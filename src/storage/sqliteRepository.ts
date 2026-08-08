@@ -1,0 +1,1084 @@
+import Database from "@tauri-apps/plugin-sql";
+import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, UpdateProfileInput, Workspace } from "../types";
+import type { CreateProviderConfigInput, ProviderConfig, ProviderKind, ProviderModel } from "../providers/types";
+import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
+import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
+import type { CreateJudgeRunInput, FrozenJudgeScoreInput, JudgeNarrative, JudgeScoreRecord } from "../judge/types";
+import { computeJudgeTotal } from "../domain/scoring";
+import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord } from "../targets/types";
+import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
+import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchConditionRecord, ResearchConfig, ResearchLockPlan, ResearchProjectRecord, ResearchResults, ResearchState, ResearchTemplateType } from "../research/types";
+import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
+import type { AppRepository } from "./repository";
+import { createId, nowIso } from "./repository";
+import { serializePostRevealTurn } from "../sessions/postRevealTranscript";
+
+type ProfileRow = {
+  id: string;
+  display_name: string;
+  note: string | null;
+  credential_id: string | null;
+  credential_provider: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type WorkspaceRow = {
+  id: string;
+  profile_id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  last_opened_at: string;
+};
+
+type ProviderConfigRow = {
+  id: string;
+  provider: ProviderKind;
+  label: string;
+  credential_id: string;
+  credential_hint: string | null;
+  base_url: string | null;
+  enabled: number;
+  last_tested_at: string | null;
+  last_status: "ok" | "error" | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ProviderModelRow = {
+  provider_config_id: string;
+  provider: ProviderKind;
+  model_id: string;
+  display_name: string;
+  route: string;
+  capability_json: string;
+  pricing_json: string;
+  recommended: number;
+  favorite: number;
+  raw_metadata_json: string;
+  refreshed_at: string;
+};
+
+type RvSessionRow = {
+  id: string;
+  workspace_id: string;
+  profile_id: string;
+  session_code: string;
+  state: RvSessionState;
+  run_type: RvSession["runType"];
+  pre_reveal_transcript: string;
+  pre_reveal_hash: string | null;
+  pre_reveal_sealed_at: string | null;
+  post_reveal_transcript: string;
+  target_id: string | null;
+  research_project_id: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+type ChatThreadRow = { id: string; workspace_id: string; mode: ChatMode; title: string; formal_rv_state: ChatThread["formalRvState"] | null; created_at: string; updated_at: string };
+type ChatMessageRow = { id: string; thread_id: string; role: "user" | "assistant"; content: string; created_at: string };
+type WorkspaceSourceRow = { id: string; workspace_id: string; source_type: "text" | "markdown"; display_name: string; content_text: string | null; content_hash: string | null; metadata_json: string; created_at: string };
+type RevealRow = { reveal_source: RevealInput["source"]; reveal_text: string | null; artifact_manifest_json: string; reveal_hash: string };
+type JudgeScoreRow = {
+  id: string;
+  judge_run_id: string;
+  judge_index: number;
+  model_route: string;
+  gestalt: number;
+  verifiable_features: number;
+  activity_function_event: number;
+  confabulation_control: number;
+  total: number;
+  rationale_json: string;
+  frozen_at: string;
+  created_at: string;
+};
+type TargetRow = {
+  id: string;
+  collection: TargetRecord["collection"];
+  title: string;
+  reveal_text: string | null;
+  reveal_artifact_path: string | null;
+  reveal_artifact_manifest_json: string;
+  tags_json: string;
+  source_metadata_json: string;
+  content_hash: string | null;
+  created_at: string;
+  updated_at: string;
+};
+type CustomProtocolRow = {
+  protocol_id: string;
+  version_id: string;
+  display_name: string;
+  version: string;
+  language: "pl" | "en";
+  content: string;
+  ordered_steps_json: string;
+  content_hash: string;
+  source_metadata_json: string;
+  created_at: string;
+};
+type ResearchProjectRow = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  template_type: ResearchTemplateType;
+  state: ResearchState;
+  config_json: string;
+  config_hash: string | null;
+  locked_at: string | null;
+  scores_frozen_at: string | null;
+  unblinded_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+function mapResearchProject(row: ResearchProjectRow): ResearchProjectRecord {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    templateType: row.template_type,
+    state: row.state,
+    config: JSON.parse(row.config_json) as ResearchConfig,
+    configHash: row.config_hash ?? undefined,
+    lockedAt: row.locked_at ?? undefined,
+    scoresFrozenAt: row.scores_frozen_at ?? undefined,
+    unblindedAt: row.unblinded_at ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapProfile(row: ProfileRow): Profile {
+  return {
+    id: row.id,
+    name: row.display_name,
+    note: row.note ?? undefined,
+    credentialId: row.credential_id ?? undefined,
+    credentialProvider: row.credential_provider ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapWorkspace(row: WorkspaceRow): Workspace {
+  return {
+    id: row.id,
+    profileId: row.profile_id,
+    name: row.name,
+    description: row.description ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastOpenedAt: row.last_opened_at,
+  };
+}
+
+function mapProviderConfig(row: ProviderConfigRow): ProviderConfig {
+  return {
+    id: row.id,
+    provider: row.provider,
+    label: row.label,
+    credentialId: row.credential_id,
+    credentialHint: row.credential_hint ?? undefined,
+    baseUrl: row.base_url ?? undefined,
+    enabled: row.enabled === 1,
+    lastTestedAt: row.last_tested_at ?? undefined,
+    lastStatus: row.last_status ?? undefined,
+    lastError: row.last_error ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapProviderModel(row: ProviderModelRow): ProviderModel {
+  return {
+    providerConfigId: row.provider_config_id,
+    provider: row.provider,
+    modelId: row.model_id,
+    displayName: row.display_name,
+    route: row.route,
+    capabilities: JSON.parse(row.capability_json) as ProviderModel["capabilities"],
+    pricing: JSON.parse(row.pricing_json) as ProviderModel["pricing"],
+    recommended: row.recommended === 1,
+    favorite: row.favorite === 1,
+    rawMetadata: JSON.parse(row.raw_metadata_json) as ProviderModel["rawMetadata"],
+    refreshedAt: row.refreshed_at,
+  };
+}
+
+function mapRvSession(row: RvSessionRow): RvSession {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    profileId: row.profile_id,
+    sessionCode: row.session_code,
+    state: row.state,
+    runType: row.run_type,
+    preRevealTranscript: row.pre_reveal_transcript,
+    preRevealHash: row.pre_reveal_hash ?? undefined,
+    preRevealSealedAt: row.pre_reveal_sealed_at ?? undefined,
+    postRevealTranscript: row.post_reveal_transcript,
+    targetId: row.target_id ?? undefined,
+    researchProjectId: row.research_project_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at ?? undefined,
+  };
+}
+
+export class SqliteRepository implements AppRepository {
+  private constructor(private readonly db: Database) {}
+
+  static async connect(): Promise<SqliteRepository> {
+    const db = await Database.load("sqlite:rv_harness.db");
+    return new SqliteRepository(db);
+  }
+
+  async createDatabaseSnapshot(destinationPath: string): Promise<void> {
+    await this.db.execute("VACUUM INTO $1", [destinationPath]);
+  }
+
+  async closeForRestore(): Promise<void> {
+    await this.db.close();
+  }
+
+  async listProfiles(): Promise<Profile[]> {
+    const rows = await this.db.select<ProfileRow[]>(
+      `SELECT p.id, p.display_name, p.note, p.credential_id,
+              c.provider AS credential_provider, p.created_at, p.updated_at
+         FROM profiles p
+         LEFT JOIN credentials_metadata c ON c.id = p.credential_id
+        WHERE p.archived_at IS NULL
+        ORDER BY p.updated_at DESC`,
+    );
+    return rows.map(mapProfile);
+  }
+
+  async createProfile(input: CreateProfileInput): Promise<Profile> {
+    const timestamp = nowIso();
+    const profile: Profile = {
+      id: createId("profile"),
+      name: input.name.trim(),
+      note: input.note?.trim() || undefined,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    await this.db.execute(
+      `INSERT INTO profiles (id, display_name, note, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [profile.id, profile.name, profile.note ?? null, timestamp, timestamp],
+    );
+    return profile;
+  }
+
+  async updateProfile(id: string, input: UpdateProfileInput): Promise<void> {
+    const name = input.name.trim();
+    await this.db.execute(
+      "UPDATE profiles SET display_name = $1, note = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL",
+      [name, input.note?.trim() || null, nowIso(), id],
+    );
+  }
+
+  async archiveProfile(id: string): Promise<void> {
+    const timestamp = nowIso();
+    await this.db.execute("UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE profile_id = $2 AND archived_at IS NULL", [timestamp, id]);
+    await this.db.execute("UPDATE profiles SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", [timestamp, id]);
+  }
+
+  async listWorkspaces(profileId?: string): Promise<Workspace[]> {
+    const rows = profileId
+      ? await this.db.select<WorkspaceRow[]>(
+          `SELECT id, profile_id, name, description, created_at, updated_at, last_opened_at
+             FROM workspaces
+            WHERE profile_id = $1 AND archived_at IS NULL
+            ORDER BY last_opened_at DESC`,
+          [profileId],
+        )
+      : await this.db.select<WorkspaceRow[]>(
+          `SELECT id, profile_id, name, description, created_at, updated_at, last_opened_at
+             FROM workspaces
+            WHERE archived_at IS NULL
+            ORDER BY last_opened_at DESC`,
+        );
+    return rows.map(mapWorkspace);
+  }
+
+  async createWorkspace(input: CreateWorkspaceInput): Promise<Workspace> {
+    const timestamp = nowIso();
+    const workspace: Workspace = {
+      id: createId("workspace"),
+      profileId: input.profileId,
+      name: input.name.trim(),
+      description: input.description?.trim() || undefined,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      lastOpenedAt: timestamp,
+    };
+    await this.db.execute(
+      `INSERT INTO workspaces (id, profile_id, name, description, created_at, updated_at, last_opened_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        workspace.id,
+        workspace.profileId,
+        workspace.name,
+        workspace.description ?? null,
+        timestamp,
+        timestamp,
+        timestamp,
+      ],
+    );
+    return workspace;
+  }
+
+  async touchWorkspace(id: string): Promise<void> {
+    const timestamp = nowIso();
+    await this.db.execute(
+      "UPDATE workspaces SET updated_at = $1, last_opened_at = $1 WHERE id = $2",
+      [timestamp, id],
+    );
+  }
+
+  async setProfileCredential(profileId: string, credentialId?: string, _provider?: string): Promise<void> {
+    await this.db.execute("UPDATE profiles SET credential_id = $1, updated_at = $2 WHERE id = $3", [credentialId ?? null, nowIso(), profileId]);
+  }
+
+  async getOrCreateChatThread(workspaceId: string, mode: ChatMode): Promise<ChatThread> {
+    const rows = await this.db.select<ChatThreadRow[]>(
+      `SELECT id, workspace_id, mode, title, formal_rv_state, created_at, updated_at
+         FROM chat_threads WHERE workspace_id = $1 AND mode = $2 ORDER BY created_at LIMIT 1`,
+      [workspaceId, mode],
+    );
+    if (rows[0]) {
+      const row = rows[0];
+      return { id: row.id, workspaceId: row.workspace_id, mode: row.mode, title: row.title, ...(row.formal_rv_state ? { formalRvState: row.formal_rv_state } : {}), createdAt: row.created_at, updatedAt: row.updated_at };
+    }
+    const timestamp = nowIso();
+    const thread: ChatThread = {
+      id: createId("thread"), workspaceId, mode,
+      title: mode === "conversation" ? "Conversation" : "Manual RV Session",
+      createdAt: timestamp, updatedAt: timestamp,
+    };
+    await this.db.execute(
+      `INSERT INTO chat_threads (id, workspace_id, mode, title, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $5)`,
+      [thread.id, thread.workspaceId, thread.mode, thread.title, timestamp],
+    );
+    return thread;
+  }
+
+  async renameChatThread(threadId: string, title: string): Promise<void> {
+    const clean = title.trim();
+    if (!clean) throw new Error("Thread title is required.");
+    await this.db.execute("UPDATE chat_threads SET title = $1, updated_at = $2 WHERE id = $3", [clean.slice(0, 160), nowIso(), threadId]);
+  }
+
+  async setChatThreadFormalRvState(threadId: string, state?: ChatThread["formalRvState"]): Promise<void> {
+    await this.db.execute("UPDATE chat_threads SET formal_rv_state = $1, updated_at = $2 WHERE id = $3 AND mode = 'manual_rv'", [state ?? null, nowIso(), threadId]);
+  }
+
+  async listChatMessages(threadId: string): Promise<ChatMessage[]> {
+    const rows = await this.db.select<ChatMessageRow[]>(
+      `SELECT id, thread_id, role, content, created_at FROM chat_messages
+        WHERE thread_id = $1 AND role IN ('user','assistant') ORDER BY created_at`,
+      [threadId],
+    );
+    return rows.map((row) => ({ id: row.id, threadId: row.thread_id, role: row.role, content: row.content, createdAt: row.created_at }));
+  }
+
+  async appendChatMessage(threadId: string, role: ChatMessage["role"], content: string): Promise<ChatMessage> {
+    const timestamp = nowIso();
+    const message: ChatMessage = { id: createId("message"), threadId, role, content, createdAt: timestamp };
+    await this.db.execute(
+      `INSERT INTO chat_messages (id, thread_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)`,
+      [message.id, threadId, role, content, timestamp],
+    );
+    await this.db.execute("UPDATE chat_threads SET updated_at = $1 WHERE id = $2", [timestamp, threadId]);
+    return message;
+  }
+
+  async listWorkspaceSources(workspaceId: string): Promise<WorkspaceSource[]> {
+    const rows = await this.db.select<WorkspaceSourceRow[]>(
+      `SELECT id, workspace_id, source_type, display_name, content_text, content_hash, metadata_json, created_at
+         FROM workspace_sources WHERE workspace_id = $1 AND content_text IS NOT NULL ORDER BY created_at DESC`, [workspaceId],
+    );
+    return rows.map((row) => ({ id: row.id, workspaceId: row.workspace_id, sourceType: row.source_type, displayName: row.display_name, content: row.content_text ?? "", contentHash: row.content_hash ?? "", metadata: JSON.parse(row.metadata_json) as Record<string, unknown>, createdAt: row.created_at }));
+  }
+
+  async createWorkspaceSource(input: CreateWorkspaceSourceInput): Promise<WorkspaceSource> {
+    const timestamp = nowIso();
+    const source: WorkspaceSource = { id: input.id, workspaceId: input.workspaceId, sourceType: input.sourceType, displayName: input.displayName.trim(), content: input.content, contentHash: input.contentHash, metadata: input.metadata ?? {}, createdAt: timestamp };
+    await this.db.execute(
+      `INSERT INTO workspace_sources (id, workspace_id, source_type, display_name, content_hash, metadata_json, content_text, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [source.id, source.workspaceId, source.sourceType, source.displayName, source.contentHash, JSON.stringify(source.metadata), source.content, timestamp],
+    );
+    return source;
+  }
+
+  async deleteWorkspaceSource(id: string): Promise<void> {
+    await this.db.execute("DELETE FROM workspace_sources WHERE id = $1", [id]);
+  }
+
+  async listActiveChatSourceIds(threadId: string): Promise<string[]> {
+    const rows = await this.db.select<{ source_id: string }[]>("SELECT source_id FROM chat_thread_sources WHERE thread_id = $1 AND active = 1", [threadId]);
+    return rows.map((row) => row.source_id);
+  }
+
+  async setChatSourceActive(threadId: string, sourceId: string, active: boolean): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO chat_thread_sources (thread_id, source_id, active, updated_at) VALUES ($1, $2, $3, $4)
+       ON CONFLICT(thread_id, source_id) DO UPDATE SET active = excluded.active, updated_at = excluded.updated_at`,
+      [threadId, sourceId, active ? 1 : 0, nowIso()],
+    );
+  }
+
+  async loadSettings(): Promise<Partial<AppSettings>> {
+    const rows = await this.db.select<{ key: string; value: string }[]>("SELECT key, value FROM app_settings");
+    const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+    return {
+      ...(values.interfaceLanguage ? { interfaceLanguage: values.interfaceLanguage as AppSettings["interfaceLanguage"] } : {}),
+      ...(values.sessionLanguage ? { sessionLanguage: values.sessionLanguage as AppSettings["sessionLanguage"] } : {}),
+      ...(values.theme ? { theme: values.theme as AppSettings["theme"] } : {}),
+      ...(values.requestTimeoutMs ? { requestTimeoutMs: Number(values.requestTimeoutMs) } : {}),
+      ...(values.maxRetries ? { maxRetries: Number(values.maxRetries) } : {}),
+      ...(values.defaultMaxOutputTokens ? { defaultMaxOutputTokens: Number(values.defaultMaxOutputTokens) } : {}),
+      ...(values.maxSessionCostUsd ? { maxSessionCostUsd: Number(values.maxSessionCostUsd) } : {}),
+      ...(values.defaultRevealSource ? { defaultRevealSource: values.defaultRevealSource as AppSettings["defaultRevealSource"] } : {}),
+      ...(values.targetRepeatPolicy ? { targetRepeatPolicy: values.targetRepeatPolicy as AppSettings["targetRepeatPolicy"] } : {}),
+      ...(values.sessionCodePrefix ? { sessionCodePrefix: values.sessionCodePrefix } : {}),
+      ...(values.textScale ? { textScale: values.textScale as AppSettings["textScale"] } : {}),
+      ...(values.animations ? { animations: values.animations === "true" } : {}),
+    };
+  }
+
+  async saveSettings(settings: AppSettings): Promise<void> {
+    const timestamp = nowIso();
+    for (const [key, value] of Object.entries(settings)) {
+      await this.db.execute(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        [key, String(value), timestamp],
+      );
+    }
+  }
+
+  async listProviderConfigs(): Promise<ProviderConfig[]> {
+    const rows = await this.db.select<ProviderConfigRow[]>(
+      `SELECT id, provider, label, credential_id, credential_hint, base_url, enabled,
+              last_tested_at, last_status, last_error, created_at, updated_at
+         FROM provider_configs
+        ORDER BY updated_at DESC`,
+    );
+    return rows.map(mapProviderConfig);
+  }
+
+  async createProviderConfig(input: CreateProviderConfigInput): Promise<ProviderConfig> {
+    const timestamp = nowIso();
+    const config: ProviderConfig = {
+      id: input.id,
+      provider: input.provider,
+      label: input.label.trim(),
+      credentialId: input.credentialId,
+      credentialHint: input.credentialHint,
+      baseUrl: input.baseUrl?.trim() || undefined,
+      enabled: true,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    await this.db.execute(
+      `INSERT INTO credentials_metadata (id, provider, label, fingerprint, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $5)`,
+      [input.credentialId, input.provider, config.label, input.fingerprint ?? null, timestamp],
+    );
+    await this.db.execute(
+      `INSERT INTO provider_configs
+       (id, provider, label, credential_id, credential_hint, base_url, enabled, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7)`,
+      [config.id, config.provider, config.label, config.credentialId, config.credentialHint ?? null, config.baseUrl ?? null, timestamp],
+    );
+    return config;
+  }
+
+  async deleteProviderConfig(id: string): Promise<void> {
+    const rows = await this.db.select<{ credential_id: string }[]>("SELECT credential_id FROM provider_configs WHERE id = $1", [id]);
+    await this.db.execute("DELETE FROM provider_configs WHERE id = $1", [id]);
+    if (rows[0]?.credential_id) {
+      await this.db.execute("DELETE FROM credentials_metadata WHERE id = $1", [rows[0].credential_id]);
+    }
+  }
+
+  async updateProviderConnectionStatus(id: string, status: "ok" | "error", error?: string): Promise<void> {
+    const timestamp = nowIso();
+    await this.db.execute(
+      `UPDATE provider_configs
+          SET last_tested_at = $1, last_status = $2, last_error = $3, updated_at = $1
+        WHERE id = $4`,
+      [timestamp, status, error ?? null, id],
+    );
+  }
+
+  async listProviderModels(providerConfigId?: string): Promise<ProviderModel[]> {
+    const rows = providerConfigId
+      ? await this.db.select<ProviderModelRow[]>(
+          `SELECT provider_config_id, provider, model_id, display_name, route, capability_json,
+                  pricing_json, recommended, favorite, raw_metadata_json, refreshed_at
+             FROM model_registry WHERE provider_config_id = $1 ORDER BY display_name`,
+          [providerConfigId],
+        )
+      : await this.db.select<ProviderModelRow[]>(
+          `SELECT provider_config_id, provider, model_id, display_name, route, capability_json,
+                  pricing_json, recommended, favorite, raw_metadata_json, refreshed_at
+             FROM model_registry ORDER BY display_name`,
+        );
+    return rows.map(mapProviderModel);
+  }
+
+  async replaceProviderModels(providerConfigId: string, models: ProviderModel[]): Promise<void> {
+    const favorites = new Set((await this.db.select<{ model_id: string }[]>(
+      "SELECT model_id FROM model_registry WHERE provider_config_id = $1 AND favorite = 1",
+      [providerConfigId],
+    )).map((row) => row.model_id));
+    await this.db.execute("DELETE FROM model_registry WHERE provider_config_id = $1", [providerConfigId]);
+    for (const model of models) {
+      await this.db.execute(
+        `INSERT INTO model_registry
+         (provider_config_id, provider, model_id, display_name, route, capability_json, pricing_json,
+          recommended, favorite, raw_metadata_json, refreshed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          model.providerConfigId,
+          model.provider,
+          model.modelId,
+          model.displayName,
+          model.route,
+          JSON.stringify(model.capabilities),
+          JSON.stringify(model.pricing),
+          model.recommended ? 1 : 0,
+          (model.favorite || favorites.has(model.modelId)) ? 1 : 0,
+          JSON.stringify(model.rawMetadata),
+          model.refreshedAt,
+        ],
+      );
+    }
+  }
+
+  async setProviderModelFavorite(providerConfigId: string, modelId: string, favorite: boolean): Promise<void> {
+    await this.db.execute(
+      "UPDATE model_registry SET favorite = $1 WHERE provider_config_id = $2 AND model_id = $3",
+      [favorite ? 1 : 0, providerConfigId, modelId],
+    );
+  }
+
+  async clearProviderModelCache(): Promise<void> {
+    await this.db.execute("DELETE FROM model_registry");
+  }
+
+  async listTargets(collection?: TargetRecord["collection"]): Promise<TargetRecord[]> {
+    const rows = collection
+      ? await this.db.select<TargetRow[]>(
+          `SELECT id, collection, title, reveal_text, reveal_artifact_path, reveal_artifact_manifest_json, tags_json, source_metadata_json,
+                  content_hash, created_at, updated_at FROM targets WHERE collection = $1 ORDER BY updated_at DESC`,
+          [collection],
+        )
+      : await this.db.select<TargetRow[]>(
+          `SELECT id, collection, title, reveal_text, reveal_artifact_path, reveal_artifact_manifest_json, tags_json, source_metadata_json,
+                  content_hash, created_at, updated_at FROM targets ORDER BY collection, updated_at DESC`,
+        );
+    return rows.map((row) => ({
+      id: row.id,
+      collection: row.collection,
+      title: row.title,
+      revealText: row.reveal_text ?? undefined,
+      revealArtifactPath: row.reveal_artifact_path ?? undefined,
+      revealArtifacts: JSON.parse(row.reveal_artifact_manifest_json) as NonNullable<TargetRecord["revealArtifacts"]>,
+      tags: JSON.parse(row.tags_json) as string[],
+      sourceMetadata: JSON.parse(row.source_metadata_json) as Record<string, unknown>,
+      contentHash: row.content_hash ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  async createTarget(input: CreateTargetInput): Promise<TargetRecord> {
+    const timestamp = nowIso();
+    const target: TargetRecord = {
+      id: input.id,
+      collection: input.collection,
+      title: input.title.trim(),
+      revealText: input.revealText?.trim() || undefined,
+      revealArtifactPath: input.revealArtifactPath,
+      revealArtifacts: input.revealArtifacts ?? [],
+      tags: input.tags ?? [],
+      sourceMetadata: input.sourceMetadata ?? {},
+      contentHash: input.contentHash,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    await this.db.execute(
+      `INSERT INTO targets
+       (id, collection, title, reveal_text, reveal_artifact_path, reveal_artifact_manifest_json, tags_json, source_metadata_json, content_hash, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
+      [target.id, target.collection, target.title, target.revealText ?? null, target.revealArtifactPath ?? null, JSON.stringify(target.revealArtifacts ?? []), JSON.stringify(target.tags), JSON.stringify(target.sourceMetadata), target.contentHash ?? null, timestamp],
+    );
+    return target;
+  }
+
+  async recordTargetUsage(input: TargetUsageInput): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO target_usage (id, target_id, profile_id, research_project_id, session_id, used_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [createId("target_usage"), input.targetId, input.profileId ?? null, input.researchProjectId ?? null, input.sessionId ?? null, nowIso()],
+    );
+  }
+
+  async listTargetUsage(): Promise<TargetUsageRecord[]> {
+    const rows = await this.db.select<Array<{ id: string; target_id: string; profile_id: string | null; research_project_id: string | null; session_id: string | null; used_at: string }>>(
+      "SELECT id, target_id, profile_id, research_project_id, session_id, used_at FROM target_usage ORDER BY used_at DESC",
+    );
+    return rows.map((row) => ({ id: row.id, targetId: row.target_id, profileId: row.profile_id ?? undefined, researchProjectId: row.research_project_id ?? undefined, sessionId: row.session_id ?? undefined, usedAt: row.used_at }));
+  }
+
+  async listCustomProtocols(language?: "pl" | "en"): Promise<CustomProtocolVersion[]> {
+    const rows = language
+      ? await this.db.select<CustomProtocolRow[]>(
+          `SELECT p.id AS protocol_id, pv.id AS version_id, p.display_name, pv.version, pv.language,
+                  pv.content, pv.ordered_steps_json, pv.content_hash, pv.source_metadata_json, pv.created_at
+             FROM protocols p JOIN protocol_versions pv ON pv.protocol_id = p.id
+            WHERE p.family = 'custom' AND pv.language = $1 ORDER BY p.display_name, pv.created_at DESC`,
+          [language],
+        )
+      : await this.db.select<CustomProtocolRow[]>(
+          `SELECT p.id AS protocol_id, pv.id AS version_id, p.display_name, pv.version, pv.language,
+                  pv.content, pv.ordered_steps_json, pv.content_hash, pv.source_metadata_json, pv.created_at
+             FROM protocols p JOIN protocol_versions pv ON pv.protocol_id = p.id
+            WHERE p.family = 'custom' ORDER BY p.display_name, pv.created_at DESC`,
+        );
+    return rows.map((row) => {
+      const metadata = JSON.parse(row.source_metadata_json) as Record<string, unknown>;
+      return {
+        protocolId: row.protocol_id,
+        versionId: row.version_id,
+        displayName: row.display_name,
+        description: typeof metadata.description === "string" ? metadata.description : undefined,
+        version: row.version,
+        language: row.language,
+        systemPrompt: row.content.trim() || undefined,
+        steps: JSON.parse(row.ordered_steps_json) as string[],
+        contentHash: row.content_hash,
+        createdAt: row.created_at,
+      };
+    });
+  }
+
+  async saveCustomProtocolVersion(input: SaveCustomProtocolVersionInput): Promise<CustomProtocolVersion> {
+    const existing = await this.db.select<{ id: string }[]>("SELECT id FROM protocols WHERE id = $1", [input.protocolId]);
+    if (!existing.length) {
+      await this.db.execute(
+        `INSERT INTO protocols (id, family, display_name, built_in, created_at) VALUES ($1, 'custom', $2, 0, $3)`,
+        [input.protocolId, input.displayName, input.createdAt],
+      );
+    }
+    await this.db.execute(
+      `INSERT INTO protocol_versions
+       (id, protocol_id, version, language, content, ordered_steps_json, reveal_policy_json, content_hash, source_metadata_json, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [input.versionId, input.protocolId, input.version, input.language, input.systemPrompt ?? "", JSON.stringify(input.steps), JSON.stringify({ separateRevealStage: true }), input.contentHash, JSON.stringify({ description: input.description ?? "", origin: "user" }), input.createdAt],
+    );
+    return { ...input, steps: [...input.steps] };
+  }
+
+  async createRvSession(input: CreateRvSessionInput): Promise<RvSession> {
+    const timestamp = nowIso();
+    const session: RvSession = {
+      id: input.id,
+      workspaceId: input.workspaceId,
+      profileId: input.profileId,
+      sessionCode: input.sessionCode,
+      state: "Draft",
+      runType: input.runType,
+      preRevealTranscript: "",
+      postRevealTranscript: "",
+      targetId: input.targetId,
+      researchProjectId: input.researchProjectId,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    await this.db.execute(
+      `INSERT INTO rv_sessions
+       (id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
+        post_reveal_transcript, target_id, research_project_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'Draft', $5, '', '', $6, $7, $8, $8)`,
+      [session.id, session.workspaceId, session.profileId, session.sessionCode, session.runType, session.targetId ?? null, session.researchProjectId ?? null, timestamp],
+    );
+    return session;
+  }
+
+  async updateRvSessionState(id: string, state: RvSessionState, stopReason?: string): Promise<void> {
+    const timestamp = nowIso();
+    await this.db.execute(
+      `UPDATE rv_sessions SET state = $1, updated_at = $2,
+       completed_at = CASE WHEN $1 = 'Completed' THEN $2 ELSE completed_at END WHERE id = $3`,
+      [state, timestamp, id],
+    );
+    if (stopReason) await this.appendSessionEvent(id, { eventType: "SESSION_STOPPED", role: "controller", content: stopReason });
+  }
+
+  async appendPostRevealTurn(sessionId: string, role: "user" | "assistant", content: string): Promise<string> {
+    const rows = await this.db.select<Array<{ state: RvSessionState; post_reveal_transcript: string; research_project_id: string | null }>>(
+      "SELECT state, post_reveal_transcript, research_project_id FROM rv_sessions WHERE id = $1",
+      [sessionId],
+    );
+    const session = rows[0];
+    if (!session) throw new Error("RV session not found.");
+    if (session.state !== "Revealed" && session.state !== "Completed") throw new Error("Post-reveal discussion requires Reveal.");
+    if (session.research_project_id) {
+      const projects = await this.db.select<Array<{ scores_frozen_at: string | null }>>(
+        "SELECT scores_frozen_at FROM research_projects WHERE id = $1",
+        [session.research_project_id],
+      );
+      if (!projects[0]?.scores_frozen_at) throw new Error("Research post-reveal discussion requires frozen scores.");
+    }
+    const next = `${session.post_reveal_transcript}${serializePostRevealTurn(role, content)}`;
+    await this.db.execute("UPDATE rv_sessions SET post_reveal_transcript = $1, updated_at = $2 WHERE id = $3", [next, nowIso(), sessionId]);
+    await this.appendSessionEvent(sessionId, { eventType: `POST_REVEAL_${role.toUpperCase()}`, role, content: content.trim() });
+    return next;
+  }
+
+  async appendSessionEvent(sessionId: string, event: SessionEventInput): Promise<void> {
+    const timestamp = nowIso();
+    await this.db.execute(
+      `INSERT INTO session_events
+       (id, session_id, sequence_number, event_type, role, content, metadata_json, created_at)
+       SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7
+         FROM session_events WHERE session_id = $2`,
+      [createId("event"), sessionId, event.eventType, event.role ?? null, event.content ?? null, JSON.stringify(event.metadata ?? {}), timestamp],
+    );
+  }
+
+  async updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void> {
+    await this.db.execute(
+      "UPDATE rv_sessions SET pre_reveal_transcript = $1, updated_at = $2 WHERE id = $3",
+      [transcript, nowIso(), sessionId],
+    );
+  }
+
+  async saveSessionSnapshot(sessionId: string, snapshot: SessionSnapshot, hash: string): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO session_snapshots (id, session_id, snapshot_json, snapshot_hash, created_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [createId("snapshot"), sessionId, JSON.stringify(snapshot), hash, nowIso()],
+    );
+  }
+
+  async getSessionSnapshot(sessionId: string): Promise<SessionSnapshot | null> {
+    const rows = await this.db.select<{ snapshot_json: string }[]>("SELECT snapshot_json FROM session_snapshots WHERE session_id = $1 LIMIT 1", [sessionId]);
+    return rows[0] ? JSON.parse(rows[0].snapshot_json) as SessionSnapshot : null;
+  }
+
+  async sealPreReveal(sessionId: string, transcript: string, hash: string): Promise<void> {
+    const timestamp = nowIso();
+    await this.db.execute(
+      `UPDATE rv_sessions SET pre_reveal_transcript = $1, pre_reveal_hash = $2,
+       pre_reveal_sealed_at = $3, state = 'AwaitingReveal', updated_at = $3 WHERE id = $4`,
+      [transcript, hash, timestamp, sessionId],
+    );
+  }
+
+  async acceptReveal(sessionId: string, reveal: RevealInput): Promise<void> {
+    const timestamp = nowIso();
+    await this.db.execute(
+      `INSERT INTO reveals (id, session_id, reveal_source, reveal_text, artifact_manifest_json, reveal_hash, accepted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [createId("reveal"), sessionId, reveal.source, reveal.text ?? null, JSON.stringify(reveal.artifactManifest ?? []), reveal.hash, timestamp],
+    );
+    await this.updateRvSessionState(sessionId, "Revealed");
+  }
+
+  async getReveal(sessionId: string): Promise<RevealInput | null> {
+    const rows = await this.db.select<RevealRow[]>(
+      `SELECT reveal_source, reveal_text, artifact_manifest_json, reveal_hash
+         FROM reveals WHERE session_id = $1 LIMIT 1`,
+      [sessionId],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      source: row.reveal_source,
+      ...(row.reveal_text !== null ? { text: row.reveal_text } : {}),
+      artifactManifest: JSON.parse(row.artifact_manifest_json) as NonNullable<RevealInput["artifactManifest"]>,
+      hash: row.reveal_hash,
+    };
+  }
+
+  async getViewerEvidence(sessionId: string): Promise<string> {
+    const rows = await this.db.select<{ content: string | null }[]>(
+      `SELECT content FROM session_events
+        WHERE session_id = $1 AND event_type IN ('VIEWER_RESPONSE','VIEWER_MONITOR_RESPONSE')
+        ORDER BY sequence_number`,
+      [sessionId],
+    );
+    return rows.map((row) => row.content?.trim() ?? "").filter(Boolean).join("\n\n---\n\n");
+  }
+
+  async listRvSessions(workspaceId: string): Promise<RvSession[]> {
+    const rows = await this.db.select<RvSessionRow[]>(
+      `SELECT id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
+              pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id,
+              research_project_id, created_at, updated_at, completed_at
+         FROM rv_sessions WHERE workspace_id = $1 ORDER BY created_at DESC`,
+      [workspaceId],
+    );
+    return rows.map(mapRvSession);
+  }
+
+  async addTargetClarification(sessionId: string, content: string): Promise<TargetClarificationRecord> {
+    const clean = content.trim();
+    if (!clean) throw new Error("Target clarification cannot be empty.");
+    const record: TargetClarificationRecord = { id: createId("clarification"), sessionId, content: clean, createdAt: nowIso() };
+    await this.db.execute(
+      "INSERT INTO target_clarifications (id, session_id, content, created_at) VALUES ($1, $2, $3, $4)",
+      [record.id, record.sessionId, record.content, record.createdAt],
+    );
+    return record;
+  }
+
+  async listTargetClarifications(sessionId: string): Promise<TargetClarificationRecord[]> {
+    const rows = await this.db.select<Array<{ id: string; session_id: string; content: string; created_at: string }>>(
+      "SELECT id, session_id, content, created_at FROM target_clarifications WHERE session_id = $1 ORDER BY created_at",
+      [sessionId],
+    );
+    return rows.map((row) => ({ id: row.id, sessionId: row.session_id, content: row.content, createdAt: row.created_at }));
+  }
+
+  async createMonitorRun(input: CreateMonitorRunInput): Promise<string> {
+    const id = createId("monitor");
+    await this.db.execute(
+      `INSERT INTO monitor_runs (id, session_id, model_route, prompt_version_id, library_version, max_interventions, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [id, input.sessionId, input.modelRoute, input.promptVersionId ?? null, input.libraryVersion, input.maxInterventions, nowIso()],
+    );
+    return id;
+  }
+
+  async appendMonitorIntervention(monitorRunId: string, intervention: MonitorInterventionInput): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO monitor_interventions
+       (id, monitor_run_id, sequence_number, decision, command_id, viewer_evidence, command_text, rationale, created_at)
+       SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7, $8
+         FROM monitor_interventions WHERE monitor_run_id = $2`,
+      [createId("monitor_event"), monitorRunId, intervention.decision, intervention.commandId ?? null, intervention.viewerEvidence ?? null, intervention.commandText ?? null, intervention.rationale ?? null, nowIso()],
+    );
+  }
+
+  async listMonitorRuns(workspaceId: string): Promise<MonitorRunRecord[]> {
+    const rows = await this.db.select<Array<{ id: string; session_id: string; session_code: string; model_route: string; prompt_version_id: string | null; library_version: string; max_interventions: number; created_at: string; intervention_count: number }>>(
+      `SELECT mr.id, mr.session_id, s.session_code, mr.model_route, mr.prompt_version_id, mr.library_version,
+              mr.max_interventions, mr.created_at, COUNT(mi.id) AS intervention_count
+         FROM monitor_runs mr JOIN rv_sessions s ON s.id = mr.session_id
+         LEFT JOIN monitor_interventions mi ON mi.monitor_run_id = mr.id
+        WHERE s.workspace_id = $1
+        GROUP BY mr.id, mr.session_id, s.session_code, mr.model_route, mr.prompt_version_id, mr.library_version, mr.max_interventions, mr.created_at
+        ORDER BY mr.created_at DESC`, [workspaceId],
+    );
+    return rows.map((row) => ({ id: row.id, sessionId: row.session_id, sessionCode: row.session_code, modelRoute: row.model_route, promptVersionId: row.prompt_version_id ?? undefined, libraryVersion: row.library_version, maxInterventions: row.max_interventions, createdAt: row.created_at, interventionCount: Number(row.intervention_count) }));
+  }
+
+  async listMonitorInterventions(monitorRunId: string): Promise<MonitorInterventionRecord[]> {
+    const rows = await this.db.select<Array<{ id: string; monitor_run_id: string; sequence_number: number; decision: "INTERVENE" | "CONTINUE_PROTOCOL"; command_id: string | null; viewer_evidence: string | null; command_text: string | null; rationale: string | null; created_at: string }>>(
+      `SELECT id, monitor_run_id, sequence_number, decision, command_id, viewer_evidence, command_text, rationale, created_at
+         FROM monitor_interventions WHERE monitor_run_id = $1 ORDER BY sequence_number`, [monitorRunId],
+    );
+    return rows.map((row) => ({ id: row.id, monitorRunId: row.monitor_run_id, sequenceNumber: row.sequence_number, decision: row.decision, commandId: row.command_id ?? undefined, viewerEvidence: row.viewer_evidence ?? undefined, commandText: row.command_text ?? undefined, rationale: row.rationale ?? undefined, createdAt: row.created_at }));
+  }
+
+  async recordFrozenJudgeResult(run: CreateJudgeRunInput, score: FrozenJudgeScoreInput): Promise<JudgeScoreRecord> {
+    const timestamp = nowIso();
+    const total = computeJudgeTotal(score);
+    await this.db.execute("BEGIN IMMEDIATE");
+    try {
+      await this.db.execute(
+        `INSERT INTO judge_runs
+         (id, session_id, judge_index, model_route, rubric_version, anonymous_session_id, packet_hash, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [run.id, run.sessionId, run.judgeIndex, run.modelRoute, run.rubricVersion, run.anonymousSessionId, run.packetHash, timestamp],
+      );
+      await this.db.execute(
+        `INSERT INTO judge_scores
+         (id, judge_run_id, gestalt, verifiable_features, activity_function_event, confabulation_control,
+          total, rationale_json, frozen_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)`,
+        [score.id, score.judgeRunId, score.gestalt, score.verifiableFeatures, score.activityFunctionEvent, score.confabulationControl, total, JSON.stringify(score.narrative), timestamp],
+      );
+      await this.db.execute("COMMIT");
+    } catch (error) {
+      await this.db.execute("ROLLBACK").catch(() => undefined);
+      throw error;
+    }
+    return {
+      ...score,
+      judgeIndex: run.judgeIndex,
+      modelRoute: run.modelRoute,
+      total,
+      frozenAt: timestamp,
+      createdAt: timestamp,
+    };
+  }
+
+  async listJudgeScores(sessionId: string): Promise<JudgeScoreRecord[]> {
+    const rows = await this.db.select<JudgeScoreRow[]>(
+      `SELECT s.id, s.judge_run_id, r.judge_index, r.model_route, s.gestalt, s.verifiable_features,
+              s.activity_function_event, s.confabulation_control, s.total, s.rationale_json,
+              s.frozen_at, s.created_at
+         FROM judge_scores s JOIN judge_runs r ON r.id = s.judge_run_id
+        WHERE r.session_id = $1 ORDER BY r.judge_index`,
+      [sessionId],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      judgeRunId: row.judge_run_id,
+      judgeIndex: row.judge_index,
+      modelRoute: row.model_route,
+      gestalt: row.gestalt,
+      verifiableFeatures: row.verifiable_features,
+      activityFunctionEvent: row.activity_function_event,
+      confabulationControl: row.confabulation_control,
+      total: row.total,
+      narrative: JSON.parse(row.rationale_json) as JudgeNarrative,
+      frozenAt: row.frozen_at,
+      createdAt: row.created_at,
+    }));
+  }
+
+  async createResearchProject(config: ResearchConfig): Promise<ResearchProjectRecord> {
+    const timestamp = nowIso();
+    const project: ResearchProjectRecord = {
+      id: createId("research"), workspaceId: config.workspaceId, name: config.name.trim(), templateType: config.templateType,
+      state: "Draft", config: structuredClone(config), createdAt: timestamp, updatedAt: timestamp,
+    };
+    await this.db.execute(
+      `INSERT INTO research_projects (id, workspace_id, name, template_type, state, config_json, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'Draft', $5, $6, $6)`,
+      [project.id, project.workspaceId, project.name, project.templateType, JSON.stringify(project.config), timestamp],
+    );
+    return project;
+  }
+
+  async getResearchProject(id: string): Promise<ResearchProjectRecord | null> {
+    const rows = await this.db.select<ResearchProjectRow[]>(
+      `SELECT id, workspace_id, name, template_type, state, config_json, config_hash, locked_at,
+              scores_frozen_at, unblinded_at, created_at, updated_at FROM research_projects WHERE id = $1 LIMIT 1`, [id],
+    );
+    return rows[0] ? mapResearchProject(rows[0]) : null;
+  }
+
+  async listResearchProjects(workspaceId?: string): Promise<ResearchProjectRecord[]> {
+    const rows = workspaceId
+      ? await this.db.select<ResearchProjectRow[]>(`SELECT id, workspace_id, name, template_type, state, config_json, config_hash, locked_at, scores_frozen_at, unblinded_at, created_at, updated_at FROM research_projects WHERE workspace_id = $1 ORDER BY created_at DESC`, [workspaceId])
+      : await this.db.select<ResearchProjectRow[]>(`SELECT id, workspace_id, name, template_type, state, config_json, config_hash, locked_at, scores_frozen_at, unblinded_at, created_at, updated_at FROM research_projects ORDER BY created_at DESC`);
+    return rows.map(mapResearchProject);
+  }
+
+  async setResearchProjectState(id: string, state: ResearchState): Promise<void> {
+    const timestamp = nowIso();
+    await this.db.execute(
+      `UPDATE research_projects SET state = $1, updated_at = $2,
+         scores_frozen_at = CASE WHEN $1 = 'ScoresFrozen' THEN COALESCE(scores_frozen_at, $2) ELSE scores_frozen_at END,
+         unblinded_at = CASE WHEN $1 = 'Unblinded' THEN COALESCE(unblinded_at, $2) ELSE unblinded_at END
+       WHERE id = $3`,
+      [state, timestamp, id],
+    );
+  }
+
+  async lockResearchProject(id: string, plan: ResearchLockPlan): Promise<void> {
+    const timestamp = nowIso();
+    const projectState = await this.db.select<{ state: ResearchState }[]>("SELECT state FROM research_projects WHERE id = $1", [id]);
+    if (!projectState[0] || !["Draft", "Preflight"].includes(projectState[0].state)) throw new Error("Research project cannot be locked from its current state.");
+    await this.db.execute("BEGIN IMMEDIATE");
+    try {
+      for (const condition of plan.conditions) {
+        await this.db.execute(
+          `INSERT INTO research_conditions (id, research_project_id, condition_key, condition_config_json) VALUES ($1, $2, $3, $4)`,
+          [condition.id, id, condition.conditionKey, JSON.stringify(condition.config)],
+        );
+      }
+      for (const assignment of plan.assignments) {
+        await this.db.execute(
+          `INSERT INTO research_assignments (id, research_project_id, anonymous_session_id, session_id, target_id, execution_order, judge_order, status)
+           VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)`,
+          [assignment.id, id, assignment.anonymousSessionId, assignment.targetId, assignment.executionOrder, assignment.judgeOrder, assignment.status],
+        );
+      }
+      for (const mapping of plan.mappings) {
+        await this.db.execute(
+          `INSERT INTO blinding_mappings (id, research_project_id, anonymous_session_id, condition_id, pair_key, pair_order, mapping_hash, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [mapping.id, id, mapping.anonymousSessionId, mapping.conditionId, mapping.pairKey, mapping.pairOrder ?? null, mapping.mappingHash, mapping.createdAt],
+        );
+      }
+      await this.db.execute(
+        `UPDATE research_projects SET state = 'Locked', config_hash = $1, locked_at = $2, updated_at = $2 WHERE id = $3 AND state IN ('Draft','Preflight')`,
+        [plan.configHash, timestamp, id],
+      );
+      await this.db.execute("COMMIT");
+    } catch (error) {
+      await this.db.execute("ROLLBACK").catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async listResearchConditions(projectId: string): Promise<ResearchConditionRecord[]> {
+    const rows = await this.db.select<Array<{ id: string; research_project_id: string; condition_key: string; condition_config_json: string }>>(
+      `SELECT id, research_project_id, condition_key, condition_config_json FROM research_conditions WHERE research_project_id = $1 ORDER BY condition_key`, [projectId],
+    );
+    return rows.map((row) => ({ id: row.id, researchProjectId: row.research_project_id, conditionKey: row.condition_key, config: JSON.parse(row.condition_config_json) as ResearchConditionRecord["config"] }));
+  }
+
+  async listResearchAssignments(projectId: string): Promise<ResearchAssignmentRecord[]> {
+    const rows = await this.db.select<Array<{ id: string; research_project_id: string; anonymous_session_id: string; session_id: string | null; target_id: string | null; execution_order: number; judge_order: number | null; status: string }>>(
+      `SELECT id, research_project_id, anonymous_session_id, session_id, target_id, execution_order, judge_order, status FROM research_assignments WHERE research_project_id = $1 ORDER BY execution_order`, [projectId],
+    );
+    return rows.map((row) => {
+      if (!row.target_id || row.judge_order === null) throw new Error("Locked Research assignment is incomplete.");
+      return { id: row.id, researchProjectId: row.research_project_id, anonymousSessionId: row.anonymous_session_id, sessionId: row.session_id ?? undefined, targetId: row.target_id, executionOrder: row.execution_order, judgeOrder: row.judge_order, status: row.status };
+    });
+  }
+
+  async listBlindingMappings(projectId: string): Promise<BlindingMappingRecord[]> {
+    const rows = await this.db.select<Array<{ id: string; research_project_id: string; anonymous_session_id: string; condition_id: string; pair_key: string | null; pair_order: string | null; mapping_hash: string; created_at: string }>>(
+      `SELECT id, research_project_id, anonymous_session_id, condition_id, pair_key, pair_order, mapping_hash, created_at FROM blinding_mappings WHERE research_project_id = $1`, [projectId],
+    );
+    return rows.map((row) => ({ id: row.id, researchProjectId: row.research_project_id, anonymousSessionId: row.anonymous_session_id, conditionId: row.condition_id, pairKey: row.pair_key ?? "", pairOrder: row.pair_order ?? undefined, mappingHash: row.mapping_hash, createdAt: row.created_at }));
+  }
+
+  async updateResearchAssignment(id: string, sessionId: string | undefined, status: string): Promise<void> {
+    await this.db.execute("UPDATE research_assignments SET session_id = $1, status = $2 WHERE id = $3", [sessionId ?? null, status, id]);
+  }
+
+  async saveResearchResults(projectId: string, results: ResearchResults, hash: string): Promise<void> {
+    const existing = await this.db.select<{ id: string }[]>("SELECT id FROM research_results WHERE research_project_id = $1 LIMIT 1", [projectId]);
+    if (existing.length) throw new Error("Research results are immutable once written.");
+    await this.db.execute(
+      `INSERT INTO research_results (id, research_project_id, results_json, results_hash, created_at) VALUES ($1, $2, $3, $4, $5)`,
+      [createId("research_results"), projectId, JSON.stringify(results), hash, nowIso()],
+    );
+  }
+
+  async getResearchResults(projectId: string): Promise<ResearchResults | null> {
+    const rows = await this.db.select<{ results_json: string }[]>("SELECT results_json FROM research_results WHERE research_project_id = $1 ORDER BY created_at DESC LIMIT 1", [projectId]);
+    return rows[0] ? JSON.parse(rows[0].results_json) as ResearchResults : null;
+  }
+
+  async recordExport(workspaceId: string, researchProjectId: string | undefined, exportType: string, artifactPath: string, manifestHash: string): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO exports (id, workspace_id, research_project_id, export_type, artifact_path, manifest_hash, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [createId("export"), workspaceId, researchProjectId ?? null, exportType, artifactPath, manifestHash, nowIso()],
+    );
+  }
+}

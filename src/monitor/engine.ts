@@ -1,0 +1,69 @@
+import { resolveGenerationSettings } from "../providers/capabilities";
+import { providerChat as nativeProviderChat } from "../providers/native";
+import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
+import type { InterfaceLanguage } from "../types";
+import { evidenceSatisfies, getMonitorCommand, renderMonitorCommand } from "./library";
+import { buildMonitorSystemPrompt, buildMonitorUserPacket } from "./prompt";
+
+export type MonitorDecision =
+  | { decision: "CONTINUE_PROTOCOL" }
+  | { decision: "INTERVENE"; commandId: string; viewerEvidence: string; argument?: string; commandText: string };
+
+export async function evaluateMonitor(input: {
+  providerConfig: ProviderConfig;
+  model: ProviderModel;
+  language: InterfaceLanguage;
+  phase: number;
+  blindTranscript: string;
+  requestTimeoutMs?: number;
+  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number }) => Promise<ProviderChatResponse>;
+}): Promise<MonitorDecision> {
+  if (input.model.providerConfigId !== input.providerConfig.id) throw new Error("Monitor model/provider route mismatch.");
+  const messages: ProviderMessage[] = [
+    { role: "system", content: buildMonitorSystemPrompt(input.language) },
+    { role: "user", content: buildMonitorUserPacket(input.language, input.phase, input.blindTranscript) },
+  ];
+  const maxOutputTokens = Math.min(input.model.capabilities.maxOutputTokens ?? 800, 800);
+  const settings = resolveGenerationSettings(input.model.capabilities, { maxOutputTokens });
+  const response = await (input.chat ?? nativeProviderChat)({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.requestTimeoutMs });
+  return validateMonitorDecision(response.content, input.blindTranscript, input.language);
+}
+
+export function validateMonitorDecision(raw: string, blindTranscript: string, language: InterfaceLanguage): MonitorDecision {
+  let parsed: Record<string, unknown>;
+  try {
+    const clean = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    parsed = JSON.parse(clean) as Record<string, unknown>;
+  } catch {
+    throw new Error("AI Monitor returned invalid JSON; intervention blocked.");
+  }
+  if (parsed.decision === "CONTINUE_PROTOCOL") return { decision: "CONTINUE_PROTOCOL" };
+  if (parsed.decision !== "INTERVENE" || typeof parsed.command_id !== "string") {
+    throw new Error("AI Monitor returned an invalid decision; intervention blocked.");
+  }
+  const command = getMonitorCommand(parsed.command_id);
+  if (!command) throw new Error("AI Monitor requested an unknown command; intervention blocked.");
+  const evidence = typeof parsed.viewer_evidence === "string" ? parsed.viewer_evidence.trim() : "";
+  if (command.prerequisite !== "none") {
+    if (!evidence || !containsVerbatim(blindTranscript, evidence) || !evidenceSatisfies(command, evidence)) {
+      throw new Error(`AI Monitor prerequisite failed for ${command.id}; intervention blocked.`);
+    }
+  }
+  const argument = typeof parsed.argument === "string" ? parsed.argument.trim() : undefined;
+  if (command.argument) {
+    if (!argument || argument.length > 160 || !containsVerbatim(blindTranscript, argument)) {
+      throw new Error(`AI Monitor argument is not grounded in Viewer evidence for ${command.id}; intervention blocked.`);
+    }
+  }
+  return {
+    decision: "INTERVENE",
+    commandId: command.id,
+    viewerEvidence: evidence,
+    ...(argument ? { argument } : {}),
+    commandText: renderMonitorCommand(command, language, argument),
+  };
+}
+
+function containsVerbatim(transcript: string, fragment: string): boolean {
+  return transcript.toLocaleLowerCase().includes(fragment.toLocaleLowerCase());
+}

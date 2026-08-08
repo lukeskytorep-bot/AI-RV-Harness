@@ -1,0 +1,144 @@
+export const PROVIDER_KINDS = [
+  "openrouter",
+  "google",
+  "openai",
+  "anthropic",
+  "zai",
+  "deepseek",
+  "mistral",
+  "custom_openai",
+] as const;
+
+export type ProviderKind = (typeof PROVIDER_KINDS)[number];
+
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type CapabilityConfidence = "provider_metadata" | "verified" | "unknown";
+
+export interface ProviderConfig {
+  id: string;
+  provider: ProviderKind;
+  label: string;
+  credentialId: string;
+  credentialHint?: string;
+  baseUrl?: string;
+  enabled: boolean;
+  lastTestedAt?: string;
+  lastStatus?: "ok" | "error";
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateProviderConfigInput {
+  id: string;
+  provider: ProviderKind;
+  label: string;
+  credentialId: string;
+  credentialHint?: string;
+  baseUrl?: string;
+  fingerprint?: string;
+}
+
+export interface ReasoningCapability {
+  supported: boolean;
+  efforts: ReasoningEffort[];
+  mandatory?: boolean;
+  defaultEffort?: ReasoningEffort;
+  confidence: CapabilityConfidence;
+}
+
+export interface TemperatureCapability {
+  supported: boolean;
+  min?: number;
+  max?: number;
+  default?: number;
+  confidence: CapabilityConfidence;
+}
+
+export interface ModelCapabilities {
+  contextTokens?: number;
+  maxOutputTokens?: number;
+  inputModalities: string[];
+  outputModalities: string[];
+  supportsVision: boolean;
+  supportsStreaming: boolean;
+  reasoning: ReasoningCapability;
+  temperature: TemperatureCapability;
+  supportedParameters: string[];
+  source: "provider" | "compatibility";
+  capturedAt: string;
+}
+
+export interface ModelPricing {
+  promptPerToken?: number;
+  completionPerToken?: number;
+  currency?: "USD";
+}
+
+export interface ProviderModel {
+  providerConfigId: string;
+  provider: ProviderKind;
+  modelId: string;
+  displayName: string;
+  route: string;
+  capabilities: ModelCapabilities;
+  pricing: ModelPricing;
+  recommended: boolean;
+  favorite?: boolean;
+  rawMetadata: Record<string, unknown>;
+  refreshedAt: string;
+}
+
+export interface GenerationSettings {
+  reasoningEffort?: ReasoningEffort;
+  temperature?: number;
+  maxOutputTokens?: number;
+}
+
+export interface EffectiveGenerationSettings {
+  requested: GenerationSettings;
+  effective: GenerationSettings;
+  omitted: Array<"reasoningEffort" | "temperature" | "maxOutputTokens">;
+}
+
+export interface ProviderMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+  images?: ProviderImageInput[];
+}
+
+export interface ProviderImageInput {
+  mimeType: string;
+  dataBase64: string;
+}
+
+export interface ProviderChatRequest {
+  providerConfigId: string;
+  provider: ProviderKind;
+  credentialId: string;
+  baseUrl?: string;
+  modelId: string;
+  messages: ProviderMessage[];
+  settings: EffectiveGenerationSettings;
+}
+
+export interface ProviderUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+}
+
+export interface ProviderChatResponse {
+  content: string;
+  finishReason?: string;
+  usage: ProviderUsage;
+  providerRequestId?: string;
+}
+
+export interface ProviderConnectionResult {
+  ok: boolean;
+  modelCount: number;
+  refreshedAt: string;
+}
