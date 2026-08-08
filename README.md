@@ -42,6 +42,11 @@ The browser preview uses a development-only local-storage repository. The Tauri 
 
 The TypeScript test/build path and SQLite migration/invariant checks are verified in the checkpoint environment. A Rust toolchain is not installed there, so the native Tauri/Rust binary is verified by the Windows GitHub Actions release pipeline rather than locally.
 
+## Credits
+
+AI RV Harness is a human-led project developed with multiple AI collaborators.
+See [CREDITS.md](CREDITS.md) for individual contributions.
+
 ## Security and evidence integrity
 
 - Raw provider API keys are stored only through the native OS credential store; no command returns a stored key to the webview.
