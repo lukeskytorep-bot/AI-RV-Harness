@@ -8,7 +8,7 @@ import type { AppRepository } from "../storage/repository";
 
 type Copy = ReturnType<typeof getCopy>;
 
-const PROVIDER_LABELS: Record<ProviderKind, string> = {
+export const PROVIDER_LABELS: Record<ProviderKind, string> = {
   openrouter: "OpenRouter",
   google: "Google Gemini API",
   openai: "OpenAI",
@@ -104,7 +104,7 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
           {providers.length === 0 ? <p className="provider-empty">{copy.noProviders}</p> : providers.map((config) => (
             <article className="provider-row" key={config.id}>
               <span className="provider-logo"><Server size={18} /></span>
-              <div className="provider-identity"><strong>{config.label}</strong><small>{PROVIDER_LABELS[config.provider]} · {config.credentialHint || "••••••••"}</small></div>
+              <div className="provider-identity"><strong>{config.label}</strong><small>{PROVIDER_LABELS[config.provider]} · {config.credentialHint || "••••••••"}</small>{config.lastStatus === "error" && config.lastError && <small className="provider-inline-error">{config.lastError}</small>}</div>
               <div className="provider-count"><small>{copy.cachedModels}</small><strong>{modelCount.get(config.id) ?? 0}</strong></div>
               <span className={`connection-state ${config.lastStatus ?? "idle"}`}>
                 {config.lastStatus === "ok" ? <Check size={13} /> : <span className="state-dot" />}

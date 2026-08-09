@@ -1,11 +1,11 @@
 import Database from "@tauri-apps/plugin-sql";
-import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, UpdateProfileInput, Workspace } from "../types";
+import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CreateProviderConfigInput, ProviderConfig, ProviderKind, ProviderModel } from "../providers/types";
 import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
 import type { CreateJudgeRunInput, FrozenJudgeScoreInput, JudgeNarrative, JudgeScoreRecord } from "../judge/types";
 import { computeJudgeTotal } from "../domain/scoring";
-import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord } from "../targets/types";
+import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord, UpdateTargetInput } from "../targets/types";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
 import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchConditionRecord, ResearchConfig, ResearchLockPlan, ResearchProjectRecord, ResearchResults, ResearchState, ResearchTemplateType } from "../research/types";
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
@@ -13,6 +13,7 @@ import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
 import { serializePostRevealTurn } from "../sessions/postRevealTranscript";
 import { verifySealedViewerEvidence } from "../sessions/evidence";
+import type { ReasoningEffort } from "../providers/types";
 
 type ProfileRow = {
   id: string;
@@ -20,6 +21,14 @@ type ProfileRow = {
   note: string | null;
   credential_id: string | null;
   credential_provider: string | null;
+  default_viewer_model_id: string | null;
+  default_viewer_reasoning_effort: ReasoningEffort | null;
+  default_viewer_temperature: number | null;
+  default_viewer_system_prompt: string | null;
+  default_monitor_provider_config_id: string | null;
+  default_monitor_model_id: string | null;
+  default_judge_provider_config_id: string | null;
+  default_judge_model_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -40,6 +49,7 @@ type ProviderConfigRow = {
   label: string;
   credential_id: string;
   credential_hint: string | null;
+  credential_fingerprint: string | null;
   base_url: string | null;
   enabled: number;
   last_tested_at: string | null;
@@ -163,6 +173,14 @@ function mapProfile(row: ProfileRow): Profile {
     note: row.note ?? undefined,
     credentialId: row.credential_id ?? undefined,
     credentialProvider: row.credential_provider ?? undefined,
+    defaultViewerModelId: row.default_viewer_model_id ?? undefined,
+    defaultViewerReasoningEffort: row.default_viewer_reasoning_effort ?? undefined,
+    defaultViewerTemperature: row.default_viewer_temperature ?? undefined,
+    defaultViewerSystemPrompt: row.default_viewer_system_prompt ?? undefined,
+    defaultMonitorProviderConfigId: row.default_monitor_provider_config_id ?? undefined,
+    defaultMonitorModelId: row.default_monitor_model_id ?? undefined,
+    defaultJudgeProviderConfigId: row.default_judge_provider_config_id ?? undefined,
+    defaultJudgeModelId: row.default_judge_model_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -187,6 +205,7 @@ function mapProviderConfig(row: ProviderConfigRow): ProviderConfig {
     label: row.label,
     credentialId: row.credential_id,
     credentialHint: row.credential_hint ?? undefined,
+    credentialFingerprint: row.credential_fingerprint ?? undefined,
     baseUrl: row.base_url ?? undefined,
     enabled: row.enabled === 1,
     lastTestedAt: row.last_tested_at ?? undefined,
@@ -252,7 +271,16 @@ export class SqliteRepository implements AppRepository {
   async listProfiles(): Promise<Profile[]> {
     const rows = await this.db.select<ProfileRow[]>(
       `SELECT p.id, p.display_name, p.note, p.credential_id,
-              c.provider AS credential_provider, p.created_at, p.updated_at
+              c.provider AS credential_provider,
+              p.default_viewer_model_id,
+              p.default_viewer_reasoning_effort,
+              p.default_viewer_temperature,
+              p.default_viewer_system_prompt,
+              p.default_monitor_provider_config_id,
+              p.default_monitor_model_id,
+              p.default_judge_provider_config_id,
+              p.default_judge_model_id,
+              p.created_at, p.updated_at
          FROM profiles p
          LEFT JOIN credentials_metadata c ON c.id = p.credential_id
         WHERE p.archived_at IS NULL
@@ -263,17 +291,49 @@ export class SqliteRepository implements AppRepository {
 
   async createProfile(input: CreateProfileInput): Promise<Profile> {
     const timestamp = nowIso();
+    const ai = input.aiConfiguration;
     const profile: Profile = {
       id: createId("profile"),
       name: input.name.trim(),
       note: input.note?.trim() || undefined,
+      credentialId: ai?.credentialId,
+      credentialProvider: ai?.credentialProvider,
+      defaultViewerModelId: ai?.defaultViewerModelId,
+      defaultViewerReasoningEffort: ai?.defaultViewerReasoningEffort,
+      defaultViewerTemperature: ai?.defaultViewerTemperature,
+      defaultViewerSystemPrompt: ai?.defaultViewerSystemPrompt?.trim() || undefined,
+      defaultMonitorProviderConfigId: ai?.defaultMonitorProviderConfigId,
+      defaultMonitorModelId: ai?.defaultMonitorModelId,
+      defaultJudgeProviderConfigId: ai?.defaultJudgeProviderConfigId,
+      defaultJudgeModelId: ai?.defaultJudgeModelId,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
     await this.db.execute(
-      `INSERT INTO profiles (id, display_name, note, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [profile.id, profile.name, profile.note ?? null, timestamp, timestamp],
+      `INSERT INTO profiles (
+         id, display_name, note, credential_id,
+         default_viewer_model_id, default_viewer_reasoning_effort,
+         default_viewer_temperature, default_viewer_system_prompt,
+         default_monitor_provider_config_id, default_monitor_model_id,
+         default_judge_provider_config_id, default_judge_model_id,
+         created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+      [
+        profile.id,
+        profile.name,
+        profile.note ?? null,
+        profile.credentialId ?? null,
+        profile.defaultViewerModelId ?? null,
+        profile.defaultViewerReasoningEffort ?? null,
+        profile.defaultViewerTemperature ?? null,
+        profile.defaultViewerSystemPrompt ?? null,
+        profile.defaultMonitorProviderConfigId ?? null,
+        profile.defaultMonitorModelId ?? null,
+        profile.defaultJudgeProviderConfigId ?? null,
+        profile.defaultJudgeModelId ?? null,
+        timestamp,
+        timestamp,
+      ],
     );
     return profile;
   }
@@ -290,6 +350,36 @@ export class SqliteRepository implements AppRepository {
     const timestamp = nowIso();
     await this.db.execute("UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE profile_id = $2 AND archived_at IS NULL", [timestamp, id]);
     await this.db.execute("UPDATE profiles SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", [timestamp, id]);
+  }
+
+  async setProfileAiConfiguration(profileId: string, input: ProfileAiConfigurationInput): Promise<void> {
+    await this.db.execute(
+      `UPDATE profiles
+          SET credential_id = $1,
+              default_viewer_model_id = $2,
+              default_viewer_reasoning_effort = $3,
+              default_viewer_temperature = $4,
+              default_viewer_system_prompt = $5,
+              default_monitor_provider_config_id = $6,
+              default_monitor_model_id = $7,
+              default_judge_provider_config_id = $8,
+              default_judge_model_id = $9,
+              updated_at = $10
+        WHERE id = $11 AND archived_at IS NULL`,
+      [
+        input.credentialId ?? null,
+        input.defaultViewerModelId ?? null,
+        input.defaultViewerReasoningEffort ?? null,
+        input.defaultViewerTemperature ?? null,
+        input.defaultViewerSystemPrompt?.trim() || null,
+        input.defaultMonitorProviderConfigId ?? null,
+        input.defaultMonitorModelId ?? null,
+        input.defaultJudgeProviderConfigId ?? null,
+        input.defaultJudgeModelId ?? null,
+        nowIso(),
+        profileId,
+      ],
+    );
   }
 
   async listWorkspaces(profileId?: string): Promise<Workspace[]> {
@@ -346,7 +436,16 @@ export class SqliteRepository implements AppRepository {
   }
 
   async setProfileCredential(profileId: string, credentialId?: string, _provider?: string): Promise<void> {
-    await this.db.execute("UPDATE profiles SET credential_id = $1, updated_at = $2 WHERE id = $3", [credentialId ?? null, nowIso(), profileId]);
+    await this.db.execute(
+      `UPDATE profiles
+          SET credential_id = $1,
+              default_viewer_model_id = NULL,
+              default_viewer_reasoning_effort = NULL,
+              default_viewer_temperature = NULL,
+              updated_at = $2
+        WHERE id = $3`,
+      [credentialId ?? null, nowIso(), profileId],
+    );
   }
 
   async getOrCreateChatThread(workspaceId: string, mode: ChatMode): Promise<ChatThread> {
@@ -471,10 +570,13 @@ export class SqliteRepository implements AppRepository {
 
   async listProviderConfigs(): Promise<ProviderConfig[]> {
     const rows = await this.db.select<ProviderConfigRow[]>(
-      `SELECT id, provider, label, credential_id, credential_hint, base_url, enabled,
-              last_tested_at, last_status, last_error, created_at, updated_at
-         FROM provider_configs
-        ORDER BY updated_at DESC`,
+      `SELECT pc.id, pc.provider, pc.label, pc.credential_id, pc.credential_hint,
+              cm.fingerprint AS credential_fingerprint,
+              pc.base_url, pc.enabled, pc.last_tested_at, pc.last_status, pc.last_error,
+              pc.created_at, pc.updated_at
+         FROM provider_configs pc
+         LEFT JOIN credentials_metadata cm ON cm.id = pc.credential_id
+        ORDER BY pc.updated_at DESC`,
     );
     return rows.map(mapProviderConfig);
   }
@@ -487,6 +589,7 @@ export class SqliteRepository implements AppRepository {
       label: input.label.trim(),
       credentialId: input.credentialId,
       credentialHint: input.credentialHint,
+      credentialFingerprint: input.fingerprint,
       baseUrl: input.baseUrl?.trim() || undefined,
       enabled: true,
       createdAt: timestamp,
@@ -506,11 +609,57 @@ export class SqliteRepository implements AppRepository {
     return config;
   }
 
+  async updateProviderCredentialMetadata(id: string, credentialHint: string, fingerprint: string): Promise<void> {
+    const rows = await this.db.select<{ credential_id: string }[]>("SELECT credential_id FROM provider_configs WHERE id = $1 LIMIT 1", [id]);
+    const credentialId = rows[0]?.credential_id;
+    if (!credentialId) throw new Error("Provider connection not found.");
+    const timestamp = nowIso();
+    await this.db.execute("BEGIN IMMEDIATE");
+    try {
+      await this.db.execute(
+        `UPDATE provider_configs
+            SET credential_hint = $1, last_status = NULL, last_error = NULL, last_tested_at = NULL, updated_at = $2
+          WHERE id = $3`,
+        [credentialHint, timestamp, id],
+      );
+      await this.db.execute(
+        "UPDATE credentials_metadata SET fingerprint = $1, updated_at = $2 WHERE id = $3",
+        [fingerprint, timestamp, credentialId],
+      );
+      await this.db.execute("COMMIT");
+    } catch (error) {
+      await this.db.execute("ROLLBACK").catch(() => undefined);
+      throw error;
+    }
+  }
+
   async deleteProviderConfig(id: string): Promise<void> {
     const rows = await this.db.select<{ credential_id: string }[]>("SELECT credential_id FROM provider_configs WHERE id = $1", [id]);
-    await this.db.execute("DELETE FROM provider_configs WHERE id = $1", [id]);
-    if (rows[0]?.credential_id) {
-      await this.db.execute("DELETE FROM credentials_metadata WHERE id = $1", [rows[0].credential_id]);
+    const credentialId = rows[0]?.credential_id;
+    await this.db.execute("BEGIN IMMEDIATE");
+    try {
+      if (credentialId) {
+        await this.db.execute(
+          `UPDATE profiles
+              SET credential_id = CASE WHEN credential_id = $1 THEN NULL ELSE credential_id END,
+                  default_viewer_model_id = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_model_id END,
+                  default_viewer_reasoning_effort = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_reasoning_effort END,
+                  default_viewer_temperature = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_temperature END,
+                  default_monitor_provider_config_id = CASE WHEN default_monitor_provider_config_id = $2 THEN NULL ELSE default_monitor_provider_config_id END,
+                  default_monitor_model_id = CASE WHEN default_monitor_provider_config_id = $2 THEN NULL ELSE default_monitor_model_id END,
+                  default_judge_provider_config_id = CASE WHEN default_judge_provider_config_id = $2 THEN NULL ELSE default_judge_provider_config_id END,
+                  default_judge_model_id = CASE WHEN default_judge_provider_config_id = $2 THEN NULL ELSE default_judge_model_id END,
+                  updated_at = $3
+            WHERE credential_id = $1 OR default_monitor_provider_config_id = $2 OR default_judge_provider_config_id = $2`,
+          [credentialId, id, nowIso()],
+        );
+      }
+      await this.db.execute("DELETE FROM provider_configs WHERE id = $1", [id]);
+      if (credentialId) await this.db.execute("DELETE FROM credentials_metadata WHERE id = $1", [credentialId]);
+      await this.db.execute("COMMIT");
+    } catch (error) {
+      await this.db.execute("ROLLBACK").catch(() => undefined);
+      throw error;
     }
   }
 
@@ -628,6 +777,24 @@ export class SqliteRepository implements AppRepository {
       [target.id, target.collection, target.title, target.revealText ?? null, target.revealArtifactPath ?? null, JSON.stringify(target.revealArtifacts ?? []), JSON.stringify(target.tags), JSON.stringify(target.sourceMetadata), target.contentHash ?? null, timestamp],
     );
     return target;
+  }
+
+  async updateTarget(id: string, input: UpdateTargetInput): Promise<TargetRecord> {
+    const timestamp = nowIso();
+    await this.db.execute(
+      `UPDATE targets
+          SET title = $1, reveal_text = $2, tags_json = $3, content_hash = $4, updated_at = $5
+        WHERE id = $6 AND collection = 'user'`,
+      [input.title.trim(), input.revealText?.trim() || null, JSON.stringify(input.tags), input.contentHash, timestamp, id],
+    );
+    const target = (await this.listTargets("user")).find((item) => item.id === id);
+    if (!target) throw new Error("User target not found.");
+    return target;
+  }
+
+  async deleteTarget(id: string): Promise<void> {
+    const result = await this.db.execute("DELETE FROM targets WHERE id = $1 AND collection = 'user'", [id]);
+    if (result.rowsAffected !== 1) throw new Error("User target not found or cannot be deleted.");
   }
 
   async recordTargetUsage(input: TargetUsageInput): Promise<void> {

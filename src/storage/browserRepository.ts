@@ -1,10 +1,10 @@
-import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, UpdateProfileInput, Workspace } from "../types";
+import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CreateProviderConfigInput, ProviderConfig, ProviderModel } from "../providers/types";
 import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
 import type { CreateJudgeRunInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
 import { computeJudgeTotal } from "../domain/scoring";
-import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord } from "../targets/types";
+import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord, UpdateTargetInput } from "../targets/types";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
 import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchConditionRecord, ResearchConfig, ResearchLockPlan, ResearchProjectRecord, ResearchResults, ResearchState } from "../research/types";
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
@@ -73,6 +73,16 @@ export class BrowserRepository implements AppRepository {
       id: createId("profile"),
       name: input.name.trim(),
       note: input.note?.trim() || undefined,
+      credentialId: input.aiConfiguration?.credentialId,
+      credentialProvider: input.aiConfiguration?.credentialProvider,
+      defaultViewerModelId: input.aiConfiguration?.defaultViewerModelId,
+      defaultViewerReasoningEffort: input.aiConfiguration?.defaultViewerReasoningEffort,
+      defaultViewerTemperature: input.aiConfiguration?.defaultViewerTemperature,
+      defaultViewerSystemPrompt: input.aiConfiguration?.defaultViewerSystemPrompt?.trim() || undefined,
+      defaultMonitorProviderConfigId: input.aiConfiguration?.defaultMonitorProviderConfigId,
+      defaultMonitorModelId: input.aiConfiguration?.defaultMonitorModelId,
+      defaultJudgeProviderConfigId: input.aiConfiguration?.defaultJudgeProviderConfigId,
+      defaultJudgeModelId: input.aiConfiguration?.defaultJudgeModelId,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -89,6 +99,31 @@ export class BrowserRepository implements AppRepository {
     const timestamp = nowIso();
     write(PROFILES_KEY, read<Profile[]>(PROFILES_KEY, []).map((profile) => profile.id === id ? { ...profile, archivedAt: timestamp, updatedAt: timestamp } : profile));
     write(WORKSPACES_KEY, read<Workspace[]>(WORKSPACES_KEY, []).map((workspace) => workspace.profileId === id ? { ...workspace, archivedAt: timestamp, updatedAt: timestamp } : workspace));
+  }
+
+  async setProfileAiConfiguration(profileId: string, input: ProfileAiConfigurationInput): Promise<void> {
+    const timestamp = nowIso();
+    write(
+      PROFILES_KEY,
+      read<Profile[]>(PROFILES_KEY, []).map((profile) =>
+        profile.id === profileId
+          ? {
+              ...profile,
+              credentialId: input.credentialId,
+              credentialProvider: input.credentialProvider,
+              defaultViewerModelId: input.defaultViewerModelId,
+              defaultViewerReasoningEffort: input.defaultViewerReasoningEffort,
+              defaultViewerTemperature: input.defaultViewerTemperature,
+              defaultViewerSystemPrompt: input.defaultViewerSystemPrompt?.trim() || undefined,
+              defaultMonitorProviderConfigId: input.defaultMonitorProviderConfigId,
+              defaultMonitorModelId: input.defaultMonitorModelId,
+              defaultJudgeProviderConfigId: input.defaultJudgeProviderConfigId,
+              defaultJudgeModelId: input.defaultJudgeModelId,
+              updatedAt: timestamp,
+            }
+          : profile,
+      ),
+    );
   }
 
   async listWorkspaces(profileId?: string): Promise<Workspace[]> {
@@ -131,7 +166,7 @@ export class BrowserRepository implements AppRepository {
       PROFILES_KEY,
       read<Profile[]>(PROFILES_KEY, []).map((profile) =>
         profile.id === profileId
-          ? { ...profile, credentialId, credentialProvider: provider, updatedAt: timestamp }
+          ? { ...profile, credentialId, credentialProvider: provider, defaultViewerModelId: undefined, defaultViewerReasoningEffort: undefined, defaultViewerTemperature: undefined, updatedAt: timestamp }
           : profile,
       ),
     );
@@ -221,6 +256,7 @@ export class BrowserRepository implements AppRepository {
       label: input.label.trim(),
       credentialId: input.credentialId,
       credentialHint: input.credentialHint,
+      credentialFingerprint: input.fingerprint,
       baseUrl: input.baseUrl?.trim() || undefined,
       enabled: true,
       createdAt: timestamp,
@@ -230,12 +266,41 @@ export class BrowserRepository implements AppRepository {
     return provider;
   }
 
+  async updateProviderCredentialMetadata(id: string, credentialHint: string, fingerprint: string): Promise<void> {
+    const timestamp = nowIso();
+    write(
+      PROVIDERS_KEY,
+      (await this.listProviderConfigs()).map((item) => item.id === id
+        ? { ...item, credentialHint, credentialFingerprint: fingerprint, lastStatus: undefined, lastError: undefined, lastTestedAt: undefined, updatedAt: timestamp }
+        : item),
+    );
+  }
+
   async deleteProviderConfig(id: string): Promise<void> {
     const removed = (await this.listProviderConfigs()).find((item) => item.id === id);
     write(PROVIDERS_KEY, (await this.listProviderConfigs()).filter((item) => item.id !== id));
     write(MODELS_KEY, read<ProviderModel[]>(MODELS_KEY, []).filter((item) => item.providerConfigId !== id));
     if (removed) {
-      write(PROFILES_KEY, (await this.listProfiles()).map((profile) => profile.credentialId === removed.credentialId ? { ...profile, credentialId: undefined, credentialProvider: undefined, updatedAt: nowIso() } : profile));
+      const timestamp = nowIso();
+      write(PROFILES_KEY, read<Profile[]>(PROFILES_KEY, []).map((profile) => {
+        const ownsRemovedCredential = profile.credentialId === removed.credentialId;
+        const usesRemovedMonitor = profile.defaultMonitorProviderConfigId === id;
+        const usesRemovedJudge = profile.defaultJudgeProviderConfigId === id;
+        if (!ownsRemovedCredential && !usesRemovedMonitor && !usesRemovedJudge) return profile;
+        return {
+          ...profile,
+          ...(ownsRemovedCredential ? {
+            credentialId: undefined,
+            credentialProvider: undefined,
+            defaultViewerModelId: undefined,
+            defaultViewerReasoningEffort: undefined,
+            defaultViewerTemperature: undefined,
+          } : {}),
+          ...(usesRemovedMonitor ? { defaultMonitorProviderConfigId: undefined, defaultMonitorModelId: undefined } : {}),
+          ...(usesRemovedJudge ? { defaultJudgeProviderConfigId: undefined, defaultJudgeModelId: undefined } : {}),
+          updatedAt: timestamp,
+        };
+      }));
     }
   }
 
@@ -295,6 +360,30 @@ export class BrowserRepository implements AppRepository {
     };
     write(TARGETS_KEY, [target, ...read<TargetRecord[]>(TARGETS_KEY, [])]);
     return target;
+  }
+
+  async updateTarget(id: string, input: UpdateTargetInput): Promise<TargetRecord> {
+    const all = read<TargetRecord[]>(TARGETS_KEY, []);
+    const target = all.find((item) => item.id === id);
+    if (!target || target.collection !== "user") throw new Error("User target not found.");
+    if (this.targetHasRecordedUse(id)) throw new Error("Used targets are locked to preserve session and Research integrity.");
+    const updated: TargetRecord = { ...target, title: input.title.trim(), revealText: input.revealText?.trim() || undefined, tags: [...input.tags], contentHash: input.contentHash, updatedAt: nowIso() };
+    write(TARGETS_KEY, all.map((item) => item.id === id ? updated : item));
+    return updated;
+  }
+
+  async deleteTarget(id: string): Promise<void> {
+    const all = read<TargetRecord[]>(TARGETS_KEY, []);
+    const target = all.find((item) => item.id === id);
+    if (!target || target.collection !== "user") throw new Error("User target not found.");
+    if (this.targetHasRecordedUse(id)) throw new Error("Used targets are locked to preserve session and Research integrity.");
+    write(TARGETS_KEY, all.filter((item) => item.id !== id));
+  }
+
+  private targetHasRecordedUse(id: string): boolean {
+    return read<TargetUsageRecord[]>(TARGET_USAGE_KEY, []).some((item) => item.targetId === id)
+      || read<RvSession[]>(RV_SESSIONS_KEY, []).some((item) => item.targetId === id)
+      || read<ResearchAssignmentRecord[]>(RESEARCH_ASSIGNMENTS_KEY, []).some((item) => item.targetId === id);
   }
 
   async recordTargetUsage(input: TargetUsageInput): Promise<void> {

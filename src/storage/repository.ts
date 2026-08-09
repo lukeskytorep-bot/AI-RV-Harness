@@ -1,9 +1,9 @@
-import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, UpdateProfileInput, Workspace } from "../types";
+import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CreateProviderConfigInput, ProviderConfig, ProviderModel } from "../providers/types";
 import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
 import type { CreateJudgeRunInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
-import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord } from "../targets/types";
+import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord, UpdateTargetInput } from "../targets/types";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
 import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchConditionRecord, ResearchConfig, ResearchLockPlan, ResearchProjectRecord, ResearchResults, ResearchState } from "../research/types";
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
@@ -13,6 +13,7 @@ export interface AppRepository {
   createProfile(input: CreateProfileInput): Promise<Profile>;
   updateProfile(id: string, input: UpdateProfileInput): Promise<void>;
   archiveProfile(id: string): Promise<void>;
+  setProfileAiConfiguration(profileId: string, input: ProfileAiConfigurationInput): Promise<void>;
   listWorkspaces(profileId?: string): Promise<Workspace[]>;
   createWorkspace(input: CreateWorkspaceInput): Promise<Workspace>;
   touchWorkspace(id: string): Promise<void>;
@@ -31,6 +32,7 @@ export interface AppRepository {
   saveSettings(settings: AppSettings): Promise<void>;
   listProviderConfigs(): Promise<ProviderConfig[]>;
   createProviderConfig(input: CreateProviderConfigInput): Promise<ProviderConfig>;
+  updateProviderCredentialMetadata(id: string, credentialHint: string, fingerprint: string): Promise<void>;
   deleteProviderConfig(id: string): Promise<void>;
   updateProviderConnectionStatus(id: string, status: "ok" | "error", error?: string): Promise<void>;
   listProviderModels(providerConfigId?: string): Promise<ProviderModel[]>;
@@ -39,6 +41,8 @@ export interface AppRepository {
   clearProviderModelCache(): Promise<void>;
   listTargets(collection?: TargetRecord["collection"]): Promise<TargetRecord[]>;
   createTarget(input: CreateTargetInput): Promise<TargetRecord>;
+  updateTarget(id: string, input: UpdateTargetInput): Promise<TargetRecord>;
+  deleteTarget(id: string): Promise<void>;
   recordTargetUsage(input: TargetUsageInput): Promise<void>;
   listTargetUsage(): Promise<TargetUsageRecord[]>;
   listCustomProtocols(language?: "pl" | "en"): Promise<CustomProtocolVersion[]>;
