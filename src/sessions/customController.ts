@@ -11,6 +11,7 @@ import type { InterfaceLanguage } from "../types";
 import { detectRepetitiveOutput, sha256Text, type SessionProgress } from "./controller";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics } from "./metrics";
 import type { RvSessionState, SessionSnapshot } from "./types";
+import { CostGuardStop, SessionCostGuard } from "./costGuard";
 
 type CustomSessionRepository = Pick<
   AppRepository,
@@ -45,6 +46,7 @@ export interface AutomaticCustomRunInput {
     messages: ProviderMessage[];
     settings: ReturnType<typeof resolveGenerationSettings>;
     timeoutMs?: number;
+    signal?: AbortSignal;
   }) => Promise<ProviderChatResponse>;
   onProgress?: (progress: SessionProgress) => void;
 }
@@ -53,6 +55,8 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   validate(input);
   const effectiveSettings = resolveGenerationSettings(input.model.capabilities, input.requestedSettings);
   if (effectiveSettings.omitted.length) throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
+  const costGuard = new SessionCostGuard(input.maxSessionCostUsd);
+  costGuard.validateModel(input.model);
   const sessionId = `session_${crypto.randomUUID()}`;
   const sessionCode = createSessionCode(input.sessionCodePrefix);
   const chat = input.chat ?? nativeProviderChat;
@@ -123,14 +127,23 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
     let responseDurationMs = 0;
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       if (input.signal?.aborted) return stopRun("USER STOP");
+      let costAuthorization;
+      try {
+        costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
+      } catch (cause) {
+        if (cause instanceof CostGuardStop) return stopRun(cause.message);
+        throw cause;
+      }
       const requestStartedAt = Date.now();
       try {
-        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs });
+        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal });
+        response = { ...response, usage: costAuthorization.success(response.usage) };
         responseDurationMs = Date.now() - requestStartedAt;
         metrics = recordProviderRequest(metrics, response.usage, responseDurationMs);
         if (!response.content.trim()) throw new Error("empty provider response");
         break;
       } catch (cause) {
+        costAuthorization.failure();
         if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { step, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });

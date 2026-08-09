@@ -1,5 +1,6 @@
-use std::time::Duration;
+use std::{collections::{HashMap, HashSet}, sync::{LazyLock, Mutex}, time::Duration};
 
+use futures_util::future::{AbortHandle, Abortable};
 use reqwest::{Client, RequestBuilder, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -33,6 +34,7 @@ pub struct ProviderChatRequest {
     provider: ProviderKind,
     credential_id: String,
     base_url: Option<String>,
+    request_id: Option<String>,
     model_id: String,
     messages: Vec<ProviderMessage>,
     reasoning_effort: Option<String>,
@@ -40,6 +42,15 @@ pub struct ProviderChatRequest {
     max_output_tokens: Option<u32>,
     timeout_ms: Option<u64>,
 }
+
+#[derive(Default)]
+struct ChatCancellationRegistry {
+    active: HashMap<String, AbortHandle>,
+    cancelled_before_start: HashSet<String>,
+}
+
+static CHAT_CANCELLATIONS: LazyLock<Mutex<ChatCancellationRegistry>> =
+    LazyLock::new(|| Mutex::new(ChatCancellationRegistry::default()));
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ProviderMessage {
@@ -112,7 +123,7 @@ fn validate_base_url(value: &str) -> Result<String, String> {
 fn client() -> Result<Client, String> {
     Client::builder()
         .connect_timeout(Duration::from_secs(30))
-        .user_agent("AI-RV-Harness/0.7.0")
+        .user_agent("AI-RV-Harness/0.7.1")
         .build()
         .map_err(|error| error.to_string())
 }
@@ -185,12 +196,13 @@ pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatR
     let mut debug_request = body.clone();
     scrub_debug_value(&mut debug_request, &secret, None);
     let timeout_ms = request.timeout_ms.unwrap_or(120_000);
-    let response = authenticated(client()?.post(url).json(&body), request.provider, &secret)
-        .timeout(Duration::from_millis(timeout_ms))
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
-    let (payload, request_id) = json_response(response, &secret).await?;
+    let (payload, request_id) = send_chat_request(
+        authenticated(client()?.post(url).json(&body), request.provider, &secret)
+            .timeout(Duration::from_millis(timeout_ms)),
+        request.request_id.as_deref(),
+        &secret,
+    )
+    .await?;
     let mut debug_response = payload.clone();
     scrub_debug_value(&mut debug_response, &secret, None);
     let mut parsed = parse_chat_response(request.provider, payload, request_id)?;
@@ -200,6 +212,69 @@ pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatR
         response: debug_response,
     });
     Ok(parsed)
+}
+
+#[tauri::command]
+pub fn cancel_provider_request(request_id: String) -> Result<bool, String> {
+    validate_request_id(&request_id)?;
+    let mut registry = CHAT_CANCELLATIONS
+        .lock()
+        .map_err(|_| "provider cancellation registry is unavailable".to_string())?;
+    let handle = registry.active.remove(&request_id);
+    if let Some(handle) = handle {
+        handle.abort();
+        Ok(true)
+    } else {
+        if registry.cancelled_before_start.len() >= 1024 {
+            registry.cancelled_before_start.clear();
+        }
+        registry.cancelled_before_start.insert(request_id);
+        Ok(false)
+    }
+}
+
+async fn send_chat_request(builder: RequestBuilder, request_id: Option<&str>, secret: &str) -> Result<(Value, Option<String>), String> {
+    let Some(request_id) = request_id else {
+        let response = builder.send().await.map_err(|error| error.to_string())?;
+        return json_response(response, secret).await;
+    };
+    validate_request_id(request_id)?;
+    let (handle, registration) = AbortHandle::new_pair();
+    {
+        let mut registry = CHAT_CANCELLATIONS
+            .lock()
+            .map_err(|_| "provider cancellation registry is unavailable".to_string())?;
+        if registry.cancelled_before_start.remove(request_id) {
+            return Err("provider request cancelled".to_string());
+        }
+        if registry.active.insert(request_id.to_string(), handle).is_some() {
+            return Err("duplicate provider request id".to_string());
+        }
+    }
+    let request = async {
+        let response = builder.send().await.map_err(|error| error.to_string())?;
+        json_response(response, secret).await
+    };
+    let result = Abortable::new(request, registration).await;
+    CHAT_CANCELLATIONS
+        .lock()
+        .map_err(|_| "provider cancellation registry is unavailable".to_string())?
+        .active
+        .remove(request_id);
+    match result {
+        Ok(response) => response,
+        Err(_) => Err("provider request cancelled".to_string()),
+    }
+}
+
+fn validate_request_id(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 80
+        || !value.chars().all(|character| character.is_ascii_alphanumeric() || character == '-')
+    {
+        return Err("invalid provider request id".to_string());
+    }
+    Ok(())
 }
 
 fn scrub_debug_value(value: &mut Value, secret: &str, parent_key: Option<&str>) {
@@ -238,6 +313,9 @@ fn scrub_debug_value(value: &mut Value, secret: &str, parent_key: Option<&str>) 
 }
 
 fn validate_chat_request(request: &ProviderChatRequest) -> Result<(), String> {
+    if let Some(request_id) = request.request_id.as_deref() {
+        validate_request_id(request_id)?;
+    }
     if request.model_id.trim().is_empty() {
         return Err("model id is required".to_string());
     }
@@ -547,5 +625,11 @@ mod tests {
         let wire = value.to_string();
         assert!(!wire.contains("sk-secret"));
         assert!(wire.contains("BINARY REDACTED"));
+    }
+
+    #[test]
+    fn validates_provider_cancellation_ids() {
+        assert!(validate_request_id("8f3127e0-844a-4f27-aada-6f14641e67e1").is_ok());
+        assert!(validate_request_id("../../escape").is_err());
     }
 }

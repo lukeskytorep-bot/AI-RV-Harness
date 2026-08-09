@@ -3,6 +3,10 @@ import type { InterfaceLanguage } from "./types";
 const en = {
   appName: "AI RV Harness",
   tagline: "Blind sessions. Reproducible research.",
+  startupFailed: "Local data could not be initialized",
+  startupFailedLead: "No data was changed. Close any other AI RV Harness window and try again. If the problem repeats, keep the technical details for diagnosis.",
+  retryStartup: "Try again",
+  technicalDetails: "Technical details",
   home: "Home",
   profiles: "Profiles",
   research: "Research Tests",
@@ -415,6 +419,10 @@ const en = {
 const pl: Record<keyof typeof en, string> = {
   appName: "AI RV Harness",
   tagline: "Ślepe sesje. Powtarzalne badania.",
+  startupFailed: "Nie udało się uruchomić lokalnych danych",
+  startupFailedLead: "Żadne dane nie zostały zmienione. Zamknij inne okna AI RV Harness i spróbuj ponownie. Jeśli problem się powtórzy, zachowaj szczegóły techniczne do diagnozy.",
+  retryStartup: "Spróbuj ponownie",
+  technicalDetails: "Szczegóły techniczne",
   home: "Start",
   profiles: "Profile",
   research: "Testy badawcze",

@@ -60,6 +60,12 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
       continue;
     }
     checks.push(pass(`${prefix}:model`, `${condition.label}: model route is cached`));
+    if (config.sessionPolicy?.maxSessionCostUsd && config.sessionPolicy.maxSessionCostUsd > 0) {
+      const hasPricing = model.pricing.promptPerToken !== undefined && model.pricing.completionPerToken !== undefined;
+      checks.push(hasPricing
+        ? pass(`${prefix}:hard_cost`, `${condition.label}: cached pricing supports hard session cost enforcement`)
+        : fail(`${prefix}:hard_cost`, `${condition.label}: hard session cost limit requires cached input/output pricing`));
+    }
     const effective = resolveGenerationSettings(model.capabilities, condition.requestedSettings);
     checks.push(effective.omitted.length ? fail(`${prefix}:settings`, `${condition.label}: unsupported setting(s): ${effective.omitted.join(", ")}`) : pass(`${prefix}:settings`, `${condition.label}: requested settings are supported`));
     checks.push(condition.capabilitySnapshot && condition.effectiveSettings ? pass(`${prefix}:snapshot`, `${condition.label}: capability + requested/effective settings snapshot is present`) : fail(`${prefix}:snapshot`, `${condition.label}: Research capability snapshot is missing`));
@@ -102,7 +108,7 @@ function estimateViewerCost(config: ResearchConfig, models: Map<string, Provider
   let total = 0;
   for (const condition of config.conditions) {
     const model = models.get(`${condition.providerConfigId}::${condition.modelId}`);
-    if (!model?.pricing.promptPerToken || !model.pricing.completionPerToken) return undefined;
+    if (model?.pricing.promptPerToken === undefined || model.pricing.completionPerToken === undefined) return undefined;
     const inputTokens = Math.ceil((protocol.content.length + (condition.systemPrompt?.content.length ?? 0)) / 3.5);
     const outputTokens = Math.min(condition.requestedSettings.maxOutputTokens ?? 2048, model.capabilities.maxOutputTokens ?? 2048);
     const sessions = config.targetIds.length * config.repetitions;

@@ -45,7 +45,9 @@ export async function buildResearchLockPlan(projectId: string, config: ResearchC
     }
   }
 
-  const execution = shuffle(rows.map((_, index) => index));
+  const execution = config.templateType === "practice"
+    ? buildPracticeExecution(rows)
+    : shuffle(rows.map((_, index) => index));
   const judging = shuffle(rows.map((_, index) => index));
   execution.forEach((rowIndex, order) => { rows[rowIndex].assignment.executionOrder = order + 1; });
   judging.forEach((rowIndex, order) => { rows[rowIndex].assignment.judgeOrder = order + 1; });
@@ -55,6 +57,29 @@ export async function buildResearchLockPlan(projectId: string, config: ResearchC
     assignments: rows.map((row) => row.assignment),
     mappings: rows.map((row) => row.mapping),
   };
+}
+
+function buildPracticeExecution(
+  rows: Array<{ mapping: ResearchLockPlan["mappings"][number] }>,
+): number[] {
+  const pairs = new Map<string, number[]>();
+  rows.forEach((row, index) => {
+    const pair = pairs.get(row.mapping.pairKey) ?? [];
+    pair.push(index);
+    pairs.set(row.mapping.pairKey, pair);
+  });
+
+  const orderedPairs = [...pairs.values()].map((indices) => {
+    if (indices.length !== 2) throw new Error("Practice Effect requires exactly two sessions in every target pair.");
+    return [...indices].sort((left, right) => practiceRank(rows[left].mapping.pairOrder) - practiceRank(rows[right].mapping.pairOrder));
+  });
+  return shuffle(orderedPairs).flat();
+}
+
+function practiceRank(value: string | undefined): number {
+  if (value === "FIRST") return 0;
+  if (value === "SECOND") return 1;
+  throw new Error("Practice Effect pair is missing FIRST/SECOND order metadata.");
 }
 
 export function validateConfig(config: ResearchConfig): void {

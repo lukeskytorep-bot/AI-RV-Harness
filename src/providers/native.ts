@@ -62,13 +62,21 @@ export async function providerChat(input: {
   messages: ProviderMessage[];
   settings: EffectiveGenerationSettings;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<ProviderChatResponse> {
   requireDesktop();
+  if (input.signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
+  const requestId = crypto.randomUUID();
+  const cancel = () => {
+    void invoke("cancel_provider_request", { requestId }).catch(() => undefined);
+  };
+  input.signal?.addEventListener("abort", cancel, { once: true });
   let response: NativeChatResponse;
   try {
     response = await invoke<NativeChatResponse>("provider_chat", {
       request: {
         ...nativeConfig(input.config),
+        requestId,
         modelId: input.modelId,
         messages: input.messages,
         reasoningEffort: input.settings.effective.reasoningEffort,
@@ -85,6 +93,8 @@ export async function providerChat(input: {
       error: cause instanceof Error ? cause.message : String(cause),
     });
     throw cause;
+  } finally {
+    input.signal?.removeEventListener("abort", cancel);
   }
   recordProviderDebug({
     provider: input.config.provider,

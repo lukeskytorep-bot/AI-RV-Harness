@@ -11,6 +11,7 @@ import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/typ
 import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
 import { serializePostRevealTurn } from "../sessions/postRevealTranscript";
+import { verifySealedViewerEvidence } from "../sessions/evidence";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
@@ -400,12 +401,9 @@ export class BrowserRepository implements AppRepository {
   }
 
   async getViewerEvidence(sessionId: string): Promise<string> {
-    return read<Array<SessionEventInput & { id: string; sessionId: string; sequenceNumber: number; createdAt: string }>>(SESSION_EVENTS_KEY, [])
-      .filter((item) => item.sessionId === sessionId && (item.eventType === "VIEWER_RESPONSE" || item.eventType === "VIEWER_MONITOR_RESPONSE"))
-      .sort((a, b) => a.sequenceNumber - b.sequenceNumber)
-      .map((item) => item.content?.trim() ?? "")
-      .filter(Boolean)
-      .join("\n\n---\n\n");
+    const session = read<RvSession[]>(RV_SESSIONS_KEY, []).find((item) => item.id === sessionId);
+    if (!session?.preRevealSealedAt || !session.preRevealHash) return "";
+    return verifySealedViewerEvidence(session.preRevealTranscript, session.preRevealHash);
   }
 
   async listRvSessions(workspaceId: string): Promise<RvSession[]> {

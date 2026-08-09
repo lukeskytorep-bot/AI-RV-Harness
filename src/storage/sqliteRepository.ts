@@ -12,6 +12,7 @@ import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/typ
 import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
 import { serializePostRevealTurn } from "../sessions/postRevealTranscript";
+import { verifySealedViewerEvidence } from "../sessions/evidence";
 
 type ProfileRow = {
   id: string;
@@ -797,7 +798,6 @@ export class SqliteRepository implements AppRepository {
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [createId("reveal"), sessionId, reveal.source, reveal.text ?? null, JSON.stringify(reveal.artifactManifest ?? []), reveal.hash, timestamp],
     );
-    await this.updateRvSessionState(sessionId, "Revealed");
   }
 
   async getReveal(sessionId: string): Promise<RevealInput | null> {
@@ -817,13 +817,14 @@ export class SqliteRepository implements AppRepository {
   }
 
   async getViewerEvidence(sessionId: string): Promise<string> {
-    const rows = await this.db.select<{ content: string | null }[]>(
-      `SELECT content FROM session_events
-        WHERE session_id = $1 AND event_type IN ('VIEWER_RESPONSE','VIEWER_MONITOR_RESPONSE')
-        ORDER BY sequence_number`,
+    const rows = await this.db.select<Array<{ pre_reveal_transcript: string; pre_reveal_hash: string | null; pre_reveal_sealed_at: string | null }>>(
+      `SELECT pre_reveal_transcript, pre_reveal_hash, pre_reveal_sealed_at
+         FROM rv_sessions WHERE id = $1 LIMIT 1`,
       [sessionId],
     );
-    return rows.map((row) => row.content?.trim() ?? "").filter(Boolean).join("\n\n---\n\n");
+    const row = rows[0];
+    if (!row?.pre_reveal_sealed_at || !row.pre_reveal_hash) return "";
+    return verifySealedViewerEvidence(row.pre_reveal_transcript, row.pre_reveal_hash);
   }
 
   async listRvSessions(workspaceId: string): Promise<RvSession[]> {

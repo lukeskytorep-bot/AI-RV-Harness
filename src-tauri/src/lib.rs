@@ -62,6 +62,12 @@ pub fn run() {
             sql: include_str!("../migrations/009_post_reveal_append_only.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 10,
+            description: "atomic_reveal_state_transition",
+            sql: include_str!("../migrations/010_atomic_reveal.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -76,6 +82,7 @@ pub fn run() {
             secrets::delete_credential,
             providers::provider_discover_models,
             providers::provider_chat,
+            providers::cancel_provider_request,
             artifacts::store_reveal_artifact,
             artifacts::store_target_artifact,
             artifacts::read_reveal_image_for_judge,

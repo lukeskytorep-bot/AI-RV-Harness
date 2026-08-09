@@ -31,7 +31,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { getCopy } from "./i18n";
 import { ProviderSettings } from "./components/ProviderSettings";
-import { detectInterfaceLanguage, resolveSessionLanguage } from "./domain/localization";
+import { resolveSessionLanguage } from "./domain/localization";
 import { getFullRcp, getRvLite, type ProtocolResource, type RvLiteProtocolResource } from "./resources/protocolRegistry";
 import { createRepository, isTauriRuntime } from "./storage";
 import { createId, type AppRepository } from "./storage/repository";
@@ -74,18 +74,16 @@ import { sendPostRevealTurn } from "./sessions/postReveal";
 import { parsePostRevealTranscript } from "./sessions/postRevealTranscript";
 import { exportMonitorRun } from "./exports/monitor";
 import { ensureBundledTrainingTargets } from "./targets/bundled";
+import { createDefaultSettings } from "./startupDefaults";
+import { SettingsSaveQueue } from "./storage/settingsSaveQueue";
+import { AsyncRunGuard } from "./sessions/runGuard";
 
 type Page = "home" | "profiles" | "research" | "targets" | "settings" | "workspace";
 type WorkspaceTab = "chat" | "rv" | "monitor";
 
-function defaultSettings(): AppSettings {
-  const interfaceLanguage = detectInterfaceLanguage(navigator.language || "en");
-  return { interfaceLanguage, sessionLanguage: "same", theme: "aurora", requestTimeoutMs: 120_000, maxRetries: 2, defaultMaxOutputTokens: 8192, maxSessionCostUsd: 0, defaultRevealSource: "external", targetRepeatPolicy: "allow", sessionCodePrefix: "RVH", textScale: "normal", animations: true };
-}
-
 export default function App() {
   const [repository, setRepository] = useState<AppRepository | null>(null);
-  const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [settings, setSettings] = useState<AppSettings>(createDefaultSettings);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [page, setPage] = useState<Page>("home");
@@ -95,6 +93,9 @@ export default function App() {
   const [profileDialog, setProfileDialog] = useState(false);
   const [workspaceDialogFor, setWorkspaceDialogFor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [initializationError, setInitializationError] = useState<string | null>(null);
+  const [initializationAttempt, setInitializationAttempt] = useState(0);
+  const settingsSaveQueueRef = useRef<{ repository: AppRepository; queue: SettingsSaveQueue } | null>(null);
 
   const copy = getCopy(settings.interfaceLanguage);
   const activeWorkspace = workspaces.find((item) => item.id === activeWorkspaceId) ?? null;
@@ -104,38 +105,67 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let stage = "repository.connect";
+    setLoading(true);
+    setInitializationError(null);
     void (async () => {
-      const repo = await createRepository();
-      await ensureBundledTrainingTargets(repo);
-      const [storedSettings, storedProfiles, storedWorkspaces] = await Promise.all([
-        repo.loadSettings(),
-        repo.listProfiles(),
-        repo.listWorkspaces(),
-      ]);
-      if (cancelled) return;
-      const nextSettings = { ...defaultSettings(), ...storedSettings };
-      setRepository(repo);
-      setSettings(nextSettings);
-      setProfiles(storedProfiles);
-      setWorkspaces(storedWorkspaces);
-      setActiveProfileId(storedWorkspaces[0]?.profileId ?? storedProfiles[0]?.id ?? null);
-      setActiveWorkspaceId(storedWorkspaces[0]?.id ?? null);
-      setLoading(false);
+      try {
+        const repo = await createRepository();
+        stage = "starter-targets.seed";
+        await ensureBundledTrainingTargets(repo);
+        stage = "workspace-data.read";
+        const [storedSettings, storedProfiles, storedWorkspaces] = await Promise.all([
+          repo.loadSettings(),
+          repo.listProfiles(),
+          repo.listWorkspaces(),
+        ]);
+        if (cancelled) return;
+        const nextSettings = { ...createDefaultSettings(), ...storedSettings };
+        setRepository(repo);
+        setSettings(nextSettings);
+        setProfiles(storedProfiles);
+        setWorkspaces(storedWorkspaces);
+        setActiveProfileId(storedWorkspaces[0]?.profileId ?? storedProfiles[0]?.id ?? null);
+        setActiveWorkspaceId(storedWorkspaces[0]?.id ?? null);
+        setLoading(false);
+      } catch (error) {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`AI RV Harness initialization failed at ${stage}`, error);
+        setRepository(null);
+        setInitializationError(`${stage}: ${message}`);
+        setLoading(false);
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [initializationAttempt]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme;
     document.documentElement.lang = settings.interfaceLanguage;
     document.documentElement.dataset.textScale = settings.textScale;
     document.documentElement.dataset.animations = settings.animations ? "on" : "off";
+    try {
+      localStorage.setItem("rvh.ui.theme", settings.theme);
+    } catch {
+      // The SQLite setting remains canonical if WebView storage is unavailable.
+    }
   }, [settings.animations, settings.interfaceLanguage, settings.textScale, settings.theme]);
 
   useEffect(() => {
-    if (repository && !loading) void repository.saveSettings(settings);
+    if (!repository || loading) return;
+    if (settingsSaveQueueRef.current?.repository !== repository) {
+      settingsSaveQueueRef.current = {
+        repository,
+        queue: new SettingsSaveQueue(
+          (next) => repository.saveSettings(next),
+          (error) => console.error("AI RV Harness settings save failed", error),
+        ),
+      };
+    }
+    settingsSaveQueueRef.current.queue.enqueue(settings);
   }, [repository, loading, settings]);
 
   const navigate = (destination: Page) => setPage(destination);
@@ -190,6 +220,12 @@ export default function App() {
         <div className="content-scroll">
           {loading ? (
             <LoadingState />
+          ) : initializationError ? (
+            <InitializationErrorState
+              copy={copy}
+              error={initializationError}
+              onRetry={() => setInitializationAttempt((current) => current + 1)}
+            />
           ) : page === "home" ? (
             <HomeScreen
               copy={copy}
@@ -768,8 +804,10 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const [batchProgress, setBatchProgress] = useState<OrdinaryBatchProgress | null>(null);
   const [batchResults, setBatchResults] = useState<OrdinaryBatchSessionResult[]>([]);
   const [batchRunning, setBatchRunning] = useState(false);
+  const [sessionRunning, setSessionRunning] = useState(false);
   const [batchPreflightSignature, setBatchPreflightSignature] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const runGuardRef = useRef(new AsyncRunGuard());
   const resolvedLanguage = resolveSessionLanguage(settings.interfaceLanguage, sessionLanguage);
   const rcp = getFullRcp(resolvedLanguage);
   const rvLite = getRvLite(resolvedLanguage);
@@ -783,7 +821,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, modelId, protocol, customProtocolVersionId, runType, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, targetRepeatPolicy: settings.targetRepeatPolicy, batchCollection, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
   const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : 6;
-  const running = batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
+  const running = sessionRunning || batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
   const activeTarget = activeTargetId ? targets.find((target) => target.id === activeTargetId) ?? null : null;
   const clarificationEligible = Boolean(progress && (progress.state === "Revealed" || progress.state === "Completed") && (!activeTargetId || activeTarget?.collection === "user"));
 
@@ -862,6 +900,8 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     if (executionScope === "single" && revealSource === "automatic" && !automaticTarget) return;
     if (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature)) return;
     const batchTargets = executionScope === "batch" ? selectBatchTargets(batchPool, batchCount) : [];
+    if (!runGuardRef.current.tryAcquire()) return;
+    setSessionRunning(true);
     setActiveTargetId(executionScope === "single" ? automaticTarget?.id ?? null : null);
     setRunError(null);
     setRevealText("");
@@ -929,10 +969,17 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     } catch (cause) {
       setRunError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      runGuardRef.current.release();
+      setSessionRunning(false);
       setBatchRunning(false);
-      setRecentSessions((await repository.listRvSessions(workspace.id)).filter((session) => !session.researchProjectId));
-      setTargetUsage(await repository.listTargetUsage());
       abortRef.current = null;
+      try {
+        const [sessions, usage] = await Promise.all([repository.listRvSessions(workspace.id), repository.listTargetUsage()]);
+        setRecentSessions(sessions.filter((session) => !session.researchProjectId));
+        setTargetUsage(usage);
+      } catch (cause) {
+        setRunError(cause instanceof Error ? cause.message : String(cause));
+      }
     }
   };
 
@@ -1735,6 +1782,10 @@ function EmptyCard({ children }: { children: ReactNode }) {
 
 function LoadingState() {
   return <div className="loading-state"><span className="loader-orb" /><p>AI RV Harness</p></div>;
+}
+
+function InitializationErrorState({ copy, error, onRetry }: { copy: ReturnType<typeof getCopy>; error: string; onRetry: () => void }) {
+  return <div className="startup-error-state"><span><CircleStop size={25} /></span><h2>{copy.startupFailed}</h2><p>{copy.startupFailedLead}</p><button className="primary-button" onClick={onRetry}>{copy.retryStartup}</button><details><summary>{copy.technicalDetails}</summary><code>{error}</code></details></div>;
 }
 
 function initials(name: string): string {

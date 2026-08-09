@@ -11,9 +11,10 @@ import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
 import { RCP_CONTROLLER_PROMPT_ID, RCP_CONTROLLER_PROMPT_VERSION, rcpPhasePrompt } from "./controllerPrompts";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics, type SessionRunMetrics } from "./metrics";
 import type { RevealArtifactRecord, RvSessionState, SessionSnapshot } from "./types";
-import { buildAutomaticTargetReveal } from "../targets/service";
+import { buildAutomaticTargetReveal, targetHasSupportedReveal } from "../targets/service";
 import { APP_VERSION } from "../version";
 import { createSessionCode } from "./sessionCode";
+import { CostGuardStop, SessionCostGuard } from "./costGuard";
 
 type SessionRepository = Pick<
   AppRepository,
@@ -62,6 +63,7 @@ export interface AutomaticRcpRunInput {
     messages: ProviderMessage[];
     settings: ReturnType<typeof resolveGenerationSettings>;
     timeoutMs?: number;
+    signal?: AbortSignal;
   }) => Promise<ProviderChatResponse>;
   onSessionCreated?: (sessionId: string, sessionCode: string) => Promise<void>;
   onProgress?: (progress: SessionProgress) => void;
@@ -91,6 +93,9 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   if (effectiveSettings.omitted.length) {
     throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
   }
+  const costGuard = new SessionCostGuard(input.maxSessionCostUsd);
+  costGuard.validateModel(input.model);
+  if (input.monitor) costGuard.validateModel(input.monitor.model);
 
   const sessionId = `session_${crypto.randomUUID()}`;
   const sessionCode = createSessionCode(input.sessionCodePrefix);
@@ -216,6 +221,13 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     let responseDurationMs = 0;
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       if (input.signal?.aborted) return stop("USER STOP");
+      let costAuthorization;
+      try {
+        costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
+      } catch (cause) {
+        if (cause instanceof CostGuardStop) return stop(cause.message);
+        throw cause;
+      }
       const requestStartedAt = Date.now();
       try {
         response = await chat({
@@ -224,12 +236,15 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
           messages: [...messages],
           settings: effectiveSettings,
           timeoutMs: input.requestTimeoutMs,
+          signal: input.signal,
         });
+        response = { ...response, usage: costAuthorization.success(response.usage) };
         responseDurationMs = Date.now() - requestStartedAt;
         metrics = recordProviderRequest(metrics, response.usage, responseDurationMs);
         if (!response.content.trim()) throw new Error("empty provider response");
         break;
       } catch (cause) {
+        costAuthorization.failure();
         if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(sessionId, {
@@ -274,14 +289,23 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
           blindTranscript: transcript,
           requestTimeoutMs: input.requestTimeoutMs,
           chat: async (request) => {
+            let costAuthorization;
+            try {
+              costAuthorization = costGuard.authorize(input.monitor!.model, request.messages, request.settings);
+            } catch (cause) {
+              if (cause instanceof CostGuardStop) throw cause;
+              throw cause;
+            }
             const requestStartedAt = Date.now();
             try {
-              const monitorResponse = await chat(request);
+              const rawMonitorResponse = await chat({ ...request, signal: input.signal });
+              const monitorResponse = { ...rawMonitorResponse, usage: costAuthorization.success(rawMonitorResponse.usage) };
               const requestDurationMs = Date.now() - requestStartedAt;
               metrics = recordProviderRequest(metrics, monitorResponse.usage, requestDurationMs);
               await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", metadata: { phase, usage: monitorResponse.usage, requestDurationMs } });
               return monitorResponse;
             } catch (cause) {
+              costAuthorization.failure();
               const requestDurationMs = Date.now() - requestStartedAt;
               metrics = recordProviderRequest(metrics, undefined, requestDurationMs);
               await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", metadata: { phase, requestDurationMs, failed: true } });
@@ -321,6 +345,13 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         let deepeningDurationMs = 0;
         for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
           if (input.signal?.aborted) return stop("USER STOP");
+          let costAuthorization;
+          try {
+            costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
+          } catch (cause) {
+            if (cause instanceof CostGuardStop) return stop(cause.message);
+            throw cause;
+          }
           const requestStartedAt = Date.now();
           try {
             deepening = await chat({
@@ -329,12 +360,15 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
               messages: [...messages],
               settings: effectiveSettings,
               timeoutMs: input.requestTimeoutMs,
+              signal: input.signal,
             });
+            deepening = { ...deepening, usage: costAuthorization.success(deepening.usage) };
             deepeningDurationMs = Date.now() - requestStartedAt;
             metrics = recordProviderRequest(metrics, deepening.usage, deepeningDurationMs);
             if (!deepening.content.trim()) throw new Error("empty provider response");
             break;
           } catch (cause) {
+            costAuthorization.failure();
             if (!deepening) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
             deepeningError = cause instanceof Error ? cause.message : String(cause);
             await input.repository.appendSessionEvent(sessionId, {
@@ -426,8 +460,8 @@ function validateRunInput(input: AutomaticRcpRunInput): void {
     if (input.monitor.model.providerConfigId !== input.monitor.providerConfig.id) throw new Error("Monitor model/provider route mismatch.");
     if (input.monitor.model.provider !== input.monitor.providerConfig.provider) throw new Error("Monitor provider mismatch.");
   }
-  if (input.automaticTarget && !input.automaticTarget.revealText?.trim()) {
-    throw new Error("Automatic target requires a supported text reveal in this build.");
+  if (input.automaticTarget && !targetHasSupportedReveal(input.automaticTarget)) {
+    throw new Error("Automatic target requires a supported reveal description or image.");
   }
 }
 

@@ -124,6 +124,42 @@ describe("automatic RCP controller", () => {
     expect(log).not.toContain("target-used");
   });
 
+  it("passes STOP into an in-flight provider request instead of waiting for its timeout", async () => {
+    const log: string[] = [];
+    const abort = new AbortController();
+    let requestStarted!: () => void;
+    const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+    const run = runAutomaticRcpSession({
+      repository: fakeRepository(log), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, signal: abort.signal,
+      chat: async (request) => new Promise((_, reject) => {
+        requestStarted();
+        request.signal?.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true });
+      }),
+    });
+    await started;
+    abort.abort();
+    const result = await run;
+    expect(result.state).toBe("Interrupted");
+    expect(result.stopReason).toBe("USER STOP");
+  });
+
+  it("accepts an image-only automatic target after the blind transcript is sealed", async () => {
+    const log: string[] = [];
+    const target = {
+      id: "image_target", collection: "user" as const, title: "Image target",
+      revealArtifacts: [{ artifactId: "a", path: "/managed/a.png", originalFileName: "a.png", mimeType: "image/png", size: 10, sha256: "a".repeat(64) }],
+      tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now",
+    };
+    const result = await runAutomaticRcpSession({
+      repository: fakeRepository(log), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, automaticTarget: target,
+      chat: async () => ({ content: "Independent blind evidence for the current protocol phase.", usage: {} }),
+    });
+    expect(result.state).toBe("Revealed");
+    expect(log.indexOf("sealed")).toBeLessThan(log.indexOf("target-used"));
+  });
+
   it("detects obvious repetitive generation loops", () => {
     expect(detectRepetitiveOutput(Array(7).fill("same repeated perceptual fragment over and over").join("\n"))).toBe(true);
     expect(detectRepetitiveOutput("A concise, varied response.")).toBe(false);

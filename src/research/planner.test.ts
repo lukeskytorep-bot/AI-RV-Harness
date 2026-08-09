@@ -26,5 +26,15 @@ describe("Research lock planner", () => {
     const pairCounts = new Map<string, number>();
     for (const mapping of plan.mappings) pairCounts.set(mapping.pairKey, (pairCounts.get(mapping.pairKey) ?? 0) + 1);
     expect([...pairCounts.values()]).toEqual([2, 2]);
+
+    const mappingBySession = new Map(plan.mappings.map((item) => [item.anonymousSessionId, item]));
+    const execution = [...plan.assignments].sort((left, right) => left.executionOrder - right.executionOrder);
+    for (let index = 0; index < execution.length; index += 2) {
+      const first = mappingBySession.get(execution[index].anonymousSessionId)!;
+      const second = mappingBySession.get(execution[index + 1].anonymousSessionId)!;
+      expect(first.pairKey).toBe(second.pairKey);
+      expect([first.pairOrder, second.pairOrder]).toEqual(["FIRST", "SECOND"]);
+      expect(execution[index].targetId).toBe(execution[index + 1].targetId);
+    }
   });
 });
