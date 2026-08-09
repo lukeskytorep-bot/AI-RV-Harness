@@ -1,0 +1,94 @@
+mod secrets;
+mod providers;
+mod artifacts;
+mod storage;
+
+use tauri_plugin_sql::{Migration, MigrationKind};
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let migrations = vec![
+        Migration {
+            version: 1,
+            description: "initial_rv_harness_schema",
+            sql: include_str!("../migrations/001_initial.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "provider_registry",
+            sql: include_str!("../migrations/002_provider_registry.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 3,
+            description: "judge_freeze_guards",
+            sql: include_str!("../migrations/003_judge_freeze.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 4,
+            description: "research_lock_guards",
+            sql: include_str!("../migrations/004_research_lock.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 5,
+            description: "workspace_source_content_and_thread_selection",
+            sql: include_str!("../migrations/005_workspace_sources.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 6,
+            description: "immutable_post_reveal_target_clarifications",
+            sql: include_str!("../migrations/006_target_clarifications.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 7,
+            description: "target_image_artifact_manifest",
+            sql: include_str!("../migrations/007_target_image_artifacts.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 8,
+            description: "persistent_model_favorites",
+            sql: include_str!("../migrations/008_model_favorites.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 9,
+            description: "append_only_post_reveal_transcript",
+            sql: include_str!("../migrations/009_post_reveal_append_only.sql"),
+            kind: MigrationKind::Up,
+        },
+    ];
+
+    tauri::Builder::default()
+        .plugin(
+            tauri_plugin_sql::Builder::default()
+                .add_migrations("sqlite:rv_harness.db", migrations)
+                .build(),
+        )
+        .invoke_handler(tauri::generate_handler![
+            secrets::store_credential,
+            secrets::has_credential,
+            secrets::delete_credential,
+            providers::provider_discover_models,
+            providers::provider_chat,
+            artifacts::store_reveal_artifact,
+            artifacts::store_target_artifact,
+            artifacts::read_reveal_image_for_judge,
+            artifacts::write_export_package,
+            storage::storage_paths,
+            storage::prepare_backup,
+            storage::finalize_backup,
+            storage::discard_backup,
+            storage::list_storage_backups,
+            storage::export_storage_backup,
+            storage::restore_backup,
+            storage::open_data_folder
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running AI RV Harness");
+}
