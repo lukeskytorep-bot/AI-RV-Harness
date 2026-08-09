@@ -24,9 +24,21 @@ pub fn store_credential(credential_id: String, secret: String) -> Result<(), Str
         return Err("credential id and secret are required".to_string());
     }
 
-    entry_for(&credential_id)?
+    let credential_id = credential_id.trim();
+    entry_for(credential_id)?
         .set_password(&secret)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+
+    // Build a fresh entry and read the value back. This verifies that the
+    // platform credential backend actually persisted the secret instead of
+    // accepting it only in a transient/default store.
+    let verified = entry_for(credential_id)?
+        .get_password()
+        .map_err(|error| format!("secure storage verification failed: {error}"))?;
+    if verified != secret {
+        return Err("secure storage verification failed: stored value does not match".to_string());
+    }
+    Ok(())
 }
 
 #[tauri::command]

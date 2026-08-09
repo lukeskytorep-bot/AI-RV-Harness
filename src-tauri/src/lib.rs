@@ -68,6 +68,24 @@ pub fn run() {
             sql: include_str!("../migrations/010_atomic_reveal.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 11,
+            description: "profile_ai_role_defaults",
+            sql: include_str!("../migrations/011_profile_ai_defaults.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 12,
+            description: "target_mutation_guards",
+            sql: include_str!("../migrations/012_target_mutation_guards.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 13,
+            description: "profile_viewer_generation_and_prompt_defaults",
+            sql: include_str!("../migrations/013_profile_viewer_defaults.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
