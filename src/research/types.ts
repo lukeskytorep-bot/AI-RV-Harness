@@ -1,6 +1,7 @@
 import type { JudgeComponentScores } from "../domain/scoring";
 import type { EffectiveGenerationSettings, GenerationSettings, ModelCapabilities } from "../providers/types";
-import type { InterfaceLanguage } from "../types";
+import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
+import type { ResearchTargetSelectionMode, ResearchTargetSource } from "./targetSelection";
 
 export const RESEARCH_TEMPLATE_TYPES = [
   "reasoning",
@@ -15,12 +16,7 @@ export const RESEARCH_TEMPLATE_TYPES = [
 export type ResearchTemplateType = (typeof RESEARCH_TEMPLATE_TYPES)[number];
 export type ResearchState = "Draft" | "Preflight" | "Locked" | "Running" | "SessionsComplete" | "Judging" | "ScoresFrozen" | "Unblinded" | "Complete" | "Interrupted" | "Failed";
 
-export interface ResearchSystemPromptSnapshot {
-  id: string;
-  version: string;
-  content: string;
-  contentSha256: string;
-}
+export type ResearchSystemPromptSnapshot = ViewerSystemPromptSnapshot;
 
 export interface ResearchConditionDefinition {
   key: string;
@@ -32,6 +28,7 @@ export interface ResearchConditionDefinition {
   effectiveSettings?: EffectiveGenerationSettings;
   capabilitySnapshot?: ModelCapabilities;
   systemPrompt?: ResearchSystemPromptSnapshot;
+  conditionInstruction?: ResearchSystemPromptSnapshot;
   practiceOrder?: "FIRST" | "SECOND";
   customValue?: string;
 }
@@ -39,6 +36,24 @@ export interface ResearchConditionDefinition {
 export interface ResearchJudgeDefinition {
   providerConfigId: string;
   modelId: string;
+}
+
+export interface ResearchViewerControl {
+  model: { mode: "fixed" | "condition_variable"; modelId?: string };
+  systemPrompt: {
+    mode: "fixed" | "condition_variable";
+    source?: "profile" | "custom";
+    contentSha256?: string;
+  };
+  reasoning: {
+    mode: "provider_default" | "fixed" | "condition_variable";
+    value?: GenerationSettings["reasoningEffort"];
+  };
+  temperature: {
+    mode: "provider_default" | "fixed" | "condition_variable";
+    value?: number;
+  };
+  maxOutputTokens: number;
 }
 
 export interface ResearchConfig {
@@ -49,6 +64,7 @@ export interface ResearchConfig {
   sessionLanguage: InterfaceLanguage;
   protocol: { id: "full-rcp"; version: "1.5a" };
   targetIds: string[];
+  targetSelection?: { source: ResearchTargetSource; mode: ResearchTargetSelectionMode; requestedCount?: number };
   repetitions: number;
   requireUnusedTargets: boolean;
   sessionPolicy?: {
@@ -58,7 +74,9 @@ export interface ResearchConfig {
     maxSessionCostUsd: number;
     sessionCodePrefix: string;
   };
+  viewerControl?: ResearchViewerControl;
   conditions: ResearchConditionDefinition[];
+  evaluationMode?: "save_only" | "ai_judges";
   judges: ResearchJudgeDefinition[];
   randomization: { matchedTargets: true; randomizedExecution: true; randomizedJudgeOrder: true };
 }

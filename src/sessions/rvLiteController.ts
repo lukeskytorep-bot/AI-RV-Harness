@@ -6,6 +6,7 @@ import type { AppRepository } from "../storage/repository";
 import { buildAutomaticTargetReveal, targetHasSupportedReveal } from "../targets/service";
 import type { TargetRecord } from "../targets/types";
 import type { InterfaceLanguage } from "../types";
+import type { ViewerSystemPromptSnapshot } from "../types";
 import { APP_VERSION } from "../version";
 import { detectRepetitiveOutput, sha256Text, type SessionProgress } from "./controller";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics } from "./metrics";
@@ -35,6 +36,7 @@ export interface AutomaticRvLiteRunInput {
   protocol: RvLiteProtocolResource;
   sessionLanguage: InterfaceLanguage;
   requestedSettings: GenerationSettings;
+  rvSystemPrompt?: ViewerSystemPromptSnapshot;
   automaticTarget?: TargetRecord;
   signal?: AbortSignal;
   maxRetries?: number;
@@ -64,7 +66,9 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   const steps = renderRvLiteSteps(input.protocol, input.profileName, sessionCode);
   const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
-  const messages: ProviderMessage[] = [];
+  const messages: ProviderMessage[] = input.rvSystemPrompt?.content.trim()
+    ? [{ role: "system", content: input.rvSystemPrompt.content.trim() }]
+    : [];
   const startedAtMs = Date.now();
   let metrics = emptySessionRequestMetrics();
   let transcript = "";
@@ -105,6 +109,15 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
       fullContent: input.protocol.content,
     },
     controllerPrompt: { id: "rv-lite-four-call-controller", version: "1.0.0", language: input.sessionLanguage },
+    ...(input.rvSystemPrompt ? {
+      rvSystemPrompt: {
+        id: input.rvSystemPrompt.id,
+        version: input.rvSystemPrompt.version,
+        language: input.sessionLanguage,
+        contentSha256: input.rvSystemPrompt.contentSha256,
+        fullContent: input.rvSystemPrompt.content,
+      },
+    } : {}),
     revealSource: input.automaticTarget ? "automatic" : "external",
     ...(input.automaticTarget ? { targetId: input.automaticTarget.id } : {}),
     applicationVersion: APP_VERSION,

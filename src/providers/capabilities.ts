@@ -9,7 +9,7 @@ import type {
   ReasoningEffort,
 } from "./types";
 
-const REASONING_EFFORTS: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+const REASONING_EFFORTS: ReasoningEffort[] = ["max", "xhigh", "high", "medium", "low", "minimal", "none"];
 
 const RECOMMENDED_FAMILY_SEEDS = [
   "gemma",
@@ -66,7 +66,10 @@ function normalizeOpenRouter(raw: Record<string, unknown>, capturedAt: string): 
   const reasoning = asRecord(raw.reasoning);
   const pricingRaw = asRecord(raw.pricing);
   const supportedParameters = stringArray(raw.supported_parameters);
-  const reasoningEfforts = effortArray(reasoning.supported_efforts);
+  const unrestrictedEfforts = Object.prototype.hasOwnProperty.call(reasoning, "supported_efforts") && reasoning.supported_efforts === null;
+  const reasoningMandatory = boolValue(reasoning.mandatory);
+  const reasoningEfforts = (unrestrictedEfforts ? [...REASONING_EFFORTS] : effortArray(reasoning.supported_efforts))
+    .filter((effort) => !(reasoningMandatory && effort === "none"));
   const reasoningAdvertised = supportedParameters.includes("reasoning") || supportedParameters.includes("reasoning_effort");
   const inputModalities = stringArray(architecture.input_modalities);
   const outputModalities = stringArray(architecture.output_modalities);
@@ -82,7 +85,7 @@ function normalizeOpenRouter(raw: Record<string, unknown>, capturedAt: string): 
       reasoning: {
         supported: reasoningAdvertised,
         efforts: reasoningEfforts,
-        mandatory: boolValue(reasoning.mandatory),
+        mandatory: reasoningMandatory,
         defaultEffort: effortArray([reasoning.default_effort])[0],
         confidence: reasoningAdvertised ? "provider_metadata" : "unknown",
       },

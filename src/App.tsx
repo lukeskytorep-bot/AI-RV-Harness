@@ -24,13 +24,14 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
+  Trash2,
   Users,
   Waves,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { getCopy } from "./i18n";
-import { ProviderSettings } from "./components/ProviderSettings";
+import { PROVIDER_LABELS, ProviderSettings } from "./components/ProviderSettings";
 import { resolveSessionLanguage } from "./domain/localization";
 import { getFullRcp, getRvLite, type ProtocolResource, type RvLiteProtocolResource } from "./resources/protocolRegistry";
 import { createRepository, isTauriRuntime } from "./storage";
@@ -39,18 +40,19 @@ import type {
   AppSettings,
   InterfaceLanguage,
   Profile,
+  ProfileAiConfigurationInput,
   SessionLanguageSetting,
   Theme,
   Workspace,
 } from "./types";
-import type { ProviderConfig } from "./providers/types";
-import type { ProviderImageInput, ProviderModel, ReasoningEffort } from "./providers/types";
+import { PROVIDER_KINDS, type ProviderConfig } from "./providers/types";
+import type { ProviderImageInput, ProviderKind, ProviderModel, ReasoningEffort } from "./providers/types";
 import { runAutomaticRcpSession, submitExternalReveal, type SessionProgress } from "./sessions/controller";
 import { sendChatTurn } from "./chat/engine";
 import type { ChatMessage, ChatMode, ChatThread } from "./types";
 import { runBlindJudging } from "./judge/engine";
 import type { JudgingResult } from "./judge/types";
-import { chooseRandomTarget, createUserTarget, targetHasSupportedReveal } from "./targets/service";
+import { chooseRandomTarget, createUserTarget, targetHasSupportedReveal, updateUserTarget } from "./targets/service";
 import type { TargetRecord, TargetUsageRecord } from "./targets/types";
 import { dryRunCustomProtocol, saveCustomProtocol } from "./protocols/custom";
 import type { CustomProtocolVersion } from "./protocols/types";
@@ -69,7 +71,7 @@ import { createStorageBackup, createStorageExport, restoreStorageBackup } from "
 import { getStoragePaths, listStorageBackups, openDataFolder, type StorageBackupRecord, type StoragePaths } from "./storage/native";
 import { APP_VERSION } from "./version";
 import { clearProviderDebug, listProviderDebug } from "./providers/debug";
-import { PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER } from "./providers/service";
+import { addProvider, PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER, refreshProviderModels } from "./providers/service";
 import { sendPostRevealTurn } from "./sessions/postReveal";
 import { parsePostRevealTranscript } from "./sessions/postRevealTranscript";
 import { exportMonitorRun } from "./exports/monitor";
@@ -77,6 +79,8 @@ import { ensureBundledTrainingTargets } from "./targets/bundled";
 import { createDefaultSettings } from "./startupDefaults";
 import { SettingsSaveQueue } from "./storage/settingsSaveQueue";
 import { AsyncRunGuard } from "./sessions/runGuard";
+import { modelRouteKey, preferredModelOrder, profileNeedingInitialSetup, resolveRoleDefault, resolveViewerDefault, splitModelRouteKey } from "./profileModelDefaults";
+import { defaultTemperatureForModel, profileGenerationDefaults, profileSystemPromptSnapshot, reasoningEffortForModel } from "./profileViewerDefaults";
 
 type Page = "home" | "profiles" | "research" | "targets" | "settings" | "workspace";
 type WorkspaceTab = "chat" | "rv" | "monitor";
@@ -181,9 +185,9 @@ export default function App() {
     }
   };
 
-  const createProfile = async (name: string, note?: string) => {
+  const createProfile = async (name: string, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => {
     if (!repository) return;
-    const profile = await repository.createProfile({ name, note });
+    const profile = await repository.createProfile({ name, note, aiConfiguration });
     setProfiles(await repository.listProfiles());
     setActiveProfileId(profile.id);
     setProfileDialog(false);
@@ -205,6 +209,18 @@ export default function App() {
   };
 
   const updateSettings = (patch: Partial<AppSettings>) => setSettings((current) => ({ ...current, ...patch }));
+
+  const finishFirstRun = async (profile: Profile) => {
+    if (!repository) return;
+    setProfiles(await repository.listProfiles());
+    setActiveProfileId(profile.id);
+    setPage("home");
+  };
+
+  const initialSetupProfile = profileNeedingInitialSetup(profiles);
+  if (!loading && !initializationError && repository && (profiles.length === 0 || initialSetupProfile)) {
+    return <FirstRunSetup copy={copy} repository={repository} existingProfile={initialSetupProfile} onComplete={finishFirstRun} />;
+  }
 
   return (
     <div className="app-shell">
@@ -272,8 +288,8 @@ export default function App() {
         </div>
       </main>
 
-      {profileDialog && (
-        <CreateProfileDialog copy={copy} onCancel={() => setProfileDialog(false)} onCreate={createProfile} />
+      {profileDialog && repository && (
+        <CreateProfileDialog copy={copy} repository={repository} onCancel={() => setProfileDialog(false)} onCreate={createProfile} />
       )}
       {workspaceDialogFor && (
         <CreateWorkspaceDialog
@@ -285,6 +301,227 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function FirstRunSetup({
+  copy,
+  repository,
+  existingProfile,
+  onComplete,
+}: {
+  copy: ReturnType<typeof getCopy>;
+  repository: AppRepository;
+  existingProfile: Profile | null;
+  onComplete: (profile: Profile) => Promise<void>;
+}) {
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [providers, setProviders] = useState<ProviderConfig[]>([]);
+  const [models, setModels] = useState<ProviderModel[]>([]);
+  const [connectionChoice, setConnectionChoice] = useState("__new__");
+  const [providerKind, setProviderKind] = useState<ProviderKind>("openrouter");
+  const [providerLabel, setProviderLabel] = useState(PROVIDER_LABELS.openrouter);
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [viewerModelId, setViewerModelId] = useState("");
+  const [viewerReasoning, setViewerReasoning] = useState<"" | ReasoningEffort>("");
+  const [viewerTemperature, setViewerTemperature] = useState("");
+  const [viewerSystemPrompt, setViewerSystemPrompt] = useState(existingProfile?.defaultViewerSystemPrompt ?? "");
+  const [modelSearch, setModelSearch] = useState("");
+  const [profileName, setProfileName] = useState(existingProfile?.name ?? "");
+  const [judgeModelKey, setJudgeModelKey] = useState("");
+  const [monitorModelKey, setMonitorModelKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const desktop = isTauriRuntime();
+  const selectedProvider = providers.find((provider) => provider.id === connectionChoice) ?? null;
+  const providerModels = useMemo(
+    () => preferredModelOrder(models.filter((model) => model.providerConfigId === selectedProvider?.id)),
+    [models, selectedProvider?.id],
+  );
+  const visibleViewerModels = useMemo(() => {
+    const query = modelSearch.trim().toLowerCase();
+    const matching = query
+      ? providerModels.filter((model) => `${model.displayName} ${model.modelId}`.toLowerCase().includes(query))
+      : providerModels;
+    return matching.slice(0, 250);
+  }, [modelSearch, providerModels]);
+  const roleModels = useMemo(() => preferredModelOrder(models), [models]);
+  const viewerModel = providerModels.find((model) => model.modelId === viewerModelId) ?? null;
+  const cachedModelCount = models.filter((model) => model.providerConfigId === selectedProvider?.id).length;
+
+  const reloadInventory = async (preferredProviderId?: string) => {
+    const [nextProviders, nextModels] = await Promise.all([
+      repository.listProviderConfigs(),
+      repository.listProviderModels(),
+    ]);
+    setProviders(nextProviders);
+    setModels(nextModels);
+    setConnectionChoice((current) => {
+      if (preferredProviderId && nextProviders.some((provider) => provider.id === preferredProviderId)) return preferredProviderId;
+      if (nextProviders.some((provider) => provider.id === current)) return current;
+      const bound = nextProviders.find((provider) => provider.credentialId === existingProfile?.credentialId);
+      return bound?.id ?? nextProviders[0]?.id ?? "__new__";
+    });
+  };
+
+  useEffect(() => {
+    void reloadInventory().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+  }, [repository]);
+
+  const changeProviderKind = (kind: ProviderKind) => {
+    setProviderKind(kind);
+    setProviderLabel(PROVIDER_LABELS[kind]);
+  };
+
+  const connectProvider = async () => {
+    if (busy || !desktop) return;
+    setBusy(true);
+    setError(null);
+    let provider = selectedProvider;
+    try {
+      if (!provider) {
+        provider = await addProvider(repository, {
+          provider: providerKind,
+          label: providerLabel,
+          apiKey,
+          ...(providerKind === "custom_openai" ? { baseUrl } : {}),
+        });
+        setApiKey("");
+      }
+      await refreshProviderModels(repository, provider);
+      await reloadInventory(provider.id);
+      setViewerModelId("");
+      setViewerReasoning("");
+      setViewerTemperature("");
+      setModelSearch("");
+      setStep(2);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      await reloadInventory(provider?.id).catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectViewerModel = (modelId: string) => {
+    const model = providerModels.find((item) => item.modelId === modelId) ?? null;
+    const sameStoredPair = existingProfile?.credentialId === selectedProvider?.credentialId && existingProfile?.defaultViewerModelId === modelId;
+    setViewerModelId(modelId);
+    setViewerReasoning(sameStoredPair ? reasoningEffortForModel(model, existingProfile?.defaultViewerReasoningEffort) ?? "" : "");
+    const temperature = sameStoredPair && existingProfile?.defaultViewerTemperature !== undefined
+      ? existingProfile.defaultViewerTemperature
+      : defaultTemperatureForModel(model);
+    setViewerTemperature(temperature === undefined ? "" : String(temperature));
+  };
+
+  const finish = async (skipOptional = false) => {
+    const provider = providers.find((item) => item.id === connectionChoice);
+    if (!provider || !viewerModel || busy) return;
+    const temperature = viewerModel.capabilities.temperature.supported
+      ? viewerTemperature.trim() ? Number(viewerTemperature) : defaultTemperatureForModel(viewerModel)
+      : undefined;
+    if (viewerReasoning && !reasoningEffortForModel(viewerModel, viewerReasoning)) { setError(copy.reasoningNotSupported); return; }
+    if (viewerModel.capabilities.temperature.supported && (!Number.isFinite(temperature) || (viewerModel.capabilities.temperature.min !== undefined && temperature! < viewerModel.capabilities.temperature.min) || (viewerModel.capabilities.temperature.max !== undefined && temperature! > viewerModel.capabilities.temperature.max))) { setError(copy.temperatureOutOfRange); return; }
+    const judge = skipOptional ? null : splitModelRouteKey(judgeModelKey);
+    const monitor = skipOptional ? null : splitModelRouteKey(monitorModelKey);
+    setBusy(true);
+    setError(null);
+    try {
+      const aiConfiguration: ProfileAiConfigurationInput = {
+          credentialId: provider.credentialId,
+          credentialProvider: provider.provider,
+          defaultViewerModelId: viewerModel.modelId,
+          ...(viewerReasoning ? { defaultViewerReasoningEffort: viewerReasoning } : {}),
+          ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
+          ...(viewerSystemPrompt.trim() ? { defaultViewerSystemPrompt: viewerSystemPrompt.trim() } : {}),
+          ...(judge ? { defaultJudgeProviderConfigId: judge.providerConfigId, defaultJudgeModelId: judge.modelId } : {}),
+          ...(monitor ? { defaultMonitorProviderConfigId: monitor.providerConfigId, defaultMonitorModelId: monitor.modelId } : {}),
+      };
+      const profile = existingProfile
+        ? { ...existingProfile, name: profileName.trim(), ...aiConfiguration, updatedAt: new Date().toISOString() }
+        : await repository.createProfile({ name: profileName, aiConfiguration });
+      if (existingProfile) {
+        await repository.updateProfile(existingProfile.id, { name: profileName, note: existingProfile.note });
+        await repository.setProfileAiConfiguration(existingProfile.id, aiConfiguration);
+      }
+      await onComplete(profile);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="first-run-shell">
+      <section className="first-run-card">
+        <header className="first-run-header">
+          <span className="first-run-logo"><Waves size={28} /></span>
+          <div><small>AI RV Harness</small><h1>{copy.firstRunTitle}</h1><p>{copy.firstRunLead}</p></div>
+        </header>
+        <div className="first-run-progress" aria-label={`${copy.step} ${step}/3`}>
+          <span className={step >= 1 ? "active" : ""}><b>1</b>{copy.setupProvider}</span>
+          <span className={step >= 2 ? "active" : ""}><b>2</b>{copy.setupViewer}</span>
+          <span className={step >= 3 ? "active" : ""}><b>3</b>{copy.setupRoles}</span>
+        </div>
+
+        {step === 1 && <div className="first-run-body">
+          <div className="setup-section-heading"><KeyRound size={20} /><div><h2>{copy.setupProvider}</h2><p>{copy.setupProviderLead}</p></div></div>
+          {!desktop && <div className="runtime-warning"><ShieldCheck size={16} />{copy.setupNeedsDesktop}</div>}
+          {providers.length > 0 && <label>{copy.providerConnection}
+            <select value={connectionChoice} onChange={(event) => setConnectionChoice(event.target.value)} disabled={busy}>
+              {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.label} · {provider.credentialHint ?? "••••••••"}</option>)}
+              <option value="__new__">＋ {copy.newProviderConnection}</option>
+            </select>
+          </label>}
+          {(!providers.length || connectionChoice === "__new__") && <div className="setup-provider-grid">
+            <label>{copy.provider}<select value={providerKind} onChange={(event) => changeProviderKind(event.target.value as ProviderKind)} disabled={busy}>{PROVIDER_KINDS.map((kind) => <option key={kind} value={kind}>{PROVIDER_LABELS[kind]}</option>)}</select></label>
+            <label>{copy.providerLabel}<input value={providerLabel} onChange={(event) => setProviderLabel(event.target.value)} disabled={busy} /></label>
+            {providerKind === "custom_openai" && <label className="wide">{copy.baseUrl}<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} disabled={busy} placeholder="https://example.com/v1" /></label>}
+            <label className="wide">{copy.apiKey}<input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} disabled={busy} /></label>
+          </div>}
+          <small className="setup-security-note"><LockKeyhole size={13} />{copy.providersReady}</small>
+          <div className="first-run-actions"><span>{selectedProvider && cachedModelCount > 0 && <button className="secondary-button" disabled={busy} onClick={() => { setViewerModelId(""); setModelSearch(""); setStep(2); }}>{copy.useCachedModels} ({cachedModelCount})</button>}</span><button className="primary-button" disabled={!desktop || busy || (!selectedProvider && (!providerLabel.trim() || !apiKey.trim() || (providerKind === "custom_openai" && !baseUrl.trim())))} onClick={() => void connectProvider()}>{busy ? copy.refreshing : copy.connectLoadModels}<ArrowRight size={15} /></button></div>
+        </div>}
+
+        {step === 2 && <div className="first-run-body">
+          <div className="setup-section-heading"><Sparkles size={20} /><div><h2>{copy.setupViewer}</h2><p>{copy.setupViewerLead}</p></div></div>
+          <div className="selected-provider-summary"><ServerIcon /><span><strong>{selectedProvider?.label}</strong><small>{selectedProvider?.credentialHint}</small></span><Check size={16} /></div>
+          <label>{copy.modelSearch}<input value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder={copy.modelSearchPlaceholder} /></label>
+          <label>{copy.defaultViewerModel}<select size={Math.min(8, Math.max(3, visibleViewerModels.length))} value={viewerModelId} onChange={(event) => selectViewerModel(event.target.value)}>{visibleViewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label>
+          {!visibleViewerModels.length && <p className="provider-empty">{copy.noMatchingModels}</p>}
+          <ViewerProfileControls copy={copy} model={viewerModel} reasoning={viewerReasoning} temperature={viewerTemperature} systemPrompt={viewerSystemPrompt} onReasoning={setViewerReasoning} onTemperature={setViewerTemperature} onSystemPrompt={setViewerSystemPrompt} />
+          <label>{copy.profileName}<input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder={copy.profileNamePlaceholder} /></label>
+          <small className="setup-security-note"><Users size={13} />{copy.profileMeaning}</small>
+          <div className="first-run-actions"><button className="secondary-button" onClick={() => setStep(1)} disabled={busy}>{copy.back}</button><button className="primary-button" disabled={!viewerModelId || busy} onClick={() => setStep(3)}>{copy.continue}<ArrowRight size={15} /></button></div>
+        </div>}
+
+        {step === 3 && <div className="first-run-body">
+          <div className="setup-section-heading"><BrainCircuit size={20} /><div><h2>{copy.setupRoles}</h2><p>{copy.setupRolesLead}</p></div></div>
+          <div className="optional-role-grid">
+            <label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><select value={judgeModelKey} onChange={(event) => setJudgeModelKey(event.target.value)}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const provider = providers.find((item) => item.id === model.providerConfigId); return <option key={`judge-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{provider?.label ?? model.provider} · {model.displayName}</option>; })}</select><small>{copy.judgeLead}</small></label>
+            <label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><select value={monitorModelKey} onChange={(event) => setMonitorModelKey(event.target.value)}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const provider = providers.find((item) => item.id === model.providerConfigId); return <option key={`monitor-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{provider?.label ?? model.provider} · {model.displayName}</option>; })}</select><small>{copy.monitorGuard}</small></label>
+          </div>
+          <small className="setup-security-note"><Settings2 size={13} />{copy.changeDefaultsLater}</small>
+          <div className="first-run-actions"><button className="secondary-button" onClick={() => setStep(2)} disabled={busy}>{copy.back}</button><span><button className="secondary-button" disabled={busy} onClick={() => void finish(true)}>{copy.skipOptionalAndFinish}</button><button className="primary-button" disabled={busy} onClick={() => void finish()}>{busy ? copy.saving : copy.finishSetup}<Check size={15} /></button></span></div>
+        </div>}
+        {error && <div className="provider-error first-run-error" role="alert">{error}</div>}
+      </section>
+    </main>
+  );
+}
+
+function ServerIcon() {
+  return <Database size={17} />;
+}
+
+function ViewerProfileControls({ copy, model, reasoning, temperature, systemPrompt, onReasoning, onTemperature, onSystemPrompt }: { copy: ReturnType<typeof getCopy>; model: ProviderModel | null; reasoning: "" | ReasoningEffort; temperature: string; systemPrompt: string; onReasoning: (value: "" | ReasoningEffort) => void; onTemperature: (value: string) => void; onSystemPrompt: (value: string) => void }) {
+  const reasoningChoices = model?.capabilities.reasoning.efforts ?? [];
+  const temperatureCapability = model?.capabilities.temperature;
+  return <div className="profile-viewer-controls">
+    <label><span>{copy.viewerReasoningLevel}</span><select value={reasoning} onChange={(event) => onReasoning(event.target.value as "" | ReasoningEffort)} disabled={!model || !reasoningChoices.length}><option value="">{copy.autoProviderDefault}</option>{reasoningChoices.map((effort) => <option key={effort} value={effort}>{effort.toUpperCase()}</option>)}</select><small>{!model ? copy.selectModelFirst : !model.capabilities.reasoning.supported ? copy.reasoningUnavailable : !reasoningChoices.length ? copy.reasoningLevelsUnknown : copy.autoReasoningLead}</small></label>
+    <label><span>{copy.viewerTemperature}</span><input type="number" step="0.1" value={temperature} onChange={(event) => onTemperature(event.target.value)} disabled={!temperatureCapability?.supported} min={temperatureCapability?.min} max={temperatureCapability?.max} placeholder={temperatureCapability?.supported ? "0.9" : copy.notSupported} /><small>{temperatureCapability?.supported ? `${copy.temperatureDefaultLead}${temperatureCapability.min !== undefined || temperatureCapability.max !== undefined ? ` (${temperatureCapability.min ?? "−∞"}–${temperatureCapability.max ?? "+∞"})` : ""}` : copy.temperatureUnavailable}</small></label>
+    <label className="profile-system-prompt-field"><span>{copy.viewerSystemPrompt}<small>{copy.optional}</small></span><textarea className="system-prompt-editor" rows={12} maxLength={100000} value={systemPrompt} onChange={(event) => onSystemPrompt(event.target.value)} placeholder={copy.viewerSystemPromptPlaceholder} /><small>{copy.viewerSystemPromptLead}</small></label>
+  </div>;
 }
 
 function Sidebar({ page, copy, onNavigate }: { page: Page; copy: ReturnType<typeof getCopy>; onNavigate: (page: Page) => void }) {
@@ -466,38 +703,34 @@ function ProfilesScreen({
   onProfilesChanged: () => Promise<void>;
 }) {
   const [providerConfigs, setProviderConfigs] = useState<ProviderConfig[]>([]);
+  const [models, setModels] = useState<ProviderModel[]>([]);
   const [calibrationHistory, setCalibrationHistory] = useState<CalibrationHistoryItem[]>([]);
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
   useEffect(() => {
     let cancelled = false;
     if (!repository) return;
     void (async () => {
-      const [configs, projects] = await Promise.all([repository.listProviderConfigs(), repository.listResearchProjects()]);
+      const [configs, cachedModels, projects] = await Promise.all([repository.listProviderConfigs(), repository.listProviderModels(), repository.listResearchProjects()]);
       const reasoning = projects.filter((project) => project.state === "Complete" && project.templateType === "reasoning");
       const resultPairs = await Promise.all(reasoning.map(async (project) => [project.id, await repository.getResearchResults(project.id)] as const));
       const resultMap = new Map(resultPairs.filter((pair): pair is readonly [string, NonNullable<typeof pair[1]>] => Boolean(pair[1])));
       if (cancelled) return;
       setProviderConfigs(configs);
+      setModels(cachedModels);
       setCalibrationHistory(profiles.flatMap((profile) => buildCalibrationHistory(projects, resultMap, profile, configs)));
     })();
     return () => { cancelled = true; };
   }, [repository, profiles]);
-  const assignCredential = async (profileId: string, credentialId: string) => {
-    if (!repository) return;
-    const current = profiles.find((item) => item.id === profileId);
-    if (current?.credentialId && current.credentialId !== credentialId && !window.confirm(copy.calibrationBindingWarning)) return;
-    const config = providerConfigs.find((item) => item.credentialId === credentialId);
-    await repository.setProfileCredential(profileId, config?.credentialId, config?.provider);
-    await onProfilesChanged();
-  };
   const archiveProfile = async (profile: Profile) => {
     if (!repository || !window.confirm(`${copy.archiveProfileConfirm}\n\n${profile.name || copy.unnamedProfile}`)) return;
     await repository.archiveProfile(profile.id);
     await onProfilesChanged();
   };
-  const saveProfile = async (name: string, note?: string) => {
+  const saveProfile = async (name: string, note?: string, aiConfiguration?: ProfileAiConfigurationInput) => {
     if (!repository || !editingProfile) return;
+    if (aiConfiguration && editingProfile.credentialId && editingProfile.credentialId !== aiConfiguration.credentialId && !window.confirm(copy.calibrationBindingWarning)) return;
     await repository.updateProfile(editingProfile.id, { name, note });
+    if (aiConfiguration) await repository.setProfileAiConfiguration(editingProfile.id, aiConfiguration);
     setEditingProfile(null);
     await onProfilesChanged();
   };
@@ -510,12 +743,14 @@ function ProfilesScreen({
         <div className="profile-grid">
           {profiles.map((profile) => {
             const owned = workspaces.filter((workspace) => workspace.profileId === profile.id);
+            const boundProvider = providerConfigs.find((provider) => provider.credentialId === profile.credentialId) ?? null;
+            const viewerReady = Boolean(resolveViewerDefault(profile, boundProvider, models));
             return (
               <section className="profile-card" key={profile.id}>
                 <div className="profile-heading">
                   <span className="avatar large">{initials(profile.name || copy.unnamedProfile)}</span>
                   <div><h3>{profile.name || copy.unnamedProfile}</h3><p>{profile.note || copy.credentialPending}</p></div>
-                  <span className={`status-chip ${profile.credentialId ? "ready" : "next"}`}><KeyRound size={13} />{profile.credentialId ? copy.credentialBound : copy.credentialPending}</span>
+                  <span className={`status-chip ${viewerReady ? "ready" : "next"}`}><KeyRound size={13} />{viewerReady ? copy.aiDefaultsReady : copy.aiDefaultsIncomplete}</span>
                 </div>
                 <div className="workspace-list">
                   {owned.length === 0 ? <p className="muted">{copy.noWorkspace}</p> : owned.map((workspace) => (
@@ -523,15 +758,6 @@ function ProfilesScreen({
                       <span><RadioTower size={17} /><strong>{workspace.name}</strong></span><ChevronRight size={16} />
                     </button>
                   ))}
-                </div>
-                <div className="profile-credential-row">
-                  <label>{copy.profileCredential}</label>
-                  {providerConfigs.length ? (
-                    <select value={profile.credentialId ?? ""} onChange={(event) => void assignCredential(profile.id, event.target.value)}>
-                      <option value="">{copy.selectProviderConnection}</option>
-                      {providerConfigs.map((config) => <option key={config.id} value={config.credentialId}>{config.label} · {config.credentialHint ?? "••••••••"}</option>)}
-                    </select>
-                  ) : <small>{copy.configureProviderFirst}</small>}
                 </div>
                 <CalibrationHistory copy={copy} items={calibrationHistory.filter((item) => item.profileId === profile.id)} />
                 <div className="profile-actions"><button className="secondary-button" onClick={() => setEditingProfile(profile)}><Pencil size={14} />{copy.editProfile}</button><button className="secondary-button danger-action" onClick={() => void archiveProfile(profile)}><Archive size={14} />{copy.archiveProfile}</button></div>
@@ -541,7 +767,7 @@ function ProfilesScreen({
           })}
         </div>
       )}
-      {editingProfile && <EditProfileDialog copy={copy} profile={editingProfile} onCancel={() => setEditingProfile(null)} onSave={saveProfile} />}
+      {editingProfile && <EditProfileDialog copy={copy} profile={editingProfile} providers={providerConfigs} models={models} onCancel={() => setEditingProfile(null)} onSave={saveProfile} />}
     </div>
   );
 }
@@ -614,11 +840,11 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setActiveSourceIds(nextActiveSources);
       setChatImages([]);
       setChatImageNames([]);
-      setModelId("");
+      setModelId(resolveViewerDefault(profile, bound ?? null, nextModels));
       setError(null);
     })();
     return () => { cancelled = true; };
-  }, [repository, workspace.id, profile?.credentialId, mode]);
+  }, [repository, workspace.id, profile?.credentialId, profile?.defaultViewerModelId, mode]);
 
   useEffect(() => {
     if (selectedModel && (!selectedModel.capabilities.supportsVision || !selectedModel.capabilities.inputModalities.includes("image"))) {
@@ -686,6 +912,8 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         providerConfig: activeProvider,
         model: selectedModel,
         content,
+        requestedSettings: profileGenerationDefaults(profile, selectedModel),
+        ...(mode === "manual_rv" && profile?.defaultViewerSystemPrompt ? { rvSystemPrompt: profile.defaultViewerSystemPrompt } : {}),
         sources: selectedSources,
         images: chatImages,
         ...(mode === "manual_rv" && attachRcp ? { attachedProtocol: getFullRcp(language).content } : {}),
@@ -727,7 +955,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         </div>
         <span className={mode === "conversation" ? "context-badge conversation" : "context-badge blind"}>
           {mode === "conversation" ? <Sparkles size={14} /> : <LockKeyhole size={14} />}
-          {mode === "conversation" ? copy.systemActive : copy.systemEmpty}
+          {mode === "conversation" ? copy.systemActive : profile?.defaultViewerSystemPrompt ? copy.viewerSystemActive : copy.systemEmpty}
         </span>
       </div>
       <div className="chat-thread-bar">
@@ -818,7 +1046,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const usedByProfile = new Set(targetUsage.filter((usage) => usage.profileId === profile?.id).map((usage) => usage.targetId));
   const eligibleTargets = targets.filter((target) => targetHasSupportedReveal(target) && (settings.targetRepeatPolicy === "allow" || target.collection !== "training" || !usedByProfile.has(target.id)));
   const batchPool = eligibleTargets.filter((target) => batchCollection === "all" || target.collection === batchCollection);
-  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, modelId, protocol, customProtocolVersionId, runType, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, targetRepeatPolicy: settings.targetRepeatPolicy, batchCollection, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
+  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, modelId, protocol, customProtocolVersionId, runType, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, targetRepeatPolicy: settings.targetRepeatPolicy, batchCollection, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
   const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : 6;
   const running = sessionRunning || batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
@@ -846,11 +1074,11 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
       setTargets(targetCatalog);
       setTargetUsage(usageHistory);
       setRecentSessions(sessionHistory.filter((session) => !session.researchProjectId));
-      setModelId("");
-      setMonitorModelKey("");
+      setModelId(resolveViewerDefault(profile, bound ?? null, nextModels));
+      setMonitorModelKey(resolveRoleDefault(profile, "monitor", everyModel));
     })();
     return () => { cancelled = true; };
-  }, [repository, profile?.credentialId, workspace.id]);
+  }, [repository, profile?.credentialId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profile?.defaultMonitorProviderConfigId, profile?.defaultMonitorModelId, workspace.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -866,10 +1094,11 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   useEffect(() => {
     if (!selectedModel) return;
     const limit = selectedModel.capabilities.maxOutputTokens;
+    const profileDefaults = profileGenerationDefaults(profile, selectedModel);
     setMaxOutputTokens(String(limit ? Math.min(limit, settings.defaultMaxOutputTokens) : settings.defaultMaxOutputTokens));
-    setReasoning("");
-    setTemperature("");
-  }, [selectedModel?.modelId, settings.defaultMaxOutputTokens]);
+    setReasoning(profileDefaults.reasoningEffort ?? "");
+    setTemperature(profileDefaults.temperature === undefined ? "" : String(profileDefaults.temperature));
+  }, [selectedModel?.modelId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, settings.defaultMaxOutputTokens]);
 
   const preflightBatch = () => {
     const failures: string[] = [];
@@ -900,6 +1129,9 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     if (executionScope === "single" && revealSource === "automatic" && !automaticTarget) return;
     if (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature)) return;
     const batchTargets = executionScope === "batch" ? selectBatchTargets(batchPool, batchCount) : [];
+    let rvSystemPrompt: Awaited<ReturnType<typeof profileSystemPromptSnapshot>>;
+    try { rvSystemPrompt = await profileSystemPromptSnapshot(profile); }
+    catch (cause) { setRunError(cause instanceof Error ? cause.message : String(cause)); return; }
     if (!runGuardRef.current.tryAcquire()) return;
     setSessionRunning(true);
     setActiveTargetId(executionScope === "single" ? automaticTarget?.id ?? null : null);
@@ -926,10 +1158,10 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     };
     const runOne = async (target: TargetRecord | null) => {
       if (protocol === "lite") {
-        return runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: profile.name, providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        return runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: profile.name, providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
       }
       if (protocol === "custom" && selectedCustomProtocol) {
-        return runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        return runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
       }
       return runAutomaticRcpSession({
         repository,
@@ -940,6 +1172,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         protocol: rcp,
         sessionLanguage: resolvedLanguage,
         requestedSettings,
+        ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
         signal: controller.signal,
         maxRetries: settings.maxRetries,
         requestTimeoutMs: settings.requestTimeoutMs,
@@ -1144,12 +1377,12 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
               <div className="reveal-success"><Check size={18} /><div><strong>🔓 {copy.revealAccepted}</strong><p>{copy.blindRunComplete}</p></div></div>
               {(acceptedRevealText || acceptedRevealArtifacts.length > 0) && <div className="save-reveal-target"><input value={saveTargetTitle} onChange={(event) => setSaveTargetTitle(event.target.value)} placeholder={copy.targetName} disabled={targetSaved} /><button className="secondary-button" disabled={!saveTargetTitle.trim() || targetSaved} onClick={() => void saveExternalRevealTarget()}>{targetSaved ? copy.savedToTargets : copy.saveRevealTarget}</button></div>}
               {executionScope === "single" && <section className="post-reveal-discussion"><div className="post-reveal-head"><div><strong>{copy.postRevealDiscussion}</strong><p>{copy.postRevealEvidenceGuard}</p></div><span>POST-REVEAL</span></div>{postRevealTranscript && <div className="post-reveal-turns">{parsePostRevealTranscript(postRevealTranscript).map((turn, index) => <article className={turn.role} key={`${turn.role}-${index}`}><small>{turn.role === "user" ? copy.you : copy.viewerModel}</small><p>{turn.content}</p></article>)}</div>}<div className="post-reveal-compose"><textarea rows={3} value={postRevealText} onChange={(event) => setPostRevealText(event.target.value)} placeholder={copy.postRevealPlaceholder} disabled={postRevealBusy} /><button className="secondary-button" disabled={!postRevealText.trim() || postRevealBusy} onClick={() => void discussPostReveal()}>{postRevealBusy ? copy.sending : copy.sendPostReveal}</button></div></section>}
-              {executionScope === "single" && <JudgeEvaluation copy={copy} repository={repository} sessionId={progress.sessionId} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} onCompleted={() => { setProgress((current) => current ? { ...current, state: "Completed" } : current); void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId))); }} />}
+              {executionScope === "single" && <JudgeEvaluation copy={copy} repository={repository} sessionId={progress.sessionId} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} onCompleted={() => { setProgress((current) => current ? { ...current, state: "Completed" } : current); void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId))); }} />}
               {executionScope === "single" && progress.state === "Revealed" && <button className="secondary-button save-only-button" onClick={() => void completeWithoutEvaluation()}>{copy.saveOnly}</button>}
               {executionScope === "single" && clarificationEligible && <section className="target-clarification"><div className="target-clarification-head"><div><strong>{copy.askTargetClarification}</strong><p>{copy.clarificationLead}</p></div><button className="secondary-button" onClick={() => setClarificationOpen((value) => !value)}>{copy.askTargetClarification}</button></div>{clarificationOpen && <div className="clarification-form"><textarea rows={4} value={clarificationText} onChange={(event) => setClarificationText(event.target.value)} placeholder={copy.clarificationPlaceholder} /><button className="primary-button" disabled={!clarificationText.trim() || clarificationBusy} onClick={() => void addClarification()}>{copy.saveClarification}</button></div>}{clarifications.length > 0 && <div className="clarification-list">{clarifications.map((item) => <article key={item.id}><small>{copy.supplementaryClarification} · {new Date(item.createdAt).toLocaleString()}</small><p>{item.content}</p></article>)}</div>}</section>}
             </>}
             {progress.state === "Interrupted" && <div className="provider-error"><CircleStop size={16} /><span><strong>{copy.interrupted}</strong>{progress.stopReason ? ` · ${progress.stopReason}` : ""}</span></div>}
-            {executionScope === "batch" && batchResults.length > 0 && !batchRunning && <BatchEvaluation copy={copy} repository={repository} sessions={batchResults} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} onCompleted={() => void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId)))} />}
+            {executionScope === "batch" && batchResults.length > 0 && !batchRunning && <BatchEvaluation copy={copy} repository={repository} sessions={batchResults} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} onCompleted={() => void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId)))} />}
             {!running && <button className="secondary-button new-session-button" onClick={() => { setProgress(null); setRunError(null); setActiveTargetId(null); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setClarifications([]); setClarificationOpen(false); setClarificationText(""); setPostRevealTranscript(""); setPostRevealText(""); setBatchResults([]); setBatchProgress(null); }}>{copy.newAutomaticSession}</button>}
           </div>
         ) : <>
@@ -1253,6 +1486,7 @@ function JudgeEvaluation({
   language,
   models,
   providerConfigs,
+  defaultModelKey,
   onCompleted,
 }: {
   copy: ReturnType<typeof getCopy>;
@@ -1261,10 +1495,11 @@ function JudgeEvaluation({
   language: InterfaceLanguage;
   models: ProviderModel[];
   providerConfigs: ProviderConfig[];
+  defaultModelKey?: string;
   onCompleted?: () => void;
 }) {
   const [judgeCount, setJudgeCount] = useState(1);
-  const [selections, setSelections] = useState(["", "", ""]);
+  const [selections, setSelections] = useState([defaultModelKey ?? "", "", ""]);
   const [result, setResult] = useState<JudgingResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [completed, setCompleted] = useState(0);
@@ -1272,6 +1507,11 @@ function JudgeEvaluation({
   const keyFor = (model: ProviderModel) => `${model.providerConfigId}::${model.modelId}`;
   const activeSelections = selections.slice(0, judgeCount).map((key) => models.find((model) => keyFor(model) === key) ?? null);
   const ready = activeSelections.every(Boolean) && activeSelections.length === judgeCount;
+
+  useEffect(() => {
+    setJudgeCount(1);
+    setSelections([defaultModelKey ?? "", "", ""]);
+  }, [defaultModelKey, sessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1354,6 +1594,7 @@ function BatchEvaluation({
   language,
   models,
   providerConfigs,
+  defaultModelKey,
   onCompleted,
 }: {
   copy: ReturnType<typeof getCopy>;
@@ -1362,11 +1603,12 @@ function BatchEvaluation({
   language: InterfaceLanguage;
   models: ProviderModel[];
   providerConfigs: ProviderConfig[];
+  defaultModelKey?: string;
   onCompleted?: () => void;
 }) {
   const eligible = sessions.filter((session) => session.state === "Revealed" || session.state === "Completed");
   const [judgeCount, setJudgeCount] = useState(1);
-  const [selections, setSelections] = useState(["", "", ""]);
+  const [selections, setSelections] = useState([defaultModelKey ?? "", "", ""]);
   const [results, setResults] = useState<Array<{ sessionCode: string; result: JudgingResult }>>([]);
   const [busy, setBusy] = useState(false);
   const [completed, setCompleted] = useState(0);
@@ -1375,6 +1617,11 @@ function BatchEvaluation({
   const keyFor = (model: ProviderModel) => `${model.providerConfigId}::${model.modelId}`;
   const activeSelections = selections.slice(0, judgeCount).map((key) => models.find((model) => keyFor(model) === key) ?? null);
   const ready = activeSelections.length === judgeCount && activeSelections.every(Boolean);
+
+  useEffect(() => {
+    setJudgeCount(1);
+    setSelections([defaultModelKey ?? "", "", ""]);
+  }, [defaultModelKey, sessions]);
 
   const saveOnly = async () => {
     if (!repository || busy) return;
@@ -1483,13 +1730,25 @@ function ResearchScreen({ copy, settings, profiles, workspaces, repository }: { 
 
 function TargetsScreen({ copy, repository }: { copy: ReturnType<typeof getCopy>; repository: AppRepository | null }) {
   const [targets, setTargets] = useState<TargetRecord[]>([]);
+  const [usage, setUsage] = useState<TargetUsageRecord[]>([]);
+  const [researchLockedTargetIds, setResearchLockedTargetIds] = useState<string[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingTarget, setEditingTarget] = useState<TargetRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const reload = async () => {
+    if (!repository) return;
+    const [nextTargets, nextUsage, projects] = await Promise.all([repository.listTargets(), repository.listTargetUsage(), repository.listResearchProjects()]);
+    const assignments = (await Promise.all(projects.map((project) => repository.listResearchAssignments(project.id)))).flat();
+    setTargets(nextTargets);
+    setUsage(nextUsage);
+    setResearchLockedTargetIds([...new Set(assignments.map((assignment) => assignment.targetId))]);
+  };
   useEffect(() => {
-    if (repository) void repository.listTargets().then(setTargets).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    void reload().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
   }, [repository]);
   const training = targets.filter((target) => target.collection === "training");
   const mine = targets.filter((target) => target.collection === "user");
+  const usedTargetIds = new Set([...usage.map((item) => item.targetId), ...researchLockedTargetIds]);
   const createTarget = async (title: string, revealText: string, tags: string[], images: File[]) => {
     if (!repository) return;
     const targetId = createId("target");
@@ -1498,22 +1757,43 @@ function TargetsScreen({ copy, repository }: { copy: ReturnType<typeof getCopy>;
     setTargets((current) => [target, ...current]);
     setDialogOpen(false);
   };
+  const editTarget = async (target: TargetRecord, title: string, revealText: string, tags: string[]) => {
+    if (!repository) return;
+    setError(null);
+    await updateUserTarget(repository, target, { title, revealText, tags });
+    setEditingTarget(null);
+    await reload();
+  };
+  const deleteTarget = async (target: TargetRecord) => {
+    if (!repository || !window.confirm(`${copy.deleteTargetConfirm}\n\n${target.title}`)) return;
+    setError(null);
+    try {
+      await repository.deleteTarget(target.id);
+      await reload();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
   return (
     <div className="page">
       <PageHeader title={copy.targets} subtitle={copy.targetsLead} action={<button className="primary-button" onClick={() => setDialogOpen(true)}><Plus size={16} />{copy.addTarget}</button>} />
       <div className="target-columns">
-        <section className="panel target-panel"><PanelHeader title={`${copy.trainingTargets} · ${training.length}`} icon={<Crosshair size={18} />} />{training.length ? <TargetList targets={training} /> : <EmptyState icon={<FileCheck2 size={28} />} title={copy.statusNext} body={copy.targetPackPending} />}</section>
-        <section className="panel target-panel"><PanelHeader title={`${copy.myTargets} · ${mine.length}`} icon={<LockKeyhole size={18} />} />{mine.length ? <TargetList targets={mine} /> : <EmptyState icon={<Plus size={28} />} title={copy.noPrivateTargets} body={copy.secureLocal} action={<button className="secondary-button" onClick={() => setDialogOpen(true)}><Plus size={15} />{copy.addTarget}</button>} />}</section>
+        <section className="panel target-panel"><PanelHeader title={`${copy.trainingTargets} · ${training.length}`} icon={<Crosshair size={18} />} />{training.length ? <TargetList copy={copy} targets={training} usedTargetIds={usedTargetIds} /> : <EmptyState icon={<FileCheck2 size={28} />} title={copy.statusNext} body={copy.targetPackPending} />}</section>
+        <section className="panel target-panel"><PanelHeader title={`${copy.myTargets} · ${mine.length}`} icon={<LockKeyhole size={18} />} />{mine.length ? <TargetList copy={copy} targets={mine} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onDelete={(target) => void deleteTarget(target)} /> : <EmptyState icon={<Plus size={28} />} title={copy.noPrivateTargets} body={copy.secureLocal} action={<button className="secondary-button" onClick={() => setDialogOpen(true)}><Plus size={15} />{copy.addTarget}</button>} />}</section>
       </div>
       <p className="target-support-note">{copy.textRevealOnly}</p>
       {error && <div className="provider-error">{error}</div>}
       {dialogOpen && <CreateTargetDialog copy={copy} onCancel={() => setDialogOpen(false)} onCreate={createTarget} />}
+      {editingTarget && <EditTargetDialog copy={copy} target={editingTarget} onCancel={() => setEditingTarget(null)} onSave={(title, revealText, tags) => editTarget(editingTarget, title, revealText, tags)} />}
     </div>
   );
 }
 
-function TargetList({ targets }: { targets: TargetRecord[] }) {
-  return <div className="target-list">{targets.map((target) => <article className="target-card" key={target.id}><div><strong>{target.title}</strong><small>{target.tags.length ? target.tags.join(" · ") : target.collection}</small></div>{target.revealText && <p>{target.revealText}</p>}{Boolean(target.revealArtifacts?.length) && <div className="target-image-list">{target.revealArtifacts!.map((artifact) => <span key={`${artifact.artifactId}-${artifact.sha256}`}>▣ {artifact.originalFileName}</span>)}</div>}{target.contentHash && <code>sha256 {target.contentHash.slice(0, 16)}…</code>}</article>)}</div>;
+function TargetList({ copy, targets, usedTargetIds, onEdit, onDelete }: { copy: ReturnType<typeof getCopy>; targets: TargetRecord[]; usedTargetIds: Set<string>; onEdit?: (target: TargetRecord) => void; onDelete?: (target: TargetRecord) => void }) {
+  return <div className="target-list">{targets.map((target) => {
+    const locked = usedTargetIds.has(target.id);
+    return <article className="target-card" key={target.id}><div className="target-card-head"><div><strong>{target.title}</strong><small>{target.tags.length ? target.tags.join(" · ") : target.collection}</small></div>{target.collection === "user" && <div className="target-card-actions"><button className="icon-button" disabled={locked} title={locked ? copy.usedTargetLocked : copy.editTarget} onClick={() => onEdit?.(target)}><Pencil size={14} /></button><button className="icon-button danger" disabled={locked} title={locked ? copy.usedTargetLocked : copy.deleteTarget} onClick={() => onDelete?.(target)}><Trash2 size={14} /></button></div>}</div>{target.revealText && <p>{target.revealText}</p>}{Boolean(target.revealArtifacts?.length) && <div className="target-image-list">{target.revealArtifacts!.map((artifact) => <span key={`${artifact.artifactId}-${artifact.sha256}`}>▣ {artifact.originalFileName}</span>)}</div>}{locked && <small className="target-locked-note"><LockKeyhole size={11} />{copy.usedTargetLocked}</small>}{target.contentHash && <code>sha256 {target.contentHash.slice(0, 16)}…</code>}</article>;
+  })}</div>;
 }
 
 function CreateTargetDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; onCancel: () => void; onCreate: (title: string, revealText: string, tags: string[], images: File[]) => Promise<void> }) {
@@ -1538,10 +1818,27 @@ function CreateTargetDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typ
   return <FormDialog title={copy.addTarget} onCancel={onCancel}><form onSubmit={(event) => void submit(event)}><label>{copy.targetName}<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>{copy.targetReveal}<textarea rows={7} value={revealText} onChange={(event) => setRevealText(event.target.value)} /></label><label>{copy.targetImages}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" disabled={!isTauriRuntime() || saving} onChange={(event) => setImages(Array.from(event.target.files ?? []).slice(0, 8))} /></label>{images.length > 0 && <div className="form-image-list">{images.map((file) => <span key={`${file.name}-${file.size}`}>▣ {file.name}</span>)}</div>}<label>{copy.targetTags}<input value={tags} onChange={(event) => setTags(event.target.value)} /></label><small className="form-hint">{copy.textRevealOnly}</small>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!title.trim() || (!revealText.trim() && !images.length) || saving}>{copy.saveTarget}</button></div></form></FormDialog>;
 }
 
+function EditTargetDialog({ copy, target, onCancel, onSave }: { copy: ReturnType<typeof getCopy>; target: TargetRecord; onCancel: () => void; onSave: (title: string, revealText: string, tags: string[]) => Promise<void> }) {
+  const [title, setTitle] = useState(target.title);
+  const [revealText, setRevealText] = useState(target.revealText ?? "");
+  const [tags, setTags] = useState(target.tags.join(", "));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!title.trim() || (!revealText.trim() && !target.revealArtifacts?.length) || saving) return;
+    setSaving(true); setError(null);
+    try { await onSave(title, revealText, tags.split(",")); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setSaving(false); }
+  };
+  return <FormDialog title={copy.editTarget} onCancel={onCancel}><form onSubmit={(event) => void submit(event)}><label>{copy.targetName}<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>{copy.targetReveal}<textarea rows={7} value={revealText} onChange={(event) => setRevealText(event.target.value)} /></label>{Boolean(target.revealArtifacts?.length) && <div><small className="form-hint">{copy.existingTargetImages}</small><div className="form-image-list">{target.revealArtifacts!.map((artifact) => <span key={`${artifact.artifactId}-${artifact.sha256}`}>▣ {artifact.originalFileName}</span>)}</div></div>}<label>{copy.targetTags}<input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!title.trim() || (!revealText.trim() && !target.revealArtifacts?.length) || saving}>{saving ? copy.saving : copy.saveChanges}</button></div></form></FormDialog>;
+}
+
 function SettingsScreen({ copy, settings, repository, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; repository: AppRepository | null; onChange: (settings: Partial<AppSettings>) => void }) {
-  const [tab, setTab] = useState<"providers" | "models" | "storage" | "targets" | "sessions" | "appearance" | "advanced">("providers");
+  const [tab, setTab] = useState<"providers" | "models" | "storage" | "targets" | "sessions" | "appearance" | "advanced" | "about">("providers");
+  const [protocolResource, setProtocolResource] = useState<ProtocolResource | RvLiteProtocolResource | null>(null);
   const tabs = [
-    ["providers", copy.providersApi], ["models", copy.models], ["storage", copy.storage], ["targets", copy.targets], ["sessions", copy.sessions], ["appearance", copy.appearance], ["advanced", copy.advanced],
+    ["providers", copy.providersApi], ["models", copy.models], ["storage", copy.storage], ["targets", copy.targets], ["sessions", copy.sessions], ["appearance", copy.appearance], ["advanced", copy.advanced], ["about", copy.aboutProtocols],
   ] as const;
   return (
     <div className="page">
@@ -1567,9 +1864,22 @@ function SettingsScreen({ copy, settings, repository, onChange }: { copy: Return
           <SettingRow label={copy.animations} icon={<Sparkles size={18} />}><select value={settings.animations ? "on" : "off"} onChange={(event) => onChange({ animations: event.target.value === "on" })}><option value="on">{copy.enabled}</option><option value="off">{copy.disabled}</option></select></SettingRow>
         </section>}
         {tab === "advanced" && <AdvancedSettingsCard copy={copy} repository={repository} />}
+        {tab === "about" && <AboutProtocolsCard copy={copy} onOpen={setProtocolResource} />}
       </div>
+      {protocolResource && <ProtocolDialog copy={copy} resource={protocolResource} onClose={() => setProtocolResource(null)} />}
     </div>
   );
+}
+
+function AboutProtocolsCard({ copy, onOpen }: { copy: ReturnType<typeof getCopy>; onOpen: (resource: ProtocolResource | RvLiteProtocolResource) => void }) {
+  const protocolCards = [
+    { id: "rcp", name: copy.fullRcp, version: "1.5a", pl: getFullRcp("pl"), en: getFullRcp("en") },
+    { id: "lite", name: copy.rvLite, version: "1.0.0", pl: getRvLite("pl"), en: getRvLite("en") },
+  ] as const;
+  return <div className="about-settings-grid">
+    <section className="panel about-protocol-card"><PanelHeader title={copy.protocolLibrary} icon={<FileCheck2 size={18} />} /><div className="about-card-body"><p>{copy.protocolLibraryLead}</p><div className="about-protocol-list">{protocolCards.map((protocol) => <article key={protocol.id}><span className="resource-orb"><FileCheck2 size={18} /></span><div><small>{copy.readOnly}</small><strong>{protocol.name}</strong><code>v{protocol.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpen(protocol.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpen(protocol.en)}>{copy.readEnglish}</button></div></article>)}</div></div></section>
+    <section className="panel about-credits-card"><PanelHeader title={copy.credits} icon={<Users size={18} />} /><div className="about-card-body"><p>{copy.creditsLead}</p><div className="credit-group"><small>{copy.projectLead}</small><article><strong>Edward <code>lukeskytorep-bot</code></strong><p>{copy.projectLeadCredit}</p></article></div><div className="credit-group"><small>{copy.aiCollaborators}</small><article><strong>Orion via Active Model — Codex / ChatGPT</strong><p>{copy.orionCredit}</p></article><article><strong>Aion via Active Model — ChatGPT 4.0</strong><p>{copy.aionCredit}</p></article><article><strong>Aura via Active Model — Gemini 3.1 Pro</strong><p>{copy.auraCredit}</p></article></div><p className="human-directed-credit">{copy.humanDirectedCredit}</p><div className="about-license"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.projectLicense}</small><strong>MIT</strong></span></div></div></section>
+  </div>;
 }
 
 function TargetSettingsCard({ copy, settings, repository, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; repository: AppRepository | null; onChange: (settings: Partial<AppSettings>) => void }) {
@@ -1718,27 +2028,134 @@ function CustomProtocolDialog({ copy, repository, language, base, onCancel, onSa
     });
   };
 
-  return <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}><section className="modal custom-protocol-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>{base ? `${base.displayName} · ${base.version}` : copy.newCustomProtocol}</small><h2>{copy.customProtocol}</h2><p>{language.toUpperCase()} · {copy.sessionCodePlaceholder}</p></div><button className="icon-button" onClick={onCancel}><X size={19} /></button></div><div className="custom-protocol-body"><div className="custom-builder-fields"><label>{copy.protocolName}<input value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.protocolDescription}<input value={description} onChange={(event) => setDescription(event.target.value)} /></label><label>{copy.systemPromptOptional}<textarea rows={4} value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} /></label><div className="custom-steps-head"><strong>{copy.blindSteps} · {steps.length}/20</strong><button className="secondary-button" type="button" disabled={steps.length >= 20} onClick={() => setSteps((current) => [...current, ""])}><Plus size={14} />{copy.addStep}</button></div><div className="custom-steps">{steps.map((step, index) => <div className="custom-step" key={index}><span>{index + 1}</span><textarea rows={3} value={step} onChange={(event) => setSteps((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} placeholder={`${copy.step} ${index + 1}`} /><div><button type="button" className="icon-button" disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button type="button" className="icon-button" disabled={index === steps.length - 1} onClick={() => move(index, 1)}>↓</button><button type="button" className="icon-button danger" disabled={steps.length === 1} title={copy.removeStep} onClick={() => setSteps((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button></div></div>)}</div></div>{preview && <aside className="custom-dry-run"><div><strong>{copy.dryRun}</strong><p>{copy.dryRunLead}</p></div>{systemPrompt.trim() && <article><span>SYSTEM</span><p>{systemPrompt.trim()}</p></article>}{dryRun.map((item) => <article key={item.sequence} className={item.boundary === "REVEAL" ? "reveal-step" : ""}><span>{item.boundary} · {item.role === "Viewer" ? copy.viewerCall : copy.revealCall}</span><strong>{item.role === "Viewer" ? `${copy.step} ${item.sequence}` : copy.revealSeparate}</strong>{item.prompt && <p>{item.prompt}</p>}</article>)}</aside>}</div>{error && <div className="provider-error">{error}</div>}<div className="custom-protocol-actions"><button className="secondary-button" type="button" onClick={() => setPreview((current) => !current)}>{copy.previewDryRun}</button><div>{base && <button className="secondary-button" type="button" disabled={saving || !name.trim() || !cleanSteps.length} onClick={() => void persist(true)}>{copy.duplicateProtocol}</button>}<button className="primary-button" type="button" disabled={saving || !name.trim() || !cleanSteps.length || cleanSteps.length > 20} onClick={() => void persist(false)}>{copy.saveNewVersion}</button></div></div></section></div>;
+  return <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}><section className="modal custom-protocol-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>{base ? `${base.displayName} · ${base.version}` : copy.newCustomProtocol}</small><h2>{copy.customProtocol}</h2><p>{language.toUpperCase()} · {copy.sessionCodePlaceholder}</p></div><button className="icon-button" onClick={onCancel}><X size={19} /></button></div><div className="custom-protocol-body"><div className="custom-builder-fields"><label>{copy.protocolName}<input value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.protocolDescription}<input value={description} onChange={(event) => setDescription(event.target.value)} /></label><label>{copy.systemPromptOptional}<textarea className="custom-system-prompt-editor" rows={10} maxLength={100000} value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} /></label><div className="custom-steps-head"><strong>{copy.blindSteps} · {steps.length}/20</strong><button className="secondary-button" type="button" disabled={steps.length >= 20} onClick={() => setSteps((current) => [...current, ""])}><Plus size={14} />{copy.addStep}</button></div><div className="custom-steps">{steps.map((step, index) => <div className="custom-step" key={index}><span>{index + 1}</span><textarea rows={3} value={step} onChange={(event) => setSteps((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} placeholder={`${copy.step} ${index + 1}`} /><div><button type="button" className="icon-button" disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button type="button" className="icon-button" disabled={index === steps.length - 1} onClick={() => move(index, 1)}>↓</button><button type="button" className="icon-button danger" disabled={steps.length === 1} title={copy.removeStep} onClick={() => setSteps((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button></div></div>)}</div></div>{preview && <aside className="custom-dry-run"><div><strong>{copy.dryRun}</strong><p>{copy.dryRunLead}</p></div>{systemPrompt.trim() && <article><span>SYSTEM</span><p>{systemPrompt.trim()}</p></article>}{dryRun.map((item) => <article key={item.sequence} className={item.boundary === "REVEAL" ? "reveal-step" : ""}><span>{item.boundary} · {item.role === "Viewer" ? copy.viewerCall : copy.revealCall}</span><strong>{item.role === "Viewer" ? `${copy.step} ${item.sequence}` : copy.revealSeparate}</strong>{item.prompt && <p>{item.prompt}</p>}</article>)}</aside>}</div>{error && <div className="provider-error">{error}</div>}<div className="custom-protocol-actions"><button className="secondary-button" type="button" onClick={() => setPreview((current) => !current)}>{copy.previewDryRun}</button><div>{base && <button className="secondary-button" type="button" disabled={saving || !name.trim() || !cleanSteps.length} onClick={() => void persist(true)}>{copy.duplicateProtocol}</button>}<button className="primary-button" type="button" disabled={saving || !name.trim() || !cleanSteps.length || cleanSteps.length > 20} onClick={() => void persist(false)}>{copy.saveNewVersion}</button></div></div></section></div>;
 }
 
-function CreateProfileDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; onCancel: () => void; onCreate: (name: string, note?: string) => Promise<void> }) {
+function buildProfileAiConfiguration(copy: ReturnType<typeof getCopy>, provider: ProviderConfig | null, viewerModel: ProviderModel | null, reasoning: "" | ReasoningEffort, temperatureInput: string, systemPrompt: string, monitorModelKey: string, judgeModelKey: string): ProfileAiConfigurationInput {
+  if (!provider || !viewerModel || viewerModel.providerConfigId !== provider.id) throw new Error(copy.selectViewerBeforeSaving);
+  const normalizedReasoning = reasoning ? reasoningEffortForModel(viewerModel, reasoning) : undefined;
+  if (reasoning && !normalizedReasoning) throw new Error(copy.reasoningNotSupported);
+  let temperature: number | undefined;
+  if (viewerModel.capabilities.temperature.supported) {
+    temperature = temperatureInput.trim() ? Number(temperatureInput) : defaultTemperatureForModel(viewerModel);
+    const capability = viewerModel.capabilities.temperature;
+    if (!Number.isFinite(temperature) || (capability.min !== undefined && temperature! < capability.min) || (capability.max !== undefined && temperature! > capability.max)) throw new Error(copy.temperatureOutOfRange);
+  }
+  const monitor = splitModelRouteKey(monitorModelKey);
+  const judge = splitModelRouteKey(judgeModelKey);
+  return {
+    credentialId: provider.credentialId,
+    credentialProvider: provider.provider,
+    defaultViewerModelId: viewerModel.modelId,
+    ...(normalizedReasoning ? { defaultViewerReasoningEffort: normalizedReasoning } : {}),
+    ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
+    ...(systemPrompt.trim() ? { defaultViewerSystemPrompt: systemPrompt.trim() } : {}),
+    ...(monitor ? { defaultMonitorProviderConfigId: monitor.providerConfigId, defaultMonitorModelId: monitor.modelId } : {}),
+    ...(judge ? { defaultJudgeProviderConfigId: judge.providerConfigId, defaultJudgeModelId: judge.modelId } : {}),
+  };
+}
+
+function CreateProfileDialog({ copy, repository, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; repository: AppRepository; onCancel: () => void; onCreate: (name: string, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => Promise<void> }) {
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
-  const submit = (event: FormEvent) => { event.preventDefault(); void onCreate(name, note); };
-  return <FormDialog title={copy.createProfile} onCancel={onCancel}><form onSubmit={submit}><label>{copy.profileName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button">{copy.create}</button></div></form></FormDialog>;
-}
-
-function EditProfileDialog({ copy, profile, onCancel, onSave }: { copy: ReturnType<typeof getCopy>; profile: Profile; onCancel: () => void; onSave: (name: string, note?: string) => Promise<void> }) {
-  const [name, setName] = useState(profile.name);
-  const [note, setNote] = useState(profile.note ?? "");
+  const [providers, setProviders] = useState<ProviderConfig[]>([]);
+  const [models, setModels] = useState<ProviderModel[]>([]);
+  const [providerConfigId, setProviderConfigId] = useState("");
+  const [viewerModelId, setViewerModelId] = useState("");
+  const [reasoning, setReasoning] = useState<"" | ReasoningEffort>("");
+  const [temperature, setTemperature] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [monitorModelKey, setMonitorModelKey] = useState("");
+  const [judgeModelKey, setJudgeModelKey] = useState("");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([repository.listProviderConfigs(), repository.listProviderModels()]).then(([nextProviders, nextModels]) => {
+      if (cancelled) return;
+      setProviders(nextProviders);
+      setModels(nextModels);
+      setProviderConfigId(nextProviders[0]?.id ?? "");
+    }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    return () => { cancelled = true; };
+  }, [repository]);
+  const provider = providers.find((item) => item.id === providerConfigId) ?? null;
+  const viewerModels = preferredModelOrder(models.filter((model) => model.providerConfigId === providerConfigId));
+  const viewerModel = viewerModels.find((model) => model.modelId === viewerModelId) ?? null;
+  const roleModels = preferredModelOrder(models);
+  const selectViewer = (modelId: string) => {
+    const model = viewerModels.find((item) => item.modelId === modelId) ?? null;
+    setViewerModelId(modelId);
+    setReasoning("");
+    const nextTemperature = defaultTemperatureForModel(model);
+    setTemperature(nextTemperature === undefined ? "" : String(nextTemperature));
+  };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (saving) return;
-    setSaving(true);
-    try { await onSave(name, note); } finally { setSaving(false); }
+    setSaving(true); setError(null);
+    try {
+      const aiConfiguration = buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey);
+      await onCreate(name, note || undefined, aiConfiguration);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setSaving(false); }
   };
-  return <FormDialog title={copy.editProfile} onCancel={onCancel}><form onSubmit={(event) => void submit(event)}><label>{copy.profileName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving}>{copy.saveChanges}</button></div></form></FormDialog>;
+  return <FormDialog title={copy.createProfile} onCancel={onCancel} modalClassName="profile-edit-modal"><form className="profile-edit-form" onSubmit={(event) => void submit(event)}><label>{copy.profileName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label><fieldset className="profile-edit-ai"><legend>{copy.profileAiDefaults}</legend><p>{copy.aiDefaultsLead}</p>{providers.length ? <><label><span>{copy.profileCredential}</span><select value={providerConfigId} onChange={(event) => { setProviderConfigId(event.target.value); setViewerModelId(""); setReasoning(""); setTemperature(""); }}><option value="">{copy.selectProviderConnection}</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.credentialHint ?? "••••••••"}</option>)}</select></label><label><span>{copy.defaultViewerModel}</span><select value={viewerModelId} onChange={(event) => selectViewer(event.target.value)} disabled={!provider}><option value="">{viewerModels.length ? copy.selectModel : copy.noCachedModels}</option>{viewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label><ViewerProfileControls copy={copy} model={viewerModel} reasoning={reasoning} temperature={temperature} systemPrompt={systemPrompt} onReasoning={setReasoning} onTemperature={setTemperature} onSystemPrompt={setSystemPrompt} /><label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><select value={judgeModelKey} onChange={(event) => setJudgeModelKey(event.target.value)}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`create-judge-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label><label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><select value={monitorModelKey} onChange={(event) => setMonitorModelKey(event.target.value)}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`create-monitor-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label></> : <small>{copy.configureProviderFirst}</small>}</fieldset>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving || !provider || !viewerModel}>{saving ? copy.saving : copy.create}</button></div></form></FormDialog>;
+}
+
+function EditProfileDialog({ copy, profile, providers, models, onCancel, onSave }: { copy: ReturnType<typeof getCopy>; profile: Profile; providers: ProviderConfig[]; models: ProviderModel[]; onCancel: () => void; onSave: (name: string, note?: string, aiConfiguration?: ProfileAiConfigurationInput) => Promise<void> }) {
+  const [name, setName] = useState(profile.name);
+  const [note, setNote] = useState(profile.note ?? "");
+  const currentProvider = providers.find((provider) => provider.credentialId === profile.credentialId) ?? null;
+  const [providerConfigId, setProviderConfigId] = useState(currentProvider?.id ?? "");
+  const [viewerModelId, setViewerModelId] = useState(profile.defaultViewerModelId ?? "");
+  const [reasoning, setReasoning] = useState<"" | ReasoningEffort>(profile.defaultViewerReasoningEffort ?? "");
+  const [temperature, setTemperature] = useState(profile.defaultViewerTemperature === undefined ? "" : String(profile.defaultViewerTemperature));
+  const [systemPrompt, setSystemPrompt] = useState(profile.defaultViewerSystemPrompt ?? "");
+  const [monitorModelKey, setMonitorModelKey] = useState(resolveRoleDefault(profile, "monitor", models));
+  const [judgeModelKey, setJudgeModelKey] = useState(resolveRoleDefault(profile, "judge", models));
+  const [aiTouched, setAiTouched] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const provider = providers.find((item) => item.id === providerConfigId) ?? null;
+  const viewerModels = preferredModelOrder(models.filter((model) => model.providerConfigId === providerConfigId));
+  const roleModels = preferredModelOrder(models);
+  const validViewerModelId = viewerModels.some((model) => model.modelId === viewerModelId) ? viewerModelId : "";
+  const viewerModel = viewerModels.find((model) => model.modelId === validViewerModelId) ?? null;
+  useEffect(() => {
+    if (aiTouched) return;
+    const nextProvider = providers.find((item) => item.credentialId === profile.credentialId) ?? null;
+    const storedModel = models.find((model) => model.providerConfigId === nextProvider?.id && model.modelId === profile.defaultViewerModelId) ?? null;
+    setProviderConfigId(nextProvider?.id ?? "");
+    setViewerModelId(profile.defaultViewerModelId ?? "");
+    setReasoning(reasoningEffortForModel(storedModel, profile.defaultViewerReasoningEffort) ?? "");
+    const storedTemperature = storedModel?.capabilities.temperature.supported ? profile.defaultViewerTemperature ?? defaultTemperatureForModel(storedModel) : undefined;
+    setTemperature(storedTemperature === undefined ? "" : String(storedTemperature));
+    setSystemPrompt(profile.defaultViewerSystemPrompt ?? "");
+    setMonitorModelKey(resolveRoleDefault(profile, "monitor", models));
+    setJudgeModelKey(resolveRoleDefault(profile, "judge", models));
+  }, [aiTouched, models, profile, providers]);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (saving) return;
+    if (aiTouched && (!provider || !validViewerModelId)) { setError(copy.selectViewerBeforeSaving); return; }
+    setSaving(true); setError(null);
+    try {
+      const aiConfiguration = aiTouched ? buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey) : undefined;
+      await onSave(name, note, aiConfiguration);
+    }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSaving(false); }
+  };
+  const selectViewer = (modelId: string) => {
+    const model = viewerModels.find((item) => item.modelId === modelId) ?? null;
+    setViewerModelId(modelId);
+    const sameStoredPair = provider?.credentialId === profile.credentialId && profile.defaultViewerModelId === modelId;
+    setReasoning(sameStoredPair ? reasoningEffortForModel(model, profile.defaultViewerReasoningEffort) ?? "" : "");
+    const nextTemperature = sameStoredPair && profile.defaultViewerTemperature !== undefined ? profile.defaultViewerTemperature : defaultTemperatureForModel(model);
+    setTemperature(nextTemperature === undefined ? "" : String(nextTemperature));
+    setAiTouched(true);
+  };
+  return <FormDialog title={copy.editProfile} onCancel={onCancel} modalClassName="profile-edit-modal"><form className="profile-edit-form" onSubmit={(event) => void submit(event)}><label>{copy.profileName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label><fieldset className="profile-edit-ai"><legend>{copy.profileAiDefaults}</legend><p>{copy.aiDefaultsLead}</p>{providers.length ? <><label><span>{copy.profileCredential}</span><select value={providerConfigId} onChange={(event) => { setProviderConfigId(event.target.value); setViewerModelId(""); setReasoning(""); setTemperature(""); setAiTouched(true); }}><option value="">{copy.selectProviderConnection}</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.credentialHint ?? "••••••••"}</option>)}</select></label><label><span>{copy.defaultViewerModel}</span><select value={validViewerModelId} onChange={(event) => selectViewer(event.target.value)} disabled={!provider}><option value="">{viewerModels.length ? copy.selectModel : copy.noCachedModels}</option>{viewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label><ViewerProfileControls copy={copy} model={viewerModel} reasoning={reasoning} temperature={temperature} systemPrompt={systemPrompt} onReasoning={(value) => { setReasoning(value); setAiTouched(true); }} onTemperature={(value) => { setTemperature(value); setAiTouched(true); }} onSystemPrompt={(value) => { setSystemPrompt(value); setAiTouched(true); }} /><label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><select value={judgeModelKey} onChange={(event) => { setJudgeModelKey(event.target.value); setAiTouched(true); }}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`edit-judge-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label><label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><select value={monitorModelKey} onChange={(event) => { setMonitorModelKey(event.target.value); setAiTouched(true); }}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`edit-monitor-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label></> : <small>{copy.configureProviderFirst}</small>}</fieldset>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving}>{saving ? copy.saving : copy.saveChanges}</button></div></form></FormDialog>;
 }
 
 function CreateWorkspaceDialog({ copy, profile, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; profile: Profile | null; onCancel: () => void; onCreate: (name: string, description?: string) => Promise<void> }) {
@@ -1748,8 +2165,8 @@ function CreateWorkspaceDialog({ copy, profile, onCancel, onCreate }: { copy: Re
   return <FormDialog title={`${copy.createWorkspace}${profile ? ` · ${profile.name || copy.unnamedProfile}` : ""}`} onCancel={onCancel}><form onSubmit={submit}><label>{copy.workspaceName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.workspaceDescription}<textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!name.trim()}>{copy.create}</button></div></form></FormDialog>;
 }
 
-function FormDialog({ title, onCancel, children }: { title: string; onCancel: () => void; children: ReactNode }) {
-  return <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}><section className="modal form-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><h2>{title}</h2><button className="icon-button" onClick={onCancel}><X size={19} /></button></div>{children}</section></div>;
+function FormDialog({ title, onCancel, children, modalClassName = "" }: { title: string; onCancel: () => void; children: ReactNode; modalClassName?: string }) {
+  return <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}><section className={`modal form-modal ${modalClassName}`.trim()} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><h2>{title}</h2><button className="icon-button" onClick={onCancel}><X size={19} /></button></div>{children}</section></div>;
 }
 
 function Choice({ active, onClick, icon, title, meta, disabled = false }: { active: boolean; onClick: () => void; icon: ReactNode; title: string; meta?: string; disabled?: boolean }) {

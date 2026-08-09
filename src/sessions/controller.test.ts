@@ -3,6 +3,7 @@ import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getFullRcp } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import { detectRepetitiveOutput, runAutomaticRcpSession } from "./controller";
+import type { SessionSnapshot } from "./types";
 
 const config: ProviderConfig = {
   id: "provider_1",
@@ -38,13 +39,13 @@ const model: ProviderModel = {
   },
 };
 
-function fakeRepository(log: string[]) {
+function fakeRepository(log: string[], snapshots: SessionSnapshot[] = []) {
   return {
     createRvSession: async () => { log.push("create"); return {} as never; },
     updateRvSessionState: async (_id: string, state: string) => { log.push(`state:${state}`); },
     appendSessionEvent: async (_id: string, event: { eventType: string }) => { log.push(`event:${event.eventType}`); },
     updatePreRevealTranscript: async (_id: string, transcript: string) => { log.push(`save:${(transcript.match(/## Phase/g) ?? []).length}`); },
-    saveSessionSnapshot: async () => { log.push("snapshot"); },
+    saveSessionSnapshot: async (_id: string, snapshot: SessionSnapshot) => { snapshots.push(snapshot); log.push("snapshot"); },
     sealPreReveal: async () => { log.push("sealed"); },
     acceptReveal: async () => undefined,
     createMonitorRun: async () => "monitor_1",
@@ -56,9 +57,10 @@ function fakeRepository(log: string[]) {
 describe("automatic RCP controller", () => {
   it("persists each completed phase before issuing the next provider call", async () => {
     const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
     let calls = 0;
     const result = await runAutomaticRcpSession({
-      repository: fakeRepository(log),
+      repository: fakeRepository(log, snapshots),
       workspaceId: "workspace_1",
       profileId: "profile_1",
       providerConfig: config,
@@ -66,9 +68,13 @@ describe("automatic RCP controller", () => {
       protocol: getFullRcp("en"),
       sessionLanguage: "en",
       requestedSettings: { reasoningEffort: "high", temperature: 1.1, maxOutputTokens: 4096 },
-      chat: async () => {
+      rvSystemPrompt: { id: "profile_prompt", version: "1", content: "FIXED PROFILE VIEWER PROMPT", contentSha256: "c".repeat(64) },
+      researchConditionInstruction: { id: "condition_a", version: "1", content: "CUSTOM VARIABLE A", contentSha256: "d".repeat(64) },
+      chat: async ({ messages }) => {
         calls += 1;
         if (calls > 1) expect(log).toContain(`save:${calls - 1}`);
+        expect(messages.some((message) => message.role === "system" && message.content === "FIXED PROFILE VIEWER PROMPT")).toBe(true);
+        expect(messages.some((message) => message.role === "system" && message.content.includes("CUSTOM VARIABLE A"))).toBe(true);
         return { content: `Distinct phase ${calls} response with useful target descriptors.`, usage: {} };
       },
     });
@@ -76,6 +82,8 @@ describe("automatic RCP controller", () => {
     expect(result.state).toBe("AwaitingReveal");
     expect(log.at(-1)).toBe("event:PRE_REVEAL_SEALED");
     expect(log).toContain("sealed");
+    expect(snapshots[0].rvSystemPrompt).toEqual(expect.objectContaining({ contentSha256: "c".repeat(64), fullContent: "FIXED PROFILE VIEWER PROMPT" }));
+    expect(snapshots[0].researchConditionInstruction).toEqual(expect.objectContaining({ contentSha256: "d".repeat(64), fullContent: "CUSTOM VARIABLE A" }));
   });
 
   it("never sends reveal data during blind execution", async () => {

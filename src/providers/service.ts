@@ -1,6 +1,6 @@
 import type { AppRepository } from "../storage/repository";
 import { createId } from "../storage/repository";
-import { deleteCredentialSecret, discoverModels, storeCredentialSecret } from "./native";
+import { deleteCredentialSecret, discoverModels, hasCredentialSecret, storeCredentialSecret } from "./native";
 import type { ProviderConfig, ProviderKind, ProviderModel } from "./types";
 
 export const PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER = 2000;
@@ -13,7 +13,7 @@ export function credentialHint(secret: string): string {
   return `••••••••${suffix}`;
 }
 
-async function credentialFingerprint(secret: string): Promise<string> {
+export async function credentialFingerprint(secret: string): Promise<string> {
   const bytes = new TextEncoder().encode(secret.trim());
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("").slice(0, 16);
@@ -50,6 +50,9 @@ export async function addProvider(
 
 export async function refreshProviderModels(repository: AppRepository, config: ProviderConfig): Promise<ProviderModel[]> {
   try {
+    if (!await hasCredentialSecret(config.credentialId)) {
+      throw new Error("API key is missing from secure storage. Remove this provider connection and add it again.");
+    }
     const models = (await discoverModels(config)).slice(0, PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER);
     await repository.replaceProviderModels(config.id, models);
     await repository.updateProviderConnectionStatus(config.id, "ok");

@@ -3,7 +3,7 @@ import { providerChat as nativeProviderChat } from "../providers/native";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { ProtocolResource } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
-import type { InterfaceLanguage } from "../types";
+import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
 import type { TargetRecord } from "../targets/types";
 import { evaluateMonitor } from "../monitor/engine";
 import { MONITOR_LIBRARY_VERSION } from "../monitor/library";
@@ -46,12 +46,8 @@ export interface AutomaticRcpRunInput {
   sessionCodePrefix?: string;
   automaticTarget?: TargetRecord;
   researchProjectId?: string;
-  rvSystemPrompt?: {
-    id: string;
-    version: string;
-    content: string;
-    contentSha256: string;
-  };
+  rvSystemPrompt?: ViewerSystemPromptSnapshot;
+  researchConditionInstruction?: ViewerSystemPromptSnapshot;
   monitor?: {
     providerConfig: ProviderConfig;
     model: ProviderModel;
@@ -111,6 +107,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   const messages: ProviderMessage[] = [
     { role: "system", content: input.protocol.content },
     ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
+    ...(input.researchConditionInstruction?.content.trim() ? [{ role: "system" as const, content: `[LOCKED RESEARCH CONDITION INSTRUCTION]\n${input.researchConditionInstruction.content.trim()}` }] : []),
   ];
   const stop = (reason: string) => stopRun(input, sessionId, sessionCode, transcript, reason, metrics, startedAtMs);
 
@@ -172,6 +169,15 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         language: input.sessionLanguage,
         contentSha256: input.rvSystemPrompt.contentSha256,
         fullContent: input.rvSystemPrompt.content,
+      },
+    } : {}),
+    ...(input.researchConditionInstruction ? {
+      researchConditionInstruction: {
+        id: input.researchConditionInstruction.id,
+        version: input.researchConditionInstruction.version,
+        language: input.sessionLanguage,
+        contentSha256: input.researchConditionInstruction.contentSha256,
+        fullContent: input.researchConditionInstruction.content,
       },
     } : {}),
     revealSource: input.automaticTarget ? "automatic" : "external",

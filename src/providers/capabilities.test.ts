@@ -51,6 +51,18 @@ describe("dynamic provider capabilities", () => {
     expect(model.capabilities.temperature.max).toBe(2);
   });
 
+  it("uses the full OpenRouter gateway effort list when supported_efforts is null and removes NONE for mandatory reasoning", () => {
+    const [model] = normalizeModelDiscovery(config, {
+      data: [{
+        id: "openai/reasoner",
+        supported_parameters: ["reasoning", "temperature"],
+        reasoning: { supported_efforts: null, mandatory: true, default_effort: "medium" },
+      }],
+    });
+    expect(model.capabilities.reasoning.efforts).toEqual(["max", "xhigh", "high", "medium", "low", "minimal"]);
+    expect(model.capabilities.reasoning.mandatory).toBe(true);
+  });
+
   it("omits controls that are not demonstrably supported", () => {
     const [model] = normalizeModelDiscovery(config, {
       data: [{ id: "plain/model", supported_parameters: ["max_tokens"], architecture: { input_modalities: ["text"] } }],

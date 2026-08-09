@@ -1,3 +1,5 @@
+import type { ReasoningEffort } from "./providers/types";
+
 export type InterfaceLanguage = "pl" | "en";
 export type SessionLanguageSetting = "same" | InterfaceLanguage;
 export type Theme = "aurora" | "light" | "dark";
@@ -42,9 +44,37 @@ export interface Profile {
   note?: string;
   credentialId?: string;
   credentialProvider?: string;
+  defaultViewerModelId?: string;
+  defaultViewerReasoningEffort?: ReasoningEffort;
+  defaultViewerTemperature?: number;
+  defaultViewerSystemPrompt?: string;
+  defaultMonitorProviderConfigId?: string;
+  defaultMonitorModelId?: string;
+  defaultJudgeProviderConfigId?: string;
+  defaultJudgeModelId?: string;
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
+}
+
+export interface ProfileAiConfigurationInput {
+  credentialId?: string;
+  credentialProvider?: string;
+  defaultViewerModelId?: string;
+  defaultViewerReasoningEffort?: ReasoningEffort;
+  defaultViewerTemperature?: number;
+  defaultViewerSystemPrompt?: string;
+  defaultMonitorProviderConfigId?: string;
+  defaultMonitorModelId?: string;
+  defaultJudgeProviderConfigId?: string;
+  defaultJudgeModelId?: string;
+}
+
+export interface ViewerSystemPromptSnapshot {
+  id: string;
+  version: string;
+  content: string;
+  contentSha256: string;
 }
 
 export interface Workspace {
@@ -61,6 +91,7 @@ export interface Workspace {
 export interface CreateProfileInput {
   name: string;
   note?: string;
+  aiConfiguration?: ProfileAiConfigurationInput;
 }
 
 export interface UpdateProfileInput {

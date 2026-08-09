@@ -98,6 +98,7 @@ export async function executeResearchSessions(input: {
       automaticTarget: target,
       researchProjectId: project.id,
       ...(condition.systemPrompt ? { rvSystemPrompt: condition.systemPrompt } : {}),
+      ...(condition.conditionInstruction ? { researchConditionInstruction: condition.conditionInstruction } : {}),
       signal: input.signal,
       onSessionCreated: async (sessionId) => {
         linkedSessionId = sessionId;
@@ -137,6 +138,7 @@ export async function judgeResearch(input: {
 }): Promise<void> {
   const project = await requireProject(input.repository, input.projectId);
   if (!["SessionsComplete", "Judging"].includes(project.state)) throw new Error(`Research judging cannot run from state ${project.state}.`);
+  if (project.config.judges.length === 0) throw new Error("This Research project is configured for Save only / external evaluation.");
   const [assignments, providers, models] = await Promise.all([
     input.repository.listResearchAssignments(project.id),
     input.repository.listProviderConfigs(),

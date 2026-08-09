@@ -1,7 +1,7 @@
 import { buildConversationPayload, buildManualRvPayload, type ScopedChatMessage } from "../domain/chatContext";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { providerChat as nativeProviderChat } from "../providers/native";
-import type { ProviderChatResponse, ProviderConfig, ProviderImageInput, ProviderMessage, ProviderModel } from "../providers/types";
+import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderImageInput, ProviderMessage, ProviderModel } from "../providers/types";
 import { getConversationPrompt } from "../resources/prompts/conversation";
 import type { AppRepository } from "../storage/repository";
 import type { ChatMessage, ChatMode, InterfaceLanguage } from "../types";
@@ -17,6 +17,8 @@ export async function sendChatTurn(input: {
   providerConfig: ProviderConfig;
   model: ProviderModel;
   content: string;
+  requestedSettings?: GenerationSettings;
+  rvSystemPrompt?: string;
   attachedProtocol?: string;
   sources?: WorkspaceSource[];
   images?: ProviderImageInput[];
@@ -42,6 +44,7 @@ export async function sendChatTurn(input: {
     : buildManualRvPayload({
         history: scopedHistory,
         currentUserMessage: content,
+        explicitSystemInstruction: input.rvSystemPrompt,
         attachedProtocol: input.attachedProtocol,
       });
 
@@ -62,7 +65,8 @@ export async function sendChatTurn(input: {
   if (input.model.capabilities.contextTokens && estimatedInputTokens + maxOutputTokens > input.model.capabilities.contextTokens) {
     throw new Error("Selected sources exceed this model's available context.");
   }
-  const settings = resolveGenerationSettings(input.model.capabilities, { maxOutputTokens });
+  const settings = resolveGenerationSettings(input.model.capabilities, { ...input.requestedSettings, maxOutputTokens });
+  if (settings.omitted.length) throw new Error(`Unsupported generation settings: ${settings.omitted.join(", ")}`);
   const user = await input.repository.appendChatMessage(input.threadId, "user", content);
   const response = await (input.chat ?? nativeProviderChat)({
     config: input.providerConfig,

@@ -7,7 +7,7 @@ import { buildAutomaticTargetReveal, targetHasSupportedReveal } from "../targets
 import { APP_VERSION } from "../version";
 import { createSessionCode } from "./sessionCode";
 import type { TargetRecord } from "../targets/types";
-import type { InterfaceLanguage } from "../types";
+import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
 import { detectRepetitiveOutput, sha256Text, type SessionProgress } from "./controller";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics } from "./metrics";
 import type { RvSessionState, SessionSnapshot } from "./types";
@@ -34,6 +34,7 @@ export interface AutomaticCustomRunInput {
   protocol: CustomProtocolVersion;
   sessionLanguage: InterfaceLanguage;
   requestedSettings: GenerationSettings;
+  rvSystemPrompt?: ViewerSystemPromptSnapshot;
   automaticTarget?: TargetRecord;
   signal?: AbortSignal;
   maxRetries?: number;
@@ -61,7 +62,10 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   const sessionCode = createSessionCode(input.sessionCodePrefix);
   const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
-  const messages: ProviderMessage[] = input.protocol.systemPrompt ? [{ role: "system", content: input.protocol.systemPrompt }] : [];
+  const messages: ProviderMessage[] = [
+    ...(input.protocol.systemPrompt ? [{ role: "system" as const, content: input.protocol.systemPrompt }] : []),
+    ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
+  ];
   const startedAtMs = Date.now();
   let metrics = emptySessionRequestMetrics();
   let transcript = "";
@@ -103,6 +107,15 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
       fullContent: fullProtocol,
     },
     controllerPrompt: { id: "custom-protocol-controller", version: "1.0.0", language: input.sessionLanguage },
+    ...(input.rvSystemPrompt ? {
+      rvSystemPrompt: {
+        id: input.rvSystemPrompt.id,
+        version: input.rvSystemPrompt.version,
+        language: input.sessionLanguage,
+        contentSha256: input.rvSystemPrompt.contentSha256,
+        fullContent: input.rvSystemPrompt.content,
+      },
+    } : {}),
     revealSource: input.automaticTarget ? "automatic" : "external",
     ...(input.automaticTarget ? { targetId: input.automaticTarget.id } : {}),
     applicationVersion: APP_VERSION,

@@ -1,5 +1,6 @@
 import { buildJudgePacket } from "../domain/judgePacket";
 import { JUDGE_RUBRIC_VERSION } from "../judge/types";
+import { getJudgePrompt } from "../judge/prompt";
 import type { AppRepository } from "../storage/repository";
 import type { RevealArtifactRecord } from "../sessions/types";
 import { stableStringify } from "../research/planner";
@@ -10,7 +11,10 @@ import { writeExportPackage, type ExportArtifactCopy, type ExportTextFile } from
 export async function exportResearchPackage(repository: AppRepository, projectId: string): Promise<{ directory: string; manifestHash: string }> {
   const project = await repository.getResearchProject(projectId);
   const results = await repository.getResearchResults(projectId);
-  if (!project || project.state !== "Complete" || !results) throw new Error("Research must be complete before full-package export.");
+  if (!project) throw new Error("Research project not found.");
+  const saveOnly = project.config.judges.length === 0 && project.state === "SessionsComplete";
+  const completedWithScores = project.state === "Complete" && Boolean(results);
+  if (!saveOnly && !completedWithScores) throw new Error("Research sessions must be complete before export.");
   const [assignments, mappings, conditions, sessions] = await Promise.all([
     repository.listResearchAssignments(projectId), repository.listBlindingMappings(projectId), repository.listResearchConditions(projectId), repository.listRvSessions(project.workspaceId),
   ]);
@@ -24,14 +28,23 @@ export async function exportResearchPackage(repository: AppRepository, projectId
   const artifactCopies: ExportArtifactCopy[] = [];
   const snapshots: Record<string, unknown> = {};
   const blindingKey: Array<Record<string, unknown>> = [];
+  const privatePrefix = saveOnly ? "private_master/" : "";
 
-  files.push({ relativePath: "results/results.json", content: pretty(results) });
-  files.push({ relativePath: "results/results.csv", content: resultsCsv(results) });
-  files.push({ relativePath: "results/session_results.csv", content: sessionResultsCsv(results) });
-  files.push({ relativePath: "configuration/research_config.json", content: pretty({ projectId: project.id, name: project.name, templateType: project.templateType, configHash: project.configHash, lockedAt: project.lockedAt, scoresFrozenAt: project.scoresFrozenAt, unblindedAt: project.unblindedAt, config: project.config }) });
+  if (saveOnly) {
+    files.push({ relativePath: "external_evaluation/JUDGE_SYSTEM_PROMPT.txt", content: `${getJudgePrompt(project.config.sessionLanguage)}\n` });
+    files.push({ relativePath: "external_evaluation/HOW_TO_EVALUATE.md", content: externalEvaluationInstructions(project.config.sessionLanguage) });
+    files.push({ relativePath: "external_evaluation/SCORE_RESPONSE_EXAMPLE.json", content: pretty({ scores: { gestalt: 0, verifiableFeatures: 0, activityFunctionEvent: 0, confabulationControl: 0 }, strongestMatches: [], majorMissesContradictions: [], confabulationObservations: [], conciseRationale: "" }) });
+  }
+
+  if (results) {
+    files.push({ relativePath: "results/results.json", content: pretty(results) });
+    files.push({ relativePath: "results/results.csv", content: resultsCsv(results) });
+    files.push({ relativePath: "results/session_results.csv", content: sessionResultsCsv(results) });
+  }
+  files.push({ relativePath: `${privatePrefix}configuration/research_config.json`, content: pretty({ projectId: project.id, name: project.name, templateType: project.templateType, configHash: project.configHash, lockedAt: project.lockedAt, scoresFrozenAt: project.scoresFrozenAt, unblindedAt: project.unblindedAt, config: project.config }) });
   if (recoverySessions.length) {
-    files.push({ relativePath: "master/recovery_sessions.json", content: pretty(recoverySessions) });
-    for (const session of recoverySessions) files.push({ relativePath: `master/recovery_sessions/${session.id}/pre_reveal.md`, content: session.preRevealTranscript });
+    files.push({ relativePath: `${privatePrefix}master/recovery_sessions.json`, content: pretty(recoverySessions) });
+    for (const session of recoverySessions) files.push({ relativePath: `${privatePrefix}master/recovery_sessions/${session.id}/pre_reveal.md`, content: session.preRevealTranscript });
   }
 
   for (const assignment of assignments) {
@@ -42,34 +55,37 @@ export async function exportResearchPackage(repository: AppRepository, projectId
       repository.getReveal(session.id), repository.getViewerEvidence(session.id), repository.getSessionSnapshot(session.id), repository.listJudgeScores(session.id), repository.listTargetClarifications(session.id),
     ]);
     const base = `sessions/${assignment.anonymousSessionId}`;
-    files.push({ relativePath: `${base}/pre_reveal.md`, content: session.preRevealTranscript });
-    files.push({ relativePath: `${base}/viewer_evidence.md`, content: viewerEvidence });
-    if (session.postRevealTranscript) files.push({ relativePath: `${base}/post_reveal.md`, content: postRevealMarkdown(session.postRevealTranscript) });
-    if (clarifications.length) files.push({ relativePath: `${base}/target_clarifications.json`, content: pretty({ label: "Supplementary analysis — after target clarification", records: clarifications }) });
+    if (!saveOnly) {
+      files.push({ relativePath: `${base}/pre_reveal.md`, content: session.preRevealTranscript });
+      files.push({ relativePath: `${base}/viewer_evidence.md`, content: viewerEvidence });
+      if (session.postRevealTranscript) files.push({ relativePath: `${base}/post_reveal.md`, content: postRevealMarkdown(session.postRevealTranscript) });
+      if (clarifications.length) files.push({ relativePath: `${base}/target_clarifications.json`, content: pretty({ label: "Supplementary analysis — after target clarification", records: clarifications }) });
+    }
     if (snapshot) {
       snapshots[assignment.anonymousSessionId] = snapshot;
-      files.push({ relativePath: `${base}/session_snapshot.json`, content: pretty(snapshot) });
+      if (!saveOnly) files.push({ relativePath: `${base}/session_snapshot.json`, content: pretty(snapshot) });
     }
     if (reveal) {
       const exportedArtifacts = (reveal.artifactManifest ?? []).map((artifact, index) => {
-        const relativePath = `${base}/reveal_artifacts/artifact_${index + 1}.${extensionFor(artifact)}`;
+        const relativePath = artifactExportPath(assignment.anonymousSessionId, index, artifact, saveOnly);
         artifactCopies.push({ sourcePath: artifact.path, relativePath });
         return { artifactId: artifact.artifactId, mimeType: artifact.mimeType, size: artifact.size, sha256: artifact.sha256, exportedPath: relativePath };
       });
-      files.push({ relativePath: `${base}/reveal.json`, content: pretty({ source: reveal.source, text: reveal.text, hash: reveal.hash, artifacts: exportedArtifacts }) });
+      if (!saveOnly) files.push({ relativePath: `${base}/reveal.json`, content: pretty({ source: reveal.source, text: reveal.text, hash: reveal.hash, artifacts: exportedArtifacts }) });
       const packet = buildJudgePacket({ anonymousSessionId: assignment.anonymousSessionId, preRevealEvidence: viewerEvidence, reveal: { ...(reveal.text ? { text: reveal.text } : {}), ...(exportedArtifacts.some((artifact) => artifact.mimeType.startsWith("image/")) ? { imageRefs: exportedArtifacts.filter((artifact) => artifact.mimeType.startsWith("image/")).map((_, index) => `reveal_image_${index + 1}`) } : {}) }, rubricVersion: JUDGE_RUBRIC_VERSION });
-      files.push({ relativePath: `judge_packets/${assignment.anonymousSessionId}.json`, content: pretty(packet) });
+      files.push({ relativePath: `${saveOnly ? "external_evaluation" : "judge_packets"}/${assignment.anonymousSessionId}.json`, content: pretty(saveOnly ? { ...packet, artifactFiles: exportedArtifacts } : packet) });
     }
-    files.push({ relativePath: `judges/${assignment.anonymousSessionId}.json`, content: pretty(judgeScores) });
+    if (!saveOnly) files.push({ relativePath: `judges/${assignment.anonymousSessionId}.json`, content: pretty(judgeScores) });
 
     const mapping = mappingByAnonymous.get(assignment.anonymousSessionId);
     const condition = mapping ? conditionById.get(mapping.conditionId) : undefined;
     if (mapping && condition) blindingKey.push({ anonymousSessionId: assignment.anonymousSessionId, conditionKey: condition.conditionKey, conditionLabel: condition.config.label, pairKey: mapping.pairKey, pairOrder: mapping.pairOrder ?? null, targetId: assignment.targetId });
   }
 
-  files.push({ relativePath: "blinding/blinding_key.json", content: pretty(blindingKey) });
-  files.push({ relativePath: "master/master_record.json", content: pretty({ project: { id: project.id, workspaceId: project.workspaceId, templateType: project.templateType, state: project.state, config: project.config, configHash: project.configHash }, conditions, assignments, mappings, sessionSnapshots: snapshots }) });
-  files.push({ relativePath: "summary.md", content: summaryMarkdown(project.name, results) });
+  files.push({ relativePath: `${privatePrefix}blinding/blinding_key.json`, content: pretty(blindingKey) });
+  files.push({ relativePath: `${privatePrefix}master/master_record.json`, content: pretty({ project: { id: project.id, workspaceId: project.workspaceId, templateType: project.templateType, state: project.state, config: project.config, configHash: project.configHash }, conditions, assignments, mappings, sessionSnapshots: snapshots }) });
+  files.push({ relativePath: "summary.md", content: results ? summaryMarkdown(project.name, results) : saveOnlySummaryMarkdown(project.name, assignments.length) });
+  if (saveOnly) files.push({ relativePath: "README.md", content: saveOnlyReadme(project.name, assignments.length) });
 
   const manifestEntries = await Promise.all(files.map(async (file) => ({ path: file.relativePath, kind: "text", sha256: await sha256Text(file.content) })));
   for (const assignment of assignments) {
@@ -77,7 +93,7 @@ export async function exportResearchPackage(repository: AppRepository, projectId
     const reveal = await repository.getReveal(assignment.sessionId);
     for (let index = 0; index < (reveal?.artifactManifest?.length ?? 0); index += 1) {
       const artifact = reveal!.artifactManifest![index];
-      manifestEntries.push({ path: `sessions/${assignment.anonymousSessionId}/reveal_artifacts/artifact_${index + 1}.${extensionFor(artifact)}`, kind: "artifact", sha256: artifact.sha256 });
+      manifestEntries.push({ path: artifactExportPath(assignment.anonymousSessionId, index, artifact, saveOnly), kind: "artifact", sha256: artifact.sha256 });
     }
   }
   const manifest = { schemaVersion: 1, projectId, generatedAt: new Date().toISOString(), entries: manifestEntries };
@@ -86,7 +102,7 @@ export async function exportResearchPackage(repository: AppRepository, projectId
   files.push({ relativePath: "manifest.json", content: manifestContent });
   const exportId = `RV_Harness_Research_${project.id.replace(/[^A-Za-z0-9_-]/g, "_")}_${Date.now()}`;
   const directory = await writeExportPackage({ exportId, files, artifactCopies });
-  await repository.recordExport(project.workspaceId, project.id, "research_package", directory, manifestHash);
+  await repository.recordExport(project.workspaceId, project.id, saveOnly ? "research_save_only_package" : "research_package", directory, manifestHash);
   return { directory, manifestHash };
 }
 
@@ -108,6 +124,21 @@ function summaryMarkdown(name: string, results: ResearchResults): string {
   return lines.join("\n") + "\n";
 }
 
+function saveOnlySummaryMarkdown(name: string, sessionCount: number): string {
+  return [`# ${name}`, "", "Evaluation mode: Save only / external evaluation", `Anonymous sessions: ${sessionCount}`, "", "No AI Judge was run by AI RV Harness. See README.md before sharing files with an external evaluator."].join("\n") + "\n";
+}
+
+function saveOnlyReadme(name: string, sessionCount: number): string {
+  return [`# External evaluation package — ${name}`, "", `This package contains ${sessionCount} anonymous session packet(s). AI Judge was optional and was not run inside AI RV Harness.`, "", "## What to share", "", "Share only the `external_evaluation` folder with another AI or human Judge. It includes the blind packets, a ready-to-use Judge system prompt, scoring instructions, and any referenced Reveal images. The tested condition labels are not included.", "", "## What to keep private until scoring is finished", "", "Do not share `private_master` with the evaluator. It contains the configuration, condition mapping, and Blinding Key.", "", "After external scores are frozen, you may use `private_master/blinding/blinding_key.json` to connect anonymous sessions to conditions.", ""].join("\n");
+}
+
+function externalEvaluationInstructions(language: "pl" | "en"): string {
+  if (language === "pl") {
+    return ["# Jak ocenić zapisane sesje", "", "1. Ustaw zawartość `JUDGE_SYSTEM_PROMPT.txt` jako instrukcję systemową wybranego AI.", "2. Dla każdego pliku `BlindSession_*.json` rozpocznij osobny, czysty kontekst i przekaż cały JSON jako wiadomość użytkownika.", "3. Jeżeli obok JSON istnieje folder `BlindSession_*_artifacts`, dołącz znajdujące się w nim obrazy do tej samej wiadomości.", "4. Zapisz odpowiedź AI dokładnie pod identyfikatorem `anonymousSessionId`. Oczekiwany format pokazuje `SCORE_RESPONSE_EXAMPLE.json`.", "5. Nie udostępniaj oceniającemu folderu `private_master`; zawiera on klucz odsłaniający warunki eksperymentu.", "", "Każda sesja powinna być oceniana niezależnie. Nie podawaj modelu Viewera, profilu, warunku testu ani kolejności uruchomienia.", ""].join("\n");
+  }
+  return ["# How to evaluate the saved sessions", "", "1. Use `JUDGE_SYSTEM_PROMPT.txt` as the selected AI's system instruction.", "2. For every `BlindSession_*.json`, start a fresh context and send the complete JSON as the user message.", "3. If a matching `BlindSession_*_artifacts` folder exists, attach its images to the same message.", "4. Save the response under its `anonymousSessionId`. The required shape is shown in `SCORE_RESPONSE_EXAMPLE.json`.", "5. Do not share `private_master` with the evaluator; it contains the experiment's unblinding key.", "", "Evaluate every session independently. Do not disclose the Viewer model, Profile, tested condition, or execution order.", ""].join("\n");
+}
+
 function pretty(value: unknown): string { return JSON.stringify(value, null, 2) + "\n"; }
 function csvCell(value: string | number): string { const text = String(value); return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text; }
 function escapePipe(value: string): string { return value.replaceAll("|", "\\|").replaceAll("\n", " "); }
@@ -117,6 +148,10 @@ function postRevealMarkdown(transcript: string): string {
   return turns.map((turn) => `## ${turn.role === "user" ? "User" : "Viewer"}\n\n${turn.content}\n`).join("\n");
 }
 function extensionFor(artifact: RevealArtifactRecord): string { return ({ "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "text/plain": "txt", "text/markdown": "md" } as Record<string, string>)[artifact.mimeType] ?? "bin"; }
+function artifactExportPath(anonymousSessionId: string, index: number, artifact: RevealArtifactRecord, saveOnly: boolean): string {
+  const root = saveOnly ? `external_evaluation/${anonymousSessionId}_artifacts` : `sessions/${anonymousSessionId}/reveal_artifacts`;
+  return `${root}/artifact_${index + 1}.${extensionFor(artifact)}`;
+}
 async function sha256Text(text: string): Promise<string> { const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)); return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join(""); }
 
 export function exportMasterRecordWire(value: unknown): string {

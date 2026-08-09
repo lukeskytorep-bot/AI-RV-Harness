@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import type { JudgeScoreRecord } from "../judge/types";
-import { judgeResearch, prepareInterruptedResearchRetry, unblindAndComputeResearch } from "./engine";
+import { executeResearchSessions, judgeResearch, prepareInterruptedResearchRetry, unblindAndComputeResearch } from "./engine";
 import type { ResearchConfig, ResearchProjectRecord, ResearchResults, ResearchState } from "./types";
 
 const config: ResearchConfig = {
@@ -17,6 +17,34 @@ const model: ProviderModel = { providerConfigId: "pc", provider: "openrouter", m
 const score: JudgeScoreRecord = { id: "score", judgeRunId: "jr", judgeIndex: 1, modelRoute: "openrouter:m", gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 1, confabulationControl: 1, total: 6, narrative: { strongestMatches: [], majorMissesContradictions: [], confabulationObservations: [], conciseRationale: "R" }, frozenAt: "now", createdAt: "now" };
 
 describe("Research evidence boundaries", () => {
+  it("passes the fixed Viewer prompt and separate Custom Variable instruction into the locked session", async () => {
+    const fixedPrompt = { id: "profile_prompt", version: "1", content: "FIXED VIEWER PROMPT", contentSha256: "a".repeat(64) };
+    const conditionInstruction = { id: "condition_a", version: "1", content: "VARIABLE A", contentSha256: "b".repeat(64) };
+    const condition = {
+      key: "a", label: "A", profileId: "p", providerConfigId: "pc", modelId: "m", requestedSettings: {},
+      capabilitySnapshot: model.capabilities, effectiveSettings: { requested: {}, effective: {}, omitted: [] },
+      systemPrompt: fixedPrompt, conditionInstruction,
+    };
+    const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "custom", state: "Locked", config: { ...config, templateType: "custom", conditions: [condition] }, createdAt: "now", updatedAt: "now" };
+    const sessionRunner = vi.fn(async (input) => {
+      await input.onSessionCreated?.("session", "RV-TEST");
+      return { sessionId: "session", sessionCode: "RV-TEST", state: "Revealed" as const, transcript: "evidence" };
+    });
+    const repo = {
+      getResearchProject: vi.fn().mockResolvedValue(project),
+      listResearchAssignments: vi.fn().mockResolvedValue([{ id: "assignment", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "Pending" }]),
+      listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: "hash", createdAt: "now" }]),
+      listResearchConditions: vi.fn().mockResolvedValue([{ id: "condition", researchProjectId: "r", conditionKey: "a", config: condition }]),
+      listTargets: vi.fn().mockResolvedValue([{ id: "t", collection: "user", title: "T", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }]),
+      listProviderConfigs: vi.fn().mockResolvedValue([provider]),
+      listProviderModels: vi.fn().mockResolvedValue([model]),
+      setResearchProjectState: vi.fn(),
+      updateResearchAssignment: vi.fn(),
+    } as unknown as AppRepository;
+    await executeResearchSessions({ repository: repo, projectId: "r", sessionRunner });
+    expect(sessionRunner).toHaveBeenCalledWith(expect.objectContaining({ rvSystemPrompt: fixedPrompt, researchConditionInstruction: conditionInstruction }));
+  });
+
   it("requires an explicit recovery action before an interrupted assignment can be retried", async () => {
     const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "Interrupted", config, createdAt: "now", updatedAt: "now" };
     const updateRvSessionState = vi.fn();

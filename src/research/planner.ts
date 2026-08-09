@@ -88,7 +88,10 @@ export function validateConfig(config: ResearchConfig): void {
   if (new Set(config.conditions.map((condition) => condition.key)).size !== config.conditions.length) throw new Error("Research condition keys must be unique.");
   if (!config.targetIds.length || new Set(config.targetIds).size !== config.targetIds.length) throw new Error("Research requires a non-empty unique target pool.");
   if (!Number.isInteger(config.repetitions) || config.repetitions < 1 || config.repetitions > 100) throw new RangeError("Research repetitions must be an integer between 1 and 100.");
-  if (config.judges.length < 1 || config.judges.length > 3) throw new RangeError("Research requires 1–3 Judges.");
+  if (config.judges.length > 3) throw new RangeError("Research supports at most 3 Judges.");
+  if (config.evaluationMode === "ai_judges" && config.judges.length < 1) throw new RangeError("AI Judge evaluation requires 1–3 Judges.");
+  if (config.evaluationMode === "save_only" && config.judges.length !== 0) throw new RangeError("Save-only Research must not contain Judge routes.");
+  if (config.evaluationMode === undefined && config.judges.length < 1) throw new RangeError("Legacy Research configuration requires 1–3 Judges.");
   if (config.templateType === "practice") {
     const orders = config.conditions.map((condition) => condition.practiceOrder).sort();
     if (orders.length !== 2 || orders[0] !== "FIRST" || orders[1] !== "SECOND") throw new Error("Practice Effect requires exactly FIRST and SECOND conditions.");

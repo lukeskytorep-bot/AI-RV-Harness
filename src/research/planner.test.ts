@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildResearchLockPlan } from "./planner";
+import { buildResearchLockPlan, validateConfig } from "./planner";
 import type { ResearchConfig } from "./types";
 
 const config: ResearchConfig = {
@@ -36,5 +36,16 @@ describe("Research lock planner", () => {
       expect([first.pairOrder, second.pairOrder]).toEqual(["FIRST", "SECOND"]);
       expect(execution[index].targetId).toBe(execution[index + 1].targetId);
     }
+  });
+
+  it("locks explicit save-only Research without configuring an AI Judge", async () => {
+    const saveOnly: ResearchConfig = { ...config, evaluationMode: "save_only", judges: [] };
+    expect(() => validateConfig(saveOnly)).not.toThrow();
+    await expect(buildResearchLockPlan("research_save_only", saveOnly)).resolves.toMatchObject({ assignments: expect.any(Array) });
+  });
+
+  it("does not silently reinterpret a legacy no-Judge configuration as save-only", () => {
+    const legacy: ResearchConfig = { ...config, judges: [] };
+    expect(() => validateConfig(legacy)).toThrow(/Legacy Research configuration requires/);
   });
 });

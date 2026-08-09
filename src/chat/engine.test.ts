@@ -42,6 +42,26 @@ describe("chat engine isolation", () => {
     expect(JSON.parse(packet).some((message: { role: string }) => message.role === "system")).toBe(false);
   });
 
+  it("Manual RV applies the Profile Viewer prompt and supported Profile generation defaults", async () => {
+    const configurable: ProviderModel = {
+      ...model,
+      capabilities: {
+        ...model.capabilities,
+        reasoning: { supported: true, efforts: ["low", "high"], confidence: "provider_metadata" },
+        temperature: { supported: true, min: 0, max: 2, confidence: "provider_metadata" },
+        supportedParameters: ["reasoning", "temperature", "max_tokens"],
+      },
+    };
+    let captured: Parameters<NonNullable<Parameters<typeof sendChatTurn>[0]["chat"]>>[0] | undefined;
+    await sendChatTurn({
+      repository: repo([]), threadId: "r", mode: "manual_rv", language: "en", providerConfig: provider, model: configurable, content: "Start",
+      rvSystemPrompt: "FIXED PROFILE VIEWER PROMPT", requestedSettings: { reasoningEffort: "high", temperature: 0.9 },
+      chat: async (request) => { captured = request; return { content: "Contact", usage: {} }; },
+    });
+    expect(captured?.messages[0]).toEqual({ role: "system", content: "FIXED PROFILE VIEWER PROMPT" });
+    expect(captured?.settings.effective).toEqual({ reasoningEffort: "high", temperature: 0.9, maxOutputTokens: 4096 });
+  });
+
   it("blocks an oversized selected Source before any provider call and never truncates it", async () => {
     const chat = async () => { throw new Error("provider must not be called"); };
     const tinyContextModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, contextTokens: 100, maxOutputTokens: 50 } };

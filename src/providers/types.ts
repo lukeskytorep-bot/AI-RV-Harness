@@ -20,6 +20,7 @@ export interface ProviderConfig {
   label: string;
   credentialId: string;
   credentialHint?: string;
+  credentialFingerprint?: string;
   baseUrl?: string;
   enabled: boolean;
   lastTestedAt?: string;

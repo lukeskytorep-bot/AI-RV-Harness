@@ -46,6 +46,16 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   }
 
   const effectiveSignatures = new Map<string, string[]>();
+  const systemPromptHashes = new Set<string>();
+  const systemPromptContents = new Set<string>();
+  const conditionInstructionHashes = new Set<string>();
+  const conditionInstructionContents = new Set<string>();
+  const profileIds = new Set(config.conditions.map((condition) => condition.profileId));
+  const providerIds = new Set(config.conditions.map((condition) => condition.providerConfigId));
+  const modelIds = new Set(config.conditions.map((condition) => condition.modelId));
+  const reasoningValues = new Set(config.conditions.map((condition) => condition.requestedSettings.reasoningEffort ?? "__provider_default__"));
+  const temperatureValues = new Set(config.conditions.map((condition) => condition.requestedSettings.temperature ?? "__provider_default__"));
+  const outputValues = new Set(config.conditions.map((condition) => condition.requestedSettings.maxOutputTokens ?? "__provider_default__"));
   for (const condition of config.conditions) {
     const profile = profileMap.get(condition.profileId);
     const provider = providerMap.get(condition.providerConfigId);
@@ -71,6 +81,10 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     checks.push(condition.capabilitySnapshot && condition.effectiveSettings ? pass(`${prefix}:snapshot`, `${condition.label}: capability + requested/effective settings snapshot is present`) : fail(`${prefix}:snapshot`, `${condition.label}: Research capability snapshot is missing`));
     const signature = JSON.stringify(effective.effective);
     effectiveSignatures.set(signature, [...(effectiveSignatures.get(signature) ?? []), condition.key]);
+    if (condition.systemPrompt?.contentSha256) systemPromptHashes.add(condition.systemPrompt.contentSha256);
+    if (condition.systemPrompt?.content.trim()) systemPromptContents.add(condition.systemPrompt.content.trim());
+    if (condition.conditionInstruction?.contentSha256) conditionInstructionHashes.add(condition.conditionInstruction.contentSha256);
+    if (condition.conditionInstruction?.content.trim()) conditionInstructionContents.add(condition.conditionInstruction.content.trim());
 
     const protocol = getFullRcp(config.sessionLanguage);
     const roughInputTokens = Math.ceil((protocol.content.length + (condition.systemPrompt?.content.length ?? 0)) / 3.5);
@@ -83,7 +97,60 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   } else {
     checks.push(pass("condition_distinguishability", "Tested conditions remain distinguishable at the known capability layer"));
   }
+  const confoundedControls: string[] = [];
+  if (config.templateType !== "profile" && profileIds.size !== 1) confoundedControls.push("Profile/API identity");
+  if (config.templateType !== "profile" && providerIds.size !== 1) confoundedControls.push("provider connection");
+  if (config.templateType !== "model" && modelIds.size !== 1) confoundedControls.push("Viewer model");
+  if (config.templateType !== "reasoning" && reasoningValues.size !== 1) confoundedControls.push("reasoning");
+  if (config.templateType !== "temperature" && temperatureValues.size !== 1) confoundedControls.push("temperature");
+  if (outputValues.size !== 1) confoundedControls.push("maximum output tokens");
+  checks.push(confoundedControls.length
+    ? fail("controlled_variables", `More than one research variable changes: ${confoundedControls.join(", ")}`)
+    : pass("controlled_variables", "All non-tested Viewer controls are identical across conditions"));
 
+  if (config.viewerControl) {
+    const lockIssues: string[] = [];
+    const expectedModelMode = config.templateType === "model" ? "condition_variable" : "fixed";
+    const expectedPromptMode = config.templateType === "system_prompt" ? "condition_variable" : "fixed";
+    const expectedReasoningMode = config.templateType === "reasoning" ? "condition_variable" : config.viewerControl.reasoning.value ? "fixed" : "provider_default";
+    const expectedTemperatureMode = config.templateType === "temperature" ? "condition_variable" : config.viewerControl.temperature.value !== undefined ? "fixed" : "provider_default";
+    if (config.viewerControl.model.mode !== expectedModelMode) lockIssues.push("model mode");
+    if (config.viewerControl.systemPrompt.mode !== expectedPromptMode) lockIssues.push("System Prompt mode");
+    if (config.viewerControl.reasoning.mode !== expectedReasoningMode) lockIssues.push("reasoning mode");
+    if (config.viewerControl.temperature.mode !== expectedTemperatureMode) lockIssues.push("temperature mode");
+    if (config.viewerControl.model.mode === "fixed" && (modelIds.size !== 1 || !modelIds.has(config.viewerControl.model.modelId ?? ""))) lockIssues.push("fixed model");
+    if (config.viewerControl.systemPrompt.mode === "fixed" && (systemPromptHashes.size !== 1 || !systemPromptHashes.has(config.viewerControl.systemPrompt.contentSha256 ?? ""))) lockIssues.push("fixed System Prompt hash");
+    if (config.viewerControl.reasoning.mode === "fixed" && (!config.viewerControl.reasoning.value || reasoningValues.size !== 1 || !reasoningValues.has(config.viewerControl.reasoning.value))) lockIssues.push("fixed reasoning");
+    if (config.viewerControl.reasoning.mode === "provider_default" && !reasoningValues.has("__provider_default__")) lockIssues.push("provider-default reasoning");
+    if (config.viewerControl.temperature.mode === "fixed" && (temperatureValues.size !== 1 || !temperatureValues.has(config.viewerControl.temperature.value ?? Number.NaN))) lockIssues.push("fixed temperature");
+    if (config.viewerControl.temperature.mode === "provider_default" && !temperatureValues.has("__provider_default__")) lockIssues.push("provider-default temperature");
+    if (outputValues.size !== 1 || !outputValues.has(config.viewerControl.maxOutputTokens)) lockIssues.push("maximum output tokens");
+    checks.push(lockIssues.length
+      ? fail("viewer_control_lock", `Study-wide Viewer control does not match its conditions: ${lockIssues.join(", ")}`)
+      : pass("viewer_control_lock", "Study-wide Viewer model, prompt and generation controls are captured in Experiment Lock"));
+  } else {
+    checks.push(warn("viewer_control_lock", "Legacy Research configuration has no explicit study-wide Viewer-control record"));
+  }
+  if (config.templateType === "system_prompt") {
+    checks.push(systemPromptHashes.size === config.conditions.length && systemPromptContents.size === config.conditions.length && config.conditions.every((condition) => Boolean(condition.systemPrompt?.content.trim()))
+      ? pass("system_prompt_design", "Every tested System Prompt condition has a distinct frozen content hash")
+      : fail("system_prompt_design", "System Prompt Comparison requires a distinct frozen prompt for every condition"));
+  } else {
+    checks.push(systemPromptHashes.size === 1 && systemPromptContents.size === 1 && config.conditions.every((condition) => Boolean(condition.systemPrompt?.content.trim()))
+      ? pass("system_prompt_constant", "One identical Viewer System Prompt is frozen across all conditions")
+      : fail("system_prompt_constant", "A single fixed Viewer System Prompt is required across every Research condition"));
+    if (config.templateType === "custom") {
+      checks.push(conditionInstructionHashes.size === config.conditions.length && conditionInstructionContents.size === config.conditions.length && config.conditions.every((condition) => Boolean(condition.conditionInstruction?.content.trim()))
+        ? pass("custom_condition_design", "Every Custom Variable condition has a distinct frozen instruction")
+        : fail("custom_condition_design", "Custom Variable requires a distinct frozen instruction for every condition"));
+    }
+  }
+
+  if (config.judges.length === 0) {
+    checks.push(config.evaluationMode === "save_only"
+      ? pass("judge_mode", "Save-only mode: no AI Judge calls; anonymous evidence can be exported for external evaluation")
+      : fail("judge_mode", "No Judge route is configured and Save-only mode is not explicit"));
+  }
   for (let index = 0; index < config.judges.length; index += 1) {
     const judge = config.judges[index];
     const provider = providerMap.get(judge.providerConfigId);

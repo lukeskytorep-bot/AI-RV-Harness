@@ -4,6 +4,7 @@ import { getRvLite } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import type { TargetRecord } from "../targets/types";
 import { runAutomaticRvLiteSession } from "./rvLiteController";
+import type { SessionSnapshot } from "./types";
 
 const config: ProviderConfig = { id: "p", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
 const model: ProviderModel = {
@@ -12,13 +13,13 @@ const model: ProviderModel = {
 };
 const target: TargetRecord = { id: "training_1", collection: "training", title: "Secret target", revealText: "SECRET REVEAL", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" };
 
-function repository(log: string[]) {
+function repository(log: string[], snapshots: SessionSnapshot[] = []) {
   return {
     createRvSession: async () => ({} as never),
     updateRvSessionState: async (_id: string, state: string) => { log.push(`state:${state}`); },
     appendSessionEvent: async (_id: string, event: { eventType: string }) => { log.push(event.eventType); },
     updatePreRevealTranscript: async () => { log.push("saved"); },
-    saveSessionSnapshot: async () => undefined,
+    saveSessionSnapshot: async (_id: string, snapshot: SessionSnapshot) => { snapshots.push(snapshot); },
     sealPreReveal: async () => { log.push("sealed"); },
     acceptReveal: async () => { log.push("reveal"); },
     recordTargetUsage: async () => undefined,
@@ -28,16 +29,19 @@ function repository(log: string[]) {
 describe("automatic RV Lite controller", () => {
   it("runs exactly four blind calls, persists each response first, deepens in Prompt 3, and reveals only after sealing", async () => {
     const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
     const requests: string[] = [];
     let calls = 0;
     const result = await runAutomaticRvLiteSession({
-      repository: repository(log), workspaceId: "w", profileId: "profile", profileName: "Leo", providerConfig: config, model,
+      repository: repository(log, snapshots), workspaceId: "w", profileId: "profile", profileName: "Leo", providerConfig: config, model,
       protocol: getRvLite("pl"), sessionLanguage: "pl", requestedSettings: { maxOutputTokens: 1024 }, automaticTarget: target,
+      rvSystemPrompt: { id: "profile_prompt", version: "1", content: "FIXED PROFILE VIEWER PROMPT", contentSha256: "a".repeat(64) },
       chat: async ({ messages }) => {
         calls += 1;
         if (calls > 1) expect(log.filter((item) => item === "saved")).toHaveLength(calls - 1);
         const payload = JSON.stringify(messages);
         expect(payload).not.toContain("SECRET REVEAL");
+        expect(messages[0]).toEqual({ role: "system", content: "FIXED PROFILE VIEWER PROMPT" });
         requests.push(messages.at(-1)?.content ?? "");
         return { content: `Blind evidence ${calls}`, usage: {} };
       },
@@ -49,6 +53,7 @@ describe("automatic RV Lite controller", () => {
     expect(log.filter((item) => item === "saved")).toHaveLength(4);
     expect(log.indexOf("sealed")).toBeLessThan(log.indexOf("reveal"));
     expect(result.state).toBe("Revealed");
+    expect(snapshots[0].rvSystemPrompt).toEqual(expect.objectContaining({ contentSha256: "a".repeat(64), fullContent: "FIXED PROFILE VIEWER PROMPT" }));
   });
 
   it("omits the name cleanly when the Profile has no AI name", async () => {

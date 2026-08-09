@@ -90,6 +90,13 @@ export interface SessionSnapshot {
     contentSha256: string;
     fullContent: string;
   };
+  researchConditionInstruction?: {
+    id: string;
+    version: string;
+    language: InterfaceLanguage;
+    contentSha256: string;
+    fullContent: string;
+  };
   revealSource: "external" | "automatic";
   targetId?: string;
   researchProjectId?: string;

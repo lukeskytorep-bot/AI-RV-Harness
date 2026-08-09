@@ -28,6 +28,13 @@ export interface CreateTargetInput {
   contentHash?: string;
 }
 
+export interface UpdateTargetInput {
+  title: string;
+  revealText?: string;
+  tags: string[];
+  contentHash: string;
+}
+
 export interface TargetUsageInput {
   targetId: string;
   profileId?: string;
