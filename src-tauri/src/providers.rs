@@ -38,6 +38,8 @@ pub struct ProviderChatRequest {
     model_id: String,
     messages: Vec<ProviderMessage>,
     reasoning_effort: Option<String>,
+    reasoning_transport_kind: Option<String>,
+    reasoning_transport_value: Option<String>,
     temperature: Option<f64>,
     max_output_tokens: Option<u32>,
     timeout_ms: Option<u64>,
@@ -123,7 +125,7 @@ fn validate_base_url(value: &str) -> Result<String, String> {
 fn client() -> Result<Client, String> {
     Client::builder()
         .connect_timeout(Duration::from_secs(30))
-        .user_agent("AI-RV-Harness/0.7.2")
+        .user_agent("AI-RV-Harness/0.7.4")
         .build()
         .map_err(|error| error.to_string())
 }
@@ -355,6 +357,14 @@ fn validate_chat_request(request: &ProviderChatRequest) -> Result<(), String> {
             return Err("invalid reasoning effort".to_string());
         }
     }
+    if let Some(kind) = request.reasoning_transport_kind.as_deref() {
+        if !matches!(kind, "effort" | "enabled_boolean" | "thinking_level") {
+            return Err("invalid reasoning transport kind".to_string());
+        }
+        if request.reasoning_transport_value.as_deref().unwrap_or_default().is_empty() {
+            return Err("reasoning transport value is required".to_string());
+        }
+    }
     if let Some(value) = request.timeout_ms {
         if !(1_000..=600_000).contains(&value) {
             return Err("request timeout must be between 1000 and 600000 ms".to_string());
@@ -381,8 +391,11 @@ fn build_openai_compatible_request(request: &ProviderChatRequest, base: &str) ->
     if let Some(value) = request.max_output_tokens {
         body.insert("max_tokens".into(), json!(value));
     }
-    if let Some(value) = request.reasoning_effort.as_deref() {
-        if matches!(request.provider, ProviderKind::Openrouter) {
+    if let Some(value) = request.reasoning_transport_value.as_deref().or(request.reasoning_effort.as_deref()) {
+        let kind = request.reasoning_transport_kind.as_deref().unwrap_or("effort");
+        if matches!(request.provider, ProviderKind::Openrouter) && kind == "enabled_boolean" {
+            body.insert("reasoning".into(), json!({ "enabled": value == "true" }));
+        } else if matches!(request.provider, ProviderKind::Openrouter) {
             body.insert("reasoning".into(), json!({ "effort": value }));
         } else {
             body.insert("reasoning_effort".into(), json!(value));
@@ -434,8 +447,11 @@ fn build_google_request(request: &ProviderChatRequest, base: &str) -> Result<(St
     if let Some(value) = request.max_output_tokens {
         generation.insert("maxOutputTokens".into(), json!(value));
     }
-    if let Some(value) = request.reasoning_effort.as_deref() {
-        if value != "none" {
+    if let Some(value) = request.reasoning_transport_value.as_deref().or(request.reasoning_effort.as_deref()) {
+        let kind = request.reasoning_transport_kind.as_deref().unwrap_or("thinking_level");
+        if kind == "enabled_boolean" {
+            generation.insert("thinkingConfig".into(), json!({ "thinkingLevel": if value == "true" { "high" } else { "minimal" } }));
+        } else {
             generation.insert("thinkingConfig".into(), json!({ "thinkingLevel": value }));
         }
     }
@@ -601,6 +617,27 @@ fn parse_anthropic_response(payload: Value, request_id: Option<String>) -> Resul
 mod tests {
     use super::*;
 
+    fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
+        ProviderChatRequest {
+            provider,
+            credential_id: "credential".to_string(),
+            base_url: None,
+            request_id: None,
+            model_id: model_id.to_string(),
+            messages: vec![ProviderMessage {
+                role: "user".to_string(),
+                content: "test".to_string(),
+                images: vec![],
+            }],
+            reasoning_effort: None,
+            reasoning_transport_kind: None,
+            reasoning_transport_value: None,
+            temperature: None,
+            max_output_tokens: None,
+            timeout_ms: None,
+        }
+    }
+
     #[test]
     fn rejects_remote_plain_http_custom_endpoint() {
         assert!(validate_base_url("http://example.com/v1").is_err());
@@ -631,5 +668,36 @@ mod tests {
     fn validates_provider_cancellation_ids() {
         assert!(validate_request_id("8f3127e0-844a-4f27-aada-6f14641e67e1").is_ok());
         assert!(validate_request_id("../../escape").is_err());
+    }
+
+    #[test]
+    fn emits_openrouter_boolean_reasoning_for_two_state_models() {
+        let mut request = chat_request(ProviderKind::Openrouter, "google/gemma-4-31b-it");
+        request.reasoning_effort = Some("high".to_string());
+        request.reasoning_transport_kind = Some("enabled_boolean".to_string());
+        request.reasoning_transport_value = Some("true".to_string());
+        let (_, body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
+        assert_eq!(body.pointer("/reasoning/enabled"), Some(&json!(true)));
+        assert!(body.pointer("/reasoning/effort").is_none());
+    }
+
+    #[test]
+    fn emits_google_registry_transport_instead_of_the_ui_value() {
+        let mut request = chat_request(ProviderKind::Google, "gemma-4-31b-it");
+        request.reasoning_effort = Some("none".to_string());
+        request.reasoning_transport_kind = Some("thinking_level".to_string());
+        request.reasoning_transport_value = Some("minimal".to_string());
+        let (_, body) = build_google_request(&request, "https://generativelanguage.googleapis.com/v1beta").unwrap();
+        assert_eq!(body.pointer("/generationConfig/thinkingConfig/thinkingLevel"), Some(&json!("minimal")));
+    }
+
+    #[test]
+    fn preserves_standard_openrouter_effort_payloads() {
+        let mut request = chat_request(ProviderKind::Openrouter, "z-ai/glm-5.2");
+        request.reasoning_effort = Some("xhigh".to_string());
+        request.reasoning_transport_kind = Some("effort".to_string());
+        request.reasoning_transport_value = Some("xhigh".to_string());
+        let (_, body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
+        assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("xhigh")));
     }
 }

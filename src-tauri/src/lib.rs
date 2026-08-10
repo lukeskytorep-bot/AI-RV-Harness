@@ -2,6 +2,7 @@ mod secrets;
 mod providers;
 mod artifacts;
 mod storage;
+mod database;
 
 use tauri_plugin_sql::{Migration, MigrationKind};
 
@@ -86,6 +87,12 @@ pub fn run() {
             sql: include_str!("../migrations/013_profile_viewer_defaults.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 14,
+            description: "chat_thread_archiving_and_recent_selection",
+            sql: include_str!("../migrations/014_chat_thread_archiving.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -112,7 +119,8 @@ pub fn run() {
             storage::list_storage_backups,
             storage::export_storage_backup,
             storage::restore_backup,
-            storage::open_data_folder
+            storage::open_data_folder,
+            database::database_execute_transaction
         ])
         .run(tauri::generate_context!())
         .expect("error while running AI RV Harness");
