@@ -13,6 +13,20 @@ export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type CapabilityConfidence = "provider_metadata" | "verified" | "unknown";
+export type ReasoningOptionVerification = "registry" | "provider_metadata" | "unverified";
+export type ReasoningTransportKind = "effort" | "enabled_boolean" | "thinking_level";
+
+export interface ReasoningTransport {
+  kind: ReasoningTransportKind;
+  value: string;
+}
+
+export interface ReasoningOption {
+  value: ReasoningEffort;
+  label: string;
+  verification: ReasoningOptionVerification;
+  transport: ReasoningTransport;
+}
 
 export interface ProviderConfig {
   id: string;
@@ -46,6 +60,13 @@ export interface ReasoningCapability {
   mandatory?: boolean;
   defaultEffort?: ReasoningEffort;
   confidence: CapabilityConfidence;
+  options?: ReasoningOption[];
+  registryStatus?: "known" | "unknown";
+  registryModelId?: string;
+  registryVersion?: string;
+  verifiedAt?: string;
+  verificationSource?: string;
+  providerEfforts?: ReasoningEffort[];
 }
 
 export interface TemperatureCapability {
@@ -100,6 +121,12 @@ export interface EffectiveGenerationSettings {
   requested: GenerationSettings;
   effective: GenerationSettings;
   omitted: Array<"reasoningEffort" | "temperature" | "maxOutputTokens">;
+  reasoningResolution?: {
+    selected: ReasoningEffort;
+    label: string;
+    verification: ReasoningOptionVerification;
+    transport: ReasoningTransport;
+  };
 }
 
 export interface ProviderMessage {

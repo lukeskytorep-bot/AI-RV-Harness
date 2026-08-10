@@ -1,6 +1,6 @@
 import type { InterfaceLanguage } from "../types";
 
-export const MONITOR_LIBRARY_VERSION = "1.0.0";
+export const MONITOR_LIBRARY_VERSION = "1.0.1";
 
 export type MonitorPrerequisite = "none" | "structure" | "subject" | "subjects" | "activity" | "event" | "location" | "reported_aspect";
 
@@ -40,13 +40,22 @@ export const MONITOR_COMMANDS: MonitorCommand[] = [
   { id: "TIME_OF_REPORTED_EVENT", prerequisite: "event", argument: "reported_fragment", text: { en: "Move to the time of {argument} and describe.", pl: "Przejdź do czasu {argument} i opisz." } },
 ];
 
-const PREREQUISITE_TERMS: Record<Exclude<MonitorPrerequisite, "none" | "reported_aspect">, RegExp> = {
-  structure: /\b(structure|building|wall|room|interior|architecture|angular|struktura|budynek|ścian|wnętrz|pomieszczen|konstrukcj)\b/i,
-  subject: /\b(subject|person|people|figure|individual|human|osob|postać|subject[s]?)\b/i,
-  subjects: /\b(subjects|people|crowd|group|persons|ludzie|tłum|grup|osoby)\b/i,
-  activity: /\b(activity|movement|moving|motion|action|process|aktywno|ruch|porusza|działanie|proces)\b/i,
-  event: /\b(event|happening|occur|moment|before|after|timeline|zdarzen|wydarzen|moment|przed|po |czas)\b/i,
-  location: /\b(location|area|place|terrain|ground|land|water|inside|outside|above|below|miejsce|obszar|teren|ziemi|wod|wewnątrz|zewnątrz|nad|pod)\b/i,
+/**
+ * Prefixes are matched against Unicode-normalized word tokens instead of using
+ * JavaScript's ASCII-only `\b`. This deliberately accepts ordinary inflection
+ * (walls, ściany, wnętrze, konstrukcja) without weakening the verbatim quote
+ * requirement enforced by the Monitor engine.
+ */
+const PREREQUISITE_STEMS: Record<Exclude<MonitorPrerequisite, "none" | "reported_aspect">, string[]> = {
+  structure: [
+    "structur", "building", "wall", "room", "interior", "architectur", "angular", "corridor", "enclosur",
+    "struktur", "budyn", "scian", "wnetrz", "pomieszczen", "konstrukcj", "korytarz", "zabudow",
+  ],
+  subject: ["subject", "person", "people", "figure", "individual", "human", "osob", "postac", "czlowiek", "ludzi"],
+  subjects: ["subjects", "people", "crowd", "group", "persons", "ludzi", "tlum", "grup", "osob"],
+  activity: ["activit", "movement", "moving", "motion", "action", "process", "aktywn", "ruch", "porusz", "dzial", "proces"],
+  event: ["event", "happening", "occur", "moment", "before", "after", "timeline", "zdarzen", "wydarzen", "moment", "przed", "czas"],
+  location: ["location", "area", "place", "terrain", "ground", "land", "water", "inside", "outside", "above", "below", "miejsc", "obszar", "teren", "ziem", "wod", "wewnatrz", "zewnatrz", "nad", "pod"],
 };
 
 export function getMonitorCommand(id: string): MonitorCommand | undefined {
@@ -57,7 +66,17 @@ export function evidenceSatisfies(command: MonitorCommand, evidence: string): bo
   if (command.prerequisite === "none") return true;
   if (!evidence.trim()) return false;
   if (command.prerequisite === "reported_aspect") return evidence.trim().length >= 3;
-  return PREREQUISITE_TERMS[command.prerequisite].test(evidence);
+  const tokens = normalizeEvidenceTokens(evidence);
+  const prerequisite = command.prerequisite as Exclude<MonitorPrerequisite, "none" | "reported_aspect">;
+  return tokens.some((token) => PREREQUISITE_STEMS[prerequisite].some((stem) => token.startsWith(stem)));
+}
+
+function normalizeEvidenceTokens(evidence: string): string[] {
+  return evidence
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLocaleLowerCase()
+    .match(/[\p{L}\p{N}]+/gu) ?? [];
 }
 
 export function renderMonitorCommand(command: MonitorCommand, language: InterfaceLanguage, argument?: string): string {

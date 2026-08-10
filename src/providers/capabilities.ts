@@ -8,6 +8,7 @@ import type {
   ProviderModel,
   ReasoningEffort,
 } from "./types";
+import { applyModelReasoningRegistry, findReasoningOption } from "./modelReasoningRegistry";
 
 const REASONING_EFFORTS: ReasoningEffort[] = ["max", "xhigh", "high", "medium", "low", "minimal", "none"];
 
@@ -225,7 +226,10 @@ export function normalizeModelDiscovery(config: ProviderConfig, payload: unknown
         modelId: id,
         displayName,
         route: `${config.provider}:${id}`,
-        capabilities: normalized.capabilities,
+        capabilities: {
+          ...normalized.capabilities,
+          reasoning: applyModelReasoningRegistry(config.provider, id, normalized.capabilities.reasoning),
+        },
         pricing: normalized.pricing,
         recommended: isRecommendedModel(id, displayName),
         rawMetadata: raw,
@@ -239,10 +243,18 @@ export function normalizeModelDiscovery(config: ProviderConfig, payload: unknown
 export function resolveGenerationSettings(capabilities: ModelCapabilities, requested: GenerationSettings): EffectiveGenerationSettings {
   const effective: GenerationSettings = {};
   const omitted: EffectiveGenerationSettings["omitted"] = [];
+  let reasoningResolution: EffectiveGenerationSettings["reasoningResolution"];
 
   if (requested.reasoningEffort !== undefined) {
     if (capabilities.reasoning.supported && capabilities.reasoning.efforts.includes(requested.reasoningEffort)) {
       effective.reasoningEffort = requested.reasoningEffort;
+      const option = findReasoningOption(capabilities.reasoning, requested.reasoningEffort);
+      reasoningResolution = {
+        selected: requested.reasoningEffort,
+        label: option?.label ?? requested.reasoningEffort.toUpperCase(),
+        verification: option?.verification ?? (capabilities.reasoning.confidence === "verified" ? "registry" : "provider_metadata"),
+        transport: option?.transport ?? { kind: "effort", value: requested.reasoningEffort },
+      };
     } else {
       omitted.push("reasoningEffort");
     }
@@ -265,5 +277,5 @@ export function resolveGenerationSettings(capabilities: ModelCapabilities, reque
     }
   }
 
-  return { requested: { ...requested }, effective, omitted };
+  return { requested: { ...requested }, effective, omitted, ...(reasoningResolution ? { reasoningResolution } : {}) };
 }

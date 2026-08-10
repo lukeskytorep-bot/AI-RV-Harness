@@ -9,6 +9,26 @@ export type MonitorDecision =
   | { decision: "CONTINUE_PROTOCOL" }
   | { decision: "INTERVENE"; commandId: string; viewerEvidence: string; argument?: string; commandText: string };
 
+export type MonitorDecisionErrorCode =
+  | "INVALID_JSON"
+  | "INVALID_DECISION"
+  | "UNKNOWN_COMMAND"
+  | "MISSING_EVIDENCE"
+  | "NON_VERBATIM_EVIDENCE"
+  | "PREREQUISITE_MISMATCH"
+  | "UNGROUNDED_ARGUMENT";
+
+export class MonitorDecisionError extends Error {
+  constructor(
+    public readonly code: MonitorDecisionErrorCode,
+    message: string,
+    public readonly rawResponse: string,
+  ) {
+    super(message);
+    this.name = "MonitorDecisionError";
+  }
+}
+
 export async function evaluateMonitor(input: {
   providerConfig: ProviderConfig;
   model: ProviderModel;
@@ -35,24 +55,24 @@ export function validateMonitorDecision(raw: string, blindTranscript: string, la
     const clean = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
     parsed = JSON.parse(clean) as Record<string, unknown>;
   } catch {
-    throw new Error("AI Monitor returned invalid JSON; intervention blocked.");
+    throw new MonitorDecisionError("INVALID_JSON", "AI Monitor returned invalid JSON; intervention blocked.", raw);
   }
   if (parsed.decision === "CONTINUE_PROTOCOL") return { decision: "CONTINUE_PROTOCOL" };
   if (parsed.decision !== "INTERVENE" || typeof parsed.command_id !== "string") {
-    throw new Error("AI Monitor returned an invalid decision; intervention blocked.");
+    throw new MonitorDecisionError("INVALID_DECISION", "AI Monitor returned an invalid decision; intervention blocked.", raw);
   }
   const command = getMonitorCommand(parsed.command_id);
-  if (!command) throw new Error("AI Monitor requested an unknown command; intervention blocked.");
+  if (!command) throw new MonitorDecisionError("UNKNOWN_COMMAND", "AI Monitor requested an unknown command; intervention blocked.", raw);
   const evidence = typeof parsed.viewer_evidence === "string" ? parsed.viewer_evidence.trim() : "";
   if (command.prerequisite !== "none") {
-    if (!evidence || !containsVerbatim(blindTranscript, evidence) || !evidenceSatisfies(command, evidence)) {
-      throw new Error(`AI Monitor prerequisite failed for ${command.id}; intervention blocked.`);
-    }
+    if (!evidence) throw new MonitorDecisionError("MISSING_EVIDENCE", `AI Monitor supplied no Viewer evidence for ${command.id}; intervention blocked.`, raw);
+    if (!containsVerbatim(blindTranscript, evidence)) throw new MonitorDecisionError("NON_VERBATIM_EVIDENCE", `AI Monitor evidence is not a verbatim Viewer excerpt for ${command.id}; intervention blocked.`, raw);
+    if (!evidenceSatisfies(command, evidence)) throw new MonitorDecisionError("PREREQUISITE_MISMATCH", `AI Monitor prerequisite failed for ${command.id}; intervention blocked.`, raw);
   }
   const argument = typeof parsed.argument === "string" ? parsed.argument.trim() : undefined;
   if (command.argument) {
     if (!argument || argument.length > 160 || !containsVerbatim(blindTranscript, argument)) {
-      throw new Error(`AI Monitor argument is not grounded in Viewer evidence for ${command.id}; intervention blocked.`);
+      throw new MonitorDecisionError("UNGROUNDED_ARGUMENT", `AI Monitor argument is not grounded in Viewer evidence for ${command.id}; intervention blocked.`, raw);
     }
   }
   return {

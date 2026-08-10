@@ -80,6 +80,8 @@ export async function providerChat(input: {
         modelId: input.modelId,
         messages: input.messages,
         reasoningEffort: input.settings.effective.reasoningEffort,
+        reasoningTransportKind: input.settings.reasoningResolution?.transport.kind,
+        reasoningTransportValue: input.settings.reasoningResolution?.transport.value,
         temperature: input.settings.effective.temperature,
         maxOutputTokens: input.settings.effective.maxOutputTokens,
         timeoutMs: input.timeoutMs,

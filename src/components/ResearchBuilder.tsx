@@ -18,8 +18,15 @@ import { exportResearchPackage } from "../exports/research";
 import { sampleResearchTargetIds, type ResearchTargetSelectionMode, type ResearchTargetSource } from "../research/targetSelection";
 import { customSystemPromptSnapshot, profileGenerationDefaults, profileSystemPromptSnapshot } from "../profileViewerDefaults";
 import { sharedResearchCapabilities, type SharedResearchCapabilities } from "../research/studyControls";
+import { reasoningOptions } from "../providers/modelReasoningRegistry";
 
 type Copy = ReturnType<typeof getCopy>;
+
+function researchReasoningLabel(copy: Copy, model: ProviderModel | null, effort: ReasoningEffort): string {
+  const option = model ? reasoningOptions(model.capabilities.reasoning).find((item) => item.value === effort) : undefined;
+  if (!option) return effort.toUpperCase();
+  return option.verification === "unverified" ? `${option.label} · ${copy.unverified}` : option.label;
+}
 
 const TEMPLATE_ORDER: ResearchTemplateType[] = ["reasoning", "temperature", "profile", "model", "practice", "system_prompt", "custom"];
 
@@ -188,7 +195,7 @@ function ResearchConfigBuilder({ copy, settings, repository, profiles, workspace
     const base = (key: string, label: string, overrides: Partial<ResearchConditionDefinition> = {}): ResearchConditionDefinition => ({ key, label, profileId: baseProfile.id, providerConfigId: baseProvider.id, modelId: baseModel.modelId, requestedSettings: fixedRequestedSettings, ...(fixedSystemPrompt ? { systemPrompt: fixedSystemPrompt } : {}), ...overrides });
     let conditions: ResearchConditionDefinition[] = [];
     if (template === "reasoning") {
-      conditions = reasoningLevels.map((effort) => base(`reasoning_${effort}`, effort.toUpperCase(), { requestedSettings: { ...fixedRequestedSettings, reasoningEffort: effort } }));
+      conditions = reasoningLevels.map((effort) => base(`reasoning_${effort}`, researchReasoningLabel(copy, baseModel, effort), { requestedSettings: { ...fixedRequestedSettings, reasoningEffort: effort } }));
     } else if (template === "temperature") {
       const values = [...new Set(temperatureValues.split(",").map((value) => Number(value.trim())).filter(Number.isFinite))];
       conditions = values.map((temperature) => base(`temperature_${String(temperature).replace(".", "_")}`, `T=${temperature}`, { requestedSettings: { ...fixedRequestedSettings, temperature } }));
@@ -328,6 +335,7 @@ function ResearchViewerSettings(props: {
   const temperatureIsVariable = template === "temperature";
   const modelIsVariable = template === "model";
   const promptIsVariable = template === "system_prompt";
+  const selectedBaseModel = props.baseModels.find((model) => modelKey(model) === props.baseModelKey) ?? null;
   return <div className="research-form-section research-viewer-control">
     <div className="research-section-head"><div><strong>{copy.researchViewerSettings}</strong><small>{copy.researchViewerSettingsLead}</small></div><span className="status-chip ready"><LockKeyhole size={12} />{copy.fixedForResearch}</span></div>
     <div className="research-control-grid">
@@ -336,7 +344,7 @@ function ResearchViewerSettings(props: {
         : <select value={props.baseModelKey} onChange={(event) => props.onBaseModelKey(event.target.value)} disabled={!baseProvider}><option value="">{copy.selectModel}</option>{props.baseModels.map((model) => <option key={modelKey(model)} value={modelKey(model)}>{model.displayName}</option>)}</select>}<small>{modelIsVariable ? copy.modelsToCompare : `${baseProvider?.label ?? copy.credentialPending} · ${copy.researchControlConstant}`}</small></label>
       <label><span>{copy.researchReasoning}</span>{reasoningIsVariable
         ? <input value={copy.testedVariableBelow} disabled readOnly />
-        : <select value={props.fixedReasoning} onChange={(event) => props.onFixedReasoning(event.target.value as "" | ReasoningEffort)} disabled={!sharedCapabilities.reasoningEfforts.length}><option value="">{copy.autoProviderDefault}</option>{sharedCapabilities.reasoningEfforts.map((effort) => <option key={effort} value={effort}>{effort.toUpperCase()}</option>)}</select>}<small>{reasoningIsVariable ? copy.reasoningLevels : sharedCapabilities.reasoningEfforts.length ? copy.researchControlConstant : copy.researchReasoningUnavailable}</small></label>
+        : <select value={props.fixedReasoning} onChange={(event) => props.onFixedReasoning(event.target.value as "" | ReasoningEffort)} disabled={!sharedCapabilities.reasoningEfforts.length}><option value="">{copy.autoProviderDefault}</option>{sharedCapabilities.reasoningEfforts.map((effort) => <option key={effort} value={effort}>{researchReasoningLabel(copy, selectedBaseModel, effort)}</option>)}</select>}<small>{reasoningIsVariable ? copy.reasoningLevels : selectedBaseModel?.capabilities.reasoning.mandatory ? copy.reasoningMandatory : sharedCapabilities.reasoningEfforts.length ? copy.researchControlConstant : selectedBaseModel?.capabilities.reasoning.registryStatus === "known" ? copy.reasoningAutoOnly : copy.researchReasoningUnavailable}</small></label>
       <label><span>{copy.researchTemperature}</span>{temperatureIsVariable
         ? <input value={copy.testedVariableBelow} disabled readOnly />
         : <input type="number" step="0.1" value={props.fixedTemperature} onChange={(event) => props.onFixedTemperature(event.target.value)} placeholder={copy.autoProviderDefault} disabled={!sharedCapabilities.temperatureSupported} min={sharedCapabilities.temperatureMin} max={sharedCapabilities.temperatureMax} />}<small>{temperatureIsVariable ? copy.temperatureValues : sharedCapabilities.temperatureSupported ? copy.researchControlConstant : copy.researchTemperatureUnavailable}</small></label>
@@ -351,7 +359,7 @@ function ResearchViewerSettings(props: {
 function TemplateConditions(props: { copy: Copy; template: ResearchTemplateType; baseModel: ProviderModel | null; baseProvider: ProviderConfig | null; models: ProviderModel[]; providers: ProviderConfig[]; profiles: Profile[]; reasoningLevels: ReasoningEffort[]; setReasoningLevels: (value: ReasoningEffort[]) => void; temperatureValues: string; setTemperatureValues: (value: string) => void; profileIds: string[]; setProfileIds: (value: string[]) => void; modelKeys: string[]; setModelKeys: (value: string[]) => void; variants: string[]; setVariants: (value: string[]) => void }) {
   const { copy, template, baseModel, baseProvider } = props;
   if (template === "practice") return <div className="research-form-section"><strong>{copy.researchConditions}</strong><div className="condition-pills"><span>FIRST</span><span>SECOND</span></div></div>;
-  if (template === "reasoning") return <div className="research-form-section"><strong>{copy.reasoningLevels}</strong><div className="research-check-grid">{baseModel?.capabilities.reasoning.efforts.map((effort) => <label key={effort}><input type="checkbox" checked={props.reasoningLevels.includes(effort)} onChange={() => props.setReasoningLevels(toggle(props.reasoningLevels, effort))} /><span>{effort.toUpperCase()}</span></label>)}</div>{!baseModel?.capabilities.reasoning.efforts.length && <small>{copy.unknown}</small>}</div>;
+  if (template === "reasoning") return <div className="research-form-section"><strong>{copy.reasoningLevels}</strong><div className="research-check-grid">{baseModel?.capabilities.reasoning.efforts.map((effort) => <label key={effort}><input type="checkbox" checked={props.reasoningLevels.includes(effort)} onChange={() => props.setReasoningLevels(toggle(props.reasoningLevels, effort))} /><span>{researchReasoningLabel(copy, baseModel, effort)}</span></label>)}</div>{baseModel?.capabilities.reasoning.mandatory && <small>{copy.reasoningMandatory}</small>}{!baseModel?.capabilities.reasoning.efforts.length && <small>{baseModel?.capabilities.reasoning.registryStatus === "known" ? copy.reasoningAutoOnly : copy.unknown}</small>}</div>;
   if (template === "temperature") return <FormRow label={copy.temperatureValues}><input value={props.temperatureValues} onChange={(event) => props.setTemperatureValues(event.target.value)} disabled={!baseModel?.capabilities.temperature.supported} /></FormRow>;
   if (template === "profile") return <div className="research-form-section"><strong>{copy.profilesToCompare}</strong><div className="research-check-grid">{props.profiles.map((profile) => { const provider = props.providers.find((item) => item.credentialId === profile.credentialId); const matched = props.models.some((model) => model.providerConfigId === provider?.id && model.modelId === baseModel?.modelId); return <label key={profile.id} className={!matched ? "disabled" : ""}><input type="checkbox" disabled={!matched} checked={props.profileIds.includes(profile.id)} onChange={() => props.setProfileIds(toggle(props.profileIds, profile.id))} /><span>{profile.name || copy.unnamedProfile}</span></label>; })}</div></div>;
   if (template === "model") return <div className="research-form-section"><strong>{copy.modelsToCompare}</strong><div className="research-check-grid models">{props.models.filter((model) => model.providerConfigId === baseProvider?.id).map((model) => <label key={modelKey(model)}><input type="checkbox" checked={props.modelKeys.includes(modelKey(model))} onChange={() => props.setModelKeys(toggle(props.modelKeys, modelKey(model)))} /><span>{model.displayName}</span></label>)}</div></div>;
