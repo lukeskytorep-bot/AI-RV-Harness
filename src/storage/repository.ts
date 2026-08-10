@@ -18,8 +18,12 @@ export interface AppRepository {
   createWorkspace(input: CreateWorkspaceInput): Promise<Workspace>;
   touchWorkspace(id: string): Promise<void>;
   setProfileCredential(profileId: string, credentialId?: string, provider?: string): Promise<void>;
+  listChatThreads(workspaceId: string, mode: ChatMode): Promise<ChatThread[]>;
+  createChatThread(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThread>;
   getOrCreateChatThread(workspaceId: string, mode: ChatMode): Promise<ChatThread>;
+  touchChatThread(threadId: string): Promise<void>;
   renameChatThread(threadId: string, title: string): Promise<void>;
+  archiveChatThread(threadId: string): Promise<void>;
   setChatThreadFormalRvState(threadId: string, state?: ChatThread["formalRvState"]): Promise<void>;
   listChatMessages(threadId: string): Promise<ChatMessage[]>;
   appendChatMessage(threadId: string, role: ChatMessage["role"], content: string): Promise<ChatMessage>;

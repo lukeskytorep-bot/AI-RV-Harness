@@ -8,11 +8,12 @@ import type { TargetRecord } from "../targets/types";
 import type { InterfaceLanguage } from "../types";
 import type { ViewerSystemPromptSnapshot } from "../types";
 import { APP_VERSION } from "../version";
-import { detectRepetitiveOutput, sha256Text, type SessionProgress } from "./controller";
+import { sha256Text, type SessionProgress } from "./controller";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics } from "./metrics";
 import { createSessionCode } from "./sessionCode";
 import type { RvSessionState, SessionSnapshot } from "./types";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
+import { RepetitionGuard, formatRepetitionStopReason } from "./repetitionGuard";
 
 type RvLiteSessionRepository = Pick<
   AppRepository,
@@ -71,6 +72,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     : [];
   const startedAtMs = Date.now();
   let metrics = emptySessionRequestMetrics();
+  const repetitionGuard = new RepetitionGuard();
   let transcript = "";
   const stopRun = (reason: string) => stop(input, sessionId, sessionCode, transcript, reason, metrics, startedAtMs);
 
@@ -174,7 +176,11 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, promptNumber, undefined, metrics, startedAtMs);
     if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) return stopRun("AUTO-STOP: configured session cost limit exceeded");
-    if (detectRepetitiveOutput(response.content)) return stopRun("AUTO-STOP: repetitive output detected");
+    const repetition = repetitionGuard.inspect(response.content);
+    if (repetition.severity !== "clear") {
+      await input.repository.appendSessionEvent(sessionId, { eventType: repetition.severity === "stop" ? "REPETITION_STOP" : "REPETITION_WARNING", role: "controller", content: repetition.fragment, metadata: { promptNumber, rule: repetition.rule, severity: repetition.severity } });
+      if (repetition.severity === "stop") return stopRun(formatRepetitionStopReason(repetition));
+    }
   }
 
   // STOP always wins, including the narrow boundary after Prompt 4 and before sealing/reveal.

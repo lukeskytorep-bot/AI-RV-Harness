@@ -14,6 +14,9 @@ import { createId, nowIso } from "./repository";
 import { serializePostRevealTurn } from "../sessions/postRevealTranscript";
 import { verifySealedViewerEvidence } from "../sessions/evidence";
 import type { ReasoningEffort } from "../providers/types";
+import { executeDatabaseTransaction, type DatabaseTransactionStatement } from "./databaseNative";
+import { SqliteWriteCoordinator } from "./sqliteWriteCoordinator";
+import { applyReasoningRegistryToProviderModel } from "../providers/modelReasoningRegistry";
 
 type ProfileRow = {
   id: string;
@@ -91,7 +94,7 @@ type RvSessionRow = {
   completed_at: string | null;
 };
 
-type ChatThreadRow = { id: string; workspace_id: string; mode: ChatMode; title: string; formal_rv_state: ChatThread["formalRvState"] | null; created_at: string; updated_at: string };
+type ChatThreadRow = { id: string; workspace_id: string; mode: ChatMode; title: string; formal_rv_state: ChatThread["formalRvState"] | null; created_at: string; updated_at: string; archived_at: string | null };
 type ChatMessageRow = { id: string; thread_id: string; role: "user" | "assistant"; content: string; created_at: string };
 type WorkspaceSourceRow = { id: string; workspace_id: string; source_type: "text" | "markdown"; display_name: string; content_text: string | null; content_hash: string | null; metadata_json: string; created_at: string };
 type RevealRow = { reveal_source: RevealInput["source"]; reveal_text: string | null; artifact_manifest_json: string; reveal_hash: string };
@@ -217,7 +220,7 @@ function mapProviderConfig(row: ProviderConfigRow): ProviderConfig {
 }
 
 function mapProviderModel(row: ProviderModelRow): ProviderModel {
-  return {
+  return applyReasoningRegistryToProviderModel({
     providerConfigId: row.provider_config_id,
     provider: row.provider,
     modelId: row.model_id,
@@ -229,7 +232,7 @@ function mapProviderModel(row: ProviderModelRow): ProviderModel {
     favorite: row.favorite === 1,
     rawMetadata: JSON.parse(row.raw_metadata_json) as ProviderModel["rawMetadata"],
     refreshedAt: row.refreshed_at,
-  };
+  });
 }
 
 function mapRvSession(row: RvSessionRow): RvSession {
@@ -252,19 +255,46 @@ function mapRvSession(row: RvSessionRow): RvSession {
   };
 }
 
+function mapChatThread(row: ChatThreadRow): ChatThread {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    mode: row.mode,
+    title: row.title,
+    ...(row.formal_rv_state ? { formalRvState: row.formal_rv_state } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
+  };
+}
+
 export class SqliteRepository implements AppRepository {
+  private readonly writes = new SqliteWriteCoordinator();
+
   private constructor(private readonly db: Database) {}
 
   static async connect(): Promise<SqliteRepository> {
     const db = await Database.load("sqlite:rv_harness.db");
-    return new SqliteRepository(db);
+    const repository = new SqliteRepository(db);
+    // WAL keeps readers responsive while the single coordinated writer persists evidence.
+    await repository.writes.run(() => db.select("PRAGMA journal_mode = WAL"));
+    return repository;
+  }
+
+  private executeWrite(query: string, bindValues?: unknown[]) {
+    return this.writes.run(() => this.db.execute(query, bindValues));
+  }
+
+  private executeTransaction(statements: DatabaseTransactionStatement[]) {
+    return this.writes.run(() => executeDatabaseTransaction(statements));
   }
 
   async createDatabaseSnapshot(destinationPath: string): Promise<void> {
-    await this.db.execute("VACUUM INTO $1", [destinationPath]);
+    await this.executeWrite("VACUUM INTO $1", [destinationPath]);
   }
 
   async closeForRestore(): Promise<void> {
+    await this.writes.idle();
     await this.db.close();
   }
 
@@ -309,7 +339,7 @@ export class SqliteRepository implements AppRepository {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO profiles (
          id, display_name, note, credential_id,
          default_viewer_model_id, default_viewer_reasoning_effort,
@@ -340,7 +370,7 @@ export class SqliteRepository implements AppRepository {
 
   async updateProfile(id: string, input: UpdateProfileInput): Promise<void> {
     const name = input.name.trim();
-    await this.db.execute(
+    await this.executeWrite(
       "UPDATE profiles SET display_name = $1, note = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL",
       [name, input.note?.trim() || null, nowIso(), id],
     );
@@ -348,12 +378,14 @@ export class SqliteRepository implements AppRepository {
 
   async archiveProfile(id: string): Promise<void> {
     const timestamp = nowIso();
-    await this.db.execute("UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE profile_id = $2 AND archived_at IS NULL", [timestamp, id]);
-    await this.db.execute("UPDATE profiles SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", [timestamp, id]);
+    await this.executeTransaction([
+      { query: "UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE profile_id = $2 AND archived_at IS NULL", values: [timestamp, id] },
+      { query: "UPDATE profiles SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", values: [timestamp, id] },
+    ]);
   }
 
   async setProfileAiConfiguration(profileId: string, input: ProfileAiConfigurationInput): Promise<void> {
-    await this.db.execute(
+    await this.executeWrite(
       `UPDATE profiles
           SET credential_id = $1,
               default_viewer_model_id = $2,
@@ -411,7 +443,7 @@ export class SqliteRepository implements AppRepository {
       updatedAt: timestamp,
       lastOpenedAt: timestamp,
     };
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO workspaces (id, profile_id, name, description, created_at, updated_at, last_opened_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
@@ -429,14 +461,14 @@ export class SqliteRepository implements AppRepository {
 
   async touchWorkspace(id: string): Promise<void> {
     const timestamp = nowIso();
-    await this.db.execute(
+    await this.executeWrite(
       "UPDATE workspaces SET updated_at = $1, last_opened_at = $1 WHERE id = $2",
       [timestamp, id],
     );
   }
 
   async setProfileCredential(profileId: string, credentialId?: string, _provider?: string): Promise<void> {
-    await this.db.execute(
+    await this.executeWrite(
       `UPDATE profiles
           SET credential_id = $1,
               default_viewer_model_id = NULL,
@@ -448,23 +480,25 @@ export class SqliteRepository implements AppRepository {
     );
   }
 
-  async getOrCreateChatThread(workspaceId: string, mode: ChatMode): Promise<ChatThread> {
+  async listChatThreads(workspaceId: string, mode: ChatMode): Promise<ChatThread[]> {
     const rows = await this.db.select<ChatThreadRow[]>(
-      `SELECT id, workspace_id, mode, title, formal_rv_state, created_at, updated_at
-         FROM chat_threads WHERE workspace_id = $1 AND mode = $2 ORDER BY created_at LIMIT 1`,
+      `SELECT id, workspace_id, mode, title, formal_rv_state, created_at, updated_at, archived_at
+         FROM chat_threads
+        WHERE workspace_id = $1 AND mode = $2 AND archived_at IS NULL
+        ORDER BY updated_at DESC, created_at DESC`,
       [workspaceId, mode],
     );
-    if (rows[0]) {
-      const row = rows[0];
-      return { id: row.id, workspaceId: row.workspace_id, mode: row.mode, title: row.title, ...(row.formal_rv_state ? { formalRvState: row.formal_rv_state } : {}), createdAt: row.created_at, updatedAt: row.updated_at };
-    }
+    return rows.map(mapChatThread);
+  }
+
+  async createChatThread(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThread> {
     const timestamp = nowIso();
     const thread: ChatThread = {
       id: createId("thread"), workspaceId, mode,
-      title: mode === "conversation" ? "Conversation" : "Manual RV Session",
+      title: title?.trim().slice(0, 160) || (mode === "conversation" ? "Conversation" : "Manual RV Session"),
       createdAt: timestamp, updatedAt: timestamp,
     };
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO chat_threads (id, workspace_id, mode, title, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $5)`,
       [thread.id, thread.workspaceId, thread.mode, thread.title, timestamp],
@@ -472,14 +506,33 @@ export class SqliteRepository implements AppRepository {
     return thread;
   }
 
+  async getOrCreateChatThread(workspaceId: string, mode: ChatMode): Promise<ChatThread> {
+    const existing = (await this.listChatThreads(workspaceId, mode))[0];
+    if (!existing) return this.createChatThread(workspaceId, mode);
+    await this.touchChatThread(existing.id);
+    return { ...existing, updatedAt: nowIso() };
+  }
+
+  async touchChatThread(threadId: string): Promise<void> {
+    await this.executeWrite("UPDATE chat_threads SET updated_at = $1 WHERE id = $2 AND archived_at IS NULL", [nowIso(), threadId]);
+  }
+
   async renameChatThread(threadId: string, title: string): Promise<void> {
     const clean = title.trim();
     if (!clean) throw new Error("Thread title is required.");
-    await this.db.execute("UPDATE chat_threads SET title = $1, updated_at = $2 WHERE id = $3", [clean.slice(0, 160), nowIso(), threadId]);
+    await this.executeWrite("UPDATE chat_threads SET title = $1, updated_at = $2 WHERE id = $3", [clean.slice(0, 160), nowIso(), threadId]);
+  }
+
+  async archiveChatThread(threadId: string): Promise<void> {
+    const rows = await this.db.select<Array<{ formal_rv_state: ChatThread["formalRvState"] | null }>>("SELECT formal_rv_state FROM chat_threads WHERE id = $1 AND archived_at IS NULL LIMIT 1", [threadId]);
+    if (!rows[0]) throw new Error("Chat thread not found.");
+    if (rows[0].formal_rv_state === "BLIND") throw new Error("A blind Manual RV thread must be ended before it can be archived.");
+    const timestamp = nowIso();
+    await this.executeWrite("UPDATE chat_threads SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", [timestamp, threadId]);
   }
 
   async setChatThreadFormalRvState(threadId: string, state?: ChatThread["formalRvState"]): Promise<void> {
-    await this.db.execute("UPDATE chat_threads SET formal_rv_state = $1, updated_at = $2 WHERE id = $3 AND mode = 'manual_rv'", [state ?? null, nowIso(), threadId]);
+    await this.executeWrite("UPDATE chat_threads SET formal_rv_state = $1, updated_at = $2 WHERE id = $3 AND mode = 'manual_rv'", [state ?? null, nowIso(), threadId]);
   }
 
   async listChatMessages(threadId: string): Promise<ChatMessage[]> {
@@ -494,11 +547,11 @@ export class SqliteRepository implements AppRepository {
   async appendChatMessage(threadId: string, role: ChatMessage["role"], content: string): Promise<ChatMessage> {
     const timestamp = nowIso();
     const message: ChatMessage = { id: createId("message"), threadId, role, content, createdAt: timestamp };
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO chat_messages (id, thread_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)`,
       [message.id, threadId, role, content, timestamp],
     );
-    await this.db.execute("UPDATE chat_threads SET updated_at = $1 WHERE id = $2", [timestamp, threadId]);
+    await this.executeWrite("UPDATE chat_threads SET updated_at = $1 WHERE id = $2", [timestamp, threadId]);
     return message;
   }
 
@@ -513,7 +566,7 @@ export class SqliteRepository implements AppRepository {
   async createWorkspaceSource(input: CreateWorkspaceSourceInput): Promise<WorkspaceSource> {
     const timestamp = nowIso();
     const source: WorkspaceSource = { id: input.id, workspaceId: input.workspaceId, sourceType: input.sourceType, displayName: input.displayName.trim(), content: input.content, contentHash: input.contentHash, metadata: input.metadata ?? {}, createdAt: timestamp };
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO workspace_sources (id, workspace_id, source_type, display_name, content_hash, metadata_json, content_text, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [source.id, source.workspaceId, source.sourceType, source.displayName, source.contentHash, JSON.stringify(source.metadata), source.content, timestamp],
@@ -522,7 +575,7 @@ export class SqliteRepository implements AppRepository {
   }
 
   async deleteWorkspaceSource(id: string): Promise<void> {
-    await this.db.execute("DELETE FROM workspace_sources WHERE id = $1", [id]);
+    await this.executeWrite("DELETE FROM workspace_sources WHERE id = $1", [id]);
   }
 
   async listActiveChatSourceIds(threadId: string): Promise<string[]> {
@@ -531,7 +584,7 @@ export class SqliteRepository implements AppRepository {
   }
 
   async setChatSourceActive(threadId: string, sourceId: string, active: boolean): Promise<void> {
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO chat_thread_sources (thread_id, source_id, active, updated_at) VALUES ($1, $2, $3, $4)
        ON CONFLICT(thread_id, source_id) DO UPDATE SET active = excluded.active, updated_at = excluded.updated_at`,
       [threadId, sourceId, active ? 1 : 0, nowIso()],
@@ -559,13 +612,11 @@ export class SqliteRepository implements AppRepository {
 
   async saveSettings(settings: AppSettings): Promise<void> {
     const timestamp = nowIso();
-    for (const [key, value] of Object.entries(settings)) {
-      await this.db.execute(
-        `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, $3)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-        [key, String(value), timestamp],
-      );
-    }
+    await this.executeTransaction(Object.entries(settings).map(([key, value]) => ({
+      query: `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, $3)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      values: [key, String(value), timestamp],
+    })));
   }
 
   async listProviderConfigs(): Promise<ProviderConfig[]> {
@@ -595,17 +646,19 @@ export class SqliteRepository implements AppRepository {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    await this.db.execute(
-      `INSERT INTO credentials_metadata (id, provider, label, fingerprint, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $5)`,
-      [input.credentialId, input.provider, config.label, input.fingerprint ?? null, timestamp],
-    );
-    await this.db.execute(
-      `INSERT INTO provider_configs
-       (id, provider, label, credential_id, credential_hint, base_url, enabled, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7)`,
-      [config.id, config.provider, config.label, config.credentialId, config.credentialHint ?? null, config.baseUrl ?? null, timestamp],
-    );
+    await this.executeTransaction([
+      {
+        query: `INSERT INTO credentials_metadata (id, provider, label, fingerprint, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $5)`,
+        values: [input.credentialId, input.provider, config.label, input.fingerprint ?? null, timestamp],
+      },
+      {
+        query: `INSERT INTO provider_configs
+                (id, provider, label, credential_id, credential_hint, base_url, enabled, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7)`,
+        values: [config.id, config.provider, config.label, config.credentialId, config.credentialHint ?? null, config.baseUrl ?? null, timestamp],
+      },
+    ]);
     return config;
   }
 
@@ -614,33 +667,28 @@ export class SqliteRepository implements AppRepository {
     const credentialId = rows[0]?.credential_id;
     if (!credentialId) throw new Error("Provider connection not found.");
     const timestamp = nowIso();
-    await this.db.execute("BEGIN IMMEDIATE");
-    try {
-      await this.db.execute(
+    await this.executeTransaction([
+      {
+        query:
         `UPDATE provider_configs
             SET credential_hint = $1, last_status = NULL, last_error = NULL, last_tested_at = NULL, updated_at = $2
           WHERE id = $3`,
-        [credentialHint, timestamp, id],
-      );
-      await this.db.execute(
-        "UPDATE credentials_metadata SET fingerprint = $1, updated_at = $2 WHERE id = $3",
-        [fingerprint, timestamp, credentialId],
-      );
-      await this.db.execute("COMMIT");
-    } catch (error) {
-      await this.db.execute("ROLLBACK").catch(() => undefined);
-      throw error;
-    }
+        values: [credentialHint, timestamp, id],
+      },
+      {
+        query: "UPDATE credentials_metadata SET fingerprint = $1, updated_at = $2 WHERE id = $3",
+        values: [fingerprint, timestamp, credentialId],
+      },
+    ]);
   }
 
   async deleteProviderConfig(id: string): Promise<void> {
     const rows = await this.db.select<{ credential_id: string }[]>("SELECT credential_id FROM provider_configs WHERE id = $1", [id]);
     const credentialId = rows[0]?.credential_id;
-    await this.db.execute("BEGIN IMMEDIATE");
-    try {
-      if (credentialId) {
-        await this.db.execute(
-          `UPDATE profiles
+    const statements: DatabaseTransactionStatement[] = [];
+    if (credentialId) {
+      statements.push({
+        query: `UPDATE profiles
               SET credential_id = CASE WHEN credential_id = $1 THEN NULL ELSE credential_id END,
                   default_viewer_model_id = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_model_id END,
                   default_viewer_reasoning_effort = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_reasoning_effort END,
@@ -651,21 +699,17 @@ export class SqliteRepository implements AppRepository {
                   default_judge_model_id = CASE WHEN default_judge_provider_config_id = $2 THEN NULL ELSE default_judge_model_id END,
                   updated_at = $3
             WHERE credential_id = $1 OR default_monitor_provider_config_id = $2 OR default_judge_provider_config_id = $2`,
-          [credentialId, id, nowIso()],
-        );
-      }
-      await this.db.execute("DELETE FROM provider_configs WHERE id = $1", [id]);
-      if (credentialId) await this.db.execute("DELETE FROM credentials_metadata WHERE id = $1", [credentialId]);
-      await this.db.execute("COMMIT");
-    } catch (error) {
-      await this.db.execute("ROLLBACK").catch(() => undefined);
-      throw error;
+        values: [credentialId, id, nowIso()],
+      });
     }
+    statements.push({ query: "DELETE FROM provider_configs WHERE id = $1", values: [id] });
+    if (credentialId) statements.push({ query: "DELETE FROM credentials_metadata WHERE id = $1", values: [credentialId] });
+    await this.executeTransaction(statements);
   }
 
   async updateProviderConnectionStatus(id: string, status: "ok" | "error", error?: string): Promise<void> {
     const timestamp = nowIso();
-    await this.db.execute(
+    await this.executeWrite(
       `UPDATE provider_configs
           SET last_tested_at = $1, last_status = $2, last_error = $3, updated_at = $1
         WHERE id = $4`,
@@ -694,14 +738,16 @@ export class SqliteRepository implements AppRepository {
       "SELECT model_id FROM model_registry WHERE provider_config_id = $1 AND favorite = 1",
       [providerConfigId],
     )).map((row) => row.model_id));
-    await this.db.execute("DELETE FROM model_registry WHERE provider_config_id = $1", [providerConfigId]);
+    const statements: DatabaseTransactionStatement[] = [
+      { query: "DELETE FROM model_registry WHERE provider_config_id = $1", values: [providerConfigId] },
+    ];
     for (const model of models) {
-      await this.db.execute(
-        `INSERT INTO model_registry
-         (provider_config_id, provider, model_id, display_name, route, capability_json, pricing_json,
-          recommended, favorite, raw_metadata_json, refreshed_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [
+      statements.push({
+        query: `INSERT INTO model_registry
+                (provider_config_id, provider, model_id, display_name, route, capability_json, pricing_json,
+                 recommended, favorite, raw_metadata_json, refreshed_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        values: [
           model.providerConfigId,
           model.provider,
           model.modelId,
@@ -714,19 +760,20 @@ export class SqliteRepository implements AppRepository {
           JSON.stringify(model.rawMetadata),
           model.refreshedAt,
         ],
-      );
+      });
     }
+    await this.executeTransaction(statements);
   }
 
   async setProviderModelFavorite(providerConfigId: string, modelId: string, favorite: boolean): Promise<void> {
-    await this.db.execute(
+    await this.executeWrite(
       "UPDATE model_registry SET favorite = $1 WHERE provider_config_id = $2 AND model_id = $3",
       [favorite ? 1 : 0, providerConfigId, modelId],
     );
   }
 
   async clearProviderModelCache(): Promise<void> {
-    await this.db.execute("DELETE FROM model_registry");
+    await this.executeWrite("DELETE FROM model_registry");
   }
 
   async listTargets(collection?: TargetRecord["collection"]): Promise<TargetRecord[]> {
@@ -770,7 +817,7 @@ export class SqliteRepository implements AppRepository {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO targets
        (id, collection, title, reveal_text, reveal_artifact_path, reveal_artifact_manifest_json, tags_json, source_metadata_json, content_hash, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
@@ -781,7 +828,7 @@ export class SqliteRepository implements AppRepository {
 
   async updateTarget(id: string, input: UpdateTargetInput): Promise<TargetRecord> {
     const timestamp = nowIso();
-    await this.db.execute(
+    await this.executeWrite(
       `UPDATE targets
           SET title = $1, reveal_text = $2, tags_json = $3, content_hash = $4, updated_at = $5
         WHERE id = $6 AND collection = 'user'`,
@@ -793,12 +840,12 @@ export class SqliteRepository implements AppRepository {
   }
 
   async deleteTarget(id: string): Promise<void> {
-    const result = await this.db.execute("DELETE FROM targets WHERE id = $1 AND collection = 'user'", [id]);
+    const result = await this.executeWrite("DELETE FROM targets WHERE id = $1 AND collection = 'user'", [id]);
     if (result.rowsAffected !== 1) throw new Error("User target not found or cannot be deleted.");
   }
 
   async recordTargetUsage(input: TargetUsageInput): Promise<void> {
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO target_usage (id, target_id, profile_id, research_project_id, session_id, used_at)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [createId("target_usage"), input.targetId, input.profileId ?? null, input.researchProjectId ?? null, input.sessionId ?? null, nowIso()],
@@ -847,12 +894,12 @@ export class SqliteRepository implements AppRepository {
   async saveCustomProtocolVersion(input: SaveCustomProtocolVersionInput): Promise<CustomProtocolVersion> {
     const existing = await this.db.select<{ id: string }[]>("SELECT id FROM protocols WHERE id = $1", [input.protocolId]);
     if (!existing.length) {
-      await this.db.execute(
+      await this.executeWrite(
         `INSERT INTO protocols (id, family, display_name, built_in, created_at) VALUES ($1, 'custom', $2, 0, $3)`,
         [input.protocolId, input.displayName, input.createdAt],
       );
     }
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO protocol_versions
        (id, protocol_id, version, language, content, ordered_steps_json, reveal_policy_json, content_hash, source_metadata_json, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
@@ -877,7 +924,7 @@ export class SqliteRepository implements AppRepository {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO rv_sessions
        (id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
         post_reveal_transcript, target_id, research_project_id, created_at, updated_at)
@@ -889,7 +936,7 @@ export class SqliteRepository implements AppRepository {
 
   async updateRvSessionState(id: string, state: RvSessionState, stopReason?: string): Promise<void> {
     const timestamp = nowIso();
-    await this.db.execute(
+    await this.executeWrite(
       `UPDATE rv_sessions SET state = $1, updated_at = $2,
        completed_at = CASE WHEN $1 = 'Completed' THEN $2 ELSE completed_at END WHERE id = $3`,
       [state, timestamp, id],
@@ -913,14 +960,14 @@ export class SqliteRepository implements AppRepository {
       if (!projects[0]?.scores_frozen_at) throw new Error("Research post-reveal discussion requires frozen scores.");
     }
     const next = `${session.post_reveal_transcript}${serializePostRevealTurn(role, content)}`;
-    await this.db.execute("UPDATE rv_sessions SET post_reveal_transcript = $1, updated_at = $2 WHERE id = $3", [next, nowIso(), sessionId]);
+    await this.executeWrite("UPDATE rv_sessions SET post_reveal_transcript = $1, updated_at = $2 WHERE id = $3", [next, nowIso(), sessionId]);
     await this.appendSessionEvent(sessionId, { eventType: `POST_REVEAL_${role.toUpperCase()}`, role, content: content.trim() });
     return next;
   }
 
   async appendSessionEvent(sessionId: string, event: SessionEventInput): Promise<void> {
     const timestamp = nowIso();
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO session_events
        (id, session_id, sequence_number, event_type, role, content, metadata_json, created_at)
        SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7
@@ -930,14 +977,14 @@ export class SqliteRepository implements AppRepository {
   }
 
   async updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void> {
-    await this.db.execute(
+    await this.executeWrite(
       "UPDATE rv_sessions SET pre_reveal_transcript = $1, updated_at = $2 WHERE id = $3",
       [transcript, nowIso(), sessionId],
     );
   }
 
   async saveSessionSnapshot(sessionId: string, snapshot: SessionSnapshot, hash: string): Promise<void> {
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO session_snapshots (id, session_id, snapshot_json, snapshot_hash, created_at)
        VALUES ($1, $2, $3, $4, $5)`,
       [createId("snapshot"), sessionId, JSON.stringify(snapshot), hash, nowIso()],
@@ -951,7 +998,7 @@ export class SqliteRepository implements AppRepository {
 
   async sealPreReveal(sessionId: string, transcript: string, hash: string): Promise<void> {
     const timestamp = nowIso();
-    await this.db.execute(
+    await this.executeWrite(
       `UPDATE rv_sessions SET pre_reveal_transcript = $1, pre_reveal_hash = $2,
        pre_reveal_sealed_at = $3, state = 'AwaitingReveal', updated_at = $3 WHERE id = $4`,
       [transcript, hash, timestamp, sessionId],
@@ -960,7 +1007,7 @@ export class SqliteRepository implements AppRepository {
 
   async acceptReveal(sessionId: string, reveal: RevealInput): Promise<void> {
     const timestamp = nowIso();
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO reveals (id, session_id, reveal_source, reveal_text, artifact_manifest_json, reveal_hash, accepted_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [createId("reveal"), sessionId, reveal.source, reveal.text ?? null, JSON.stringify(reveal.artifactManifest ?? []), reveal.hash, timestamp],
@@ -1009,7 +1056,7 @@ export class SqliteRepository implements AppRepository {
     const clean = content.trim();
     if (!clean) throw new Error("Target clarification cannot be empty.");
     const record: TargetClarificationRecord = { id: createId("clarification"), sessionId, content: clean, createdAt: nowIso() };
-    await this.db.execute(
+    await this.executeWrite(
       "INSERT INTO target_clarifications (id, session_id, content, created_at) VALUES ($1, $2, $3, $4)",
       [record.id, record.sessionId, record.content, record.createdAt],
     );
@@ -1026,7 +1073,7 @@ export class SqliteRepository implements AppRepository {
 
   async createMonitorRun(input: CreateMonitorRunInput): Promise<string> {
     const id = createId("monitor");
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO monitor_runs (id, session_id, model_route, prompt_version_id, library_version, max_interventions, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [id, input.sessionId, input.modelRoute, input.promptVersionId ?? null, input.libraryVersion, input.maxInterventions, nowIso()],
@@ -1035,7 +1082,7 @@ export class SqliteRepository implements AppRepository {
   }
 
   async appendMonitorIntervention(monitorRunId: string, intervention: MonitorInterventionInput): Promise<void> {
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO monitor_interventions
        (id, monitor_run_id, sequence_number, decision, command_id, viewer_evidence, command_text, rationale, created_at)
        SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7, $8
@@ -1068,26 +1115,21 @@ export class SqliteRepository implements AppRepository {
   async recordFrozenJudgeResult(run: CreateJudgeRunInput, score: FrozenJudgeScoreInput): Promise<JudgeScoreRecord> {
     const timestamp = nowIso();
     const total = computeJudgeTotal(score);
-    await this.db.execute("BEGIN IMMEDIATE");
-    try {
-      await this.db.execute(
-        `INSERT INTO judge_runs
+    await this.executeTransaction([
+      {
+        query: `INSERT INTO judge_runs
          (id, session_id, judge_index, model_route, rubric_version, anonymous_session_id, packet_hash, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [run.id, run.sessionId, run.judgeIndex, run.modelRoute, run.rubricVersion, run.anonymousSessionId, run.packetHash, timestamp],
-      );
-      await this.db.execute(
-        `INSERT INTO judge_scores
+        values: [run.id, run.sessionId, run.judgeIndex, run.modelRoute, run.rubricVersion, run.anonymousSessionId, run.packetHash, timestamp],
+      },
+      {
+        query: `INSERT INTO judge_scores
          (id, judge_run_id, gestalt, verifiable_features, activity_function_event, confabulation_control,
           total, rationale_json, frozen_at, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)`,
-        [score.id, score.judgeRunId, score.gestalt, score.verifiableFeatures, score.activityFunctionEvent, score.confabulationControl, total, JSON.stringify(score.narrative), timestamp],
-      );
-      await this.db.execute("COMMIT");
-    } catch (error) {
-      await this.db.execute("ROLLBACK").catch(() => undefined);
-      throw error;
-    }
+        values: [score.id, score.judgeRunId, score.gestalt, score.verifiableFeatures, score.activityFunctionEvent, score.confabulationControl, total, JSON.stringify(score.narrative), timestamp],
+      },
+    ]);
     return {
       ...score,
       judgeIndex: run.judgeIndex,
@@ -1129,7 +1171,7 @@ export class SqliteRepository implements AppRepository {
       id: createId("research"), workspaceId: config.workspaceId, name: config.name.trim(), templateType: config.templateType,
       state: "Draft", config: structuredClone(config), createdAt: timestamp, updatedAt: timestamp,
     };
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO research_projects (id, workspace_id, name, template_type, state, config_json, created_at, updated_at)
        VALUES ($1, $2, $3, $4, 'Draft', $5, $6, $6)`,
       [project.id, project.workspaceId, project.name, project.templateType, JSON.stringify(project.config), timestamp],
@@ -1154,7 +1196,7 @@ export class SqliteRepository implements AppRepository {
 
   async setResearchProjectState(id: string, state: ResearchState): Promise<void> {
     const timestamp = nowIso();
-    await this.db.execute(
+    await this.executeWrite(
       `UPDATE research_projects SET state = $1, updated_at = $2,
          scores_frozen_at = CASE WHEN $1 = 'ScoresFrozen' THEN COALESCE(scores_frozen_at, $2) ELSE scores_frozen_at END,
          unblinded_at = CASE WHEN $1 = 'Unblinded' THEN COALESCE(unblinded_at, $2) ELSE unblinded_at END
@@ -1167,37 +1209,25 @@ export class SqliteRepository implements AppRepository {
     const timestamp = nowIso();
     const projectState = await this.db.select<{ state: ResearchState }[]>("SELECT state FROM research_projects WHERE id = $1", [id]);
     if (!projectState[0] || !["Draft", "Preflight"].includes(projectState[0].state)) throw new Error("Research project cannot be locked from its current state.");
-    await this.db.execute("BEGIN IMMEDIATE");
-    try {
-      for (const condition of plan.conditions) {
-        await this.db.execute(
-          `INSERT INTO research_conditions (id, research_project_id, condition_key, condition_config_json) VALUES ($1, $2, $3, $4)`,
-          [condition.id, id, condition.conditionKey, JSON.stringify(condition.config)],
-        );
-      }
-      for (const assignment of plan.assignments) {
-        await this.db.execute(
-          `INSERT INTO research_assignments (id, research_project_id, anonymous_session_id, session_id, target_id, execution_order, judge_order, status)
+    const statements: DatabaseTransactionStatement[] = plan.conditions.map((condition) => ({
+      query: "INSERT INTO research_conditions (id, research_project_id, condition_key, condition_config_json) VALUES ($1, $2, $3, $4)",
+      values: [condition.id, id, condition.conditionKey, JSON.stringify(condition.config)],
+    }));
+    statements.push(...plan.assignments.map((assignment) => ({
+      query: `INSERT INTO research_assignments (id, research_project_id, anonymous_session_id, session_id, target_id, execution_order, judge_order, status)
            VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)`,
-          [assignment.id, id, assignment.anonymousSessionId, assignment.targetId, assignment.executionOrder, assignment.judgeOrder, assignment.status],
-        );
-      }
-      for (const mapping of plan.mappings) {
-        await this.db.execute(
-          `INSERT INTO blinding_mappings (id, research_project_id, anonymous_session_id, condition_id, pair_key, pair_order, mapping_hash, created_at)
+      values: [assignment.id, id, assignment.anonymousSessionId, assignment.targetId, assignment.executionOrder, assignment.judgeOrder, assignment.status],
+    })));
+    statements.push(...plan.mappings.map((mapping) => ({
+      query: `INSERT INTO blinding_mappings (id, research_project_id, anonymous_session_id, condition_id, pair_key, pair_order, mapping_hash, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [mapping.id, id, mapping.anonymousSessionId, mapping.conditionId, mapping.pairKey, mapping.pairOrder ?? null, mapping.mappingHash, mapping.createdAt],
-        );
-      }
-      await this.db.execute(
-        `UPDATE research_projects SET state = 'Locked', config_hash = $1, locked_at = $2, updated_at = $2 WHERE id = $3 AND state IN ('Draft','Preflight')`,
-        [plan.configHash, timestamp, id],
-      );
-      await this.db.execute("COMMIT");
-    } catch (error) {
-      await this.db.execute("ROLLBACK").catch(() => undefined);
-      throw error;
-    }
+      values: [mapping.id, id, mapping.anonymousSessionId, mapping.conditionId, mapping.pairKey, mapping.pairOrder ?? null, mapping.mappingHash, mapping.createdAt],
+    })));
+    statements.push({
+      query: "UPDATE research_projects SET state = 'Locked', config_hash = $1, locked_at = $2, updated_at = $2 WHERE id = $3 AND state IN ('Draft','Preflight')",
+      values: [plan.configHash, timestamp, id],
+    });
+    await this.executeTransaction(statements);
   }
 
   async listResearchConditions(projectId: string): Promise<ResearchConditionRecord[]> {
@@ -1225,13 +1255,13 @@ export class SqliteRepository implements AppRepository {
   }
 
   async updateResearchAssignment(id: string, sessionId: string | undefined, status: string): Promise<void> {
-    await this.db.execute("UPDATE research_assignments SET session_id = $1, status = $2 WHERE id = $3", [sessionId ?? null, status, id]);
+    await this.executeWrite("UPDATE research_assignments SET session_id = $1, status = $2 WHERE id = $3", [sessionId ?? null, status, id]);
   }
 
   async saveResearchResults(projectId: string, results: ResearchResults, hash: string): Promise<void> {
     const existing = await this.db.select<{ id: string }[]>("SELECT id FROM research_results WHERE research_project_id = $1 LIMIT 1", [projectId]);
     if (existing.length) throw new Error("Research results are immutable once written.");
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO research_results (id, research_project_id, results_json, results_hash, created_at) VALUES ($1, $2, $3, $4, $5)`,
       [createId("research_results"), projectId, JSON.stringify(results), hash, nowIso()],
     );
@@ -1243,7 +1273,7 @@ export class SqliteRepository implements AppRepository {
   }
 
   async recordExport(workspaceId: string, researchProjectId: string | undefined, exportType: string, artifactPath: string, manifestHash: string): Promise<void> {
-    await this.db.execute(
+    await this.executeWrite(
       `INSERT INTO exports (id, workspace_id, research_project_id, export_type, artifact_path, manifest_hash, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [createId("export"), workspaceId, researchProjectId ?? null, exportType, artifactPath, manifestHash, nowIso()],

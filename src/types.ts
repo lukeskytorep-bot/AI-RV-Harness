@@ -13,6 +13,7 @@ export interface ChatThread {
   formalRvState?: "BLIND" | "REVEALED" | "INTERRUPTED" | "FAILED";
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
 }
 
 export interface ChatMessage {

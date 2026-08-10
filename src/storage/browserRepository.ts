@@ -12,6 +12,7 @@ import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
 import { serializePostRevealTurn } from "../sessions/postRevealTranscript";
 import { verifySealedViewerEvidence } from "../sessions/evidence";
+import { applyReasoningRegistryToProviderModel } from "../providers/modelReasoningRegistry";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
@@ -172,24 +173,49 @@ export class BrowserRepository implements AppRepository {
     );
   }
 
-  async getOrCreateChatThread(workspaceId: string, mode: ChatMode): Promise<ChatThread> {
+  async listChatThreads(workspaceId: string, mode: ChatMode): Promise<ChatThread[]> {
+    return read<ChatThread[]>(CHAT_THREADS_KEY, [])
+      .filter((thread) => thread.workspaceId === workspaceId && thread.mode === mode && !thread.archivedAt)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async createChatThread(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThread> {
     const all = read<ChatThread[]>(CHAT_THREADS_KEY, []);
-    const existing = all.find((thread) => thread.workspaceId === workspaceId && thread.mode === mode);
-    if (existing) return existing;
     const timestamp = nowIso();
     const thread: ChatThread = {
       id: createId("thread"), workspaceId, mode,
-      title: mode === "conversation" ? "Conversation" : "Manual RV Session",
+      title: title?.trim().slice(0, 160) || (mode === "conversation" ? "Conversation" : "Manual RV Session"),
       createdAt: timestamp, updatedAt: timestamp,
     };
     write(CHAT_THREADS_KEY, [...all, thread]);
     return thread;
   }
 
+  async getOrCreateChatThread(workspaceId: string, mode: ChatMode): Promise<ChatThread> {
+    const existing = (await this.listChatThreads(workspaceId, mode))[0];
+    if (!existing) return this.createChatThread(workspaceId, mode);
+    await this.touchChatThread(existing.id);
+    return { ...existing, updatedAt: nowIso() };
+  }
+
+  async touchChatThread(threadId: string): Promise<void> {
+    const timestamp = nowIso();
+    write(CHAT_THREADS_KEY, read<ChatThread[]>(CHAT_THREADS_KEY, []).map((thread) => thread.id === threadId && !thread.archivedAt ? { ...thread, updatedAt: timestamp } : thread));
+  }
+
   async renameChatThread(threadId: string, title: string): Promise<void> {
     const clean = title.trim();
     if (!clean) throw new Error("Thread title is required.");
     write(CHAT_THREADS_KEY, read<ChatThread[]>(CHAT_THREADS_KEY, []).map((thread) => thread.id === threadId ? { ...thread, title: clean.slice(0, 160), updatedAt: nowIso() } : thread));
+  }
+
+  async archiveChatThread(threadId: string): Promise<void> {
+    const threads = read<ChatThread[]>(CHAT_THREADS_KEY, []);
+    const thread = threads.find((item) => item.id === threadId && !item.archivedAt);
+    if (!thread) throw new Error("Chat thread not found.");
+    if (thread.formalRvState === "BLIND") throw new Error("A blind Manual RV thread must be ended before it can be archived.");
+    const timestamp = nowIso();
+    write(CHAT_THREADS_KEY, threads.map((item) => item.id === threadId ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
   }
 
   async setChatThreadFormalRvState(threadId: string, state?: ChatThread["formalRvState"]): Promise<void> {
@@ -319,6 +345,7 @@ export class BrowserRepository implements AppRepository {
   async listProviderModels(providerConfigId?: string): Promise<ProviderModel[]> {
     return read<ProviderModel[]>(MODELS_KEY, [])
       .filter((item) => !providerConfigId || item.providerConfigId === providerConfigId)
+      .map(applyReasoningRegistryToProviderModel)
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
   }
 

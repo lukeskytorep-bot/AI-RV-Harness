@@ -3,6 +3,7 @@ import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getFullRcp } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import { detectRepetitiveOutput, runAutomaticRcpSession } from "./controller";
+import { RCP_CONTROLLER_PROMPT_VERSION, rcpPhasePrompt } from "./controllerPrompts";
 import type { SessionSnapshot } from "./types";
 
 const config: ProviderConfig = {
@@ -118,6 +119,39 @@ describe("automatic RCP controller", () => {
     expect(log.indexOf("sealed")).toBeLessThan(log.indexOf("target-used"));
   });
 
+  it("audits a rejected Monitor response and continues the protocol after a limited retry", async () => {
+    const log: string[] = [];
+    let viewerCalls = 0;
+    let monitorCalls = 0;
+    const result = await runAutomaticRcpSession({
+      repository: fakeRepository(log),
+      workspaceId: "w",
+      profileId: "p",
+      providerConfig: config,
+      model,
+      protocol: getFullRcp("en"),
+      sessionLanguage: "en",
+      requestedSettings: { maxOutputTokens: 1024 },
+      maxRetries: 2,
+      monitor: { providerConfig: config, model },
+      chat: async ({ messages }) => {
+        const monitorRequest = messages.some((message) => message.role === "system" && message.content.includes("AI Monitor for a blind"));
+        if (monitorRequest) {
+          monitorCalls += 1;
+          return { content: monitorCalls <= 2 ? "not-json" : '{"decision":"CONTINUE_PROTOCOL"}', usage: {} };
+        }
+        viewerCalls += 1;
+        return { content: `Distinct Viewer material for phase ${viewerCalls}, containing new sensory and spatial evidence.`, usage: {} };
+      },
+    });
+    expect(result.state).toBe("AwaitingReveal");
+    expect(viewerCalls).toBe(6);
+    expect(monitorCalls).toBe(7);
+    expect(log).toContain("event:MONITOR_ATTEMPT_REJECTED");
+    expect(log).toContain("event:MONITOR_SKIPPED_CONTINUE_PROTOCOL");
+    expect(log).toContain("sealed");
+  });
+
   it("honors STOP after sealing and never auto-reveals the target", async () => {
     const log: string[] = [];
     const abort = new AbortController();
@@ -171,5 +205,13 @@ describe("automatic RCP controller", () => {
   it("detects obvious repetitive generation loops", () => {
     expect(detectRepetitiveOutput(Array(7).fill("same repeated perceptual fragment over and over").join("\n"))).toBe(true);
     expect(detectRepetitiveOutput("A concise, varied response.")).toBe(false);
+  });
+
+  it("keeps the versioned ASCII-sketch instruction in the first Full RCP call in both languages", () => {
+    expect(RCP_CONTROLLER_PROMPT_VERSION).toBe("1.1.0");
+    expect(rcpPhasePrompt("en", 1, "1234 5678")).toMatch(/ASCII sketch[\s\S]*fenced code block/i);
+    expect(rcpPhasePrompt("pl", 1, "1234 5678")).toMatch(/szkic ASCII[\s\S]*bloku kodu/i);
+    expect(rcpPhasePrompt("en", 2, "1234 5678")).not.toMatch(/ASCII sketch/i);
+    expect(rcpPhasePrompt("pl", 2, "1234 5678")).not.toMatch(/szkic ASCII/i);
   });
 });

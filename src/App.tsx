@@ -81,8 +81,13 @@ import { SettingsSaveQueue } from "./storage/settingsSaveQueue";
 import { AsyncRunGuard } from "./sessions/runGuard";
 import { modelRouteKey, preferredModelOrder, profileNeedingInitialSetup, resolveRoleDefault, resolveViewerDefault, splitModelRouteKey } from "./profileModelDefaults";
 import { defaultTemperatureForModel, profileGenerationDefaults, profileSystemPromptSnapshot, reasoningEffortForModel } from "./profileViewerDefaults";
+import { canSelectMonitor, canSelectProtocol, isRunModeCompatible } from "./sessions/modeCompatibility";
+import { SafeMarkdown } from "./components/SafeMarkdown";
+import { filterWorkspaceDirectory } from "./domain/workspaceDirectory";
+import { reasoningOptions } from "./providers/modelReasoningRegistry";
+import type { ReasoningOption } from "./providers/types";
 
-type Page = "home" | "profiles" | "research" | "targets" | "settings" | "workspace";
+type Page = "home" | "profiles" | "workspaces" | "research" | "targets" | "settings" | "workspace";
 type WorkspaceTab = "chat" | "rv" | "monitor";
 
 export default function App() {
@@ -96,6 +101,7 @@ export default function App() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [profileDialog, setProfileDialog] = useState(false);
   const [workspaceDialogFor, setWorkspaceDialogFor] = useState<string | null>(null);
+  const [workspaceCreatedNotice, setWorkspaceCreatedNotice] = useState<{ workspaceId: string; workspaceName: string; profileName: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [initializationError, setInitializationError] = useState<string | null>(null);
   const [initializationAttempt, setInitializationAttempt] = useState(0);
@@ -196,6 +202,7 @@ export default function App() {
   const createWorkspace = async (profileId: string, name: string, description?: string) => {
     if (!repository) return;
     const workspace = await repository.createWorkspace({ profileId, name, description });
+    setWorkspaceCreatedNotice({ workspaceId: workspace.id, workspaceName: workspace.name, profileName: profiles.find((profile) => profile.id === profileId)?.name || copy.unnamedProfile });
     setWorkspaces(await repository.listWorkspaces());
     setWorkspaceDialogFor(null);
     await openWorkspace(workspace);
@@ -266,6 +273,8 @@ export default function App() {
               repository={repository}
               onProfilesChanged={refreshProfiles}
             />
+          ) : page === "workspaces" ? (
+            <WorkspacesScreen copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={openWorkspace} />
           ) : page === "research" ? (
             <ResearchScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
           ) : page === "targets" ? (
@@ -281,6 +290,11 @@ export default function App() {
               tab={workspaceTab}
               onTab={setWorkspaceTab}
               repository={repository}
+              profiles={profiles}
+              workspaces={workspaces}
+              onOpenWorkspace={openWorkspace}
+              createdNotice={workspaceCreatedNotice?.workspaceId === activeWorkspace.id ? workspaceCreatedNotice : null}
+              onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
             />
           ) : (
             <EmptyCard>{copy.noWorkspace}</EmptyCard>
@@ -515,10 +529,10 @@ function ServerIcon() {
 }
 
 function ViewerProfileControls({ copy, model, reasoning, temperature, systemPrompt, onReasoning, onTemperature, onSystemPrompt }: { copy: ReturnType<typeof getCopy>; model: ProviderModel | null; reasoning: "" | ReasoningEffort; temperature: string; systemPrompt: string; onReasoning: (value: "" | ReasoningEffort) => void; onTemperature: (value: string) => void; onSystemPrompt: (value: string) => void }) {
-  const reasoningChoices = model?.capabilities.reasoning.efforts ?? [];
+  const reasoningChoices = model ? reasoningOptions(model.capabilities.reasoning) : [];
   const temperatureCapability = model?.capabilities.temperature;
   return <div className="profile-viewer-controls">
-    <label><span>{copy.viewerReasoningLevel}</span><select value={reasoning} onChange={(event) => onReasoning(event.target.value as "" | ReasoningEffort)} disabled={!model || !reasoningChoices.length}><option value="">{copy.autoProviderDefault}</option>{reasoningChoices.map((effort) => <option key={effort} value={effort}>{effort.toUpperCase()}</option>)}</select><small>{!model ? copy.selectModelFirst : !model.capabilities.reasoning.supported ? copy.reasoningUnavailable : !reasoningChoices.length ? copy.reasoningLevelsUnknown : copy.autoReasoningLead}</small></label>
+    <label><span>{copy.viewerReasoningLevel}</span><select value={reasoning} onChange={(event) => onReasoning(event.target.value as "" | ReasoningEffort)} disabled={!model}><option value="">{copy.autoProviderDefault}</option>{reasoningChoices.map((option) => <option key={option.value} value={option.value}>{reasoningOptionLabel(copy, option)}</option>)}</select><small>{!model ? copy.selectModelFirst : reasoningCapabilityLead(copy, model)}</small></label>
     <label><span>{copy.viewerTemperature}</span><input type="number" step="0.1" value={temperature} onChange={(event) => onTemperature(event.target.value)} disabled={!temperatureCapability?.supported} min={temperatureCapability?.min} max={temperatureCapability?.max} placeholder={temperatureCapability?.supported ? "0.9" : copy.notSupported} /><small>{temperatureCapability?.supported ? `${copy.temperatureDefaultLead}${temperatureCapability.min !== undefined || temperatureCapability.max !== undefined ? ` (${temperatureCapability.min ?? "−∞"}–${temperatureCapability.max ?? "+∞"})` : ""}` : copy.temperatureUnavailable}</small></label>
     <label className="profile-system-prompt-field"><span>{copy.viewerSystemPrompt}<small>{copy.optional}</small></span><textarea className="system-prompt-editor" rows={12} maxLength={100000} value={systemPrompt} onChange={(event) => onSystemPrompt(event.target.value)} placeholder={copy.viewerSystemPromptPlaceholder} /><small>{copy.viewerSystemPromptLead}</small></label>
   </div>;
@@ -528,6 +542,7 @@ function Sidebar({ page, copy, onNavigate }: { page: Page; copy: ReturnType<type
   const items: Array<{ id: Page; icon: typeof Home; label: string }> = [
     { id: "home", icon: Home, label: copy.home },
     { id: "profiles", icon: Users, label: copy.profiles },
+    { id: "workspaces", icon: RadioTower, label: copy.workspaces },
     { id: "research", icon: FlaskConical, label: copy.research },
     { id: "targets", icon: Crosshair, label: copy.targets },
     { id: "settings", icon: Settings2, label: copy.settings },
@@ -541,7 +556,7 @@ function Sidebar({ page, copy, onNavigate }: { page: Page; copy: ReturnType<type
       <nav className="side-nav">
         {items.map((item) => {
           const Icon = item.icon;
-          const active = page === item.id || (page === "workspace" && item.id === "profiles");
+          const active = page === item.id || (page === "workspace" && item.id === "workspaces");
           return (
             <button key={item.id} className={active ? "nav-item active" : "nav-item"} onClick={() => onNavigate(item.id)}>
               <Icon size={18} />
@@ -683,6 +698,20 @@ function MiniStat({ icon, title, value }: { icon: ReactNode; title: string; valu
   return <div className="mini-stat"><span>{icon}</span><div><small>{title}</small><strong>{value}</strong></div></div>;
 }
 
+function WorkspacesScreen({ copy, profiles, workspaces, onOpenWorkspace }: { copy: ReturnType<typeof getCopy>; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void }) {
+  return <div className="page"><PageHeader title={copy.allWorkspaces} subtitle={copy.allWorkspacesLead} /><section className="panel workspace-directory-panel"><WorkspaceDirectoryList copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={onOpenWorkspace} /></section></div>;
+}
+
+function WorkspaceDirectoryList({ copy, profiles, workspaces, onOpenWorkspace }: { copy: ReturnType<typeof getCopy>; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void }) {
+  const [query, setQuery] = useState("");
+  const groups = useMemo(() => filterWorkspaceDirectory(workspaces, profiles, query), [workspaces, profiles, query]);
+  return <div className="workspace-directory"><label className="workspace-search"><RadioTower size={16} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy.searchWorkspaces} /></label>{groups.length ? <div className="workspace-directory-groups">{groups.map((group) => <section key={group.profile.id}><header><span className="avatar tiny">{initials(group.profile.name || copy.unnamedProfile)}</span><div><strong>{group.profile.name || copy.unnamedProfile}</strong><small>{group.workspaces.length} {copy.workspacesCount}</small></div></header><div>{group.workspaces.map((workspace) => <button key={workspace.id} onClick={() => onOpenWorkspace(workspace)}><span><RadioTower size={16} /><span><strong>{workspace.name}</strong><small>{workspace.description || new Date(workspace.lastOpenedAt).toLocaleString()}</small></span></span><ArrowRight size={15} /></button>)}</div></section>)}</div> : <EmptyState icon={<RadioTower size={26} />} title={copy.noMatchingWorkspaces} body={copy.allWorkspacesLead} />}</div>;
+}
+
+function WorkspaceSwitcherDialog({ copy, profiles, workspaces, onOpenWorkspace, onClose }: { copy: ReturnType<typeof getCopy>; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void; onClose: () => void }) {
+  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="modal workspace-switcher-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>{copy.workspaces}</small><h2>{copy.switchWorkspace}</h2></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><WorkspaceDirectoryList copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={(workspace) => { onClose(); onOpenWorkspace(workspace); }} /></section></div>;
+}
+
 function ProfilesScreen({
   copy,
   profiles,
@@ -776,22 +805,25 @@ function CalibrationHistory({ copy, items }: { copy: ReturnType<typeof getCopy>;
   return <section className="calibration-history"><div className="calibration-history-head"><strong>{copy.calibrationHistory}</strong><small>{items.length}</small></div>{items.length ? <div className="calibration-list">{items.slice(0, 5).map((item) => <article key={item.projectId}><div><strong>{item.modelId}</strong><span className={`status-chip ${item.historical ? "next" : "ready"}`}>{item.historical ? copy.historicalCalibration : copy.currentPairing}</span></div><small>{item.providerLabel}{item.credentialHint ? ` · ${item.credentialHint}` : ""}</small><dl><div><dt>{copy.lastCalibration}</dt><dd>{new Date(item.completedAt).toLocaleDateString()}</dd></div><div><dt>{copy.tested}</dt><dd>{item.tested.join(" / ")}</dd></div><div><dt>{copy.bestObserved}</dt><dd>{item.bestObserved.join(" / ") || "—"}</dd></div><div><dt>n</dt><dd>{item.n}</dd></div></dl></article>)}</div> : <p>{copy.noCalibrationHistory}</p>}</section>;
 }
 
-function WorkspaceScreen({ copy, settings, profile, workspace, tab, onTab, repository }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; tab: WorkspaceTab; onTab: (tab: WorkspaceTab) => void; repository: AppRepository | null }) {
+function WorkspaceScreen({ copy, settings, profile, workspace, tab, onTab, repository, profiles, workspaces, onOpenWorkspace, createdNotice, onDismissCreatedNotice }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; tab: WorkspaceTab; onTab: (tab: WorkspaceTab) => void; repository: AppRepository | null; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void; createdNotice: { workspaceId: string; workspaceName: string; profileName: string } | null; onDismissCreatedNotice: () => void }) {
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   return (
-    <div className="page workspace-page">
-      <PageHeader title={workspace.name} subtitle={workspace.description || `${profile ? profile.name || copy.unnamedProfile : "—"} · ${copy.workspace}`} />
+    <><div className="page workspace-page">
+      <PageHeader title={workspace.name} subtitle={workspace.description || `${profile ? profile.name || copy.unnamedProfile : "—"} · ${copy.workspace}`} action={<button className="secondary-button" onClick={() => setSwitcherOpen(true)}><RadioTower size={15} />{copy.switchWorkspace}</button>} />
+      {createdNotice && <div className="workspace-created-notice"><Check size={16} /><span><strong>{copy.workspaceCreated}</strong><small>{createdNotice.profileName} → {createdNotice.workspaceName}</small></span><button className="icon-button" onClick={onDismissCreatedNotice}><X size={14} /></button></div>}
       <div className="module-tabs">
         <button className={tab === "chat" ? "module-tab active" : "module-tab"} onClick={() => onTab("chat")}><MessageCircle size={17} />{copy.chat}</button>
         <button className={tab === "rv" ? "module-tab active" : "module-tab"} onClick={() => onTab("rv")}><Crosshair size={17} />{copy.rvSession}</button>
         <button className={tab === "monitor" ? "module-tab active" : "module-tab"} onClick={() => onTab("monitor")}><BrainCircuit size={17} />{copy.aiMonitor}</button>
       </div>
       {tab === "chat" ? <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} /> : tab === "rv" ? <RvSessionPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} /> : <MonitorPanel copy={copy} workspace={workspace} repository={repository} />}
-    </div>
+    </div>{switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={onOpenWorkspace} onClose={() => setSwitcherOpen(false)} />}</>
   );
 }
 
 function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; repository: AppRepository | null }) {
   const [mode, setMode] = useState<ChatMode>("conversation");
+  const [threads, setThreads] = useState<ChatThread[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [threadTitle, setThreadTitle] = useState("");
   const [savedThreadTitle, setSavedThreadTitle] = useState("");
@@ -816,35 +848,54 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     let cancelled = false;
     void (async () => {
       if (!repository) return;
-      const [configs, thread] = await Promise.all([
+      const [configs, nextSources] = await Promise.all([
         repository.listProviderConfigs(),
-        repository.getOrCreateChatThread(workspace.id, mode),
+        repository.listWorkspaceSources(workspace.id),
       ]);
       if (cancelled) return;
       setProviderConfigs(configs);
-      setThreadId(thread.id);
-      setThreadTitle(thread.title);
-      setSavedThreadTitle(thread.title);
-      setFormalRvState(thread.formalRvState);
       const bound = configs.find((item) => item.credentialId === profile?.credentialId);
-      const [nextModels, nextMessages, nextSources, nextActiveSources] = await Promise.all([
-        bound ? repository.listProviderModels(bound.id) : Promise.resolve([]),
-        repository.listChatMessages(thread.id),
-        repository.listWorkspaceSources(workspace.id),
-        repository.listActiveChatSourceIds(thread.id),
-      ]);
+      const nextModels = bound ? await repository.listProviderModels(bound.id) : [];
       if (cancelled) return;
       setModels(nextModels);
-      setMessages(nextMessages);
       setSources(nextSources);
-      setActiveSourceIds(nextActiveSources);
       setChatImages([]);
       setChatImageNames([]);
       setModelId(resolveViewerDefault(profile, bound ?? null, nextModels));
       setError(null);
     })();
     return () => { cancelled = true; };
-  }, [repository, workspace.id, profile?.credentialId, profile?.defaultViewerModelId, mode]);
+  }, [repository, workspace.id, profile?.credentialId, profile?.defaultViewerModelId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setMessages([]);
+    setActiveSourceIds([]);
+    setThreadId(null);
+    void (async () => {
+      if (!repository) return;
+      let available = await repository.listChatThreads(workspace.id, mode);
+      const thread = available[0] ?? await repository.createChatThread(workspace.id, mode);
+      if (!available.length) available = [thread];
+      const [nextMessages, nextActiveSources] = await Promise.all([
+        repository.listChatMessages(thread.id),
+        repository.listActiveChatSourceIds(thread.id),
+        repository.touchChatThread(thread.id),
+      ]);
+      if (cancelled) return;
+      setThreads(available);
+      setThreadId(thread.id);
+      setThreadTitle(thread.title);
+      setSavedThreadTitle(thread.title);
+      setFormalRvState(thread.formalRvState);
+      setMessages(nextMessages);
+      setActiveSourceIds(nextActiveSources);
+      setChatImages([]);
+      setChatImageNames([]);
+      setError(null);
+    })().catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause)); });
+    return () => { cancelled = true; };
+  }, [repository, workspace.id, mode]);
 
   useEffect(() => {
     if (selectedModel && (!selectedModel.capabilities.supportsVision || !selectedModel.capabilities.inputModalities.includes("image"))) {
@@ -857,6 +908,70 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
   const estimatedContext = estimateTextTokens(messages.map((message) => message.content).join("\n\n") + "\n" + input) + selectedSources.reduce((sum, source) => sum + estimateTextTokens(source.content), 0);
   const reservedOutput = selectedModel ? Math.min(selectedModel.capabilities.maxOutputTokens ?? 4096, 4096) : 0;
   const contextExceeded = Boolean(selectedModel?.capabilities.contextTokens && estimatedContext + reservedOutput > selectedModel.capabilities.contextTokens);
+
+  const openThread = async (nextThreadId: string) => {
+    if (!repository || sending || nextThreadId === threadId) return;
+    const thread = threads.find((item) => item.id === nextThreadId);
+    if (!thread) return;
+    setError(null);
+    try {
+      const [nextMessages, nextActiveSources] = await Promise.all([
+        repository.listChatMessages(thread.id),
+        repository.listActiveChatSourceIds(thread.id),
+        repository.touchChatThread(thread.id),
+      ]);
+      setThreadId(thread.id);
+      setThreadTitle(thread.title);
+      setSavedThreadTitle(thread.title);
+      setFormalRvState(thread.formalRvState);
+      setMessages(nextMessages);
+      setActiveSourceIds(nextActiveSources);
+      setChatImages([]);
+      setChatImageNames([]);
+      setThreads(await repository.listChatThreads(workspace.id, mode));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
+  const createNewThread = async () => {
+    if (!repository || sending) return;
+    setError(null);
+    try {
+      const baseTitle = mode === "conversation" ? copy.conversation : copy.manualRv;
+      const thread = await repository.createChatThread(workspace.id, mode, `${baseTitle} ${threads.length + 1}`);
+      setThreads(await repository.listChatThreads(workspace.id, mode));
+      setThreadId(thread.id);
+      setThreadTitle(thread.title);
+      setSavedThreadTitle(thread.title);
+      setFormalRvState(undefined);
+      setMessages([]);
+      setActiveSourceIds([]);
+      setChatImages([]);
+      setChatImageNames([]);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
+  const archiveCurrentThread = async () => {
+    if (!repository || !threadId || sending || !window.confirm(`${copy.archiveChatConfirm}\n\n${savedThreadTitle}`)) return;
+    setError(null);
+    try {
+      await repository.archiveChatThread(threadId);
+      let remaining = await repository.listChatThreads(workspace.id, mode);
+      const next = remaining[0] ?? await repository.createChatThread(workspace.id, mode, mode === "conversation" ? copy.conversation : copy.manualRv);
+      if (!remaining.length) remaining = [next];
+      const [nextMessages, nextActiveSources] = await Promise.all([
+        repository.listChatMessages(next.id),
+        repository.listActiveChatSourceIds(next.id),
+        repository.touchChatThread(next.id),
+      ]);
+      setThreads(remaining);
+      setThreadId(next.id);
+      setThreadTitle(next.title);
+      setSavedThreadTitle(next.title);
+      setFormalRvState(next.formalRvState);
+      setMessages(nextMessages);
+      setActiveSourceIds(nextActiveSources);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
 
   const toggleSource = async (sourceId: string) => {
     if (!repository || !threadId) return;
@@ -924,6 +1039,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setMessages(await repository.listChatMessages(threadId));
+      setThreads(await repository.listChatThreads(workspace.id, mode));
       setSending(false);
     }
   };
@@ -934,6 +1050,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       await repository.renameChatThread(threadId, threadTitle);
       setThreadTitle(threadTitle.trim());
       setSavedThreadTitle(threadTitle.trim());
+      setThreads(await repository.listChatThreads(workspace.id, mode));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
@@ -943,6 +1060,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     try {
       await repository.setChatThreadFormalRvState(threadId, next);
       setFormalRvState(next);
+      setThreads(await repository.listChatThreads(workspace.id, mode));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
@@ -950,13 +1068,18 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     <section className="chat-surface">
       <div className="chat-toolbar">
         <div className="segmented large-segmented">
-          <button className={mode === "conversation" ? "active" : ""} onClick={() => setMode("conversation")}><MessageCircle size={16} />{copy.conversation}</button>
-          <button className={mode === "manual_rv" ? "active" : ""} onClick={() => setMode("manual_rv")}><Crosshair size={16} />{copy.manualRv}</button>
+          <button disabled={sending} className={mode === "conversation" ? "active" : ""} onClick={() => setMode("conversation")}><MessageCircle size={16} />{copy.conversation}</button>
+          <button disabled={sending} className={mode === "manual_rv" ? "active" : ""} onClick={() => setMode("manual_rv")}><Crosshair size={16} />{copy.manualRv}</button>
         </div>
         <span className={mode === "conversation" ? "context-badge conversation" : "context-badge blind"}>
           {mode === "conversation" ? <Sparkles size={14} /> : <LockKeyhole size={14} />}
           {mode === "conversation" ? copy.systemActive : profile?.defaultViewerSystemPrompt ? copy.viewerSystemActive : copy.systemEmpty}
         </span>
+      </div>
+      <div className="chat-thread-switcher">
+        <label><span>{copy.chatThreads}</span><select value={threadId ?? ""} disabled={!threadId || sending} onChange={(event) => void openThread(event.target.value)}>{threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}</select></label>
+        <button className="secondary-button" disabled={!repository || sending} onClick={() => void createNewThread()}><Plus size={13} />{copy.newChat}</button>
+        <button className="secondary-button danger-action" disabled={!threadId || sending || formalRvState === "BLIND"} title={formalRvState === "BLIND" ? copy.endBlindBeforeArchive : copy.archiveChat} onClick={() => void archiveCurrentThread()}><Archive size={13} />{copy.archiveChat}</button>
       </div>
       <div className="chat-thread-bar">
         <label><span>{copy.threadTitle}</span><input value={threadTitle} maxLength={160} onChange={(event) => setThreadTitle(event.target.value)} /></label>
@@ -976,7 +1099,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         <div><strong>{mode === "conversation" ? copy.conversationTitle : copy.manualTitle}</strong><p>{mode === "conversation" ? copy.conversationDesc : copy.manualDesc}</p></div>
       </div>
       <details className="chat-sources"><summary><span><FileCheck2 size={14} />{copy.workspaceSources}</span><small>{copy.activeSources}: {activeSourceIds.length} · {copy.estimatedContext}: ~{estimatedContext.toLocaleString()} tokens</small></summary><div className="chat-source-body"><div className="chat-source-actions"><label className="secondary-button">{copy.addSource}<input type="file" multiple accept=".txt,.md,text/plain,text/markdown" onChange={(event) => void importSources(event.target.files)} /></label></div>{sources.length ? <div className="chat-source-list">{sources.map((source) => <label key={source.id}><input type="checkbox" checked={activeSourceIds.includes(source.id)} onChange={() => void toggleSource(source.id)} /><span><strong>{source.displayName}</strong><small>~{estimateTextTokens(source.content).toLocaleString()} tokens</small></span><button type="button" className="icon-button danger" title={copy.removeSource} onClick={(event) => { event.preventDefault(); void removeSource(source); }}><X size={13} /></button></label>)}</div> : <p>{copy.noSources}</p>}{contextExceeded && <div className="source-context-error">{copy.contextExceeded}</div>}</div></details>
-      {messages.length === 0 ? <div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div> : <div className="message-list">{messages.map((message) => <article className={`chat-message ${message.role}`} key={message.id}><span>{message.role === "user" ? initials(profile?.name || copy.unnamedProfile) : "AI"}</span><div><small>{message.role === "user" ? profile?.name || copy.unnamedProfile : selectedModel?.displayName ?? "AI"}</small><p>{message.content}</p></div></article>)}{sending && <div className="typing-row"><span className="loader-orb" />{copy.sending}</div>}</div>}
+      {messages.length === 0 ? <div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div> : <div className="message-list">{messages.map((message) => <article className={`chat-message ${message.role}`} key={message.id}><span>{message.role === "user" ? initials(profile?.name || copy.unnamedProfile) : "AI"}</span><div><small>{message.role === "user" ? profile?.name || copy.unnamedProfile : selectedModel?.displayName ?? "AI"}</small><SafeMarkdown content={message.content} /></div></article>)}{sending && <div className="typing-row"><span className="loader-orb" />{copy.sending}</div>}</div>}
       {error && <div className="provider-error chat-error">{error}</div>}
       <div className="composer">
         <textarea rows={2} placeholder={copy.messagePlaceholder} value={input} onChange={(event) => setInput(event.target.value)} disabled={!selectedModel || sending} />
@@ -1105,7 +1228,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     if (!activeProvider || activeProvider.lastStatus !== "ok") failures.push(copy.batchProviderPreflight);
     if (!selectedModel) failures.push(copy.selectModel);
     if (protocol === "custom" && !selectedCustomProtocol) failures.push(copy.noCustomProtocols);
-    if (runType === "monitor" && protocol !== "rcp") failures.push(copy.customMonitorNote);
+    if (!isRunModeCompatible(runType, protocol)) failures.push(copy.rvLiteUnavailable);
     if (runType === "monitor" && (!monitorModel || !monitorProvider)) failures.push(copy.monitorModel);
     if (!Number.isFinite(Number(maxOutputTokens)) || Number(maxOutputTokens) <= 0) failures.push(copy.maxOutputTokens);
     if (batchCount < 1 || batchCount > batchPool.length) failures.push(copy.batchTargetPreflight);
@@ -1121,7 +1244,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const start = async () => {
     if (!repository || !profile || !activeProvider || !selectedModel) return;
     if (protocol === "custom" && !selectedCustomProtocol) return;
-    if (protocol !== "rcp" && runType === "monitor") return;
+    if (!isRunModeCompatible(runType, protocol)) return;
     if (runType === "monitor" && (!monitorModel || !monitorProvider)) return;
     const automaticTarget = executionScope === "single" && revealSource === "automatic"
       ? selectedTargetId === "__random__" ? chooseRandomTarget(eligibleTargets) : eligibleTargets.find((target) => target.id === selectedTargetId) ?? null
@@ -1371,12 +1494,12 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
             </div>
             {executionScope === "batch" && batchProgress && <div className="batch-progress-strip"><strong>{copy.batchProgress}</strong><span>{batchProgress.current} / {batchProgress.total}</span><small>{copy.completedSessions}: {batchProgress.completed}</small></div>}
             {progress.metrics && <div className="session-run-metrics"><span><small>{copy.apiCalls}</small><strong>{progress.metrics.requestCount}</strong></span>{progress.metrics.totalTokens !== undefined && <span><small>{copy.tokens}</small><strong>{Math.round(progress.metrics.totalTokens).toLocaleString()}</strong></span>}{progress.metrics.costUsd !== undefined && <span><small>{copy.cost}</small><strong>${progress.metrics.costUsd.toFixed(4)}</strong></span>}<span><small>{copy.elapsed}</small><strong>{formatDuration(progress.metrics.sessionDurationMs)}</strong></span></div>}
-            {progress.transcript ? <pre className="live-transcript">{progress.transcript}</pre> : <div className="session-wait"><span className="loader-orb" /><p>{progress.state === "Preflight" ? "Preflight" : `${copy.runningPhase} ${progress.phase ?? 1}`}</p></div>}
+            {progress.transcript ? <SafeMarkdown className="live-transcript" content={progress.transcript} /> : <div className="session-wait"><span className="loader-orb" /><p>{progress.state === "Preflight" ? "Preflight" : `${copy.runningPhase} ${progress.phase ?? 1}`}</p></div>}
             {progress.state === "AwaitingReveal" && <div className="reveal-box"><div><LockKeyhole size={18} /><span><strong>{copy.awaitingReveal}</strong><small>{copy.blindRunComplete}</small></span></div><textarea rows={5} value={revealText} onChange={(event) => setRevealText(event.target.value)} placeholder={copy.revealPlaceholder} /><div className="reveal-artifact-row"><label className="secondary-button reveal-file-button">{copy.revealFiles}<input type="file" multiple accept=".txt,.md,image/png,image/jpeg,image/webp,image/gif" disabled={artifactBusy} onChange={(event) => void attachRevealFiles(event.target.files)} /></label>{artifactBusy && <small>{copy.storingFile}</small>}{revealArtifacts.map((artifact) => <span className="reveal-artifact-chip" key={`${artifact.artifactId}-${artifact.originalFileName}`}>{artifact.mimeType.startsWith("image/") ? "▣" : "≡"} {artifact.originalFileName}</span>)}</div>{revealArtifacts.some((artifact) => artifact.mimeType.startsWith("image/")) && <small className="vision-guard-note">{copy.imageJudgeGuard}</small>}<button className="primary-button" disabled={artifactBusy || (!revealText.trim() && !revealArtifacts.length)} onClick={() => void submitReveal()}>{copy.submitReveal}</button></div>}
             {(progress.state === "Revealed" || progress.state === "Completed") && <>
               <div className="reveal-success"><Check size={18} /><div><strong>🔓 {copy.revealAccepted}</strong><p>{copy.blindRunComplete}</p></div></div>
               {(acceptedRevealText || acceptedRevealArtifacts.length > 0) && <div className="save-reveal-target"><input value={saveTargetTitle} onChange={(event) => setSaveTargetTitle(event.target.value)} placeholder={copy.targetName} disabled={targetSaved} /><button className="secondary-button" disabled={!saveTargetTitle.trim() || targetSaved} onClick={() => void saveExternalRevealTarget()}>{targetSaved ? copy.savedToTargets : copy.saveRevealTarget}</button></div>}
-              {executionScope === "single" && <section className="post-reveal-discussion"><div className="post-reveal-head"><div><strong>{copy.postRevealDiscussion}</strong><p>{copy.postRevealEvidenceGuard}</p></div><span>POST-REVEAL</span></div>{postRevealTranscript && <div className="post-reveal-turns">{parsePostRevealTranscript(postRevealTranscript).map((turn, index) => <article className={turn.role} key={`${turn.role}-${index}`}><small>{turn.role === "user" ? copy.you : copy.viewerModel}</small><p>{turn.content}</p></article>)}</div>}<div className="post-reveal-compose"><textarea rows={3} value={postRevealText} onChange={(event) => setPostRevealText(event.target.value)} placeholder={copy.postRevealPlaceholder} disabled={postRevealBusy} /><button className="secondary-button" disabled={!postRevealText.trim() || postRevealBusy} onClick={() => void discussPostReveal()}>{postRevealBusy ? copy.sending : copy.sendPostReveal}</button></div></section>}
+              {executionScope === "single" && <section className="post-reveal-discussion"><div className="post-reveal-head"><div><strong>{copy.postRevealDiscussion}</strong><p>{copy.postRevealEvidenceGuard}</p></div><span>POST-REVEAL</span></div>{postRevealTranscript && <div className="post-reveal-turns">{parsePostRevealTranscript(postRevealTranscript).map((turn, index) => <article className={turn.role} key={`${turn.role}-${index}`}><small>{turn.role === "user" ? copy.you : copy.viewerModel}</small><SafeMarkdown content={turn.content} /></article>)}</div>}<div className="post-reveal-compose"><textarea rows={3} value={postRevealText} onChange={(event) => setPostRevealText(event.target.value)} placeholder={copy.postRevealPlaceholder} disabled={postRevealBusy} /><button className="secondary-button" disabled={!postRevealText.trim() || postRevealBusy} onClick={() => void discussPostReveal()}>{postRevealBusy ? copy.sending : copy.sendPostReveal}</button></div></section>}
               {executionScope === "single" && <JudgeEvaluation copy={copy} repository={repository} sessionId={progress.sessionId} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} onCompleted={() => { setProgress((current) => current ? { ...current, state: "Completed" } : current); void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId))); }} />}
               {executionScope === "single" && progress.state === "Revealed" && <button className="secondary-button save-only-button" onClick={() => void completeWithoutEvaluation()}>{copy.saveOnly}</button>}
               {executionScope === "single" && clarificationEligible && <section className="target-clarification"><div className="target-clarification-head"><div><strong>{copy.askTargetClarification}</strong><p>{copy.clarificationLead}</p></div><button className="secondary-button" onClick={() => setClarificationOpen((value) => !value)}>{copy.askTargetClarification}</button></div>{clarificationOpen && <div className="clarification-form"><textarea rows={4} value={clarificationText} onChange={(event) => setClarificationText(event.target.value)} placeholder={copy.clarificationPlaceholder} /><button className="primary-button" disabled={!clarificationText.trim() || clarificationBusy} onClick={() => void addClarification()}>{copy.saveClarification}</button></div>}{clarifications.length > 0 && <div className="clarification-list">{clarifications.map((item) => <article key={item.id}><small>{copy.supplementaryClarification} · {new Date(item.createdAt).toLocaleString()}</small><p>{item.content}</p></article>)}</div>}</section>}
@@ -1395,8 +1518,9 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         <ConfigBlock label={copy.runType}>
           <div className="choice-grid two">
             <Choice active={runType === "automatic"} onClick={() => setRunType("automatic")} icon={<Waves size={18} />} title={copy.automatic} />
-            <Choice disabled={protocol !== "rcp"} active={runType === "monitor"} onClick={() => setRunType("monitor")} icon={<BrainCircuit size={18} />} title={copy.automaticMonitor} />
+            <Choice disabled={!canSelectMonitor(protocol)} active={runType === "monitor"} onClick={() => setRunType("monitor")} icon={<BrainCircuit size={18} />} title={copy.automaticMonitor} />
           </div>
+          {(!canSelectMonitor(protocol) || runType === "monitor") && <small className="mode-compatibility-note">{copy.rvLiteUnavailable}</small>}
         </ConfigBlock>
         {runType === "monitor" && <ConfigBlock label={copy.monitorModel}>
           <div className="monitor-model-config">
@@ -1410,9 +1534,10 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         <ConfigBlock label={copy.protocol}>
           <div className="choice-grid three">
             <Choice active={protocol === "rcp"} onClick={() => setProtocol("rcp")} icon={<FileCheck2 size={18} />} title={copy.fullRcp} meta="v1.5a" />
-            <Choice active={protocol === "lite"} onClick={() => { setProtocol("lite"); setRunType("automatic"); }} icon={<Sparkles size={18} />} title={copy.rvLite} meta="v1.0.0" />
-            <Choice active={protocol === "custom"} onClick={() => { setProtocol("custom"); setRunType("automatic"); }} icon={<Settings2 size={18} />} title={copy.customProtocol} meta={customProtocols.length ? `${customProtocols.length}` : undefined} />
+            <Choice disabled={!canSelectProtocol(runType, "lite")} active={protocol === "lite"} onClick={() => setProtocol("lite")} icon={<Sparkles size={18} />} title={copy.rvLite} meta="v1.0.0" />
+            <Choice disabled={!canSelectProtocol(runType, "custom")} active={protocol === "custom"} onClick={() => setProtocol("custom")} icon={<Settings2 size={18} />} title={copy.customProtocol} meta={customProtocols.length ? `${customProtocols.length}` : undefined} />
           </div>
+          {runType === "monitor" && <small className="mode-compatibility-note">{copy.rvLiteUnavailable}</small>}
         </ConfigBlock>
         {protocol === "custom" && <ConfigBlock label={copy.customProtocolSelect}>
           <div className="custom-protocol-select"><select value={customProtocolVersionId} onChange={(event) => setCustomProtocolVersionId(event.target.value)}><option value="">{copy.noCustomProtocols}</option>{customProtocols.map((item) => <option key={item.versionId} value={item.versionId}>{item.displayName} · {item.version}</option>)}</select><div className="custom-protocol-buttons"><button className="secondary-button" onClick={() => { setCustomBuilderNew(true); setCustomBuilderOpen(true); }}><Plus size={15} />{copy.newCustomProtocol}</button>{selectedCustomProtocol && <button className="secondary-button" onClick={() => { setCustomBuilderNew(false); setCustomBuilderOpen(true); }}>{copy.editCustomProtocol}</button>}</div><small>{copy.customMonitorNote}</small></div>
@@ -1428,7 +1553,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         </ConfigBlock>
         {selectedModel && <ConfigBlock label="Generation">
           <div className="generation-grid">
-            <label><span>{copy.reasoning}</span><select value={reasoning} onChange={(event) => setReasoning(event.target.value as "" | ReasoningEffort)} disabled={!selectedModel.capabilities.reasoning.efforts.length}><option value="">{copy.providerDefault}</option>{selectedModel.capabilities.reasoning.efforts.map((effort) => <option key={effort} value={effort}>{effort.toUpperCase()}</option>)}</select></label>
+            <label><span>{copy.reasoning}</span><select value={reasoning} onChange={(event) => setReasoning(event.target.value as "" | ReasoningEffort)}><option value="">{copy.providerDefault}</option>{reasoningOptions(selectedModel.capabilities.reasoning).map((option) => <option key={option.value} value={option.value}>{reasoningOptionLabel(copy, option)}</option>)}</select><small>{reasoningCapabilityLead(copy, selectedModel)}</small></label>
             <label><span>{copy.temperature}</span><input type="number" step="0.1" value={temperature} onChange={(event) => setTemperature(event.target.value)} placeholder={copy.providerDefault} disabled={!selectedModel.capabilities.temperature.supported} min={selectedModel.capabilities.temperature.min} max={selectedModel.capabilities.temperature.max} /></label>
             <label><span>{copy.maxOutputTokens}</span><input type="number" min={1} max={selectedModel.capabilities.maxOutputTokens} value={maxOutputTokens} onChange={(event) => setMaxOutputTokens(event.target.value)} /></label>
           </div>
@@ -1579,7 +1704,7 @@ function JudgeEvaluation({
           <JudgeNarrativeRow label={copy.strongestMatches} values={score.narrative.strongestMatches} />
           <JudgeNarrativeRow label={copy.majorMisses} values={score.narrative.majorMissesContradictions} />
           <JudgeNarrativeRow label={copy.confabNotes} values={score.narrative.confabulationObservations} />
-          <div className="judge-rationale"><small>{copy.rationale}</small><p>{score.narrative.conciseRationale}</p></div>
+          <div className="judge-rationale"><small>{copy.rationale}</small><SafeMarkdown content={score.narrative.conciseRationale} /></div>
         </article>)}</div>
       </div>}
       {error && <div className="provider-error">{error}</div>}
@@ -1670,7 +1795,7 @@ function BatchEvaluation({
 }
 
 function JudgeNarrativeRow({ label, values }: { label: string; values: string[] }) {
-  return <div className="judge-narrative"><small>{label}</small>{values.length ? <ul>{values.map((value, index) => <li key={`${index}-${value}`}>{value}</li>)}</ul> : <p>—</p>}</div>;
+  return <div className="judge-narrative"><small>{label}</small>{values.length ? <ul>{values.map((value, index) => <li key={`${index}-${value}`}><SafeMarkdown content={value} /></li>)}</ul> : <p>—</p>}</div>;
 }
 
 function MonitorPanel({ copy, workspace, repository }: { copy: ReturnType<typeof getCopy>; workspace: Workspace; repository: AppRepository | null }) {
@@ -1709,7 +1834,7 @@ function MonitorPanel({ copy, workspace, repository }: { copy: ReturnType<typeof
     <section className="panel monitor-panel">
       <PanelHeader title={copy.monitorHistory} icon={<BrainCircuit size={18} />} />
       <div className="role-guard"><ShieldCheck size={22} /><div><strong>{copy.blindRoleBoundary}</strong><p>{copy.monitorLead}</p></div></div>
-      {!runs.length ? <EmptyState icon={<MonitorCog size={28} />} title={copy.noMonitorRuns} body={copy.monitorLead} /> : <div className="monitor-history-layout"><div className="monitor-run-list">{runs.map((run) => <button className={run.id === selectedRunId ? "active" : ""} key={run.id} onClick={() => { setSelectedRunId(run.id); setExportPath(null); setExportError(null); }}><span><strong>{run.sessionCode}</strong><small>{run.modelRoute}</small></span><span>{run.interventionCount}</span></button>)}</div><div className="monitor-run-detail">{selected && <><div className="monitor-run-meta"><span><small>{copy.promptVersion}</small><strong>{selected.promptVersionId ?? "—"}</strong></span><span><small>{copy.libraryVersion}</small><strong>{selected.libraryVersion}</strong></span><span><small>{copy.interventions}</small><strong>{selected.interventionCount} / {selected.maxInterventions}</strong></span></div><div className="monitor-export-row"><button className="secondary-button" disabled={!isTauriRuntime() || exportingRun} onClick={() => void exportSelected()}>{exportingRun ? copy.exporting : copy.exportMonitorRun}</button><small>{copy.monitorExportSafe}</small></div></>}{interventions.length ? <div className="monitor-timeline">{interventions.map((item) => <article key={item.id} className={item.decision === "INTERVENE" ? "intervene" : "continue"}><div><span>{item.sequenceNumber}</span><strong>{item.decision === "INTERVENE" ? item.commandId ?? "INTERVENE" : copy.continueProtocol}</strong></div>{item.viewerEvidence && <p><b>{copy.viewerEvidence}</b>{item.viewerEvidence}</p>}{item.commandText && <p><b>{copy.monitorCommand}</b>{item.commandText}</p>}</article>)}</div> : <p className="monitor-no-decisions">{copy.noMonitorRuns}</p>}{exportPath && <div className="storage-success"><Check size={14} />{copy.exportComplete} · {exportPath}</div>}{exportError && <div className="provider-error">{exportError}</div>}</div></div>}
+      {!runs.length ? <EmptyState icon={<MonitorCog size={28} />} title={copy.noMonitorRuns} body={copy.monitorLead} /> : <div className="monitor-history-layout"><div className="monitor-run-list">{runs.map((run) => <button className={run.id === selectedRunId ? "active" : ""} key={run.id} onClick={() => { setSelectedRunId(run.id); setExportPath(null); setExportError(null); }}><span><strong>{run.sessionCode}</strong><small>{run.modelRoute}</small></span><span>{run.interventionCount}</span></button>)}</div><div className="monitor-run-detail">{selected && <><div className="monitor-run-meta"><span><small>{copy.promptVersion}</small><strong>{selected.promptVersionId ?? "—"}</strong></span><span><small>{copy.libraryVersion}</small><strong>{selected.libraryVersion}</strong></span><span><small>{copy.interventions}</small><strong>{selected.interventionCount} / {selected.maxInterventions}</strong></span></div><div className="monitor-export-row"><button className="secondary-button" disabled={!isTauriRuntime() || exportingRun} onClick={() => void exportSelected()}>{exportingRun ? copy.exporting : copy.exportMonitorRun}</button><small>{copy.monitorExportSafe}</small></div></>}{interventions.length ? <div className="monitor-timeline">{interventions.map((item) => <article key={item.id} className={item.decision === "INTERVENE" ? "intervene" : "continue"}><div><span>{item.sequenceNumber}</span><strong>{item.decision === "INTERVENE" ? item.commandId ?? "INTERVENE" : copy.continueProtocol}</strong></div>{item.viewerEvidence && <div className="monitor-markdown-row"><b>{copy.viewerEvidence}</b><SafeMarkdown content={item.viewerEvidence} /></div>}{item.commandText && <div className="monitor-markdown-row"><b>{copy.monitorCommand}</b><SafeMarkdown content={item.commandText} /></div>}{item.rationale && <details className="monitor-rationale"><summary>{copy.rationale}</summary><SafeMarkdown content={formatMonitorRationale(item.rationale)} /></details>}</article>)}</div> : <p className="monitor-no-decisions">{copy.noMonitorRuns}</p>}{exportPath && <div className="storage-success"><Check size={14} />{copy.exportComplete} · {exportPath}</div>}{exportError && <div className="provider-error">{exportError}</div>}</div></div>}
     </section>
   );
 }
@@ -2224,4 +2349,23 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatMonitorRationale(value: string): string {
+  try {
+    return `\`\`\`json\n${JSON.stringify(JSON.parse(value), null, 2)}\n\`\`\``;
+  } catch {
+    return value;
+  }
+}
+
+function reasoningOptionLabel(copy: ReturnType<typeof getCopy>, option: ReasoningOption): string {
+  return option.verification === "unverified" ? `${option.label} · ${copy.unverified}` : option.label;
+}
+
+function reasoningCapabilityLead(copy: ReturnType<typeof getCopy>, model: ProviderModel): string {
+  const choices = reasoningOptions(model.capabilities.reasoning);
+  if (model.capabilities.reasoning.registryStatus === "known" && !choices.length) return copy.reasoningAutoOnly;
+  if (model.capabilities.reasoning.mandatory) return copy.reasoningMandatory;
+  return model.capabilities.reasoning.registryStatus === "known" ? copy.reasoningVerifiedRegistry : copy.reasoningProviderFallback;
 }

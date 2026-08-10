@@ -5,7 +5,7 @@ import type { ProtocolResource } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
 import type { TargetRecord } from "../targets/types";
-import { evaluateMonitor } from "../monitor/engine";
+import { evaluateMonitor, MonitorDecisionError, type MonitorDecision } from "../monitor/engine";
 import { MONITOR_LIBRARY_VERSION } from "../monitor/library";
 import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
 import { RCP_CONTROLLER_PROMPT_ID, RCP_CONTROLLER_PROMPT_VERSION, rcpPhasePrompt } from "./controllerPrompts";
@@ -15,6 +15,9 @@ import { buildAutomaticTargetReveal, targetHasSupportedReveal } from "../targets
 import { APP_VERSION } from "../version";
 import { createSessionCode } from "./sessionCode";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
+import { RepetitionGuard, formatRepetitionStopReason } from "./repetitionGuard";
+
+export { detectRepetitiveOutput } from "./repetitionGuard";
 
 type SessionRepository = Pick<
   AppRepository,
@@ -99,6 +102,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   const startedAtMs = Date.now();
   let transcript = "";
   let metrics = emptySessionRequestMetrics();
+  const repetitionGuard = new RepetitionGuard();
   let currentState: RvSessionState = "Draft";
   const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
@@ -279,55 +283,75 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
     if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
 
-    if (detectRepetitiveOutput(response.content)) {
-      return stop("AUTO-STOP: repetitive output detected");
+    const repetition = repetitionGuard.inspect(response.content);
+    if (repetition.severity !== "clear") {
+      await input.repository.appendSessionEvent(sessionId, { eventType: repetition.severity === "stop" ? "REPETITION_STOP" : "REPETITION_WARNING", role: "controller", content: repetition.fragment, metadata: { phase, rule: repetition.rule, severity: repetition.severity } });
+      if (repetition.severity === "stop") return stop(formatRepetitionStopReason(repetition));
     }
     if (input.signal?.aborted) return stop("USER STOP");
 
     if (input.monitor && monitorRunId && monitorInterventionCount < maxMonitorInterventions) {
-      let decision;
-      try {
-        decision = await evaluateMonitor({
-          providerConfig: input.monitor.providerConfig,
-          model: input.monitor.model,
-          language: input.sessionLanguage,
-          phase,
-          blindTranscript: transcript,
-          requestTimeoutMs: input.requestTimeoutMs,
-          chat: async (request) => {
-            let costAuthorization;
-            try {
-              costAuthorization = costGuard.authorize(input.monitor!.model, request.messages, request.settings);
-            } catch (cause) {
-              if (cause instanceof CostGuardStop) throw cause;
-              throw cause;
-            }
-            const requestStartedAt = Date.now();
-            try {
-              const rawMonitorResponse = await chat({ ...request, signal: input.signal });
-              const monitorResponse = { ...rawMonitorResponse, usage: costAuthorization.success(rawMonitorResponse.usage) };
-              const requestDurationMs = Date.now() - requestStartedAt;
-              metrics = recordProviderRequest(metrics, monitorResponse.usage, requestDurationMs);
-              await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", metadata: { phase, usage: monitorResponse.usage, requestDurationMs } });
-              return monitorResponse;
-            } catch (cause) {
-              costAuthorization.failure();
-              const requestDurationMs = Date.now() - requestStartedAt;
-              metrics = recordProviderRequest(metrics, undefined, requestDurationMs);
-              await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", metadata: { phase, requestDurationMs, failed: true } });
-              throw cause;
-            }
-          },
-        });
-      } catch (cause) {
-        const message = cause instanceof Error ? cause.message : String(cause);
-        await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_ERROR", role: "controller", content: message, metadata: { phase } });
-        return stop(`AUTO-STOP: AI Monitor safety/response failure — ${message}`);
+      let decision: MonitorDecision | null = null;
+      const rejectedAttempts: Array<{ attempt: number; reason: string; code?: string; rawResponse?: string }> = [];
+      const monitorRetryLimit = Math.min(1, maxRetries);
+      for (let attempt = 0; attempt <= monitorRetryLimit; attempt += 1) {
+        try {
+          decision = await evaluateMonitor({
+            providerConfig: input.monitor.providerConfig,
+            model: input.monitor.model,
+            language: input.sessionLanguage,
+            phase,
+            blindTranscript: transcript,
+            requestTimeoutMs: input.requestTimeoutMs,
+            chat: async (request) => {
+              const costAuthorization = costGuard.authorize(input.monitor!.model, request.messages, request.settings);
+              const requestStartedAt = Date.now();
+              try {
+                const rawMonitorResponse = await chat({ ...request, signal: input.signal });
+                const monitorResponse = { ...rawMonitorResponse, usage: costAuthorization.success(rawMonitorResponse.usage) };
+                const requestDurationMs = Date.now() - requestStartedAt;
+                metrics = recordProviderRequest(metrics, monitorResponse.usage, requestDurationMs);
+                await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", metadata: { phase, attempt: attempt + 1, usage: monitorResponse.usage, requestDurationMs } });
+                return monitorResponse;
+              } catch (cause) {
+                costAuthorization.failure();
+                const requestDurationMs = Date.now() - requestStartedAt;
+                metrics = recordProviderRequest(metrics, undefined, requestDurationMs);
+                await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", metadata: { phase, attempt: attempt + 1, requestDurationMs, failed: true } });
+                throw cause;
+              }
+            },
+          });
+          break;
+        } catch (cause) {
+          if (cause instanceof CostGuardStop) return stop(cause.message);
+          if (input.signal?.aborted) return stop("USER STOP");
+          const reason = cause instanceof Error ? cause.message : String(cause);
+          const rawResponse = cause instanceof MonitorDecisionError ? cause.rawResponse : undefined;
+          const code = cause instanceof MonitorDecisionError ? cause.code : undefined;
+          rejectedAttempts.push({ attempt: attempt + 1, reason, ...(code ? { code } : {}), ...(rawResponse ? { rawResponse } : {}) });
+          await input.repository.appendSessionEvent(sessionId, {
+            eventType: "MONITOR_ATTEMPT_REJECTED",
+            role: "controller",
+            ...(rawResponse ? { content: rawResponse } : {}),
+            metadata: { phase, attempt: attempt + 1, reason, ...(code ? { code } : {}) },
+          });
+        }
       }
       if (input.signal?.aborted) return stop("USER STOP");
       if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
 
-      if (decision.decision === "CONTINUE_PROTOCOL") {
+      if (!decision) {
+        const rationale = JSON.stringify({ kind: "monitor_rejected_continue_protocol", phase, attempts: rejectedAttempts });
+        await input.repository.appendMonitorIntervention(monitorRunId, { decision: "CONTINUE_PROTOCOL", rationale });
+        await input.repository.appendSessionEvent(sessionId, {
+          eventType: "MONITOR_SKIPPED_CONTINUE_PROTOCOL",
+          role: "controller",
+          content: rejectedAttempts.at(-1)?.rawResponse,
+          metadata: { phase, reason: rejectedAttempts.at(-1)?.reason ?? "unknown Monitor failure", attempts: rejectedAttempts.length },
+        });
+        notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
+      } else if (decision.decision === "CONTINUE_PROTOCOL") {
         await input.repository.appendMonitorIntervention(monitorRunId, { decision: "CONTINUE_PROTOCOL" });
         notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
       } else {
@@ -400,8 +424,10 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
         if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
-        if (detectRepetitiveOutput(deepening.content)) {
-          return stop("AUTO-STOP: repetitive output detected after Monitor intervention");
+        const deepeningRepetition = repetitionGuard.inspect(deepening.content);
+        if (deepeningRepetition.severity !== "clear") {
+          await input.repository.appendSessionEvent(sessionId, { eventType: deepeningRepetition.severity === "stop" ? "REPETITION_STOP" : "REPETITION_WARNING", role: "controller", content: deepeningRepetition.fragment, metadata: { phase, source: "monitor_intervention", rule: deepeningRepetition.rule, severity: deepeningRepetition.severity } });
+          if (deepeningRepetition.severity === "stop") return stop(formatRepetitionStopReason(deepeningRepetition));
         }
       }
     }
@@ -483,27 +509,6 @@ export function appendPhaseTranscript(current: string, phase: number, content: s
 export function appendMonitorTranscript(current: string, phase: number, command: string, content: string): string {
   const block = `### AI Monitor deepening after Phase ${phase}\n\nMonitor: ${command.trim()}\n\nViewer: ${content.trim()}`;
   return current ? `${current}\n\n${block}` : block;
-}
-
-export function detectRepetitiveOutput(content: string): boolean {
-  const normalized = content.replace(/\s+/g, " ").trim();
-  if (normalized.length < 240) return false;
-
-  const lines = content.split(/\r?\n/).map((line) => line.trim().toLowerCase()).filter((line) => line.length >= 12);
-  if (lines.length >= 5) {
-    const counts = new Map<string, number>();
-    for (const line of lines) counts.set(line, (counts.get(line) ?? 0) + 1);
-    if ([...counts.values()].some((count) => count >= 5)) return true;
-  }
-
-  const words = normalized.toLowerCase().split(" ");
-  if (words.length < 60) return false;
-  const windows = new Map<string, number>();
-  for (let index = 0; index <= words.length - 12; index += 12) {
-    const window = words.slice(index, index + 12).join(" ");
-    windows.set(window, (windows.get(window) ?? 0) + 1);
-  }
-  return [...windows.values()].some((count) => count >= 4);
 }
 
 export async function submitExternalReveal(repository: SessionRepository, sessionId: string, text: string, artifactManifest: RevealArtifactRecord[] = []): Promise<void> {
