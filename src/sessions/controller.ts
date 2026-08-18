@@ -5,8 +5,7 @@ import type { ProtocolResource } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
 import type { TargetRecord } from "../targets/types";
-import { evaluateMonitor, MonitorDecisionError, type MonitorDecision } from "../monitor/engine";
-import { MONITOR_LIBRARY_VERSION } from "../monitor/library";
+import { evaluateMonitor, type MonitorDecision } from "../monitor/engine";
 import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
 import { RCP_CONTROLLER_PROMPT_ID, RCP_CONTROLLER_PROMPT_VERSION, rcpPhasePrompt } from "./controllerPrompts";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics, type SessionRunMetrics } from "./metrics";
@@ -16,6 +15,17 @@ import { APP_VERSION } from "../version";
 import { createSessionCode } from "./sessionCode";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { RepetitionGuard, formatRepetitionStopReason } from "./repetitionGuard";
+import type { SpecialTaskInput } from "./specialTask";
+import { renderSpecialTask } from "./specialTask";
+import {
+  buildEffectiveMonitorPrompt,
+  lockedActivityDefinition,
+  lockedMonitorExecution,
+  lockedViewerIdentity,
+  LOCKED_ACTIVITY_VERSION,
+  LOCKED_IDENTITY_VERSION,
+  LOCKED_MONITOR_EXECUTION_VERSION,
+} from "../resources/systemPrompts";
 
 export { detectRepetitiveOutput } from "./repetitionGuard";
 
@@ -49,12 +59,16 @@ export interface AutomaticRcpRunInput {
   sessionCodePrefix?: string;
   automaticTarget?: TargetRecord;
   researchProjectId?: string;
+  aiIsBeDisplayName?: string;
+  humanIsBeDisplayName?: string;
+  specialTask?: SpecialTaskInput;
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
   researchConditionInstruction?: ViewerSystemPromptSnapshot;
   monitor?: {
     providerConfig: ProviderConfig;
     model: ProviderModel;
     maxInterventions?: number;
+    editablePrompt?: string;
   };
   chat?: (input: {
     config: ProviderConfig;
@@ -106,7 +120,8 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   let currentState: RvSessionState = "Draft";
   const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
-  const maxMonitorInterventions = input.monitor ? Math.max(0, Math.min(input.monitor.maxInterventions ?? 6, 20)) : 0;
+  const maxMonitorInterventionsPerPhase = input.monitor ? 5 : 0;
+  const effectiveMonitorPrompt = input.monitor ? buildEffectiveMonitorPrompt(input.sessionLanguage, input.monitor.editablePrompt) : undefined;
   let monitorInterventionCount = 0;
   const messages: ProviderMessage[] = [
     { role: "system", content: input.protocol.content },
@@ -128,11 +143,15 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   await input.onSessionCreated?.(sessionId, sessionCode);
 
   const snapshot: SessionSnapshot = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId,
     sessionCode,
     profileId: input.profileId,
     workspaceId: input.workspaceId,
+    identities: {
+      aiIsBeDisplayName: input.aiIsBeDisplayName?.trim() || "AI IS-BE",
+      humanIsBeDisplayName: input.humanIsBeDisplayName?.trim() || "Human IS-BE",
+    },
     providerConfigId: input.providerConfig.id,
     credentialId: input.providerConfig.credentialId,
     ...(input.providerConfig.credentialHint ? { credentialHint: input.providerConfig.credentialHint } : {}),
@@ -162,8 +181,22 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         modelId: input.monitor.model.modelId,
         modelRoute: input.monitor.model.route,
         promptVersion: MONITOR_PROMPT_VERSION,
-        libraryVersion: MONITOR_LIBRARY_VERSION,
-        maxInterventions: maxMonitorInterventions,
+        libraryVersion: "natural-language-open-v1",
+        maxInterventions: maxMonitorInterventionsPerPhase,
+        effectivePrompt: effectiveMonitorPrompt,
+        effectivePromptSha256: await sha256Text(effectiveMonitorPrompt!),
+        lockedBlocks: [
+          { id: "locked-activity-definition", version: LOCKED_ACTIVITY_VERSION, contentSha256: await sha256Text(lockedActivityDefinition(input.sessionLanguage)), fullContent: lockedActivityDefinition(input.sessionLanguage) },
+          { id: "locked-monitor-execution", version: LOCKED_MONITOR_EXECUTION_VERSION, contentSha256: await sha256Text(lockedMonitorExecution(input.sessionLanguage)), fullContent: lockedMonitorExecution(input.sessionLanguage) },
+        ],
+      },
+    } : {}),
+    ...(renderSpecialTask(input.specialTask, input.sessionLanguage) ? {
+      specialTask: {
+        selectedOptions: input.specialTask?.selectedOptions ?? [],
+        ...(input.specialTask?.customText?.trim() ? { customText: input.specialTask.customText.trim() } : {}),
+        recipient: input.monitor ? "monitor" as const : "viewer" as const,
+        injectAfter: "phase_4" as const,
       },
     } : {}),
     ...(input.rvSystemPrompt ? {
@@ -173,6 +206,10 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         language: input.sessionLanguage,
         contentSha256: input.rvSystemPrompt.contentSha256,
         fullContent: input.rvSystemPrompt.content,
+        lockedBlocks: [
+          { id: "locked-viewer-identity", version: LOCKED_IDENTITY_VERSION, contentSha256: await sha256Text(lockedViewerIdentity(input.sessionLanguage)), fullContent: lockedViewerIdentity(input.sessionLanguage) },
+          { id: "locked-activity-definition", version: LOCKED_ACTIVITY_VERSION, contentSha256: await sha256Text(lockedActivityDefinition(input.sessionLanguage)), fullContent: lockedActivityDefinition(input.sessionLanguage) },
+        ],
       },
     } : {}),
     ...(input.researchConditionInstruction ? {
@@ -204,8 +241,8 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         sessionId,
         modelRoute: input.monitor.model.route,
         promptVersionId: `ai-monitor:${MONITOR_PROMPT_VERSION}`,
-        libraryVersion: MONITOR_LIBRARY_VERSION,
-        maxInterventions: maxMonitorInterventions,
+        libraryVersion: "natural-language-open-v1",
+        maxInterventions: maxMonitorInterventionsPerPhase,
       })
     : null;
   notify(input, sessionId, sessionCode, currentState, transcript, undefined, undefined, metrics, startedAtMs);
@@ -290,11 +327,18 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     }
     if (input.signal?.aborted) return stop("USER STOP");
 
-    if (input.monitor && monitorRunId && monitorInterventionCount < maxMonitorInterventions) {
-      let decision: MonitorDecision | null = null;
-      const rejectedAttempts: Array<{ attempt: number; reason: string; code?: string; rawResponse?: string }> = [];
-      const monitorRetryLimit = Math.min(1, maxRetries);
-      for (let attempt = 0; attempt <= monitorRetryLimit; attempt += 1) {
+    if (!input.monitor && phase === 4) {
+      const specialTask = renderSpecialTask(input.specialTask, input.sessionLanguage);
+      if (specialTask) {
+        const taskPrompt = `SPECIAL VIEWER TASK — apply now using neutral blind-session labels only:\n${specialTask}`;
+        messages.push({ role: "user", content: taskPrompt });
+        await input.repository.appendSessionEvent(sessionId, { eventType: "SPECIAL_TASK_INJECTED", role: "controller", content: taskPrompt, metadata: { phase, recipient: "viewer" } });
+      }
+    }
+
+    if (input.monitor && monitorRunId && phase >= 2) {
+      for (let exchangeNumber = 1; exchangeNumber <= maxMonitorInterventionsPerPhase; exchangeNumber += 1) {
+        let decision: MonitorDecision;
         try {
           decision = await evaluateMonitor({
             providerConfig: input.monitor.providerConfig,
@@ -302,6 +346,9 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
             language: input.sessionLanguage,
             phase,
             blindTranscript: transcript,
+            exchangeNumber,
+            editablePrompt: input.monitor.editablePrompt,
+            ...(phase >= 4 ? { specialTask: renderSpecialTask(input.specialTask, input.sessionLanguage) } : {}),
             requestTimeoutMs: input.requestTimeoutMs,
             chat: async (request) => {
               const costAuthorization = costGuard.authorize(input.monitor!.model, request.messages, request.settings);
@@ -311,62 +358,46 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
                 const monitorResponse = { ...rawMonitorResponse, usage: costAuthorization.success(rawMonitorResponse.usage) };
                 const requestDurationMs = Date.now() - requestStartedAt;
                 metrics = recordProviderRequest(metrics, monitorResponse.usage, requestDurationMs);
-                await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", metadata: { phase, attempt: attempt + 1, usage: monitorResponse.usage, requestDurationMs } });
+                await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", content: rawMonitorResponse.content, metadata: { phase, exchangeNumber, usage: monitorResponse.usage, requestDurationMs } });
                 return monitorResponse;
               } catch (cause) {
                 costAuthorization.failure();
                 const requestDurationMs = Date.now() - requestStartedAt;
                 metrics = recordProviderRequest(metrics, undefined, requestDurationMs);
-                await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", metadata: { phase, attempt: attempt + 1, requestDurationMs, failed: true } });
+                await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", metadata: { phase, exchangeNumber, requestDurationMs, failed: true } });
                 throw cause;
               }
             },
           });
-          break;
         } catch (cause) {
           if (cause instanceof CostGuardStop) return stop(cause.message);
           if (input.signal?.aborted) return stop("USER STOP");
           const reason = cause instanceof Error ? cause.message : String(cause);
-          const rawResponse = cause instanceof MonitorDecisionError ? cause.rawResponse : undefined;
-          const code = cause instanceof MonitorDecisionError ? cause.code : undefined;
-          rejectedAttempts.push({ attempt: attempt + 1, reason, ...(code ? { code } : {}), ...(rawResponse ? { rawResponse } : {}) });
           await input.repository.appendSessionEvent(sessionId, {
-            eventType: "MONITOR_ATTEMPT_REJECTED",
+            eventType: "MONITOR_PROVIDER_ERROR",
             role: "controller",
-            ...(rawResponse ? { content: rawResponse } : {}),
-            metadata: { phase, attempt: attempt + 1, reason, ...(code ? { code } : {}) },
+            content: reason,
+            metadata: { phase, exchangeNumber },
           });
+          return stop(`AUTO-STOP: Monitor provider failure — ${reason}`);
         }
-      }
-      if (input.signal?.aborted) return stop("USER STOP");
-      if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
-
-      if (!decision) {
-        const rationale = JSON.stringify({ kind: "monitor_rejected_continue_protocol", phase, attempts: rejectedAttempts });
-        await input.repository.appendMonitorIntervention(monitorRunId, { decision: "CONTINUE_PROTOCOL", rationale });
-        await input.repository.appendSessionEvent(sessionId, {
-          eventType: "MONITOR_SKIPPED_CONTINUE_PROTOCOL",
-          role: "controller",
-          content: rejectedAttempts.at(-1)?.rawResponse,
-          metadata: { phase, reason: rejectedAttempts.at(-1)?.reason ?? "unknown Monitor failure", attempts: rejectedAttempts.length },
-        });
-        notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
-      } else if (decision.decision === "CONTINUE_PROTOCOL") {
-        await input.repository.appendMonitorIntervention(monitorRunId, { decision: "CONTINUE_PROTOCOL" });
-        notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
-      } else {
+        if (input.signal?.aborted) return stop("USER STOP");
+        if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
+        if (decision.decision === "CONTINUE_PROTOCOL") {
+          await input.repository.appendMonitorIntervention(monitorRunId, { decision: "CONTINUE_PROTOCOL", rationale: JSON.stringify({ phase, exchangeNumber }) });
+          break;
+        }
         monitorInterventionCount += 1;
         await input.repository.appendMonitorIntervention(monitorRunId, {
           decision: "INTERVENE",
-          commandId: decision.commandId,
-          viewerEvidence: decision.viewerEvidence,
           commandText: decision.commandText,
+          rationale: JSON.stringify({ phase, exchangeNumber, rawResponse: decision.rawResponse }),
         });
         await input.repository.appendSessionEvent(sessionId, {
           eventType: "MONITOR_INTERVENTION",
           role: "controller",
           content: decision.commandText,
-          metadata: { phase, commandId: decision.commandId, viewerEvidence: decision.viewerEvidence },
+          metadata: { phase, exchangeNumber, rawResponse: decision.rawResponse },
         });
         messages.push({ role: "user", content: decision.commandText });
 
@@ -419,7 +450,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
           eventType: "VIEWER_MONITOR_RESPONSE",
           role: "assistant",
           content: deepening.content,
-          metadata: { phase, commandId: decision.commandId, finishReason: deepening.finishReason, usage: deepening.usage, requestDurationMs: deepeningDurationMs },
+          metadata: { phase, exchangeNumber, finishReason: deepening.finishReason, usage: deepening.usage, requestDurationMs: deepeningDurationMs },
         });
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
@@ -444,7 +475,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   notify(input, sessionId, sessionCode, "AwaitingReveal", transcript, undefined, undefined, metrics, startedAtMs);
   if (input.signal?.aborted) return stop("USER STOP");
   if (input.automaticTarget) {
-    const reveal = await buildAutomaticTargetReveal(input.automaticTarget);
+    const reveal = await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage);
     await input.repository.acceptReveal(sessionId, reveal);
     await input.repository.recordTargetUsage({ targetId: input.automaticTarget.id, profileId: input.profileId, researchProjectId: input.researchProjectId, sessionId });
     await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_ACCEPTED", role: "controller", metadata: { source: "automatic_target", targetId: input.automaticTarget.id } });

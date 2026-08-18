@@ -119,7 +119,7 @@ describe("automatic RCP controller", () => {
     expect(log.indexOf("sealed")).toBeLessThan(log.indexOf("target-used"));
   });
 
-  it("audits a rejected Monitor response and continues the protocol after a limited retry", async () => {
+  it("accepts natural-language Monitor instructions and stops the phase cycle on CONTINUE_PROTOCOL", async () => {
     const log: string[] = [];
     let viewerCalls = 0;
     let monitorCalls = 0;
@@ -135,20 +135,20 @@ describe("automatic RCP controller", () => {
       maxRetries: 2,
       monitor: { providerConfig: config, model },
       chat: async ({ messages }) => {
-        const monitorRequest = messages.some((message) => message.role === "system" && message.content.includes("AI Monitor for a blind"));
+        const monitorRequest = messages.some((message) => message.role === "system" && message.content.includes("AI Monitor conducting a blind"));
         if (monitorRequest) {
           monitorCalls += 1;
-          return { content: monitorCalls <= 2 ? "not-json" : '{"decision":"CONTINUE_PROTOCOL"}', usage: {} };
+          return { content: monitorCalls <= 2 ? "Move 100 meters above the reported area and describe only new spatial data." : "CONTINUE_PROTOCOL", usage: {} };
         }
         viewerCalls += 1;
         return { content: `Distinct Viewer material for phase ${viewerCalls}, containing new sensory and spatial evidence.`, usage: {} };
       },
     });
     expect(result.state).toBe("AwaitingReveal");
-    expect(viewerCalls).toBe(6);
+    expect(viewerCalls).toBe(8);
     expect(monitorCalls).toBe(7);
-    expect(log).toContain("event:MONITOR_ATTEMPT_REJECTED");
-    expect(log).toContain("event:MONITOR_SKIPPED_CONTINUE_PROTOCOL");
+    expect(log).toContain("event:MONITOR_INTERVENTION");
+    expect(log).not.toContain("event:MONITOR_ATTEMPT_REJECTED");
     expect(log).toContain("sealed");
   });
 

@@ -13,6 +13,12 @@ import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetri
 import type { RvSessionState, SessionSnapshot } from "./types";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { RepetitionGuard, formatRepetitionStopReason } from "./repetitionGuard";
+import {
+  LOCKED_ACTIVITY_VERSION,
+  LOCKED_IDENTITY_VERSION,
+  lockedActivityDefinition,
+  lockedViewerIdentity,
+} from "../resources/systemPrompts";
 
 type CustomSessionRepository = Pick<
   AppRepository,
@@ -30,6 +36,8 @@ export interface AutomaticCustomRunInput {
   repository: CustomSessionRepository;
   workspaceId: string;
   profileId: string;
+  aiIsBeDisplayName?: string;
+  humanIsBeDisplayName?: string;
   providerConfig: ProviderConfig;
   model: ProviderModel;
   protocol: CustomProtocolVersion;
@@ -86,11 +94,15 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
 
   const fullProtocol = JSON.stringify({ systemPrompt: input.protocol.systemPrompt ?? "", steps: input.protocol.steps });
   const snapshot: SessionSnapshot = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId,
     sessionCode,
     profileId: input.profileId,
     workspaceId: input.workspaceId,
+    identities: {
+      aiIsBeDisplayName: input.aiIsBeDisplayName?.trim() || "AI IS-BE",
+      humanIsBeDisplayName: input.humanIsBeDisplayName?.trim() || "Human IS-BE",
+    },
     providerConfigId: input.providerConfig.id,
     credentialId: input.providerConfig.credentialId,
     ...(input.providerConfig.credentialHint ? { credentialHint: input.providerConfig.credentialHint } : {}),
@@ -116,6 +128,10 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
         language: input.sessionLanguage,
         contentSha256: input.rvSystemPrompt.contentSha256,
         fullContent: input.rvSystemPrompt.content,
+        lockedBlocks: [
+          { id: "locked-viewer-identity", version: LOCKED_IDENTITY_VERSION, contentSha256: await sha256Text(lockedViewerIdentity(input.sessionLanguage)), fullContent: lockedViewerIdentity(input.sessionLanguage) },
+          { id: "locked-activity-definition", version: LOCKED_ACTIVITY_VERSION, contentSha256: await sha256Text(lockedActivityDefinition(input.sessionLanguage)), fullContent: lockedActivityDefinition(input.sessionLanguage) },
+        ],
       },
     } : {}),
     revealSource: input.automaticTarget ? "automatic" : "external",
@@ -188,7 +204,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   if (input.signal?.aborted) return stopRun("USER STOP");
   if (!input.automaticTarget) return { sessionId, sessionCode, state: "AwaitingReveal", transcript };
 
-  const reveal = await buildAutomaticTargetReveal(input.automaticTarget);
+  const reveal = await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage);
   await input.repository.acceptReveal(sessionId, reveal);
   await input.repository.recordTargetUsage({ targetId: input.automaticTarget.id, profileId: input.profileId, sessionId });
   await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_ACCEPTED", role: "controller", metadata: { source: "automatic_target", targetId: input.automaticTarget.id } });

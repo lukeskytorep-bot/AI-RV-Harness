@@ -41,17 +41,35 @@ export interface CreateRvSessionInput {
 
 export interface SessionEventInput {
   eventType: string;
-  role?: "system" | "user" | "assistant" | "controller";
+  role?: "system" | "user" | "assistant" | "monitor" | "controller";
   content?: string;
   metadata?: Record<string, unknown>;
 }
 
+export interface SpecialTaskSnapshot {
+  selectedOptions: string[];
+  customText?: string;
+  recipient: "viewer" | "monitor";
+  injectAfter: "phase_4" | "rv_lite_step_3";
+}
+
+export interface LockedPromptBlockSnapshot {
+  id: string;
+  version: string;
+  contentSha256: string;
+  fullContent: string;
+}
+
 export interface SessionSnapshot {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   sessionId: string;
   sessionCode: string;
   profileId: string;
   workspaceId: string;
+  identities?: {
+    aiIsBeDisplayName: string;
+    humanIsBeDisplayName: string;
+  };
   providerConfigId: string;
   credentialId: string;
   credentialHint?: string;
@@ -68,6 +86,7 @@ export interface SessionSnapshot {
     language: InterfaceLanguage;
     contentSha256: string;
     fullContent: string;
+    variant?: "core" | "extended";
   };
   controllerPrompt: {
     id: string;
@@ -82,6 +101,9 @@ export interface SessionSnapshot {
     promptVersion: string;
     libraryVersion: string;
     maxInterventions: number;
+    effectivePrompt?: string;
+    effectivePromptSha256?: string;
+    lockedBlocks?: LockedPromptBlockSnapshot[];
   };
   rvSystemPrompt?: {
     id: string;
@@ -89,6 +111,7 @@ export interface SessionSnapshot {
     language: InterfaceLanguage;
     contentSha256: string;
     fullContent: string;
+    lockedBlocks?: LockedPromptBlockSnapshot[];
   };
   researchConditionInstruction?: {
     id: string;
@@ -97,6 +120,7 @@ export interface SessionSnapshot {
     contentSha256: string;
     fullContent: string;
   };
+  specialTask?: SpecialTaskSnapshot;
   revealSource: "external" | "automatic";
   targetId?: string;
   researchProjectId?: string;

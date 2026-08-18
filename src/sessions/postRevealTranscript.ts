@@ -1,5 +1,5 @@
 export interface PostRevealTurn {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "monitor";
   content: string;
 }
 
@@ -13,7 +13,7 @@ export function parsePostRevealTranscript(transcript: string): PostRevealTurn[] 
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line) as Partial<PostRevealTurn>;
-      if ((parsed.role === "user" || parsed.role === "assistant") && typeof parsed.content === "string") {
+      if ((parsed.role === "user" || parsed.role === "assistant" || parsed.role === "monitor") && typeof parsed.content === "string") {
         turns.push({ role: parsed.role, content: parsed.content });
       }
     } catch {

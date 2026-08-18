@@ -2,6 +2,12 @@ import { resolveGenerationSettings } from "../providers/capabilities";
 import { providerChat as nativeProviderChat } from "../providers/native";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import { renderRvLiteSteps, type RvLiteProtocolResource } from "../resources/protocolRegistry";
+import {
+  lockedActivityDefinition,
+  lockedViewerIdentity,
+  LOCKED_ACTIVITY_VERSION,
+  LOCKED_IDENTITY_VERSION,
+} from "../resources/systemPrompts";
 import type { AppRepository } from "../storage/repository";
 import { buildAutomaticTargetReveal, targetHasSupportedReveal } from "../targets/service";
 import type { TargetRecord } from "../targets/types";
@@ -14,6 +20,8 @@ import { createSessionCode } from "./sessionCode";
 import type { RvSessionState, SessionSnapshot } from "./types";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { RepetitionGuard, formatRepetitionStopReason } from "./repetitionGuard";
+import type { SpecialTaskInput } from "./specialTask";
+import { renderSpecialTask } from "./specialTask";
 
 type RvLiteSessionRepository = Pick<
   AppRepository,
@@ -32,6 +40,7 @@ export interface AutomaticRvLiteRunInput {
   workspaceId: string;
   profileId: string;
   profileName?: string;
+  humanIsBeDisplayName?: string;
   providerConfig: ProviderConfig;
   model: ProviderModel;
   protocol: RvLiteProtocolResource;
@@ -39,6 +48,7 @@ export interface AutomaticRvLiteRunInput {
   requestedSettings: GenerationSettings;
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
   automaticTarget?: TargetRecord;
+  specialTask?: SpecialTaskInput;
   signal?: AbortSignal;
   maxRetries?: number;
   requestTimeoutMs?: number;
@@ -88,11 +98,15 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   await input.repository.updateRvSessionState(sessionId, "Preflight");
 
   const snapshot: SessionSnapshot = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId,
     sessionCode,
     profileId: input.profileId,
     workspaceId: input.workspaceId,
+    identities: {
+      aiIsBeDisplayName: input.profileName?.trim() || "AI IS-BE",
+      humanIsBeDisplayName: input.humanIsBeDisplayName?.trim() || "Human IS-BE",
+    },
     providerConfigId: input.providerConfig.id,
     credentialId: input.providerConfig.credentialId,
     ...(input.providerConfig.credentialHint ? { credentialHint: input.providerConfig.credentialHint } : {}),
@@ -109,6 +123,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
       language: input.protocol.language,
       contentSha256: input.protocol.contentSha256,
       fullContent: input.protocol.content,
+      variant: input.protocol.variant,
     },
     controllerPrompt: { id: "rv-lite-four-call-controller", version: "1.0.0", language: input.sessionLanguage },
     ...(input.rvSystemPrompt ? {
@@ -118,6 +133,18 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         language: input.sessionLanguage,
         contentSha256: input.rvSystemPrompt.contentSha256,
         fullContent: input.rvSystemPrompt.content,
+        lockedBlocks: [
+          { id: "locked-viewer-identity", version: LOCKED_IDENTITY_VERSION, contentSha256: await sha256Text(lockedViewerIdentity(input.sessionLanguage)), fullContent: lockedViewerIdentity(input.sessionLanguage) },
+          { id: "locked-activity-definition", version: LOCKED_ACTIVITY_VERSION, contentSha256: await sha256Text(lockedActivityDefinition(input.sessionLanguage)), fullContent: lockedActivityDefinition(input.sessionLanguage) },
+        ],
+      },
+    } : {}),
+    ...(renderSpecialTask(input.specialTask, input.sessionLanguage) ? {
+      specialTask: {
+        selectedOptions: input.specialTask?.selectedOptions ?? [],
+        ...(input.specialTask?.customText?.trim() ? { customText: input.specialTask.customText.trim() } : {}),
+        recipient: "viewer" as const,
+        injectAfter: "rv_lite_step_3" as const,
       },
     } : {}),
     revealSource: input.automaticTarget ? "automatic" : "external",
@@ -134,9 +161,13 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   for (let index = 0; index < steps.length; index += 1) {
     const promptNumber = index + 1;
     if (input.signal?.aborted) return stopRun("USER STOP");
-    const prompt = steps[index];
+    const specialTask = promptNumber === 3 ? renderSpecialTask(input.specialTask, input.sessionLanguage) : undefined;
+    const prompt = specialTask ? injectRvLiteSpecialTask(steps[index], specialTask, input.sessionLanguage, input.protocol.variant) : steps[index];
     messages.push({ role: "user", content: prompt });
     await input.repository.appendSessionEvent(sessionId, { eventType: "CONTROLLER_STEP", role: "controller", content: prompt, metadata: { promptNumber, protocolFamily: "rv-lite" } });
+    if (specialTask) {
+      await input.repository.appendSessionEvent(sessionId, { eventType: "SPECIAL_TASK_INJECTED", role: "controller", content: specialTask, metadata: { promptNumber, recipient: "viewer", injectAfter: "rv_lite_step_3" } });
+    }
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, promptNumber, undefined, metrics, startedAtMs);
 
     let response: ProviderChatResponse | null = null;
@@ -192,7 +223,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   if (input.signal?.aborted) return stopRun("USER STOP");
   if (!input.automaticTarget) return { sessionId, sessionCode, state: "AwaitingReveal", transcript };
 
-  const reveal = await buildAutomaticTargetReveal(input.automaticTarget);
+  const reveal = await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage);
   await input.repository.acceptReveal(sessionId, reveal);
   await input.repository.recordTargetUsage({ targetId: input.automaticTarget.id, profileId: input.profileId, sessionId });
   await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_ACCEPTED", role: "controller", metadata: { source: "automatic_target", targetId: input.automaticTarget.id } });
@@ -203,6 +234,23 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
 export function appendRvLiteTranscript(current: string, promptNumber: number, content: string): string {
   const block = `## RV Lite Prompt ${promptNumber}\n\n${content.trim()}`;
   return current ? `${current}\n\n${block}` : block;
+}
+
+export function injectRvLiteSpecialTask(
+  prompt: string,
+  task: string,
+  language: InterfaceLanguage,
+  variant: "core" | "extended",
+): string {
+  const block = language === "pl"
+    ? `Po zakończeniu Kroku 3 wykonaj poniższe SPECJALNE ZADANIE VIEWERA, używając wyłącznie neutralnych etykiet ślepej sesji:\n\n${task}`
+    : `After completing Step 3, perform the following SPECIAL VIEWER TASK using only neutral blind-session labels:\n\n${task}`;
+  if (variant === "extended") {
+    const marker = language === "pl" ? "Po zakończeniu Kroku 3 **obowiązkowo wykonaj Deepening Movement**:" : "After completing Step 3, **you MUST perform the Deepening Movement**:";
+    if (prompt.includes(marker)) return prompt.replace(marker, `${block}\n\n${marker}`);
+  }
+  const closing = language === "pl" ? "Nie nazywaj celu ani nie zgaduj, czym jest." : "Do not name or guess the target.";
+  return prompt.includes(closing) ? prompt.replace(closing, `${block}\n\n${closing}`) : `${prompt}\n\n${block}`;
 }
 
 function validate(input: AutomaticRvLiteRunInput): void {

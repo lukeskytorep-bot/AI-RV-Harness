@@ -3,7 +3,7 @@ import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getRvLite } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import type { TargetRecord } from "../targets/types";
-import { runAutomaticRvLiteSession } from "./rvLiteController";
+import { injectRvLiteSpecialTask, runAutomaticRvLiteSession } from "./rvLiteController";
 import type { SessionSnapshot } from "./types";
 
 const config: ProviderConfig = { id: "p", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
@@ -54,6 +54,14 @@ describe("automatic RV Lite controller", () => {
     expect(log.indexOf("sealed")).toBeLessThan(log.indexOf("reveal"));
     expect(result.state).toBe("Revealed");
     expect(snapshots[0].rvSystemPrompt).toEqual(expect.objectContaining({ contentSha256: "a".repeat(64), fullContent: "FIXED PROFILE VIEWER PROMPT" }));
+    expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity", "locked-activity-definition"]);
+  });
+
+  it("places a Special Viewer Task after Step 3 and before Extended deepening", () => {
+    const prompt = injectRvLiteSpecialTask(getRvLite("pl", "extended").steps[2], "- Przejdź do Object A i opisz.", "pl", "extended");
+
+    expect(prompt.indexOf("SPECJALNE ZADANIE VIEWERA")).toBeGreaterThan(prompt.indexOf("Teraz wykonaj Krok 3"));
+    expect(prompt.indexOf("SPECJALNE ZADANIE VIEWERA")).toBeLessThan(prompt.indexOf("obowiązkowo wykonaj Deepening Movement"));
   });
 
   it("omits the name cleanly when the Profile has no AI name", async () => {

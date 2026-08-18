@@ -1,15 +1,18 @@
 import type { AppRepository } from "../storage/repository";
 import { createId } from "../storage/repository";
 import type { RevealArtifactRecord } from "../sessions/types";
+import type { InterfaceLanguage } from "../types";
+import { localizedTargetReveal } from "./localization";
 import type { RevealInput } from "../sessions/types";
 import type { TargetRecord } from "./types";
+import type { TrainingCategory } from "./bundled";
 
 type TargetRepository = Pick<AppRepository, "createTarget">;
 type TargetMutationRepository = Pick<AppRepository, "updateTarget">;
 
 export async function createUserTarget(
   repository: TargetRepository,
-  input: { id?: string; title: string; revealText?: string; revealArtifacts?: RevealArtifactRecord[]; tags?: string[]; source?: string },
+  input: { id?: string; title: string; revealText?: string; revealArtifacts?: RevealArtifactRecord[]; tags?: string[]; source?: string; trainingCategory?: TrainingCategory },
 ): Promise<TargetRecord> {
   const title = input.title.trim();
   const revealText = input.revealText?.trim();
@@ -25,7 +28,7 @@ export async function createUserTarget(
     ...(revealText ? { revealText } : {}),
     ...(revealArtifacts.length ? { revealArtifacts } : {}),
     tags,
-    sourceMetadata: { origin: input.source ?? "user_created" },
+    sourceMetadata: { origin: input.source ?? "user_created", ...(input.trainingCategory ? { category: input.trainingCategory, trainingEligible: true } : {}) },
     contentHash: await sha256Text(canonical),
   });
 }
@@ -61,8 +64,8 @@ export function targetHasSupportedReveal(target: TargetRecord | undefined): bool
   return Boolean(target && (target.revealText?.trim() || target.revealArtifacts?.some((artifact) => artifact.mimeType.startsWith("image/"))));
 }
 
-export async function buildAutomaticTargetReveal(target: TargetRecord): Promise<RevealInput> {
-  const text = target.revealText?.trim();
+export async function buildAutomaticTargetReveal(target: TargetRecord, language?: InterfaceLanguage): Promise<RevealInput> {
+  const text = (language ? localizedTargetReveal(target, language) : target.revealText)?.trim();
   const artifactManifest = (target.revealArtifacts ?? []).filter((artifact) => artifact.mimeType.startsWith("image/"));
   if (!text && !artifactManifest.length) throw new Error("Automatic target has no supported reveal evidence.");
   const hashMaterial = JSON.stringify({ text: text ?? null, artifacts: artifactManifest.map((artifact) => ({ sha256: artifact.sha256, mimeType: artifact.mimeType })) });

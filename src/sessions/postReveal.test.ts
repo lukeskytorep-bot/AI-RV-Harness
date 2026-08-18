@@ -13,7 +13,7 @@ describe("post-reveal discussion", () => {
       getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Stone lighthouse", hash: "h" }),
       getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
       listTargetClarifications: vi.fn().mockResolvedValue([]),
-      appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant", content: string) => {
+      appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant" | "monitor", content: string) => {
         transcript += `${JSON.stringify({ role, content })}\n`;
         return transcript;
       }),
