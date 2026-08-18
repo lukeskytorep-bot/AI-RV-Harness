@@ -2,7 +2,7 @@
 
 AI RV Harness is a local-first desktop workspace for blind AI Remote Viewing sessions and controlled RV research. The desktop stack is Tauri 2 + React/TypeScript + Rust + SQLite, with Windows as the primary release platform.
 
-## Current checkpoint — 0.7.4
+## Current checkpoint — 0.7.5
 
 This is a substantial v1 implementation checkpoint, not a claim that the complete v1 distribution is releasable yet.
 
@@ -11,11 +11,11 @@ Implemented end to end:
 - Polish/English UI, Profiles, Workspaces, Chat, RV Session, AI Monitor, Targets, Research and all eight Settings tabs;
 - verified OS-native credential storage and native adapters for OpenRouter, Google, OpenAI, Anthropic, Z.AI, DeepSeek, Mistral and custom OpenAI-compatible endpoints;
 - dynamic model/capability discovery, a versioned exact-model reasoning registry, explicit AUTO/OFF/effort semantics, provider-specific reasoning payloads, Profile-level reasoning and temperature defaults, requested/effective generation settings, recommended seeds and persistent model Favorites;
-- strict Conversation / Manual RV context separation, multiple named and independently archived chat threads per mode, a Profile-level Viewer System Prompt, and per-thread Workspace Source selection with context-limit blocking;
-- Full RCP v1.5a and RV Lite v1.0.0 automatic execution, Custom Protocol versioning/Dry Run, ordinary randomized batch runs, STOP/retry/cost safeguards and response autosave;
+- strict Conversation / Manual RV context separation, a Workspace → Thread → Conversation hierarchy, optional `AI IS-BE` and `Human IS-BE` display names, a Profile-level Viewer System Prompt, and per-conversation Workspace Source selection with context-limit blocking;
+- Full RCP v1.5a and RV Lite v1.1.0 Core/Extended automatic execution, Custom Protocol versioning/Dry Run, ordinary randomized batch runs, STOP/retry/cost safeguards and response autosave;
 - approved RV Lite PL/EN resources with exactly four Viewer calls; Prompt 3 includes mandatory Deepening, Prompt 4 is Functional Sketches, and the Profile greeting omits the AI name cleanly when none is set;
-- 10 bundled project-provided Training Targets with stable Target IDs 1–10, plus editable/deletable unused My Targets, immutable used targets and usage/repeat tracking;
-- blind AI Monitor with bounded interventions, inflection-aware evidence validation, rejection audit/fallback and exportable Monitor history;
+- 84 bundled project-provided Training Targets in seven categories, plus category-aware My Targets, a fixed 84-session curriculum, partial Training runs, resumable checkpoints, exports and optional 1–3 AI Judges;
+- autonomous blind AI Monitor with natural-language instructions, at most five deepenings after Phases 2–6, editable full prompt with visible locked rules, Special Tasks, post-Reveal review and exportable Monitor history;
 - external/automatic text or image Reveal, immutable sealed pre-reveal evidence, post-reveal Viewer discussion stored in a separate evidence domain, and supplementary Target Clarifications;
 - independent 1–3 AI Judges using sanitized allowlist packets and frozen 3+3+2+2 scores;
 - seven Research templates, study-wide Viewer controls (model, System Prompt, reasoning, temperature and output limit), searchable manual or random Training/My Target selection, optional 1–3 AI Judges or save-only external evaluation, Preflight, Experiment Lock, randomized anonymous assignments/Judge order, explicit interrupted-run recovery, freeze-before-unblind, statistics and reproducibility export;
@@ -23,7 +23,7 @@ Implemented end to end:
 - safe Markdown/ASCII rendering throughout human-readable AI output, a searchable all-Workspace directory and direct Workspace switching;
 - redacted in-memory provider raw-payload diagnostics and capability cache controls.
 
-The two content blockers from checkpoint 0.6.0 are now resolved: RV Lite PL/EN and the ten-target starter Training pack are bundled.
+The former ten-target starter pack is retired non-destructively during migration and replaced by the validated factory Training library of 84 targets. Historical sessions that referenced the old rows remain intact.
 
 Checkpoint 0.7.1 follows the first native Windows installation test. It grants the webview the explicit SQLite execute permission required to seed the bundled Training Targets, replaces the indefinite startup spinner with a recoverable diagnostic state, and makes Aurora a distinct soft multicolor theme instead of a second dark variant. New installations now open in English with Aurora as the default theme, while the native window uses a matching light background before the web interface is ready.
 
@@ -43,11 +43,13 @@ Checkpoint 0.7.4 integrates the complete post-test correction set on top of 0.7.
 
 The same checkpoint adds safe Markdown presentation, a versioned model reasoning registry with provider-specific transport and marked fallbacks for unknown models, a global searchable Workspace directory/direct switcher, and multiple named Chat/Manual RV threads with isolated messages, formal state and Source selections. Existing chats remain intact; schema migration 14 only adds non-destructive thread archiving.
 
+Checkpoint 0.7.5 adds the icon-only non-Home navigation rail, recent sessions on Home, collapsible RV metadata, the Rosehip mark and five UI themes with soft blue as the first-run default. It introduces locked AI IS-BE/Shadow Zone and activity-definition prompt blocks, factory PL/EN Viewer and Monitor prompt recovery resources, editable Special Tasks, RV Lite Core/Extended variants, and sequential Viewer-then-Monitor post-Reveal reviews. The former ten starter targets are replaced with an 84-target categorized Training library and a durable full/partial Training runner. Application code remains MIT; authored protocols, factory prompts, training targets and comparable methodology content are explicitly separated under CC BY 4.0.
+
 `.github/workflows/release-windows.yml` runs only from `main`, prevents overlapping releases, generates and commits the application `Cargo.lock`, checks TypeScript plus Rust tests/Clippy, and then uses the official Tauri GitHub Actions path to create a draft GitHub Release. A local Rust installation is therefore not required for distribution builds.
 
 ## Windows installer trust
 
-Checkpoint 0.7.4 is not code-signed, so Windows SmartScreen or third-party endpoint protection may warn again for every newly built installer hash. Removing that recurring warning requires a stable Authenticode publisher identity (for example Microsoft Artifact Signing or another trusted certificate configured in the Tauri release workflow) or distribution through Microsoft Store. Signing improves reputation but does not guarantee that the first signed releases will never show a reputation warning. See the [Microsoft SmartScreen reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) and [Tauri Windows code-signing guide](https://v2.tauri.app/distribute/sign/windows/).
+Checkpoint 0.7.5 is not code-signed, so Windows SmartScreen or third-party endpoint protection may warn again for every newly built installer hash. Removing that recurring warning requires a stable Authenticode publisher identity (for example Microsoft Artifact Signing or another trusted certificate configured in the Tauri release workflow) or distribution through Microsoft Store. Signing improves reputation but does not guarantee that the first signed releases will never show a reputation warning. See the [Microsoft SmartScreen reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) and [Tauri Windows code-signing guide](https://v2.tauri.app/distribute/sign/windows/).
 
 ## Development and verification
 
@@ -83,4 +85,6 @@ AI RV Harness is a human-led project developed with multiple AI collaborators. S
 
 ## License
 
-Source code is released under the MIT License. Methodology and target content may have separate licensing/source requirements and must be reviewed before redistribution.
+Application source code is released under the MIT License in [LICENSE](LICENSE).
+
+Full RCP, RV Lite, the factory AI Viewer and AI Monitor prompts, the factory Training Target pack and comparable authored methodology content are licensed under CC BY 4.0. See [CONTENT_LICENSE_CC_BY_4.0.md](CONTENT_LICENSE_CC_BY_4.0.md) for scope, exceptions and the pending public attribution line. The Rosehip brand mark is a separate user-supplied brand asset and is not relicensed by either MIT or CC BY 4.0.
