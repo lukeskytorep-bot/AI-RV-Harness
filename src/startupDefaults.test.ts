@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { createDefaultSettings, DEFAULT_INTERFACE_LANGUAGE, DEFAULT_THEME } from "./startupDefaults";
 
 describe("first-run defaults", () => {
-  it("opens a new installation in English with the soft Aurora theme", () => {
+  it("opens a new installation in English with the soft blue theme", () => {
     const settings = createDefaultSettings();
 
     expect(DEFAULT_INTERFACE_LANGUAGE).toBe("en");
-    expect(DEFAULT_THEME).toBe("aurora");
+    expect(DEFAULT_THEME).toBe("blue");
     expect(settings.interfaceLanguage).toBe("en");
     expect(settings.sessionLanguage).toBe("same");
-    expect(settings.theme).toBe("aurora");
+    expect(settings.theme).toBe("blue");
   });
 });

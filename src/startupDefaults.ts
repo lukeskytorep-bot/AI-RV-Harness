@@ -1,7 +1,7 @@
 import type { AppSettings } from "./types";
 
 export const DEFAULT_INTERFACE_LANGUAGE = "en" as const;
-export const DEFAULT_THEME = "aurora" as const;
+export const DEFAULT_THEME = "blue" as const;
 
 export function createDefaultSettings(): AppSettings {
   return {

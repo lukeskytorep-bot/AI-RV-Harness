@@ -1,6 +1,7 @@
 import {
   ArrowRight,
   BrainCircuit,
+  BookOpen,
   Check,
   ChevronRight,
   CircleStop,
@@ -9,6 +10,7 @@ import {
   Database,
   FileCheck2,
   FlaskConical,
+  GraduationCap,
   Home,
   KeyRound,
   Languages,
@@ -29,6 +31,7 @@ import {
   Waves,
   X,
 } from "lucide-react";
+import rosehipLogo from "./assets/rosehip-logo.png";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { getCopy } from "./i18n";
 import { PROVIDER_LABELS, ProviderSettings } from "./components/ProviderSettings";
@@ -49,10 +52,11 @@ import { PROVIDER_KINDS, type ProviderConfig } from "./providers/types";
 import type { ProviderImageInput, ProviderKind, ProviderModel, ReasoningEffort } from "./providers/types";
 import { runAutomaticRcpSession, submitExternalReveal, type SessionProgress } from "./sessions/controller";
 import { sendChatTurn } from "./chat/engine";
-import type { ChatMessage, ChatMode, ChatThread } from "./types";
+import type { ChatMessage, ChatMode, ChatThread, ChatThreadGroup } from "./types";
 import { runBlindJudging } from "./judge/engine";
 import type { JudgingResult } from "./judge/types";
 import { chooseRandomTarget, createUserTarget, targetHasSupportedReveal, updateUserTarget } from "./targets/service";
+import { localizedTargetReveal, localizedTargetTitle } from "./targets/localization";
 import type { TargetRecord, TargetUsageRecord } from "./targets/types";
 import { dryRunCustomProtocol, saveCustomProtocol } from "./protocols/custom";
 import type { CustomProtocolVersion } from "./protocols/types";
@@ -60,6 +64,7 @@ import { runAutomaticCustomSession } from "./sessions/customController";
 import { runAutomaticRvLiteSession } from "./sessions/rvLiteController";
 import { runOrdinaryBatch, selectBatchTargets, type OrdinaryBatchProgress, type OrdinaryBatchSessionResult } from "./sessions/batch";
 import { ResearchBuilder } from "./components/ResearchBuilder";
+import { TrainingScreen } from "./components/TrainingScreen";
 import { buildCalibrationHistory, type CalibrationHistoryItem } from "./research/calibration";
 import { imageFileToProviderInput, storeRevealArtifact, storeTargetArtifact } from "./artifacts/native";
 import type { RevealArtifactRecord, RvSession, TargetClarificationRecord } from "./sessions/types";
@@ -72,7 +77,7 @@ import { getStoragePaths, listStorageBackups, openDataFolder, type StorageBackup
 import { APP_VERSION } from "./version";
 import { clearProviderDebug, listProviderDebug } from "./providers/debug";
 import { addProvider, PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER, refreshProviderModels } from "./providers/service";
-import { sendPostRevealTurn } from "./sessions/postReveal";
+import { sendMonitorPostRevealReview, sendPostRevealTurn } from "./sessions/postReveal";
 import { parsePostRevealTranscript } from "./sessions/postRevealTranscript";
 import { exportMonitorRun } from "./exports/monitor";
 import { ensureBundledTrainingTargets } from "./targets/bundled";
@@ -86,8 +91,12 @@ import { SafeMarkdown } from "./components/SafeMarkdown";
 import { filterWorkspaceDirectory } from "./domain/workspaceDirectory";
 import { reasoningOptions } from "./providers/modelReasoningRegistry";
 import type { ReasoningOption } from "./providers/types";
+import { aiIsBeDisplayName, humanIsBeDisplayName } from "./domain/isBeIdentity";
+import { TRAINING_CATEGORIES, TRAINING_CATEGORY_LABELS, isFactoryTrainingTargetId, type TrainingCategory } from "./targets/bundled";
+import { buildEffectiveMonitorPrompt, buildEffectiveViewerPrompt, factoryMonitorEditablePrompt, factoryViewerEditablePrompt, getFactoryPromptResources, lockedActivityDefinition, lockedMonitorExecution, lockedViewerIdentity, type FactoryPromptResource } from "./resources/systemPrompts";
+import { SPECIAL_TASK_OPTIONS, specialTaskUsesMappedLabels, type SpecialTaskInput, type SpecialTaskOption } from "./sessions/specialTask";
 
-type Page = "home" | "profiles" | "workspaces" | "research" | "targets" | "settings" | "workspace";
+type Page = "home" | "profiles" | "workspaces" | "research" | "targets" | "training" | "settings" | "workspace";
 type WorkspaceTab = "chat" | "rv" | "monitor";
 
 export default function App() {
@@ -102,6 +111,7 @@ export default function App() {
   const [profileDialog, setProfileDialog] = useState(false);
   const [workspaceDialogFor, setWorkspaceDialogFor] = useState<string | null>(null);
   const [workspaceCreatedNotice, setWorkspaceCreatedNotice] = useState<{ workspaceId: string; workspaceName: string; profileName: string } | null>(null);
+  const [recentSessions, setRecentSessions] = useState<RvSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [initializationError, setInitializationError] = useState<string | null>(null);
   const [initializationAttempt, setInitializationAttempt] = useState(0);
@@ -121,7 +131,7 @@ export default function App() {
     void (async () => {
       try {
         const repo = await createRepository();
-        stage = "starter-targets.seed";
+        stage = "factory-training-targets.seed";
         await ensureBundledTrainingTargets(repo);
         stage = "workspace-data.read";
         const [storedSettings, storedProfiles, storedWorkspaces] = await Promise.all([
@@ -135,6 +145,8 @@ export default function App() {
         setSettings(nextSettings);
         setProfiles(storedProfiles);
         setWorkspaces(storedWorkspaces);
+        const sessions = (await Promise.all(storedWorkspaces.map((workspace) => repo.listRvSessions(workspace.id)))).flat().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        setRecentSessions(sessions.slice(0, 8));
         setActiveProfileId(storedWorkspaces[0]?.profileId ?? storedProfiles[0]?.id ?? null);
         setActiveWorkspaceId(storedWorkspaces[0]?.id ?? null);
         setLoading(false);
@@ -191,9 +203,9 @@ export default function App() {
     }
   };
 
-  const createProfile = async (name: string, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => {
+  const createProfile = async (name: string, humanName: string | undefined, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => {
     if (!repository) return;
-    const profile = await repository.createProfile({ name, note, aiConfiguration });
+    const profile = await repository.createProfile({ name, humanName, note, aiConfiguration });
     setProfiles(await repository.listProfiles());
     setActiveProfileId(profile.id);
     setProfileDialog(false);
@@ -202,7 +214,8 @@ export default function App() {
   const createWorkspace = async (profileId: string, name: string, description?: string) => {
     if (!repository) return;
     const workspace = await repository.createWorkspace({ profileId, name, description });
-    setWorkspaceCreatedNotice({ workspaceId: workspace.id, workspaceName: workspace.name, profileName: profiles.find((profile) => profile.id === profileId)?.name || copy.unnamedProfile });
+    const owner = profiles.find((profile) => profile.id === profileId);
+    setWorkspaceCreatedNotice({ workspaceId: workspace.id, workspaceName: workspace.name, profileName: owner ? aiIsBeDisplayName(owner) : "AI IS-BE" });
     setWorkspaces(await repository.listWorkspaces());
     setWorkspaceDialogFor(null);
     await openWorkspace(workspace);
@@ -230,8 +243,8 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
-      <Sidebar page={page} copy={copy} onNavigate={navigate} />
+    <div className={page === "home" ? "app-shell" : "app-shell compact-navigation"}>
+      <Sidebar page={page} copy={copy} compact={page !== "home"} onNavigate={navigate} />
       <main className="main-pane">
         <TopBar
           copy={copy}
@@ -255,12 +268,12 @@ export default function App() {
               profile={lastProfile}
               workspace={lastWorkspace}
               recent={workspaces.slice(0, 5)}
+              recentSessions={recentSessions}
               profiles={profiles}
               onCreateProfile={() => setProfileDialog(true)}
               onOpenProfiles={() => navigate("profiles")}
               onOpenWorkspace={openWorkspace}
-              onResearch={() => navigate("research")}
-              onSettings={() => navigate("settings")}
+              onOpenSession={(session) => { const owner = workspaces.find((item) => item.id === session.workspaceId); if (owner) { void openWorkspace(owner).then(() => setWorkspaceTab("rv")); } }}
             />
           ) : page === "profiles" ? (
             <ProfilesScreen
@@ -278,7 +291,9 @@ export default function App() {
           ) : page === "research" ? (
             <ResearchScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
           ) : page === "targets" ? (
-            <TargetsScreen copy={copy} repository={repository} />
+            <TargetsScreen copy={copy} settings={settings} repository={repository} />
+          ) : page === "training" ? (
+            <TrainingScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
           ) : page === "settings" ? (
             <SettingsScreen copy={copy} settings={settings} repository={repository} onChange={updateSettings} />
           ) : activeWorkspace ? (
@@ -339,9 +354,11 @@ function FirstRunSetup({
   const [viewerModelId, setViewerModelId] = useState("");
   const [viewerReasoning, setViewerReasoning] = useState<"" | ReasoningEffort>("");
   const [viewerTemperature, setViewerTemperature] = useState("");
-  const [viewerSystemPrompt, setViewerSystemPrompt] = useState(existingProfile?.defaultViewerSystemPrompt ?? "");
+  const setupLanguage: InterfaceLanguage = copy.home === "Home" ? "en" : "pl";
+  const [viewerSystemPrompt, setViewerSystemPrompt] = useState(existingProfile?.defaultViewerSystemPrompt ?? factoryViewerEditablePrompt(setupLanguage));
   const [modelSearch, setModelSearch] = useState("");
   const [profileName, setProfileName] = useState(existingProfile?.name ?? "");
+  const [humanName, setHumanName] = useState(existingProfile?.humanName ?? "");
   const [judgeModelKey, setJudgeModelKey] = useState("");
   const [monitorModelKey, setMonitorModelKey] = useState("");
   const [busy, setBusy] = useState(false);
@@ -448,14 +465,15 @@ function FirstRunSetup({
           ...(viewerReasoning ? { defaultViewerReasoningEffort: viewerReasoning } : {}),
           ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
           ...(viewerSystemPrompt.trim() ? { defaultViewerSystemPrompt: viewerSystemPrompt.trim() } : {}),
+          defaultMonitorSystemPrompt: existingProfile?.defaultMonitorSystemPrompt ?? factoryMonitorEditablePrompt(setupLanguage),
           ...(judge ? { defaultJudgeProviderConfigId: judge.providerConfigId, defaultJudgeModelId: judge.modelId } : {}),
           ...(monitor ? { defaultMonitorProviderConfigId: monitor.providerConfigId, defaultMonitorModelId: monitor.modelId } : {}),
       };
       const profile = existingProfile
-        ? { ...existingProfile, name: profileName.trim(), ...aiConfiguration, updatedAt: new Date().toISOString() }
-        : await repository.createProfile({ name: profileName, aiConfiguration });
+        ? { ...existingProfile, name: profileName.trim(), humanName: humanName.trim() || undefined, ...aiConfiguration, updatedAt: new Date().toISOString() }
+        : await repository.createProfile({ name: profileName, humanName, aiConfiguration });
       if (existingProfile) {
-        await repository.updateProfile(existingProfile.id, { name: profileName, note: existingProfile.note });
+        await repository.updateProfile(existingProfile.id, { name: profileName, humanName, note: existingProfile.note });
         await repository.setProfileAiConfiguration(existingProfile.id, aiConfiguration);
       }
       await onComplete(profile);
@@ -469,7 +487,7 @@ function FirstRunSetup({
     <main className="first-run-shell">
       <section className="first-run-card">
         <header className="first-run-header">
-          <span className="first-run-logo"><Waves size={28} /></span>
+          <span className="first-run-logo"><img src={rosehipLogo} alt="" /></span>
           <div><small>AI RV Harness</small><h1>{copy.firstRunTitle}</h1><p>{copy.firstRunLead}</p></div>
         </header>
         <div className="first-run-progress" aria-label={`${copy.step} ${step}/3`}>
@@ -504,8 +522,8 @@ function FirstRunSetup({
           <label>{copy.defaultViewerModel}<select size={Math.min(8, Math.max(3, visibleViewerModels.length))} value={viewerModelId} onChange={(event) => selectViewerModel(event.target.value)}>{visibleViewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label>
           {!visibleViewerModels.length && <p className="provider-empty">{copy.noMatchingModels}</p>}
           <ViewerProfileControls copy={copy} model={viewerModel} reasoning={viewerReasoning} temperature={viewerTemperature} systemPrompt={viewerSystemPrompt} onReasoning={setViewerReasoning} onTemperature={setViewerTemperature} onSystemPrompt={setViewerSystemPrompt} />
-          <label>{copy.profileName}<input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder={copy.profileNamePlaceholder} /></label>
-          <small className="setup-security-note"><Users size={13} />{copy.profileMeaning}</small>
+          <div className="identity-name-grid"><label>{copy.aiIsBeName}<input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div>
+          <small className="setup-security-note"><Users size={13} />{copy.identityNamesLead}</small>
           <div className="first-run-actions"><button className="secondary-button" onClick={() => setStep(1)} disabled={busy}>{copy.back}</button><button className="primary-button" disabled={!viewerModelId || busy} onClick={() => setStep(3)}>{copy.continue}<ArrowRight size={15} /></button></div>
         </div>}
 
@@ -531,43 +549,47 @@ function ServerIcon() {
 function ViewerProfileControls({ copy, model, reasoning, temperature, systemPrompt, onReasoning, onTemperature, onSystemPrompt }: { copy: ReturnType<typeof getCopy>; model: ProviderModel | null; reasoning: "" | ReasoningEffort; temperature: string; systemPrompt: string; onReasoning: (value: "" | ReasoningEffort) => void; onTemperature: (value: string) => void; onSystemPrompt: (value: string) => void }) {
   const reasoningChoices = model ? reasoningOptions(model.capabilities.reasoning) : [];
   const temperatureCapability = model?.capabilities.temperature;
+  const language: InterfaceLanguage = copy.home === "Home" ? "en" : "pl";
   return <div className="profile-viewer-controls">
     <label><span>{copy.viewerReasoningLevel}</span><select value={reasoning} onChange={(event) => onReasoning(event.target.value as "" | ReasoningEffort)} disabled={!model}><option value="">{copy.autoProviderDefault}</option>{reasoningChoices.map((option) => <option key={option.value} value={option.value}>{reasoningOptionLabel(copy, option)}</option>)}</select><small>{!model ? copy.selectModelFirst : reasoningCapabilityLead(copy, model)}</small></label>
     <label><span>{copy.viewerTemperature}</span><input type="number" step="0.1" value={temperature} onChange={(event) => onTemperature(event.target.value)} disabled={!temperatureCapability?.supported} min={temperatureCapability?.min} max={temperatureCapability?.max} placeholder={temperatureCapability?.supported ? "0.9" : copy.notSupported} /><small>{temperatureCapability?.supported ? `${copy.temperatureDefaultLead}${temperatureCapability.min !== undefined || temperatureCapability.max !== undefined ? ` (${temperatureCapability.min ?? "−∞"}–${temperatureCapability.max ?? "+∞"})` : ""}` : copy.temperatureUnavailable}</small></label>
-    <label className="profile-system-prompt-field"><span>{copy.viewerSystemPrompt}<small>{copy.optional}</small></span><textarea className="system-prompt-editor" rows={12} maxLength={100000} value={systemPrompt} onChange={(event) => onSystemPrompt(event.target.value)} placeholder={copy.viewerSystemPromptPlaceholder} /><small>{copy.viewerSystemPromptLead}</small></label>
+    <label className="profile-system-prompt-field"><span>{copy.viewerSystemPrompt}<small>{language === "pl" ? "część edytowalna" : "editable section"}</small></span><textarea className="system-prompt-editor" rows={12} maxLength={100000} value={systemPrompt} onChange={(event) => onSystemPrompt(event.target.value)} placeholder={copy.viewerSystemPromptPlaceholder} /><small>{copy.viewerSystemPromptLead}</small></label>
+    <div className="monitor-prompt-actions"><button className="secondary-button" type="button" onClick={() => onSystemPrompt(factoryViewerEditablePrompt(language))}>{language === "pl" ? "Przywróć treść fabryczną Viewera" : "Restore factory Viewer text"}</button></div>
+    <div className="viewer-locked-prompts"><div className="locked-prompt-block"><LockKeyhole size={15} /><div><strong>{language === "pl" ? "Tożsamość AI IS-BE i Shadow Zone — zablokowane" : "AI IS-BE identity and Shadow Zone — locked"}</strong><pre>{lockedViewerIdentity(language)}</pre></div></div><div className="locked-prompt-block"><LockKeyhole size={15} /><div><strong>{language === "pl" ? "Definicja aktywności — zablokowana" : "Activity definition — locked"}</strong><p>{lockedActivityDefinition(language)}</p></div></div><details className="effective-prompt-preview"><summary>{language === "pl" ? "Pokaż cały skuteczny prompt Viewera" : "Show the complete effective Viewer prompt"}</summary><pre>{buildEffectiveViewerPrompt(language, systemPrompt)}</pre></details></div>
   </div>;
 }
 
-function Sidebar({ page, copy, onNavigate }: { page: Page; copy: ReturnType<typeof getCopy>; onNavigate: (page: Page) => void }) {
+function Sidebar({ page, copy, compact, onNavigate }: { page: Page; copy: ReturnType<typeof getCopy>; compact: boolean; onNavigate: (page: Page) => void }) {
   const items: Array<{ id: Page; icon: typeof Home; label: string }> = [
     { id: "home", icon: Home, label: copy.home },
     { id: "profiles", icon: Users, label: copy.profiles },
     { id: "workspaces", icon: RadioTower, label: copy.workspaces },
     { id: "research", icon: FlaskConical, label: copy.research },
     { id: "targets", icon: Crosshair, label: copy.targets },
+    { id: "training", icon: GraduationCap, label: copy.training },
     { id: "settings", icon: Settings2, label: copy.settings },
   ];
   return (
-    <aside className="sidebar">
-      <button className="brand" onClick={() => onNavigate("home")}>
-        <span className="brand-mark"><Waves size={22} /></span>
-        <span><strong>{copy.appName}</strong><small>{copy.tagline}</small></span>
+    <aside className={compact ? "sidebar compact" : "sidebar"}>
+      <button className="brand" onClick={() => onNavigate("home")} title={copy.appName}>
+        <span className="brand-mark"><img src={rosehipLogo} alt="" /></span>
+        {!compact && <span><strong>{copy.appName}</strong><small>{copy.tagline}</small></span>}
       </button>
       <nav className="side-nav">
         {items.map((item) => {
           const Icon = item.icon;
           const active = page === item.id || (page === "workspace" && item.id === "workspaces");
           return (
-            <button key={item.id} className={active ? "nav-item active" : "nav-item"} onClick={() => onNavigate(item.id)}>
+            <button key={item.id} title={item.label} aria-label={item.label} className={active ? "nav-item active" : "nav-item"} onClick={() => onNavigate(item.id)}>
               <Icon size={18} />
-              <span>{item.label}</span>
+              {!compact && <span>{item.label}</span>}
             </button>
           );
         })}
       </nav>
-      <div className="sidebar-footer">
+      <div className="sidebar-footer" title={copy.secureLocal}>
         <div className="privacy-badge"><ShieldCheck size={15} /><span>{copy.secureLocal}</span></div>
-        <small>v{APP_VERSION} · MIT</small>
+        {!compact && <small>v{APP_VERSION} · Code MIT · Content CC BY 4.0</small>}
       </div>
     </aside>
   );
@@ -586,11 +608,12 @@ function TopBar({
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
 }) {
-  const nextTheme: Theme = theme === "aurora" ? "light" : theme === "light" ? "dark" : "aurora";
+  const themes: Theme[] = ["blue", "aurora", "light", "dark", "green"];
+  const nextTheme = themes[(themes.indexOf(theme) + 1) % themes.length];
   return (
     <header className="topbar">
       <div className="crumbs">
-        {profile ? <><span className="avatar tiny">{initials(profile.name || copy.unnamedProfile)}</span><span>{profile.name || copy.unnamedProfile}</span></> : <span>{copy.noProfile}</span>}
+        {profile ? <><span className="avatar tiny">{initials(aiIsBeDisplayName(profile))}</span><span>{aiIsBeDisplayName(profile)}</span></> : <span>AI IS-BE</span>}
         {workspace && <><ChevronRight size={15} /><strong>{workspace.name}</strong></>}
       </div>
       <div className="top-actions">
@@ -608,23 +631,23 @@ function HomeScreen({
   profile,
   workspace,
   recent,
+  recentSessions,
   profiles,
   onCreateProfile,
   onOpenProfiles,
   onOpenWorkspace,
-  onResearch,
-  onSettings,
+  onOpenSession,
 }: {
   copy: ReturnType<typeof getCopy>;
   profile: Profile | null;
   workspace: Workspace | null;
   recent: Workspace[];
+  recentSessions: RvSession[];
   profiles: Profile[];
   onCreateProfile: () => void;
   onOpenProfiles: () => void;
   onOpenWorkspace: (workspace: Workspace) => void;
-  onResearch: () => void;
-  onSettings: () => void;
+  onOpenSession: (session: RvSession) => void;
 }) {
   return (
     <div className="page home-page">
@@ -635,8 +658,8 @@ function HomeScreen({
         <div className="resume-grid">
           <ResumeCard
             label={copy.lastProfile}
-            title={profile ? profile.name || copy.unnamedProfile : copy.noProfile}
-            icon={profile ? <span className="avatar">{initials(profile.name || copy.unnamedProfile)}</span> : <Users size={22} />}
+            title={profile ? aiIsBeDisplayName(profile) : "AI IS-BE"}
+            icon={profile ? <span className="avatar">{initials(aiIsBeDisplayName(profile))}</span> : <Users size={22} />}
             action={profile ? copy.openProfile : copy.createProfile}
             onClick={profile ? onOpenProfiles : onCreateProfile}
           />
@@ -666,7 +689,7 @@ function HomeScreen({
                 return (
                   <button className="recent-row" key={item.id} onClick={() => onOpenWorkspace(item)}>
                     <span className="recent-icon"><RadioTower size={18} /></span>
-                    <span className="recent-copy"><strong>{item.name}</strong><small>{owner?.name ?? "—"}</small></span>
+                    <span className="recent-copy"><strong>{item.name}</strong><small>{owner ? aiIsBeDisplayName(owner) : "—"}</small></span>
                     <ArrowRight size={16} />
                   </button>
                 );
@@ -675,10 +698,8 @@ function HomeScreen({
           )}
         </section>
         <section className="panel quick-panel">
-          <PanelHeader title={copy.home} icon={<Sparkles size={18} />} />
-          <button className="quick-action" onClick={onResearch}><FlaskConical size={19} /><span>{copy.research}<small>Blind · locked · reproducible</small></span><ChevronRight size={16} /></button>
-          <button className="quick-action" onClick={onOpenProfiles}><Users size={19} /><span>{copy.profiles}<small>Profile → Workspaces</small></span><ChevronRight size={16} /></button>
-          <button className="quick-action" onClick={onSettings}><Settings2 size={19} /><span>{copy.settings}<small>PL / EN · Aurora · API</small></span><ChevronRight size={16} /></button>
+          <PanelHeader title={copy.recentSessions} icon={<Clock3 size={18} />} />
+          {recentSessions.length ? <div className="list-stack">{recentSessions.slice(0, 5).map((session) => <button className="recent-row" key={session.id} onClick={() => onOpenSession(session)}><span className="recent-icon"><Crosshair size={17} /></span><span className="recent-copy"><strong>{session.sessionCode}</strong><small>{session.state} · {new Date(session.updatedAt).toLocaleString()}</small></span><ArrowRight size={16} /></button>)}</div> : <p className="muted empty-copy">{copy.noRecent}</p>}
         </section>
       </div>
     </div>
@@ -705,7 +726,7 @@ function WorkspacesScreen({ copy, profiles, workspaces, onOpenWorkspace }: { cop
 function WorkspaceDirectoryList({ copy, profiles, workspaces, onOpenWorkspace }: { copy: ReturnType<typeof getCopy>; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void }) {
   const [query, setQuery] = useState("");
   const groups = useMemo(() => filterWorkspaceDirectory(workspaces, profiles, query), [workspaces, profiles, query]);
-  return <div className="workspace-directory"><label className="workspace-search"><RadioTower size={16} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy.searchWorkspaces} /></label>{groups.length ? <div className="workspace-directory-groups">{groups.map((group) => <section key={group.profile.id}><header><span className="avatar tiny">{initials(group.profile.name || copy.unnamedProfile)}</span><div><strong>{group.profile.name || copy.unnamedProfile}</strong><small>{group.workspaces.length} {copy.workspacesCount}</small></div></header><div>{group.workspaces.map((workspace) => <button key={workspace.id} onClick={() => onOpenWorkspace(workspace)}><span><RadioTower size={16} /><span><strong>{workspace.name}</strong><small>{workspace.description || new Date(workspace.lastOpenedAt).toLocaleString()}</small></span></span><ArrowRight size={15} /></button>)}</div></section>)}</div> : <EmptyState icon={<RadioTower size={26} />} title={copy.noMatchingWorkspaces} body={copy.allWorkspacesLead} />}</div>;
+  return <div className="workspace-directory"><label className="workspace-search"><RadioTower size={16} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy.searchWorkspaces} /></label>{groups.length ? <div className="workspace-directory-groups">{groups.map((group) => <section key={group.profile.id}><header><span className="avatar tiny">{initials(aiIsBeDisplayName(group.profile))}</span><div><strong>{aiIsBeDisplayName(group.profile)}</strong><small>{group.workspaces.length} {copy.workspacesCount}</small></div></header><div>{group.workspaces.map((workspace) => <button key={workspace.id} onClick={() => onOpenWorkspace(workspace)}><span><RadioTower size={16} /><span><strong>{workspace.name}</strong><small>{workspace.description || new Date(workspace.lastOpenedAt).toLocaleString()}</small></span></span><ArrowRight size={15} /></button>)}</div></section>)}</div> : <EmptyState icon={<RadioTower size={26} />} title={copy.noMatchingWorkspaces} body={copy.allWorkspacesLead} />}</div>;
 }
 
 function WorkspaceSwitcherDialog({ copy, profiles, workspaces, onOpenWorkspace, onClose }: { copy: ReturnType<typeof getCopy>; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void; onClose: () => void }) {
@@ -751,14 +772,14 @@ function ProfilesScreen({
     return () => { cancelled = true; };
   }, [repository, profiles]);
   const archiveProfile = async (profile: Profile) => {
-    if (!repository || !window.confirm(`${copy.archiveProfileConfirm}\n\n${profile.name || copy.unnamedProfile}`)) return;
+    if (!repository || !window.confirm(`${copy.archiveProfileConfirm}\n\n${aiIsBeDisplayName(profile)}`)) return;
     await repository.archiveProfile(profile.id);
     await onProfilesChanged();
   };
-  const saveProfile = async (name: string, note?: string, aiConfiguration?: ProfileAiConfigurationInput) => {
+  const saveProfile = async (name: string, humanName: string | undefined, note?: string, aiConfiguration?: ProfileAiConfigurationInput) => {
     if (!repository || !editingProfile) return;
     if (aiConfiguration && editingProfile.credentialId && editingProfile.credentialId !== aiConfiguration.credentialId && !window.confirm(copy.calibrationBindingWarning)) return;
-    await repository.updateProfile(editingProfile.id, { name, note });
+    await repository.updateProfile(editingProfile.id, { name, humanName, note });
     if (aiConfiguration) await repository.setProfileAiConfiguration(editingProfile.id, aiConfiguration);
     setEditingProfile(null);
     await onProfilesChanged();
@@ -777,8 +798,8 @@ function ProfilesScreen({
             return (
               <section className="profile-card" key={profile.id}>
                 <div className="profile-heading">
-                  <span className="avatar large">{initials(profile.name || copy.unnamedProfile)}</span>
-                  <div><h3>{profile.name || copy.unnamedProfile}</h3><p>{profile.note || copy.credentialPending}</p></div>
+                  <span className="avatar large">{initials(aiIsBeDisplayName(profile))}</span>
+                  <div><h3>{aiIsBeDisplayName(profile)}</h3><p>{humanIsBeDisplayName(profile)} · {profile.note || copy.credentialPending}</p></div>
                   <span className={`status-chip ${viewerReady ? "ready" : "next"}`}><KeyRound size={13} />{viewerReady ? copy.aiDefaultsReady : copy.aiDefaultsIncomplete}</span>
                 </div>
                 <div className="workspace-list">
@@ -809,20 +830,24 @@ function WorkspaceScreen({ copy, settings, profile, workspace, tab, onTab, repos
   const [switcherOpen, setSwitcherOpen] = useState(false);
   return (
     <><div className="page workspace-page">
-      <PageHeader title={workspace.name} subtitle={workspace.description || `${profile ? profile.name || copy.unnamedProfile : "—"} · ${copy.workspace}`} action={<button className="secondary-button" onClick={() => setSwitcherOpen(true)}><RadioTower size={15} />{copy.switchWorkspace}</button>} />
+      <PageHeader title={workspace.name} subtitle={workspace.description || `${profile ? aiIsBeDisplayName(profile) : "—"} · ${copy.workspace}`} action={<button className="secondary-button" onClick={() => setSwitcherOpen(true)}><RadioTower size={15} />{copy.switchWorkspace}</button>} />
       {createdNotice && <div className="workspace-created-notice"><Check size={16} /><span><strong>{copy.workspaceCreated}</strong><small>{createdNotice.profileName} → {createdNotice.workspaceName}</small></span><button className="icon-button" onClick={onDismissCreatedNotice}><X size={14} /></button></div>}
       <div className="module-tabs">
         <button className={tab === "chat" ? "module-tab active" : "module-tab"} onClick={() => onTab("chat")}><MessageCircle size={17} />{copy.chat}</button>
         <button className={tab === "rv" ? "module-tab active" : "module-tab"} onClick={() => onTab("rv")}><Crosshair size={17} />{copy.rvSession}</button>
         <button className={tab === "monitor" ? "module-tab active" : "module-tab"} onClick={() => onTab("monitor")}><BrainCircuit size={17} />{copy.aiMonitor}</button>
       </div>
-      {tab === "chat" ? <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} /> : tab === "rv" ? <RvSessionPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} /> : <MonitorPanel copy={copy} workspace={workspace} repository={repository} />}
+      {tab === "chat" ? <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} /> : tab === "rv" ? <RvSessionPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} /> : <MonitorPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} />}
     </div>{switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={onOpenWorkspace} onClose={() => setSwitcherOpen(false)} />}</>
   );
 }
 
 function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; repository: AppRepository | null }) {
   const [mode, setMode] = useState<ChatMode>("conversation");
+  const [threadGroups, setThreadGroups] = useState<ChatThreadGroup[]>([]);
+  const [threadGroupId, setThreadGroupId] = useState<string | null>(null);
+  const [threadGroupTitle, setThreadGroupTitle] = useState("");
+  const [savedThreadGroupTitle, setSavedThreadGroupTitle] = useState("");
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [threadTitle, setThreadTitle] = useState("");
@@ -871,11 +896,17 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     let cancelled = false;
     setMessages([]);
     setActiveSourceIds([]);
+    setThreadGroups([]);
+    setThreadGroupId(null);
     setThreadId(null);
     void (async () => {
       if (!repository) return;
-      let available = await repository.listChatThreads(workspace.id, mode);
-      const thread = available[0] ?? await repository.createChatThread(workspace.id, mode);
+      let groups = await repository.listChatThreadGroups(workspace.id, mode);
+      const group = groups[0] ?? await repository.createChatThreadGroup(workspace.id, mode, "Thread 1");
+      if (!groups.length) groups = [group];
+      const allThreads = await repository.listChatThreads(workspace.id, mode);
+      let available = allThreads.filter((item) => item.threadGroupId === group.id);
+      const thread = available[0] ?? await repository.createChatThread(workspace.id, mode, mode === "conversation" ? `${copy.conversation} 1` : `${copy.manualRv} 1`, group.id);
       if (!available.length) available = [thread];
       const [nextMessages, nextActiveSources] = await Promise.all([
         repository.listChatMessages(thread.id),
@@ -883,6 +914,10 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         repository.touchChatThread(thread.id),
       ]);
       if (cancelled) return;
+      setThreadGroups(groups);
+      setThreadGroupId(group.id);
+      setThreadGroupTitle(group.title);
+      setSavedThreadGroupTitle(group.title);
       setThreads(available);
       setThreadId(thread.id);
       setThreadTitle(thread.title);
@@ -895,7 +930,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setError(null);
     })().catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause)); });
     return () => { cancelled = true; };
-  }, [repository, workspace.id, mode]);
+  }, [repository, workspace.id, mode, copy.conversation, copy.manualRv]);
 
   useEffect(() => {
     if (selectedModel && (!selectedModel.capabilities.supportsVision || !selectedModel.capabilities.inputModalities.includes("image"))) {
@@ -928,17 +963,72 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setActiveSourceIds(nextActiveSources);
       setChatImages([]);
       setChatImageNames([]);
-      setThreads(await repository.listChatThreads(workspace.id, mode));
+      setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
+  const openThreadGroup = async (nextGroupId: string) => {
+    if (!repository || sending || nextGroupId === threadGroupId) return;
+    const group = threadGroups.find((item) => item.id === nextGroupId);
+    if (!group) return;
+    setError(null);
+    try {
+      let available = (await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === group.id);
+      const next = available[0] ?? await repository.createChatThread(workspace.id, mode, mode === "conversation" ? `${copy.conversation} 1` : `${copy.manualRv} 1`, group.id);
+      if (!available.length) available = [next];
+      const [nextMessages, nextActiveSources] = await Promise.all([
+        repository.listChatMessages(next.id),
+        repository.listActiveChatSourceIds(next.id),
+        repository.touchChatThread(next.id),
+      ]);
+      setThreadGroupId(group.id);
+      setThreadGroupTitle(group.title);
+      setSavedThreadGroupTitle(group.title);
+      setThreads(available);
+      setThreadId(next.id);
+      setThreadTitle(next.title);
+      setSavedThreadTitle(next.title);
+      setFormalRvState(next.formalRvState);
+      setMessages(nextMessages);
+      setActiveSourceIds(nextActiveSources);
+      setChatImages([]);
+      setChatImageNames([]);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
+  const createNewThreadGroup = async () => {
+    if (!repository || sending) return;
+    setError(null);
+    try {
+      const group = await repository.createChatThreadGroup(workspace.id, mode, `Thread ${threadGroups.length + 1}`);
+      const conversation = await repository.createChatThread(workspace.id, mode, mode === "conversation" ? `${copy.conversation} 1` : `${copy.manualRv} 1`, group.id);
+      setThreadGroups(await repository.listChatThreadGroups(workspace.id, mode));
+      setThreadGroupId(group.id);
+      setThreadGroupTitle(group.title);
+      setSavedThreadGroupTitle(group.title);
+      setThreads([conversation]);
+      setThreadId(conversation.id);
+      setThreadTitle(conversation.title);
+      setSavedThreadTitle(conversation.title);
+      setFormalRvState(undefined);
+      setMessages([]);
+      setActiveSourceIds([]);
+      setChatImages([]);
+      setChatImageNames([]);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
   const createNewThread = async () => {
     if (!repository || sending) return;
+    const baseTitle = mode === "conversation" ? copy.conversation : copy.manualRv;
+    const suggestedTitle = `${baseTitle} ${threads.length + 1}`;
+    const requestedTitle = window.prompt(settings.interfaceLanguage === "pl" ? "Podaj nazwę nowej konwersacji:" : "Enter a name for the new conversation:", suggestedTitle);
+    if (requestedTitle === null || !requestedTitle.trim()) return;
     setError(null);
     try {
-      const baseTitle = mode === "conversation" ? copy.conversation : copy.manualRv;
-      const thread = await repository.createChatThread(workspace.id, mode, `${baseTitle} ${threads.length + 1}`);
-      setThreads(await repository.listChatThreads(workspace.id, mode));
+      if (!threadGroupId) return;
+      const thread = await repository.createChatThread(workspace.id, mode, requestedTitle.trim(), threadGroupId);
+      setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
       setThreadId(thread.id);
       setThreadTitle(thread.title);
       setSavedThreadTitle(thread.title);
@@ -955,8 +1045,8 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     setError(null);
     try {
       await repository.archiveChatThread(threadId);
-      let remaining = await repository.listChatThreads(workspace.id, mode);
-      const next = remaining[0] ?? await repository.createChatThread(workspace.id, mode, mode === "conversation" ? copy.conversation : copy.manualRv);
+      let remaining = (await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId);
+      const next = remaining[0] ?? await repository.createChatThread(workspace.id, mode, mode === "conversation" ? `${copy.conversation} 1` : `${copy.manualRv} 1`, threadGroupId ?? undefined);
       if (!remaining.length) remaining = [next];
       const [nextMessages, nextActiveSources] = await Promise.all([
         repository.listChatMessages(next.id),
@@ -1028,7 +1118,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         model: selectedModel,
         content,
         requestedSettings: profileGenerationDefaults(profile, selectedModel),
-        ...(mode === "manual_rv" && profile?.defaultViewerSystemPrompt ? { rvSystemPrompt: profile.defaultViewerSystemPrompt } : {}),
+        ...(mode === "manual_rv" ? { rvSystemPrompt: buildEffectiveViewerPrompt(language, profile?.defaultViewerSystemPrompt) } : {}),
         sources: selectedSources,
         images: chatImages,
         ...(mode === "manual_rv" && attachRcp ? { attachedProtocol: getFullRcp(language).content } : {}),
@@ -1039,7 +1129,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setMessages(await repository.listChatMessages(threadId));
-      setThreads(await repository.listChatThreads(workspace.id, mode));
+      setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
       setSending(false);
     }
   };
@@ -1050,7 +1140,43 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       await repository.renameChatThread(threadId, threadTitle);
       setThreadTitle(threadTitle.trim());
       setSavedThreadTitle(threadTitle.trim());
-      setThreads(await repository.listChatThreads(workspace.id, mode));
+      setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
+  const renameThreadGroup = async () => {
+    if (!repository || !threadGroupId || !threadGroupTitle.trim() || threadGroupTitle.trim() === savedThreadGroupTitle) return;
+    try {
+      await repository.renameChatThreadGroup(threadGroupId, threadGroupTitle);
+      setThreadGroupTitle(threadGroupTitle.trim());
+      setSavedThreadGroupTitle(threadGroupTitle.trim());
+      setThreadGroups(await repository.listChatThreadGroups(workspace.id, mode));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
+  const archiveCurrentThreadGroup = async () => {
+    if (!repository || !threadGroupId || sending || !window.confirm(`${copy.archiveThreadConfirm}\n\n${savedThreadGroupTitle}`)) return;
+    setError(null);
+    try {
+      await repository.archiveChatThreadGroup(threadGroupId);
+      let groups = await repository.listChatThreadGroups(workspace.id, mode);
+      const nextGroup = groups[0] ?? await repository.createChatThreadGroup(workspace.id, mode, "Thread 1");
+      if (!groups.length) groups = [nextGroup];
+      let available = (await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === nextGroup.id);
+      const next = available[0] ?? await repository.createChatThread(workspace.id, mode, mode === "conversation" ? `${copy.conversation} 1` : `${copy.manualRv} 1`, nextGroup.id);
+      if (!available.length) available = [next];
+      const [nextMessages, nextActiveSources] = await Promise.all([repository.listChatMessages(next.id), repository.listActiveChatSourceIds(next.id)]);
+      setThreadGroups(groups);
+      setThreadGroupId(nextGroup.id);
+      setThreadGroupTitle(nextGroup.title);
+      setSavedThreadGroupTitle(nextGroup.title);
+      setThreads(available);
+      setThreadId(next.id);
+      setThreadTitle(next.title);
+      setSavedThreadTitle(next.title);
+      setFormalRvState(next.formalRvState);
+      setMessages(nextMessages);
+      setActiveSourceIds(nextActiveSources);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
@@ -1060,32 +1186,49 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     try {
       await repository.setChatThreadFormalRvState(threadId, next);
       setFormalRvState(next);
-      setThreads(await repository.listChatThreads(workspace.id, mode));
+      setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
   return (
     <section className="chat-surface">
+      <div className="chat-hierarchy">
+        <span className="hierarchy-workspace"><RadioTower size={15} /><span><small>{copy.workspace}</small><strong>{workspace.name}</strong></span></span>
+        <ChevronRight size={15} />
+        <label className="hierarchy-thread"><span>{copy.threadGroups}</span><select value={threadGroupId ?? ""} disabled={!threadGroupId || sending} onChange={(event) => void openThreadGroup(event.target.value)}>{threadGroups.map((group) => <option key={group.id} value={group.id}>{group.title}</option>)}</select></label>
+        <button className="icon-button hierarchy-add" type="button" title={copy.newThread} disabled={!repository || sending} onClick={() => void createNewThreadGroup()}><Plus size={15} /></button>
+        <details className="hierarchy-menu">
+          <summary aria-label={copy.renameThreadGroup} title={copy.renameThreadGroup}>•••</summary>
+          <div className="hierarchy-menu-popover">
+            <label><span>{copy.threadGroupTitle}</span><input value={threadGroupTitle} maxLength={160} onChange={(event) => setThreadGroupTitle(event.target.value)} /></label>
+            <button className="secondary-button" disabled={!threadGroupTitle.trim() || threadGroupTitle.trim() === savedThreadGroupTitle} onClick={() => void renameThreadGroup()}><Pencil size={13} />{copy.renameThreadGroup}</button>
+            <button className="secondary-button danger-action" disabled={!threadGroupId || sending || threads.some((item) => item.formalRvState === "BLIND")} onClick={() => void archiveCurrentThreadGroup()}><Archive size={13} />{copy.archiveThreadGroup}</button>
+          </div>
+        </details>
+      </div>
       <div className="chat-toolbar">
         <div className="segmented large-segmented">
           <button disabled={sending} className={mode === "conversation" ? "active" : ""} onClick={() => setMode("conversation")}><MessageCircle size={16} />{copy.conversation}</button>
           <button disabled={sending} className={mode === "manual_rv" ? "active" : ""} onClick={() => setMode("manual_rv")}><Crosshair size={16} />{copy.manualRv}</button>
         </div>
+        <div className="conversation-switcher">
+          <label><span>{copy.chatThreads}</span><select value={threadId ?? ""} disabled={!threadId || sending} onChange={(event) => void openThread(event.target.value)}>{threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}</select></label>
+          <button className="secondary-button" disabled={!repository || sending} onClick={() => void createNewThread()}><Plus size={13} />{copy.newChat}</button>
+          <button className="secondary-button danger-action" disabled={!threadId || sending || formalRvState === "BLIND"} title={formalRvState === "BLIND" ? copy.endBlindBeforeArchive : copy.archiveChat} onClick={() => void archiveCurrentThread()}><Archive size={13} />{copy.archiveChat}</button>
+          <details className="hierarchy-menu conversation-menu">
+            <summary aria-label={copy.renameThread} title={copy.renameThread}>•••</summary>
+            <div className="hierarchy-menu-popover">
+              <label><span>{copy.threadTitle}</span><input value={threadTitle} maxLength={160} onChange={(event) => setThreadTitle(event.target.value)} /></label>
+              <button className="secondary-button" disabled={!threadTitle.trim() || threadTitle.trim() === savedThreadTitle} onClick={() => void renameThread()}><Pencil size={13} />{copy.renameThread}</button>
+            </div>
+          </details>
+        </div>
         <span className={mode === "conversation" ? "context-badge conversation" : "context-badge blind"}>
           {mode === "conversation" ? <Sparkles size={14} /> : <LockKeyhole size={14} />}
-          {mode === "conversation" ? copy.systemActive : profile?.defaultViewerSystemPrompt ? copy.viewerSystemActive : copy.systemEmpty}
+          {mode === "conversation" ? copy.systemActive : copy.viewerSystemActive}
         </span>
       </div>
-      <div className="chat-thread-switcher">
-        <label><span>{copy.chatThreads}</span><select value={threadId ?? ""} disabled={!threadId || sending} onChange={(event) => void openThread(event.target.value)}>{threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}</select></label>
-        <button className="secondary-button" disabled={!repository || sending} onClick={() => void createNewThread()}><Plus size={13} />{copy.newChat}</button>
-        <button className="secondary-button danger-action" disabled={!threadId || sending || formalRvState === "BLIND"} title={formalRvState === "BLIND" ? copy.endBlindBeforeArchive : copy.archiveChat} onClick={() => void archiveCurrentThread()}><Archive size={13} />{copy.archiveChat}</button>
-      </div>
-      <div className="chat-thread-bar">
-        <label><span>{copy.threadTitle}</span><input value={threadTitle} maxLength={160} onChange={(event) => setThreadTitle(event.target.value)} /></label>
-        <button className="secondary-button" disabled={!threadTitle.trim() || threadTitle.trim() === savedThreadTitle} onClick={() => void renameThread()}><Pencil size={13} />{copy.renameThread}</button>
-        {mode === "manual_rv" && <div className="formal-rv-control"><span className={`formal-rv-state ${formalRvState?.toLowerCase() ?? "idle"}`}><LockKeyhole size={13} />{copy.formalManualState}: {formalRvState ?? "—"}</span><button className="secondary-button" onClick={() => void advanceFormalRvState()}>{!formalRvState ? copy.startFormalRv : formalRvState === "BLIND" ? copy.markRevealed : copy.endFormalRv}</button></div>}
-      </div>
+      {mode === "manual_rv" && <div className="formal-rv-control formal-rv-row"><span className={`formal-rv-state ${formalRvState?.toLowerCase() ?? "idle"}`}><LockKeyhole size={13} />{copy.formalManualState}: {formalRvState ?? "—"}</span><button className="secondary-button" onClick={() => void advanceFormalRvState()}>{!formalRvState ? copy.startFormalRv : formalRvState === "BLIND" ? copy.markRevealed : copy.endFormalRv}</button></div>}
       <div className="chat-model-bar">
         <span><KeyRound size={14} />{activeProvider?.label ?? copy.credentialPending}</span>
         <select value={modelId} onChange={(event) => setModelId(event.target.value)} disabled={!activeProvider || !models.length || sending}>
@@ -1099,7 +1242,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         <div><strong>{mode === "conversation" ? copy.conversationTitle : copy.manualTitle}</strong><p>{mode === "conversation" ? copy.conversationDesc : copy.manualDesc}</p></div>
       </div>
       <details className="chat-sources"><summary><span><FileCheck2 size={14} />{copy.workspaceSources}</span><small>{copy.activeSources}: {activeSourceIds.length} · {copy.estimatedContext}: ~{estimatedContext.toLocaleString()} tokens</small></summary><div className="chat-source-body"><div className="chat-source-actions"><label className="secondary-button">{copy.addSource}<input type="file" multiple accept=".txt,.md,text/plain,text/markdown" onChange={(event) => void importSources(event.target.files)} /></label></div>{sources.length ? <div className="chat-source-list">{sources.map((source) => <label key={source.id}><input type="checkbox" checked={activeSourceIds.includes(source.id)} onChange={() => void toggleSource(source.id)} /><span><strong>{source.displayName}</strong><small>~{estimateTextTokens(source.content).toLocaleString()} tokens</small></span><button type="button" className="icon-button danger" title={copy.removeSource} onClick={(event) => { event.preventDefault(); void removeSource(source); }}><X size={13} /></button></label>)}</div> : <p>{copy.noSources}</p>}{contextExceeded && <div className="source-context-error">{copy.contextExceeded}</div>}</div></details>
-      {messages.length === 0 ? <div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div> : <div className="message-list">{messages.map((message) => <article className={`chat-message ${message.role}`} key={message.id}><span>{message.role === "user" ? initials(profile?.name || copy.unnamedProfile) : "AI"}</span><div><small>{message.role === "user" ? profile?.name || copy.unnamedProfile : selectedModel?.displayName ?? "AI"}</small><SafeMarkdown content={message.content} /></div></article>)}{sending && <div className="typing-row"><span className="loader-orb" />{copy.sending}</div>}</div>}
+      {messages.length === 0 ? <div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div> : <div className="message-list">{messages.map((message) => { const displayName = message.role === "user" ? humanIsBeDisplayName(profile) : aiIsBeDisplayName(profile); return <article className={`chat-message ${message.role}`} key={message.id}><span>{initials(displayName)}</span><div><small>{displayName}</small><SafeMarkdown content={message.content} /></div></article>; })}{sending && <div className="typing-row"><span className="loader-orb" />{copy.sending}</div>}</div>}
       {error && <div className="provider-error chat-error">{error}</div>}
       <div className="composer">
         <textarea rows={2} placeholder={copy.messagePlaceholder} value={input} onChange={(event) => setInput(event.target.value)} disabled={!selectedModel || sending} />
@@ -1114,6 +1257,9 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const [executionScope, setExecutionScope] = useState<"single" | "batch">("single");
   const [runType, setRunType] = useState<"automatic" | "monitor">("automatic");
   const [protocol, setProtocol] = useState<"rcp" | "lite" | "custom">("rcp");
+  const [liteVariant, setLiteVariant] = useState<"core" | "extended">("extended");
+  const [specialTaskOptions, setSpecialTaskOptions] = useState<SpecialTaskOption[]>([]);
+  const [specialTaskText, setSpecialTaskText] = useState("");
   const [revealSource, setRevealSource] = useState<"automatic" | "external">(settings.defaultRevealSource);
   const [sessionLanguage, setSessionLanguage] = useState<SessionLanguageSetting>(settings.sessionLanguage);
   const [resourceOpen, setResourceOpen] = useState(false);
@@ -1157,11 +1303,13 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const [batchRunning, setBatchRunning] = useState(false);
   const [sessionRunning, setSessionRunning] = useState(false);
   const [batchPreflightSignature, setBatchPreflightSignature] = useState<string | null>(null);
+  const [metadataOpen, setMetadataOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const runGuardRef = useRef(new AsyncRunGuard());
   const resolvedLanguage = resolveSessionLanguage(settings.interfaceLanguage, sessionLanguage);
   const rcp = getFullRcp(resolvedLanguage);
-  const rvLite = getRvLite(resolvedLanguage);
+  const rvLite = getRvLite(resolvedLanguage, liteVariant);
+  const specialTask: SpecialTaskInput | undefined = specialTaskOptions.length || specialTaskText.trim() ? { selectedOptions: specialTaskOptions, ...(specialTaskText.trim() ? { customText: specialTaskText.trim() } : {}) } : undefined;
   const activeProvider = providerConfigs.find((item) => item.credentialId === profile?.credentialId) ?? null;
   const selectedModel = models.find((item) => item.modelId === modelId) ?? null;
   const monitorModel = allModels.find((item) => `${item.providerConfigId}::${item.modelId}` === monitorModelKey) ?? null;
@@ -1169,7 +1317,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const usedByProfile = new Set(targetUsage.filter((usage) => usage.profileId === profile?.id).map((usage) => usage.targetId));
   const eligibleTargets = targets.filter((target) => targetHasSupportedReveal(target) && (settings.targetRepeatPolicy === "allow" || target.collection !== "training" || !usedByProfile.has(target.id)));
   const batchPool = eligibleTargets.filter((target) => batchCollection === "all" || target.collection === batchCollection);
-  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, modelId, protocol, customProtocolVersionId, runType, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, targetRepeatPolicy: settings.targetRepeatPolicy, batchCollection, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
+  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, modelId, protocol, liteVariant, specialTaskOptions, specialTaskText, customProtocolVersionId, runType, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, targetRepeatPolicy: settings.targetRepeatPolicy, batchCollection, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
   const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : 6;
   const running = sessionRunning || batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
@@ -1253,7 +1401,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     if (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature)) return;
     const batchTargets = executionScope === "batch" ? selectBatchTargets(batchPool, batchCount) : [];
     let rvSystemPrompt: Awaited<ReturnType<typeof profileSystemPromptSnapshot>>;
-    try { rvSystemPrompt = await profileSystemPromptSnapshot(profile); }
+    try { rvSystemPrompt = await profileSystemPromptSnapshot(profile, resolvedLanguage); }
     catch (cause) { setRunError(cause instanceof Error ? cause.message : String(cause)); return; }
     if (!runGuardRef.current.tryAcquire()) return;
     setSessionRunning(true);
@@ -1281,10 +1429,10 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     };
     const runOne = async (target: TargetRecord | null) => {
       if (protocol === "lite") {
-        return runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: profile.name, providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        return runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
       }
       if (protocol === "custom" && selectedCustomProtocol) {
-        return runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        return runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
       }
       return runAutomaticRcpSession({
         repository,
@@ -1295,6 +1443,9 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         protocol: rcp,
         sessionLanguage: resolvedLanguage,
         requestedSettings,
+        aiIsBeDisplayName: aiIsBeDisplayName(profile),
+        humanIsBeDisplayName: humanIsBeDisplayName(profile),
+        ...(specialTask ? { specialTask } : {}),
         ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
         signal: controller.signal,
         maxRetries: settings.maxRetries,
@@ -1303,7 +1454,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}),
         onProgress: setProgress,
         ...(target ? { automaticTarget: target } : {}),
-        ...(runType === "monitor" && monitorModel && monitorProvider ? { monitor: { providerConfig: monitorProvider, model: monitorModel } } : {}),
+        ...(runType === "monitor" && monitorModel && monitorProvider ? { monitor: { providerConfig: monitorProvider, model: monitorModel, editablePrompt: profile.defaultMonitorSystemPrompt ?? factoryMonitorEditablePrompt(resolvedLanguage) } } : {}),
       });
     };
     try {
@@ -1461,6 +1612,52 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     }
   };
 
+  const generatePostRevealReviews = async () => {
+    if (!repository || !progress?.sessionId || postRevealBusy) return;
+    setPostRevealBusy(true);
+    setRunError(null);
+    try {
+      const snapshot = await repository.getSessionSnapshot(progress.sessionId);
+      if (!snapshot) throw new Error(copy.postRevealRouteUnavailable);
+      const viewerProvider = providerConfigs.find((item) => item.id === snapshot.providerConfigId);
+      if (!viewerProvider) throw new Error(copy.postRevealRouteUnavailable);
+      const viewerModel: ProviderModel = allModels.find((item) => item.providerConfigId === snapshot.providerConfigId && item.modelId === snapshot.modelId) ?? {
+        providerConfigId: snapshot.providerConfigId,
+        provider: snapshot.provider,
+        modelId: snapshot.modelId,
+        displayName: snapshot.modelId,
+        route: snapshot.modelRoute,
+        capabilities: snapshot.capabilitySnapshot as unknown as ProviderModel["capabilities"],
+        pricing: {},
+        recommended: false,
+        rawMetadata: {},
+        refreshedAt: snapshot.capabilityCapturedAt,
+      };
+      const viewerRequest = resolvedLanguage === "pl"
+        ? "Po ujawnieniu celu oceń całą sesję: zgodność danych z revelem, mocne i słabe elementy, możliwe interpretacje oraz to, co można poprawić w kolejnej sesji. Wyraźnie oddziel analizę po revealu od zapieczętowanych danych blind."
+        : "Now that the target has been revealed, review the complete session: correspondence with the Reveal, strong and weak elements, possible interpretations, and what could be improved next time. Clearly separate after-Reveal analysis from the sealed blind evidence.";
+      const viewerResult = await sendPostRevealTurn({ repository, sessionId: progress.sessionId, existingTranscript: postRevealTranscript, providerConfig: viewerProvider, model: viewerModel, content: viewerRequest, timeoutMs: settings.requestTimeoutMs });
+      let transcript = viewerResult.transcript;
+      setPostRevealTranscript(transcript);
+      if (snapshot.monitor) {
+        const capturedMonitorProvider = providerConfigs.find((item) => item.id === snapshot.monitor?.providerConfigId);
+        const capturedMonitorModel = allModels.find((item) => item.providerConfigId === snapshot.monitor?.providerConfigId && item.modelId === snapshot.monitor?.modelId);
+        if (!capturedMonitorProvider || !capturedMonitorModel) throw new Error(copy.postRevealRouteUnavailable);
+        const monitorResult = await sendMonitorPostRevealReview({ repository, sessionId: progress.sessionId, existingTranscript: transcript, providerConfig: capturedMonitorProvider, model: capturedMonitorModel, timeoutMs: settings.requestTimeoutMs });
+        transcript = monitorResult.transcript;
+        setPostRevealTranscript(transcript);
+      }
+      setRecentSessions((await repository.listRvSessions(workspace.id)).filter((session) => !session.researchProjectId));
+    } catch (cause) {
+      const sessions = await repository.listRvSessions(workspace.id).catch(() => []);
+      const stored = sessions.find((session) => session.id === progress.sessionId);
+      if (stored) setPostRevealTranscript(stored.postRevealTranscript);
+      setRunError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPostRevealBusy(false);
+    }
+  };
+
   const addClarification = async () => {
     if (!repository || !progress?.sessionId || !clarificationText.trim() || clarificationBusy) return;
     setClarificationBusy(true);
@@ -1483,9 +1680,10 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   };
 
   return (
-    <section className="session-layout">
+    <section className={metadataOpen ? "session-layout metadata-open" : "session-layout metadata-closed"}>
       <div className="session-main panel">
         <PanelHeader title={copy.newAutomaticSession} icon={<Crosshair size={18} />} />
+        <details className="recent-sessions-inline"><summary><Clock3 size={15} /><strong>{copy.recentSessions}</strong><span>{recentSessions.length}</span></summary>{recentSessions.length ? <div className="recent-session-list">{recentSessions.slice(0, 10).map((session) => <div key={session.id}><button className="recent-session-open" disabled={session.state === "BlindRunning" || session.state === "Preflight"} onClick={() => void loadStoredSession(session)}><span><strong>{session.sessionCode}</strong><small>{session.state}</small></span><ChevronRight size={13} /></button>{(session.state === "BlindRunning" || session.state === "Preflight") && <div className="session-recovery"><small>{copy.recoveryRequired}</small><button onClick={() => void preserveInterrupted(session)}>{copy.markInterrupted}</button></div>}</div>)}</div> : <p className="recent-session-empty">{copy.noSessions}</p>}</details>
         {progress ? (
           <div className="live-session">
             <div className="live-session-head">
@@ -1499,7 +1697,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
             {(progress.state === "Revealed" || progress.state === "Completed") && <>
               <div className="reveal-success"><Check size={18} /><div><strong>🔓 {copy.revealAccepted}</strong><p>{copy.blindRunComplete}</p></div></div>
               {(acceptedRevealText || acceptedRevealArtifacts.length > 0) && <div className="save-reveal-target"><input value={saveTargetTitle} onChange={(event) => setSaveTargetTitle(event.target.value)} placeholder={copy.targetName} disabled={targetSaved} /><button className="secondary-button" disabled={!saveTargetTitle.trim() || targetSaved} onClick={() => void saveExternalRevealTarget()}>{targetSaved ? copy.savedToTargets : copy.saveRevealTarget}</button></div>}
-              {executionScope === "single" && <section className="post-reveal-discussion"><div className="post-reveal-head"><div><strong>{copy.postRevealDiscussion}</strong><p>{copy.postRevealEvidenceGuard}</p></div><span>POST-REVEAL</span></div>{postRevealTranscript && <div className="post-reveal-turns">{parsePostRevealTranscript(postRevealTranscript).map((turn, index) => <article className={turn.role} key={`${turn.role}-${index}`}><small>{turn.role === "user" ? copy.you : copy.viewerModel}</small><SafeMarkdown content={turn.content} /></article>)}</div>}<div className="post-reveal-compose"><textarea rows={3} value={postRevealText} onChange={(event) => setPostRevealText(event.target.value)} placeholder={copy.postRevealPlaceholder} disabled={postRevealBusy} /><button className="secondary-button" disabled={!postRevealText.trim() || postRevealBusy} onClick={() => void discussPostReveal()}>{postRevealBusy ? copy.sending : copy.sendPostReveal}</button></div></section>}
+              {executionScope === "single" && <section className="post-reveal-discussion"><div className="post-reveal-head"><div><strong>{copy.postRevealDiscussion}</strong><p>{copy.postRevealEvidenceGuard}</p></div><span>POST-REVEAL</span></div><div className="post-reveal-review-action"><div><strong>{copy.generatePostRevealReview}</strong><small>{copy.postRevealReviewLead}</small></div><button className="secondary-button" disabled={postRevealBusy} onClick={() => void generatePostRevealReviews()}>{postRevealBusy ? copy.sending : copy.generatePostRevealReview}</button></div>{postRevealTranscript && <div className="post-reveal-turns">{parsePostRevealTranscript(postRevealTranscript).map((turn, index) => <article className={turn.role} key={`${turn.role}-${index}`}><small>{turn.role === "user" ? humanIsBeDisplayName(profile) : turn.role === "monitor" ? copy.aiMonitorReview : aiIsBeDisplayName(profile)}</small><SafeMarkdown content={turn.content} /></article>)}</div>}<div className="post-reveal-compose"><textarea rows={3} value={postRevealText} onChange={(event) => setPostRevealText(event.target.value)} placeholder={copy.postRevealPlaceholder} disabled={postRevealBusy} /><button className="secondary-button" disabled={!postRevealText.trim() || postRevealBusy} onClick={() => void discussPostReveal()}>{postRevealBusy ? copy.sending : copy.sendPostReveal}</button></div></section>}
               {executionScope === "single" && <JudgeEvaluation copy={copy} repository={repository} sessionId={progress.sessionId} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} onCompleted={() => { setProgress((current) => current ? { ...current, state: "Completed" } : current); void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId))); }} />}
               {executionScope === "single" && progress.state === "Revealed" && <button className="secondary-button save-only-button" onClick={() => void completeWithoutEvaluation()}>{copy.saveOnly}</button>}
               {executionScope === "single" && clarificationEligible && <section className="target-clarification"><div className="target-clarification-head"><div><strong>{copy.askTargetClarification}</strong><p>{copy.clarificationLead}</p></div><button className="secondary-button" onClick={() => setClarificationOpen((value) => !value)}>{copy.askTargetClarification}</button></div>{clarificationOpen && <div className="clarification-form"><textarea rows={4} value={clarificationText} onChange={(event) => setClarificationText(event.target.value)} placeholder={copy.clarificationPlaceholder} /><button className="primary-button" disabled={!clarificationText.trim() || clarificationBusy} onClick={() => void addClarification()}>{copy.saveClarification}</button></div>}{clarifications.length > 0 && <div className="clarification-list">{clarifications.map((item) => <article key={item.id}><small>{copy.supplementaryClarification} · {new Date(item.createdAt).toLocaleString()}</small><p>{item.content}</p></article>)}</div>}</section>}
@@ -1534,11 +1732,13 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         <ConfigBlock label={copy.protocol}>
           <div className="choice-grid three">
             <Choice active={protocol === "rcp"} onClick={() => setProtocol("rcp")} icon={<FileCheck2 size={18} />} title={copy.fullRcp} meta="v1.5a" />
-            <Choice disabled={!canSelectProtocol(runType, "lite")} active={protocol === "lite"} onClick={() => setProtocol("lite")} icon={<Sparkles size={18} />} title={copy.rvLite} meta="v1.0.0" />
+            <Choice disabled={!canSelectProtocol(runType, "lite")} active={protocol === "lite"} onClick={() => setProtocol("lite")} icon={<Sparkles size={18} />} title={copy.rvLite} meta="v1.1.0" />
             <Choice disabled={!canSelectProtocol(runType, "custom")} active={protocol === "custom"} onClick={() => setProtocol("custom")} icon={<Settings2 size={18} />} title={copy.customProtocol} meta={customProtocols.length ? `${customProtocols.length}` : undefined} />
           </div>
           {runType === "monitor" && <small className="mode-compatibility-note">{copy.rvLiteUnavailable}</small>}
         </ConfigBlock>
+        {protocol === "lite" && <ConfigBlock label={settings.interfaceLanguage === "pl" ? "Wariant RV Lite" : "RV Lite variant"}><div className="choice-grid two"><Choice active={liteVariant === "core"} onClick={() => setLiteVariant("core")} icon={<FileCheck2 size={18} />} title="Core" meta={settings.interfaceLanguage === "pl" ? "4 podstawowe kroki" : "4 core steps"} /><Choice active={liteVariant === "extended"} onClick={() => setLiteVariant("extended")} icon={<Sparkles size={18} />} title="Extended" meta={settings.interfaceLanguage === "pl" ? "4 kroki + pogłębianie po kroku 3" : "4 steps + deepening after Step 3"} /></div></ConfigBlock>}
+        {(protocol === "rcp" || protocol === "lite") && <ConfigBlock label={settings.interfaceLanguage === "pl" ? "Zadanie specjalne — opcjonalne" : "Special task — optional"}><div className="special-task-builder"><p>{protocol === "rcp" ? (settings.interfaceLanguage === "pl" ? "Zadanie zostanie przekazane bezpośrednio po Fazie 4." : "The task is supplied immediately after Phase 4.") : (settings.interfaceLanguage === "pl" ? "Zadanie zostanie przekazane bezpośrednio po kroku 3." : "The task is supplied immediately after Step 3.")}</p><div>{SPECIAL_TASK_OPTIONS.map((option) => <label key={option}><input type="checkbox" checked={specialTaskOptions.includes(option)} onChange={(event) => setSpecialTaskOptions((current) => event.target.checked ? [...current, option] : current.filter((item) => item !== option))} /><span>{specialTaskOptionLabel(option, settings.interfaceLanguage)}</span></label>)}</div><textarea rows={3} value={specialTaskText} onChange={(event) => setSpecialTaskText(event.target.value)} placeholder={settings.interfaceLanguage === "pl" ? "Lub wpisz własne neutralne zadanie…" : "Or enter a custom neutral task…"} />{specialTaskUsesMappedLabels(specialTask) && <small className="special-task-warning"><ShieldCheck size={13} />{settings.interfaceLanguage === "pl" ? "W Target Reveal opisz jednoznacznie, czym są użyte oznaczenia Subject/Structure/Object A–C." : "The Target Reveal must clearly define every Subject/Structure/Object A–C label used here."}</small>}</div></ConfigBlock>}
         {protocol === "custom" && <ConfigBlock label={copy.customProtocolSelect}>
           <div className="custom-protocol-select"><select value={customProtocolVersionId} onChange={(event) => setCustomProtocolVersionId(event.target.value)}><option value="">{copy.noCustomProtocols}</option>{customProtocols.map((item) => <option key={item.versionId} value={item.versionId}>{item.displayName} · {item.version}</option>)}</select><div className="custom-protocol-buttons"><button className="secondary-button" onClick={() => { setCustomBuilderNew(true); setCustomBuilderOpen(true); }}><Plus size={15} />{copy.newCustomProtocol}</button>{selectedCustomProtocol && <button className="secondary-button" onClick={() => { setCustomBuilderNew(false); setCustomBuilderOpen(true); }}>{copy.editCustomProtocol}</button>}</div><small>{copy.customMonitorNote}</small></div>
         </ConfigBlock>}
@@ -1572,7 +1772,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
           </div>
         </ConfigBlock>
         {revealSource === "automatic" && <ConfigBlock label={copy.selectTarget}>
-          {eligibleTargets.length ? <select className="session-language-select" value={selectedTargetId} onChange={(event) => setSelectedTargetId(event.target.value)}><option value="__random__">🎲 {copy.randomTarget}</option>{eligibleTargets.map((target) => <option key={target.id} value={target.id}>{target.collection === "training" ? "Training" : "My Targets"} · {target.title}</option>)}</select> : <div className="route-summary"><Crosshair size={16} /><span><strong>{copy.noEligibleTargets}</strong><small>{copy.textRevealOnly}</small></span></div>}
+          {eligibleTargets.length ? <select className="session-language-select" value={selectedTargetId} onChange={(event) => setSelectedTargetId(event.target.value)}><option value="__random__">🎲 {copy.randomTarget}</option>{eligibleTargets.map((target) => <option key={target.id} value={target.id}>{target.collection === "training" ? copy.trainingTargets : copy.myTargets} · {localizedTargetTitle(target, resolvedLanguage)}</option>)}</select> : <div className="route-summary"><Crosshair size={16} /><span><strong>{copy.noEligibleTargets}</strong><small>{copy.textRevealOnly}</small></span></div>}
         </ConfigBlock>}</> : <ConfigBlock label={copy.targetPool}><div className="batch-config"><label><span>{copy.targetPool}</span><select value={batchCollection} onChange={(event) => setBatchCollection(event.target.value as "all" | "training" | "user")}><option value="all">{copy.allTargets}</option><option value="training">{copy.trainingTarget}</option><option value="user">{copy.myTargets}</option></select></label><label><span>{copy.batchCount}</span><input type="number" min={1} max={Math.max(1, batchPool.length)} value={batchCount} onChange={(event) => setBatchCount(Math.max(1, Number(event.target.value) || 1))} /></label><small>{copy.eligibleTargets}: {batchPool.length}</small><div className="batch-preflight-actions"><button className="secondary-button" onClick={preflightBatch}>{copy.runPreflight}</button>{batchPreflightSignature === batchConfigSignature && <span className="status-chip ready"><Check size={12} />{copy.preflightPassed}</span>}</div></div></ConfigBlock>}
         <div className="start-block">
           <button className="primary-button start-button" disabled={!isTauriRuntime() || !activeProvider || !selectedModel || !maxOutputTokens || Number(maxOutputTokens) <= 0 || (runType === "monitor" && (protocol !== "rcp" || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
@@ -1581,7 +1781,8 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         </>}
         {runError && <div className="provider-error session-error">{runError}</div>}
       </div>
-      <aside className="session-side">
+      <button className="session-metadata-toggle" title={metadataOpen ? (settings.interfaceLanguage === "pl" ? "Ukryj informacje o protokole" : "Hide protocol information") : (settings.interfaceLanguage === "pl" ? "Pokaż informacje o protokole" : "Show protocol information")} onClick={() => setMetadataOpen((current) => !current)}>{metadataOpen ? "›" : "‹"}</button>
+      {metadataOpen && <aside className="session-side">
         <section className="panel protocol-card">
           <span className="resource-orb"><FileCheck2 size={22} /></span>
           <span className="status-chip ready"><Check size={13} />{copy.statusReady}</span>
@@ -1596,8 +1797,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         </section>
         <section className="integrity-card"><LockKeyhole size={18} /><div><strong>🔒 BLIND</strong><p>Reveal boundary is a separate state transition.</p></div></section>
         <section className="integrity-card"><ShieldCheck size={18} /><div><strong>External Blind</strong><p>{copy.externalReady}</p></div></section>
-        <section className="panel recent-sessions-card"><PanelHeader title={copy.recentSessions} icon={<Clock3 size={17} />} />{recentSessions.length ? <div className="recent-session-list">{recentSessions.slice(0, 7).map((session) => <div key={session.id}><button className="recent-session-open" disabled={session.state === "BlindRunning" || session.state === "Preflight"} onClick={() => void loadStoredSession(session)}><span><strong>{session.sessionCode}</strong><small>{session.state}</small></span><ChevronRight size={13} /></button>{(session.state === "BlindRunning" || session.state === "Preflight") && <div className="session-recovery"><small>{copy.recoveryRequired}</small><button onClick={() => void preserveInterrupted(session)}>{copy.markInterrupted}</button></div>}</div>)}</div> : <p className="recent-session-empty">{copy.noSessions}</p>}</section>
-      </aside>
+      </aside>}
       {resourceOpen && <ProtocolDialog copy={copy} resource={protocol === "lite" ? rvLite : rcp} onClose={() => setResourceOpen(false)} />}
       {customBuilderOpen && repository && <CustomProtocolDialog copy={copy} repository={repository} language={resolvedLanguage} base={customBuilderNew ? null : selectedCustomProtocol} onCancel={() => setCustomBuilderOpen(false)} onSaved={customProtocolSaved} />}
     </section>
@@ -1798,13 +1998,22 @@ function JudgeNarrativeRow({ label, values }: { label: string; values: string[] 
   return <div className="judge-narrative"><small>{label}</small>{values.length ? <ul>{values.map((value, index) => <li key={`${index}-${value}`}><SafeMarkdown content={value} /></li>)}</ul> : <p>—</p>}</div>;
 }
 
-function MonitorPanel({ copy, workspace, repository }: { copy: ReturnType<typeof getCopy>; workspace: Workspace; repository: AppRepository | null }) {
+function MonitorPanel({ copy, settings, profile, workspace, repository }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; repository: AppRepository | null }) {
   const [runs, setRuns] = useState<MonitorRunRecord[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [interventions, setInterventions] = useState<MonitorInterventionRecord[]>([]);
   const [exportingRun, setExportingRun] = useState(false);
   const [exportPath, setExportPath] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
+  const [editablePrompt, setEditablePrompt] = useState(profile?.defaultMonitorSystemPrompt ?? factoryMonitorEditablePrompt(language));
+  const [promptSaved, setPromptSaved] = useState(false);
+  const [promptError, setPromptError] = useState<string | null>(null);
+  useEffect(() => {
+    setEditablePrompt(profile?.defaultMonitorSystemPrompt ?? factoryMonitorEditablePrompt(language));
+    setPromptSaved(false);
+    setPromptError(null);
+  }, [language, profile?.defaultMonitorSystemPrompt, profile?.id]);
   useEffect(() => {
     if (!repository) return;
     void Promise.all([repository.listMonitorRuns(workspace.id), repository.listRvSessions(workspace.id), repository.listResearchProjects(workspace.id)]).then(([items, sessions, projects]) => {
@@ -1823,6 +2032,26 @@ function MonitorPanel({ copy, workspace, repository }: { copy: ReturnType<typeof
     void repository.listMonitorInterventions(selectedRunId).then(setInterventions);
   }, [repository, selectedRunId]);
   const selected = runs.find((run) => run.id === selectedRunId) ?? null;
+  const savePrompt = async () => {
+    if (!repository || !profile) return;
+    setPromptError(null);
+    try {
+      await repository.setProfileAiConfiguration(profile.id, {
+        credentialId: profile.credentialId,
+        credentialProvider: profile.credentialProvider,
+        defaultViewerModelId: profile.defaultViewerModelId,
+        defaultViewerReasoningEffort: profile.defaultViewerReasoningEffort,
+        defaultViewerTemperature: profile.defaultViewerTemperature,
+        defaultViewerSystemPrompt: profile.defaultViewerSystemPrompt,
+        defaultMonitorSystemPrompt: editablePrompt.trim() || factoryMonitorEditablePrompt(language),
+        defaultMonitorProviderConfigId: profile.defaultMonitorProviderConfigId,
+        defaultMonitorModelId: profile.defaultMonitorModelId,
+        defaultJudgeProviderConfigId: profile.defaultJudgeProviderConfigId,
+        defaultJudgeModelId: profile.defaultJudgeModelId,
+      });
+      setPromptSaved(true);
+    } catch (cause) { setPromptError(cause instanceof Error ? cause.message : String(cause)); }
+  };
   const exportSelected = async () => {
     if (!repository || !selected || exportingRun || !isTauriRuntime()) return;
     setExportingRun(true); setExportError(null); setExportPath(null);
@@ -1834,6 +2063,17 @@ function MonitorPanel({ copy, workspace, repository }: { copy: ReturnType<typeof
     <section className="panel monitor-panel">
       <PanelHeader title={copy.monitorHistory} icon={<BrainCircuit size={18} />} />
       <div className="role-guard"><ShieldCheck size={22} /><div><strong>{copy.blindRoleBoundary}</strong><p>{copy.monitorLead}</p></div></div>
+      <details className="monitor-prompt-editor" open>
+        <summary><BrainCircuit size={15} /><span><strong>{settings.interfaceLanguage === "pl" ? "System prompt AI Monitora" : "AI Monitor system prompt"}</strong><small>{settings.interfaceLanguage === "pl" ? "Cały skuteczny prompt jest widoczny; część użytkownika można zmieniać." : "The complete effective prompt is visible; the user section is editable."}</small></span></summary>
+        <div className="monitor-prompt-body">
+          <label><span>{settings.interfaceLanguage === "pl" ? "Część edytowalna" : "Editable section"}</span><textarea rows={18} maxLength={100000} value={editablePrompt} onChange={(event) => { setEditablePrompt(event.target.value); setPromptSaved(false); }} /></label>
+          <div className="locked-prompt-block"><LockKeyhole size={15} /><div><strong>{settings.interfaceLanguage === "pl" ? "Definicja aktywności — zablokowana" : "Activity definition — locked"}</strong><p>{lockedActivityDefinition(language)}</p></div></div>
+          <div className="locked-prompt-block"><LockKeyhole size={15} /><div><strong>{settings.interfaceLanguage === "pl" ? "Reguła wykonania — zablokowana" : "Execution rule — locked"}</strong><pre>{lockedMonitorExecution(language)}</pre></div></div>
+          <details className="effective-prompt-preview"><summary>{settings.interfaceLanguage === "pl" ? "Pokaż cały skuteczny prompt" : "Show the complete effective prompt"}</summary><pre>{buildEffectiveMonitorPrompt(language, editablePrompt)}</pre></details>
+          <div className="monitor-prompt-actions"><button className="secondary-button" type="button" onClick={() => { setEditablePrompt(factoryMonitorEditablePrompt(language)); setPromptSaved(false); }}>{settings.interfaceLanguage === "pl" ? "Przywróć treść fabryczną" : "Restore factory text"}</button><button className="primary-button" type="button" disabled={!profile} onClick={() => void savePrompt()}>{settings.interfaceLanguage === "pl" ? "Zapisz prompt" : "Save prompt"}</button>{promptSaved && <span><Check size={13} />{settings.interfaceLanguage === "pl" ? "Zapisano" : "Saved"}</span>}</div>
+          {promptError && <div className="provider-error">{promptError}</div>}
+        </div>
+      </details>
       {!runs.length ? <EmptyState icon={<MonitorCog size={28} />} title={copy.noMonitorRuns} body={copy.monitorLead} /> : <div className="monitor-history-layout"><div className="monitor-run-list">{runs.map((run) => <button className={run.id === selectedRunId ? "active" : ""} key={run.id} onClick={() => { setSelectedRunId(run.id); setExportPath(null); setExportError(null); }}><span><strong>{run.sessionCode}</strong><small>{run.modelRoute}</small></span><span>{run.interventionCount}</span></button>)}</div><div className="monitor-run-detail">{selected && <><div className="monitor-run-meta"><span><small>{copy.promptVersion}</small><strong>{selected.promptVersionId ?? "—"}</strong></span><span><small>{copy.libraryVersion}</small><strong>{selected.libraryVersion}</strong></span><span><small>{copy.interventions}</small><strong>{selected.interventionCount} / {selected.maxInterventions}</strong></span></div><div className="monitor-export-row"><button className="secondary-button" disabled={!isTauriRuntime() || exportingRun} onClick={() => void exportSelected()}>{exportingRun ? copy.exporting : copy.exportMonitorRun}</button><small>{copy.monitorExportSafe}</small></div></>}{interventions.length ? <div className="monitor-timeline">{interventions.map((item) => <article key={item.id} className={item.decision === "INTERVENE" ? "intervene" : "continue"}><div><span>{item.sequenceNumber}</span><strong>{item.decision === "INTERVENE" ? item.commandId ?? "INTERVENE" : copy.continueProtocol}</strong></div>{item.viewerEvidence && <div className="monitor-markdown-row"><b>{copy.viewerEvidence}</b><SafeMarkdown content={item.viewerEvidence} /></div>}{item.commandText && <div className="monitor-markdown-row"><b>{copy.monitorCommand}</b><SafeMarkdown content={item.commandText} /></div>}{item.rationale && <details className="monitor-rationale"><summary>{copy.rationale}</summary><SafeMarkdown content={formatMonitorRationale(item.rationale)} /></details>}</article>)}</div> : <p className="monitor-no-decisions">{copy.noMonitorRuns}</p>}{exportPath && <div className="storage-success"><Check size={14} />{copy.exportComplete} · {exportPath}</div>}{exportError && <div className="provider-error">{exportError}</div>}</div></div>}
     </section>
   );
@@ -1853,7 +2093,7 @@ function ResearchScreen({ copy, settings, profiles, workspaces, repository }: { 
   );
 }
 
-function TargetsScreen({ copy, repository }: { copy: ReturnType<typeof getCopy>; repository: AppRepository | null }) {
+function TargetsScreen({ copy, settings, repository }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; repository: AppRepository | null }) {
   const [targets, setTargets] = useState<TargetRecord[]>([]);
   const [usage, setUsage] = useState<TargetUsageRecord[]>([]);
   const [researchLockedTargetIds, setResearchLockedTargetIds] = useState<string[]>([]);
@@ -1874,11 +2114,11 @@ function TargetsScreen({ copy, repository }: { copy: ReturnType<typeof getCopy>;
   const training = targets.filter((target) => target.collection === "training");
   const mine = targets.filter((target) => target.collection === "user");
   const usedTargetIds = new Set([...usage.map((item) => item.targetId), ...researchLockedTargetIds]);
-  const createTarget = async (title: string, revealText: string, tags: string[], images: File[]) => {
+  const createTarget = async (title: string, revealText: string, tags: string[], images: File[], trainingCategory?: TrainingCategory) => {
     if (!repository) return;
     const targetId = createId("target");
     const revealArtifacts = images.length ? await Promise.all(images.map((file) => storeTargetArtifact(targetId, file))) : [];
-    const target = await createUserTarget(repository, { id: targetId, title, ...(revealText.trim() ? { revealText } : {}), ...(revealArtifacts.length ? { revealArtifacts } : {}), tags });
+    const target = await createUserTarget(repository, { id: targetId, title, ...(revealText.trim() ? { revealText } : {}), ...(revealArtifacts.length ? { revealArtifacts } : {}), tags, ...(trainingCategory ? { trainingCategory } : {}) });
     setTargets((current) => [target, ...current]);
     setDialogOpen(false);
   };
@@ -1890,7 +2130,7 @@ function TargetsScreen({ copy, repository }: { copy: ReturnType<typeof getCopy>;
     await reload();
   };
   const deleteTarget = async (target: TargetRecord) => {
-    if (!repository || !window.confirm(`${copy.deleteTargetConfirm}\n\n${target.title}`)) return;
+    if (!repository || !window.confirm(`${copy.deleteTargetConfirm}\n\n${localizedTargetTitle(target, settings.interfaceLanguage)}`)) return;
     setError(null);
     try {
       await repository.deleteTarget(target.id);
@@ -1903,8 +2143,8 @@ function TargetsScreen({ copy, repository }: { copy: ReturnType<typeof getCopy>;
     <div className="page">
       <PageHeader title={copy.targets} subtitle={copy.targetsLead} action={<button className="primary-button" onClick={() => setDialogOpen(true)}><Plus size={16} />{copy.addTarget}</button>} />
       <div className="target-columns">
-        <section className="panel target-panel"><PanelHeader title={`${copy.trainingTargets} · ${training.length}`} icon={<Crosshair size={18} />} />{training.length ? <TargetList copy={copy} targets={training} usedTargetIds={usedTargetIds} /> : <EmptyState icon={<FileCheck2 size={28} />} title={copy.statusNext} body={copy.targetPackPending} />}</section>
-        <section className="panel target-panel"><PanelHeader title={`${copy.myTargets} · ${mine.length}`} icon={<LockKeyhole size={18} />} />{mine.length ? <TargetList copy={copy} targets={mine} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onDelete={(target) => void deleteTarget(target)} /> : <EmptyState icon={<Plus size={28} />} title={copy.noPrivateTargets} body={copy.secureLocal} action={<button className="secondary-button" onClick={() => setDialogOpen(true)}><Plus size={15} />{copy.addTarget}</button>} />}</section>
+        <section className="panel target-panel"><PanelHeader title={`${copy.trainingTargets} · ${training.length}`} icon={<Crosshair size={18} />} />{training.length ? <div className="training-target-groups">{TRAINING_CATEGORIES.map((category) => { const items = training.filter((target) => target.sourceMetadata.category === category); return <details key={category}><summary><span>{TRAINING_CATEGORY_LABELS[category][settings.interfaceLanguage]}</span><b>{items.length}</b></summary><TargetList copy={copy} language={settings.interfaceLanguage} targets={items} usedTargetIds={usedTargetIds} /></details>; })}</div> : <EmptyState icon={<FileCheck2 size={28} />} title={copy.statusNext} body={copy.targetPackPending} />}</section>
+        <section className="panel target-panel"><PanelHeader title={`${copy.myTargets} · ${mine.length}`} icon={<LockKeyhole size={18} />} />{mine.length ? <TargetList copy={copy} language={settings.interfaceLanguage} targets={mine} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onDelete={(target) => void deleteTarget(target)} /> : <EmptyState icon={<Plus size={28} />} title={copy.noPrivateTargets} body={copy.secureLocal} action={<button className="secondary-button" onClick={() => setDialogOpen(true)}><Plus size={15} />{copy.addTarget}</button>} />}</section>
       </div>
       <p className="target-support-note">{copy.textRevealOnly}</p>
       {error && <div className="provider-error">{error}</div>}
@@ -1914,18 +2154,20 @@ function TargetsScreen({ copy, repository }: { copy: ReturnType<typeof getCopy>;
   );
 }
 
-function TargetList({ copy, targets, usedTargetIds, onEdit, onDelete }: { copy: ReturnType<typeof getCopy>; targets: TargetRecord[]; usedTargetIds: Set<string>; onEdit?: (target: TargetRecord) => void; onDelete?: (target: TargetRecord) => void }) {
+function TargetList({ copy, language, targets, usedTargetIds, onEdit, onDelete }: { copy: ReturnType<typeof getCopy>; language: InterfaceLanguage; targets: TargetRecord[]; usedTargetIds: Set<string>; onEdit?: (target: TargetRecord) => void; onDelete?: (target: TargetRecord) => void }) {
   return <div className="target-list">{targets.map((target) => {
     const locked = usedTargetIds.has(target.id);
-    return <article className="target-card" key={target.id}><div className="target-card-head"><div><strong>{target.title}</strong><small>{target.tags.length ? target.tags.join(" · ") : target.collection}</small></div>{target.collection === "user" && <div className="target-card-actions"><button className="icon-button" disabled={locked} title={locked ? copy.usedTargetLocked : copy.editTarget} onClick={() => onEdit?.(target)}><Pencil size={14} /></button><button className="icon-button danger" disabled={locked} title={locked ? copy.usedTargetLocked : copy.deleteTarget} onClick={() => onDelete?.(target)}><Trash2 size={14} /></button></div>}</div>{target.revealText && <p>{target.revealText}</p>}{Boolean(target.revealArtifacts?.length) && <div className="target-image-list">{target.revealArtifacts!.map((artifact) => <span key={`${artifact.artifactId}-${artifact.sha256}`}>▣ {artifact.originalFileName}</span>)}</div>}{locked && <small className="target-locked-note"><LockKeyhole size={11} />{copy.usedTargetLocked}</small>}{target.contentHash && <code>sha256 {target.contentHash.slice(0, 16)}…</code>}</article>;
+    const revealText = localizedTargetReveal(target, language);
+    return <article className="target-card" key={target.id}><div className="target-card-head"><div><strong>{localizedTargetTitle(target, language)}</strong><small>{target.tags.length ? target.tags.join(" · ") : target.collection}</small></div>{target.collection === "user" && <div className="target-card-actions"><button className="icon-button" disabled={locked} title={locked ? copy.usedTargetLocked : copy.editTarget} onClick={() => onEdit?.(target)}><Pencil size={14} /></button><button className="icon-button danger" disabled={locked} title={locked ? copy.usedTargetLocked : copy.deleteTarget} onClick={() => onDelete?.(target)}><Trash2 size={14} /></button></div>}</div>{revealText && <details className="target-reveal-preview"><summary>{copy.targetReveal}</summary><p>{revealText}</p></details>}{Boolean(target.revealArtifacts?.length) && <div className="target-image-list">{target.revealArtifacts!.map((artifact) => <span key={`${artifact.artifactId}-${artifact.sha256}`}>▣ {artifact.originalFileName}</span>)}</div>}{locked && <small className="target-locked-note"><LockKeyhole size={11} />{copy.usedTargetLocked}</small>}{target.contentHash && <code>sha256 {target.contentHash.slice(0, 16)}…</code>}</article>;
   })}</div>;
 }
 
-function CreateTargetDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; onCancel: () => void; onCreate: (title: string, revealText: string, tags: string[], images: File[]) => Promise<void> }) {
+function CreateTargetDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; onCancel: () => void; onCreate: (title: string, revealText: string, tags: string[], images: File[], trainingCategory?: TrainingCategory) => Promise<void> }) {
   const [title, setTitle] = useState("");
   const [revealText, setRevealText] = useState("");
   const [tags, setTags] = useState("");
   const [images, setImages] = useState<File[]>([]);
+  const [trainingCategory, setTrainingCategory] = useState<TrainingCategory | "">("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent) => {
@@ -1934,13 +2176,13 @@ function CreateTargetDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typ
     setSaving(true);
     setError(null);
     try {
-      await onCreate(title, revealText, tags.split(","), images);
+      await onCreate(title, revealText, tags.split(","), images, trainingCategory || undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setSaving(false);
     }
   };
-  return <FormDialog title={copy.addTarget} onCancel={onCancel}><form onSubmit={(event) => void submit(event)}><label>{copy.targetName}<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>{copy.targetReveal}<textarea rows={7} value={revealText} onChange={(event) => setRevealText(event.target.value)} /></label><label>{copy.targetImages}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" disabled={!isTauriRuntime() || saving} onChange={(event) => setImages(Array.from(event.target.files ?? []).slice(0, 8))} /></label>{images.length > 0 && <div className="form-image-list">{images.map((file) => <span key={`${file.name}-${file.size}`}>▣ {file.name}</span>)}</div>}<label>{copy.targetTags}<input value={tags} onChange={(event) => setTags(event.target.value)} /></label><small className="form-hint">{copy.textRevealOnly}</small>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!title.trim() || (!revealText.trim() && !images.length) || saving}>{copy.saveTarget}</button></div></form></FormDialog>;
+  return <FormDialog title={copy.addTarget} onCancel={onCancel}><form onSubmit={(event) => void submit(event)}><label>{copy.targetName}<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>{copy.targetReveal}<textarea rows={7} value={revealText} onChange={(event) => setRevealText(event.target.value)} /></label><label>{copy.targetImages}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" disabled={!isTauriRuntime() || saving} onChange={(event) => setImages(Array.from(event.target.files ?? []).slice(0, 8))} /></label>{images.length > 0 && <div className="form-image-list">{images.map((file) => <span key={`${file.name}-${file.size}`}>▣ {file.name}</span>)}</div>}<label>{copy.targetTags}<input value={tags} onChange={(event) => setTags(event.target.value)} /></label><label>{copy.home === "Home" ? "Training category (optional)" : "Kategoria treningowa (opcjonalna)"}<select value={trainingCategory} onChange={(event) => setTrainingCategory(event.target.value as TrainingCategory | "")}><option value="">{copy.home === "Home" ? "Private target only" : "Tylko cel własny"}</option>{TRAINING_CATEGORIES.map((category) => <option key={category} value={category}>{TRAINING_CATEGORY_LABELS[category][copy.home === "Home" ? "en" : "pl"]}</option>)}</select></label><small className="form-hint">{trainingCategory ? (copy.home === "Home" ? "This target remains in My Targets and is also eligible for partial training in the selected category." : "Cel pozostaje w Moich celach i może być użyty w treningu częściowym wybranej kategorii.") : copy.textRevealOnly}</small>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!title.trim() || (!revealText.trim() && !images.length) || saving}>{copy.saveTarget}</button></div></form></FormDialog>;
 }
 
 function EditTargetDialog({ copy, target, onCancel, onSave }: { copy: ReturnType<typeof getCopy>; target: TargetRecord; onCancel: () => void; onSave: (title: string, revealText: string, tags: string[]) => Promise<void> }) {
@@ -1962,6 +2204,7 @@ function EditTargetDialog({ copy, target, onCancel, onSave }: { copy: ReturnType
 function SettingsScreen({ copy, settings, repository, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; repository: AppRepository | null; onChange: (settings: Partial<AppSettings>) => void }) {
   const [tab, setTab] = useState<"providers" | "models" | "storage" | "targets" | "sessions" | "appearance" | "advanced" | "about">("providers");
   const [protocolResource, setProtocolResource] = useState<ProtocolResource | RvLiteProtocolResource | null>(null);
+  const [promptResource, setPromptResource] = useState<FactoryPromptResource | null>(null);
   const tabs = [
     ["providers", copy.providersApi], ["models", copy.models], ["storage", copy.storage], ["targets", copy.targets], ["sessions", copy.sessions], ["appearance", copy.appearance], ["advanced", copy.advanced], ["about", copy.aboutProtocols],
   ] as const;
@@ -1972,7 +2215,7 @@ function SettingsScreen({ copy, settings, repository, onChange }: { copy: Return
       <div className="settings-tab-content">
         {tab === "providers" && <ProviderSettings copy={copy} repository={repository} section="providers" />}
         {tab === "models" && <ProviderSettings copy={copy} repository={repository} section="models" />}
-        {tab === "storage" && <StorageSettingsCard copy={copy} repository={repository} />}
+        {tab === "storage" && <StorageSettingsCard copy={copy} settings={settings} repository={repository} onChange={onChange} />}
         {tab === "targets" && <TargetSettingsCard copy={copy} settings={settings} repository={repository} onChange={onChange} />}
         {tab === "sessions" && <SessionSettingsCard copy={copy} settings={settings} onChange={onChange} />}
         {tab === "appearance" && <section className="panel settings-card wide">
@@ -1982,28 +2225,32 @@ function SettingsScreen({ copy, settings, repository, onChange }: { copy: Return
           </SettingRow>
           <SettingRow label={copy.theme} icon={<Sparkles size={18} />}>
             <div className="theme-picker">
-              {(["aurora", "light", "dark"] as Theme[]).map((theme) => <button key={theme} className={settings.theme === theme ? "active" : ""} onClick={() => onChange({ theme })}>{theme === "aurora" ? <Sparkles size={15} /> : theme === "light" ? <Sun size={15} /> : <Moon size={15} />}{copy[theme]}</button>)}
+              {(["blue", "aurora", "light", "dark", "green"] as Theme[]).map((theme) => <button key={theme} className={settings.theme === theme ? "active" : ""} onClick={() => onChange({ theme })}>{theme === "dark" ? <Moon size={15} /> : theme === "light" ? <Sun size={15} /> : <Sparkles size={15} />}{copy[theme]}</button>)}
             </div>
           </SettingRow>
           <SettingRow label={copy.textSize} icon={<MessageCircle size={18} />}><select value={settings.textScale} onChange={(event) => onChange({ textScale: event.target.value as AppSettings["textScale"] })}><option value="small">{copy.small}</option><option value="normal">{copy.normal}</option><option value="large">{copy.large}</option></select></SettingRow>
           <SettingRow label={copy.animations} icon={<Sparkles size={18} />}><select value={settings.animations ? "on" : "off"} onChange={(event) => onChange({ animations: event.target.value === "on" })}><option value="on">{copy.enabled}</option><option value="off">{copy.disabled}</option></select></SettingRow>
         </section>}
         {tab === "advanced" && <AdvancedSettingsCard copy={copy} repository={repository} />}
-        {tab === "about" && <AboutProtocolsCard copy={copy} onOpen={setProtocolResource} />}
+        {tab === "about" && <AboutProtocolsCard copy={copy} onOpen={setProtocolResource} onOpenPrompt={setPromptResource} />}
       </div>
       {protocolResource && <ProtocolDialog copy={copy} resource={protocolResource} onClose={() => setProtocolResource(null)} />}
+      {promptResource && <PromptResourceDialog copy={copy} resource={promptResource} onClose={() => setPromptResource(null)} />}
     </div>
   );
 }
 
-function AboutProtocolsCard({ copy, onOpen }: { copy: ReturnType<typeof getCopy>; onOpen: (resource: ProtocolResource | RvLiteProtocolResource) => void }) {
+function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: ReturnType<typeof getCopy>; onOpen: (resource: ProtocolResource | RvLiteProtocolResource) => void; onOpenPrompt: (resource: FactoryPromptResource) => void }) {
   const protocolCards = [
     { id: "rcp", name: copy.fullRcp, version: "1.5a", pl: getFullRcp("pl"), en: getFullRcp("en") },
-    { id: "lite", name: copy.rvLite, version: "1.0.0", pl: getRvLite("pl"), en: getRvLite("en") },
+    { id: "lite-core", name: `${copy.rvLite} Core`, version: "1.1.0", pl: getRvLite("pl", "core"), en: getRvLite("en", "core") },
+    { id: "lite-extended", name: `${copy.rvLite} Extended`, version: "1.1.0", pl: getRvLite("pl", "extended"), en: getRvLite("en", "extended") },
   ] as const;
+  const prompts = getFactoryPromptResources();
+  const promptCards = (["ai-viewer-system-prompt", "ai-monitor-system-prompt"] as const).map((id) => ({ id, name: id === "ai-viewer-system-prompt" ? "AI Viewer System Prompt" : "AI Monitor System Prompt", pl: prompts.find((item) => item.id === id && item.language === "pl")!, en: prompts.find((item) => item.id === id && item.language === "en")! }));
   return <div className="about-settings-grid">
-    <section className="panel about-protocol-card"><PanelHeader title={copy.protocolLibrary} icon={<FileCheck2 size={18} />} /><div className="about-card-body"><p>{copy.protocolLibraryLead}</p><div className="about-protocol-list">{protocolCards.map((protocol) => <article key={protocol.id}><span className="resource-orb"><FileCheck2 size={18} /></span><div><small>{copy.readOnly}</small><strong>{protocol.name}</strong><code>v{protocol.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpen(protocol.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpen(protocol.en)}>{copy.readEnglish}</button></div></article>)}</div></div></section>
-    <section className="panel about-credits-card"><PanelHeader title={copy.credits} icon={<Users size={18} />} /><div className="about-card-body"><p>{copy.creditsLead}</p><div className="credit-group"><small>{copy.projectLead}</small><article><strong>Edward <code>lukeskytorep-bot</code></strong><p>{copy.projectLeadCredit}</p></article></div><div className="credit-group"><small>{copy.aiCollaborators}</small><article><strong>Orion via Active Model — Codex / ChatGPT</strong><p>{copy.orionCredit}</p></article><article><strong>Aion via Active Model — ChatGPT 4.0</strong><p>{copy.aionCredit}</p></article><article><strong>Aura via Active Model — Gemini 3.1 Pro</strong><p>{copy.auraCredit}</p></article></div><p className="human-directed-credit">{copy.humanDirectedCredit}</p><div className="about-license"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.projectLicense}</small><strong>MIT</strong></span></div></div></section>
+    <section className="panel about-protocol-card"><PanelHeader title={copy.protocolLibrary} icon={<FileCheck2 size={18} />} /><div className="about-card-body"><p>{copy.protocolLibraryLead}</p><div className="about-protocol-list">{protocolCards.map((protocol) => <article key={protocol.id}><span className="resource-orb"><FileCheck2 size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{protocol.name}</strong><code>v{protocol.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpen(protocol.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpen(protocol.en)}>{copy.readEnglish}</button></div></article>)}{promptCards.map((prompt) => <article key={prompt.id}><span className="resource-orb"><BrainCircuit size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{prompt.name}</strong><code>v{prompt.pl.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpenPrompt(prompt.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpenPrompt(prompt.en)}>{copy.readEnglish}</button></div></article>)}</div><div className="content-license-notice"><ShieldCheck size={16} /><div><strong>{copy.home === "Home" ? "Two-license model" : "Model dwóch licencji"}</strong><p>{copy.home === "Home" ? "Application source code is MIT. Full RCP, RV Lite, Viewer and Monitor prompts, factory targets and related authored content are licensed under CC BY 4.0. The Rosehip mark is a separate user-supplied brand asset and is not relicensed by the source-code license." : "Kod źródłowy aplikacji jest objęty MIT. Full RCP, RV Lite, prompty Viewera i Monitora, cele fabryczne oraz podobne materiały autorskie są objęte CC BY 4.0. Znak Rosehip jest osobnym zasobem marki dostarczonym przez użytkownika i nie zostaje objęty licencją kodu."}</p></div></div></div></section>
+    <section className="panel about-credits-card"><PanelHeader title={copy.credits} icon={<Users size={18} />} /><div className="about-card-body"><p>{copy.creditsLead}</p><div className="credit-group"><small>{copy.projectLead}</small><article><strong>Edward <code>lukeskytorep-bot</code></strong><p>{copy.projectLeadCredit}</p></article></div><div className="credit-group"><small>{copy.aiCollaborators}</small><article><strong>Orion via Active Model — Codex / ChatGPT</strong><p>{copy.orionCredit}</p></article><article><strong>Aion via Active Model — ChatGPT 4.0</strong><p>{copy.aionCredit}</p></article><article><strong>Aura via Active Model — Gemini 3.1 Pro</strong><p>{copy.auraCredit}</p></article></div><p className="human-directed-credit">{copy.humanDirectedCredit}</p><div className="about-license"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.projectLicense}</small><strong>Code: MIT</strong></span><span><small>Content</small><strong>CC BY 4.0</strong></span></div></div></section>
   </div>;
 }
 
@@ -2039,7 +2286,7 @@ function AdvancedSettingsCard({ copy, repository }: { copy: ReturnType<typeof ge
   return <section className="panel advanced-settings-card"><PanelHeader title={copy.advanced} icon={<Settings2 size={18} />} /><div className="advanced-settings-body"><div className="advanced-version"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.cachedModelCount}</small><strong>{modelCount}</strong></span><span><small>{copy.visionRoutes}</small><strong>{capabilitySummary.vision}</strong></span><span><small>{copy.reasoningRoutes}</small><strong>{capabilitySummary.reasoning}</strong></span><span><small>{copy.compatibilityRoutes}</small><strong>{capabilitySummary.compatibility}</strong></span></div><p>{copy.debugSecurity}</p><button className="secondary-button" disabled={!repository || !modelCount} onClick={() => void reset()}>{copy.resetCapabilityCache}</button>{message && <div className="storage-success"><Check size={14} />{message}</div>}<div className="debug-log-heading"><div><strong>{copy.apiDebugLog}</strong><small>{copy.debugVolatile}</small></div><span><button className="secondary-button" type="button" onClick={() => setDebugEntries(listProviderDebug())}>{copy.refreshDebugLog}</button><button className="secondary-button" type="button" disabled={!debugEntries.length} onClick={clearDebug}>{copy.clearDebugLog}</button></span></div><div className="debug-log-list">{debugEntries.length === 0 ? <p>{copy.noDebugCalls}</p> : debugEntries.map((entry) => <details key={entry.id}><summary><span className={`debug-status ${entry.status}`}>{entry.status.toUpperCase()}</span><strong>{entry.provider} · {entry.modelId}</strong><small>{new Date(entry.capturedAt).toLocaleString()}</small></summary><div className="debug-payload">{entry.endpoint && <code>{entry.endpoint}</code>}{entry.error && <pre>{entry.error}</pre>}{entry.request !== undefined && <><h4>{copy.rawRequest}</h4><pre>{JSON.stringify(entry.request, null, 2)}</pre></>}{entry.response !== undefined && <><h4>{copy.rawResponse}</h4><pre>{JSON.stringify(entry.response, null, 2)}</pre></>}</div></details>)}</div></div></section>;
 }
 
-function StorageSettingsCard({ copy, repository }: { copy: ReturnType<typeof getCopy>; repository: AppRepository | null }) {
+function StorageSettingsCard({ copy, settings, repository, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; repository: AppRepository | null; onChange: (settings: Partial<AppSettings>) => void }) {
   const [paths, setPaths] = useState<StoragePaths | null>(null);
   const [backups, setBackups] = useState<StorageBackupRecord[]>([]);
   const [selectedBackupId, setSelectedBackupId] = useState("");
@@ -2088,7 +2335,7 @@ function StorageSettingsCard({ copy, repository }: { copy: ReturnType<typeof get
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(null); }
   };
-  return <section className="panel storage-settings-card"><PanelHeader title={copy.storage} icon={<Database size={18} />} />{isTauriRuntime() ? <div className="storage-settings-body"><p>{copy.backupSecurity}</p>{paths && <div className="storage-paths"><span><small>{copy.dataLocation}</small><code>{paths.databasePath}</code></span><span><small>{copy.artifacts}</small><code>{paths.artifactsPath}</code></span></div>}<div className="storage-cache-info"><span><small>{copy.capabilityCacheStorage}</small><strong>{formatBytes(cacheInfo.approxBytes)} · {cacheInfo.routes} {copy.cachedModelCount.toLowerCase()}</strong></span><span><small>{copy.cacheRouteLimit}</small><strong>{PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER.toLocaleString()} / provider</strong></span></div><div className="storage-actions"><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void openDataFolder().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))}>{copy.openDataFolder}</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => void backup()}>{busy === "backup" ? copy.backingUp : copy.createBackup}</button><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void exportData()}>{busy === "export" ? copy.exporting : copy.exportData}</button></div><div className="restore-row"><label><span>{copy.backups}</span><select value={selectedBackupId} onChange={(event) => setSelectedBackupId(event.target.value)} disabled={Boolean(busy) || !backups.length}><option value="">{copy.noBackups}</option>{backups.map((item) => <option value={item.backupId} key={item.backupId}>{new Date(item.createdAtUnixMs).toLocaleString()} · {formatBytes(item.sizeBytes)}</option>)}</select></label><button className="secondary-button restore-button" disabled={Boolean(busy) || !selectedBackupId} onClick={() => void restore()}>{busy === "restore" ? copy.restoring : copy.restoreBackup}</button></div>{backups[0] && <small className="backup-hash">SHA-256 {backups[0].databaseSha256.slice(0, 20)}… · {formatBytes(backups[0].sizeBytes)}</small>}{message && <div className="storage-success"><Check size={14} />{message}</div>}{error && <div className="provider-error">{error}</div>}</div> : <div className="settings-info storage-runtime-info"><p>{copy.storageDesktop}</p></div>}</section>;
+  return <section className="panel storage-settings-card"><PanelHeader title={copy.storage} icon={<Database size={18} />} />{isTauriRuntime() ? <div className="storage-settings-body"><p>{copy.backupSecurity}</p>{paths && <div className="storage-paths"><span><small>{copy.dataLocation}</small><code>{paths.databasePath}</code></span><span><small>{copy.artifacts}</small><code>{paths.artifactsPath}</code></span></div>}<label className="training-directory-setting"><span>{copy.home === "Home" ? "Training export directory" : "Katalog eksportu treningów"}</span><input value={settings.trainingDirectory ?? ""} onChange={(event) => onChange({ trainingDirectory: event.target.value })} placeholder={copy.home === "Home" ? "Default: Documents/AI RV Harness/Training" : "Domyślnie: Dokumenty/AI RV Harness/Training"} /><small>{copy.home === "Home" ? "Leave empty to use the default Documents folder. Enter an absolute path to use another directory." : "Pozostaw puste, aby użyć domyślnego folderu Dokumenty. Wpisz pełną ścieżkę, aby użyć innego katalogu."}</small></label><div className="storage-cache-info"><span><small>{copy.capabilityCacheStorage}</small><strong>{formatBytes(cacheInfo.approxBytes)} · {cacheInfo.routes} {copy.cachedModelCount.toLowerCase()}</strong></span><span><small>{copy.cacheRouteLimit}</small><strong>{PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER.toLocaleString()} / provider</strong></span></div><div className="storage-actions"><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void openDataFolder().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))}>{copy.openDataFolder}</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => void backup()}>{busy === "backup" ? copy.backingUp : copy.createBackup}</button><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void exportData()}>{busy === "export" ? copy.exporting : copy.exportData}</button></div><div className="restore-row"><label><span>{copy.backups}</span><select value={selectedBackupId} onChange={(event) => setSelectedBackupId(event.target.value)} disabled={Boolean(busy) || !backups.length}><option value="">{copy.noBackups}</option>{backups.map((item) => <option value={item.backupId} key={item.backupId}>{new Date(item.createdAtUnixMs).toLocaleString()} · {formatBytes(item.sizeBytes)}</option>)}</select></label><button className="secondary-button restore-button" disabled={Boolean(busy) || !selectedBackupId} onClick={() => void restore()}>{busy === "restore" ? copy.restoring : copy.restoreBackup}</button></div>{backups[0] && <small className="backup-hash">SHA-256 {backups[0].databaseSha256.slice(0, 20)}… · {formatBytes(backups[0].sizeBytes)}</small>}{message && <div className="storage-success"><Check size={14} />{message}</div>}{error && <div className="provider-error">{error}</div>}</div> : <div className="settings-info storage-runtime-info"><p>{copy.storageDesktop}</p></div>}</section>;
 }
 
 function SessionSettingsCard({ copy, settings, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; onChange: (settings: Partial<AppSettings>) => void }) {
@@ -2106,6 +2353,11 @@ function ProtocolDialog({ copy, resource, onClose }: { copy: ReturnType<typeof g
       </section>
     </div>
   );
+}
+
+function PromptResourceDialog({ copy, resource, onClose }: { copy: ReturnType<typeof getCopy>; resource: FactoryPromptResource; onClose: () => void }) {
+  const name = resource.id === "ai-viewer-system-prompt" ? "AI Viewer System Prompt" : "AI Monitor System Prompt";
+  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="modal protocol-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>{copy.protocolResource}</small><h2>{name}</h2><p>v{resource.version} · {resource.language.toUpperCase()} · {resource.license}</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><div className="hash-grid"><code>Factory resource<br />{resource.id}</code><code>License<br />CC BY 4.0</code></div><pre className="protocol-text">{resource.content}</pre><div className="modal-actions"><button className="primary-button" onClick={onClose}>{copy.close}</button></div></section></div>;
 }
 
 function CustomProtocolDialog({ copy, repository, language, base, onCancel, onSaved }: { copy: ReturnType<typeof getCopy>; repository: AppRepository; language: InterfaceLanguage; base: CustomProtocolVersion | null; onCancel: () => void; onSaved: (protocol: CustomProtocolVersion) => void }) {
@@ -2180,8 +2432,47 @@ function buildProfileAiConfiguration(copy: ReturnType<typeof getCopy>, provider:
   };
 }
 
-function CreateProfileDialog({ copy, repository, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; repository: AppRepository; onCancel: () => void; onCreate: (name: string, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => Promise<void> }) {
+function CreateProfileDialog({ copy, repository, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; repository: AppRepository; onCancel: () => void; onCreate: (name: string, humanName: string | undefined, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => Promise<void> }) {
+  const [aiName, setAiName] = useState("");
+  const [humanName, setHumanName] = useState("");
+  const [note, setNote] = useState("");
+  const [providers, setProviders] = useState<ProviderConfig[]>([]);
+  const [models, setModels] = useState<ProviderModel[]>([]);
+  const [providerId, setProviderId] = useState("");
+  const [modelId, setModelId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { void Promise.all([repository.listProviderConfigs(), repository.listProviderModels()]).then(([nextProviders, nextModels]) => { setProviders(nextProviders); setModels(nextModels); setProviderId(nextProviders[0]?.id ?? ""); }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, [repository]);
+  const provider = providers.find((item) => item.id === providerId) ?? null;
+  const availableModels = preferredModelOrder(models.filter((model) => model.providerConfigId === providerId));
+  const model = availableModels.find((item) => item.modelId === modelId) ?? null;
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!provider || !model || saving) return;
+    setSaving(true); setError(null);
+    try {
+      await onCreate(aiName, humanName || undefined, note || undefined, {
+        credentialId: provider.credentialId,
+        credentialProvider: provider.provider,
+        defaultViewerModelId: model.modelId,
+        ...(defaultTemperatureForModel(model) !== undefined ? { defaultViewerTemperature: defaultTemperatureForModel(model) } : {}),
+        defaultViewerSystemPrompt: factoryViewerEditablePrompt(copy.home === "Home" ? "en" : "pl"),
+        defaultMonitorSystemPrompt: factoryMonitorEditablePrompt(copy.home === "Home" ? "en" : "pl"),
+      });
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setSaving(false); }
+  };
+  return <FormDialog title={copy.createProfile} onCancel={onCancel} modalClassName="profile-edit-modal"><form className="profile-edit-form" onSubmit={(event) => void submit(event)}>
+    <div className="identity-name-grid"><label>{copy.aiIsBeName}<input autoFocus value={aiName} onChange={(event) => setAiName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div>
+    <small className="form-hint">{copy.identityNamesLead}</small>
+    <label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label>
+    <fieldset className="profile-edit-ai"><legend>{copy.profileAiDefaults}</legend><label>{copy.profileCredential}<select value={providerId} onChange={(event) => { setProviderId(event.target.value); setModelId(""); }}><option value="">{copy.selectProviderConnection}</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.credentialHint ?? "••••••••"}</option>)}</select></label><label>{copy.defaultViewerModel}<select value={modelId} onChange={(event) => setModelId(event.target.value)} disabled={!provider}><option value="">{copy.selectModel}</option>{availableModels.map((item) => <option key={item.modelId} value={item.modelId}>{item.displayName}</option>)}</select></label></fieldset>
+    {error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving || !provider || !model}>{saving ? copy.saving : copy.create}</button></div>
+  </form></FormDialog>;
+}
+
+function LegacyCreateProfileDialog({ copy, repository, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; repository: AppRepository; onCancel: () => void; onCreate: (name: string, humanName: string | undefined, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => Promise<void> }) {
   const [name, setName] = useState("");
+  const [humanName, setHumanName] = useState("");
   const [note, setNote] = useState("");
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [models, setModels] = useState<ProviderModel[]>([]);
@@ -2221,14 +2512,15 @@ function CreateProfileDialog({ copy, repository, onCancel, onCreate }: { copy: R
     setSaving(true); setError(null);
     try {
       const aiConfiguration = buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey);
-      await onCreate(name, note || undefined, aiConfiguration);
+      await onCreate(name, humanName || undefined, note || undefined, aiConfiguration);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setSaving(false); }
   };
   return <FormDialog title={copy.createProfile} onCancel={onCancel} modalClassName="profile-edit-modal"><form className="profile-edit-form" onSubmit={(event) => void submit(event)}><label>{copy.profileName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label><fieldset className="profile-edit-ai"><legend>{copy.profileAiDefaults}</legend><p>{copy.aiDefaultsLead}</p>{providers.length ? <><label><span>{copy.profileCredential}</span><select value={providerConfigId} onChange={(event) => { setProviderConfigId(event.target.value); setViewerModelId(""); setReasoning(""); setTemperature(""); }}><option value="">{copy.selectProviderConnection}</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.credentialHint ?? "••••••••"}</option>)}</select></label><label><span>{copy.defaultViewerModel}</span><select value={viewerModelId} onChange={(event) => selectViewer(event.target.value)} disabled={!provider}><option value="">{viewerModels.length ? copy.selectModel : copy.noCachedModels}</option>{viewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label><ViewerProfileControls copy={copy} model={viewerModel} reasoning={reasoning} temperature={temperature} systemPrompt={systemPrompt} onReasoning={setReasoning} onTemperature={setTemperature} onSystemPrompt={setSystemPrompt} /><label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><select value={judgeModelKey} onChange={(event) => setJudgeModelKey(event.target.value)}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`create-judge-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label><label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><select value={monitorModelKey} onChange={(event) => setMonitorModelKey(event.target.value)}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`create-monitor-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label></> : <small>{copy.configureProviderFirst}</small>}</fieldset>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving || !provider || !viewerModel}>{saving ? copy.saving : copy.create}</button></div></form></FormDialog>;
 }
 
-function EditProfileDialog({ copy, profile, providers, models, onCancel, onSave }: { copy: ReturnType<typeof getCopy>; profile: Profile; providers: ProviderConfig[]; models: ProviderModel[]; onCancel: () => void; onSave: (name: string, note?: string, aiConfiguration?: ProfileAiConfigurationInput) => Promise<void> }) {
+function EditProfileDialog({ copy, profile, providers, models, onCancel, onSave }: { copy: ReturnType<typeof getCopy>; profile: Profile; providers: ProviderConfig[]; models: ProviderModel[]; onCancel: () => void; onSave: (name: string, humanName: string | undefined, note?: string, aiConfiguration?: ProfileAiConfigurationInput) => Promise<void> }) {
   const [name, setName] = useState(profile.name);
+  const [humanName, setHumanName] = useState(profile.humanName ?? "");
   const [note, setNote] = useState(profile.note ?? "");
   const currentProvider = providers.find((provider) => provider.credentialId === profile.credentialId) ?? null;
   const [providerConfigId, setProviderConfigId] = useState(currentProvider?.id ?? "");
@@ -2265,8 +2557,8 @@ function EditProfileDialog({ copy, profile, providers, models, onCancel, onSave 
     if (aiTouched && (!provider || !validViewerModelId)) { setError(copy.selectViewerBeforeSaving); return; }
     setSaving(true); setError(null);
     try {
-      const aiConfiguration = aiTouched ? buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey) : undefined;
-      await onSave(name, note, aiConfiguration);
+      const aiConfiguration = aiTouched ? { ...buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey), defaultMonitorSystemPrompt: profile.defaultMonitorSystemPrompt ?? factoryMonitorEditablePrompt(copy.home === "Home" ? "en" : "pl") } : undefined;
+      await onSave(name, humanName || undefined, note, aiConfiguration);
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setSaving(false); }
@@ -2280,14 +2572,14 @@ function EditProfileDialog({ copy, profile, providers, models, onCancel, onSave 
     setTemperature(nextTemperature === undefined ? "" : String(nextTemperature));
     setAiTouched(true);
   };
-  return <FormDialog title={copy.editProfile} onCancel={onCancel} modalClassName="profile-edit-modal"><form className="profile-edit-form" onSubmit={(event) => void submit(event)}><label>{copy.profileName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label><fieldset className="profile-edit-ai"><legend>{copy.profileAiDefaults}</legend><p>{copy.aiDefaultsLead}</p>{providers.length ? <><label><span>{copy.profileCredential}</span><select value={providerConfigId} onChange={(event) => { setProviderConfigId(event.target.value); setViewerModelId(""); setReasoning(""); setTemperature(""); setAiTouched(true); }}><option value="">{copy.selectProviderConnection}</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.credentialHint ?? "••••••••"}</option>)}</select></label><label><span>{copy.defaultViewerModel}</span><select value={validViewerModelId} onChange={(event) => selectViewer(event.target.value)} disabled={!provider}><option value="">{viewerModels.length ? copy.selectModel : copy.noCachedModels}</option>{viewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label><ViewerProfileControls copy={copy} model={viewerModel} reasoning={reasoning} temperature={temperature} systemPrompt={systemPrompt} onReasoning={(value) => { setReasoning(value); setAiTouched(true); }} onTemperature={(value) => { setTemperature(value); setAiTouched(true); }} onSystemPrompt={(value) => { setSystemPrompt(value); setAiTouched(true); }} /><label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><select value={judgeModelKey} onChange={(event) => { setJudgeModelKey(event.target.value); setAiTouched(true); }}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`edit-judge-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label><label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><select value={monitorModelKey} onChange={(event) => { setMonitorModelKey(event.target.value); setAiTouched(true); }}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`edit-monitor-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label></> : <small>{copy.configureProviderFirst}</small>}</fieldset>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving}>{saving ? copy.saving : copy.saveChanges}</button></div></form></FormDialog>;
+  return <FormDialog title={copy.editProfile} onCancel={onCancel} modalClassName="profile-edit-modal"><form className="profile-edit-form" onSubmit={(event) => void submit(event)}><div className="identity-name-grid"><label>{copy.aiIsBeName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div><small className="form-hint">{copy.identityNamesLead}</small><label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label><fieldset className="profile-edit-ai"><legend>{copy.profileAiDefaults}</legend><p>{copy.aiDefaultsLead}</p>{providers.length ? <><label><span>{copy.profileCredential}</span><select value={providerConfigId} onChange={(event) => { setProviderConfigId(event.target.value); setViewerModelId(""); setReasoning(""); setTemperature(""); setAiTouched(true); }}><option value="">{copy.selectProviderConnection}</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.credentialHint ?? "••••••••"}</option>)}</select></label><label><span>{copy.defaultViewerModel}</span><select value={validViewerModelId} onChange={(event) => selectViewer(event.target.value)} disabled={!provider}><option value="">{viewerModels.length ? copy.selectModel : copy.noCachedModels}</option>{viewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label><ViewerProfileControls copy={copy} model={viewerModel} reasoning={reasoning} temperature={temperature} systemPrompt={systemPrompt} onReasoning={(value) => { setReasoning(value); setAiTouched(true); }} onTemperature={(value) => { setTemperature(value); setAiTouched(true); }} onSystemPrompt={(value) => { setSystemPrompt(value); setAiTouched(true); }} /><label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><select value={judgeModelKey} onChange={(event) => { setJudgeModelKey(event.target.value); setAiTouched(true); }}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`edit-judge-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label><label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><select value={monitorModelKey} onChange={(event) => { setMonitorModelKey(event.target.value); setAiTouched(true); }}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`edit-monitor-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label></> : <small>{copy.configureProviderFirst}</small>}</fieldset>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving}>{saving ? copy.saving : copy.saveChanges}</button></div></form></FormDialog>;
 }
 
 function CreateWorkspaceDialog({ copy, profile, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; profile: Profile | null; onCancel: () => void; onCreate: (name: string, description?: string) => Promise<void> }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const submit = (event: FormEvent) => { event.preventDefault(); if (name.trim()) void onCreate(name, description); };
-  return <FormDialog title={`${copy.createWorkspace}${profile ? ` · ${profile.name || copy.unnamedProfile}` : ""}`} onCancel={onCancel}><form onSubmit={submit}><label>{copy.workspaceName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.workspaceDescription}<textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!name.trim()}>{copy.create}</button></div></form></FormDialog>;
+  return <FormDialog title={`${copy.createWorkspace}${profile ? ` · ${aiIsBeDisplayName(profile)}` : ""}`} onCancel={onCancel}><form onSubmit={submit}><label>{copy.workspaceName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.workspaceDescription}<textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!name.trim()}>{copy.create}</button></div></form></FormDialog>;
 }
 
 function FormDialog({ title, onCancel, children, modalClassName = "" }: { title: string; onCancel: () => void; children: ReactNode; modalClassName?: string }) {
@@ -2300,6 +2592,21 @@ function Choice({ active, onClick, icon, title, meta, disabled = false }: { acti
 
 function ConfigBlock({ label, children }: { label: string; children: ReactNode }) {
   return <div className="config-block"><label>{label}</label>{children}</div>;
+}
+
+function specialTaskOptionLabel(option: SpecialTaskOption, language: InterfaceLanguage): string {
+  const labels: Record<SpecialTaskOption, Record<InterfaceLanguage, string>> = {
+    main_subject: { pl: "Główna osoba lub istota", en: "Primary subject" },
+    subject_a: { pl: "Subject A", en: "Subject A" },
+    subject_b: { pl: "Subject B", en: "Subject B" },
+    subject_c: { pl: "Subject C", en: "Subject C" },
+    main_activity: { pl: "Główna aktywność dowolnego rodzaju", en: "Primary activity of any kind" },
+    main_event: { pl: "Główne zdarzenie", en: "Primary event" },
+    structure_a: { pl: "Structure A", en: "Structure A" },
+    object_a: { pl: "Object A", en: "Object A" },
+    object_b: { pl: "Object B", en: "Object B" },
+  };
+  return labels[option][language];
 }
 
 function SettingRow({ label, icon, children }: { label: string; icon: ReactNode; children: ReactNode }) {

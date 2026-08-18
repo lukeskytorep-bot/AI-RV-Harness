@@ -9,6 +9,7 @@ import { buildResearchLockPlan, stableStringify } from "./planner";
 import { runResearchPreflight, type ResearchPreflightInventory } from "./preflight";
 import { computeConditionStatistics, computePairwiseStatistics } from "./statistics";
 import type { ResearchConfig, ResearchPreflightResult, ResearchProjectRecord, ResearchResults, UnblindedSessionResult } from "./types";
+import { aiIsBeDisplayName, humanIsBeDisplayName } from "../domain/isBeIdentity";
 
 type ResearchRepository = AppRepository;
 
@@ -37,19 +38,21 @@ export async function executeResearchSessions(input: {
 }): Promise<void> {
   const project = await requireProject(input.repository, input.projectId);
   if (!["Locked", "Running", "Interrupted"].includes(project.state)) throw new Error(`Research sessions cannot run from state ${project.state}.`);
-  const [assignments, mappings, conditions, targets, providers, models] = await Promise.all([
+  const [assignments, mappings, conditions, targets, providers, models, profiles] = await Promise.all([
     input.repository.listResearchAssignments(project.id),
     input.repository.listBlindingMappings(project.id),
     input.repository.listResearchConditions(project.id),
     input.repository.listTargets(),
     input.repository.listProviderConfigs(),
     input.repository.listProviderModels(),
+    typeof input.repository.listProfiles === "function" ? input.repository.listProfiles() : Promise.resolve([]),
   ]);
   const mappingByAnonymous = new Map(mappings.map((mapping) => [mapping.anonymousSessionId, mapping]));
   const conditionById = new Map(conditions.map((condition) => [condition.id, condition]));
   const targetById = new Map(targets.map((target) => [target.id, target]));
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const modelByKey = new Map(models.map((model) => [`${model.providerConfigId}::${model.modelId}`, model]));
+  const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
   const run = input.sessionRunner ?? runAutomaticRcpSession;
   let completed = assignments.filter((assignment) => assignment.status === "SessionComplete" || assignment.status === "Judged").length;
   await input.repository.setResearchProjectState(project.id, "Running");
@@ -71,6 +74,7 @@ export async function executeResearchSessions(input: {
     if (!mapping || !condition || !target) throw new Error("Locked Research plan is incomplete.");
     const provider = providerById.get(condition.providerConfigId);
     const model = modelByKey.get(`${condition.providerConfigId}::${condition.modelId}`);
+    const sessionProfile = profileById.get(condition.profileId);
     if (!provider || !model) throw new Error("A locked Viewer route is no longer present in the current model registry.");
     if (!condition.capabilitySnapshot || capabilityMethodSignature(condition.capabilitySnapshot) !== capabilityMethodSignature(model.capabilities)) {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
@@ -86,6 +90,8 @@ export async function executeResearchSessions(input: {
       repository: input.repository,
       workspaceId: project.workspaceId,
       profileId: condition.profileId,
+      aiIsBeDisplayName: sessionProfile ? aiIsBeDisplayName(sessionProfile) : "AI IS-BE",
+      humanIsBeDisplayName: sessionProfile ? humanIsBeDisplayName(sessionProfile) : "Human IS-BE",
       providerConfig: provider,
       model,
       protocol: getFullRcp(project.config.sessionLanguage),

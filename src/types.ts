@@ -2,13 +2,24 @@ import type { ReasoningEffort } from "./providers/types";
 
 export type InterfaceLanguage = "pl" | "en";
 export type SessionLanguageSetting = "same" | InterfaceLanguage;
-export type Theme = "aurora" | "light" | "dark";
+export type Theme = "blue" | "aurora" | "light" | "dark" | "green";
 export type ChatMode = "conversation" | "manual_rv";
+
+export interface ChatThreadGroup {
+  id: string;
+  workspaceId: string;
+  mode: ChatMode;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+}
 
 export interface ChatThread {
   id: string;
   workspaceId: string;
   mode: ChatMode;
+  threadGroupId?: string;
   title: string;
   formalRvState?: "BLIND" | "REVEALED" | "INTERRUPTED" | "FAILED";
   createdAt: string;
@@ -37,11 +48,13 @@ export interface AppSettings {
   sessionCodePrefix: string;
   textScale: "small" | "normal" | "large";
   animations: boolean;
+  trainingDirectory?: string;
 }
 
 export interface Profile {
   id: string;
   name: string;
+  humanName?: string;
   note?: string;
   credentialId?: string;
   credentialProvider?: string;
@@ -49,6 +62,7 @@ export interface Profile {
   defaultViewerReasoningEffort?: ReasoningEffort;
   defaultViewerTemperature?: number;
   defaultViewerSystemPrompt?: string;
+  defaultMonitorSystemPrompt?: string;
   defaultMonitorProviderConfigId?: string;
   defaultMonitorModelId?: string;
   defaultJudgeProviderConfigId?: string;
@@ -65,6 +79,7 @@ export interface ProfileAiConfigurationInput {
   defaultViewerReasoningEffort?: ReasoningEffort;
   defaultViewerTemperature?: number;
   defaultViewerSystemPrompt?: string;
+  defaultMonitorSystemPrompt?: string;
   defaultMonitorProviderConfigId?: string;
   defaultMonitorModelId?: string;
   defaultJudgeProviderConfigId?: string;
@@ -91,12 +106,14 @@ export interface Workspace {
 
 export interface CreateProfileInput {
   name: string;
+  humanName?: string;
   note?: string;
   aiConfiguration?: ProfileAiConfigurationInput;
 }
 
 export interface UpdateProfileInput {
   name: string;
+  humanName?: string;
   note?: string;
 }
 

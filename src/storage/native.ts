@@ -60,3 +60,7 @@ export async function restoreStorageBackupNative(backupId: string): Promise<Rest
 export async function openDataFolder(): Promise<void> {
   await invoke("open_data_folder");
 }
+
+export async function openFolder(path: string): Promise<void> {
+  await invoke("open_folder", { path });
+}

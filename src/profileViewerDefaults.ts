@@ -1,6 +1,7 @@
 import { resolveGenerationSettings } from "./providers/capabilities";
 import type { GenerationSettings, ProviderModel, ReasoningEffort } from "./providers/types";
-import type { Profile, ViewerSystemPromptSnapshot } from "./types";
+import type { InterfaceLanguage, Profile, ViewerSystemPromptSnapshot } from "./types";
+import { buildEffectiveViewerPrompt, FACTORY_PROMPT_VERSION, factoryViewerEditablePrompt } from "./resources/systemPrompts";
 
 export const DEFAULT_VIEWER_TEMPERATURE = 0.9;
 export const MAX_PROFILE_SYSTEM_PROMPT_LENGTH = 100_000;
@@ -53,23 +54,27 @@ export function normalizeProfileSystemPrompt(value: string): string | undefined 
 
 export async function profileSystemPromptSnapshot(
   profile: Profile | null,
+  language: InterfaceLanguage = "en",
 ): Promise<ViewerSystemPromptSnapshot | undefined> {
-  const content = normalizeProfileSystemPrompt(profile?.defaultViewerSystemPrompt ?? "");
-  if (!profile || !content) return undefined;
+  if (!profile) return undefined;
+  const editable = normalizeProfileSystemPrompt(profile.defaultViewerSystemPrompt ?? "") ?? factoryViewerEditablePrompt(language);
+  const content = buildEffectiveViewerPrompt(language, editable);
   return {
     id: `profile_viewer_prompt_${profile.id}`,
-    version: profile.updatedAt,
+    version: `${FACTORY_PROMPT_VERSION}:${profile.updatedAt}`,
     content,
     contentSha256: await sha256Text(content),
   };
 }
 
 export async function customSystemPromptSnapshot(
-  contentInput: string,
+  editableInput: string,
   id: string,
+  language: InterfaceLanguage = "en",
 ): Promise<ViewerSystemPromptSnapshot | undefined> {
-  const content = normalizeProfileSystemPrompt(contentInput);
-  if (!content) return undefined;
+  const editable = normalizeProfileSystemPrompt(editableInput);
+  if (!editable) return undefined;
+  const content = buildEffectiveViewerPrompt(language, editable);
   return { id, version: "1", content, contentSha256: await sha256Text(content) };
 }
 

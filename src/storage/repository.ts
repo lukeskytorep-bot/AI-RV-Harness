@@ -1,4 +1,4 @@
-import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
+import type { AppSettings, ChatMessage, ChatMode, ChatThread, ChatThreadGroup, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CreateProviderConfigInput, ProviderConfig, ProviderModel } from "../providers/types";
 import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
@@ -7,6 +7,7 @@ import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageReco
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
 import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchConditionRecord, ResearchConfig, ResearchLockPlan, ResearchProjectRecord, ResearchResults, ResearchState } from "../research/types";
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
+import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
 
 export interface AppRepository {
   listProfiles(): Promise<Profile[]>;
@@ -18,8 +19,12 @@ export interface AppRepository {
   createWorkspace(input: CreateWorkspaceInput): Promise<Workspace>;
   touchWorkspace(id: string): Promise<void>;
   setProfileCredential(profileId: string, credentialId?: string, provider?: string): Promise<void>;
+  listChatThreadGroups(workspaceId: string, mode: ChatMode): Promise<ChatThreadGroup[]>;
+  createChatThreadGroup(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThreadGroup>;
+  renameChatThreadGroup(groupId: string, title: string): Promise<void>;
+  archiveChatThreadGroup(groupId: string): Promise<void>;
   listChatThreads(workspaceId: string, mode: ChatMode): Promise<ChatThread[]>;
-  createChatThread(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThread>;
+  createChatThread(workspaceId: string, mode: ChatMode, title?: string, threadGroupId?: string): Promise<ChatThread>;
   getOrCreateChatThread(workspaceId: string, mode: ChatMode): Promise<ChatThread>;
   touchChatThread(threadId: string): Promise<void>;
   renameChatThread(threadId: string, title: string): Promise<void>;
@@ -49,13 +54,16 @@ export interface AppRepository {
   deleteTarget(id: string): Promise<void>;
   recordTargetUsage(input: TargetUsageInput): Promise<void>;
   listTargetUsage(): Promise<TargetUsageRecord[]>;
+  createTrainingRun(input: CreateTrainingRunInput): Promise<TrainingRunRecord>;
+  updateTrainingRun(id: string, input: UpdateTrainingRunInput): Promise<void>;
+  listTrainingRuns(): Promise<TrainingRunRecord[]>;
   listCustomProtocols(language?: "pl" | "en"): Promise<CustomProtocolVersion[]>;
   saveCustomProtocolVersion(input: SaveCustomProtocolVersionInput): Promise<CustomProtocolVersion>;
   createRvSession(input: CreateRvSessionInput): Promise<RvSession>;
   updateRvSessionState(id: string, state: RvSessionState, stopReason?: string): Promise<void>;
   appendSessionEvent(sessionId: string, event: SessionEventInput): Promise<void>;
   updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void>;
-  appendPostRevealTurn(sessionId: string, role: "user" | "assistant", content: string): Promise<string>;
+  appendPostRevealTurn(sessionId: string, role: "user" | "assistant" | "monitor", content: string): Promise<string>;
   saveSessionSnapshot(sessionId: string, snapshot: SessionSnapshot, hash: string): Promise<void>;
   getSessionSnapshot(sessionId: string): Promise<SessionSnapshot | null>;
   sealPreReveal(sessionId: string, transcript: string, hash: string): Promise<void>;

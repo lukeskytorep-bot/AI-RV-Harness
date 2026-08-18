@@ -1,4 +1,4 @@
-import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
+import type { AppSettings, ChatMessage, ChatMode, ChatThread, ChatThreadGroup, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CreateProviderConfigInput, ProviderConfig, ProviderModel } from "../providers/types";
 import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
@@ -13,6 +13,7 @@ import { createId, nowIso } from "./repository";
 import { serializePostRevealTurn } from "../sessions/postRevealTranscript";
 import { verifySealedViewerEvidence } from "../sessions/evidence";
 import { applyReasoningRegistryToProviderModel } from "../providers/modelReasoningRegistry";
+import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
@@ -24,6 +25,7 @@ const SESSION_EVENTS_KEY = "rvh.dev.session_events";
 const SESSION_SNAPSHOTS_KEY = "rvh.dev.session_snapshots";
 const REVEALS_KEY = "rvh.dev.reveals";
 const CHAT_THREADS_KEY = "rvh.dev.chat_threads";
+const CHAT_THREAD_GROUPS_KEY = "rvh.dev.chat_thread_groups";
 const CHAT_MESSAGES_KEY = "rvh.dev.chat_messages";
 const MONITOR_RUNS_KEY = "rvh.dev.monitor_runs";
 const MONITOR_INTERVENTIONS_KEY = "rvh.dev.monitor_interventions";
@@ -40,6 +42,7 @@ const RESEARCH_RESULTS_KEY = "rvh.dev.research_results";
 const WORKSPACE_SOURCES_KEY = "rvh.dev.workspace_sources";
 const CHAT_SOURCE_SELECTION_KEY = "rvh.dev.chat_source_selection";
 const TARGET_CLARIFICATIONS_KEY = "rvh.dev.target_clarifications";
+const TRAINING_RUNS_KEY = "rvh.dev.training_runs";
 
 function read<T>(key: string, fallback: T): T {
   try {
@@ -54,7 +57,27 @@ function write<T>(key: string, value: T): void {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+function isLegacyStarterTrainingTarget(target: TargetRecord): boolean {
+  return target.collection === "training" && /^training_(?:[1-9]|10)$/.test(target.id);
+}
+
 export class BrowserRepository implements AppRepository {
+  async createTrainingRun(input: CreateTrainingRunInput): Promise<TrainingRunRecord> {
+    const all = read<TrainingRunRecord[]>(TRAINING_RUNS_KEY, []);
+    const timestamp = nowIso();
+    const run: TrainingRunRecord = { ...input, id: createId("training"), runNumber: Math.max(0, ...all.map((item) => item.runNumber)) + 1, completedTargetIds: [], sessionIds: [], currentIndex: 0, errors: [], createdAt: timestamp, updatedAt: timestamp };
+    write(TRAINING_RUNS_KEY, [run, ...all]);
+    return run;
+  }
+
+  async updateTrainingRun(id: string, input: UpdateTrainingRunInput): Promise<void> {
+    write(TRAINING_RUNS_KEY, read<TrainingRunRecord[]>(TRAINING_RUNS_KEY, []).map((run) => run.id === id ? { ...run, ...input, errors: input.error ? [...run.errors, input.error] : run.errors, updatedAt: nowIso() } : run));
+  }
+
+  async listTrainingRuns(): Promise<TrainingRunRecord[]> {
+    return read<TrainingRunRecord[]>(TRAINING_RUNS_KEY, []).map((run) => ({ ...run, sessionIds: run.sessionIds ?? [] })).sort((a, b) => b.runNumber - a.runNumber);
+  }
+
   async createDatabaseSnapshot(_destinationPath: string): Promise<void> {
     throw new Error("Backup snapshots are available in the desktop app.");
   }
@@ -73,6 +96,7 @@ export class BrowserRepository implements AppRepository {
     const profile: Profile = {
       id: createId("profile"),
       name: input.name.trim(),
+      humanName: input.humanName?.trim() || undefined,
       note: input.note?.trim() || undefined,
       credentialId: input.aiConfiguration?.credentialId,
       credentialProvider: input.aiConfiguration?.credentialProvider,
@@ -80,6 +104,7 @@ export class BrowserRepository implements AppRepository {
       defaultViewerReasoningEffort: input.aiConfiguration?.defaultViewerReasoningEffort,
       defaultViewerTemperature: input.aiConfiguration?.defaultViewerTemperature,
       defaultViewerSystemPrompt: input.aiConfiguration?.defaultViewerSystemPrompt?.trim() || undefined,
+      defaultMonitorSystemPrompt: input.aiConfiguration?.defaultMonitorSystemPrompt?.trim() || undefined,
       defaultMonitorProviderConfigId: input.aiConfiguration?.defaultMonitorProviderConfigId,
       defaultMonitorModelId: input.aiConfiguration?.defaultMonitorModelId,
       defaultJudgeProviderConfigId: input.aiConfiguration?.defaultJudgeProviderConfigId,
@@ -93,7 +118,7 @@ export class BrowserRepository implements AppRepository {
 
   async updateProfile(id: string, input: UpdateProfileInput): Promise<void> {
     const name = input.name.trim();
-    write(PROFILES_KEY, read<Profile[]>(PROFILES_KEY, []).map((profile) => profile.id === id ? { ...profile, name, note: input.note?.trim() || undefined, updatedAt: nowIso() } : profile));
+    write(PROFILES_KEY, read<Profile[]>(PROFILES_KEY, []).map((profile) => profile.id === id ? { ...profile, name, humanName: input.humanName?.trim() || undefined, note: input.note?.trim() || undefined, updatedAt: nowIso() } : profile));
   }
 
   async archiveProfile(id: string): Promise<void> {
@@ -116,6 +141,7 @@ export class BrowserRepository implements AppRepository {
               defaultViewerReasoningEffort: input.defaultViewerReasoningEffort,
               defaultViewerTemperature: input.defaultViewerTemperature,
               defaultViewerSystemPrompt: input.defaultViewerSystemPrompt?.trim() || undefined,
+              defaultMonitorSystemPrompt: input.defaultMonitorSystemPrompt?.trim() || undefined,
               defaultMonitorProviderConfigId: input.defaultMonitorProviderConfigId,
               defaultMonitorModelId: input.defaultMonitorModelId,
               defaultJudgeProviderConfigId: input.defaultJudgeProviderConfigId,
@@ -173,17 +199,65 @@ export class BrowserRepository implements AppRepository {
     );
   }
 
+  async listChatThreadGroups(workspaceId: string, mode: ChatMode): Promise<ChatThreadGroup[]> {
+    const allGroups = read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []);
+    let relevant = allGroups
+      .filter((group) => group.workspaceId === workspaceId && group.mode === mode && !group.archivedAt)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.createdAt.localeCompare(a.createdAt));
+    const legacyThreads = read<ChatThread[]>(CHAT_THREADS_KEY, []).filter((thread) => thread.workspaceId === workspaceId && thread.mode === mode && !thread.archivedAt && !thread.threadGroupId);
+    if (!relevant.length && legacyThreads.length) {
+      const timestamp = nowIso();
+      const legacyGroup: ChatThreadGroup = { id: `legacy_group_${workspaceId}_${mode}`, workspaceId, mode, title: "Thread 1", createdAt: legacyThreads.reduce((oldest, thread) => thread.createdAt < oldest ? thread.createdAt : oldest, legacyThreads[0].createdAt), updatedAt: timestamp };
+      write(CHAT_THREAD_GROUPS_KEY, [...allGroups, legacyGroup]);
+      write(CHAT_THREADS_KEY, read<ChatThread[]>(CHAT_THREADS_KEY, []).map((thread) => legacyThreads.some((legacy) => legacy.id === thread.id) ? { ...thread, threadGroupId: legacyGroup.id } : thread));
+      relevant = [legacyGroup];
+    }
+    return relevant;
+  }
+
+  async createChatThreadGroup(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThreadGroup> {
+    const all = read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []);
+    const timestamp = nowIso();
+    const group: ChatThreadGroup = {
+      id: createId("thread_group"),
+      workspaceId,
+      mode,
+      title: title?.trim().slice(0, 160) || `Thread ${all.filter((item) => item.workspaceId === workspaceId && item.mode === mode).length + 1}`,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    write(CHAT_THREAD_GROUPS_KEY, [...all, group]);
+    return group;
+  }
+
+  async renameChatThreadGroup(groupId: string, title: string): Promise<void> {
+    const clean = title.trim();
+    if (!clean) throw new Error("Thread title is required.");
+    write(CHAT_THREAD_GROUPS_KEY, read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []).map((group) => group.id === groupId ? { ...group, title: clean.slice(0, 160), updatedAt: nowIso() } : group));
+  }
+
+  async archiveChatThreadGroup(groupId: string): Promise<void> {
+    const groups = read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []);
+    const group = groups.find((item) => item.id === groupId && !item.archivedAt);
+    if (!group) throw new Error("Thread not found.");
+    const activeConversation = read<ChatThread[]>(CHAT_THREADS_KEY, []).find((item) => item.threadGroupId === groupId && item.formalRvState === "BLIND" && !item.archivedAt);
+    if (activeConversation) throw new Error("A Thread containing a blind Manual RV conversation cannot be archived.");
+    const timestamp = nowIso();
+    write(CHAT_THREAD_GROUPS_KEY, groups.map((item) => item.id === groupId ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
+    write(CHAT_THREADS_KEY, read<ChatThread[]>(CHAT_THREADS_KEY, []).map((item) => item.threadGroupId === groupId && !item.archivedAt ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
+  }
+
   async listChatThreads(workspaceId: string, mode: ChatMode): Promise<ChatThread[]> {
     return read<ChatThread[]>(CHAT_THREADS_KEY, [])
       .filter((thread) => thread.workspaceId === workspaceId && thread.mode === mode && !thread.archivedAt)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.createdAt.localeCompare(a.createdAt));
   }
 
-  async createChatThread(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThread> {
+  async createChatThread(workspaceId: string, mode: ChatMode, title?: string, threadGroupId?: string): Promise<ChatThread> {
     const all = read<ChatThread[]>(CHAT_THREADS_KEY, []);
     const timestamp = nowIso();
     const thread: ChatThread = {
-      id: createId("thread"), workspaceId, mode,
+      id: createId("thread"), workspaceId, mode, threadGroupId,
       title: title?.trim().slice(0, 160) || (mode === "conversation" ? "Conversation" : "Manual RV Session"),
       createdAt: timestamp, updatedAt: timestamp,
     };
@@ -367,7 +441,10 @@ export class BrowserRepository implements AppRepository {
   }
 
   async listTargets(collection?: TargetRecord["collection"]): Promise<TargetRecord[]> {
-    return read<TargetRecord[]>(TARGETS_KEY, []).filter((target) => !collection || target.collection === collection).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return read<TargetRecord[]>(TARGETS_KEY, [])
+      .filter((target) => !isLegacyStarterTrainingTarget(target))
+      .filter((target) => !collection || target.collection === collection)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   async createTarget(input: CreateTargetInput): Promise<TargetRecord> {
@@ -463,7 +540,7 @@ export class BrowserRepository implements AppRepository {
     if (stopReason) await this.appendSessionEvent(id, { eventType: "SESSION_STOPPED", role: "controller", content: stopReason });
   }
 
-  async appendPostRevealTurn(sessionId: string, role: "user" | "assistant", content: string): Promise<string> {
+  async appendPostRevealTurn(sessionId: string, role: "user" | "assistant" | "monitor", content: string): Promise<string> {
     const sessions = read<RvSession[]>(RV_SESSIONS_KEY, []);
     const session = sessions.find((item) => item.id === sessionId);
     if (!session) throw new Error("RV session not found.");

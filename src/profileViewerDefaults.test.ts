@@ -38,9 +38,12 @@ describe("Profile Viewer defaults", () => {
     expect(defaultTemperatureForModel(model({ temperature: { supported: true, min: 1, max: 2, confidence: "provider_metadata" } }))).toBe(1);
   });
 
-  it("freezes the trimmed Profile prompt with a stable content hash", async () => {
+  it("freezes the locked identity/activity blocks together with the trimmed editable Profile prompt", async () => {
     const snapshot = await profileSystemPromptSnapshot(profile);
-    expect(snapshot?.content).toBe("Stay in Shadow Zone.");
+    expect(snapshot?.content).toContain("AI IS-BE");
+    expect(snapshot?.content).toContain("LOCKED ACTIVITY DEFINITION");
+    expect(snapshot?.content).toContain("Stay in Shadow Zone.");
+    expect(snapshot?.content.endsWith("Stay in Shadow Zone.")).toBe(true);
     expect(snapshot?.id).toBe("profile_viewer_prompt_profile");
     expect(snapshot?.contentSha256).toMatch(/^[a-f0-9]{64}$/);
   });
