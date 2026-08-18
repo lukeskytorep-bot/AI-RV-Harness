@@ -271,13 +271,26 @@ pub fn restore_backup(app: tauri::AppHandle, request: BackupIdRequest) -> Result
 pub fn open_data_folder(app: tauri::AppHandle) -> Result<(), String> {
     let directory = app.path().app_config_dir().map_err(|error| error.to_string())?;
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    open_directory(&directory)
+}
+
+#[tauri::command]
+pub fn open_folder(path: String) -> Result<(), String> {
+    let directory = fs::canonicalize(PathBuf::from(path)).map_err(|_| "folder does not exist".to_string())?;
+    if !directory.is_dir() {
+        return Err("path is not a folder".to_string());
+    }
+    open_directory(&directory)
+}
+
+fn open_directory(directory: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = Command::new("explorer");
     #[cfg(target_os = "macos")]
     let mut command = Command::new("open");
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut command = Command::new("xdg-open");
-    command.arg(&directory).spawn().map_err(|error| error.to_string())?;
+    command.arg(directory).spawn().map_err(|error| error.to_string())?;
     Ok(())
 }
 

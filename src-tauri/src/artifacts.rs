@@ -64,6 +64,12 @@ pub struct WriteExportRequest {
     files: Vec<ExportTextFile>,
     #[serde(default)]
     artifact_copies: Vec<ExportArtifactCopy>,
+    #[serde(default)]
+    destination: Option<String>,
+    #[serde(default)]
+    base_directory: Option<String>,
+    #[serde(default)]
+    overwrite_existing: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -148,13 +154,23 @@ pub fn write_export_package(app: tauri::AppHandle, request: WriteExportRequest) 
     if request.files.len() > 2000 || request.artifact_copies.len() > 500 {
         return Err("export contains too many files".to_string());
     }
-    let export_root = app.path().app_data_dir().map_err(|error| error.to_string())?.join("exports");
+    let export_root = export_root(&app, request.destination.as_deref(), request.base_directory.as_deref())?;
     fs::create_dir_all(&export_root).map_err(|error| error.to_string())?;
-    let directory = export_root.join(&request.export_id);
-    if directory.exists() {
-        return Err("export package id already exists".to_string());
-    }
-    fs::create_dir(&directory).map_err(|error| error.to_string())?;
+    let directory = if request.overwrite_existing {
+        if request.destination.as_deref() != Some("training") {
+            return Err("only Training exports may update an existing package".to_string());
+        }
+        let directory = export_root.join(&request.export_id);
+        if directory.exists() && !directory.is_dir() {
+            return Err("Training export path is not a directory".to_string());
+        }
+        fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        directory
+    } else {
+        let directory = unique_export_directory(&export_root, &request.export_id)?;
+        fs::create_dir(&directory).map_err(|error| error.to_string())?;
+        directory
+    };
     let mut total_text_bytes = 0usize;
     for file in &request.files {
         total_text_bytes = total_text_bytes.saturating_add(file.content.len());
@@ -163,6 +179,7 @@ pub fn write_export_package(app: tauri::AppHandle, request: WriteExportRequest) 
         }
         let relative = safe_relative_path(&file.relative_path)?;
         let destination = directory.join(relative);
+        reject_symlink_path(&directory, &destination)?;
         if let Some(parent) = destination.parent() { fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
         fs::write(destination, file.content.as_bytes()).map_err(|error| error.to_string())?;
     }
@@ -174,11 +191,64 @@ pub fn write_export_package(app: tauri::AppHandle, request: WriteExportRequest) 
             if !source.starts_with(&canonical_managed_root) { return Err("export artifact is outside managed storage".to_string()); }
             let relative = safe_relative_path(&copy.relative_path)?;
             let destination = directory.join(relative);
+            reject_symlink_path(&directory, &destination)?;
             if let Some(parent) = destination.parent() { fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
             fs::copy(source, destination).map_err(|error| error.to_string())?;
         }
     }
     Ok(WriteExportResponse { directory: directory.to_string_lossy().to_string() })
+}
+
+fn export_root(app: &tauri::AppHandle, destination: Option<&str>, base_directory: Option<&str>) -> Result<PathBuf, String> {
+    match destination.unwrap_or("managed") {
+        "managed" => Ok(app.path().app_data_dir().map_err(|error| error.to_string())?.join("exports")),
+        "training" => {
+            if let Some(value) = base_directory.map(str::trim).filter(|value| !value.is_empty()) {
+                let path = PathBuf::from(value);
+                if !path.is_absolute() || path.parent().is_none() || path.components().any(|component| matches!(component, Component::ParentDir)) {
+                    return Err("training export directory must be an absolute non-root path".to_string());
+                }
+                if path.exists() && !path.is_dir() {
+                    return Err("training export path is not a directory".to_string());
+                }
+                return Ok(path);
+            }
+            let documents = app.path().document_dir()
+                .or_else(|_| app.path().app_data_dir())
+                .map_err(|error| error.to_string())?;
+            Ok(documents.join("AI RV Harness").join("Training"))
+        }
+        _ => Err("unsupported export destination".to_string()),
+    }
+}
+
+fn unique_export_directory(root: &Path, export_id: &str) -> Result<PathBuf, String> {
+    let first = root.join(export_id);
+    if !first.exists() {
+        return Ok(first);
+    }
+    for suffix in 2..=9999 {
+        let candidate = root.join(format!("{export_id}_{suffix}"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err("could not allocate a unique export package directory".to_string())
+}
+
+fn reject_symlink_path(root: &Path, destination: &Path) -> Result<(), String> {
+    let relative = destination.strip_prefix(root).map_err(|_| "export path escaped its package directory".to_string())?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(part) = component else {
+            return Err("invalid export path".to_string());
+        };
+        current.push(part);
+        if current.exists() && fs::symlink_metadata(&current).map_err(|error| error.to_string())?.file_type().is_symlink() {
+            return Err("symbolic links are not allowed inside export packages".to_string());
+        }
+    }
+    Ok(())
 }
 
 fn artifact_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {

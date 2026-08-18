@@ -93,6 +93,30 @@ pub fn run() {
             sql: include_str!("../migrations/014_chat_thread_archiving.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 15,
+            description: "is_be_identity_and_monitor_prompt",
+            sql: include_str!("../migrations/015_is_be_identity_and_monitor_prompt.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 16,
+            description: "training_run_checkpoints",
+            sql: include_str!("../migrations/016_training_runs.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 17,
+            description: "chat_thread_conversation_hierarchy",
+            sql: include_str!("../migrations/017_chat_thread_conversation_hierarchy.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 18,
+            description: "retire_legacy_training_target_pack",
+            sql: include_str!("../migrations/018_retire_legacy_training_targets.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -120,6 +144,7 @@ pub fn run() {
             storage::export_storage_backup,
             storage::restore_backup,
             storage::open_data_folder,
+            storage::open_folder,
             database::database_execute_transaction
         ])
         .run(tauri::generate_context!())
