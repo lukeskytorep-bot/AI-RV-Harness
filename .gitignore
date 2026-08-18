@@ -14,7 +14,7 @@ src-tauri/target/
 .env.*
 !.env.example
 backups/
-exports/
+/exports/
 private-targets/
 .DS_Store
 Thumbs.db
