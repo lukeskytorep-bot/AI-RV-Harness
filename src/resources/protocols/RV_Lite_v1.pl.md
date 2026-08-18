@@ -110,7 +110,7 @@ Przejdź spokojnie przez cel i jego bezpośrednie otoczenie.
 Opisz:
 
 1. główny aspekt celu;
-2. główną aktywność;
+2. Przejdź do głównej aktywności dowolnego rodzaju i opisz.
 3. centrum celu;
 4. otoczenie celu.
 

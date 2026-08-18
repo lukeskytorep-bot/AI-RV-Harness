@@ -140,7 +140,7 @@ Take a calm walk through the target and its immediate surroundings.
 Describe:
 
 1. the main aspect of the target;
-2. the principal activity;
+2. Move to the primary activity of any kind and describe.
 3. the center of the target;
 4. the target’s surroundings.
 

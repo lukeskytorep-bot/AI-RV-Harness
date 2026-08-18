@@ -17,7 +17,8 @@ export interface ProtocolResource {
 
 export interface RvLiteProtocolResource {
   id: "rv-lite";
-  version: "1.0.0";
+  version: "1.1.0";
+  variant: "core" | "extended";
   language: InterfaceLanguage;
   displayName: string;
   content: string;
@@ -53,31 +54,38 @@ export function getFullRcp(language: InterfaceLanguage): ProtocolResource {
   return resources[language];
 }
 
-const rvLiteResources: Record<InterfaceLanguage, RvLiteProtocolResource> = {
+const extendedRvLiteResources: Record<InterfaceLanguage, RvLiteProtocolResource> = {
   pl: {
     id: "rv-lite",
-    version: "1.0.0",
+    version: "1.1.0",
+    variant: "extended",
     language: "pl",
     displayName: "RV Lite",
     content: rvLitePl,
-    contentSha256: "7ce737c0b91673e365435d4764b0a66e75ea8ec8d985d17f872529950e94b96b",
+    contentSha256: "7118fa26eca259e8da3320ca7e6298e2699bb280d9b0363711ba30dec337c1f1",
     steps: extractRvLiteSteps(rvLitePl),
     sourceFormat: "approved-message-derived-markdown",
   },
   en: {
     id: "rv-lite",
-    version: "1.0.0",
+    version: "1.1.0",
+    variant: "extended",
     language: "en",
     displayName: "RV Lite",
     content: rvLiteEn,
-    contentSha256: "59f127ca6d8c3834e6a0f3d4e8cd2ff526c7b1155dbbaf220fe2abf95e8fe1dd",
+    contentSha256: "d178a1b59ba8aba3e5c6cf70bfa1886c0629bb3143ed8b4ac67399c491489fbb",
     steps: extractRvLiteSteps(rvLiteEn),
     sourceFormat: "approved-message-derived-markdown",
   },
 };
 
-export function getRvLite(language: InterfaceLanguage): RvLiteProtocolResource {
-  return rvLiteResources[language];
+const coreRvLiteResources: Record<InterfaceLanguage, RvLiteProtocolResource> = {
+  pl: makeCoreResource(extendedRvLiteResources.pl),
+  en: makeCoreResource(extendedRvLiteResources.en),
+};
+
+export function getRvLite(language: InterfaceLanguage, variant: "core" | "extended" = "extended"): RvLiteProtocolResource {
+  return variant === "core" ? coreRvLiteResources[language] : extendedRvLiteResources[language];
 }
 
 export function renderRvLiteSteps(resource: RvLiteProtocolResource, profileName: string | undefined, sessionCode: string): readonly [string, string, string, string] {
@@ -97,4 +105,22 @@ function extractRvLiteSteps(content: string): readonly [string, string, string, 
     .map((match) => match[2].trim());
   if (sections.length !== 4 || sections.some((section) => !section)) throw new Error("RV Lite resource must contain exactly four non-empty Viewer prompts.");
   return sections as unknown as readonly [string, string, string, string];
+}
+
+function makeCoreResource(extended: RvLiteProtocolResource): RvLiteProtocolResource {
+  const third = extended.steps[2]
+    .replace(/\nAfter completing Step 3,[\s\S]*?Do not name or guess the target\./, "\n\nDo not name or guess the target.")
+    .replace(/\nPo zakończeniu Kroku 3[\s\S]*?Nie nazywaj celu ani nie zgaduj, czym jest\./, "\n\nNie nazywaj celu ani nie zgaduj, czym jest.");
+  const steps = [extended.steps[0], extended.steps[1], third, extended.steps[3]] as const;
+  const content = extended.content.replace(extended.steps[2], third)
+    .replace(/RV Lite — approved English version/, "RV Lite Core — approved English version")
+    .replace(/RV Lite — wersja polska zatwierdzona/, "RV Lite Core — wersja polska zatwierdzona");
+  return {
+    ...extended,
+    variant: "core",
+    displayName: "RV Lite Core",
+    content,
+    contentSha256: extended.language === "pl" ? "80a417f17029d3fe4f10a0b3af3d5fe65658ff3ce43ae23bda0d8864551377bd" : "740cebe1d2c18ef14fb66203289edf4e39dcd5cf5a5a08dbb6c9324632e8a5a2",
+    steps,
+  };
 }
