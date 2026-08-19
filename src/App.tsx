@@ -8,6 +8,7 @@ import {
   Clock3,
   Crosshair,
   Database,
+  Download,
   FileCheck2,
   FlaskConical,
   GraduationCap,
@@ -72,14 +73,15 @@ import { aggregateJudgeScores } from "./domain/scoring";
 import type { MonitorInterventionRecord, MonitorRunRecord } from "./monitor/types";
 import { createTextWorkspaceSource, estimateTextTokens } from "./sources/service";
 import type { WorkspaceSource } from "./sources/types";
-import { createStorageBackup, createStorageExport, restoreStorageBackup } from "./storage/maintenance";
-import { getStoragePaths, listStorageBackups, openDataFolder, type StorageBackupRecord, type StoragePaths } from "./storage/native";
+import { createPortableStorageBackup, restorePortableStorageBackup } from "./storage/maintenance";
+import { chooseDirectory, openDataFolder } from "./storage/native";
 import { APP_VERSION } from "./version";
 import { clearProviderDebug, listProviderDebug } from "./providers/debug";
 import { addProvider, PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER, refreshProviderModels } from "./providers/service";
 import { sendMonitorPostRevealReview, sendPostRevealTurn } from "./sessions/postReveal";
 import { parsePostRevealTranscript } from "./sessions/postRevealTranscript";
 import { exportMonitorRun } from "./exports/monitor";
+import { exportSessionRecord } from "./exports/session";
 import { ensureBundledTrainingTargets } from "./targets/bundled";
 import { createDefaultSettings } from "./startupDefaults";
 import { SettingsSaveQueue } from "./storage/settingsSaveQueue";
@@ -1267,7 +1269,6 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [allModels, setAllModels] = useState<ProviderModel[]>([]);
   const [targets, setTargets] = useState<TargetRecord[]>([]);
-  const [targetUsage, setTargetUsage] = useState<TargetUsageRecord[]>([]);
   const [customProtocols, setCustomProtocols] = useState<CustomProtocolVersion[]>([]);
   const [customProtocolVersionId, setCustomProtocolVersionId] = useState("");
   const [customBuilderOpen, setCustomBuilderOpen] = useState(false);
@@ -1296,7 +1297,8 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const [postRevealTranscript, setPostRevealTranscript] = useState("");
   const [postRevealText, setPostRevealText] = useState("");
   const [postRevealBusy, setPostRevealBusy] = useState(false);
-  const [batchCollection, setBatchCollection] = useState<"all" | "training" | "user">("all");
+  const [sessionExportBusy, setSessionExportBusy] = useState(false);
+  const [sessionExportPath, setSessionExportPath] = useState<string | null>(null);
   const [batchCount, setBatchCount] = useState(3);
   const [batchProgress, setBatchProgress] = useState<OrdinaryBatchProgress | null>(null);
   const [batchResults, setBatchResults] = useState<OrdinaryBatchSessionResult[]>([]);
@@ -1314,10 +1316,9 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const selectedModel = models.find((item) => item.modelId === modelId) ?? null;
   const monitorModel = allModels.find((item) => `${item.providerConfigId}::${item.modelId}` === monitorModelKey) ?? null;
   const monitorProvider = monitorModel ? providerConfigs.find((item) => item.id === monitorModel.providerConfigId) ?? null : null;
-  const usedByProfile = new Set(targetUsage.filter((usage) => usage.profileId === profile?.id).map((usage) => usage.targetId));
-  const eligibleTargets = targets.filter((target) => targetHasSupportedReveal(target) && (settings.targetRepeatPolicy === "allow" || target.collection !== "training" || !usedByProfile.has(target.id)));
-  const batchPool = eligibleTargets.filter((target) => batchCollection === "all" || target.collection === batchCollection);
-  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, modelId, protocol, liteVariant, specialTaskOptions, specialTaskText, customProtocolVersionId, runType, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, targetRepeatPolicy: settings.targetRepeatPolicy, batchCollection, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
+  const eligibleTargets = targets.filter((target) => target.collection === "user" && targetHasSupportedReveal(target));
+  const batchPool = eligibleTargets;
+  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, modelId, protocol, liteVariant, specialTaskOptions, specialTaskText, customProtocolVersionId, runType, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
   const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : 6;
   const running = sessionRunning || batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
@@ -1332,18 +1333,16 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
       if (cancelled) return;
       setProviderConfigs(configs);
       const bound = configs.find((item) => item.credentialId === profile?.credentialId);
-      const [nextModels, everyModel, targetCatalog, usageHistory, sessionHistory] = await Promise.all([
+      const [nextModels, everyModel, targetCatalog, sessionHistory] = await Promise.all([
         bound ? repository.listProviderModels(bound.id) : Promise.resolve([]),
         repository.listProviderModels(),
         repository.listTargets(),
-        repository.listTargetUsage(),
         repository.listRvSessions(workspace.id),
       ]);
       if (cancelled) return;
       setModels(nextModels);
       setAllModels(everyModel);
       setTargets(targetCatalog);
-      setTargetUsage(usageHistory);
       setRecentSessions(sessionHistory.filter((session) => !session.researchProjectId));
       setModelId(resolveViewerDefault(profile, bound ?? null, nextModels));
       setMonitorModelKey(resolveRoleDefault(profile, "monitor", everyModel));
@@ -1481,9 +1480,8 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
       setBatchRunning(false);
       abortRef.current = null;
       try {
-        const [sessions, usage] = await Promise.all([repository.listRvSessions(workspace.id), repository.listTargetUsage()]);
+        const sessions = await repository.listRvSessions(workspace.id);
         setRecentSessions(sessions.filter((session) => !session.researchProjectId));
-        setTargetUsage(usage);
       } catch (cause) {
         setRunError(cause instanceof Error ? cause.message : String(cause));
       }
@@ -1549,7 +1547,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     setExecutionScope("single");
     setProgress({ sessionId: session.id, sessionCode: session.sessionCode, state: session.state, transcript: session.preRevealTranscript });
     setActiveTargetId(session.targetId ?? null);
-    setRunError(null); setRevealText(""); setRevealArtifacts([]); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setTargetSaved(false); setClarificationOpen(false); setClarificationText(""); setPostRevealTranscript(session.postRevealTranscript); setPostRevealText("");
+    setRunError(null); setRevealText(""); setRevealArtifacts([]); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setTargetSaved(false); setClarificationOpen(false); setClarificationText(""); setPostRevealTranscript(session.postRevealTranscript); setPostRevealText(""); setSessionExportPath(null);
     if (!repository) {
       setClarifications([]);
       return;
@@ -1574,6 +1572,22 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     await repository.updateRvSessionState(progress.sessionId, "Completed");
     setProgress((current) => current ? { ...current, state: "Completed" } : current);
     setRecentSessions((await repository.listRvSessions(workspace.id)).filter((session) => !session.researchProjectId));
+  };
+
+  const saveCurrentSession = async () => {
+    if (!repository || !progress?.sessionId || sessionExportBusy) return;
+    const destination = await chooseDirectory(copy.chooseSessionExportFolder);
+    if (!destination) return;
+    setSessionExportBusy(true);
+    setRunError(null);
+    setSessionExportPath(null);
+    try {
+      setSessionExportPath(await exportSessionRecord(repository, workspace.id, progress.sessionId, resolvedLanguage, destination));
+    } catch (cause) {
+      setRunError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSessionExportBusy(false);
+    }
   };
 
   const discussPostReveal = async () => {
@@ -1700,11 +1714,12 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
               {executionScope === "single" && <section className="post-reveal-discussion"><div className="post-reveal-head"><div><strong>{copy.postRevealDiscussion}</strong><p>{copy.postRevealEvidenceGuard}</p></div><span>POST-REVEAL</span></div><div className="post-reveal-review-action"><div><strong>{copy.generatePostRevealReview}</strong><small>{copy.postRevealReviewLead}</small></div><button className="secondary-button" disabled={postRevealBusy} onClick={() => void generatePostRevealReviews()}>{postRevealBusy ? copy.sending : copy.generatePostRevealReview}</button></div>{postRevealTranscript && <div className="post-reveal-turns">{parsePostRevealTranscript(postRevealTranscript).map((turn, index) => <article className={turn.role} key={`${turn.role}-${index}`}><small>{turn.role === "user" ? humanIsBeDisplayName(profile) : turn.role === "monitor" ? copy.aiMonitorReview : aiIsBeDisplayName(profile)}</small><SafeMarkdown content={turn.content} /></article>)}</div>}<div className="post-reveal-compose"><textarea rows={3} value={postRevealText} onChange={(event) => setPostRevealText(event.target.value)} placeholder={copy.postRevealPlaceholder} disabled={postRevealBusy} /><button className="secondary-button" disabled={!postRevealText.trim() || postRevealBusy} onClick={() => void discussPostReveal()}>{postRevealBusy ? copy.sending : copy.sendPostReveal}</button></div></section>}
               {executionScope === "single" && <JudgeEvaluation copy={copy} repository={repository} sessionId={progress.sessionId} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} onCompleted={() => { setProgress((current) => current ? { ...current, state: "Completed" } : current); void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId))); }} />}
               {executionScope === "single" && progress.state === "Revealed" && <button className="secondary-button save-only-button" onClick={() => void completeWithoutEvaluation()}>{copy.saveOnly}</button>}
+              {executionScope === "single" && <div className="session-export-action"><button className="secondary-button" disabled={!isTauriRuntime() || sessionExportBusy} onClick={() => void saveCurrentSession()}><Download size={15} />{sessionExportBusy ? copy.savingSession : copy.saveSession}</button>{sessionExportPath && <div className="storage-success">{copy.sessionExported}: {sessionExportPath}</div>}</div>}
               {executionScope === "single" && clarificationEligible && <section className="target-clarification"><div className="target-clarification-head"><div><strong>{copy.askTargetClarification}</strong><p>{copy.clarificationLead}</p></div><button className="secondary-button" onClick={() => setClarificationOpen((value) => !value)}>{copy.askTargetClarification}</button></div>{clarificationOpen && <div className="clarification-form"><textarea rows={4} value={clarificationText} onChange={(event) => setClarificationText(event.target.value)} placeholder={copy.clarificationPlaceholder} /><button className="primary-button" disabled={!clarificationText.trim() || clarificationBusy} onClick={() => void addClarification()}>{copy.saveClarification}</button></div>}{clarifications.length > 0 && <div className="clarification-list">{clarifications.map((item) => <article key={item.id}><small>{copy.supplementaryClarification} · {new Date(item.createdAt).toLocaleString()}</small><p>{item.content}</p></article>)}</div>}</section>}
             </>}
             {progress.state === "Interrupted" && <div className="provider-error"><CircleStop size={16} /><span><strong>{copy.interrupted}</strong>{progress.stopReason ? ` · ${progress.stopReason}` : ""}</span></div>}
             {executionScope === "batch" && batchResults.length > 0 && !batchRunning && <BatchEvaluation copy={copy} repository={repository} sessions={batchResults} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} onCompleted={() => void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId)))} />}
-            {!running && <button className="secondary-button new-session-button" onClick={() => { setProgress(null); setRunError(null); setActiveTargetId(null); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setClarifications([]); setClarificationOpen(false); setClarificationText(""); setPostRevealTranscript(""); setPostRevealText(""); setBatchResults([]); setBatchProgress(null); }}>{copy.newAutomaticSession}</button>}
+            {!running && <button className="secondary-button new-session-button" onClick={() => { setProgress(null); setRunError(null); setActiveTargetId(null); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setClarifications([]); setClarificationOpen(false); setClarificationText(""); setPostRevealTranscript(""); setPostRevealText(""); setSessionExportPath(null); setBatchResults([]); setBatchProgress(null); }}>{copy.newAutomaticSession}</button>}
           </div>
         ) : <>
         <ConfigBlock label={copy.sessionScope}>
@@ -1770,10 +1785,11 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
             <Choice active={revealSource === "automatic"} onClick={() => setRevealSource("automatic")} icon={<Crosshair size={18} />} title={copy.automaticTarget} meta={eligibleTargets.length ? `${eligibleTargets.length}` : undefined} />
             <Choice active={revealSource === "external"} onClick={() => setRevealSource("external")} icon={<LockKeyhole size={18} />} title={copy.externalBlind} />
           </div>
+          <small className="target-source-explanation">{revealSource === "automatic" ? copy.automaticTargetLead : copy.externalBlindLead}</small>
         </ConfigBlock>
         {revealSource === "automatic" && <ConfigBlock label={copy.selectTarget}>
-          {eligibleTargets.length ? <select className="session-language-select" value={selectedTargetId} onChange={(event) => setSelectedTargetId(event.target.value)}><option value="__random__">🎲 {copy.randomTarget}</option>{eligibleTargets.map((target) => <option key={target.id} value={target.id}>{target.collection === "training" ? copy.trainingTargets : copy.myTargets} · {localizedTargetTitle(target, resolvedLanguage)}</option>)}</select> : <div className="route-summary"><Crosshair size={16} /><span><strong>{copy.noEligibleTargets}</strong><small>{copy.textRevealOnly}</small></span></div>}
-        </ConfigBlock>}</> : <ConfigBlock label={copy.targetPool}><div className="batch-config"><label><span>{copy.targetPool}</span><select value={batchCollection} onChange={(event) => setBatchCollection(event.target.value as "all" | "training" | "user")}><option value="all">{copy.allTargets}</option><option value="training">{copy.trainingTarget}</option><option value="user">{copy.myTargets}</option></select></label><label><span>{copy.batchCount}</span><input type="number" min={1} max={Math.max(1, batchPool.length)} value={batchCount} onChange={(event) => setBatchCount(Math.max(1, Number(event.target.value) || 1))} /></label><small>{copy.eligibleTargets}: {batchPool.length}</small><div className="batch-preflight-actions"><button className="secondary-button" onClick={preflightBatch}>{copy.runPreflight}</button>{batchPreflightSignature === batchConfigSignature && <span className="status-chip ready"><Check size={12} />{copy.preflightPassed}</span>}</div></div></ConfigBlock>}
+          {eligibleTargets.length ? <select className="session-language-select" value={selectedTargetId} onChange={(event) => setSelectedTargetId(event.target.value)}><option value="__random__">🎲 {copy.randomTarget}</option>{eligibleTargets.map((target) => <option key={target.id} value={target.id}>{copy.myTargets} · {localizedTargetTitle(target, resolvedLanguage)}</option>)}</select> : <div className="route-summary target-empty-warning"><Crosshair size={16} /><span><strong>{copy.noEligibleTargets}</strong><small>{copy.noEligibleTargetsLead}</small></span></div>}
+        </ConfigBlock>}</> : <ConfigBlock label={copy.targetPool}><div className="batch-config"><label><span>{copy.targetPool}</span><strong>{copy.myTargets}</strong></label><label><span>{copy.batchCount}</span><input type="number" min={1} max={Math.max(1, batchPool.length)} value={batchCount} onChange={(event) => setBatchCount(Math.max(1, Number(event.target.value) || 1))} /></label><small>{copy.eligibleTargets}: {batchPool.length}</small>{batchPool.length === 0 && <small className="target-source-error">{copy.noEligibleTargetsLead}</small>}<div className="batch-preflight-actions"><button className="secondary-button" onClick={preflightBatch}>{copy.runPreflight}</button>{batchPreflightSignature === batchConfigSignature && <span className="status-chip ready"><Check size={12} />{copy.preflightPassed}</span>}</div></div></ConfigBlock>}
         <div className="start-block">
           <button className="primary-button start-button" disabled={!isTauriRuntime() || !activeProvider || !selectedModel || !maxOutputTokens || Number(maxOutputTokens) <= 0 || (runType === "monitor" && (protocol !== "rcp" || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
           <p>{activeProvider ? copy.controllerReady : copy.configureProviderFirst}</p>
@@ -2215,7 +2231,7 @@ function SettingsScreen({ copy, settings, repository, onChange }: { copy: Return
       <div className="settings-tab-content">
         {tab === "providers" && <ProviderSettings copy={copy} repository={repository} section="providers" />}
         {tab === "models" && <ProviderSettings copy={copy} repository={repository} section="models" />}
-        {tab === "storage" && <StorageSettingsCard copy={copy} settings={settings} repository={repository} onChange={onChange} />}
+        {tab === "storage" && <StorageSettingsCard copy={copy} repository={repository} />}
         {tab === "targets" && <TargetSettingsCard copy={copy} settings={settings} repository={repository} onChange={onChange} />}
         {tab === "sessions" && <SessionSettingsCard copy={copy} settings={settings} onChange={onChange} />}
         {tab === "appearance" && <section className="panel settings-card wide">
@@ -2249,7 +2265,7 @@ function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: ReturnType<t
   const prompts = getFactoryPromptResources();
   const promptCards = (["ai-viewer-system-prompt", "ai-monitor-system-prompt"] as const).map((id) => ({ id, name: id === "ai-viewer-system-prompt" ? "AI Viewer System Prompt" : "AI Monitor System Prompt", pl: prompts.find((item) => item.id === id && item.language === "pl")!, en: prompts.find((item) => item.id === id && item.language === "en")! }));
   return <div className="about-settings-grid">
-    <section className="panel about-protocol-card"><PanelHeader title={copy.protocolLibrary} icon={<FileCheck2 size={18} />} /><div className="about-card-body"><p>{copy.protocolLibraryLead}</p><div className="about-protocol-list">{protocolCards.map((protocol) => <article key={protocol.id}><span className="resource-orb"><FileCheck2 size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{protocol.name}</strong><code>v{protocol.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpen(protocol.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpen(protocol.en)}>{copy.readEnglish}</button></div></article>)}{promptCards.map((prompt) => <article key={prompt.id}><span className="resource-orb"><BrainCircuit size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{prompt.name}</strong><code>v{prompt.pl.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpenPrompt(prompt.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpenPrompt(prompt.en)}>{copy.readEnglish}</button></div></article>)}</div><div className="content-license-notice"><ShieldCheck size={16} /><div><strong>{copy.home === "Home" ? "Two-license model" : "Model dwóch licencji"}</strong><p>{copy.home === "Home" ? "Application source code is MIT. Full RCP, RV Lite, Viewer and Monitor prompts, factory targets and related authored content are licensed under CC BY 4.0. The Rosehip mark is a separate user-supplied brand asset and is not relicensed by the source-code license." : "Kod źródłowy aplikacji jest objęty MIT. Full RCP, RV Lite, prompty Viewera i Monitora, cele fabryczne oraz podobne materiały autorskie są objęte CC BY 4.0. Znak Rosehip jest osobnym zasobem marki dostarczonym przez użytkownika i nie zostaje objęty licencją kodu."}</p></div></div></div></section>
+    <section className="panel about-protocol-card"><PanelHeader title={copy.protocolLibrary} icon={<FileCheck2 size={18} />} /><div className="about-card-body"><p>{copy.protocolLibraryLead}</p><div className="about-protocol-list">{protocolCards.map((protocol) => <article key={protocol.id}><span className="resource-orb"><FileCheck2 size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{protocol.name}</strong><code>v{protocol.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpen(protocol.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpen(protocol.en)}>{copy.readEnglish}</button></div></article>)}{promptCards.map((prompt) => <article key={prompt.id}><span className="resource-orb"><BrainCircuit size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{prompt.name}</strong><code>v{prompt.pl.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpenPrompt(prompt.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpenPrompt(prompt.en)}>{copy.readEnglish}</button></div></article>)}</div><div className="content-license-notice"><ShieldCheck size={16} /><div><strong>{copy.home === "Home" ? "Two-license model" : "Model dwóch licencji"}</strong><p>{copy.home === "Home" ? "Source code is licensed under the MIT License. Documentation, bundled prompts, training content, and other non-code visual assets are licensed under CC BY 4.0." : "Kod źródłowy jest objęty licencją MIT. Dokumentacja, dołączone prompty, materiały treningowe i inne niekodowe zasoby wizualne są objęte licencją CC BY 4.0."}</p></div></div></div></section>
     <section className="panel about-credits-card"><PanelHeader title={copy.credits} icon={<Users size={18} />} /><div className="about-card-body"><p>{copy.creditsLead}</p><div className="credit-group"><small>{copy.projectLead}</small><article><strong>Edward <code>lukeskytorep-bot</code></strong><p>{copy.projectLeadCredit}</p></article></div><div className="credit-group"><small>{copy.aiCollaborators}</small><article><strong>Orion via Active Model — Codex / ChatGPT</strong><p>{copy.orionCredit}</p></article><article><strong>Aion via Active Model — ChatGPT 4.0</strong><p>{copy.aionCredit}</p></article><article><strong>Aura via Active Model — Gemini 3.1 Pro</strong><p>{copy.auraCredit}</p></article></div><p className="human-directed-credit">{copy.humanDirectedCredit}</p><div className="about-license"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.projectLicense}</small><strong>Code: MIT</strong></span><span><small>Content</small><strong>CC BY 4.0</strong></span></div></div></section>
   </div>;
 }
@@ -2286,56 +2302,44 @@ function AdvancedSettingsCard({ copy, repository }: { copy: ReturnType<typeof ge
   return <section className="panel advanced-settings-card"><PanelHeader title={copy.advanced} icon={<Settings2 size={18} />} /><div className="advanced-settings-body"><div className="advanced-version"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.cachedModelCount}</small><strong>{modelCount}</strong></span><span><small>{copy.visionRoutes}</small><strong>{capabilitySummary.vision}</strong></span><span><small>{copy.reasoningRoutes}</small><strong>{capabilitySummary.reasoning}</strong></span><span><small>{copy.compatibilityRoutes}</small><strong>{capabilitySummary.compatibility}</strong></span></div><p>{copy.debugSecurity}</p><button className="secondary-button" disabled={!repository || !modelCount} onClick={() => void reset()}>{copy.resetCapabilityCache}</button>{message && <div className="storage-success"><Check size={14} />{message}</div>}<div className="debug-log-heading"><div><strong>{copy.apiDebugLog}</strong><small>{copy.debugVolatile}</small></div><span><button className="secondary-button" type="button" onClick={() => setDebugEntries(listProviderDebug())}>{copy.refreshDebugLog}</button><button className="secondary-button" type="button" disabled={!debugEntries.length} onClick={clearDebug}>{copy.clearDebugLog}</button></span></div><div className="debug-log-list">{debugEntries.length === 0 ? <p>{copy.noDebugCalls}</p> : debugEntries.map((entry) => <details key={entry.id}><summary><span className={`debug-status ${entry.status}`}>{entry.status.toUpperCase()}</span><strong>{entry.provider} · {entry.modelId}</strong><small>{new Date(entry.capturedAt).toLocaleString()}</small></summary><div className="debug-payload">{entry.endpoint && <code>{entry.endpoint}</code>}{entry.error && <pre>{entry.error}</pre>}{entry.request !== undefined && <><h4>{copy.rawRequest}</h4><pre>{JSON.stringify(entry.request, null, 2)}</pre></>}{entry.response !== undefined && <><h4>{copy.rawResponse}</h4><pre>{JSON.stringify(entry.response, null, 2)}</pre></>}</div></details>)}</div></div></section>;
 }
 
-function StorageSettingsCard({ copy, settings, repository, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; repository: AppRepository | null; onChange: (settings: Partial<AppSettings>) => void }) {
-  const [paths, setPaths] = useState<StoragePaths | null>(null);
-  const [backups, setBackups] = useState<StorageBackupRecord[]>([]);
-  const [selectedBackupId, setSelectedBackupId] = useState("");
-  const [busy, setBusy] = useState<"backup" | "export" | "restore" | null>(null);
+function StorageSettingsCard({ copy, repository }: { copy: ReturnType<typeof getCopy>; repository: AppRepository | null }) {
+  const [busy, setBusy] = useState<"backup" | "restore" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cacheInfo, setCacheInfo] = useState({ routes: 0, approxBytes: 0 });
   const refresh = async () => {
     if (!isTauriRuntime() || !repository) return;
-    const [nextPaths, nextBackups, cachedModels] = await Promise.all([getStoragePaths(), listStorageBackups(), repository.listProviderModels()]);
-    setPaths(nextPaths); setBackups(nextBackups);
+    const cachedModels = await repository.listProviderModels();
     setCacheInfo({ routes: cachedModels.length, approxBytes: new TextEncoder().encode(JSON.stringify(cachedModels)).byteLength });
-    setSelectedBackupId((current) => nextBackups.some((item) => item.backupId === current) ? current : nextBackups[0]?.backupId ?? "");
   };
   useEffect(() => { if (repository) void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, [repository]);
   const backup = async () => {
     if (!repository || busy || !isTauriRuntime()) return;
+    const destination = await chooseDirectory(copy.backupChooseFolder);
+    if (!destination) return;
     setBusy("backup"); setError(null); setMessage(null);
     try {
-      const created = await createStorageBackup(repository);
-      setMessage(`${copy.backupComplete} · ${new Date(created.createdAtUnixMs).toLocaleString()}`);
+      const created = await createPortableStorageBackup(repository, destination);
+      setMessage(`${copy.backupComplete} · ${created.directory}`);
       await refresh();
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(null); }
   };
   const restore = async () => {
-    if (!repository || !selectedBackupId || busy || !isTauriRuntime()) return;
-    const selected = backups.find((item) => item.backupId === selectedBackupId);
-    if (!window.confirm(`${copy.restoreConfirm}\n\n${selected ? new Date(selected.createdAtUnixMs).toLocaleString() : selectedBackupId}`)) return;
+    if (!repository || busy || !isTauriRuntime()) return;
+    const directory = await chooseDirectory(copy.restoreChooseFolder);
+    if (!directory) return;
+    if (!window.confirm(`${copy.restoreConfirm}\n\n${directory}`)) return;
     setBusy("restore"); setError(null); setMessage(null);
     try {
-      await restoreStorageBackup(repository, selectedBackupId);
+      await restorePortableStorageBackup(repository, directory);
       window.location.reload();
     } catch (cause) {
       window.alert(`${copy.restoreFailed}\n\n${cause instanceof Error ? cause.message : String(cause)}`);
       window.location.reload();
     }
   };
-  const exportData = async () => {
-    if (!repository || busy || !isTauriRuntime()) return;
-    setBusy("export"); setError(null); setMessage(null);
-    try {
-      const exported = await createStorageExport(repository);
-      setMessage(`${copy.exportComplete} · ${exported.directory}`);
-      await refresh();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setBusy(null); }
-  };
-  return <section className="panel storage-settings-card"><PanelHeader title={copy.storage} icon={<Database size={18} />} />{isTauriRuntime() ? <div className="storage-settings-body"><p>{copy.backupSecurity}</p>{paths && <div className="storage-paths"><span><small>{copy.dataLocation}</small><code>{paths.databasePath}</code></span><span><small>{copy.artifacts}</small><code>{paths.artifactsPath}</code></span></div>}<label className="training-directory-setting"><span>{copy.home === "Home" ? "Training export directory" : "Katalog eksportu treningów"}</span><input value={settings.trainingDirectory ?? ""} onChange={(event) => onChange({ trainingDirectory: event.target.value })} placeholder={copy.home === "Home" ? "Default: Documents/AI RV Harness/Training" : "Domyślnie: Dokumenty/AI RV Harness/Training"} /><small>{copy.home === "Home" ? "Leave empty to use the default Documents folder. Enter an absolute path to use another directory." : "Pozostaw puste, aby użyć domyślnego folderu Dokumenty. Wpisz pełną ścieżkę, aby użyć innego katalogu."}</small></label><div className="storage-cache-info"><span><small>{copy.capabilityCacheStorage}</small><strong>{formatBytes(cacheInfo.approxBytes)} · {cacheInfo.routes} {copy.cachedModelCount.toLowerCase()}</strong></span><span><small>{copy.cacheRouteLimit}</small><strong>{PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER.toLocaleString()} / provider</strong></span></div><div className="storage-actions"><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void openDataFolder().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))}>{copy.openDataFolder}</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => void backup()}>{busy === "backup" ? copy.backingUp : copy.createBackup}</button><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void exportData()}>{busy === "export" ? copy.exporting : copy.exportData}</button></div><div className="restore-row"><label><span>{copy.backups}</span><select value={selectedBackupId} onChange={(event) => setSelectedBackupId(event.target.value)} disabled={Boolean(busy) || !backups.length}><option value="">{copy.noBackups}</option>{backups.map((item) => <option value={item.backupId} key={item.backupId}>{new Date(item.createdAtUnixMs).toLocaleString()} · {formatBytes(item.sizeBytes)}</option>)}</select></label><button className="secondary-button restore-button" disabled={Boolean(busy) || !selectedBackupId} onClick={() => void restore()}>{busy === "restore" ? copy.restoring : copy.restoreBackup}</button></div>{backups[0] && <small className="backup-hash">SHA-256 {backups[0].databaseSha256.slice(0, 20)}… · {formatBytes(backups[0].sizeBytes)}</small>}{message && <div className="storage-success"><Check size={14} />{message}</div>}{error && <div className="provider-error">{error}</div>}</div> : <div className="settings-info storage-runtime-info"><p>{copy.storageDesktop}</p></div>}</section>;
+  return <section className="panel storage-settings-card"><PanelHeader title={copy.storage} icon={<Database size={18} />} />{isTauriRuntime() ? <div className="storage-settings-body"><p>{copy.backupSecurity}</p><div className="storage-backup-explainer"><ShieldCheck size={18} /><div><strong>{copy.portableBackup}</strong><p>{copy.portableBackupLead}</p></div></div><div className="storage-cache-info"><span><small>{copy.capabilityCacheStorage}</small><strong>{formatBytes(cacheInfo.approxBytes)} · {cacheInfo.routes} {copy.cachedModelCount.toLowerCase()}</strong></span><span><small>{copy.cacheRouteLimit}</small><strong>{PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER.toLocaleString()} / provider</strong></span></div><div className="storage-actions"><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void openDataFolder().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))}>{copy.openDataFolder}</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => void backup()}>{busy === "backup" ? copy.backingUp : copy.createBackup}</button><button className="danger-button restore-button" disabled={Boolean(busy)} onClick={() => void restore()}>{busy === "restore" ? copy.restoring : copy.restoreBackup}</button></div><div className="restore-warning"><CircleStop size={17} /><p>{copy.restoreDataWarning}</p></div>{message && <div className="storage-success"><Check size={14} />{message}</div>}{error && <div className="provider-error">{error}</div>}</div> : <div className="settings-info storage-runtime-info"><p>{copy.storageDesktop}</p></div>}</section>;
 }
 
 function SessionSettingsCard({ copy, settings, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; onChange: (settings: Partial<AppSettings>) => void }) {

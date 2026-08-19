@@ -3,6 +3,7 @@ mod providers;
 mod artifacts;
 mod storage;
 mod database;
+mod dialogs;
 
 use tauri_plugin_sql::{Migration, MigrationKind};
 
@@ -138,13 +139,19 @@ pub fn run() {
             artifacts::write_export_package,
             storage::storage_paths,
             storage::prepare_backup,
+            storage::prepare_portable_backup,
             storage::finalize_backup,
+            storage::finalize_portable_backup,
+            storage::inspect_portable_backup,
+            storage::discard_portable_backup,
             storage::discard_backup,
             storage::list_storage_backups,
             storage::export_storage_backup,
             storage::restore_backup,
+            storage::restore_portable_backup,
             storage::open_data_folder,
             storage::open_folder,
+            dialogs::choose_directory,
             database::database_execute_transaction
         ])
         .run(tauri::generate_context!())

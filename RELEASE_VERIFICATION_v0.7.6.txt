@@ -1,0 +1,36 @@
+AI RV Harness — release verification v0.7.6
+Date: 2026-08-19
+
+LOCAL FRONTEND VERIFICATION
+
+1. TypeScript project build
+   Command: ./node_modules/.bin/tsc -b --pretty false
+   Result: PASS
+
+2. Complete Vitest suite
+   Command: ./node_modules/.bin/vitest run
+   Result: PASS
+   Test files: 57 passed / 57 total
+   Tests: 137 passed / 137 total
+
+3. Production web build
+   Command: ./node_modules/.bin/vite build
+   Result: PASS
+   Modules transformed: 2206
+   Output: dist/index.html and production assets
+   Non-blocking note: Vite reports that the main minified JavaScript chunk exceeds 500 kB.
+
+4. Version consistency
+   Covered by src/versionConsistency.test.ts
+   Result: PASS for frontend, Tauri bundle and native provider user agent at 0.7.6.
+
+NATIVE VERIFICATION BOUNDARY
+
+The packaging environment does not contain rustc/cargo, so Rust tests, Clippy and the Windows Tauri installer were not executed locally. The included CI and Release Windows GitHub Actions workflows perform those native checks and build the Windows release from branch main.
+
+RELEASE CONTENT CHECKS
+
+- Complete project source is included; node_modules, dist and src-tauri/target are excluded from the delivery ZIP.
+- The approved Polish Viewer prompt is included as a versioned factory resource.
+- The approved MIT / CC BY 4.0 notice is present.
+- Raw API credentials are neither source assets nor export/backup payloads.

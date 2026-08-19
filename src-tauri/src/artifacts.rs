@@ -202,21 +202,22 @@ pub fn write_export_package(app: tauri::AppHandle, request: WriteExportRequest) 
 fn export_root(app: &tauri::AppHandle, destination: Option<&str>, base_directory: Option<&str>) -> Result<PathBuf, String> {
     match destination.unwrap_or("managed") {
         "managed" => Ok(app.path().app_data_dir().map_err(|error| error.to_string())?.join("exports")),
-        "training" => {
+        "training" | "external" => {
             if let Some(value) = base_directory.map(str::trim).filter(|value| !value.is_empty()) {
                 let path = PathBuf::from(value);
                 if !path.is_absolute() || path.parent().is_none() || path.components().any(|component| matches!(component, Component::ParentDir)) {
-                    return Err("training export directory must be an absolute non-root path".to_string());
+                    return Err("export directory must be an absolute non-root path".to_string());
                 }
                 if path.exists() && !path.is_dir() {
-                    return Err("training export path is not a directory".to_string());
+                    return Err("export path is not a directory".to_string());
                 }
                 return Ok(path);
             }
             let documents = app.path().document_dir()
                 .or_else(|_| app.path().app_data_dir())
                 .map_err(|error| error.to_string())?;
-            Ok(documents.join("AI RV Harness").join("Training"))
+            let folder = if destination == Some("training") { "Training" } else { "Exports" };
+            Ok(documents.join("AI RV Harness").join(folder))
         }
         _ => Err("unsupported export destination".to_string()),
     }

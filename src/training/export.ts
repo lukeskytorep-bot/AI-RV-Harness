@@ -18,7 +18,9 @@ export async function exportTrainingRun(
   const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const targetById = new Map(targets.map((target) => [target.id, target]));
   const files: Array<{ relativePath: string; content: string }> = [];
+  const artifactCopies: Array<{ sourcePath: string; relativePath: string }> = [];
   const rows: string[] = [];
+  const csvRows: string[] = ["position,session_code,category,target,mean_judge_score,status"];
   const resultRows: Array<{
     position: number;
     block: number;
@@ -44,11 +46,23 @@ export async function exportTrainingRun(
     const title = localizedTargetTitle(target, language);
     files.push(
       { relativePath: `sessions/${folder}/viewer_transcript.md`, content: `${session.preRevealTranscript.trim()}\n` },
+      { relativePath: `sessions/${folder}/post_reveal_review.md`, content: `${session.postRevealTranscript.trim() || (language === "pl" ? "Nie zapisano opinii po Revealu." : "No post-Reveal review was recorded.")}\n` },
       { relativePath: `sessions/${folder}/target_reveal.json`, content: `${JSON.stringify({ targetId, title, category, reveal }, null, 2)}\n` },
       { relativePath: `sessions/${folder}/judge_scores.json`, content: `${JSON.stringify(scores, null, 2)}\n` },
       { relativePath: `reveals/${folder}.json`, content: `${JSON.stringify({ targetId, title, category, reveal }, null, 2)}\n` },
       { relativePath: `judges/${folder}.json`, content: `${JSON.stringify(scores, null, 2)}\n` },
     );
+    const revealText = reveal?.text?.trim() || (language === "pl" ? "Reveal zawiera wyłącznie załączone pliki." : "The Reveal contains attached files only.");
+    const judgeMarkdown = scores.length
+      ? scores.map((score) => `### Judge ${score.judgeIndex} — ${score.total}/10\n\n${score.narrative.conciseRationale}\n\n- ${language === "pl" ? "Najmocniejsze trafienia" : "Strongest matches"}: ${score.narrative.strongestMatches.join("; ") || "—"}\n- ${language === "pl" ? "Główne chybienia" : "Major misses"}: ${score.narrative.majorMissesContradictions.join("; ") || "—"}`).join("\n\n")
+      : language === "pl" ? "W tej sesji nie użyto AI Judge'a." : "No AI Judge was used for this session.";
+    files.push({
+      relativePath: `sessions/${folder}/complete_session.md`,
+      content: `# ${session.sessionCode} — ${title}\n\n## ${language === "pl" ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}\n\n${session.preRevealTranscript.trim()}\n\n## Target Reveal\n\n${revealText}\n\n## ${language === "pl" ? "Opinia Viewera i rozmowa po Revealu" : "Viewer review and post-Reveal discussion"}\n\n${session.postRevealTranscript.trim() || "—"}\n\n## AI Judge\n\n${judgeMarkdown}\n`,
+    });
+    for (const artifact of reveal?.artifactManifest ?? []) {
+      artifactCopies.push({ sourcePath: artifact.path, relativePath: `sessions/${folder}/reveal_files/${safeName(artifact.originalFileName)}` });
+    }
     resultRows.push({
       position: index + 1,
       block: run.mode === "full" ? Math.floor(index / 7) + 1 : 1,
@@ -59,6 +73,7 @@ export async function exportTrainingRun(
       scores: scores.map((score) => ({ judgeIndex: score.judgeIndex, modelRoute: score.modelRoute, total: score.total })),
     });
     rows.push(`| ${index + 1} | ${session.sessionCode} | ${category ? TRAINING_CATEGORY_LABELS[category][language] : "—"} | ${title} | ${scores.length ? (scores.reduce((sum, score) => sum + score.total, 0) / scores.length).toFixed(2) : "—"} |`);
+    csvRows.push([index + 1, session.sessionCode, category ? TRAINING_CATEGORY_LABELS[category][language] : "", title, scores.length ? (scores.reduce((sum, score) => sum + score.total, 0) / scores.length).toFixed(2) : "", session.state].map(csvCell).join(","));
   }
 
   for (const category of run.categories) {
@@ -81,8 +96,9 @@ export async function exportTrainingRun(
     return { block, sessions: items.length, meanJudgeScore: mean(items.flatMap((item) => item.scores.map((score) => score.total))), results: items };
   });
   const judgeResults = run.judgeModelRoutes.map((modelRoute, judgeIndex) => {
-    const totals = resultRows.flatMap((item) => item.scores.filter((score) => score.judgeIndex === judgeIndex || score.modelRoute === modelRoute).map((score) => score.total));
-    return { judgeIndex, modelRoute, sessions: totals.length, meanScore: mean(totals) };
+    const oneBasedJudgeIndex = judgeIndex + 1;
+    const totals = resultRows.flatMap((item) => item.scores.filter((score) => score.judgeIndex === oneBasedJudgeIndex || score.modelRoute === modelRoute).map((score) => score.total));
+    return { judgeIndex: oneBasedJudgeIndex, modelRoute, sessions: totals.length, meanScore: mean(totals) };
   });
 
   const manifest = {
@@ -108,9 +124,14 @@ export async function exportTrainingRun(
       relativePath: "summary.md",
       content: `# ${run.name}\n\n- Run: ${run.runNumber}\n- Status: ${run.status}\n- Mode: ${run.mode}\n- RV Lite: ${run.protocolVariant}\n- Completed: ${run.completedTargetIds.length}/${run.targetIds.length}\n- Judges: ${run.judgeModelRoutes.length}\n- Created: ${run.createdAt}\n\n| # | Session | Category | Target | Mean Judge score |\n|---:|---|---|---|---:|\n${rows.join("\n")}\n`,
     },
+    { relativePath: "summary.csv", content: `${csvRows.join("\n")}\n` },
+    {
+      relativePath: "summary.html",
+      content: `<!doctype html><html lang="${language}"><head><meta charset="utf-8"><title>${escapeHtml(run.name)}</title><style>body{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;padding:0 24px;color:#172033}table{width:100%;border-collapse:collapse}th,td{padding:9px;border:1px solid #cbd5e1;text-align:left}th{background:#eef2ff}small{color:#64748b}</style></head><body><h1>${escapeHtml(run.name)}</h1><p>${language === "pl" ? "Zakończono" : "Completed"}: ${run.completedTargetIds.length}/${run.targetIds.length} · RV Lite ${run.protocolVariant}</p><table><thead><tr><th>#</th><th>${language === "pl" ? "Sesja" : "Session"}</th><th>${language === "pl" ? "Kategoria" : "Category"}</th><th>Target</th><th>${language === "pl" ? "Średnia Judge" : "Mean Judge"}</th></tr></thead><tbody>${resultRows.map((row) => `<tr><td>${row.position}</td><td>${escapeHtml(row.sessionCode)}</td><td>${escapeHtml(row.category ? TRAINING_CATEGORY_LABELS[row.category][language] : "—")}</td><td>${escapeHtml(row.title)}</td><td>${row.scores.length ? (row.scores.reduce((sum, score) => sum + score.total, 0) / row.scores.length).toFixed(2) : "—"}</td></tr>`).join("")}</tbody></table><p><small>AI RV Harness · ${escapeHtml(new Date().toISOString())}</small></p></body></html>`,
+    },
   );
   const exportId = `Training_${String(run.runNumber).padStart(3, "0")}_${run.createdAt.slice(0, 10)}`;
-  const directory = await writeExportPackage({ exportId, files, destination: "training", overwriteExisting: true, ...(baseDirectory?.trim() ? { baseDirectory: baseDirectory.trim() } : {}) });
+  const directory = await writeExportPackage({ exportId, files, artifactCopies, destination: "training", overwriteExisting: true, ...(baseDirectory?.trim() ? { baseDirectory: baseDirectory.trim() } : {}) });
   if (recordInDatabase) await repository.recordExport(run.workspaceId, undefined, "training_run", directory, await sha256Text(JSON.stringify(manifest)));
   return directory;
 }
@@ -122,6 +143,15 @@ function mean(values: number[]): number | null {
 
 function safeName(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80) || "session";
+}
+
+function csvCell(value: string | number): string {
+  const text = String(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 }
 
 async function sha256Text(text: string): Promise<string> {

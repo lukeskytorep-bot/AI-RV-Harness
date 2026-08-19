@@ -19,6 +19,19 @@ pub struct BackupIdRequest {
     backup_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableBackupRequest {
+    backup_id: String,
+    directory: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableRestoreRequest {
+    directory: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoragePaths {
@@ -47,6 +60,8 @@ pub struct BackupArtifact {
 #[serde(rename_all = "camelCase")]
 pub struct BackupManifest {
     schema_version: u8,
+    #[serde(default = "current_application_version")]
+    application_version: String,
     backup_id: String,
     created_at_unix_ms: u64,
     database_sha256: String,
@@ -109,6 +124,26 @@ pub fn prepare_backup(app: tauri::AppHandle) -> Result<PreparedBackup, String> {
 }
 
 #[tauri::command]
+pub fn prepare_portable_backup(destination_root: String) -> Result<PreparedBackup, String> {
+    let root = fs::canonicalize(PathBuf::from(destination_root)).map_err(|_| "selected backup folder does not exist".to_string())?;
+    if !root.is_dir() {
+        return Err("selected backup path is not a folder".to_string());
+    }
+    let backup_id = format!("backup_{}", unix_ms()?);
+    validate_backup_id(&backup_id)?;
+    let directory = root.join(format!("AI_RV_Harness_{backup_id}"));
+    if directory.exists() {
+        return Err("backup folder collision".to_string());
+    }
+    fs::create_dir(&directory).map_err(|error| error.to_string())?;
+    Ok(PreparedBackup {
+        backup_id,
+        database_path: directory.join(DATABASE_FILE_NAME).to_string_lossy().to_string(),
+        directory: directory.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
 pub fn finalize_backup(app: tauri::AppHandle, request: BackupIdRequest) -> Result<BackupRecord, String> {
     validate_backup_id(&request.backup_id)?;
     let directory = backup_directory(&app, &request.backup_id)?;
@@ -126,6 +161,7 @@ pub fn finalize_backup(app: tauri::AppHandle, request: BackupIdRequest) -> Resul
     }
     let manifest = BackupManifest {
         schema_version: BACKUP_SCHEMA_VERSION,
+        application_version: current_application_version(),
         backup_id: request.backup_id.clone(),
         created_at_unix_ms: unix_ms()?,
         database_sha256: database_sha256.clone(),
@@ -136,6 +172,61 @@ pub fn finalize_backup(app: tauri::AppHandle, request: BackupIdRequest) -> Resul
     let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
     fs::write(directory.join("manifest.json"), manifest_bytes).map_err(|error| error.to_string())?;
     Ok(record_from_manifest(&directory, &manifest))
+}
+
+#[tauri::command]
+pub fn finalize_portable_backup(app: tauri::AppHandle, request: PortableBackupRequest) -> Result<BackupRecord, String> {
+    validate_backup_id(&request.backup_id)?;
+    let directory = fs::canonicalize(PathBuf::from(&request.directory)).map_err(|_| "portable backup folder is missing".to_string())?;
+    let expected_folder_name = format!("AI_RV_Harness_{}", request.backup_id);
+    if !directory.is_dir() || directory.file_name().and_then(|value| value.to_str()) != Some(expected_folder_name.as_str()) {
+        return Err("portable backup folder does not match its identifier".to_string());
+    }
+    let database = directory.join(DATABASE_FILE_NAME);
+    if !database.is_file() {
+        return Err("backup database snapshot is missing".to_string());
+    }
+    let database_size_bytes = fs::metadata(&database).map_err(|error| error.to_string())?.len();
+    let database_sha256 = sha256_file(&database)?;
+    let source_artifacts = app.path().app_data_dir().map_err(|error| error.to_string())?.join("artifacts");
+    let destination_artifacts = directory.join("artifacts");
+    let mut artifacts = Vec::new();
+    if source_artifacts.exists() {
+        copy_artifacts(&source_artifacts, &source_artifacts, &destination_artifacts, &mut artifacts)?;
+    }
+    let manifest = BackupManifest {
+        schema_version: BACKUP_SCHEMA_VERSION,
+        application_version: current_application_version(),
+        backup_id: request.backup_id,
+        created_at_unix_ms: unix_ms()?,
+        database_sha256,
+        database_size_bytes,
+        artifacts,
+        secrets_included: false,
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
+    fs::write(directory.join("manifest.json"), manifest_bytes).map_err(|error| error.to_string())?;
+    Ok(record_from_manifest(&directory, &manifest))
+}
+
+#[tauri::command]
+pub fn inspect_portable_backup(directory: String) -> Result<BackupRecord, String> {
+    let (directory, manifest) = validated_portable_backup(&directory)?;
+    Ok(record_from_manifest(&directory, &manifest))
+}
+
+#[tauri::command]
+pub fn discard_portable_backup(request: PortableBackupRequest) -> Result<(), String> {
+    validate_backup_id(&request.backup_id)?;
+    let directory = fs::canonicalize(PathBuf::from(&request.directory)).map_err(|_| "portable backup folder is missing".to_string())?;
+    let expected_folder_name = format!("AI_RV_Harness_{}", request.backup_id);
+    if !directory.is_dir() || directory.file_name().and_then(|value| value.to_str()) != Some(expected_folder_name.as_str()) {
+        return Err("portable backup folder does not match its identifier".to_string());
+    }
+    if directory.join("manifest.json").exists() {
+        return Err("a completed portable backup cannot be discarded".to_string());
+    }
+    fs::remove_dir_all(directory).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -268,6 +359,52 @@ pub fn restore_backup(app: tauri::AppHandle, request: BackupIdRequest) -> Result
 }
 
 #[tauri::command]
+pub fn restore_portable_backup(app: tauri::AppHandle, request: PortableRestoreRequest) -> Result<RestoreResult, String> {
+    let (directory, manifest) = validated_portable_backup(&request.directory)?;
+    let source_database = directory.join(DATABASE_FILE_NAME);
+
+    let destination_artifacts = app.path().app_data_dir().map_err(|error| error.to_string())?.join("artifacts");
+    for artifact in &manifest.artifacts {
+        let relative = safe_relative(&artifact.relative_path)?;
+        let source = directory.join("artifacts").join(&relative);
+        let destination = destination_artifacts.join(&relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        fs::copy(source, destination).map_err(|error| error.to_string())?;
+    }
+
+    let destination_database = database_path(&app)?;
+    if let Some(parent) = destination_database.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let restore_temp = destination_database.with_extension(format!("restore_{}.tmp", unix_ms()?));
+    fs::copy(&source_database, &restore_temp).map_err(|error| error.to_string())?;
+    if sha256_file(&restore_temp)? != manifest.database_sha256 {
+        let _ = fs::remove_file(&restore_temp);
+        return Err("restored database copy failed integrity check".to_string());
+    }
+
+    let safety_suffix = unix_ms()?;
+    let previous_database = destination_database.with_file_name(format!("rv_harness.pre_restore_{safety_suffix}.db"));
+    let mut previous_database_path = None;
+    if destination_database.exists() {
+        fs::rename(&destination_database, &previous_database).map_err(|error| error.to_string())?;
+        previous_database_path = Some(previous_database.to_string_lossy().to_string());
+    }
+    if let Err(error) = fs::rename(&restore_temp, &destination_database) {
+        if previous_database.exists() {
+            let _ = fs::rename(&previous_database, &destination_database);
+        }
+        return Err(error.to_string());
+    }
+    preserve_sidecar(&destination_database, "-wal", safety_suffix)?;
+    preserve_sidecar(&destination_database, "-shm", safety_suffix)?;
+
+    Ok(RestoreResult { backup_id: manifest.backup_id, previous_database_path })
+}
+
+#[tauri::command]
 pub fn open_data_folder(app: tauri::AppHandle) -> Result<(), String> {
     let directory = app.path().app_config_dir().map_err(|error| error.to_string())?;
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
@@ -314,8 +451,36 @@ fn validate_backup_id(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validated_portable_backup(value: &str) -> Result<(PathBuf, BackupManifest), String> {
+    let directory = fs::canonicalize(PathBuf::from(value)).map_err(|_| "selected backup folder does not exist".to_string())?;
+    if !directory.is_dir() {
+        return Err("selected backup path is not a folder".to_string());
+    }
+    let manifest = read_manifest(&directory.join("manifest.json"))?;
+    validate_backup_id(&manifest.backup_id)?;
+    if manifest.schema_version != BACKUP_SCHEMA_VERSION || manifest.secrets_included {
+        return Err("backup manifest is invalid or unsupported".to_string());
+    }
+    let source_database = directory.join(DATABASE_FILE_NAME);
+    if !source_database.is_file() || sha256_file(&source_database)? != manifest.database_sha256 {
+        return Err("backup database integrity check failed".to_string());
+    }
+    for artifact in &manifest.artifacts {
+        let relative = safe_relative(&artifact.relative_path)?;
+        let source = directory.join("artifacts").join(&relative);
+        if !source.is_file() || sha256_file(&source)? != artifact.sha256 {
+            return Err("backup artifact integrity check failed".to_string());
+        }
+    }
+    Ok((directory, manifest))
+}
+
 fn unix_ms() -> Result<u64, String> {
     Ok(SystemTime::now().duration_since(UNIX_EPOCH).map_err(|error| error.to_string())?.as_millis() as u64)
+}
+
+fn current_application_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {

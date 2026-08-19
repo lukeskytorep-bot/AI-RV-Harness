@@ -13,9 +13,9 @@ export function createDefaultSettings(): AppSettings {
     defaultMaxOutputTokens: 8192,
     maxSessionCostUsd: 0,
     defaultRevealSource: "external",
-    targetRepeatPolicy: "allow",
+    targetRepeatPolicy: "avoid_profile",
     sessionCodePrefix: "RVH",
-    textScale: "normal",
+    textScale: "large",
     animations: true,
   };
 }

@@ -203,7 +203,8 @@ describe("automatic RCP controller", () => {
   });
 
   it("detects obvious repetitive generation loops", () => {
-    expect(detectRepetitiveOutput(Array(7).fill("same repeated perceptual fragment over and over").join("\n"))).toBe(true);
+    expect(detectRepetitiveOutput(Array(60).fill("same repeated perceptual fragment over and over").join("\n"))).toBe(true);
+    expect(detectRepetitiveOutput(Array(12).fill("Deskryptor zaawansowany: sztuczne - wykonane przez człowieka").join("\n"))).toBe(false);
     expect(detectRepetitiveOutput("A concise, varied response.")).toBe(false);
   });
 

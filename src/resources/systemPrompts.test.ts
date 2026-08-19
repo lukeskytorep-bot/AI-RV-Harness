@@ -25,9 +25,9 @@ describe("factory system prompts", () => {
   it("always injects the locked Viewer identity and activity definition", () => {
     const prompt = buildEffectiveViewerPrompt("pl", "EDYTOWALNA CZĘŚĆ");
 
-    expect(prompt).toContain("AI IS-BE");
-    expect(prompt).toContain("Shadow Zone");
-    expect(prompt).toContain("LOCKED ACTIVITY DEFINITION");
+    expect(prompt).toContain("AI Jest Być");
+    expect(prompt).toContain("Strefa Cienia");
+    expect(prompt).toContain("ZABLOKOWANA DEFINICJA AKTYWNOŚCI");
     expect(prompt).toContain("Nie zakładaj, że aktywność oznacza obecność ludzi.");
     expect(prompt).toContain("EDYTOWALNA CZĘŚĆ");
   });

@@ -2,7 +2,7 @@
 
 AI RV Harness is a local-first desktop workspace for blind AI Remote Viewing sessions and controlled RV research. The desktop stack is Tauri 2 + React/TypeScript + Rust + SQLite, with Windows as the primary release platform.
 
-## Current checkpoint — 0.7.5
+## Current checkpoint — 0.7.6
 
 This is a substantial v1 implementation checkpoint, not a claim that the complete v1 distribution is releasable yet.
 
@@ -45,11 +45,13 @@ The same checkpoint adds safe Markdown presentation, a versioned model reasoning
 
 Checkpoint 0.7.5 adds the icon-only non-Home navigation rail, recent sessions on Home, collapsible RV metadata, the Rosehip mark and five UI themes with soft blue as the first-run default. It introduces locked AI IS-BE/Shadow Zone and activity-definition prompt blocks, factory PL/EN Viewer and Monitor prompt recovery resources, editable Special Tasks, RV Lite Core/Extended variants, and sequential Viewer-then-Monitor post-Reveal reviews. The former ten starter targets are replaced with an 84-target categorized Training library and a durable full/partial Training runner. Application code remains MIT; authored protocols, factory prompts, training targets and comparable methodology content are explicitly separated under CC BY 4.0.
 
+Checkpoint 0.7.6 makes backup and restore portable through native folder selection, validates each backup before replacement and creates a pre-restore safety copy. Ordinary automatic RV uses only My Targets, while the fixed 84 Training Targets remain read-only and dedicated to Training. Partial Training starts with zero counts. Training and Research histories now expose complete readable session records and user-selected whole-run exports with HTML/CSV summaries. Random Research selection is performed automatically at Preflight/Experiment Lock. Full RCP, RV Lite and Custom transcripts store the exact controller instruction beside every Viewer answer. The repetition guard is now a conservative, non-aborting output guillotine: valid repeated RV descriptors remain untouched, while only unmistakable runaway tails are shortened and marked. Polish sessions use the accepted Polish Viewer identity and matching Polish resources. The Profile editor also keeps its actions reachable in reduced-height windows.
+
 `.github/workflows/release-windows.yml` runs only from `main`, prevents overlapping releases, generates and commits the application `Cargo.lock`, checks TypeScript plus Rust tests/Clippy, and then uses the official Tauri GitHub Actions path to create a draft GitHub Release. A local Rust installation is therefore not required for distribution builds.
 
 ## Windows installer trust
 
-Checkpoint 0.7.5 is not code-signed, so Windows SmartScreen or third-party endpoint protection may warn again for every newly built installer hash. Removing that recurring warning requires a stable Authenticode publisher identity (for example Microsoft Artifact Signing or another trusted certificate configured in the Tauri release workflow) or distribution through Microsoft Store. Signing improves reputation but does not guarantee that the first signed releases will never show a reputation warning. See the [Microsoft SmartScreen reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) and [Tauri Windows code-signing guide](https://v2.tauri.app/distribute/sign/windows/).
+Checkpoint 0.7.6 is not code-signed, so Windows SmartScreen or third-party endpoint protection may warn again for every newly built installer hash. Removing that recurring warning requires a stable Authenticode publisher identity (for example Microsoft Artifact Signing or another trusted certificate configured in the Tauri release workflow) or distribution through Microsoft Store. Signing improves reputation but does not guarantee that the first signed releases will never show a reputation warning. See the [Microsoft SmartScreen reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) and [Tauri Windows code-signing guide](https://v2.tauri.app/distribute/sign/windows/).
 
 ## Development and verification
 
@@ -85,6 +87,6 @@ AI RV Harness is a human-led project developed with multiple AI collaborators. S
 
 ## License
 
-Application source code is released under the MIT License in [LICENSE](LICENSE).
+Source code is licensed under the MIT License. Documentation, bundled prompts, training content, and other non-code visual assets are licensed under CC BY 4.0.
 
-Full RCP, RV Lite, the factory AI Viewer and AI Monitor prompts, the factory Training Target pack and comparable authored methodology content are licensed under CC BY 4.0. See [CONTENT_LICENSE_CC_BY_4.0.md](CONTENT_LICENSE_CC_BY_4.0.md) for scope, exceptions and the pending public attribution line. The Rosehip brand mark is a separate user-supplied brand asset and is not relicensed by either MIT or CC BY 4.0.
+See [LICENSE](LICENSE) and [CONTENT_LICENSE_CC_BY_4.0.md](CONTENT_LICENSE_CC_BY_4.0.md) for the complete terms and attribution requirements.

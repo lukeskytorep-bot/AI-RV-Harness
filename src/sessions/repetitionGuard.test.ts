@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RepetitionGuard, analyzeRepetitiveOutput, detectRepetitiveOutput } from "./repetitionGuard";
+import { analyzeRepetitiveOutput, detectRepetitiveOutput, sanitizeRepetitiveOutput } from "./repetitionGuard";
 
 const sixTouches = `## Phase 1
 
@@ -26,16 +26,25 @@ describe("repetition guard", () => {
     expect(detectRepetitiveOutput(sixTouches)).toBe(false);
   });
 
-  it("immediately stops an unmistakable long repeated line", () => {
-    const loop = Array(6).fill("The same long perceptual sentence repeats without any new spatial or sensory information at all.").join("\n");
-    expect(analyzeRepetitiveOutput(loop)).toEqual(expect.objectContaining({ severity: "stop", rule: "long-line-repeat" }));
+  it("detects only an unmistakable run of at least sixty identical lines", () => {
+    const loop = Array(60).fill("The same long perceptual sentence repeats without any new spatial or sensory information at all.").join("\n");
+    expect(analyzeRepetitiveOutput(loop)).toEqual(expect.objectContaining({ severity: "stop", rule: "consecutive-identical-lines" }));
   });
 
-  it("warns once for a borderline pattern and stops if the next response repeats a borderline pattern", () => {
-    const guard = new RepetitionGuard();
-    const borderline = Array(3).fill("This moderately long perception repeats with enough words to deserve a diagnostic warning.").join("\n");
-    expect(guard.inspect(borderline).severity).toBe("warning");
-    expect(guard.inspect(borderline)).toEqual(expect.objectContaining({ severity: "stop", rule: "consecutive-long-line-repeat" }));
+  it("keeps the repeated Polish RV descriptor which previously caused a false stop", () => {
+    const valid = Array.from({ length: 12 }, (_, index) => `DOTYK [${index + 1}]\n1. Echo Dot: odrębny punkt kontaktu.\n2. Kategoria kontaktu: struktura.\n3. Deskryptor prymitywny: twarde.\n4. Deskryptor zaawansowany: sztuczne - wykonane przez człowieka.\n5. Formowanie: element ${index + 1}.`).join("\n\n");
+    expect(analyzeRepetitiveOutput(valid)).toEqual({ severity: "clear" });
+    expect(sanitizeRepetitiveOutput(valid, "pl")).toEqual(expect.objectContaining({ truncated: false, content: valid }));
+  });
+
+  it("truncates a clear runaway but preserves the session instead of aborting it", () => {
+    const valid = "Useful perceptual evidence before the provider loop.";
+    const loop = `${valid}\n${Array(65).fill("identical runaway line").join("\n")}`;
+    const result = sanitizeRepetitiveOutput(loop, "en");
+    expect(result.truncated).toBe(true);
+    expect(result.content).toContain(valid);
+    expect(result.content).toContain("OUTPUT TRUNCATED");
+    expect(result.content.length).toBeLessThan(loop.length);
   });
 
   it("ignores repeated ASCII strokes inside fenced code blocks", () => {

@@ -19,7 +19,7 @@ import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetri
 import { createSessionCode } from "./sessionCode";
 import type { RvSessionState, SessionSnapshot } from "./types";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
-import { RepetitionGuard, formatRepetitionStopReason } from "./repetitionGuard";
+import { sanitizeRepetitiveOutput } from "./repetitionGuard";
 import type { SpecialTaskInput } from "./specialTask";
 import { renderSpecialTask } from "./specialTask";
 
@@ -82,7 +82,6 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     : [];
   const startedAtMs = Date.now();
   let metrics = emptySessionRequestMetrics();
-  const repetitionGuard = new RepetitionGuard();
   let transcript = "";
   const stopRun = (reason: string) => stop(input, sessionId, sessionCode, transcript, reason, metrics, startedAtMs);
 
@@ -200,18 +199,24 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     }
     if (!response) return stopRun(`AUTO-STOP: repeated provider/API failures${lastError ? ` — ${lastError}` : ""}`);
 
+    const rawResponseContent = response.content;
+    const sanitized = sanitizeRepetitiveOutput(rawResponseContent, input.sessionLanguage);
+    response = { ...response, content: sanitized.content };
+    if (sanitized.truncated) {
+      await input.repository.appendSessionEvent(sessionId, {
+        eventType: "OUTPUT_TRUNCATED_LOOP",
+        role: "controller",
+        content: sanitized.finding?.fragment,
+        metadata: { promptNumber, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(rawResponseContent) },
+      });
+    }
     messages.push({ role: "assistant", content: response.content });
-    transcript = appendRvLiteTranscript(transcript, promptNumber, response.content);
+    transcript = appendRvLiteTranscript(transcript, promptNumber, prompt, response.content, input.sessionLanguage);
     await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { promptNumber, finishReason: response.finishReason, usage: response.usage, requestDurationMs: responseDurationMs } });
     // The Viewer response is durably saved before any next model call.
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, promptNumber, undefined, metrics, startedAtMs);
     if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) return stopRun("AUTO-STOP: configured session cost limit exceeded");
-    const repetition = repetitionGuard.inspect(response.content);
-    if (repetition.severity !== "clear") {
-      await input.repository.appendSessionEvent(sessionId, { eventType: repetition.severity === "stop" ? "REPETITION_STOP" : "REPETITION_WARNING", role: "controller", content: repetition.fragment, metadata: { promptNumber, rule: repetition.rule, severity: repetition.severity } });
-      if (repetition.severity === "stop") return stopRun(formatRepetitionStopReason(repetition));
-    }
   }
 
   // STOP always wins, including the narrow boundary after Prompt 4 and before sealing/reveal.
@@ -231,8 +236,10 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   return { sessionId, sessionCode, state: "Revealed", transcript };
 }
 
-export function appendRvLiteTranscript(current: string, promptNumber: number, content: string): string {
-  const block = `## RV Lite Prompt ${promptNumber}\n\n${content.trim()}`;
+export function appendRvLiteTranscript(current: string, promptNumber: number, prompt: string, content: string, language: InterfaceLanguage): string {
+  const block = language === "pl"
+    ? `## RV Lite — krok ${promptNumber}\n\n### Dokładne polecenie kontrolera\n\n${prompt.trim()}\n\n### Odpowiedź Viewera\n\n${content.trim()}`
+    : `## RV Lite — Step ${promptNumber}\n\n### Exact controller instruction\n\n${prompt.trim()}\n\n### Viewer response\n\n${content.trim()}`;
   return current ? `${current}\n\n${block}` : block;
 }
 

@@ -1,132 +1,176 @@
+import type { InterfaceLanguage } from "../types";
+
 export type RepetitionSeverity = "clear" | "warning" | "stop";
 
 export interface RepetitionInspection {
   severity: RepetitionSeverity;
   rule?: string;
   fragment?: string;
+  cutAt?: number;
 }
 
-const PROTOCOL_LABEL = /^(?:(?:touch|phase|faza|step|krok|prompt)\s*\d+|(?:echo dot|contact category|primitive descriptor|advanced descriptor|forming|element \d+|monitor questions?))\s*:?[\s*]*$/i;
-const CONTROLLED_DESCRIPTOR = /^(?:structure|liquid|energy|land|movement|mountain|person|object|hard|soft|elastic|semi[- ]?hard|fluid|semi[- ]?soft|spongy|flexible|natural|artificial|man[- ]?made|energetic|moving|struktura|ciecz|energia|teren|ruch|góra|osoba|obiekt|twarde?|miękkie?|naturalne?|sztuczne?)$/i;
+export interface SanitizedRepetitiveOutput {
+  content: string;
+  truncated: boolean;
+  originalLength: number;
+  retainedLength: number;
+  finding?: RepetitionInspection;
+}
+
+const MAX_OUTPUT_CHARACTERS = 120_000;
+const IDENTICAL_LINE_LIMIT = 60;
+const IDENTICAL_CHARACTER_LIMIT = 600;
+const MIN_PERIOD = 12;
+const MAX_PERIOD = 1_000;
+const TAIL_REPEAT_LIMIT = 20;
+
+/** Compatibility wrapper retained for integrations which construct a guard. */
+export class RepetitionGuard {
+  inspect(content: string): RepetitionInspection {
+    return analyzeRepetitiveOutput(content);
+  }
+}
 
 /**
- * Stateful guard used by every automatic controller. A borderline pattern only
- * emits a warning the first time; another borderline pattern in the immediately
- * following Viewer response is promoted to a stop. A clearly repeated long
- * passage remains an immediate hard stop.
+ * Detects only unmistakable generation runaways. Repeated RV field names,
+ * descriptors, touches and ordinary prose are valid protocol data and are not
+ * scored. This is a last-resort output guillotine, not a semantic classifier.
  */
-export class RepetitionGuard {
-  private previousWarning = false;
-
-  inspect(content: string): RepetitionInspection {
-    const finding = analyzeRepetitiveOutput(content);
-    if (finding.severity === "stop") {
-      this.previousWarning = false;
-      return finding;
-    }
-    if (finding.severity === "warning") {
-      if (this.previousWarning) {
-        this.previousWarning = false;
-        return { ...finding, severity: "stop", rule: `consecutive-${finding.rule ?? "repetition"}` };
-      }
-      this.previousWarning = true;
-      return finding;
-    }
-    this.previousWarning = false;
-    return finding;
-  }
-}
-
 export function analyzeRepetitiveOutput(content: string): RepetitionInspection {
-  const prose = proseOutsideCodeFences(content);
-  const normalized = prose.replace(/\s+/g, " ").trim();
-  if (normalized.length < 160) return { severity: "clear" };
-
-  const substantiveLines = prose
-    .split(/\r?\n/)
-    .map(cleanLine)
-    .filter((line): line is string => Boolean(line));
-  const lineFinding = repeatedExact(substantiveLines, 3, 5, "long-line-repeat");
-  if (lineFinding) return lineFinding;
-
-  const paragraphs = prose
-    .split(/\n\s*\n/)
-    .map((paragraph) => paragraph.split(/\r?\n/).map(cleanLine).filter(Boolean).join(" ").replace(/\s+/g, " ").trim())
-    .filter((paragraph) => paragraph.length >= 100 && wordCount(paragraph) >= 16);
-  const paragraphFinding = repeatedExact(paragraphs, 2, 3, "long-paragraph-repeat");
-  if (paragraphFinding) return paragraphFinding;
-
-  // N-gram analysis uses only substantive prose. Protocol headings, numbered
-  // field labels and controlled one-word descriptors must never bridge into a
-  // synthetic repeated passage.
-  const substantiveProse = substantiveLines.join(" ");
-  const words = substantiveProse.toLocaleLowerCase().match(/[\p{L}\p{N}'’-]+/gu) ?? [];
-  if (words.length < 64) return { severity: "clear" };
-  const windowSize = 16;
-  const occurrences = new Map<string, number[]>();
-  for (let index = 0; index <= words.length - windowSize; index += 1) {
-    const window = words.slice(index, index + windowSize).join(" ");
-    const positions = occurrences.get(window) ?? [];
-    const last = positions.at(-1);
-    if (last === undefined || index - last >= windowSize) positions.push(index);
-    occurrences.set(window, positions);
+  if (content.length > MAX_OUTPUT_CHARACTERS) {
+    return {
+      severity: "stop",
+      rule: "output-size-limit",
+      fragment: content.slice(MAX_OUTPUT_CHARACTERS, MAX_OUTPUT_CHARACTERS + 120),
+      cutAt: MAX_OUTPUT_CHARACTERS,
+    };
   }
-  let warning: RepetitionInspection | null = null;
-  for (const [fragment, positions] of occurrences) {
-    if (positions.length >= 4) return { severity: "stop", rule: "repeated-16-word-passage", fragment };
-    if (!warning && positions.length >= 3) warning = { severity: "warning", rule: "repeated-16-word-passage", fragment };
-  }
-  return warning ?? { severity: "clear" };
+  return findCharacterRun(content)
+    ?? findConsecutiveIdenticalLines(content)
+    ?? findRepeatedTailBlock(content)
+    ?? { severity: "clear" };
 }
 
-/** Backward-compatible immediate-loop predicate used by older callers/tests. */
+/** Backward-compatible predicate used by tests and older callers. */
 export function detectRepetitiveOutput(content: string): boolean {
   return analyzeRepetitiveOutput(content).severity === "stop";
 }
 
+/**
+ * Preserves valid evidence, removes only the runaway suffix and appends a
+ * durable marker. Controllers continue with the next protocol instruction.
+ */
+export function sanitizeRepetitiveOutput(
+  content: string,
+  language: InterfaceLanguage = "en",
+): SanitizedRepetitiveOutput {
+  const finding = analyzeRepetitiveOutput(content);
+  if (finding.severity !== "stop" || finding.cutAt === undefined) {
+    return { content, truncated: false, originalLength: content.length, retainedLength: content.length };
+  }
+
+  const marker = language === "pl"
+    ? "[ODPOWIEDŹ SKRÓCONA — wykryto jednoznaczne zapętlenie generowania; prawidłowe dane sprzed tego miejsca zostały zachowane.]"
+    : "[OUTPUT TRUNCATED — a clear generation loop was detected; valid material before this point was preserved.]";
+  const retained = content.slice(0, Math.max(0, finding.cutAt)).trimEnd();
+  const sanitized = `${retained}${retained ? "\n\n" : ""}${marker}`;
+  return {
+    content: sanitized,
+    truncated: true,
+    originalLength: content.length,
+    retainedLength: retained.length,
+    finding,
+  };
+}
+
+/** Legacy formatter kept for downstream source compatibility. */
 export function formatRepetitionStopReason(finding: RepetitionInspection): string {
   const fragment = finding.fragment?.replace(/\s+/g, " ").trim().slice(0, 120);
-  return `AUTO-STOP: repetitive output detected${finding.rule ? ` [${finding.rule}]` : ""}${fragment ? ` — ${fragment}` : ""}`;
+  return `OUTPUT TRUNCATED: clear generation loop detected${finding.rule ? ` [${finding.rule}]` : ""}${fragment ? ` — ${fragment}` : ""}`;
 }
 
-function proseOutsideCodeFences(content: string): string {
-  let fenced = false;
-  const visible: string[] = [];
-  for (const line of content.split(/\r?\n/)) {
-    if (/^\s*```/.test(line)) {
-      fenced = !fenced;
-      continue;
+function findCharacterRun(content: string): RepetitionInspection | null {
+  let runStart = 0;
+  let runLength = 0;
+  let previous = "";
+  for (let index = 0; index < content.length; index += 1) {
+    const current = content[index];
+    if (!/\s/.test(current) && current === previous) {
+      runLength += 1;
+    } else {
+      previous = current;
+      runStart = index;
+      runLength = /\s/.test(current) ? 0 : 1;
     }
-    if (!fenced) visible.push(line);
+    if (runLength >= IDENTICAL_CHARACTER_LIMIT) {
+      return {
+        severity: "stop",
+        rule: "identical-character-run",
+        fragment: current.repeat(Math.min(80, runLength)),
+        cutAt: Math.min(content.length, runStart + 16),
+      };
+    }
   }
-  return visible.join("\n");
+  return null;
 }
 
-function cleanLine(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed || /^\s*(?:[-_*═=]\s*){3,}$/.test(trimmed) || /^#{1,6}\s+/.test(trimmed)) return null;
-  const withoutMarkup = trimmed
-    .replace(/^[-+>]\s+/, "")
-    .replace(/^\d+[.)]\s+/, "")
-    .replace(/[*_`~]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!withoutMarkup || PROTOCOL_LABEL.test(withoutMarkup) || CONTROLLED_DESCRIPTOR.test(withoutMarkup)) return null;
-  if (withoutMarkup.length < 40 || wordCount(withoutMarkup) < 7) return null;
-  return withoutMarkup.toLocaleLowerCase();
-}
+function findConsecutiveIdenticalLines(content: string): RepetitionInspection | null {
+  const lines = content.split(/(?<=\n)/);
+  let offset = 0;
+  let previous = "";
+  let runCount = 0;
+  let runStart = 0;
+  let thirdLineEnd = 0;
 
-function repeatedExact(values: string[], warningAt: number, stopAt: number, rule: string): RepetitionInspection | null {
-  const counts = new Map<string, number>();
-  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
-  let warning: RepetitionInspection | null = null;
-  for (const [fragment, count] of counts) {
-    if (count >= stopAt) return { severity: "stop", rule, fragment };
-    if (!warning && count >= warningAt) warning = { severity: "warning", rule, fragment };
+  for (const rawLine of lines) {
+    const normalized = rawLine.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+    if (normalized && normalized === previous) {
+      runCount += 1;
+      if (runCount === 3) thirdLineEnd = offset + rawLine.length;
+    } else {
+      previous = normalized;
+      runCount = normalized ? 1 : 0;
+      runStart = offset;
+      thirdLineEnd = offset + rawLine.length;
+    }
+    if (normalized && runCount >= IDENTICAL_LINE_LIMIT) {
+      return {
+        severity: "stop",
+        rule: "consecutive-identical-lines",
+        fragment: normalized.slice(0, 120),
+        cutAt: Math.max(runStart, thirdLineEnd),
+      };
+    }
+    offset += rawLine.length;
   }
-  return warning;
+  return null;
 }
 
-function wordCount(value: string): number {
-  return value.trim() ? value.trim().split(/\s+/).length : 0;
+function findRepeatedTailBlock(content: string): RepetitionInspection | null {
+  if (content.length < MIN_PERIOD * TAIL_REPEAT_LIMIT) return null;
+  const searchStart = Math.max(0, content.length - 24_000);
+  const tail = content.slice(searchStart);
+  const maxPeriod = Math.min(MAX_PERIOD, Math.floor(tail.length / TAIL_REPEAT_LIMIT));
+
+  for (let period = MIN_PERIOD; period <= maxPeriod; period += 1) {
+    const block = tail.slice(-period);
+    if (!block.trim() || new Set(block.replace(/\s/g, "")).size < 2) continue;
+    let repeats = 1;
+    while (repeats < 200) {
+      const end = tail.length - repeats * period;
+      const start = end - period;
+      if (start < 0 || tail.slice(start, end) !== block) break;
+      repeats += 1;
+    }
+    if (repeats >= TAIL_REPEAT_LIMIT) {
+      const repeatedStart = content.length - repeats * period;
+      return {
+        severity: "stop",
+        rule: "repeated-tail-block",
+        fragment: block.trim().replace(/\s+/g, " ").slice(0, 120),
+        cutAt: Math.min(content.length, repeatedStart + period * 3),
+      };
+    }
+  }
+  return null;
 }

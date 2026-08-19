@@ -1,6 +1,6 @@
 [package]
 name = "ai-rv-harness"
-version = "0.7.5"
+version = "0.7.6"
 description = "AI RV Harness desktop application"
 authors = ["AI RV Harness contributors"]
 edition = "2021"

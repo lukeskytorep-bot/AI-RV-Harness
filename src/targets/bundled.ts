@@ -134,7 +134,7 @@ export async function ensureBundledTrainingTargets(repository: Pick<AppRepositor
         languages: ["en"],
         polishTranslationStatus: "not_supplied",
         license: "CC-BY-4.0",
-        attribution: "Pending author confirmation",
+        attribution: "AI RV Harness contributors — see CREDITS.md",
         provenance: "project_author_supplied",
       },
       contentHash: await sha256Text(target.revealText),

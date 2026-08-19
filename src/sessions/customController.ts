@@ -12,7 +12,7 @@ import { sha256Text, type SessionProgress } from "./controller";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics } from "./metrics";
 import type { RvSessionState, SessionSnapshot } from "./types";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
-import { RepetitionGuard, formatRepetitionStopReason } from "./repetitionGuard";
+import { sanitizeRepetitiveOutput } from "./repetitionGuard";
 import {
   LOCKED_ACTIVITY_VERSION,
   LOCKED_IDENTITY_VERSION,
@@ -77,7 +77,6 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   ];
   const startedAtMs = Date.now();
   let metrics = emptySessionRequestMetrics();
-  const repetitionGuard = new RepetitionGuard();
   let transcript = "";
   const stopRun = (reason: string) => stop(input, sessionId, sessionCode, transcript, reason, metrics, startedAtMs);
 
@@ -183,17 +182,23 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
     }
     if (!response) return stopRun(`AUTO-STOP: repeated provider/API failures${lastError ? ` — ${lastError}` : ""}`);
 
+    const rawResponseContent = response.content;
+    const sanitized = sanitizeRepetitiveOutput(rawResponseContent, input.sessionLanguage);
+    response = { ...response, content: sanitized.content };
+    if (sanitized.truncated) {
+      await input.repository.appendSessionEvent(sessionId, {
+        eventType: "OUTPUT_TRUNCATED_LOOP",
+        role: "controller",
+        content: sanitized.finding?.fragment,
+        metadata: { step, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(rawResponseContent) },
+      });
+    }
     messages.push({ role: "assistant", content: response.content });
-    transcript = appendStepTranscript(transcript, step, response.content);
+    transcript = appendStepTranscript(transcript, step, prompt, response.content, input.sessionLanguage);
     await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { step, finishReason: response.finishReason, usage: response.usage, requestDurationMs: responseDurationMs } });
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, step, undefined, metrics, startedAtMs);
     if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) return stopRun("AUTO-STOP: configured session cost limit exceeded");
-    const repetition = repetitionGuard.inspect(response.content);
-    if (repetition.severity !== "clear") {
-      await input.repository.appendSessionEvent(sessionId, { eventType: repetition.severity === "stop" ? "REPETITION_STOP" : "REPETITION_WARNING", role: "controller", content: repetition.fragment, metadata: { step, rule: repetition.rule, severity: repetition.severity } });
-      if (repetition.severity === "stop") return stopRun(formatRepetitionStopReason(repetition));
-    }
   }
 
   if (input.signal?.aborted) return stopRun("USER STOP");
@@ -212,8 +217,10 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   return { sessionId, sessionCode, state: "Revealed", transcript };
 }
 
-export function appendStepTranscript(current: string, step: number, content: string): string {
-  const block = `## Step ${step}\n\n${content.trim()}`;
+export function appendStepTranscript(current: string, step: number, prompt: string, content: string, language: InterfaceLanguage): string {
+  const block = language === "pl"
+    ? `## Protokół własny — krok ${step}\n\n### Dokładne polecenie kontrolera\n\n${prompt.trim()}\n\n### Odpowiedź Viewera\n\n${content.trim()}`
+    : `## Custom protocol — Step ${step}\n\n### Exact controller instruction\n\n${prompt.trim()}\n\n### Viewer response\n\n${content.trim()}`;
   return current ? `${current}\n\n${block}` : block;
 }
 

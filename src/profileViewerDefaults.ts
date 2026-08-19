@@ -57,7 +57,12 @@ export async function profileSystemPromptSnapshot(
   language: InterfaceLanguage = "en",
 ): Promise<ViewerSystemPromptSnapshot | undefined> {
   if (!profile) return undefined;
-  const editable = normalizeProfileSystemPrompt(profile.defaultViewerSystemPrompt ?? "") ?? factoryViewerEditablePrompt(language);
+  const storedEditable = normalizeProfileSystemPrompt(profile.defaultViewerSystemPrompt ?? "");
+  const isBundledFactoryEditable = storedEditable === factoryViewerEditablePrompt("pl")
+    || storedEditable === factoryViewerEditablePrompt("en");
+  const editable = !storedEditable || isBundledFactoryEditable
+    ? factoryViewerEditablePrompt(language)
+    : storedEditable;
   const content = buildEffectiveViewerPrompt(language, editable);
   return {
     id: `profile_viewer_prompt_${profile.id}`,

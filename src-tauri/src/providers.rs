@@ -125,7 +125,7 @@ fn validate_base_url(value: &str) -> Result<String, String> {
 fn client() -> Result<Client, String> {
     Client::builder()
         .connect_timeout(Duration::from_secs(30))
-        .user_agent("AI-RV-Harness/0.7.5")
+        .user_agent("AI-RV-Harness/0.7.6")
         .build()
         .map_err(|error| error.to_string())
 }

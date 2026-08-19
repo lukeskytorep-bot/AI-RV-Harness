@@ -8,7 +8,7 @@ import type { ResearchResults } from "../research/types";
 import { parsePostRevealTranscript } from "../sessions/postRevealTranscript";
 import { writeExportPackage, type ExportArtifactCopy, type ExportTextFile } from "./native";
 
-export async function exportResearchPackage(repository: AppRepository, projectId: string): Promise<{ directory: string; manifestHash: string }> {
+export async function exportResearchPackage(repository: AppRepository, projectId: string, baseDirectory?: string): Promise<{ directory: string; manifestHash: string }> {
   const project = await repository.getResearchProject(projectId);
   const results = await repository.getResearchResults(projectId);
   if (!project) throw new Error("Research project not found.");
@@ -76,6 +76,15 @@ export async function exportResearchPackage(repository: AppRepository, projectId
       files.push({ relativePath: `${saveOnly ? "external_evaluation" : "judge_packets"}/${assignment.anonymousSessionId}.json`, content: pretty(saveOnly ? { ...packet, artifactFiles: exportedArtifacts } : packet) });
     }
     if (!saveOnly) files.push({ relativePath: `judges/${assignment.anonymousSessionId}.json`, content: pretty(judgeScores) });
+    if (!saveOnly) {
+      const judgeMarkdown = judgeScores.length
+        ? judgeScores.map((score) => `### Judge ${score.judgeIndex} — ${score.total}/10\n\n${score.narrative.conciseRationale}`).join("\n\n")
+        : project.config.sessionLanguage === "pl" ? "W tej sesji nie użyto AI Judge'a." : "No AI Judge was used for this session.";
+      files.push({
+        relativePath: `${base}/complete_session.md`,
+        content: `# ${assignment.anonymousSessionId}\n\n## ${project.config.sessionLanguage === "pl" ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}\n\n${session.preRevealTranscript.trim()}\n\n## Target Reveal\n\n${reveal?.text?.trim() || "—"}\n\n## ${project.config.sessionLanguage === "pl" ? "Opinia Viewera i rozmowa po Revealu" : "Viewer review and post-Reveal discussion"}\n\n${session.postRevealTranscript.trim() || "—"}\n\n## AI Judge\n\n${judgeMarkdown}\n`,
+      });
+    }
 
     const mapping = mappingByAnonymous.get(assignment.anonymousSessionId);
     const condition = mapping ? conditionById.get(mapping.conditionId) : undefined;
@@ -85,6 +94,8 @@ export async function exportResearchPackage(repository: AppRepository, projectId
   files.push({ relativePath: `${privatePrefix}blinding/blinding_key.json`, content: pretty(blindingKey) });
   files.push({ relativePath: `${privatePrefix}master/master_record.json`, content: pretty({ project: { id: project.id, workspaceId: project.workspaceId, templateType: project.templateType, state: project.state, config: project.config, configHash: project.configHash }, conditions, assignments, mappings, sessionSnapshots: snapshots }) });
   files.push({ relativePath: "summary.md", content: results ? summaryMarkdown(project.name, results) : saveOnlySummaryMarkdown(project.name, assignments.length) });
+  files.push({ relativePath: "summary.csv", content: results ? sessionResultsCsv(results) : saveOnlySessionsCsv(assignments) });
+  files.push({ relativePath: "summary.html", content: summaryHtml(project.name, project.config.sessionLanguage, results, assignments.length, saveOnly) });
   if (saveOnly) files.push({ relativePath: "README.md", content: saveOnlyReadme(project.name, assignments.length) });
 
   const manifestEntries = await Promise.all(files.map(async (file) => ({ path: file.relativePath, kind: "text", sha256: await sha256Text(file.content) })));
@@ -101,7 +112,7 @@ export async function exportResearchPackage(repository: AppRepository, projectId
   const manifestHash = await sha256Text(manifestContent);
   files.push({ relativePath: "manifest.json", content: manifestContent });
   const exportId = `RV_Harness_Research_${project.id.replace(/[^A-Za-z0-9_-]/g, "_")}_${Date.now()}`;
-  const directory = await writeExportPackage({ exportId, files, artifactCopies });
+  const directory = await writeExportPackage({ exportId, files, artifactCopies, ...(baseDirectory?.trim() ? { destination: "external" as const, baseDirectory: baseDirectory.trim() } : {}) });
   await repository.recordExport(project.workspaceId, project.id, saveOnly ? "research_save_only_package" : "research_package", directory, manifestHash);
   return { directory, manifestHash };
 }
@@ -128,8 +139,23 @@ function saveOnlySummaryMarkdown(name: string, sessionCount: number): string {
   return [`# ${name}`, "", "Evaluation mode: Save only / external evaluation", `Anonymous sessions: ${sessionCount}`, "", "No AI Judge was run by AI RV Harness. See README.md before sharing files with an external evaluator."].join("\n") + "\n";
 }
 
+function saveOnlySessionsCsv(assignments: Array<{ anonymousSessionId: string; status: string; sessionId?: string }>): string {
+  return [["anonymous_session_id", "status", "session_saved"], ...assignments.map((assignment) => [assignment.anonymousSessionId, assignment.status, assignment.sessionId ? "yes" : "no"])]
+    .map((row) => row.map(csvCell).join(","))
+    .join("\r\n") + "\r\n";
+}
+
 function saveOnlyReadme(name: string, sessionCount: number): string {
   return [`# External evaluation package — ${name}`, "", `This package contains ${sessionCount} anonymous session packet(s). AI Judge was optional and was not run inside AI RV Harness.`, "", "## What to share", "", "Share only the `external_evaluation` folder with another AI or human Judge. It includes the blind packets, a ready-to-use Judge system prompt, scoring instructions, and any referenced Reveal images. The tested condition labels are not included.", "", "## What to keep private until scoring is finished", "", "Do not share `private_master` with the evaluator. It contains the configuration, condition mapping, and Blinding Key.", "", "After external scores are frozen, you may use `private_master/blinding/blinding_key.json` to connect anonymous sessions to conditions.", ""].join("\n");
+}
+
+function summaryHtml(name: string, language: "pl" | "en", results: ResearchResults | null, sessionCount: number, saveOnly: boolean): string {
+  const rows = results?.conditions.map((condition) => `<tr><td>${escapeHtml(condition.label)}</td><td>${condition.n}</td><td>${condition.meanTotal.toFixed(2)}</td><td>${condition.medianTotal.toFixed(2)}</td><td>${condition.stdDevTotal.toFixed(2)}</td></tr>`).join("") ?? "";
+  return `<!doctype html><html lang="${language}"><head><meta charset="utf-8"><title>${escapeHtml(name)}</title><style>body{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;padding:0 24px;color:#172033}table{width:100%;border-collapse:collapse}th,td{padding:9px;border:1px solid #cbd5e1;text-align:left}th{background:#eef2ff}</style></head><body><h1>${escapeHtml(name)}</h1><p>${language === "pl" ? "Sesje" : "Sessions"}: ${sessionCount} · ${saveOnly ? (language === "pl" ? "ocena zewnętrzna" : "external evaluation") : "AI Judge"}</p>${results ? `<table><thead><tr><th>${language === "pl" ? "Warunek" : "Condition"}</th><th>n</th><th>${language === "pl" ? "Średnia" : "Mean"}</th><th>Median</th><th>SD</th></tr></thead><tbody>${rows}</tbody></table>` : ""}</body></html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 }
 
 function externalEvaluationInstructions(language: "pl" | "en"): string {

@@ -8,7 +8,7 @@ export async function writeExportPackage(input: {
   exportId: string;
   files: ExportTextFile[];
   artifactCopies?: ExportArtifactCopy[];
-  destination?: "managed" | "training";
+  destination?: "managed" | "training" | "external";
   baseDirectory?: string;
   overwriteExisting?: boolean;
 }): Promise<string> {

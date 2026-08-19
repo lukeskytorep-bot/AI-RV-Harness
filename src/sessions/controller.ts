@@ -14,7 +14,7 @@ import { buildAutomaticTargetReveal, targetHasSupportedReveal } from "../targets
 import { APP_VERSION } from "../version";
 import { createSessionCode } from "./sessionCode";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
-import { RepetitionGuard, formatRepetitionStopReason } from "./repetitionGuard";
+import { sanitizeRepetitiveOutput } from "./repetitionGuard";
 import type { SpecialTaskInput } from "./specialTask";
 import { renderSpecialTask } from "./specialTask";
 import {
@@ -116,7 +116,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   const startedAtMs = Date.now();
   let transcript = "";
   let metrics = emptySessionRequestMetrics();
-  const repetitionGuard = new RepetitionGuard();
   let currentState: RvSessionState = "Draft";
   const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
@@ -307,8 +306,19 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
       return stop(`AUTO-STOP: repeated provider/API failures${lastError ? ` — ${lastError}` : ""}`);
     }
 
+    const rawResponseContent = response.content;
+    const sanitized = sanitizeRepetitiveOutput(rawResponseContent, input.sessionLanguage);
+    response = { ...response, content: sanitized.content };
+    if (sanitized.truncated) {
+      await input.repository.appendSessionEvent(sessionId, {
+        eventType: "OUTPUT_TRUNCATED_LOOP",
+        role: "controller",
+        content: sanitized.finding?.fragment,
+        metadata: { phase, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(rawResponseContent) },
+      });
+    }
     messages.push({ role: "assistant", content: response.content });
-    transcript = appendPhaseTranscript(transcript, phase, response.content);
+    transcript = appendPhaseTranscript(transcript, phase, controllerPrompt, response.content, input.sessionLanguage);
     await input.repository.appendSessionEvent(sessionId, {
       eventType: "VIEWER_RESPONSE",
       role: "assistant",
@@ -320,11 +330,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
     if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
 
-    const repetition = repetitionGuard.inspect(response.content);
-    if (repetition.severity !== "clear") {
-      await input.repository.appendSessionEvent(sessionId, { eventType: repetition.severity === "stop" ? "REPETITION_STOP" : "REPETITION_WARNING", role: "controller", content: repetition.fragment, metadata: { phase, rule: repetition.rule, severity: repetition.severity } });
-      if (repetition.severity === "stop") return stop(formatRepetitionStopReason(repetition));
-    }
     if (input.signal?.aborted) return stop("USER STOP");
 
     if (!input.monitor && phase === 4) {
@@ -444,8 +449,19 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         if (!deepening) {
           return stop(`AUTO-STOP: Viewer failed after Monitor intervention${deepeningError ? ` — ${deepeningError}` : ""}`);
         }
+        const rawDeepeningContent = deepening.content;
+        const sanitizedDeepening = sanitizeRepetitiveOutput(rawDeepeningContent, input.sessionLanguage);
+        deepening = { ...deepening, content: sanitizedDeepening.content };
+        if (sanitizedDeepening.truncated) {
+          await input.repository.appendSessionEvent(sessionId, {
+            eventType: "OUTPUT_TRUNCATED_LOOP",
+            role: "controller",
+            content: sanitizedDeepening.finding?.fragment,
+            metadata: { phase, source: "monitor_intervention", rule: sanitizedDeepening.finding?.rule, originalLength: sanitizedDeepening.originalLength, retainedLength: sanitizedDeepening.retainedLength, rawOutputSha256: await sha256Text(rawDeepeningContent) },
+          });
+        }
         messages.push({ role: "assistant", content: deepening.content });
-        transcript = appendMonitorTranscript(transcript, phase, decision.commandText, deepening.content);
+        transcript = appendMonitorTranscript(transcript, phase, decision.commandText, deepening.content, input.sessionLanguage);
         await input.repository.appendSessionEvent(sessionId, {
           eventType: "VIEWER_MONITOR_RESPONSE",
           role: "assistant",
@@ -455,11 +471,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
         if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
-        const deepeningRepetition = repetitionGuard.inspect(deepening.content);
-        if (deepeningRepetition.severity !== "clear") {
-          await input.repository.appendSessionEvent(sessionId, { eventType: deepeningRepetition.severity === "stop" ? "REPETITION_STOP" : "REPETITION_WARNING", role: "controller", content: deepeningRepetition.fragment, metadata: { phase, source: "monitor_intervention", rule: deepeningRepetition.rule, severity: deepeningRepetition.severity } });
-          if (deepeningRepetition.severity === "stop") return stop(formatRepetitionStopReason(deepeningRepetition));
-        }
       }
     }
   }
@@ -532,13 +543,17 @@ function costLimitExceeded(limit: number | undefined, reportedCost: number | und
   return Boolean(limit && limit > 0 && reportedCost !== undefined && reportedCost >= limit);
 }
 
-export function appendPhaseTranscript(current: string, phase: number, content: string): string {
-  const block = `## Phase ${phase}\n\n${content.trim()}`;
+export function appendPhaseTranscript(current: string, phase: number, prompt: string, content: string, language: InterfaceLanguage): string {
+  const block = language === "pl"
+    ? `## Faza ${phase}\n\n### Dokładne polecenie kontrolera\n\n${prompt.trim()}\n\n### Odpowiedź Viewera\n\n${content.trim()}`
+    : `## Phase ${phase}\n\n### Exact controller instruction\n\n${prompt.trim()}\n\n### Viewer response\n\n${content.trim()}`;
   return current ? `${current}\n\n${block}` : block;
 }
 
-export function appendMonitorTranscript(current: string, phase: number, command: string, content: string): string {
-  const block = `### AI Monitor deepening after Phase ${phase}\n\nMonitor: ${command.trim()}\n\nViewer: ${content.trim()}`;
+export function appendMonitorTranscript(current: string, phase: number, command: string, content: string, language: InterfaceLanguage): string {
+  const block = language === "pl"
+    ? `### Pogłębienie AI Monitora po Fazie ${phase}\n\n#### Dokładne polecenie Monitora\n\n${command.trim()}\n\n#### Odpowiedź Viewera\n\n${content.trim()}`
+    : `### AI Monitor deepening after Phase ${phase}\n\n#### Exact Monitor instruction\n\n${command.trim()}\n\n#### Viewer response\n\n${content.trim()}`;
   return current ? `${current}\n\n${block}` : block;
 }
 
