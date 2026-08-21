@@ -2,7 +2,7 @@
 
 AI RV Harness is a local-first desktop workspace for blind AI Remote Viewing sessions and controlled RV research. The desktop stack is Tauri 2 + React/TypeScript + Rust + SQLite, with Windows as the primary release platform.
 
-## Current checkpoint — 0.7.6
+## Current checkpoint — 0.7.7
 
 This is a substantial v1 implementation checkpoint, not a claim that the complete v1 distribution is releasable yet.
 
@@ -14,9 +14,9 @@ Implemented end to end:
 - strict Conversation / Manual RV context separation, a Workspace → Thread → Conversation hierarchy, optional `AI IS-BE` and `Human IS-BE` display names, a Profile-level Viewer System Prompt, and per-conversation Workspace Source selection with context-limit blocking;
 - Full RCP v1.5a and RV Lite v1.1.0 Core/Extended automatic execution, Custom Protocol versioning/Dry Run, ordinary randomized batch runs, STOP/retry/cost safeguards and response autosave;
 - approved RV Lite PL/EN resources with exactly four Viewer calls; Prompt 3 includes mandatory Deepening, Prompt 4 is Functional Sketches, and the Profile greeting omits the AI name cleanly when none is set;
-- 84 bundled project-provided Training Targets in seven categories, plus category-aware My Targets, a fixed 84-session curriculum, partial Training runs, resumable checkpoints, exports and optional 1–3 AI Judges;
+- 84 bundled project-provided, read-only Training Targets in seven categories, separate unlimited My Targets, a fixed 84-session curriculum, partial Training runs that can mix category counts with an explicit My Targets count, resumable checkpoints, exports and optional 1–3 AI Judges;
 - autonomous blind AI Monitor with natural-language instructions, at most five deepenings after Phases 2–6, editable full prompt with visible locked rules, Special Tasks, post-Reveal review and exportable Monitor history;
-- external/automatic text or image Reveal, immutable sealed pre-reveal evidence, post-reveal Viewer discussion stored in a separate evidence domain, and supplementary Target Clarifications;
+- external/automatic text or image Reveal, immutable sealed pre-reveal evidence, automatic Viewer self-review (and Monitor review when present), plus an optional two-way post-Reveal conversation stored in a separate evidence domain;
 - independent 1–3 AI Judges using sanitized allowlist packets and frozen 3+3+2+2 scores;
 - seven Research templates, study-wide Viewer controls (model, System Prompt, reasoning, temperature and output limit), searchable manual or random Training/My Target selection, optional 1–3 AI Judges or save-only external evaluation, Preflight, Experiment Lock, randomized anonymous assignments/Judge order, explicit interrupted-run recovery, freeze-before-unblind, statistics and reproducibility export;
 - Calibration History, target-use policy, session codes, operational token/cost/time metrics, crash-safe formal-session history, backup/restore and managed artifact integrity checks;
@@ -47,11 +47,15 @@ Checkpoint 0.7.5 adds the icon-only non-Home navigation rail, recent sessions on
 
 Checkpoint 0.7.6 makes backup and restore portable through native folder selection, validates each backup before replacement and creates a pre-restore safety copy. Ordinary automatic RV uses only My Targets, while the fixed 84 Training Targets remain read-only and dedicated to Training. Partial Training starts with zero counts. Training and Research histories now expose complete readable session records and user-selected whole-run exports with HTML/CSV summaries. Random Research selection is performed automatically at Preflight/Experiment Lock. Full RCP, RV Lite and Custom transcripts store the exact controller instruction beside every Viewer answer. The repetition guard is now a conservative, non-aborting output guillotine: valid repeated RV descriptors remain untouched, while only unmistakable runaway tails are shortened and marked. Polish sessions use the accepted Polish Viewer identity and matching Polish resources. The Profile editor also keeps its actions reachable in reduced-height windows.
 
+Checkpoint 0.7.7 simplifies the human workflows around Targets, Training, Research and completed sessions. Factory Training Targets remain closed and cannot be extended; every target added by a user goes directly to My Targets. Full Training always uses the fixed 84-target factory curriculum, while Partial Training exposes the seven factory categories plus an independent My Targets count, all starting at zero. Ordinary automatic sessions draw only from My Targets and explain clearly when that catalogue is empty. Manual RV can attach Full RCP, RV Lite Core or RV Lite Extended explicitly.
+
+After every automatic Reveal the Viewer now receives the Reveal and produces a self-review without an extra button; monitored sessions continue with the Monitor review. The optional follow-up is a two-way conversation. Human exports use readable Markdown. Ordinary and Training exports avoid redundant JSON files; when a Reveal includes an image, the actual image file is copied beside the Markdown and linked from it. Research retains technical JSON for audit and external evaluation, while adding readable complete-session Markdown, readable blinding keys, condition labels after unblinding and a detailed README. Recent RV sessions live in a scrollable metadata panel, Special Task is collapsible and explained, editable factory Viewer/Monitor prompts follow the selected Polish or English interface language, and the accepted PL/EN Monitor prompt resources are bundled as version 1.3.0.
+
 `.github/workflows/release-windows.yml` runs only from `main`, prevents overlapping releases, generates and commits the application `Cargo.lock`, checks TypeScript plus Rust tests/Clippy, and then uses the official Tauri GitHub Actions path to create a draft GitHub Release. A local Rust installation is therefore not required for distribution builds.
 
 ## Windows installer trust
 
-Checkpoint 0.7.6 is not code-signed, so Windows SmartScreen or third-party endpoint protection may warn again for every newly built installer hash. Removing that recurring warning requires a stable Authenticode publisher identity (for example Microsoft Artifact Signing or another trusted certificate configured in the Tauri release workflow) or distribution through Microsoft Store. Signing improves reputation but does not guarantee that the first signed releases will never show a reputation warning. See the [Microsoft SmartScreen reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) and [Tauri Windows code-signing guide](https://v2.tauri.app/distribute/sign/windows/).
+Checkpoint 0.7.7 is not code-signed, so Windows SmartScreen or third-party endpoint protection may warn again for every newly built installer hash. Removing that recurring warning requires a stable Authenticode publisher identity (for example Microsoft Artifact Signing or another trusted certificate configured in the Tauri release workflow) or distribution through Microsoft Store. Signing improves reputation but does not guarantee that the first signed releases will never show a reputation warning. See the [Microsoft SmartScreen reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) and [Tauri Windows code-signing guide](https://v2.tauri.app/distribute/sign/windows/).
 
 ## Development and verification
 

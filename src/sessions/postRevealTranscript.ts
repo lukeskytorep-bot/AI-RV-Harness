@@ -22,3 +22,12 @@ export function parsePostRevealTranscript(transcript: string): PostRevealTurn[] 
   }
   return turns;
 }
+
+export function postRevealTranscriptMarkdown(transcript: string, language: "pl" | "en"): string {
+  const turns = parsePostRevealTranscript(transcript);
+  if (!turns.length) return transcript.trim();
+  const labels = language === "pl"
+    ? { user: "Polecenie lub wiadomość po Revealu", assistant: "AI Viewer", monitor: "AI Monitor" }
+    : { user: "Post-Reveal instruction or message", assistant: "AI Viewer", monitor: "AI Monitor" };
+  return turns.map((turn, index) => `### ${index + 1}. ${labels[turn.role]}\n\n${turn.content.trim()}`).join("\n\n");
+}

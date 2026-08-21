@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { sendPostRevealTurn } from "./postReveal";
+import { runAutomaticPostRevealReview, sendPostRevealTurn } from "./postReveal";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 
 const config: ProviderConfig = { id: "pc", provider: "openrouter", label: "P", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
@@ -26,5 +26,40 @@ describe("post-reveal discussion", () => {
     expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(1, "s", "user", "Compare my session with the feedback.");
     expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(2, "s", "assistant", expect.stringContaining("lighthouse"));
     expect(result.transcript).toContain('"role":"assistant"');
+  });
+
+  it("automatically stores the Viewer review first and the Monitor review second", async () => {
+    let transcript = "";
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({
+        providerConfigId: "pc", modelId: "viewer", sessionLanguage: "pl", workspaceId: "workspace",
+        monitor: { providerConfigId: "pc-monitor", modelId: "monitor", effectivePrompt: "Monitor prompt" },
+      }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Kamienna latarnia", hash: "h" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("twarda wysoka struktura"),
+      listTargetClarifications: vi.fn().mockResolvedValue([]),
+      listMonitorRuns: vi.fn().mockResolvedValue([{ id: "run", sessionId: "s" }]),
+      listMonitorInterventions: vi.fn().mockResolvedValue([{ sequenceNumber: 1, decision: "intervene", commandText: "Opisz strukturę." }]),
+      appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant" | "monitor", content: string) => {
+        transcript += `${JSON.stringify({ role, content })}\n`;
+        return transcript;
+      }),
+    };
+    const monitorConfig: ProviderConfig = { ...config, id: "pc-monitor", label: "Monitor" };
+    const monitorModel: ProviderModel = { ...model, providerConfigId: "pc-monitor", modelId: "monitor", displayName: "Monitor", route: "openrouter:monitor" };
+    const chat = vi.fn(async ({ config: usedConfig }: { config: ProviderConfig }) => ({ content: usedConfig.id === "pc" ? "Ocena Viewera" : "Ocena Monitora", usage: {} }));
+
+    const result = await runAutomaticPostRevealReview({
+      repository: repository as never,
+      sessionId: "s",
+      viewer: { providerConfig: config, model },
+      monitor: { providerConfig: monitorConfig, model: monitorModel },
+      chat: chat as never,
+    });
+
+    expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(1, "s", "user", expect.stringContaining("co poszło dobrze"));
+    expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(2, "s", "assistant", "Ocena Viewera");
+    expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(3, "s", "monitor", "Ocena Monitora");
+    expect(result).toContain('"role":"monitor"');
   });
 });

@@ -1,0 +1,39 @@
+AI RV Harness — release verification v0.7.7
+Date: 2026-08-21
+
+1. TypeScript project check
+   Command: ./node_modules/.bin/tsc -b --pretty false
+   Result: PASS
+
+2. Complete frontend test suite
+   Command: ./node_modules/.bin/vitest run
+   Result: PASS — 59 test files, 142 tests
+
+3. Production frontend build
+   Command: ./node_modules/.bin/vite build
+   Result: PASS — 2206 modules transformed; dist generated
+   Note: Vite reports the existing non-fatal large-chunk advisory. It does not fail the build.
+
+4. Version consistency
+   Result: PASS through src/versionConsistency.test.ts and direct inspection.
+   Frontend, package lock, Tauri bundle, Cargo manifest and native provider user agent are aligned at 0.7.7.
+
+5. Reveal image export
+   Result: PASS through session, Training and Research export tests.
+   Real managed image files are copied into export packages and linked from human-readable Markdown. Image extensions are preserved.
+
+6. Partial Training selection
+   Result: PASS through src/training/curriculum.test.ts.
+   Factory category counts and the independent My Targets count remain separate.
+
+7. Automatic post-Reveal review
+   Result: PASS through src/sessions/postReveal.test.ts.
+   Viewer review is stored first; Monitor review follows when a Monitor route was captured.
+
+8. Rust/Tauri verification
+   Local result: NOT RUN — this packaging environment has no Rust toolchain installed.
+   Required release verification: .github/workflows/release-windows.yml generates Cargo.lock, runs cargo test --all-targets --locked, runs cargo clippy --all-targets --locked and builds the Windows installer with the official Tauri action.
+   Native source changes in 0.7.7 are limited to synchronized version metadata; functional Rust export/backup code remains covered by the release workflow.
+
+9. Package hygiene
+   The delivery ZIP excludes node_modules, dist, TypeScript build caches and src-tauri/target. It includes hidden release files such as .github, .gitignore and .env.example.

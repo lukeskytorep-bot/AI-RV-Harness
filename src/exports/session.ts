@@ -1,5 +1,6 @@
 import type { JudgeScoreRecord } from "../judge/types";
-import type { RevealArtifactRecord, RevealInput, RvSession, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
+import type { RevealArtifactRecord, RevealInput, RvSession, TargetClarificationRecord } from "../sessions/types";
+import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
 import type { AppRepository } from "../storage/repository";
 import type { InterfaceLanguage } from "../types";
 import { writeExportPackage, type ExportArtifactCopy, type ExportTextFile } from "./native";
@@ -11,11 +12,10 @@ export async function exportSessionRecord(
   language: InterfaceLanguage,
   baseDirectory: string,
 ): Promise<string> {
-  const [sessions, reveal, scores, snapshot, clarifications] = await Promise.all([
+  const [sessions, reveal, scores, clarifications] = await Promise.all([
     repository.listRvSessions(workspaceId),
     repository.getReveal(sessionId),
     repository.listJudgeScores(sessionId),
-    repository.getSessionSnapshot(sessionId),
     repository.listTargetClarifications(sessionId),
   ]);
   const session = sessions.find((item) => item.id === sessionId);
@@ -24,29 +24,10 @@ export async function exportSessionRecord(
   const exportId = `RV_Session_${safePart(session.sessionCode)}_${timestampPart()}`;
   const artifactCopies = revealArtifactCopies(reveal);
   const completeSession = completeSessionMarkdown(session, reveal, scores, clarifications, language);
-  const safeSnapshot = snapshot ? snapshotWithoutCredentialReference(snapshot) : null;
   const files: ExportTextFile[] = [
     { relativePath: "complete_session.md", content: completeSession },
-    { relativePath: "session.json", content: jsonFile(session) },
-    { relativePath: "session_snapshot.json", content: jsonFile(safeSnapshot) },
-    { relativePath: "reveal.json", content: jsonFile(reveal) },
-    { relativePath: "judge_scores.json", content: jsonFile(scores) },
-    { relativePath: "target_clarifications.json", content: jsonFile(clarifications) },
   ];
   const manifestHash = await sha256Text(completeSession);
-  files.push({
-    relativePath: "manifest.json",
-    content: jsonFile({
-      schemaVersion: 1,
-      exportType: "complete_session",
-      sessionId: session.id,
-      sessionCode: session.sessionCode,
-      generatedAt: new Date().toISOString(),
-      completeSessionSha256: manifestHash,
-      revealArtifactCount: artifactCopies.length,
-      rawApiKeysIncluded: false,
-    }),
-  });
 
   const directory = await writeExportPackage({
     exportId,
@@ -80,7 +61,12 @@ function completeSessionMarkdown(
     ].join("\n")).join("\n\n")
     : (pl ? "W tej sesji nie użyto AI Judge'a." : "No AI Judge was used for this session.");
   const revealFiles = reveal?.artifactManifest?.length
-    ? reveal.artifactManifest.map((artifact) => `- ${artifact.originalFileName} (${artifact.mimeType}, SHA-256: ${artifact.sha256})`).join("\n")
+    ? reveal.artifactManifest.map((artifact, index) => {
+      const relativePath = `reveal_files/${String(index + 1).padStart(2, "0")}_${safePart(artifact.originalFileName)}`;
+      return artifact.mimeType.startsWith("image/")
+        ? `![${artifact.originalFileName}](${relativePath})\n\n- ${artifact.originalFileName} (${artifact.mimeType}, SHA-256: ${artifact.sha256})`
+        : `- [${artifact.originalFileName}](${relativePath}) (${artifact.mimeType}, SHA-256: ${artifact.sha256})`;
+    }).join("\n\n")
     : "—";
   const clarificationText = clarifications.length
     ? clarifications.map((item) => `### ${item.createdAt}\n\n${item.content}`).join("\n\n")
@@ -105,7 +91,7 @@ ${revealFiles}
 
 ## ${pl ? "Opinia Viewera i rozmowa po Revealu" : "Viewer review and post-Reveal discussion"}
 
-${session.postRevealTranscript.trim() || "—"}
+${postRevealTranscriptMarkdown(session.postRevealTranscript, language) || "—"}
 
 ## ${pl ? "Ocena AI Judge" : "AI Judge evaluation"}
 
@@ -124,10 +110,6 @@ function revealArtifactCopies(reveal: RevealInput | null): ExportArtifactCopy[] 
   }));
 }
 
-function snapshotWithoutCredentialReference(snapshot: SessionSnapshot): Record<string, unknown> {
-  return { ...snapshot, credentialId: "[stored in the operating-system keychain; not exported]", credentialHint: undefined };
-}
-
 function safePart(value: string): string {
   const safe = value.normalize("NFKD").replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return safe || "session";
@@ -135,10 +117,6 @@ function safePart(value: string): string {
 
 function timestampPart(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
-}
-
-function jsonFile(value: unknown): string {
-  return `${JSON.stringify(value, null, 2)}\n`;
 }
 
 async function sha256Text(text: string): Promise<string> {

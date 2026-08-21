@@ -37,16 +37,19 @@ export function buildFactoryCurriculum(): TrainingCurriculumItem[] {
 export function selectPartialTrainingTargets(
   targets: TargetRecord[],
   counts: Partial<Record<TrainingCategory, number>>,
-  source: "factory" | "user" | "all",
+  myTargetsCount = 0,
 ): TargetRecord[] {
   const selected: TargetRecord[] = [];
   for (const category of TRAINING_CATEGORIES) {
     const count = Math.max(0, Math.floor(counts[category] ?? 0));
-    const pool = targets.filter((target) => target.sourceMetadata.category === category)
-      .filter((target) => source === "all" || (source === "factory" ? target.collection === "training" : target.collection === "user"));
+    const pool = targets.filter((target) => target.collection === "training" && target.sourceMetadata.category === category);
     if (count > pool.length) throw new Error(`${category}: requested ${count}, available ${pool.length}`);
     selected.push(...shuffle(pool).slice(0, count));
   }
+  const userCount = Math.max(0, Math.floor(myTargetsCount));
+  const userPool = targets.filter((target) => target.collection === "user");
+  if (userCount > userPool.length) throw new Error(`my_targets: requested ${userCount}, available ${userPool.length}`);
+  selected.push(...shuffle(userPool).slice(0, userCount));
   return selected;
 }
 

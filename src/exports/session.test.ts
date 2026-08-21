@@ -17,7 +17,7 @@ describe("complete session export", () => {
         state: "Completed", runType: "automatic", preRevealTranscript: "exact instruction\n\nviewer response",
         postRevealTranscript: "viewer review", createdAt: "2026-08-19T10:00:00Z", updatedAt: "2026-08-19T10:10:00Z",
       }]),
-      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "true target", hash: "reveal-hash" }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_mixed", text: "true target", artifactManifest: [{ artifactId: "image", path: "/managed/reveal.png", originalFileName: "target image.png", mimeType: "image/png", size: 123, sha256: "a".repeat(64) }], hash: "reveal-hash" }),
       listJudgeScores: vi.fn().mockResolvedValue([]),
       getSessionSnapshot: vi.fn().mockResolvedValue({ credentialId: "credential-secret-reference", credentialHint: "should-not-export" }),
       listTargetClarifications: vi.fn().mockResolvedValue([]),
@@ -28,14 +28,16 @@ describe("complete session export", () => {
     const result = await exportSessionRecord(repository, "workspace-1", "session-1", "pl", "C:/Chosen");
 
     expect(result).toBe("C:/Chosen/RV_Session_RVH-ONE");
-    const request = writeExportPackage.mock.calls[0][0] as { baseDirectory: string; destination: string; files: Array<{ relativePath: string; content: string }> };
+    const request = writeExportPackage.mock.calls[0][0] as { baseDirectory: string; destination: string; files: Array<{ relativePath: string; content: string }>; artifactCopies: Array<{ sourcePath: string; relativePath: string }> };
     expect(request.baseDirectory).toBe("C:/Chosen");
     expect(request.destination).toBe("external");
     expect(request.files.find((file) => file.relativePath === "complete_session.md")?.content).toContain("exact instruction");
     expect(request.files.find((file) => file.relativePath === "complete_session.md")?.content).toContain("true target");
-    const snapshot = request.files.find((file) => file.relativePath === "session_snapshot.json")?.content ?? "";
-    expect(snapshot).not.toContain("credential-secret-reference");
-    expect(snapshot).not.toContain("should-not-export");
+    expect(request.files.find((file) => file.relativePath === "complete_session.md")?.content).toContain("reveal_files/01_target_image.png");
+    expect(request.files).toHaveLength(1);
+    expect(request.files.some((file) => file.relativePath.endsWith(".json"))).toBe(false);
+    expect(request.files.map((file) => file.content).join("\n")).not.toContain("credential-secret-reference");
+    expect(request.artifactCopies).toEqual([{ sourcePath: "/managed/reveal.png", relativePath: "reveal_files/01_target_image.png" }]);
     expect(recordExport).toHaveBeenCalledWith("workspace-1", undefined, "complete_session", result, expect.stringMatching(/^[a-f0-9]{64}$/));
   });
 });

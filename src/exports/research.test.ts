@@ -40,11 +40,16 @@ describe("save-only Research export", () => {
     expect(paths).toContain("external_evaluation/JUDGE_SYSTEM_PROMPT.txt");
     expect(paths).toContain("external_evaluation/HOW_TO_EVALUATE.md");
     expect(paths).toContain("external_evaluation/BlindSession_ABCDEF123456.json");
+    expect(paths).toContain("external_evaluation/BlindSession_ABCDEF123456.md");
     expect(paths).toContain("private_master/blinding/blinding_key.json");
+    expect(paths).toContain("private_master/blinding/blinding_key.md");
+    expect(paths).toContain("private_master/sessions/BlindSession_ABCDEF123456/complete_session.md");
+    expect(paths).toContain("README.md");
     expect(paths.some((path) => path.startsWith("judges/") || path.startsWith("results/"))).toBe(false);
     const publicContent = request.files.filter((file) => file.relativePath.startsWith("external_evaluation/")).map((file) => file.content).join("\n");
     expect(publicContent).not.toContain("Secret condition A");
     expect(publicContent).not.toContain("viewer-a");
+    expect(publicContent).toContain("BlindSession_ABCDEF123456_artifacts/artifact_1.png");
     expect(request.artifactCopies).toEqual([{ sourcePath: "/managed/image.png", relativePath: "external_evaluation/BlindSession_ABCDEF123456_artifacts/artifact_1.png" }]);
     expect(recordExport).toHaveBeenCalledWith("workspace", "research", "research_save_only_package", "/exports/research", expect.stringMatching(/^[a-f0-9]{64}$/));
   });

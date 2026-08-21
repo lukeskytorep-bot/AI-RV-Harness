@@ -1,11 +1,11 @@
 import { buildJudgePacket } from "../domain/judgePacket";
-import { JUDGE_RUBRIC_VERSION } from "../judge/types";
+import { JUDGE_RUBRIC_VERSION, type JudgeScoreRecord } from "../judge/types";
 import { getJudgePrompt } from "../judge/prompt";
 import type { AppRepository } from "../storage/repository";
-import type { RevealArtifactRecord } from "../sessions/types";
+import type { RevealArtifactRecord, RvSession, TargetClarificationRecord } from "../sessions/types";
 import { stableStringify } from "../research/planner";
 import type { ResearchResults } from "../research/types";
-import { parsePostRevealTranscript } from "../sessions/postRevealTranscript";
+import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
 import { writeExportPackage, type ExportArtifactCopy, type ExportTextFile } from "./native";
 
 export async function exportResearchPackage(repository: AppRepository, projectId: string, baseDirectory?: string): Promise<{ directory: string; manifestHash: string }> {
@@ -58,15 +58,16 @@ export async function exportResearchPackage(repository: AppRepository, projectId
     if (!saveOnly) {
       files.push({ relativePath: `${base}/pre_reveal.md`, content: session.preRevealTranscript });
       files.push({ relativePath: `${base}/viewer_evidence.md`, content: viewerEvidence });
-      if (session.postRevealTranscript) files.push({ relativePath: `${base}/post_reveal.md`, content: postRevealMarkdown(session.postRevealTranscript) });
+      if (session.postRevealTranscript) files.push({ relativePath: `${base}/post_reveal.md`, content: postRevealTranscriptMarkdown(session.postRevealTranscript, project.config.sessionLanguage) });
       if (clarifications.length) files.push({ relativePath: `${base}/target_clarifications.json`, content: pretty({ label: "Supplementary analysis — after target clarification", records: clarifications }) });
     }
     if (snapshot) {
       snapshots[assignment.anonymousSessionId] = snapshot;
       if (!saveOnly) files.push({ relativePath: `${base}/session_snapshot.json`, content: pretty(snapshot) });
     }
+    let exportedArtifacts: Array<{ artifactId: string; mimeType: string; size: number; sha256: string; exportedPath: string }> = [];
     if (reveal) {
-      const exportedArtifacts = (reveal.artifactManifest ?? []).map((artifact, index) => {
+      exportedArtifacts = (reveal.artifactManifest ?? []).map((artifact, index) => {
         const relativePath = artifactExportPath(assignment.anonymousSessionId, index, artifact, saveOnly);
         artifactCopies.push({ sourcePath: artifact.path, relativePath });
         return { artifactId: artifact.artifactId, mimeType: artifact.mimeType, size: artifact.size, sha256: artifact.sha256, exportedPath: relativePath };
@@ -74,17 +75,16 @@ export async function exportResearchPackage(repository: AppRepository, projectId
       if (!saveOnly) files.push({ relativePath: `${base}/reveal.json`, content: pretty({ source: reveal.source, text: reveal.text, hash: reveal.hash, artifacts: exportedArtifacts }) });
       const packet = buildJudgePacket({ anonymousSessionId: assignment.anonymousSessionId, preRevealEvidence: viewerEvidence, reveal: { ...(reveal.text ? { text: reveal.text } : {}), ...(exportedArtifacts.some((artifact) => artifact.mimeType.startsWith("image/")) ? { imageRefs: exportedArtifacts.filter((artifact) => artifact.mimeType.startsWith("image/")).map((_, index) => `reveal_image_${index + 1}`) } : {}) }, rubricVersion: JUDGE_RUBRIC_VERSION });
       files.push({ relativePath: `${saveOnly ? "external_evaluation" : "judge_packets"}/${assignment.anonymousSessionId}.json`, content: pretty(saveOnly ? { ...packet, artifactFiles: exportedArtifacts } : packet) });
-    }
-    if (!saveOnly) files.push({ relativePath: `judges/${assignment.anonymousSessionId}.json`, content: pretty(judgeScores) });
-    if (!saveOnly) {
-      const judgeMarkdown = judgeScores.length
-        ? judgeScores.map((score) => `### Judge ${score.judgeIndex} — ${score.total}/10\n\n${score.narrative.conciseRationale}`).join("\n\n")
-        : project.config.sessionLanguage === "pl" ? "W tej sesji nie użyto AI Judge'a." : "No AI Judge was used for this session.";
-      files.push({
-        relativePath: `${base}/complete_session.md`,
-        content: `# ${assignment.anonymousSessionId}\n\n## ${project.config.sessionLanguage === "pl" ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}\n\n${session.preRevealTranscript.trim()}\n\n## Target Reveal\n\n${reveal?.text?.trim() || "—"}\n\n## ${project.config.sessionLanguage === "pl" ? "Opinia Viewera i rozmowa po Revealu" : "Viewer review and post-Reveal discussion"}\n\n${session.postRevealTranscript.trim() || "—"}\n\n## AI Judge\n\n${judgeMarkdown}\n`,
+      if (saveOnly) files.push({
+        relativePath: `external_evaluation/${assignment.anonymousSessionId}.md`,
+        content: humanJudgePacketMarkdown(assignment.anonymousSessionId, viewerEvidence, reveal.text ?? "", exportedArtifacts, project.config.sessionLanguage),
       });
     }
+    if (!saveOnly) files.push({ relativePath: `judges/${assignment.anonymousSessionId}.json`, content: pretty(judgeScores) });
+    files.push({
+      relativePath: saveOnly ? `private_master/sessions/${assignment.anonymousSessionId}/complete_session.md` : `${base}/complete_session.md`,
+      content: completeResearchSessionMarkdown({ anonymousSessionId: assignment.anonymousSessionId, session, revealText: reveal?.text ?? "", artifacts: exportedArtifacts, judgeScores, clarifications, language: project.config.sessionLanguage, saveOnly }),
+    });
 
     const mapping = mappingByAnonymous.get(assignment.anonymousSessionId);
     const condition = mapping ? conditionById.get(mapping.conditionId) : undefined;
@@ -92,11 +92,12 @@ export async function exportResearchPackage(repository: AppRepository, projectId
   }
 
   files.push({ relativePath: `${privatePrefix}blinding/blinding_key.json`, content: pretty(blindingKey) });
+  files.push({ relativePath: `${privatePrefix}blinding/blinding_key.md`, content: blindingKeyMarkdown(project.name, blindingKey, project.config.sessionLanguage) });
   files.push({ relativePath: `${privatePrefix}master/master_record.json`, content: pretty({ project: { id: project.id, workspaceId: project.workspaceId, templateType: project.templateType, state: project.state, config: project.config, configHash: project.configHash }, conditions, assignments, mappings, sessionSnapshots: snapshots }) });
   files.push({ relativePath: "summary.md", content: results ? summaryMarkdown(project.name, results) : saveOnlySummaryMarkdown(project.name, assignments.length) });
   files.push({ relativePath: "summary.csv", content: results ? sessionResultsCsv(results) : saveOnlySessionsCsv(assignments) });
   files.push({ relativePath: "summary.html", content: summaryHtml(project.name, project.config.sessionLanguage, results, assignments.length, saveOnly) });
-  if (saveOnly) files.push({ relativePath: "README.md", content: saveOnlyReadme(project.name, assignments.length) });
+  files.push({ relativePath: "README.md", content: researchReadme(project.name, assignments.length, project.config.sessionLanguage, saveOnly, Boolean(results)) });
 
   const manifestEntries = await Promise.all(files.map(async (file) => ({ path: file.relativePath, kind: "text", sha256: await sha256Text(file.content) })));
   for (const assignment of assignments) {
@@ -145,8 +146,52 @@ function saveOnlySessionsCsv(assignments: Array<{ anonymousSessionId: string; st
     .join("\r\n") + "\r\n";
 }
 
-function saveOnlyReadme(name: string, sessionCount: number): string {
-  return [`# External evaluation package — ${name}`, "", `This package contains ${sessionCount} anonymous session packet(s). AI Judge was optional and was not run inside AI RV Harness.`, "", "## What to share", "", "Share only the `external_evaluation` folder with another AI or human Judge. It includes the blind packets, a ready-to-use Judge system prompt, scoring instructions, and any referenced Reveal images. The tested condition labels are not included.", "", "## What to keep private until scoring is finished", "", "Do not share `private_master` with the evaluator. It contains the configuration, condition mapping, and Blinding Key.", "", "After external scores are frozen, you may use `private_master/blinding/blinding_key.json` to connect anonymous sessions to conditions.", ""].join("\n");
+function completeResearchSessionMarkdown(input: {
+  anonymousSessionId: string;
+  session: RvSession;
+  revealText: string;
+  artifacts: Array<{ mimeType: string; sha256: string; exportedPath: string }>;
+  judgeScores: JudgeScoreRecord[];
+  clarifications: TargetClarificationRecord[];
+  language: "pl" | "en";
+  saveOnly: boolean;
+}): string {
+  const pl = input.language === "pl";
+  const artifactPrefix = input.saveOnly ? "../../../" : `sessions/${input.anonymousSessionId}/`;
+  const artifacts = readableArtifacts(input.artifacts, artifactPrefix);
+  const judges = input.judgeScores.length
+    ? input.judgeScores.map((score) => [`### Judge ${score.judgeIndex} — ${score.total}/10`, `- ${pl ? "Model" : "Model"}: ${score.modelRoute}`, `- ${pl ? "Najmocniejsze trafienia" : "Strongest matches"}: ${score.narrative.strongestMatches.join(" · ") || "—"}`, `- ${pl ? "Główne chybienia lub sprzeczności" : "Major misses or contradictions"}: ${score.narrative.majorMissesContradictions.join(" · ") || "—"}`, `- ${pl ? "Konfabulacje" : "Confabulation observations"}: ${score.narrative.confabulationObservations.join(" · ") || "—"}`, "", score.narrative.conciseRationale].join("\n")).join("\n\n")
+    : (pl ? "W tej sesji nie użyto AI Judge'a." : "No AI Judge was used for this session.");
+  const clarifications = input.clarifications.length
+    ? input.clarifications.map((item) => `### ${item.createdAt}\n\n${item.content}`).join("\n\n")
+    : "—";
+  return `# ${input.anonymousSessionId} — ${pl ? "pełny zapis sesji" : "complete session record"}\n\n## ${pl ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}\n\n${input.session.preRevealTranscript.trim() || "—"}\n\n## Target Reveal\n\n${input.revealText.trim() || "—"}\n\n### ${pl ? "Pliki Revealu" : "Reveal files"}\n\n${artifacts || "—"}\n\n## ${pl ? "Opinia Viewera i rozmowa po Revealu" : "Viewer review and post-Reveal discussion"}\n\n${postRevealTranscriptMarkdown(input.session.postRevealTranscript, input.language) || "—"}\n\n## AI Judge\n\n${judges}\n\n## ${pl ? "Starsze doprecyzowania celu" : "Legacy target clarifications"}\n\n${clarifications}\n`;
+}
+
+function humanJudgePacketMarkdown(anonymousSessionId: string, evidence: string, revealText: string, artifacts: Array<{ mimeType: string; sha256: string; exportedPath: string }>, language: "pl" | "en"): string {
+  const pl = language === "pl";
+  return `# ${anonymousSessionId} — ${pl ? "pakiet do zewnętrznej oceny" : "external evaluation packet"}\n\n## ${pl ? "Zapieczętowane dane blind" : "Sealed blind evidence"}\n\n${evidence.trim() || "—"}\n\n## Target Reveal\n\n${revealText.trim() || "—"}\n\n### ${pl ? "Pliki Revealu" : "Reveal files"}\n\n${readableArtifacts(artifacts, "external_evaluation/") || "—"}\n\n> ${pl ? "Warunek badawczy jest celowo ukryty. Nie otwieraj folderu private_master przed zamrożeniem ocen." : "The research condition is intentionally hidden. Do not open private_master before scores are frozen."}\n`;
+}
+
+function readableArtifacts(artifacts: Array<{ mimeType: string; sha256: string; exportedPath: string }>, stripPrefix: string): string {
+  return artifacts.map((artifact, index) => {
+    const path = stripPrefix === "../../../" ? `${stripPrefix}${artifact.exportedPath}` : artifact.exportedPath.replace(stripPrefix, "");
+    return artifact.mimeType.startsWith("image/")
+      ? `![Reveal ${index + 1}](${path})\n\n- ${artifact.mimeType} · SHA-256: ${artifact.sha256}`
+      : `- [Reveal ${index + 1}](${path}) · ${artifact.mimeType} · SHA-256: ${artifact.sha256}`;
+  }).join("\n\n");
+}
+
+function blindingKeyMarkdown(name: string, rows: Array<Record<string, unknown>>, language: "pl" | "en"): string {
+  const pl = language === "pl";
+  const lines = [`# ${pl ? "Klucz odślepienia" : "Blinding Key"} — ${name}`, "", pl ? "Otwórz ten plik dopiero po zamrożeniu wszystkich ocen. Łączy anonimowe sesje z rzeczywistymi warunkami badania." : "Open this file only after every score is frozen. It connects anonymous sessions with the actual research conditions.", "", `| ${pl ? "Sesja anonimowa" : "Anonymous session"} | ${pl ? "Warunek" : "Condition"} | Key | Pair | Order | Target |`, "|---|---|---|---|---:|---|"];
+  for (const row of rows) lines.push(`| ${escapePipe(String(row.anonymousSessionId ?? "—"))} | ${escapePipe(String(row.conditionLabel ?? "—"))} | ${escapePipe(String(row.conditionKey ?? "—"))} | ${escapePipe(String(row.pairKey ?? "—"))} | ${escapePipe(String(row.pairOrder ?? "—"))} | ${escapePipe(String(row.targetId ?? "—"))} |`);
+  return `${lines.join("\n")}\n`;
+}
+
+function researchReadme(name: string, sessionCount: number, language: "pl" | "en", saveOnly: boolean, hasResults: boolean): string {
+  if (language === "pl") return [`# Jak czytać pakiet Research — ${name}`, "", `Pakiet zawiera ${sessionCount} sesji. Ten plik opisuje po kolei, gdzie znajduje się każda informacja.`, "", "## Najprostsza ścieżka dla człowieka", "", saveOnly ? "1. Pełne, czytelne sesje otwieraj w `private_master/sessions/<ID>/complete_session.md`." : "1. Pełne, czytelne sesje otwieraj w `sessions/<ID>/complete_session.md`.", "2. Każdy taki plik zawiera dokładne prompty i odpowiedzi z części blind, Target Reveal, opinię Viewera po Revealu oraz — jeśli użyto — ocenę AI Judge.", "3. Jeżeli Reveal zawierał obraz, rzeczywisty plik obrazu znajduje się obok pakietu i jest podlinkowany w Markdownzie.", hasResults ? "4. Podsumowanie wyników znajdziesz w `summary.md`, a dane tabelaryczne w folderze `results`." : "4. W tym pakiecie nie ma jeszcze wyników AI Judge; ocena została pozostawiona zewnętrznemu oceniającemu.", "", "## Pliki techniczne", "", "Pliki JSON pozostają dla AI, audytu i odtwarzalności badania. Człowiek nie musi ich czytać, aby przejrzeć sesje.", "", saveOnly ? "## Zewnętrzna ocena" : "## Pakiety Judge", "", saveOnly ? "Udostępnij oceniającemu wyłącznie folder `external_evaluation`. Każda sesja ma tam czytelny plik `.md`, techniczny `.json`, instrukcję oceny oraz rzeczywiste obrazy Revealu. Nie udostępniaj `private_master` przed zamrożeniem ocen." : "Folder `judge_packets` zawiera anonimowe pakiety techniczne użyte przez Judge'ów.", "", "## Klucz odślepienia", "", saveOnly ? "Po zamrożeniu ocen otwórz `private_master/blinding/blinding_key.md`. Pokazuje on prostą tabelę: anonimowa sesja → warunek → target. Obok pozostaje wersja JSON dla automatyzacji." : "Czytelna tabela znajduje się w `blinding/blinding_key.md`; wersja JSON służy automatyzacji.", "", "## Pozostałe katalogi", "", "- `configuration` — zamrożona konfiguracja badania.", "- `master` — techniczny rekord audytowy i ewentualne odzyskane sesje.", "- `manifest.json` — sumy kontrolne eksportu.", "- `summary.csv` i `summary.html` — dodatkowe formaty podsumowania.", ""].join("\n");
+  return [`# How to read the Research package — ${name}`, "", `This package contains ${sessionCount} sessions. This file explains exactly where each kind of information is stored.`, "", "## Simplest path for a human reader", "", saveOnly ? "1. Open complete readable sessions in `private_master/sessions/<ID>/complete_session.md`." : "1. Open complete readable sessions in `sessions/<ID>/complete_session.md`.", "2. Each file contains the exact blind prompts and responses, Target Reveal, the Viewer's post-Reveal review, and the AI Judge evaluation when used.", "3. If a Reveal included an image, the real image file is included and linked from Markdown.", hasResults ? "4. Read `summary.md` for results and the `results` folder for tables." : "4. No internal AI Judge result is present; evaluation was left to an external evaluator.", "", "## Technical files", "", "JSON files remain for AI tools, audit, and reproducibility. A human does not need to read JSON to inspect the sessions.", "", saveOnly ? "## External evaluation" : "## Judge packets", "", saveOnly ? "Share only `external_evaluation` with the evaluator. Each session has a readable `.md`, a technical `.json`, instructions, and real Reveal images. Keep `private_master` private until scores are frozen." : "`judge_packets` contains the anonymous technical packets used by the Judges.", "", "## Blinding Key", "", saveOnly ? "After scores are frozen, open `private_master/blinding/blinding_key.md`. Its simple table maps anonymous session → condition → target. JSON remains beside it for automation." : "The readable table is `blinding/blinding_key.md`; JSON remains for automation.", "", "## Other folders", "", "- `configuration` — frozen research configuration.", "- `master` — technical audit record and any recovery sessions.", "- `manifest.json` — export checksums.", "- `summary.csv` and `summary.html` — additional summary formats.", ""].join("\n");
 }
 
 function summaryHtml(name: string, language: "pl" | "en", results: ResearchResults | null, sessionCount: number, saveOnly: boolean): string {
@@ -160,19 +205,14 @@ function escapeHtml(value: string): string {
 
 function externalEvaluationInstructions(language: "pl" | "en"): string {
   if (language === "pl") {
-    return ["# Jak ocenić zapisane sesje", "", "1. Ustaw zawartość `JUDGE_SYSTEM_PROMPT.txt` jako instrukcję systemową wybranego AI.", "2. Dla każdego pliku `BlindSession_*.json` rozpocznij osobny, czysty kontekst i przekaż cały JSON jako wiadomość użytkownika.", "3. Jeżeli obok JSON istnieje folder `BlindSession_*_artifacts`, dołącz znajdujące się w nim obrazy do tej samej wiadomości.", "4. Zapisz odpowiedź AI dokładnie pod identyfikatorem `anonymousSessionId`. Oczekiwany format pokazuje `SCORE_RESPONSE_EXAMPLE.json`.", "5. Nie udostępniaj oceniającemu folderu `private_master`; zawiera on klucz odsłaniający warunki eksperymentu.", "", "Każda sesja powinna być oceniana niezależnie. Nie podawaj modelu Viewera, profilu, warunku testu ani kolejności uruchomienia.", ""].join("\n");
+    return ["# Jak ocenić zapisane sesje", "", "1. Ustaw zawartość `JUDGE_SYSTEM_PROMPT.txt` jako instrukcję systemową wybranego AI.", "2. Dla każdego anonimowego pliku `<anonymousSessionId>.json` rozpocznij osobny, czysty kontekst i przekaż cały JSON jako wiadomość użytkownika. Plik `.md` o tej samej nazwie jest jego czytelną wersją dla człowieka.", "3. Jeżeli istnieje folder `<anonymousSessionId>_artifacts`, dołącz znajdujące się w nim obrazy do tej samej wiadomości. Te same pliki są podlinkowane w odpowiadającym im Markdownzie.", "4. Zapisz odpowiedź AI dokładnie pod identyfikatorem `anonymousSessionId`. Oczekiwany format pokazuje `SCORE_RESPONSE_EXAMPLE.json`.", "5. Nie udostępniaj oceniającemu folderu `private_master`; zawiera on klucz odsłaniający warunki eksperymentu.", "", "Każda sesja powinna być oceniana niezależnie. Nie podawaj modelu Viewera, profilu, warunku testu ani kolejności uruchomienia.", ""].join("\n");
   }
-  return ["# How to evaluate the saved sessions", "", "1. Use `JUDGE_SYSTEM_PROMPT.txt` as the selected AI's system instruction.", "2. For every `BlindSession_*.json`, start a fresh context and send the complete JSON as the user message.", "3. If a matching `BlindSession_*_artifacts` folder exists, attach its images to the same message.", "4. Save the response under its `anonymousSessionId`. The required shape is shown in `SCORE_RESPONSE_EXAMPLE.json`.", "5. Do not share `private_master` with the evaluator; it contains the experiment's unblinding key.", "", "Evaluate every session independently. Do not disclose the Viewer model, Profile, tested condition, or execution order.", ""].join("\n");
+  return ["# How to evaluate the saved sessions", "", "1. Use `JUDGE_SYSTEM_PROMPT.txt` as the selected AI's system instruction.", "2. For every anonymous `<anonymousSessionId>.json` file, start a fresh context and send the complete JSON as the user message. The `.md` file with the same name is its human-readable counterpart.", "3. If a matching `<anonymousSessionId>_artifacts` folder exists, attach its images to the same message. The same files are linked from the corresponding Markdown.", "4. Save the response under its `anonymousSessionId`. The required shape is shown in `SCORE_RESPONSE_EXAMPLE.json`.", "5. Do not share `private_master` with the evaluator; it contains the experiment's unblinding key.", "", "Evaluate every session independently. Do not disclose the Viewer model, Profile, tested condition, or execution order.", ""].join("\n");
 }
 
 function pretty(value: unknown): string { return JSON.stringify(value, null, 2) + "\n"; }
 function csvCell(value: string | number): string { const text = String(value); return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text; }
 function escapePipe(value: string): string { return value.replaceAll("|", "\\|").replaceAll("\n", " "); }
-function postRevealMarkdown(transcript: string): string {
-  const turns = parsePostRevealTranscript(transcript);
-  if (!turns.length) return transcript;
-  return turns.map((turn) => `## ${turn.role === "user" ? "User" : "Viewer"}\n\n${turn.content}\n`).join("\n");
-}
 function extensionFor(artifact: RevealArtifactRecord): string { return ({ "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "text/plain": "txt", "text/markdown": "md" } as Record<string, string>)[artifact.mimeType] ?? "bin"; }
 function artifactExportPath(anonymousSessionId: string, index: number, artifact: RevealArtifactRecord, saveOnly: boolean): string {
   const root = saveOnly ? `external_evaluation/${anonymousSessionId}_artifacts` : `sessions/${anonymousSessionId}/reveal_artifacts`;

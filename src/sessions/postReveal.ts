@@ -75,6 +75,43 @@ export async function sendPostRevealTurn(input: {
 
 type MonitorPostRevealRepository = Pick<AppRepository, "appendPostRevealTurn" | "getReveal" | "getSessionSnapshot" | "getViewerEvidence" | "listTargetClarifications" | "listMonitorRuns" | "listMonitorInterventions">;
 
+export async function runAutomaticPostRevealReview(input: {
+  repository: MonitorPostRevealRepository;
+  sessionId: string;
+  existingTranscript?: string;
+  viewer: { providerConfig: ProviderConfig; model: ProviderModel };
+  monitor?: { providerConfig: ProviderConfig; model: ProviderModel };
+  timeoutMs?: number;
+  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number }) => Promise<ProviderChatResponse>;
+}): Promise<string> {
+  const snapshot = await input.repository.getSessionSnapshot(input.sessionId);
+  if (!snapshot) throw new Error("The captured Session Snapshot is required for the automatic post-Reveal review.");
+  const request = snapshot.sessionLanguage === "pl"
+    ? "Porównaj teraz zapieczętowany zapis części ślepej z ujawnionym celem. Opisz konkretnie: co poszło dobrze, co poszło źle lub było nietrafne, co było częściowo trafne, co warto poprawić w następnych sesjach oraz co już działa dobrze. Wyraźnie oddziel analizę po Revealu od wcześniejszych danych blind i nie dopisuj nowych percepcji do zapieczętowanej części sesji."
+    : "Now compare the sealed blind-session record with the revealed target. Describe specifically: what went well, what was wrong or inaccurate, what was partly accurate, what should be improved in future sessions, and what already works well. Clearly separate this post-Reveal analysis from the earlier blind data and do not add new perceptions to the sealed session record.";
+  const viewerResult = await sendPostRevealTurn({
+    repository: input.repository,
+    sessionId: input.sessionId,
+    existingTranscript: input.existingTranscript ?? "",
+    providerConfig: input.viewer.providerConfig,
+    model: input.viewer.model,
+    content: request,
+    timeoutMs: input.timeoutMs,
+    ...(input.chat ? { chat: input.chat } : {}),
+  });
+  if (!input.monitor) return viewerResult.transcript;
+  const monitorResult = await sendMonitorPostRevealReview({
+    repository: input.repository,
+    sessionId: input.sessionId,
+    existingTranscript: viewerResult.transcript,
+    providerConfig: input.monitor.providerConfig,
+    model: input.monitor.model,
+    timeoutMs: input.timeoutMs,
+    ...(input.chat ? { chat: input.chat } : {}),
+  });
+  return monitorResult.transcript;
+}
+
 export async function sendMonitorPostRevealReview(input: {
   repository: MonitorPostRevealRepository;
   sessionId: string;

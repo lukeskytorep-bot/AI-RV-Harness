@@ -562,6 +562,14 @@ h1, h2, h3 { font-family: "Segoe UI", system-ui, sans-serif; }
 .new-session-button { align-self: flex-end; margin: 14px 18px 17px; }
 .session-error { margin-bottom: 12px; }
 .session-side { display: grid; gap: 12px; }
+.recent-sessions-side { overflow: hidden; }
+.recent-sessions-side > summary { min-height: 43px; display: flex; align-items: center; gap: 8px; padding: 10px 13px; cursor: pointer; list-style: none; }
+.recent-sessions-side > summary::-webkit-details-marker { display: none; }
+.recent-sessions-side > summary svg { color: var(--violet); }
+.recent-sessions-side > summary strong { font-size: 9.5px; }
+.recent-sessions-side > summary span { margin-left: auto; color: var(--cyan); font-size: 8px; font-weight: 800; }
+.recent-sessions-side .recent-session-list { max-height: 540px; display: grid; grid-template-columns: minmax(0, 1fr); overflow: auto; padding: 5px 9px 10px; border-top: 1px solid var(--border); }
+.recent-sessions-side .recent-session-empty { margin: 0; padding: 13px; border-top: 1px solid var(--border); color: var(--muted); font-size: 8.5px; }
 .protocol-card { position: relative; padding: 19px; }
 .resource-orb { width: 44px; height: 44px; display: grid; place-items: center; margin-bottom: 17px; border-radius: 13px; color: var(--cyan); background: var(--cyan-soft); }
 .protocol-card > .status-chip { position: absolute; top: 19px; right: 19px; }
@@ -1164,6 +1172,21 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 .special-task-builder label { min-height: 34px; display: flex; align-items: center; gap: 7px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); font-size: 8.3px; }
 .special-task-builder textarea { width: 100%; padding: 9px 10px; resize: vertical; font-size: 9px; }
 .special-task-warning { display: flex; align-items: flex-start; gap: 6px; padding: 8px 9px; border-radius: 8px; color: #b27417; background: color-mix(in srgb, #f2b84b 13%, transparent); font-size: 8px; line-height: 1.45; }
+.special-task-disclosure { margin: 0 18px 13px; overflow: hidden; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-soft); }
+.special-task-disclosure > summary { min-height: 45px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; cursor: pointer; list-style: none; }
+.special-task-disclosure > summary::-webkit-details-marker { display: none; }
+.special-task-disclosure > summary > span { display: grid; gap: 2px; }
+.special-task-disclosure > summary strong { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
+.special-task-disclosure > summary small { color: var(--muted); font-size: 7.7px; }
+.special-task-disclosure > summary svg { flex: 0 0 auto; color: var(--violet); transition: transform 160ms ease; }
+.special-task-disclosure[open] > summary svg { transform: rotate(90deg); }
+.special-task-disclosure > .special-task-builder { padding: 12px; border-top: 1px solid var(--border); }
+.manual-protocol-select { min-width: 260px; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 8.5px; font-weight: 700; }
+.manual-protocol-select select { min-width: 190px; width: 100%; }
+.post-reveal-conversation { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }
+.post-reveal-conversation > summary { padding: 10px 12px; cursor: pointer; color: var(--violet); font-size: 9px; font-weight: 800; }
+.post-reveal-conversation > p { margin: 0; padding: 0 12px 10px; color: var(--muted); font-size: 8px; line-height: 1.45; }
+.post-reveal-conversation .post-reveal-compose { padding: 0 12px 12px; }
 .session-layout { position: relative; }
 .session-layout.metadata-closed { grid-template-columns: minmax(0, 1fr); }
 .session-layout.metadata-open { grid-template-columns: minmax(0, 1fr) 310px; }
@@ -1259,6 +1282,8 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 .session-inspection-loading { margin-top: 12px; padding: 14px; color: var(--muted); font-size: 9px; text-align: center; }
 .research-session-history { margin-top: 15px; overflow: hidden; }
 .research-session-history > div:last-child { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; padding: 12px; }
+.research-session-history > div:last-child > button { display: grid; gap: 4px; }
+.research-session-history > div:last-child > button small { color: var(--cyan); font-size: 7.3px; font-weight: 750; }
 
 @media (max-height: 760px) {
   .modal-heading { padding-block: 13px; }

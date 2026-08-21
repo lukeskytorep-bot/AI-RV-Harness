@@ -68,7 +68,7 @@ import { ResearchBuilder } from "./components/ResearchBuilder";
 import { TrainingScreen } from "./components/TrainingScreen";
 import { buildCalibrationHistory, type CalibrationHistoryItem } from "./research/calibration";
 import { imageFileToProviderInput, storeRevealArtifact, storeTargetArtifact } from "./artifacts/native";
-import type { RevealArtifactRecord, RvSession, TargetClarificationRecord } from "./sessions/types";
+import type { RevealArtifactRecord, RvSession } from "./sessions/types";
 import { aggregateJudgeScores } from "./domain/scoring";
 import type { MonitorInterventionRecord, MonitorRunRecord } from "./monitor/types";
 import { createTextWorkspaceSource, estimateTextTokens } from "./sources/service";
@@ -78,7 +78,7 @@ import { chooseDirectory, openDataFolder } from "./storage/native";
 import { APP_VERSION } from "./version";
 import { clearProviderDebug, listProviderDebug } from "./providers/debug";
 import { addProvider, PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER, refreshProviderModels } from "./providers/service";
-import { sendMonitorPostRevealReview, sendPostRevealTurn } from "./sessions/postReveal";
+import { runAutomaticPostRevealReview, sendPostRevealTurn } from "./sessions/postReveal";
 import { parsePostRevealTranscript } from "./sessions/postRevealTranscript";
 import { exportMonitorRun } from "./exports/monitor";
 import { exportSessionRecord } from "./exports/session";
@@ -94,8 +94,8 @@ import { filterWorkspaceDirectory } from "./domain/workspaceDirectory";
 import { reasoningOptions } from "./providers/modelReasoningRegistry";
 import type { ReasoningOption } from "./providers/types";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "./domain/isBeIdentity";
-import { TRAINING_CATEGORIES, TRAINING_CATEGORY_LABELS, isFactoryTrainingTargetId, type TrainingCategory } from "./targets/bundled";
-import { buildEffectiveMonitorPrompt, buildEffectiveViewerPrompt, factoryMonitorEditablePrompt, factoryViewerEditablePrompt, getFactoryPromptResources, lockedActivityDefinition, lockedMonitorExecution, lockedViewerIdentity, type FactoryPromptResource } from "./resources/systemPrompts";
+import { TRAINING_CATEGORIES, TRAINING_CATEGORY_LABELS, isFactoryTrainingTargetId } from "./targets/bundled";
+import { buildEffectiveMonitorPrompt, buildEffectiveViewerPrompt, factoryMonitorEditablePrompt, factoryViewerEditablePrompt, getFactoryPromptResources, localizedMonitorEditablePrompt, localizedViewerEditablePrompt, lockedActivityDefinition, lockedMonitorExecution, lockedViewerIdentity, type FactoryPromptResource } from "./resources/systemPrompts";
 import { SPECIAL_TASK_OPTIONS, specialTaskUsesMappedLabels, type SpecialTaskInput, type SpecialTaskOption } from "./sessions/specialTask";
 
 type Page = "home" | "profiles" | "workspaces" | "research" | "targets" | "training" | "settings" | "workspace";
@@ -357,7 +357,7 @@ function FirstRunSetup({
   const [viewerReasoning, setViewerReasoning] = useState<"" | ReasoningEffort>("");
   const [viewerTemperature, setViewerTemperature] = useState("");
   const setupLanguage: InterfaceLanguage = copy.home === "Home" ? "en" : "pl";
-  const [viewerSystemPrompt, setViewerSystemPrompt] = useState(existingProfile?.defaultViewerSystemPrompt ?? factoryViewerEditablePrompt(setupLanguage));
+  const [viewerSystemPrompt, setViewerSystemPrompt] = useState(localizedViewerEditablePrompt(existingProfile?.defaultViewerSystemPrompt, setupLanguage));
   const [modelSearch, setModelSearch] = useState("");
   const [profileName, setProfileName] = useState(existingProfile?.name ?? "");
   const [humanName, setHumanName] = useState(existingProfile?.humanName ?? "");
@@ -467,7 +467,7 @@ function FirstRunSetup({
           ...(viewerReasoning ? { defaultViewerReasoningEffort: viewerReasoning } : {}),
           ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
           ...(viewerSystemPrompt.trim() ? { defaultViewerSystemPrompt: viewerSystemPrompt.trim() } : {}),
-          defaultMonitorSystemPrompt: existingProfile?.defaultMonitorSystemPrompt ?? factoryMonitorEditablePrompt(setupLanguage),
+          defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(existingProfile?.defaultMonitorSystemPrompt, setupLanguage),
           ...(judge ? { defaultJudgeProviderConfigId: judge.providerConfigId, defaultJudgeModelId: judge.modelId } : {}),
           ...(monitor ? { defaultMonitorProviderConfigId: monitor.providerConfigId, defaultMonitorModelId: monitor.modelId } : {}),
       };
@@ -864,7 +864,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
   const [chatImageNames, setChatImageNames] = useState<string[]>([]);
   const [modelId, setModelId] = useState("");
   const [input, setInput] = useState("");
-  const [attachRcp, setAttachRcp] = useState(false);
+  const [manualProtocol, setManualProtocol] = useState<"none" | "rcp" | "lite-core" | "lite-extended">("none");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
@@ -1120,10 +1120,10 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         model: selectedModel,
         content,
         requestedSettings: profileGenerationDefaults(profile, selectedModel),
-        ...(mode === "manual_rv" ? { rvSystemPrompt: buildEffectiveViewerPrompt(language, profile?.defaultViewerSystemPrompt) } : {}),
+        ...(mode === "manual_rv" ? { rvSystemPrompt: buildEffectiveViewerPrompt(language, localizedViewerEditablePrompt(profile?.defaultViewerSystemPrompt, language)) } : {}),
         sources: selectedSources,
         images: chatImages,
-        ...(mode === "manual_rv" && attachRcp ? { attachedProtocol: getFullRcp(language).content } : {}),
+        ...(mode === "manual_rv" && manualProtocol !== "none" ? { attachedProtocol: manualProtocol === "rcp" ? getFullRcp(language).content : getRvLite(language, manualProtocol === "lite-core" ? "core" : "extended").content } : {}),
       });
       setChatImages([]);
       setChatImageNames([]);
@@ -1237,7 +1237,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
           <option value="">{models.length ? copy.selectModel : copy.noCachedModels}</option>
           {models.map((model) => <option key={model.modelId} value={model.modelId}>{model.recommended ? "★ " : ""}{model.displayName}</option>)}
         </select>
-        {mode === "manual_rv" && <label className="protocol-toggle"><input type="checkbox" checked={attachRcp} onChange={(event) => setAttachRcp(event.target.checked)} disabled={sending} /><span>{copy.attachRcp}</span></label>}
+        {mode === "manual_rv" && <label className="manual-protocol-select"><span>{settings.interfaceLanguage === "pl" ? "Dołącz protokół" : "Attach protocol"}</span><select value={manualProtocol} onChange={(event) => setManualProtocol(event.target.value as typeof manualProtocol)} disabled={sending}><option value="none">{settings.interfaceLanguage === "pl" ? "Bez dodatkowego protokołu" : "No additional protocol"}</option><option value="rcp">Full RCP 1.5a</option><option value="lite-core">RV Lite Core 1.1.0</option><option value="lite-extended">RV Lite Extended 1.1.0</option></select></label>}
       </div>
       <div className="context-banner">
         <span className={mode === "conversation" ? "banner-icon violet" : "banner-icon cyan"}>{mode === "conversation" ? <MessageCircle size={22} /> : <ShieldCheck size={22} />}</span>
@@ -1290,10 +1290,6 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const [targetSaved, setTargetSaved] = useState(false);
   const [recentSessions, setRecentSessions] = useState<RvSession[]>([]);
   const [activeTargetId, setActiveTargetId] = useState<string | null>(null);
-  const [clarifications, setClarifications] = useState<TargetClarificationRecord[]>([]);
-  const [clarificationOpen, setClarificationOpen] = useState(false);
-  const [clarificationText, setClarificationText] = useState("");
-  const [clarificationBusy, setClarificationBusy] = useState(false);
   const [postRevealTranscript, setPostRevealTranscript] = useState("");
   const [postRevealText, setPostRevealText] = useState("");
   const [postRevealBusy, setPostRevealBusy] = useState(false);
@@ -1322,8 +1318,6 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
   const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : 6;
   const running = sessionRunning || batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
-  const activeTarget = activeTargetId ? targets.find((target) => target.id === activeTargetId) ?? null : null;
-  const clarificationEligible = Boolean(progress && (progress.state === "Revealed" || progress.state === "Completed") && (!activeTargetId || activeTarget?.collection === "user"));
 
   useEffect(() => {
     let cancelled = false;
@@ -1388,6 +1382,43 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     setRunError(null);
   };
 
+  const automaticReview = async (sessionId: string, updateVisibleTranscript: boolean): Promise<string> => {
+    if (!repository) return "";
+    if (updateVisibleTranscript) setPostRevealBusy(true);
+    try {
+      const snapshot = await repository.getSessionSnapshot(sessionId);
+      if (!snapshot) throw new Error(copy.postRevealRouteUnavailable);
+      const viewerProvider = providerConfigs.find((item) => item.id === snapshot.providerConfigId);
+      if (!viewerProvider) throw new Error(copy.postRevealRouteUnavailable);
+      const viewerModel: ProviderModel = allModels.find((item) => item.providerConfigId === snapshot.providerConfigId && item.modelId === snapshot.modelId) ?? {
+        providerConfigId: snapshot.providerConfigId,
+        provider: snapshot.provider,
+        modelId: snapshot.modelId,
+        displayName: snapshot.modelId,
+        route: snapshot.modelRoute,
+        capabilities: snapshot.capabilitySnapshot as unknown as ProviderModel["capabilities"],
+        pricing: {},
+        recommended: false,
+        rawMetadata: {},
+        refreshedAt: snapshot.capabilityCapturedAt,
+      };
+      const capturedMonitorProvider = snapshot.monitor ? providerConfigs.find((item) => item.id === snapshot.monitor?.providerConfigId) : undefined;
+      const capturedMonitorModel = snapshot.monitor ? allModels.find((item) => item.providerConfigId === snapshot.monitor?.providerConfigId && item.modelId === snapshot.monitor?.modelId) : undefined;
+      if (snapshot.monitor && (!capturedMonitorProvider || !capturedMonitorModel)) throw new Error(copy.postRevealRouteUnavailable);
+      const transcript = await runAutomaticPostRevealReview({
+        repository,
+        sessionId,
+        viewer: { providerConfig: viewerProvider, model: viewerModel },
+        ...(capturedMonitorProvider && capturedMonitorModel ? { monitor: { providerConfig: capturedMonitorProvider, model: capturedMonitorModel } } : {}),
+        timeoutMs: settings.requestTimeoutMs,
+      });
+      if (updateVisibleTranscript) setPostRevealTranscript(transcript);
+      return transcript;
+    } finally {
+      if (updateVisibleTranscript) setPostRevealBusy(false);
+    }
+  };
+
   const start = async () => {
     if (!repository || !profile || !activeProvider || !selectedModel) return;
     if (protocol === "custom" && !selectedCustomProtocol) return;
@@ -1412,9 +1443,6 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     setAcceptedRevealArtifacts([]);
     setSaveTargetTitle("");
     setTargetSaved(false);
-    setClarifications([]);
-    setClarificationOpen(false);
-    setClarificationText("");
     setPostRevealTranscript("");
     setPostRevealText("");
     setBatchResults([]);
@@ -1428,12 +1456,16 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     };
     const runOne = async (target: TargetRecord | null) => {
       if (protocol === "lite") {
-        return runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        const result = await runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        if (result.state === "Revealed") await automaticReview(result.sessionId, executionScope === "single");
+        return result;
       }
       if (protocol === "custom" && selectedCustomProtocol) {
-        return runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        const result = await runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        if (result.state === "Revealed") await automaticReview(result.sessionId, executionScope === "single");
+        return result;
       }
-      return runAutomaticRcpSession({
+      const result = await runAutomaticRcpSession({
         repository,
         workspaceId: workspace.id,
         profileId: profile.id,
@@ -1453,8 +1485,10 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}),
         onProgress: setProgress,
         ...(target ? { automaticTarget: target } : {}),
-        ...(runType === "monitor" && monitorModel && monitorProvider ? { monitor: { providerConfig: monitorProvider, model: monitorModel, editablePrompt: profile.defaultMonitorSystemPrompt ?? factoryMonitorEditablePrompt(resolvedLanguage) } } : {}),
+        ...(runType === "monitor" && monitorModel && monitorProvider ? { monitor: { providerConfig: monitorProvider, model: monitorModel, editablePrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, resolvedLanguage) } } : {}),
       });
+      if (result.state === "Revealed") await automaticReview(result.sessionId, executionScope === "single");
+      return result;
     };
     try {
       if (executionScope === "batch") {
@@ -1499,6 +1533,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
       setAcceptedRevealArtifacts([...revealArtifacts]);
       setRevealText("");
       setRevealArtifacts([]);
+      await automaticReview(progress.sessionId, true);
       setRecentSessions((await repository.listRvSessions(workspace.id)).filter((session) => !session.researchProjectId));
     } catch (cause) {
       setRunError(cause instanceof Error ? cause.message : String(cause));
@@ -1547,16 +1582,9 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     setExecutionScope("single");
     setProgress({ sessionId: session.id, sessionCode: session.sessionCode, state: session.state, transcript: session.preRevealTranscript });
     setActiveTargetId(session.targetId ?? null);
-    setRunError(null); setRevealText(""); setRevealArtifacts([]); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setTargetSaved(false); setClarificationOpen(false); setClarificationText(""); setPostRevealTranscript(session.postRevealTranscript); setPostRevealText(""); setSessionExportPath(null);
-    if (!repository) {
-      setClarifications([]);
-      return;
-    }
-    const [storedClarifications, storedReveal] = await Promise.all([
-      repository.listTargetClarifications(session.id),
-      repository.getReveal(session.id),
-    ]);
-    setClarifications(storedClarifications);
+    setRunError(null); setRevealText(""); setRevealArtifacts([]); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setTargetSaved(false); setPostRevealTranscript(session.postRevealTranscript); setPostRevealText(""); setSessionExportPath(null);
+    if (!repository) return;
+    const storedReveal = await repository.getReveal(session.id);
     setAcceptedRevealText(storedReveal?.text ?? "");
     setAcceptedRevealArtifacts(storedReveal?.artifactManifest ?? []);
   };
@@ -1626,78 +1654,10 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     }
   };
 
-  const generatePostRevealReviews = async () => {
-    if (!repository || !progress?.sessionId || postRevealBusy) return;
-    setPostRevealBusy(true);
-    setRunError(null);
-    try {
-      const snapshot = await repository.getSessionSnapshot(progress.sessionId);
-      if (!snapshot) throw new Error(copy.postRevealRouteUnavailable);
-      const viewerProvider = providerConfigs.find((item) => item.id === snapshot.providerConfigId);
-      if (!viewerProvider) throw new Error(copy.postRevealRouteUnavailable);
-      const viewerModel: ProviderModel = allModels.find((item) => item.providerConfigId === snapshot.providerConfigId && item.modelId === snapshot.modelId) ?? {
-        providerConfigId: snapshot.providerConfigId,
-        provider: snapshot.provider,
-        modelId: snapshot.modelId,
-        displayName: snapshot.modelId,
-        route: snapshot.modelRoute,
-        capabilities: snapshot.capabilitySnapshot as unknown as ProviderModel["capabilities"],
-        pricing: {},
-        recommended: false,
-        rawMetadata: {},
-        refreshedAt: snapshot.capabilityCapturedAt,
-      };
-      const viewerRequest = resolvedLanguage === "pl"
-        ? "Po ujawnieniu celu oceń całą sesję: zgodność danych z revelem, mocne i słabe elementy, możliwe interpretacje oraz to, co można poprawić w kolejnej sesji. Wyraźnie oddziel analizę po revealu od zapieczętowanych danych blind."
-        : "Now that the target has been revealed, review the complete session: correspondence with the Reveal, strong and weak elements, possible interpretations, and what could be improved next time. Clearly separate after-Reveal analysis from the sealed blind evidence.";
-      const viewerResult = await sendPostRevealTurn({ repository, sessionId: progress.sessionId, existingTranscript: postRevealTranscript, providerConfig: viewerProvider, model: viewerModel, content: viewerRequest, timeoutMs: settings.requestTimeoutMs });
-      let transcript = viewerResult.transcript;
-      setPostRevealTranscript(transcript);
-      if (snapshot.monitor) {
-        const capturedMonitorProvider = providerConfigs.find((item) => item.id === snapshot.monitor?.providerConfigId);
-        const capturedMonitorModel = allModels.find((item) => item.providerConfigId === snapshot.monitor?.providerConfigId && item.modelId === snapshot.monitor?.modelId);
-        if (!capturedMonitorProvider || !capturedMonitorModel) throw new Error(copy.postRevealRouteUnavailable);
-        const monitorResult = await sendMonitorPostRevealReview({ repository, sessionId: progress.sessionId, existingTranscript: transcript, providerConfig: capturedMonitorProvider, model: capturedMonitorModel, timeoutMs: settings.requestTimeoutMs });
-        transcript = monitorResult.transcript;
-        setPostRevealTranscript(transcript);
-      }
-      setRecentSessions((await repository.listRvSessions(workspace.id)).filter((session) => !session.researchProjectId));
-    } catch (cause) {
-      const sessions = await repository.listRvSessions(workspace.id).catch(() => []);
-      const stored = sessions.find((session) => session.id === progress.sessionId);
-      if (stored) setPostRevealTranscript(stored.postRevealTranscript);
-      setRunError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setPostRevealBusy(false);
-    }
-  };
-
-  const addClarification = async () => {
-    if (!repository || !progress?.sessionId || !clarificationText.trim() || clarificationBusy) return;
-    setClarificationBusy(true);
-    setRunError(null);
-    try {
-      const session = recentSessions.find((item) => item.id === progress.sessionId);
-      if (session?.researchProjectId) {
-        const project = await repository.getResearchProject(session.researchProjectId);
-        if (!project?.scoresFrozenAt) throw new Error(copy.clarificationResearchGuard);
-      }
-      const record = await repository.addTargetClarification(progress.sessionId, clarificationText);
-      setClarifications((current) => [...current, record]);
-      setClarificationText("");
-      setClarificationOpen(false);
-    } catch (cause) {
-      setRunError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setClarificationBusy(false);
-    }
-  };
-
   return (
     <section className={metadataOpen ? "session-layout metadata-open" : "session-layout metadata-closed"}>
       <div className="session-main panel">
         <PanelHeader title={copy.newAutomaticSession} icon={<Crosshair size={18} />} />
-        <details className="recent-sessions-inline"><summary><Clock3 size={15} /><strong>{copy.recentSessions}</strong><span>{recentSessions.length}</span></summary>{recentSessions.length ? <div className="recent-session-list">{recentSessions.slice(0, 10).map((session) => <div key={session.id}><button className="recent-session-open" disabled={session.state === "BlindRunning" || session.state === "Preflight"} onClick={() => void loadStoredSession(session)}><span><strong>{session.sessionCode}</strong><small>{session.state}</small></span><ChevronRight size={13} /></button>{(session.state === "BlindRunning" || session.state === "Preflight") && <div className="session-recovery"><small>{copy.recoveryRequired}</small><button onClick={() => void preserveInterrupted(session)}>{copy.markInterrupted}</button></div>}</div>)}</div> : <p className="recent-session-empty">{copy.noSessions}</p>}</details>
         {progress ? (
           <div className="live-session">
             <div className="live-session-head">
@@ -1711,15 +1671,14 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
             {(progress.state === "Revealed" || progress.state === "Completed") && <>
               <div className="reveal-success"><Check size={18} /><div><strong>🔓 {copy.revealAccepted}</strong><p>{copy.blindRunComplete}</p></div></div>
               {(acceptedRevealText || acceptedRevealArtifacts.length > 0) && <div className="save-reveal-target"><input value={saveTargetTitle} onChange={(event) => setSaveTargetTitle(event.target.value)} placeholder={copy.targetName} disabled={targetSaved} /><button className="secondary-button" disabled={!saveTargetTitle.trim() || targetSaved} onClick={() => void saveExternalRevealTarget()}>{targetSaved ? copy.savedToTargets : copy.saveRevealTarget}</button></div>}
-              {executionScope === "single" && <section className="post-reveal-discussion"><div className="post-reveal-head"><div><strong>{copy.postRevealDiscussion}</strong><p>{copy.postRevealEvidenceGuard}</p></div><span>POST-REVEAL</span></div><div className="post-reveal-review-action"><div><strong>{copy.generatePostRevealReview}</strong><small>{copy.postRevealReviewLead}</small></div><button className="secondary-button" disabled={postRevealBusy} onClick={() => void generatePostRevealReviews()}>{postRevealBusy ? copy.sending : copy.generatePostRevealReview}</button></div>{postRevealTranscript && <div className="post-reveal-turns">{parsePostRevealTranscript(postRevealTranscript).map((turn, index) => <article className={turn.role} key={`${turn.role}-${index}`}><small>{turn.role === "user" ? humanIsBeDisplayName(profile) : turn.role === "monitor" ? copy.aiMonitorReview : aiIsBeDisplayName(profile)}</small><SafeMarkdown content={turn.content} /></article>)}</div>}<div className="post-reveal-compose"><textarea rows={3} value={postRevealText} onChange={(event) => setPostRevealText(event.target.value)} placeholder={copy.postRevealPlaceholder} disabled={postRevealBusy} /><button className="secondary-button" disabled={!postRevealText.trim() || postRevealBusy} onClick={() => void discussPostReveal()}>{postRevealBusy ? copy.sending : copy.sendPostReveal}</button></div></section>}
+              {executionScope === "single" && <section className="post-reveal-discussion"><div className="post-reveal-head"><div><strong>{copy.postRevealDiscussion}</strong><p>{copy.postRevealEvidenceGuard}</p></div><span>POST-REVEAL</span></div><div className="post-reveal-review-action"><div><strong>{settings.interfaceLanguage === "pl" ? "Automatyczna opinia po Revealu" : "Automatic post-Reveal review"}</strong><small>{postRevealBusy ? (settings.interfaceLanguage === "pl" ? "Viewer analizuje sesję…" : "The Viewer is reviewing the session…") : (settings.interfaceLanguage === "pl" ? "Viewer, a przy sesji monitorowanej także Monitor, otrzymuje Reveal automatycznie." : "The Viewer, and the Monitor for a monitored run, receives the Reveal automatically.")}</small></div><span className={`status-chip ${postRevealBusy ? "next" : "ready"}`}>{postRevealBusy ? copy.sending : (settings.interfaceLanguage === "pl" ? "AUTOMATYCZNIE" : "AUTOMATIC")}</span></div>{postRevealTranscript && <div className="post-reveal-turns">{parsePostRevealTranscript(postRevealTranscript).map((turn, index) => <article className={turn.role} key={`${turn.role}-${index}`}><small>{turn.role === "user" ? (settings.interfaceLanguage === "pl" ? "Polecenie po Revealu" : "Post-Reveal instruction") : turn.role === "monitor" ? copy.aiMonitorReview : aiIsBeDisplayName(profile)}</small><SafeMarkdown content={turn.content} /></article>)}</div>}<details className="post-reveal-conversation"><summary>{settings.interfaceLanguage === "pl" ? "Porozmawiaj z Viewerem o celu" : "Discuss the target with the Viewer"}</summary><p>{settings.interfaceLanguage === "pl" ? "Opcjonalna, dwustronna rozmowa po zakończonej sesji. Viewer może również zadawać pytania o Reveal." : "An optional two-way discussion after the completed session. The Viewer may also ask questions about the Reveal."}</p><div className="post-reveal-compose"><textarea rows={3} value={postRevealText} onChange={(event) => setPostRevealText(event.target.value)} placeholder={copy.postRevealPlaceholder} disabled={postRevealBusy} /><button className="secondary-button" disabled={!postRevealText.trim() || postRevealBusy} onClick={() => void discussPostReveal()}>{postRevealBusy ? copy.sending : copy.sendPostReveal}</button></div></details></section>}
               {executionScope === "single" && <JudgeEvaluation copy={copy} repository={repository} sessionId={progress.sessionId} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} onCompleted={() => { setProgress((current) => current ? { ...current, state: "Completed" } : current); void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId))); }} />}
               {executionScope === "single" && progress.state === "Revealed" && <button className="secondary-button save-only-button" onClick={() => void completeWithoutEvaluation()}>{copy.saveOnly}</button>}
               {executionScope === "single" && <div className="session-export-action"><button className="secondary-button" disabled={!isTauriRuntime() || sessionExportBusy} onClick={() => void saveCurrentSession()}><Download size={15} />{sessionExportBusy ? copy.savingSession : copy.saveSession}</button>{sessionExportPath && <div className="storage-success">{copy.sessionExported}: {sessionExportPath}</div>}</div>}
-              {executionScope === "single" && clarificationEligible && <section className="target-clarification"><div className="target-clarification-head"><div><strong>{copy.askTargetClarification}</strong><p>{copy.clarificationLead}</p></div><button className="secondary-button" onClick={() => setClarificationOpen((value) => !value)}>{copy.askTargetClarification}</button></div>{clarificationOpen && <div className="clarification-form"><textarea rows={4} value={clarificationText} onChange={(event) => setClarificationText(event.target.value)} placeholder={copy.clarificationPlaceholder} /><button className="primary-button" disabled={!clarificationText.trim() || clarificationBusy} onClick={() => void addClarification()}>{copy.saveClarification}</button></div>}{clarifications.length > 0 && <div className="clarification-list">{clarifications.map((item) => <article key={item.id}><small>{copy.supplementaryClarification} · {new Date(item.createdAt).toLocaleString()}</small><p>{item.content}</p></article>)}</div>}</section>}
             </>}
             {progress.state === "Interrupted" && <div className="provider-error"><CircleStop size={16} /><span><strong>{copy.interrupted}</strong>{progress.stopReason ? ` · ${progress.stopReason}` : ""}</span></div>}
             {executionScope === "batch" && batchResults.length > 0 && !batchRunning && <BatchEvaluation copy={copy} repository={repository} sessions={batchResults} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} onCompleted={() => void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId)))} />}
-            {!running && <button className="secondary-button new-session-button" onClick={() => { setProgress(null); setRunError(null); setActiveTargetId(null); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setClarifications([]); setClarificationOpen(false); setClarificationText(""); setPostRevealTranscript(""); setPostRevealText(""); setSessionExportPath(null); setBatchResults([]); setBatchProgress(null); }}>{copy.newAutomaticSession}</button>}
+            {!running && <button className="secondary-button new-session-button" onClick={() => { setProgress(null); setRunError(null); setActiveTargetId(null); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setPostRevealTranscript(""); setPostRevealText(""); setSessionExportPath(null); setBatchResults([]); setBatchProgress(null); }}>{copy.newAutomaticSession}</button>}
           </div>
         ) : <>
         <ConfigBlock label={copy.sessionScope}>
@@ -1753,7 +1712,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
           {runType === "monitor" && <small className="mode-compatibility-note">{copy.rvLiteUnavailable}</small>}
         </ConfigBlock>
         {protocol === "lite" && <ConfigBlock label={settings.interfaceLanguage === "pl" ? "Wariant RV Lite" : "RV Lite variant"}><div className="choice-grid two"><Choice active={liteVariant === "core"} onClick={() => setLiteVariant("core")} icon={<FileCheck2 size={18} />} title="Core" meta={settings.interfaceLanguage === "pl" ? "4 podstawowe kroki" : "4 core steps"} /><Choice active={liteVariant === "extended"} onClick={() => setLiteVariant("extended")} icon={<Sparkles size={18} />} title="Extended" meta={settings.interfaceLanguage === "pl" ? "4 kroki + pogłębianie po kroku 3" : "4 steps + deepening after Step 3"} /></div></ConfigBlock>}
-        {(protocol === "rcp" || protocol === "lite") && <ConfigBlock label={settings.interfaceLanguage === "pl" ? "Zadanie specjalne — opcjonalne" : "Special task — optional"}><div className="special-task-builder"><p>{protocol === "rcp" ? (settings.interfaceLanguage === "pl" ? "Zadanie zostanie przekazane bezpośrednio po Fazie 4." : "The task is supplied immediately after Phase 4.") : (settings.interfaceLanguage === "pl" ? "Zadanie zostanie przekazane bezpośrednio po kroku 3." : "The task is supplied immediately after Step 3.")}</p><div>{SPECIAL_TASK_OPTIONS.map((option) => <label key={option}><input type="checkbox" checked={specialTaskOptions.includes(option)} onChange={(event) => setSpecialTaskOptions((current) => event.target.checked ? [...current, option] : current.filter((item) => item !== option))} /><span>{specialTaskOptionLabel(option, settings.interfaceLanguage)}</span></label>)}</div><textarea rows={3} value={specialTaskText} onChange={(event) => setSpecialTaskText(event.target.value)} placeholder={settings.interfaceLanguage === "pl" ? "Lub wpisz własne neutralne zadanie…" : "Or enter a custom neutral task…"} />{specialTaskUsesMappedLabels(specialTask) && <small className="special-task-warning"><ShieldCheck size={13} />{settings.interfaceLanguage === "pl" ? "W Target Reveal opisz jednoznacznie, czym są użyte oznaczenia Subject/Structure/Object A–C." : "The Target Reveal must clearly define every Subject/Structure/Object A–C label used here."}</small>}</div></ConfigBlock>}
+        {(protocol === "rcp" || protocol === "lite") && <details className="special-task-disclosure"><summary><span><strong>{settings.interfaceLanguage === "pl" ? "Zadanie specjalne — opcjonalne" : "Special task — optional"}</strong><small>{specialTaskOptions.length || specialTaskText.trim() ? (settings.interfaceLanguage === "pl" ? "Skonfigurowano" : "Configured") : (settings.interfaceLanguage === "pl" ? "Rozwiń, aby ustawić" : "Expand to configure")}</small></span><ChevronRight size={15} /></summary><div className="special-task-builder"><p>{protocol === "rcp" ? (settings.interfaceLanguage === "pl" ? "Zadanie zostanie przekazane bezpośrednio po Fazie 4." : "The task is supplied immediately after Phase 4.") : (settings.interfaceLanguage === "pl" ? "Zadanie zostanie przekazane bezpośrednio po kroku 3." : "The task is supplied immediately after Step 3.")}</p><p>{settings.interfaceLanguage === "pl" ? "Służy do neutralnego skierowania Viewera lub Monitora ku konkretnej osobie, istocie, strukturze, obiektowi, aktywności albo zdarzeniu będącemu częścią celu. Po sesji Target Reveal musi jasno wyjaśnić, co oznaczało każde użyte oznaczenie, np. Subject A lub Object A, aby Viewer mógł porównać dane z celem." : "It neutrally directs the Viewer or Monitor toward a specific subject, structure, object, activity, or event that is part of the target. After the session, the Target Reveal must clearly explain every label used, such as Subject A or Object A, so the Viewer can compare the data with the target."}</p><div>{SPECIAL_TASK_OPTIONS.map((option) => <label key={option}><input type="checkbox" checked={specialTaskOptions.includes(option)} onChange={(event) => setSpecialTaskOptions((current) => event.target.checked ? [...current, option] : current.filter((item) => item !== option))} /><span>{specialTaskOptionLabel(option, settings.interfaceLanguage)}</span></label>)}</div><textarea rows={3} value={specialTaskText} onChange={(event) => setSpecialTaskText(event.target.value)} placeholder={settings.interfaceLanguage === "pl" ? "Lub wpisz własne neutralne zadanie…" : "Or enter a custom neutral task…"} />{specialTaskUsesMappedLabels(specialTask) && <small className="special-task-warning"><ShieldCheck size={13} />{settings.interfaceLanguage === "pl" ? "W Target Reveal opisz jednoznacznie, czym są użyte oznaczenia Subject/Structure/Object A–C." : "The Target Reveal must clearly define every Subject/Structure/Object A–C label used here."}</small>}</div></details>}
         {protocol === "custom" && <ConfigBlock label={copy.customProtocolSelect}>
           <div className="custom-protocol-select"><select value={customProtocolVersionId} onChange={(event) => setCustomProtocolVersionId(event.target.value)}><option value="">{copy.noCustomProtocols}</option>{customProtocols.map((item) => <option key={item.versionId} value={item.versionId}>{item.displayName} · {item.version}</option>)}</select><div className="custom-protocol-buttons"><button className="secondary-button" onClick={() => { setCustomBuilderNew(true); setCustomBuilderOpen(true); }}><Plus size={15} />{copy.newCustomProtocol}</button>{selectedCustomProtocol && <button className="secondary-button" onClick={() => { setCustomBuilderNew(false); setCustomBuilderOpen(true); }}>{copy.editCustomProtocol}</button>}</div><small>{copy.customMonitorNote}</small></div>
         </ConfigBlock>}
@@ -1799,10 +1758,11 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
       </div>
       <button className="session-metadata-toggle" title={metadataOpen ? (settings.interfaceLanguage === "pl" ? "Ukryj informacje o protokole" : "Hide protocol information") : (settings.interfaceLanguage === "pl" ? "Pokaż informacje o protokole" : "Show protocol information")} onClick={() => setMetadataOpen((current) => !current)}>{metadataOpen ? "›" : "‹"}</button>
       {metadataOpen && <aside className="session-side">
+        <details className="panel recent-sessions-side" open><summary><Clock3 size={15} /><strong>{copy.recentSessions}</strong><span>{recentSessions.length}</span></summary>{recentSessions.length ? <div className="recent-session-list">{recentSessions.map((session) => <div key={session.id}><button className="recent-session-open" disabled={session.state === "BlindRunning" || session.state === "Preflight"} onClick={() => void loadStoredSession(session)}><span><strong>{session.sessionCode}</strong><small>{session.state}</small></span><ChevronRight size={13} /></button>{(session.state === "BlindRunning" || session.state === "Preflight") && <div className="session-recovery"><small>{copy.recoveryRequired}</small><button onClick={() => void preserveInterrupted(session)}>{copy.markInterrupted}</button></div>}</div>)}</div> : <p className="recent-session-empty">{copy.noSessions}</p>}</details>
         <section className="panel protocol-card">
           <span className="resource-orb"><FileCheck2 size={22} /></span>
           <span className="status-chip ready"><Check size={13} />{copy.statusReady}</span>
-          <h3>{protocol === "custom" ? selectedCustomProtocol?.displayName ?? copy.customProtocol : protocol === "lite" ? `${copy.rvLite} v1.0.0` : copy.rcpReady}</h3>
+          <h3>{protocol === "custom" ? selectedCustomProtocol?.displayName ?? copy.customProtocol : protocol === "lite" ? `${copy.rvLite} v1.1.0` : copy.rcpReady}</h3>
           <p>{protocol === "custom" ? selectedCustomProtocol?.description ?? copy.dryRunLead : copy.rcpReadyDesc}</p>
           <dl>
             <div><dt>{copy.sessionLanguage}</dt><dd>{resolvedLanguage.toUpperCase()}</dd></div>
@@ -2022,11 +1982,11 @@ function MonitorPanel({ copy, settings, profile, workspace, repository }: { copy
   const [exportPath, setExportPath] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
-  const [editablePrompt, setEditablePrompt] = useState(profile?.defaultMonitorSystemPrompt ?? factoryMonitorEditablePrompt(language));
+  const [editablePrompt, setEditablePrompt] = useState(localizedMonitorEditablePrompt(profile?.defaultMonitorSystemPrompt, language));
   const [promptSaved, setPromptSaved] = useState(false);
   const [promptError, setPromptError] = useState<string | null>(null);
   useEffect(() => {
-    setEditablePrompt(profile?.defaultMonitorSystemPrompt ?? factoryMonitorEditablePrompt(language));
+    setEditablePrompt(localizedMonitorEditablePrompt(profile?.defaultMonitorSystemPrompt, language));
     setPromptSaved(false);
     setPromptError(null);
   }, [language, profile?.defaultMonitorSystemPrompt, profile?.id]);
@@ -2130,11 +2090,11 @@ function TargetsScreen({ copy, settings, repository }: { copy: ReturnType<typeof
   const training = targets.filter((target) => target.collection === "training");
   const mine = targets.filter((target) => target.collection === "user");
   const usedTargetIds = new Set([...usage.map((item) => item.targetId), ...researchLockedTargetIds]);
-  const createTarget = async (title: string, revealText: string, tags: string[], images: File[], trainingCategory?: TrainingCategory) => {
+  const createTarget = async (title: string, revealText: string, tags: string[], images: File[]) => {
     if (!repository) return;
     const targetId = createId("target");
     const revealArtifacts = images.length ? await Promise.all(images.map((file) => storeTargetArtifact(targetId, file))) : [];
-    const target = await createUserTarget(repository, { id: targetId, title, ...(revealText.trim() ? { revealText } : {}), ...(revealArtifacts.length ? { revealArtifacts } : {}), tags, ...(trainingCategory ? { trainingCategory } : {}) });
+    const target = await createUserTarget(repository, { id: targetId, title, ...(revealText.trim() ? { revealText } : {}), ...(revealArtifacts.length ? { revealArtifacts } : {}), tags });
     setTargets((current) => [target, ...current]);
     setDialogOpen(false);
   };
@@ -2178,12 +2138,11 @@ function TargetList({ copy, language, targets, usedTargetIds, onEdit, onDelete }
   })}</div>;
 }
 
-function CreateTargetDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; onCancel: () => void; onCreate: (title: string, revealText: string, tags: string[], images: File[], trainingCategory?: TrainingCategory) => Promise<void> }) {
+function CreateTargetDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; onCancel: () => void; onCreate: (title: string, revealText: string, tags: string[], images: File[]) => Promise<void> }) {
   const [title, setTitle] = useState("");
   const [revealText, setRevealText] = useState("");
   const [tags, setTags] = useState("");
   const [images, setImages] = useState<File[]>([]);
-  const [trainingCategory, setTrainingCategory] = useState<TrainingCategory | "">("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent) => {
@@ -2192,13 +2151,13 @@ function CreateTargetDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typ
     setSaving(true);
     setError(null);
     try {
-      await onCreate(title, revealText, tags.split(","), images, trainingCategory || undefined);
+      await onCreate(title, revealText, tags.split(","), images);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setSaving(false);
     }
   };
-  return <FormDialog title={copy.addTarget} onCancel={onCancel}><form onSubmit={(event) => void submit(event)}><label>{copy.targetName}<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>{copy.targetReveal}<textarea rows={7} value={revealText} onChange={(event) => setRevealText(event.target.value)} /></label><label>{copy.targetImages}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" disabled={!isTauriRuntime() || saving} onChange={(event) => setImages(Array.from(event.target.files ?? []).slice(0, 8))} /></label>{images.length > 0 && <div className="form-image-list">{images.map((file) => <span key={`${file.name}-${file.size}`}>▣ {file.name}</span>)}</div>}<label>{copy.targetTags}<input value={tags} onChange={(event) => setTags(event.target.value)} /></label><label>{copy.home === "Home" ? "Training category (optional)" : "Kategoria treningowa (opcjonalna)"}<select value={trainingCategory} onChange={(event) => setTrainingCategory(event.target.value as TrainingCategory | "")}><option value="">{copy.home === "Home" ? "Private target only" : "Tylko cel własny"}</option>{TRAINING_CATEGORIES.map((category) => <option key={category} value={category}>{TRAINING_CATEGORY_LABELS[category][copy.home === "Home" ? "en" : "pl"]}</option>)}</select></label><small className="form-hint">{trainingCategory ? (copy.home === "Home" ? "This target remains in My Targets and is also eligible for partial training in the selected category." : "Cel pozostaje w Moich celach i może być użyty w treningu częściowym wybranej kategorii.") : copy.textRevealOnly}</small>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!title.trim() || (!revealText.trim() && !images.length) || saving}>{copy.saveTarget}</button></div></form></FormDialog>;
+  return <FormDialog title={copy.addTarget} onCancel={onCancel}><form onSubmit={(event) => void submit(event)}><label>{copy.targetName}<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>{copy.targetReveal}<textarea rows={7} value={revealText} onChange={(event) => setRevealText(event.target.value)} /></label><label>{copy.targetImages}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" disabled={!isTauriRuntime() || saving} onChange={(event) => setImages(Array.from(event.target.files ?? []).slice(0, 8))} /></label>{images.length > 0 && <div className="form-image-list">{images.map((file) => <span key={`${file.name}-${file.size}`}>▣ {file.name}</span>)}</div>}<label>{copy.targetTags}<input value={tags} onChange={(event) => setTags(event.target.value)} /></label><small className="form-hint">{copy.home === "Home" ? "Every added target is saved in My Targets and can be selected independently in Partial Training." : "Każdy dodany cel jest zapisywany w Moich celach i może zostać osobno wybrany w treningu częściowym."}</small>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!title.trim() || (!revealText.trim() && !images.length) || saving}>{copy.saveTarget}</button></div></form></FormDialog>;
 }
 
 function EditTargetDialog({ copy, target, onCancel, onSave }: { copy: ReturnType<typeof getCopy>; target: TargetRecord; onCancel: () => void; onSave: (title: string, revealText: string, tags: string[]) => Promise<void> }) {
@@ -2283,7 +2242,7 @@ function TargetSettingsCard({ copy, settings, repository, onChange }: { copy: Re
     });
   }, [repository]);
   const updatePrefix = (value: string) => onChange({ sessionCodePrefix: value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12) || "RVH" });
-  return <section className="panel target-settings-card"><PanelHeader title={copy.targets} icon={<Crosshair size={18} />} /><div className="target-settings-summary"><span><small>{copy.trainingTargets}</small><strong>{trainingCount}</strong></span><span><small>{copy.myTargets}</small><strong>{userCount}</strong></span><span><small>{copy.trackedTargetUses}</small><strong>{usageCount}</strong></span></div><div className="target-settings-body"><label><span>{copy.repeatBehavior}</span><select value={settings.targetRepeatPolicy} onChange={(event) => onChange({ targetRepeatPolicy: event.target.value as AppSettings["targetRepeatPolicy"] })}><option value="allow">{copy.allowRepeatedTraining}</option><option value="avoid_profile">{copy.avoidPreviouslyUsedTraining}</option></select></label><label><span>{copy.sessionCodePrefix}</span><input value={settings.sessionCodePrefix} maxLength={12} onChange={(event) => updatePrefix(event.target.value)} /></label><div className="training-pack-status"><div><strong>{copy.trainingTargets}</strong><p>{copy.targetPackPending}</p></div><button className="secondary-button" disabled>{copy.downloadMore}</button></div></div></section>;
+  return <section className="panel target-settings-card"><PanelHeader title={copy.targets} icon={<Crosshair size={18} />} /><div className="target-settings-summary"><span><small>{copy.trainingTargets}</small><strong>{trainingCount}</strong></span><span><small>{copy.myTargets}</small><strong>{userCount}</strong></span><span><small>{copy.trackedTargetUses}</small><strong>{usageCount}</strong></span></div><div className="target-settings-body"><label><span>{copy.repeatBehavior}</span><select value={settings.targetRepeatPolicy} onChange={(event) => onChange({ targetRepeatPolicy: event.target.value as AppSettings["targetRepeatPolicy"] })}><option value="allow">{copy.allowRepeatedTraining}</option><option value="avoid_profile">{copy.avoidPreviouslyUsedTraining}</option></select></label><label><span>{copy.sessionCodePrefix}</span><input value={settings.sessionCodePrefix} maxLength={12} onChange={(event) => updatePrefix(event.target.value)} /></label><div className="training-pack-status"><div><strong>{copy.trainingTargets}</strong><p>{copy.targetPackPending}</p></div></div></div></section>;
 }
 
 function AdvancedSettingsCard({ copy, repository }: { copy: ReturnType<typeof getCopy>; repository: AppRepository | null }) {
@@ -2531,7 +2490,8 @@ function EditProfileDialog({ copy, profile, providers, models, onCancel, onSave 
   const [viewerModelId, setViewerModelId] = useState(profile.defaultViewerModelId ?? "");
   const [reasoning, setReasoning] = useState<"" | ReasoningEffort>(profile.defaultViewerReasoningEffort ?? "");
   const [temperature, setTemperature] = useState(profile.defaultViewerTemperature === undefined ? "" : String(profile.defaultViewerTemperature));
-  const [systemPrompt, setSystemPrompt] = useState(profile.defaultViewerSystemPrompt ?? "");
+  const interfaceLanguage: InterfaceLanguage = copy.home === "Home" ? "en" : "pl";
+  const [systemPrompt, setSystemPrompt] = useState(localizedViewerEditablePrompt(profile.defaultViewerSystemPrompt, interfaceLanguage));
   const [monitorModelKey, setMonitorModelKey] = useState(resolveRoleDefault(profile, "monitor", models));
   const [judgeModelKey, setJudgeModelKey] = useState(resolveRoleDefault(profile, "judge", models));
   const [aiTouched, setAiTouched] = useState(false);
@@ -2551,17 +2511,17 @@ function EditProfileDialog({ copy, profile, providers, models, onCancel, onSave 
     setReasoning(reasoningEffortForModel(storedModel, profile.defaultViewerReasoningEffort) ?? "");
     const storedTemperature = storedModel?.capabilities.temperature.supported ? profile.defaultViewerTemperature ?? defaultTemperatureForModel(storedModel) : undefined;
     setTemperature(storedTemperature === undefined ? "" : String(storedTemperature));
-    setSystemPrompt(profile.defaultViewerSystemPrompt ?? "");
+    setSystemPrompt(localizedViewerEditablePrompt(profile.defaultViewerSystemPrompt, interfaceLanguage));
     setMonitorModelKey(resolveRoleDefault(profile, "monitor", models));
     setJudgeModelKey(resolveRoleDefault(profile, "judge", models));
-  }, [aiTouched, models, profile, providers]);
+  }, [aiTouched, interfaceLanguage, models, profile, providers]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (saving) return;
     if (aiTouched && (!provider || !validViewerModelId)) { setError(copy.selectViewerBeforeSaving); return; }
     setSaving(true); setError(null);
     try {
-      const aiConfiguration = aiTouched ? { ...buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey), defaultMonitorSystemPrompt: profile.defaultMonitorSystemPrompt ?? factoryMonitorEditablePrompt(copy.home === "Home" ? "en" : "pl") } : undefined;
+      const aiConfiguration = aiTouched ? { ...buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey), defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, interfaceLanguage) } : undefined;
       await onSave(name, humanName || undefined, note, aiConfiguration);
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
