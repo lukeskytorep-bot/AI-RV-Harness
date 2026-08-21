@@ -35,6 +35,7 @@ export async function executeResearchSessions(input: {
   projectId: string;
   signal?: AbortSignal;
   sessionRunner?: (input: AutomaticRcpRunInput) => Promise<AutomaticRcpRunResult>;
+  postRevealReviewer?: typeof runAutomaticPostRevealReview;
   onProgress?: (progress: { completed: number; total: number; anonymousSessionId: string; session?: SessionProgress }) => void;
 }): Promise<void> {
   const project = await requireProject(input.repository, input.projectId);
@@ -61,6 +62,13 @@ export async function executeResearchSessions(input: {
   for (const assignment of assignments.sort((a, b) => a.executionOrder - b.executionOrder)) {
     if (assignment.status === "SessionComplete" || assignment.status === "Judged") continue;
     if (assignment.sessionId) {
+      const existingReveal = await input.repository.getReveal(assignment.sessionId);
+      if (existingReveal) {
+        await input.repository.updateResearchAssignment(assignment.id, assignment.sessionId, "SessionComplete");
+        completed += 1;
+        input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId });
+        continue;
+      }
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       throw new Error(`Incomplete paid session ${assignment.anonymousSessionId} requires explicit recovery; it will not be rerun silently.`);
     }
@@ -118,17 +126,30 @@ export async function executeResearchSessions(input: {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       return;
     }
-    if (!input.sessionRunner) {
-      await runAutomaticPostRevealReview({
-        repository: input.repository,
-        sessionId: result.sessionId,
-        viewer: { providerConfig: provider, model },
-        timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
-      });
-    }
     await input.repository.updateResearchAssignment(assignment.id, result.sessionId, "SessionComplete");
     completed += 1;
     input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId });
+    if (!input.sessionRunner || input.postRevealReviewer) {
+      try {
+        await (input.postRevealReviewer ?? runAutomaticPostRevealReview)({
+          repository: input.repository,
+          sessionId: result.sessionId,
+          viewer: { providerConfig: provider, model },
+          timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
+        });
+      } catch (cause) {
+        try {
+          await input.repository.appendSessionEvent(result.sessionId, {
+            eventType: "POST_REVEAL_REVIEW_FAILED",
+            role: "controller",
+            content: cause instanceof Error ? cause.message : String(cause),
+            metadata: { nonBlocking: true, researchProjectId: project.id },
+          });
+        } catch {
+          // A supplementary review or its diagnostic record must never invalidate a completed blind Research session.
+        }
+      }
+    }
   }
   await input.repository.setResearchProjectState(project.id, "SessionsComplete");
 }
@@ -140,6 +161,11 @@ export async function prepareInterruptedResearchRetry(repository: ResearchReposi
   const recoverable = assignments.filter((assignment) => assignment.sessionId && !["SessionComplete", "Judged"].includes(assignment.status));
   for (const assignment of recoverable) {
     const sessionId = assignment.sessionId!;
+    const existingReveal = await repository.getReveal(sessionId);
+    if (existingReveal) {
+      await repository.updateResearchAssignment(assignment.id, sessionId, "SessionComplete");
+      continue;
+    }
     await repository.updateRvSessionState(sessionId, "Interrupted", "RECOVERY: partial Research session preserved; explicit retry approved by user");
     await repository.updateResearchAssignment(assignment.id, undefined, "RetryApproved");
   }

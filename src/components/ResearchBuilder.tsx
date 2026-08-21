@@ -426,7 +426,7 @@ function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: {
   const saveOnly = project.config.judges.length === 0;
   const judgingReady = !saveOnly && ["SessionsComplete", "Judging"].includes(project.state);
   const saveOnlyExportReady = saveOnly && project.state === "SessionsComplete";
-  const completedAssignments = assignments.filter((assignment) => assignment.sessionId);
+  const completedAssignments = assignments.filter((assignment) => assignment.sessionId && ["SessionComplete", "Judged"].includes(assignment.status));
   const resultBySessionId = new Map((results?.sessions ?? []).map((session) => [session.sessionId, session]));
 
   return <div className="research-project-view">
