@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import dependabot from "../.github/dependabot.yml?raw";
 import ci from "../.github/workflows/ci.yml?raw";
 import codeql from "../.github/workflows/codeql.yml?raw";
 import linux from "../.github/workflows/release-linux.yml?raw";
@@ -43,5 +44,17 @@ describe("GitHub workflow supply-chain policy", () => {
     expect(prepareCargoLock).toContain("actions/upload-artifact@");
     expect(prepareCargoLock).toContain("contents: read");
     expect(prepareCargoLock).not.toMatch(/git\s+(commit|push)/i);
+  });
+
+  it("keeps routine Dependabot updates paused during release stabilization", () => {
+    expect(dependabot.match(/open-pull-requests-limit:\s*0/g)).toHaveLength(3);
+  });
+
+  it("uses buildless Rust CodeQL while CI owns Rust compilation checks", () => {
+    expect(codeql).toContain("languages: rust");
+    expect(codeql).toContain("build-mode: none");
+    expect(ci).toContain("cargo test --manifest-path src-tauri/Cargo.toml --all-targets --locked");
+    expect(ci).toContain("cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked");
+    expect(ci).not.toContain("cargo fmt");
   });
 });

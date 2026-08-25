@@ -4,15 +4,17 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # Release stabilization: keep version-update PRs paused until the 0.7.9
+    # release checks are green. Dependabot security updates remain managed by
+    # the repository security settings.
+    open-pull-requests-limit: 0
   - package-ecosystem: cargo
     directory: /src-tauri
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
-
+    open-pull-requests-limit: 0

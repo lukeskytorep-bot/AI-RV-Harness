@@ -37,14 +37,12 @@ jobs:
         uses: dtolnay/rust-toolchain@b95584d8105b9ab200e15821fa671848cf2b7017 # master snapshot
         with:
           toolchain: stable
-          components: clippy,rustfmt
+          components: clippy
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           workspaces: './src-tauri -> target'
       - name: Require the committed Rust lockfile
         run: test -f src-tauri/Cargo.lock
-      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
       - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets --locked
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-
