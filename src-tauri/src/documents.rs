@@ -258,7 +258,7 @@ fn parse_document(file_name: &str, bytes: &[u8]) -> Result<ParsedDocumentSource,
 fn parse_docx(bytes: &[u8]) -> Result<String, String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))
         .map_err(|_| "DOCX package is damaged or password-protected".to_string())?;
-    if archive.len() == 0 || archive.len() > MAX_DOCX_ENTRIES {
+    if archive.is_empty() || archive.len() > MAX_DOCX_ENTRIES {
         return Err("DOCX contains too many package entries".to_string());
     }
     let mut total_uncompressed = 0u64;
@@ -391,9 +391,9 @@ pub(crate) fn validate_image_bytes(file_name: &str, bytes: &[u8]) -> Result<(&'s
     if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
         return Err("chat image must be between 1 byte and 10 MB".to_string());
     }
-    let (mime_type, width, height) = image_metadata(&bytes)
+    let (mime_type, width, height) = image_metadata(bytes)
         .ok_or_else(|| "image is damaged or its byte signature is unsupported".to_string())?;
-    if !extension_matches_image(&file_name, mime_type) {
+    if !extension_matches_image(file_name, mime_type) {
         return Err("image extension does not match its byte signature".to_string());
     }
     if width == 0

@@ -1,0 +1,5 @@
+daf946fbb61bea0897dfd41625c7166466da6486ccd40e3a98aa93a32c0a7ede  src-tauri/src/providers.rs
+d872e0642e79c7ff2f98c321ef1e6f30ff486f58cc4e19f8fc13eb30c1282bde  src-tauri/src/storage.rs
+6eb110d9f2e260995bcf826a60105443953d9c296de49b2027b27d331e02e430  src-tauri/src/documents.rs
+e45e84d86f95c4b4e23e2987223da82c953add3c93af096dc76f0e6471d36daf  src/nativeCiCompatibility.test.ts
+3775a38fd3560eb23d1edafbdc8b6c9d525394a9a3df98983277b254371ddb22  PATCH_0.7.9_RUST_1.98_CLIPPY_FIX.md

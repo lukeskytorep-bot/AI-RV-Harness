@@ -330,7 +330,7 @@ pub fn list_storage_backups(app: tauri::AppHandle) -> Result<Vec<BackupRecord>, 
         }
         records.push(record_from_manifest(&entry.path(), &manifest));
     }
-    records.sort_by(|a, b| b.created_at_unix_ms.cmp(&a.created_at_unix_ms));
+    records.sort_by_key(|record| std::cmp::Reverse(record.created_at_unix_ms));
     Ok(records)
 }
 
@@ -403,9 +403,8 @@ pub async fn restore_backup(app: tauri::AppHandle, request: BackupIdRequest) -> 
         let _ = fs::remove_file(&restore_temp);
         return Err("restored database copy failed integrity check".to_string());
     }
-    validate_sqlite_database(&restore_temp).await.map_err(|error| {
+    validate_sqlite_database(&restore_temp).await.inspect_err(|_| {
         let _ = fs::remove_file(&restore_temp);
-        error
     })?;
 
     let safety_suffix = unix_ms()?;
@@ -454,9 +453,8 @@ pub async fn restore_portable_backup(app: tauri::AppHandle, request: PortableRes
         let _ = fs::remove_file(&restore_temp);
         return Err("restored database copy failed integrity check".to_string());
     }
-    validate_sqlite_database(&restore_temp).await.map_err(|error| {
+    validate_sqlite_database(&restore_temp).await.inspect_err(|_| {
         let _ = fs::remove_file(&restore_temp);
-        error
     })?;
 
     let safety_suffix = unix_ms()?;

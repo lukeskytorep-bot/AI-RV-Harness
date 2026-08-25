@@ -307,7 +307,7 @@ fn scrub_debug_value(value: &mut Value, secret: &str, parent_key: Option<&str>) 
     match value {
         Value::Object(map) => {
             for (key, child) in map.iter_mut() {
-                let lower = key.to_ascii_lowercase().replace('-', "").replace('_', "");
+                let lower = key.to_ascii_lowercase().replace(['-', '_'], "");
                 if matches!(lower.as_str(), "authorization" | "apikey" | "xapikey" | "xgoogapikey") {
                     *child = Value::String("[REDACTED]".to_string());
                 } else {
