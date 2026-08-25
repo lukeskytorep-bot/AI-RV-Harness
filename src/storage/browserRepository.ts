@@ -345,32 +345,12 @@ export class BrowserRepository implements AppRepository {
     return read<ProviderConfig[]>(PROVIDERS_KEY, []).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
-  async createProviderConfig(input: CreateProviderConfigInput): Promise<ProviderConfig> {
-    const timestamp = nowIso();
-    const provider: ProviderConfig = {
-      id: input.id,
-      provider: input.provider,
-      label: input.label.trim(),
-      credentialId: input.credentialId,
-      credentialHint: input.credentialHint,
-      credentialFingerprint: input.fingerprint,
-      baseUrl: input.baseUrl?.trim() || undefined,
-      enabled: true,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    write(PROVIDERS_KEY, [provider, ...(await this.listProviderConfigs())]);
-    return provider;
+  async createProviderConfig(_input: CreateProviderConfigInput): Promise<ProviderConfig> {
+    throw new Error("Provider connections and credential metadata require the desktop runtime.");
   }
 
-  async updateProviderCredentialMetadata(id: string, credentialHint: string, fingerprint: string): Promise<void> {
-    const timestamp = nowIso();
-    write(
-      PROVIDERS_KEY,
-      (await this.listProviderConfigs()).map((item) => item.id === id
-        ? { ...item, credentialHint, credentialFingerprint: fingerprint, lastStatus: undefined, lastError: undefined, lastTestedAt: undefined, updatedAt: timestamp }
-        : item),
-    );
+  async updateProviderCredentialMetadata(_id: string, _credentialHint: string, _fingerprint: string): Promise<void> {
+    throw new Error("Provider connections and credential metadata require the desktop runtime.");
   }
 
   async deleteProviderConfig(id: string): Promise<void> {

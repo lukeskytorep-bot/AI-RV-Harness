@@ -57,6 +57,9 @@ describe("Profile model defaults", () => {
   it("round-trips provider/model keys and puts favorites first", () => {
     expect(splitModelRouteKey(modelRouteKey("provider_a", "vendor/model"))).toEqual({ providerConfigId: "provider_a", modelId: "vendor/model" });
     expect(splitModelRouteKey("invalid")).toBeNull();
+    expect(splitModelRouteKey("a")).toBeNull();
+    expect(splitModelRouteKey("::model")).toBeNull();
+    expect(splitModelRouteKey("provider::")).toBeNull();
     expect(preferredModelOrder([makeModel("plain"), makeModel("recommended", { recommended: true }), makeModel("favorite", { favorite: true })]).map((model) => model.modelId))
       .toEqual(["favorite", "recommended", "plain"]);
   });

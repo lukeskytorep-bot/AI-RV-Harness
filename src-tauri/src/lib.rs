@@ -130,7 +130,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(
-            tauri::plugin::Builder::new("pre-migration-backup")
+            tauri::plugin::Builder::<_, ()>::new("pre-migration-backup")
                 .setup(|app, _api| {
                     storage::backup_database_before_migrations(app)
                         .map_err(|error| Box::<dyn std::error::Error>::from(std::io::Error::other(error)))?;

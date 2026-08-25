@@ -1,6 +1,5 @@
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
-use sqlx::{Acquire, Executor};
 use tauri::State;
 use tauri_plugin_sql::{DbInstances, DbPool};
 
@@ -33,7 +32,6 @@ pub async fn database_execute_transaction(
     let instances = db_instances.0.read().await;
     let pool = match instances.get(DATABASE_URL) {
         Some(DbPool::Sqlite(pool)) => pool,
-        Some(_) => return Err("RV Harness database is not SQLite".to_string()),
         None => return Err("RV Harness database is not loaded".to_string()),
     };
     let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;

@@ -6,9 +6,10 @@ export function modelRouteKey(providerConfigId: string, modelId: string): string
 }
 
 export function splitModelRouteKey(key: string): { providerConfigId: string; modelId: string } | null {
-  const boundary = key.indexOf("::");
-  if (boundary < 1 || boundary === key.length - 2) return null;
-  return { providerConfigId: key.slice(0, boundary), modelId: key.slice(boundary + 2) };
+  const separator = "::";
+  const boundary = key.indexOf(separator);
+  if (boundary <= 0 || boundary + separator.length >= key.length) return null;
+  return { providerConfigId: key.slice(0, boundary), modelId: key.slice(boundary + separator.length) };
 }
 
 export function resolveViewerDefault(

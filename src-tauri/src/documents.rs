@@ -293,7 +293,7 @@ fn parse_docx(bytes: &[u8]) -> Result<String, String> {
         }
     }
     let index = document_index.ok_or_else(|| "DOCX is missing word/document.xml".to_string())?;
-    let mut entry = archive.by_index(index).map_err(|_| "DOCX document XML is unavailable".to_string())?;
+    let entry = archive.by_index(index).map_err(|_| "DOCX document XML is unavailable".to_string())?;
     if entry.encrypted() {
         return Err("password-protected DOCX files are not supported".to_string());
     }
