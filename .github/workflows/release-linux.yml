@@ -1,0 +1,72 @@
+name: Release Linux
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-linux:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install Linux dependencies for Tauri
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@b95584d8105b9ab200e15821fa671848cf2b7017 # master snapshot
+        with:
+          toolchain: stable
+          components: clippy,rustfmt
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          workspaces: './src-tauri -> target'
+      - name: Require the committed Rust lockfile
+        run: test -f src-tauri/Cargo.lock
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test -- --run
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets --locked
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Build AppImage and Debian package and update the draft release
+        id: tauri_build
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --bundles appimage,deb
+          tagName: app-v__VERSION__
+          releaseName: 'AI RV Harness v__VERSION__'
+          releaseBody: |
+            Windows and Linux desktop release of AI RV Harness.
+
+            Verify each downloaded asset with GitHub Artifact Attestations before installation.
+            `gh attestation verify "PATH_TO_ASSET" --repo lukeskytorep-bot/AI-RV-Harness`
+          releaseDraft: true
+          prerelease: false
+      - name: Require the expected Linux packages
+        run: |
+          compgen -G 'src-tauri/target/release/bundle/appimage/*.AppImage' > /dev/null
+          compgen -G 'src-tauri/target/release/bundle/deb/*.deb' > /dev/null
+      - name: Attest Linux packages
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb

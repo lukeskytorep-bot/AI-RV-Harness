@@ -3,6 +3,7 @@ import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { providerChat as nativeProviderChat } from "../providers/native";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderUsage } from "../providers/types";
+import { isRetryableProviderError, waitBeforeProviderRetry } from "../providers/retry";
 import type { TelepathicProtocolResource } from "../resources/protocolRegistry";
 import {
   buildEffectiveTelepathicMonitorPrompt,
@@ -273,10 +274,13 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
         break;
       } catch (cause) {
         authorization.failure();
+        if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
         if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { ...metadata, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
         response = null;
+        if (attempt < maxRetries && isRetryableProviderError(cause)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+        else break;
       }
     }
     if (!response) throw new TelepathicRunStop(`AUTO-STOP: repeated Viewer provider failures${lastError ? ` — ${lastError}` : ""}`);
@@ -287,7 +291,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
       await input.repository.appendSessionEvent(sessionId, { eventType: "OUTPUT_TRUNCATED_LOOP", role: "controller", content: sanitized.finding?.fragment, metadata: { ...metadata, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(raw) } });
     }
     messages.push({ role: "assistant", content: response.content });
-    await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, finishReason: response.finishReason, usage: response.usage, requestDurationMs: responseDurationMs } });
+    await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs } });
     return response;
   };
 
@@ -344,7 +348,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
               const response = { ...raw, usage: authorization.success(raw.usage) };
               const requestDurationMs = Date.now() - requestStartedAt;
               metrics = recordProviderRequest(metrics, response.usage, requestDurationMs);
-              await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", content: raw.content, metadata: { step, exchangeNumber, usage: response.usage, requestDurationMs } });
+              await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", content: raw.content, metadata: { step, exchangeNumber, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs } });
               return response;
             } catch (cause) {
               authorization.failure();
@@ -547,10 +551,13 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
         break;
       } catch (cause) {
         authorization.failure();
+        if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
         if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(input.session.id, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { ...metadata, resumed: true, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
         response = null;
+        if (attempt < maxRetries && isRetryableProviderError(cause)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+        else break;
       }
     }
     if (!response) throw new TelepathicRunStop(`AUTO-STOP: repeated Viewer provider failures${lastError ? ` — ${lastError}` : ""}`);
@@ -561,7 +568,7 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
       await input.repository.appendSessionEvent(input.session.id, { eventType: "OUTPUT_TRUNCATED_LOOP", role: "controller", content: sanitized.finding?.fragment, metadata: { ...metadata, resumed: true, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(raw) } });
     }
     messages.push({ role: "assistant", content: response.content });
-    await input.repository.appendSessionEvent(input.session.id, { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, resumed: true, finishReason: response.finishReason, usage: response.usage, requestDurationMs: responseDurationMs } });
+    await input.repository.appendSessionEvent(input.session.id, { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, resumed: true, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs } });
     return response;
   };
   const runQuestion = async (question: string): Promise<void> => {

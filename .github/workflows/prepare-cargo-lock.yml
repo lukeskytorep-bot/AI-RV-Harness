@@ -1,0 +1,30 @@
+name: Prepare Cargo lockfile
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@b95584d8105b9ab200e15821fa671848cf2b7017 # master snapshot
+        with:
+          toolchain: stable
+      - name: Generate the application lockfile
+        run: cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+      - name: Verify the lockfile resolves the native project
+        run: cargo metadata --manifest-path src-tauri/Cargo.toml --locked --no-deps > /dev/null
+      - name: Upload Cargo.lock for review and a separate commit
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: AI-RV-Harness-v0.7.9-Cargo-lock
+          path: src-tauri/Cargo.lock
+          if-no-files-found: error
+          retention-days: 14

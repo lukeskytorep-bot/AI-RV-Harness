@@ -1,0 +1,39 @@
+AI RV Harness 0.7.9 — COMPLETE SOURCE PACKAGE
+Prepared: 2026-08-25
+
+Base:
+- AI_RV_Harness_v0.7.8_COMPLETE_SOURCE.zip
+- SHA-256: fa04d6456c0406aee48ebc5a3a787f9a9ea1a12c2f57f5c7d462631ab32ae3e2
+
+Exact bundled DOCX files:
+- AI Field Perception Lexicon.docx
+  SHA-256: ed270637109c8aee7c009a18ff99788003856f5b52ffda177a5aa13de3e518f8
+- MODUŁ TELEPATIA – PROTOKÓŁ DLA AI VIEWERA 1.1 .docx
+  SHA-256: bd933bb22c928457212a499e5fe56ca534abc11b1d4b59c590a515b8259f15b6
+- Słownik Percepcyjny Pola dla AI.docx
+  SHA-256: f853c20914a89ff36346ee7c753fe47ed14d4d5f9c2e50c2caa897c4cc0c479e
+- TELEPATHY MODULE – PROTOCOL FOR AI VIEWER v1.1.docx
+  SHA-256: de7c5494f77c8777108dcdae50a7647058067926c5a3e2f92c02e9c7f81aaa43
+
+Local verification:
+- TypeScript: OK
+- Vitest: 169/169 OK (65 test files)
+- Vite production build: OK
+- SQLite migrations 001-019, integrity and foreign keys: OK
+- GitHub workflow YAML parse and static supply-chain tests: OK
+- DOCX ZIP safety inspection and visual render: OK (100 pages)
+
+Intentionally excluded from the ZIP:
+- node_modules
+- dist
+- src-tauri/target
+- docx_qa (temporary rendered review images)
+- *.tsbuildinfo
+- local databases, logs, secrets and environment files
+
+Required after upload to GitHub:
+- generate, review and commit src-tauri/Cargo.lock using the manual Prepare Cargo lockfile workflow;
+- run Rust fmt/tests/Clippy and Tauri builds in CI;
+- test Windows/Linux packages and Blackbox with the user's account;
+- verify GitHub Artifact Attestations before publishing the immutable release.
+

@@ -1,6 +1,7 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { providerChat as nativeProviderChat } from "../providers/native";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
+import { isRetryableProviderError, waitBeforeProviderRetry } from "../providers/retry";
 import { renderRvLiteSteps, type RvLiteProtocolResource } from "../resources/protocolRegistry";
 import {
   lockedActivityDefinition,
@@ -187,10 +188,13 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         break;
       } catch (cause) {
         costAuthorization.failure();
+        if (input.signal?.aborted) return stopRun("USER STOP");
         if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { promptNumber, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
         response = null;
+        if (attempt < maxRetries && isRetryableProviderError(cause)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+        else break;
       }
     }
     if (!response) return stopRun(`AUTO-STOP: repeated provider/API failures${lastError ? ` — ${lastError}` : ""}`);
@@ -208,7 +212,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     }
     messages.push({ role: "assistant", content: response.content });
     transcript = appendRvLiteTranscript(transcript, promptNumber, prompt, response.content, input.sessionLanguage);
-    await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { promptNumber, finishReason: response.finishReason, usage: response.usage, requestDurationMs: responseDurationMs } });
+    await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { promptNumber, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs } });
     // The Viewer response is durably saved before any next model call.
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, promptNumber, undefined, metrics, startedAtMs);
@@ -245,10 +249,13 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
             break;
           } catch (cause) {
             costAuthorization.failure();
+            if (input.signal?.aborted) return stopRun("USER STOP");
             if (!taskResponse) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
             taskError = cause instanceof Error ? cause.message : String(cause);
             await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: taskError, metadata: { promptNumber, attempt: attempt + 1, source: "special_task", requestDurationMs: Date.now() - requestStartedAt } });
             taskResponse = null;
+            if (attempt < maxRetries && isRetryableProviderError(cause)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+            else break;
           }
         }
         if (!taskResponse) return stopRun(`AUTO-STOP: Viewer failed during Special Task${taskError ? ` — ${taskError}` : ""}`);
@@ -266,7 +273,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         }
         messages.push({ role: "assistant", content: taskResponse.content });
         transcript = appendRvLiteSpecialTaskTranscript(transcript, taskPrompt, taskResponse.content, input.sessionLanguage);
-        await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_SPECIAL_TASK_RESPONSE", role: "assistant", content: taskResponse.content, metadata: { promptNumber, finishReason: taskResponse.finishReason, usage: taskResponse.usage, requestDurationMs: taskDurationMs } });
+        await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_SPECIAL_TASK_RESPONSE", role: "assistant", content: taskResponse.content, metadata: { promptNumber, finishReason: taskResponse.finishReason, actualModel: taskResponse.actualModel ?? "unavailable", providerRequestId: taskResponse.providerRequestId ?? "unavailable", usage: taskResponse.usage, usageAccuracy: taskResponse.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: taskDurationMs } });
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, "BlindRunning", transcript, promptNumber, undefined, metrics, startedAtMs);
         if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) return stopRun("AUTO-STOP: configured session cost limit exceeded");

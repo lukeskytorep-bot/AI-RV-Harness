@@ -1,7 +1,7 @@
 export interface WorkspaceSource {
   id: string;
   workspaceId: string;
-  sourceType: "text" | "markdown";
+  sourceType: "text" | "markdown" | "pdf" | "docx";
   displayName: string;
   content: string;
   contentHash: string;

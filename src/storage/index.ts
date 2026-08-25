@@ -1,6 +1,7 @@
 import { BrowserRepository } from "./browserRepository";
 import type { AppRepository } from "./repository";
 import { SqliteRepository } from "./sqliteRepository";
+import { validateLiveDatabase } from "./native";
 
 let nativeRepositoryPromise: Promise<AppRepository> | null = null;
 
@@ -11,10 +12,15 @@ export function isTauriRuntime(): boolean {
 export async function createRepository(): Promise<AppRepository> {
   if (isTauriRuntime()) {
     if (!nativeRepositoryPromise) {
-      nativeRepositoryPromise = SqliteRepository.connect().catch((cause) => {
-        nativeRepositoryPromise = null;
-        throw cause;
-      });
+      nativeRepositoryPromise = SqliteRepository.connect()
+        .then(async (repository) => {
+          await validateLiveDatabase();
+          return repository;
+        })
+        .catch((cause) => {
+          nativeRepositoryPromise = null;
+          throw cause;
+        });
     }
     return nativeRepositoryPromise;
   }

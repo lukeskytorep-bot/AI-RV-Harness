@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { isTauriRuntime } from "../storage";
 import { normalizeModelDiscovery } from "./capabilities";
-import { recordProviderDebug } from "./debug";
+import { detailedProviderDiagnosticsEnabled, recordProviderDebug } from "./debug";
 import type {
   EffectiveGenerationSettings,
   ProviderChatResponse,
@@ -14,6 +14,7 @@ import type {
 type NativeChatResponse = {
   content: string;
   finish_reason?: string | null;
+  actual_model?: string | null;
   usage?: {
     input_tokens?: number | null;
     output_tokens?: number | null;
@@ -85,6 +86,7 @@ export async function providerChat(input: {
         temperature: input.settings.effective.temperature,
         maxOutputTokens: input.settings.effective.maxOutputTokens,
         timeoutMs: input.timeoutMs,
+        detailedDiagnostics: detailedProviderDiagnosticsEnabled(),
       },
     });
   } catch (cause) {
@@ -106,10 +108,18 @@ export async function providerChat(input: {
     endpoint: response.debug_payload?.endpoint,
     request: response.debug_payload?.request,
     response: response.debug_payload?.response,
+    usage: {
+      inputTokens: response.usage?.input_tokens ?? undefined,
+      outputTokens: response.usage?.output_tokens ?? undefined,
+      reasoningTokens: response.usage?.reasoning_tokens ?? undefined,
+      totalTokens: response.usage?.total_tokens ?? undefined,
+      costUsd: response.usage?.cost_usd ?? undefined,
+    },
   });
   return {
     content: response.content,
     finishReason: response.finish_reason ?? undefined,
+    actualModel: response.actual_model ?? undefined,
     usage: {
       inputTokens: response.usage?.input_tokens ?? undefined,
       outputTokens: response.usage?.output_tokens ?? undefined,

@@ -4,6 +4,7 @@ mod artifacts;
 mod storage;
 mod database;
 mod dialogs;
+mod documents;
 
 use tauri_plugin_sql::{Migration, MigrationKind};
 
@@ -118,9 +119,25 @@ pub fn run() {
             sql: include_str!("../migrations/018_retire_legacy_training_targets.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 19,
+            description: "add_blackbox_provider",
+            sql: include_str!("../migrations/019_add_blackbox_provider.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri::plugin::Builder::new("pre-migration-backup")
+                .setup(|app, _api| {
+                    storage::backup_database_before_migrations(app)
+                        .map_err(|error| Box::<dyn std::error::Error>::from(std::io::Error::other(error)))?;
+                    Ok(())
+                })
+                .build(),
+        )
         .plugin(
             tauri_plugin_sql::Builder::default()
                 .add_migrations("sqlite:rv_harness.db", migrations)
@@ -138,6 +155,7 @@ pub fn run() {
             artifacts::read_reveal_image_for_judge,
             artifacts::write_export_package,
             storage::storage_paths,
+            storage::validate_live_database,
             storage::prepare_backup,
             storage::prepare_portable_backup,
             storage::finalize_backup,
@@ -152,6 +170,11 @@ pub fn run() {
             storage::open_data_folder,
             storage::open_folder,
             dialogs::choose_directory,
+            dialogs::choose_attachments,
+            documents::import_attachment,
+            documents::list_builtin_documents,
+            documents::read_builtin_document,
+            documents::save_builtin_document,
             database::database_execute_transaction
         ])
         .run(tauri::generate_context!())

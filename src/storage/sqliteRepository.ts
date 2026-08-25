@@ -100,7 +100,7 @@ type RvSessionRow = {
 type ChatThreadGroupRow = { id: string; workspace_id: string; mode: ChatMode; title: string; created_at: string; updated_at: string; archived_at: string | null };
 type ChatThreadRow = { id: string; workspace_id: string; mode: ChatMode; thread_group_id: string | null; title: string; formal_rv_state: ChatThread["formalRvState"] | null; created_at: string; updated_at: string; archived_at: string | null };
 type ChatMessageRow = { id: string; thread_id: string; role: "user" | "assistant"; content: string; created_at: string };
-type WorkspaceSourceRow = { id: string; workspace_id: string; source_type: "text" | "markdown"; display_name: string; content_text: string | null; content_hash: string | null; metadata_json: string; created_at: string };
+type WorkspaceSourceRow = { id: string; workspace_id: string; source_type: "text" | "markdown" | "pdf" | "docx"; display_name: string; content_text: string | null; content_hash: string | null; metadata_json: string; created_at: string };
 type RevealRow = { reveal_source: RevealInput["source"]; reveal_text: string | null; artifact_manifest_json: string; reveal_hash: string };
 type SessionEventRow = { id: string; session_id: string; sequence_number: number; event_type: string; role: SessionEventRecord["role"] | null; content: string | null; metadata_json: string; created_at: string };
 type JudgeScoreRow = {
@@ -571,12 +571,6 @@ export class SqliteRepository implements AppRepository {
   }
 
   async archiveChatThreadGroup(groupId: string): Promise<void> {
-    const rows = await this.db.select<Array<{ blind_count: number }>>(
-      `SELECT COUNT(*) AS blind_count FROM chat_threads
-        WHERE thread_group_id = $1 AND formal_rv_state = 'BLIND' AND archived_at IS NULL`,
-      [groupId],
-    );
-    if (Number(rows[0]?.blind_count ?? 0) > 0) throw new Error("A Thread containing a blind Manual RV conversation cannot be archived.");
     const timestamp = nowIso();
     await this.executeTransaction([
       { query: "UPDATE chat_thread_groups SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", values: [timestamp, groupId] },
@@ -628,9 +622,8 @@ export class SqliteRepository implements AppRepository {
   }
 
   async archiveChatThread(threadId: string): Promise<void> {
-    const rows = await this.db.select<Array<{ formal_rv_state: ChatThread["formalRvState"] | null }>>("SELECT formal_rv_state FROM chat_threads WHERE id = $1 AND archived_at IS NULL LIMIT 1", [threadId]);
+    const rows = await this.db.select<Array<{ id: string }>>("SELECT id FROM chat_threads WHERE id = $1 AND archived_at IS NULL LIMIT 1", [threadId]);
     if (!rows[0]) throw new Error("Chat thread not found.");
-    if (rows[0].formal_rv_state === "BLIND") throw new Error("A blind Manual RV thread must be ended before it can be archived.");
     const timestamp = nowIso();
     await this.executeWrite("UPDATE chat_threads SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", [timestamp, threadId]);
   }

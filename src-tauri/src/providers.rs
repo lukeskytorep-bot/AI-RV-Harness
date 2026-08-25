@@ -17,6 +17,7 @@ enum ProviderKind {
     Zai,
     Deepseek,
     Mistral,
+    Blackbox,
     CustomOpenai,
 }
 
@@ -43,6 +44,8 @@ pub struct ProviderChatRequest {
     temperature: Option<f64>,
     max_output_tokens: Option<u32>,
     timeout_ms: Option<u64>,
+    #[serde(default)]
+    detailed_diagnostics: bool,
 }
 
 #[derive(Default)]
@@ -82,6 +85,7 @@ struct ProviderUsage {
 pub struct ProviderChatResponse {
     content: String,
     finish_reason: Option<String>,
+    actual_model: Option<String>,
     usage: ProviderUsage,
     provider_request_id: Option<String>,
     debug_payload: Option<ProviderDebugPayload>,
@@ -90,8 +94,8 @@ pub struct ProviderChatResponse {
 #[derive(Debug, Serialize)]
 struct ProviderDebugPayload {
     endpoint: String,
-    request: Value,
-    response: Value,
+    request: Option<Value>,
+    response: Option<Value>,
 }
 
 fn provider_base_url(provider: ProviderKind, custom: Option<&str>) -> Result<String, String> {
@@ -103,6 +107,7 @@ fn provider_base_url(provider: ProviderKind, custom: Option<&str>) -> Result<Str
         ProviderKind::Zai => Some("https://api.z.ai/api/paas/v4"),
         ProviderKind::Deepseek => Some("https://api.deepseek.com"),
         ProviderKind::Mistral => Some("https://api.mistral.ai/v1"),
+        ProviderKind::Blackbox => Some("https://api.blackbox.ai"),
         ProviderKind::CustomOpenai => None,
     };
     let candidate = fixed.or(custom).ok_or_else(|| "custom provider requires a base URL".to_string())?;
@@ -122,12 +127,16 @@ fn validate_base_url(value: &str) -> Result<String, String> {
     Ok(value.trim().trim_end_matches('/').to_string())
 }
 
-fn client() -> Result<Client, String> {
+static HTTP_CLIENT: LazyLock<Result<Client, String>> = LazyLock::new(|| {
     Client::builder()
         .connect_timeout(Duration::from_secs(30))
-        .user_agent("AI-RV-Harness/0.7.8")
+        .user_agent(format!("AI-RV-Harness/{}", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|error| error.to_string())
+});
+
+fn client() -> Result<&'static Client, String> {
+    HTTP_CLIENT.as_ref().map_err(Clone::clone)
 }
 
 fn authenticated(builder: RequestBuilder, provider: ProviderKind, secret: &str) -> RequestBuilder {
@@ -144,18 +153,27 @@ fn endpoint(base: &str, suffix: &str) -> String {
     format!("{}/{}", base.trim_end_matches('/'), suffix.trim_start_matches('/'))
 }
 
-fn safe_provider_error(status: reqwest::StatusCode, body: &str, secret: &str) -> String {
+fn safe_provider_error(status: reqwest::StatusCode, body: &str, secret: &str, retry_after_ms: Option<u64>) -> String {
     let redacted = if secret.is_empty() {
         body.to_string()
     } else {
         body.replace(secret, "[REDACTED]")
     };
     let compact = redacted.chars().take(1200).collect::<String>();
-    format!("provider request failed ({status}): {compact}")
+    let retry_hint = retry_after_ms
+        .map(|milliseconds| format!(" [retry-after-ms={milliseconds}]"))
+        .unwrap_or_default();
+    format!("provider request failed ({status}){retry_hint}: {compact}")
 }
 
 async fn json_response(response: reqwest::Response, secret: &str) -> Result<(Value, Option<String>), String> {
     let status = response.status();
+    let retry_after_ms = response
+        .headers()
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|seconds| seconds.saturating_mul(1_000).min(30_000));
     let request_id = response
         .headers()
         .get("x-request-id")
@@ -164,7 +182,7 @@ async fn json_response(response: reqwest::Response, secret: &str) -> Result<(Val
         .map(str::to_string);
     let body = response.text().await.map_err(|error| error.to_string())?;
     if !status.is_success() {
-        return Err(safe_provider_error(status, &body, secret));
+        return Err(safe_provider_error(status, &body, secret, retry_after_ms));
     }
     let value = serde_json::from_str(&body).map_err(|_| "provider returned invalid JSON".to_string())?;
     Ok((value, request_id))
@@ -195,8 +213,11 @@ pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatR
     let base = provider_base_url(request.provider, request.base_url.as_deref())?;
     let (url, body) = build_chat_request(&request, &base)?;
     let debug_endpoint = url.clone();
-    let mut debug_request = body.clone();
-    scrub_debug_value(&mut debug_request, &secret, None);
+    let debug_request = request.detailed_diagnostics.then(|| {
+        let mut value = body.clone();
+        scrub_debug_value(&mut value, &secret, None);
+        value
+    });
     let timeout_ms = request.timeout_ms.unwrap_or(120_000);
     let (payload, request_id) = send_chat_request(
         authenticated(client()?.post(url).json(&body), request.provider, &secret)
@@ -205,8 +226,11 @@ pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatR
         &secret,
     )
     .await?;
-    let mut debug_response = payload.clone();
-    scrub_debug_value(&mut debug_response, &secret, None);
+    let debug_response = request.detailed_diagnostics.then(|| {
+        let mut value = payload.clone();
+        scrub_debug_value(&mut value, &secret, None);
+        value
+    });
     let mut parsed = parse_chat_response(request.provider, payload, request_id)?;
     parsed.debug_payload = Some(ProviderDebugPayload {
         endpoint: debug_endpoint,
@@ -518,6 +542,7 @@ fn parse_chat_response(
 }
 
 fn parse_openai_compatible_response(payload: Value, request_id: Option<String>) -> Result<ProviderChatResponse, String> {
+    let actual_model = payload.get("model").and_then(Value::as_str).map(str::to_string);
     let content = payload
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
@@ -534,6 +559,7 @@ fn parse_openai_compatible_response(payload: Value, request_id: Option<String>) 
     Ok(ProviderChatResponse {
         content,
         finish_reason: payload.pointer("/choices/0/finish_reason").and_then(Value::as_str).map(str::to_string),
+        actual_model,
         usage: ProviderUsage {
             input_tokens: usage.get("prompt_tokens").and_then(Value::as_u64),
             output_tokens: usage.get("completion_tokens").and_then(Value::as_u64),
@@ -547,6 +573,7 @@ fn parse_openai_compatible_response(payload: Value, request_id: Option<String>) 
 }
 
 fn parse_google_response(payload: Value, request_id: Option<String>) -> Result<ProviderChatResponse, String> {
+    let actual_model = payload.get("modelVersion").and_then(Value::as_str).map(str::to_string);
     let parts = payload
         .pointer("/candidates/0/content/parts")
         .and_then(Value::as_array)
@@ -564,6 +591,7 @@ fn parse_google_response(payload: Value, request_id: Option<String>) -> Result<P
     Ok(ProviderChatResponse {
         content,
         finish_reason: payload.pointer("/candidates/0/finishReason").and_then(Value::as_str).map(str::to_string),
+        actual_model,
         usage: ProviderUsage {
             input_tokens: usage.get("promptTokenCount").and_then(Value::as_u64),
             output_tokens: usage.get("candidatesTokenCount").and_then(Value::as_u64),
@@ -577,6 +605,7 @@ fn parse_google_response(payload: Value, request_id: Option<String>) -> Result<P
 }
 
 fn parse_anthropic_response(payload: Value, request_id: Option<String>) -> Result<ProviderChatResponse, String> {
+    let actual_model = payload.get("model").and_then(Value::as_str).map(str::to_string);
     let content = payload
         .get("content")
         .and_then(Value::as_array)
@@ -598,6 +627,7 @@ fn parse_anthropic_response(payload: Value, request_id: Option<String>) -> Resul
     Ok(ProviderChatResponse {
         content,
         finish_reason: payload.get("stop_reason").and_then(Value::as_str).map(str::to_string),
+        actual_model,
         usage: ProviderUsage {
             input_tokens: input,
             output_tokens: output,
@@ -616,6 +646,25 @@ fn parse_anthropic_response(payload: Value, request_id: Option<String>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
+
+    async fn read_simulator_request(socket: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        loop {
+            let mut chunk = [0u8; 2048];
+            let read = socket.read(&mut chunk).await.unwrap();
+            if read == 0 { break; }
+            request.extend_from_slice(&chunk[..read]);
+            if let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..header_end + 4]);
+                let content_length = headers.lines()
+                    .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").map(str::trim).and_then(|value| value.parse::<usize>().ok()))
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length { break; }
+            }
+        }
+        String::from_utf8(request).unwrap()
+    }
 
     fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
         ProviderChatRequest {
@@ -635,6 +684,7 @@ mod tests {
             temperature: None,
             max_output_tokens: None,
             timeout_ms: None,
+            detailed_diagnostics: false,
         }
     }
 
@@ -647,7 +697,7 @@ mod tests {
 
     #[test]
     fn provider_errors_redact_secret() {
-        let error = safe_provider_error(reqwest::StatusCode::UNAUTHORIZED, "bad sk-secret", "sk-secret");
+        let error = safe_provider_error(reqwest::StatusCode::UNAUTHORIZED, "bad sk-secret", "sk-secret", None);
         assert!(!error.contains("sk-secret"));
     }
 
@@ -699,5 +749,55 @@ mod tests {
         request.reasoning_transport_value = Some("xhigh".to_string());
         let (_, body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
         assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("xhigh")));
+    }
+
+    #[test]
+    fn blackbox_uses_the_documented_openai_compatible_routes() {
+        let request = chat_request(ProviderKind::Blackbox, "blackboxai/openai/gpt-5");
+        let base = provider_base_url(ProviderKind::Blackbox, Some("https://ignored.example/v1")).unwrap();
+        assert_eq!(base, "https://api.blackbox.ai");
+        let (url, body) = build_chat_request(&request, &base).unwrap();
+        assert_eq!(url, "https://api.blackbox.ai/chat/completions");
+        assert_eq!(body.get("model"), Some(&json!("blackboxai/openai/gpt-5")));
+        assert_eq!(endpoint(&base, "models"), "https://api.blackbox.ai/models");
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_contract_passes_against_a_local_simulator() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for expected_path in ["/models", "/chat/completions"] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_simulator_request(&mut socket).await;
+                assert!(request.lines().next().unwrap_or_default().contains(expected_path));
+                assert!(request.to_ascii_lowercase().contains("authorization: bearer simulator-secret"));
+                let body = if expected_path == "/models" {
+                    r#"{"data":[{"id":"simulator-model"}]}"#
+                } else {
+                    assert!(request.contains("\"model\":\"simulator-model\""));
+                    r#"{"model":"simulator-model-actual","choices":[{"message":{"content":"simulated response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}"#
+                };
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let base = format!("http://{address}");
+        let models = authenticated(client().unwrap().get(endpoint(&base, "models")), ProviderKind::Blackbox, "simulator-secret")
+            .send().await.unwrap();
+        let (models, _) = json_response(models, "simulator-secret").await.unwrap();
+        assert_eq!(models.pointer("/data/0/id"), Some(&json!("simulator-model")));
+
+        let request = chat_request(ProviderKind::Blackbox, "simulator-model");
+        let (url, body) = build_chat_request(&request, &base).unwrap();
+        let response = authenticated(client().unwrap().post(url).json(&body), ProviderKind::Blackbox, "simulator-secret")
+            .send().await.unwrap();
+        let (payload, request_id) = json_response(response, "simulator-secret").await.unwrap();
+        let parsed = parse_chat_response(ProviderKind::Blackbox, payload, request_id).unwrap();
+        assert_eq!(parsed.content, "simulated response");
+        assert_eq!(parsed.actual_model.as_deref(), Some("simulator-model-actual"));
+        assert_eq!(parsed.usage.total_tokens, Some(5));
+        server.await.unwrap();
     }
 }

@@ -7,11 +7,14 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sha2::{Digest, Sha256};
+use sqlx::{sqlite::{SqliteConnectOptions, SqliteConnection}, Connection, Row};
 use tauri::Manager;
 
 const BACKUP_SCHEMA_VERSION: u8 = 1;
 const DATABASE_FILE_NAME: &str = "rv_harness.db";
+const CURRENT_MIGRATION_VERSION: i64 = 19;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,6 +96,54 @@ pub struct StorageExportResult {
     directory: String,
 }
 
+pub fn backup_database_before_migrations(app: &tauri::AppHandle) -> Result<(), String> {
+    let source = database_path(app)?;
+    if !source.is_file() {
+        return Ok(());
+    }
+    let root = backup_root(app)?.join("pre_migration");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let marker = root.join(format!("v{}_complete", current_application_version().replace('.', "_")));
+    if marker.is_file() {
+        return Ok(());
+    }
+
+    let timestamp = unix_ms()?;
+    let directory = root.join(format!("before_v{}_{}", current_application_version().replace('.', "_"), timestamp));
+    fs::create_dir(&directory).map_err(|error| error.to_string())?;
+    let mut files = Vec::new();
+    for (name, path) in [
+        (DATABASE_FILE_NAME.to_string(), source.clone()),
+        (format!("{DATABASE_FILE_NAME}-wal"), PathBuf::from(format!("{}-wal", source.to_string_lossy()))),
+        (format!("{DATABASE_FILE_NAME}-shm"), PathBuf::from(format!("{}-shm", source.to_string_lossy()))),
+    ] {
+        if !path.is_file() { continue; }
+        let destination = directory.join(&name);
+        fs::copy(&path, &destination).map_err(|error| error.to_string())?;
+        files.push(json!({
+            "fileName": name,
+            "sha256": sha256_file(&destination)?,
+            "sizeBytes": fs::metadata(&destination).map_err(|error| error.to_string())?.len(),
+        }));
+    }
+    if files.is_empty() {
+        let _ = fs::remove_dir(&directory);
+        return Err("pre-migration database backup did not copy any files".to_string());
+    }
+    let manifest = json!({
+        "backupKind": "automatic_pre_migration",
+        "targetApplicationVersion": current_application_version(),
+        "expectedPreviousMigrationVersion": 18,
+        "createdAtUnixMs": timestamp,
+        "files": files,
+        "secretsIncluded": false,
+    });
+    fs::write(directory.join("manifest.json"), serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    fs::write(marker, directory.to_string_lossy().as_bytes()).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn storage_paths(app: tauri::AppHandle) -> Result<StoragePaths, String> {
     let database_path = database_path(&app)?;
@@ -103,6 +154,18 @@ pub fn storage_paths(app: tauri::AppHandle) -> Result<StoragePaths, String> {
         artifacts_path: artifacts_path.to_string_lossy().to_string(),
         backups_path: backups_path.to_string_lossy().to_string(),
     })
+}
+
+#[tauri::command]
+pub async fn validate_live_database(app: tauri::AppHandle) -> Result<(), String> {
+    let path = database_path(&app)?;
+    let migration_version = validate_sqlite_database(&path).await?;
+    if migration_version != CURRENT_MIGRATION_VERSION {
+        return Err(format!(
+            "database migration validation failed: expected version {CURRENT_MIGRATION_VERSION}, found {migration_version}"
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -210,8 +273,9 @@ pub fn finalize_portable_backup(app: tauri::AppHandle, request: PortableBackupRe
 }
 
 #[tauri::command]
-pub fn inspect_portable_backup(directory: String) -> Result<BackupRecord, String> {
+pub async fn inspect_portable_backup(directory: String) -> Result<BackupRecord, String> {
     let (directory, manifest) = validated_portable_backup(&directory)?;
+    validate_sqlite_database(&directory.join(DATABASE_FILE_NAME)).await?;
     Ok(record_from_manifest(&directory, &manifest))
 }
 
@@ -297,7 +361,7 @@ pub fn export_storage_backup(app: tauri::AppHandle, request: BackupIdRequest) ->
 }
 
 #[tauri::command]
-pub fn restore_backup(app: tauri::AppHandle, request: BackupIdRequest) -> Result<RestoreResult, String> {
+pub async fn restore_backup(app: tauri::AppHandle, request: BackupIdRequest) -> Result<RestoreResult, String> {
     validate_backup_id(&request.backup_id)?;
     let directory = backup_directory(&app, &request.backup_id)?;
     let manifest = read_manifest(&directory.join("manifest.json"))?;
@@ -308,6 +372,7 @@ pub fn restore_backup(app: tauri::AppHandle, request: BackupIdRequest) -> Result
     if sha256_file(&source_database)? != manifest.database_sha256 {
         return Err("backup database integrity check failed".to_string());
     }
+    validate_sqlite_database(&source_database).await?;
     for artifact in &manifest.artifacts {
         let relative = safe_relative(&artifact.relative_path)?;
         let source = directory.join("artifacts").join(&relative);
@@ -338,6 +403,10 @@ pub fn restore_backup(app: tauri::AppHandle, request: BackupIdRequest) -> Result
         let _ = fs::remove_file(&restore_temp);
         return Err("restored database copy failed integrity check".to_string());
     }
+    validate_sqlite_database(&restore_temp).await.map_err(|error| {
+        let _ = fs::remove_file(&restore_temp);
+        error
+    })?;
 
     let safety_suffix = unix_ms()?;
     let previous_database = destination_database.with_file_name(format!("rv_harness.pre_restore_{safety_suffix}.db"));
@@ -359,9 +428,10 @@ pub fn restore_backup(app: tauri::AppHandle, request: BackupIdRequest) -> Result
 }
 
 #[tauri::command]
-pub fn restore_portable_backup(app: tauri::AppHandle, request: PortableRestoreRequest) -> Result<RestoreResult, String> {
+pub async fn restore_portable_backup(app: tauri::AppHandle, request: PortableRestoreRequest) -> Result<RestoreResult, String> {
     let (directory, manifest) = validated_portable_backup(&request.directory)?;
     let source_database = directory.join(DATABASE_FILE_NAME);
+    validate_sqlite_database(&source_database).await?;
 
     let destination_artifacts = app.path().app_data_dir().map_err(|error| error.to_string())?.join("artifacts");
     for artifact in &manifest.artifacts {
@@ -384,6 +454,10 @@ pub fn restore_portable_backup(app: tauri::AppHandle, request: PortableRestoreRe
         let _ = fs::remove_file(&restore_temp);
         return Err("restored database copy failed integrity check".to_string());
     }
+    validate_sqlite_database(&restore_temp).await.map_err(|error| {
+        let _ = fs::remove_file(&restore_temp);
+        error
+    })?;
 
     let safety_suffix = unix_ms()?;
     let previous_database = destination_database.with_file_name(format!("rv_harness.pre_restore_{safety_suffix}.db"));
@@ -473,6 +547,57 @@ fn validated_portable_backup(value: &str) -> Result<(PathBuf, BackupManifest), S
         }
     }
     Ok((directory, manifest))
+}
+
+async fn validate_sqlite_database(path: &Path) -> Result<i64, String> {
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true)
+        .create_if_missing(false)
+        .foreign_keys(true);
+    let mut connection = SqliteConnection::connect_with(&options)
+        .await
+        .map_err(|error| format!("backup database cannot be opened: {error}"))?;
+
+    let integrity = sqlx::query("PRAGMA integrity_check")
+        .fetch_all(&mut connection)
+        .await
+        .map_err(|error| format!("backup database integrity check failed: {error}"))?;
+    if integrity.len() != 1 || integrity[0].try_get::<String, _>(0).ok().as_deref() != Some("ok") {
+        return Err("backup database failed SQLite integrity_check".to_string());
+    }
+
+    let foreign_key_violations = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&mut connection)
+        .await
+        .map_err(|error| format!("backup database foreign-key check failed: {error}"))?;
+    if !foreign_key_violations.is_empty() {
+        return Err("backup database contains foreign-key violations".to_string());
+    }
+
+    let rows = sqlx::query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('profiles','workspaces','rv_sessions','chat_threads','provider_configs')",
+    )
+    .fetch_all(&mut connection)
+    .await
+    .map_err(|error| format!("backup database schema check failed: {error}"))?;
+    if rows.len() != 5 {
+        return Err("backup database is missing required RV Harness tables".to_string());
+    }
+
+    let migration_version = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT MAX(version) FROM _sqlx_migrations WHERE success = 1",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .map_err(|error| format!("backup database migration-version check failed: {error}"))?
+    .ok_or_else(|| "backup database has no successful migration record".to_string())?;
+    if !(1..=CURRENT_MIGRATION_VERSION).contains(&migration_version) {
+        return Err(format!(
+            "backup database has unsupported migration version {migration_version}"
+        ));
+    }
+    Ok(migration_version)
 }
 
 fn unix_ms() -> Result<u64, String> {

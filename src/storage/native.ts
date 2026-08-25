@@ -33,6 +33,10 @@ export async function getStoragePaths(): Promise<StoragePaths> {
   return invoke<StoragePaths>("storage_paths");
 }
 
+export async function validateLiveDatabase(): Promise<void> {
+  await invoke("validate_live_database");
+}
+
 export async function prepareStorageBackup(): Promise<PreparedBackup> {
   return invoke<PreparedBackup>("prepare_backup");
 }

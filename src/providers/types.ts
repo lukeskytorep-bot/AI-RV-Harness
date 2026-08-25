@@ -6,6 +6,7 @@ export const PROVIDER_KINDS = [
   "zai",
   "deepseek",
   "mistral",
+  "blackbox",
   "custom_openai",
 ] as const;
 
@@ -161,6 +162,7 @@ export interface ProviderUsage {
 export interface ProviderChatResponse {
   content: string;
   finishReason?: string;
+  actualModel?: string;
   usage: ProviderUsage;
   providerRequestId?: string;
 }

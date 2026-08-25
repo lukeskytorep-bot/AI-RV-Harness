@@ -1,16 +1,21 @@
-# Jak wgrać kompletne źródło 0.7.7 i zbudować Windows EXE
+# Jak wgrać kompletne źródło 0.7.9 i przygotować Draft Release
 
-Najbezpieczniejsza metoda to GitHub Desktop, ponieważ zachowuje katalogi, pliki ukryte (`.github`, `.gitignore`) i usuwa z repozytorium pliki, których nie ma już w nowej wersji.
-
-1. Pobierz i rozpakuj `AI_RV_Harness_v0.7.7_COMPLETE_UPDATE_source.zip`.
+1. Pobierz i rozpakuj `AI_RV_Harness_v0.7.9_COMPLETE_SOURCE.zip`.
 2. W GitHub Desktop sklonuj repozytorium `AI-RV-Harness` albo otwórz jego istniejącą lokalną kopię.
-3. Zamknij AI RV Harness.
-4. Skopiuj **całą zawartość** rozpakowanej paczki do katalogu repozytorium. Kopiuj zawartość, nie dodatkowy nadrzędny folder.
-5. Zgódź się na zastąpienie istniejących plików. Nie kopiuj `node_modules`, `dist` ani lokalnego `src-tauri/target` — nie ma ich w paczce.
-6. W GitHub Desktop sprawdź, czy widoczne są zarówno pliki dodane/zmienione, jak i usunięte.
-7. Commit: `Release 0.7.7 complete source`.
-8. Kliknij `Push origin` i poczekaj na zielony workflow `CI`.
-9. W GitHub wejdź w `Actions` → `Release Windows` → `Run workflow`, wybierając gałąź `main`.
-10. Workflow utworzy lub zaktualizuje `Cargo.lock`, zweryfikuje frontend i Rust, a następnie utworzy szkic wydania `AI RV Harness v0.7.7` z instalatorem Windows.
+3. Zamknij AI RV Harness i skopiuj **całą zawartość** rozpakowanej paczki do katalogu repozytorium. Kopiuj zawartość, a nie nadrzędny folder.
+4. Zgódź się na zastąpienie plików. Paczka nie zawiera `node_modules`, `dist` ani `src-tauri/target`.
+5. Sprawdź w GitHub Desktop pliki dodane, zmienione i usunięte. Wykonaj commit na gałęzi roboczej i push.
+6. Ponieważ środowisko przygotowania nie miało Rust, uruchom `Actions` → **Prepare Cargo lockfile**. Pobierz artefakt, przejrzyj `Cargo.lock`, umieść go w `src-tauri/Cargo.lock`, wykonaj osobny commit i push.
+7. Poczekaj na zielone CI i CodeQL. Nie obchodź wymogu `--locked`.
+8. Wykonaj całą `RELEASE_CHECKLIST_v0.7.9.md`, w tym włącz **Enable release immutability** przed publikacją.
+9. Z `main` uruchom ręcznie **Release Windows** oraz **Release Linux**. Oba workflowy pozostawiają Release jako Draft i generują attestation.
+10. Pobierz każdy asset i sprawdź:
 
-Nie dodawaj paczki plik po pliku przez przeglądarkowe `Add file → Upload files`. Ta metoda w przeszłości pozostawiła w repozytorium mieszaninę wersji i brakujące katalogi.
+```bash
+gh attestation verify "PLIK" --repo lukeskytorep-bot/AI-RV-Harness
+```
+
+11. Opublikuj Release dopiero po testach instalacyjnych Windows/Linux, teście Blackbox na koncie użytkownika i pełnej weryfikacji Draftu.
+
+Nie wgrywaj paczki plik po pliku przez przeglądarkowe `Add file → Upload files`; łatwo wtedy pozostawić mieszaninę wersji lub pominąć katalogi ukryte, w tym `.github`.
+

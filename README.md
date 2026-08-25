@@ -2,9 +2,13 @@
 
 AI RV Harness is a local-first desktop workspace for blind AI Remote Viewing sessions and controlled RV research. The desktop stack is Tauri 2 + React/TypeScript + Rust + SQLite, with Windows as the primary release platform.
 
-## Current checkpoint — 0.7.7
+## Current checkpoint — 0.7.9
 
 This is a substantial v1 implementation checkpoint, not a claim that the complete v1 distribution is releasable yet.
+
+Checkpoint 0.7.9 consolidates the complete 0.7.8 telepathic and Special Task work and hardens the release path. It adds the unified native attachment picker for TXT/Markdown/PDF/DOCX and one-turn images, conservative shared context budgeting with a visible output reserve, the four exact PL/EN Telepathy and Field Perception documents, pre-migration database backup plus post-migration/restore validation, real image-signature validation, privacy-gated provider diagnostics, and a cautious throttling-only automatic retry policy. Manual RV no longer exposes a formal blind/revealed control.
+
+Blackbox is available through its documented OpenAI-compatible API with fixed official endpoints and a local contract simulator. Linux AppImage and Debian package workflows are included alongside Windows NSIS/MSI. Both release workflows create a Draft Release and generate GitHub Artifact Attestations for every expected installer/package; the workflow fails if any expected artifact set is empty. All external GitHub Actions are pinned to reviewed full commit SHAs. Linux remains conditional until the generated packages pass the real-system checklist described in `RELEASE_CHECKLIST_v0.7.9.md`.
 
 Implemented end to end:
 
@@ -51,11 +55,13 @@ Checkpoint 0.7.7 simplifies the human workflows around Targets, Training, Resear
 
 After every automatic Reveal the Viewer now receives the Reveal and produces a self-review without an extra button; monitored sessions continue with the Monitor review. The optional follow-up is a two-way conversation. Human exports use readable Markdown. Ordinary and Training exports avoid redundant JSON files; when a Reveal includes an image, the actual image file is copied beside the Markdown and linked from it. Research retains technical JSON for audit and external evaluation, while adding readable complete-session Markdown, readable blinding keys, condition labels after unblinding and a detailed README. Recent RV sessions live in a scrollable metadata panel, Special Task is collapsible and explained, editable factory Viewer/Monitor prompts follow the selected Polish or English interface language, and the accepted PL/EN Monitor prompt resources are bundled as version 1.3.0.
 
-`.github/workflows/release-windows.yml` runs only from `main`, prevents overlapping releases, generates and commits the application `Cargo.lock`, checks TypeScript plus Rust tests/Clippy, and then uses the official Tauri GitHub Actions path to create a draft GitHub Release. A local Rust installation is therefore not required for distribution builds.
+`.github/workflows/release-windows.yml` and `.github/workflows/release-linux.yml` run manually from `main`, prevent overlapping releases, require the reviewed and committed `src-tauri/Cargo.lock`, run the relevant quality gates, create/update a draft GitHub Release and attest the generated packages. CI never commits or pushes repository changes.
+
+If Rust is unavailable locally, run the manual `Prepare Cargo lockfile` workflow once, download its `AI-RV-Harness-v0.7.9-Cargo-lock` artifact, review `Cargo.lock`, place it in `src-tauri/Cargo.lock`, and commit it. The normal CI and release workflows intentionally refuse to continue until that file is present.
 
 ## Windows installer trust
 
-Checkpoint 0.7.7 is not code-signed, so Windows SmartScreen or third-party endpoint protection may warn again for every newly built installer hash. Removing that recurring warning requires a stable Authenticode publisher identity (for example Microsoft Artifact Signing or another trusted certificate configured in the Tauri release workflow) or distribution through Microsoft Store. Signing improves reputation but does not guarantee that the first signed releases will never show a reputation warning. See the [Microsoft SmartScreen reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) and [Tauri Windows code-signing guide](https://v2.tauri.app/distribute/sign/windows/).
+Checkpoint 0.7.9 is not Authenticode-signed, so Windows SmartScreen or third-party endpoint protection may warn again for every newly built installer hash. GitHub Artifact Attestation proves build provenance but does not replace a Windows publisher signature. Removing the recurring publisher warning requires a stable Authenticode identity (for example Microsoft Artifact Signing or another trusted certificate configured in the Tauri release workflow) or distribution through Microsoft Store. See the [Microsoft SmartScreen reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) and [Tauri Windows code-signing guide](https://v2.tauri.app/distribute/sign/windows/).
 
 ## Development and verification
 
@@ -71,7 +77,7 @@ npm run tauri dev
 
 The browser preview uses a development-only local-storage repository. The Tauri desktop runtime uses SQLite and the OS credential store.
 
-The TypeScript test/build path and SQLite migration/invariant checks are verified in the checkpoint environment. A Rust toolchain is not installed there, so the native Tauri/Rust binary is verified by the Windows GitHub Actions release pipeline rather than locally.
+The TypeScript test/build path and static project checks are verified in the checkpoint environment. When that environment has no Rust toolchain, native Tauri/Rust tests, formatting, Clippy, lockfile resolution and installer builds remain enforced by GitHub CI before the Draft Release may be published.
 
 ## Security and evidence integrity
 

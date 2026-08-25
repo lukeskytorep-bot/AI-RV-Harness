@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::Manager;
 
+use crate::documents;
+
 const MAX_ARTIFACT_BYTES: usize = 25 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -81,10 +83,15 @@ pub struct WriteExportResponse {
 #[tauri::command]
 pub fn store_reveal_artifact(app: tauri::AppHandle, request: StoreRevealArtifactRequest) -> Result<RevealArtifactRecord, String> {
     validate_session_id(&request.session_id)?;
-    let mime = normalize_mime(&request.mime_type, &request.original_file_name)?;
+    let mut mime = normalize_mime(&request.mime_type, &request.original_file_name)?;
     let bytes = BASE64.decode(request.data_base64.as_bytes()).map_err(|_| "invalid artifact encoding".to_string())?;
     if bytes.is_empty() || bytes.len() > MAX_ARTIFACT_BYTES {
         return Err("reveal artifact must be between 1 byte and 25 MB".to_string());
+    }
+    if mime.starts_with("image/") {
+        let (detected, _, _) = documents::validate_image_bytes(&request.original_file_name, &bytes)?;
+        if mime != detected { return Err("image MIME type does not match its byte signature".to_string()); }
+        mime = detected.to_string();
     }
     let sha256 = format!("{:x}", Sha256::digest(&bytes));
     let artifact_id = format!("artifact_{}", &sha256[..20]);
@@ -107,7 +114,7 @@ pub fn store_reveal_artifact(app: tauri::AppHandle, request: StoreRevealArtifact
 #[tauri::command]
 pub fn store_target_artifact(app: tauri::AppHandle, request: StoreTargetArtifactRequest) -> Result<RevealArtifactRecord, String> {
     validate_session_id(&request.target_id)?;
-    let mime = normalize_mime(&request.mime_type, &request.original_file_name)?;
+    let mut mime = normalize_mime(&request.mime_type, &request.original_file_name)?;
     if !mime.starts_with("image/") {
         return Err("target artifact must be a supported image".to_string());
     }
@@ -115,6 +122,9 @@ pub fn store_target_artifact(app: tauri::AppHandle, request: StoreTargetArtifact
     if bytes.is_empty() || bytes.len() > MAX_ARTIFACT_BYTES {
         return Err("target image must be between 1 byte and 25 MB".to_string());
     }
+    let (detected, _, _) = documents::validate_image_bytes(&request.original_file_name, &bytes)?;
+    if mime != detected { return Err("image MIME type does not match its byte signature".to_string()); }
+    mime = detected.to_string();
     let sha256 = format!("{:x}", Sha256::digest(&bytes));
     let artifact_id = format!("artifact_{}", &sha256[..20]);
     let extension = extension_for_mime(&mime);
@@ -140,11 +150,12 @@ pub fn read_reveal_image_for_judge(app: tauri::AppHandle, path: String) -> Resul
     if !candidate.starts_with(&canonical_root) {
         return Err("artifact path is outside managed application storage".to_string());
     }
-    let mime = mime_from_path(&candidate).ok_or_else(|| "artifact is not a supported Judge image".to_string())?;
     let bytes = fs::read(&candidate).map_err(|error| error.to_string())?;
     if bytes.is_empty() || bytes.len() > MAX_ARTIFACT_BYTES {
         return Err("invalid reveal image size".to_string());
     }
+    let file_name = candidate.file_name().and_then(|value| value.to_str()).ok_or_else(|| "artifact file name is invalid".to_string())?;
+    let (mime, _, _) = documents::validate_image_bytes(file_name, &bytes)?;
     Ok(JudgeImage { mime_type: mime.to_string(), data_base64: BASE64.encode(bytes) })
 }
 
@@ -308,10 +319,6 @@ fn mime_from_name(name: &str) -> Option<&'static str> {
     else if lower.ends_with(".webp") { Some("image/webp") }
     else if lower.ends_with(".gif") { Some("image/gif") }
     else { None }
-}
-
-fn mime_from_path(path: &Path) -> Option<&'static str> {
-    mime_from_name(path.file_name()?.to_str()?)
 }
 
 fn extension_for_mime(mime: &str) -> &'static str {

@@ -155,7 +155,7 @@ describe("automatic Telepathic Protocol controller", () => {
       sessionLanguage: "en", protocol: { id: protocol.id, version: protocol.version, language: protocol.language, contentSha256: protocol.contentSha256, fullContent: protocol.content },
       controllerPrompt: { id: "telepathic-nine-step-controller", version: "1.0.0", language: "en" },
       telepathic: { controllerStepCount: 9, step8QuestionMode: "manual", predefinedQuestions: [], fixedDeepeningAfterSteps: [3, 4, 5], stepMapping: TELEPATHIC_STEP_MAPPING.map((entry) => ({ controllerStep: entry.controllerStep, protocolSections: [...entry.protocolSections] })), targetKind: "external" },
-      revealSource: "external", applicationVersion: "0.7.8", createdAt: "now",
+      revealSource: "external", applicationVersion: "0.7.9", createdAt: "now",
     } satisfies SessionSnapshot;
     const events: SessionEventRecord[] = [
       { id: "e1", sessionId: session.id, sequenceNumber: 1, eventType: "CONTROLLER_STEP", role: "controller", content: "Execute Step 8", metadata: { step: 8 }, createdAt: "now" },

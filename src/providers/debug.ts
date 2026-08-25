@@ -1,4 +1,5 @@
 import type { ProviderKind } from "./types";
+import type { ProviderUsage } from "./types";
 
 export interface ProviderDebugEntry {
   id: string;
@@ -10,11 +11,21 @@ export interface ProviderDebugEntry {
   endpoint?: string;
   request?: unknown;
   response?: unknown;
+  usage?: ProviderUsage;
   error?: string;
 }
 
 const MAX_ENTRIES = 30;
 const entries: ProviderDebugEntry[] = [];
+let detailedDiagnostics = false;
+
+export function detailedProviderDiagnosticsEnabled(): boolean {
+  return detailedDiagnostics;
+}
+
+export function setDetailedProviderDiagnostics(enabled: boolean): void {
+  detailedDiagnostics = enabled;
+}
 
 export function recordProviderDebug(entry: Omit<ProviderDebugEntry, "id" | "capturedAt">): void {
   entries.unshift({ ...entry, id: crypto.randomUUID(), capturedAt: new Date().toISOString() });

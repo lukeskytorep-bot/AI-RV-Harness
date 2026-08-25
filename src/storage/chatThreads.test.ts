@@ -33,13 +33,11 @@ describe("multiple chat threads", () => {
     expect(await restarted.listActiveChatSourceIds(threads[3].id)).toEqual(["source_4"]);
   });
 
-  it("archives non-destructively and protects an active blind Manual RV thread", async () => {
+  it("archives legacy formal Manual RV states non-destructively", async () => {
     const repository = new BrowserRepository();
     const thread = await repository.createChatThread("workspace_1", "manual_rv", "Blind work");
     await repository.appendChatMessage(thread.id, "user", "Preserved evidence");
     await repository.setChatThreadFormalRvState(thread.id, "BLIND");
-    await expect(repository.archiveChatThread(thread.id)).rejects.toThrow(/must be ended/i);
-    await repository.setChatThreadFormalRvState(thread.id, "REVEALED");
     await repository.archiveChatThread(thread.id);
     expect(await repository.listChatThreads("workspace_1", "manual_rv")).toEqual([]);
     expect((await repository.listChatMessages(thread.id))[0]?.content).toBe("Preserved evidence");

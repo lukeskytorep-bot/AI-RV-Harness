@@ -16,6 +16,7 @@ export const PROVIDER_LABELS: Record<ProviderKind, string> = {
   zai: "Z.AI",
   deepseek: "DeepSeek",
   mistral: "Mistral",
+  blackbox: "Blackbox AI",
   custom_openai: "Custom OpenAI-compatible",
 };
 

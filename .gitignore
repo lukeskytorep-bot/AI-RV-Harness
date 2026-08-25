@@ -18,3 +18,4 @@ backups/
 private-targets/
 .DS_Store
 Thumbs.db
+*.openai-download-*

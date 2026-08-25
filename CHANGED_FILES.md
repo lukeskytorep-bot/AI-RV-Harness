@@ -1,80 +1,33 @@
-# AI RV Harness v0.7.8 — paczka zmienionych plików
+# AI RV Harness v0.7.9 — zakres zmian względem kompletnego 0.7.8
 
-Paczka zawiera wyłącznie pliki dodane lub zmienione w ramach integracji Protokołu Telepatycznego oraz naprawy Zadań Specjalnych.
+Podstawowym artefaktem jest pełna paczka źródłowa 0.7.9. Ten plik służy tylko jako indeks zmian do przeglądu w Git.
 
-## Instalacja
+## Kod i interfejs
 
-1. Rozpakuj zawartość ZIP bezpośrednio w katalogu głównym repozytorium `ai-rv-harness`.
-2. Zezwól na zastąpienie istniejących plików.
-3. Przejrzyj zmiany w Git i uruchom lokalne testy/CI przed publikacją.
+- `src/App.tsx`, `src/styles/app.css`, `src/i18n.ts` — załączniki, dokumenty, kontekst/output, Blackbox, diagnostyka, typografia i uproszczenie Manual RV;
+- `src/attachments/` — natywny import dokumentów/obrazów i obsługa czterech dokumentów wbudowanych;
+- `src/chat/contextBudget.*`, `src/chat/outputPreference.*`, `src/chat/engine.*` — wspólne budowanie payloadu, estymacja i izolacja niezaufanych źródeł;
+- `src/providers/` — Blackbox, diagnostyka prywatności, ostrożna polityka retry, rzeczywisty model i request ID;
+- `src/sessions/*Controller.ts` — metadane wywołań, Retry-After oraz bezpieczne zachowanie USER STOP;
+- `src/sources/`, `src/storage/` — PDF/DOCX, stan źródeł i walidacja bazy po migracji;
+- `src/workflowSecurity.test.ts` — kontrola łańcucha dostaw workflowów.
 
-Nie dołączono `node_modules`, `dist`, plików tymczasowych ani artefaktów kompilacji.
+## Warstwa natywna
 
-## Najważniejsze zmiany
+- `src-tauri/src/documents.rs` — parser TXT/MD/PDF/DOCX, walidacja/dekodowanie obrazów i cztery dokumenty PL/EN;
+- `src-tauri/src/dialogs.rs` — oficjalny natywny dialog Tauri;
+- `src-tauri/src/storage.rs` — backup przed migracją i logiczna walidacja restore/live DB;
+- `src-tauri/src/providers.rs` — Blackbox/OpenAI-compatible, współdzielony klient, diagnostyka i symulator kontraktowy;
+- `src-tauri/src/artifacts.rs` — walidacja rzeczywistej zawartości obrazów;
+- `src-tauri/migrations/019_add_blackbox_provider.sql` — migracja zachowująca dane i Favorites;
+- `src-tauri/resources/documents/` — cztery oryginalne DOCX.
 
-- naprawiono Zadania Specjalne w Full RCP i RV Light: są teraz wykonywane jako osobne wywołania Viewera, zapisywane w zdarzeniach i widoczne w transkrypcie;
-- zachowano ślepotę AI Monitora: treść Zadania Specjalnego jest udostępniana dopiero od właściwego punktu po Fazie 4;
-- dodano Protokół Telepatyczny PL/EN do Automatic RV, AI Monitor RV oraz listy protokołów Manual RV;
-- dodano dziewięciokrokowy kontroler telepatyczny, obowiązkowe pogłębienia po krokach 3–5, obsługę pytań po kroku 8 oraz przejście do Reveal po kroku 9;
-- dodano odzyskiwanie przerwanej ręcznej sekcji pytań kroku 8 bez ponownego wykonywania kroków 1–8;
-- rozdzielono zwykłe i telepatyczne cele użytkownika oraz dodano 10 dostarczonych celów startowych;
-- zaktualizowano wersję aplikacji do `0.7.8` i plan wydania Revision 7.
+## Wydanie i bezpieczeństwo
 
-## Weryfikacja wykonana w środowisku roboczym
+- `.github/workflows/ci.yml`, `release-windows.yml`, `release-linux.yml`, `prepare-cargo-lock.yml`, `codeql.yml`;
+- `.github/dependabot.yml`;
+- `RELEASE_PLAN_v0.7.9_REVISION_1.md`, `RELEASE_NOTES_v0.7.9.md`, `RELEASE_CHECKLIST_v0.7.9.md`, `IMPLEMENTATION_REPORT_v0.7.9.md`;
+- wersja `0.7.9` w npm, Tauri i kodzie aplikacji.
 
-- TypeScript: `tsc -b --pretty false` — OK;
-- testy: 61 plików, 158 testów — wszystkie zaliczone;
-- build web: `vite build` — OK;
-- Vite zgłasza wyłącznie ostrzeżenie o paczce JavaScript większej niż 500 kB;
-- Rust/Cargo nie były dostępne w środowisku, dlatego nie uruchomiono testów Rust ani Clippy i nie wygenerowano `Cargo.lock`. Te kontrole powinny wykonać lokalne środowisko Rust lub GitHub CI.
+Pełną listę plików i ich sumy zawiera `SHA256SUMS.txt`.
 
-## Pliki
-
-- `RELEASE_PLAN_v0.7.8_REVISION_7.md`
-- `package-lock.json`
-- `package.json`
-- `src-tauri/Cargo.toml`
-- `src-tauri/src/providers.rs`
-- `src-tauri/tauri.conf.json`
-- `src/App.tsx`
-- `src/components/ResearchBuilder.tsx`
-- `src/components/TrainingScreen.tsx`
-- `src/monitor/engine.ts`
-- `src/monitor/prompt.ts`
-- `src/resources/protocolRegistry.test.ts`
-- `src/resources/protocolRegistry.ts`
-- `src/resources/protocols/Telepathy_v1.1.en.md`
-- `src/resources/protocols/Telepathy_v1.1.pl.md`
-- `src/resources/systemPrompts.test.ts`
-- `src/resources/systemPrompts.ts`
-- `src/resources/telepathic-targets/t1.md` … `t10.md`
-- `src/sessions/controller.test.ts`
-- `src/sessions/controller.ts`
-- `src/sessions/costGuard.ts`
-- `src/sessions/modeCompatibility.test.ts`
-- `src/sessions/modeCompatibility.ts`
-- `src/sessions/rvLiteController.test.ts`
-- `src/sessions/rvLiteController.ts`
-- `src/sessions/telepathicController.test.ts`
-- `src/sessions/telepathicController.ts`
-- `src/sessions/telepathicControllerPrompts.ts`
-- `src/sessions/types.ts`
-- `src/storage/browserRepository.ts`
-- `src/storage/repository.ts`
-- `src/storage/sqliteRepository.ts`
-- `src/styles/app.css`
-- `src/targets/service.test.ts`
-- `src/targets/service.ts`
-- `src/targets/telepathicBundled.test.ts`
-- `src/targets/telepathicBundled.ts`
-- `src/targets/types.ts`
-- `src/training/curriculum.ts`
-- `src/types.ts`
-- `src/version.ts`
-
-## Pochodzenie Protokołu Telepatycznego
-
-- `Telepathy_v1.1.en.md`: `9db147cf0935ecc33ca2cf307b46b7010c8f2e5428e8fafd62dc8f6004f3994b`
-- `Telepathy_v1.1.pl.md`: `f0e25179748ed9df6f2a4e00e10c3f20f8d2743c776e7d18c6a76949deeeb8ba`
-
-Pliki Markdown zostały przygotowane z zatwierdzonych wersji protokołu PL/EN, bez zmiany treści merytorycznej.

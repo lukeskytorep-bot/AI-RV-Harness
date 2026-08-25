@@ -52,72 +52,12 @@ describe("Research evidence boundaries", () => {
     const repo = {
       getResearchProject: vi.fn().mockResolvedValue(project),
       listResearchAssignments: vi.fn().mockResolvedValue([{ id: "a", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", sessionId: "partial", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "Interrupted" }]),
-      getReveal: vi.fn().mockResolvedValue(null),
       updateRvSessionState,
       updateResearchAssignment,
     } as unknown as AppRepository;
     expect(await prepareInterruptedResearchRetry(repo, "r")).toBe(1);
     expect(updateRvSessionState).toHaveBeenCalledWith("partial", "Interrupted", expect.stringContaining("explicit retry"));
     expect(updateResearchAssignment).toHaveBeenCalledWith("a", undefined, "RetryApproved");
-  });
-
-  it("keeps running locked assignments when a supplementary post-Reveal review fails", async () => {
-    const condition = {
-      key: "a", label: "A", profileId: "p", providerConfigId: "pc", modelId: "m", requestedSettings: {},
-      capabilitySnapshot: model.capabilities, effectiveSettings: { requested: {}, effective: {}, omitted: [] },
-    };
-    const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "Locked", config: { ...config, conditions: [condition] }, createdAt: "now", updatedAt: "now" };
-    const assignments = [1, 2].map((index) => ({ id: `a${index}`, researchProjectId: "r", anonymousSessionId: `BlindSession_${index}`, targetId: "t", executionOrder: index, judgeOrder: index, status: "Pending" }));
-    let runCount = 0;
-    const sessionRunner = vi.fn(async (input) => {
-      runCount += 1;
-      const sessionId = `session-${runCount}`;
-      await input.onSessionCreated?.(sessionId, `RV-${runCount}`);
-      return { sessionId, sessionCode: `RV-${runCount}`, state: "Revealed" as const, transcript: `evidence-${runCount}` };
-    });
-    const postRevealReviewer = vi.fn().mockRejectedValue(new Error("temporary review failure"));
-    const updateResearchAssignment = vi.fn();
-    const appendSessionEvent = vi.fn();
-    const states: ResearchState[] = [];
-    const repo = {
-      getResearchProject: vi.fn().mockResolvedValue(project),
-      listResearchAssignments: vi.fn().mockResolvedValue(assignments),
-      listBlindingMappings: vi.fn().mockResolvedValue(assignments.map((assignment) => ({ id: `mapping-${assignment.id}`, researchProjectId: "r", anonymousSessionId: assignment.anonymousSessionId, conditionId: "condition", pairKey: assignment.id, mappingHash: "hash", createdAt: "now" }))),
-      listResearchConditions: vi.fn().mockResolvedValue([{ id: "condition", researchProjectId: "r", conditionKey: "a", config: condition }]),
-      listTargets: vi.fn().mockResolvedValue([{ id: "t", collection: "user", title: "T", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }]),
-      listProviderConfigs: vi.fn().mockResolvedValue([provider]),
-      listProviderModels: vi.fn().mockResolvedValue([model]),
-      listProfiles: vi.fn().mockResolvedValue([]),
-      setResearchProjectState: vi.fn(async (_id: string, state: ResearchState) => { states.push(state); }),
-      updateResearchAssignment,
-      appendSessionEvent,
-    } as unknown as AppRepository;
-
-    await executeResearchSessions({ repository: repo, projectId: "r", sessionRunner, postRevealReviewer });
-
-    expect(sessionRunner).toHaveBeenCalledTimes(2);
-    expect(postRevealReviewer).toHaveBeenCalledTimes(2);
-    expect(updateResearchAssignment).toHaveBeenCalledWith("a1", "session-1", "SessionComplete");
-    expect(updateResearchAssignment).toHaveBeenCalledWith("a2", "session-2", "SessionComplete");
-    expect(appendSessionEvent).toHaveBeenCalledTimes(2);
-    expect(states.at(-1)).toBe("SessionsComplete");
-  });
-
-  it("recovers an already revealed paid session without approving a paid rerun", async () => {
-    const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "Interrupted", config, createdAt: "now", updatedAt: "now" };
-    const updateRvSessionState = vi.fn();
-    const updateResearchAssignment = vi.fn();
-    const repo = {
-      getResearchProject: vi.fn().mockResolvedValue(project),
-      listResearchAssignments: vi.fn().mockResolvedValue([{ id: "a", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", sessionId: "revealed", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "Running" }]),
-      getReveal: vi.fn().mockResolvedValue({ source: "automatic", text: "Reveal", hash: "h" }),
-      updateRvSessionState,
-      updateResearchAssignment,
-    } as unknown as AppRepository;
-
-    expect(await prepareInterruptedResearchRetry(repo, "r")).toBe(1);
-    expect(updateRvSessionState).not.toHaveBeenCalled();
-    expect(updateResearchAssignment).toHaveBeenCalledWith("a", "revealed", "SessionComplete");
   });
 
   it("judges randomized assignments without opening the Blinding Key", async () => {

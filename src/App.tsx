@@ -21,6 +21,7 @@ import {
   Moon,
   Archive,
   Pencil,
+  Paperclip,
   Plus,
   RadioTower,
   Settings2,
@@ -52,7 +53,9 @@ import type {
 import { PROVIDER_KINDS, type ProviderConfig } from "./providers/types";
 import type { ProviderImageInput, ProviderKind, ProviderModel, ReasoningEffort } from "./providers/types";
 import { runAutomaticRcpSession, submitExternalReveal, type SessionProgress } from "./sessions/controller";
-import { sendChatTurn } from "./chat/engine";
+import { buildChatProviderMessages, sendChatTurn } from "./chat/engine";
+import { estimateContextBudget } from "./chat/contextBudget";
+import { clampChatOutputTokens, defaultChatOutputTokens, loadChatOutputTokens, saveChatOutputTokens } from "./chat/outputPreference";
 import type { ChatMessage, ChatMode, ChatThread, ChatThreadGroup } from "./types";
 import { runBlindJudging } from "./judge/engine";
 import type { JudgingResult } from "./judge/types";
@@ -67,16 +70,17 @@ import { runOrdinaryBatch, selectBatchTargets, type OrdinaryBatchProgress, type 
 import { ResearchBuilder } from "./components/ResearchBuilder";
 import { TrainingScreen } from "./components/TrainingScreen";
 import { buildCalibrationHistory, type CalibrationHistoryItem } from "./research/calibration";
-import { imageFileToProviderInput, storeRevealArtifact, storeTargetArtifact } from "./artifacts/native";
+import { storeRevealArtifact, storeTargetArtifact } from "./artifacts/native";
 import type { RevealArtifactRecord, RvSession } from "./sessions/types";
 import { aggregateJudgeScores } from "./domain/scoring";
 import type { MonitorInterventionRecord, MonitorRunRecord } from "./monitor/types";
-import { createTextWorkspaceSource, estimateTextTokens } from "./sources/service";
+import { createImportedWorkspaceSource, estimateTextTokens } from "./sources/service";
 import type { WorkspaceSource } from "./sources/types";
+import { chooseAndImportAttachments, listBuiltinDocuments, readBuiltinDocument, saveBuiltinDocument, type BuiltinDocumentManifest } from "./attachments/native";
 import { createPortableStorageBackup, restorePortableStorageBackup } from "./storage/maintenance";
 import { chooseDirectory, openDataFolder } from "./storage/native";
 import { APP_VERSION } from "./version";
-import { clearProviderDebug, listProviderDebug } from "./providers/debug";
+import { clearProviderDebug, detailedProviderDiagnosticsEnabled, listProviderDebug, setDetailedProviderDiagnostics } from "./providers/debug";
 import { addProvider, PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER, refreshProviderModels } from "./providers/service";
 import { runAutomaticPostRevealReview, sendPostRevealTurn } from "./sessions/postReveal";
 import { parsePostRevealTranscript } from "./sessions/postRevealTranscript";
@@ -869,7 +873,6 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
   const [threadId, setThreadId] = useState<string | null>(null);
   const [threadTitle, setThreadTitle] = useState("");
   const [savedThreadTitle, setSavedThreadTitle] = useState("");
-  const [formalRvState, setFormalRvState] = useState<ChatThread["formalRvState"]>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [providerConfigs, setProviderConfigs] = useState<ProviderConfig[]>([]);
   const [models, setModels] = useState<ProviderModel[]>([]);
@@ -880,6 +883,8 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
   const [modelId, setModelId] = useState("");
   const [input, setInput] = useState("");
   const [manualProtocol, setManualProtocol] = useState<"none" | "rcp" | "lite-core" | "lite-extended" | "telepathic">("none");
+  const [maxOutputTokens, setMaxOutputTokens] = useState(String(settings.defaultMaxOutputTokens));
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
@@ -939,7 +944,6 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setThreadId(thread.id);
       setThreadTitle(thread.title);
       setSavedThreadTitle(thread.title);
-      setFormalRvState(thread.formalRvState);
       setMessages(nextMessages);
       setActiveSourceIds(nextActiveSources);
       setChatImages([]);
@@ -956,10 +960,30 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     }
   }, [selectedModel?.modelId]);
 
+  useEffect(() => {
+    if (!selectedModel) return;
+    const fallback = defaultChatOutputTokens(settings.defaultMaxOutputTokens, selectedModel.capabilities.maxOutputTokens);
+    const next = threadId ? loadChatOutputTokens(threadId, fallback, selectedModel.capabilities.maxOutputTokens) : fallback;
+    setMaxOutputTokens(String(next));
+  }, [threadId, selectedModel?.modelId, selectedModel?.capabilities.maxOutputTokens, settings.defaultMaxOutputTokens]);
+
   const selectedSources = sources.filter((source) => activeSourceIds.includes(source.id));
-  const estimatedContext = estimateTextTokens(messages.map((message) => message.content).join("\n\n") + "\n" + input) + selectedSources.reduce((sum, source) => sum + estimateTextTokens(source.content), 0);
-  const reservedOutput = selectedModel ? Math.min(selectedModel.capabilities.maxOutputTokens ?? 4096, 4096) : 0;
-  const contextExceeded = Boolean(selectedModel?.capabilities.contextTokens && estimatedContext + reservedOutput > selectedModel.capabilities.contextTokens);
+  const effectiveMaxOutputTokens = (() => {
+    const parsed = Number(maxOutputTokens);
+    const fallback = defaultChatOutputTokens(settings.defaultMaxOutputTokens, selectedModel?.capabilities.maxOutputTokens);
+    return Number.isInteger(parsed) && parsed > 0 ? clampChatOutputTokens(parsed, selectedModel?.capabilities.maxOutputTokens) : fallback;
+  })();
+  const attachedProtocol = mode === "manual_rv" && manualProtocol !== "none"
+    ? manualProtocol === "rcp"
+      ? getFullRcp(language).content
+      : manualProtocol === "telepathic"
+        ? getTelepathicProtocol(language).content
+        : getRvLite(language, manualProtocol === "lite-core" ? "core" : "extended").content
+    : undefined;
+  const rvSystemPrompt = mode === "manual_rv" ? buildEffectiveViewerPrompt(language, localizedViewerEditablePrompt(profile?.defaultViewerSystemPrompt, language)) : undefined;
+  const previewMessages = buildChatProviderMessages({ mode, language, history: messages, content: input.trim(), rvSystemPrompt, attachedProtocol, sources: selectedSources, images: chatImages });
+  const contextBudget = estimateContextBudget(previewMessages, selectedModel?.capabilities.contextTokens, effectiveMaxOutputTokens);
+  const contextExceeded = contextBudget.exceeded;
 
   const openThread = async (nextThreadId: string) => {
     if (!repository || sending || nextThreadId === threadId) return;
@@ -975,7 +999,6 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setThreadId(thread.id);
       setThreadTitle(thread.title);
       setSavedThreadTitle(thread.title);
-      setFormalRvState(thread.formalRvState);
       setMessages(nextMessages);
       setActiveSourceIds(nextActiveSources);
       setChatImages([]);
@@ -1005,7 +1028,6 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setThreadId(next.id);
       setThreadTitle(next.title);
       setSavedThreadTitle(next.title);
-      setFormalRvState(next.formalRvState);
       setMessages(nextMessages);
       setActiveSourceIds(nextActiveSources);
       setChatImages([]);
@@ -1027,7 +1049,6 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setThreadId(conversation.id);
       setThreadTitle(conversation.title);
       setSavedThreadTitle(conversation.title);
-      setFormalRvState(undefined);
       setMessages([]);
       setActiveSourceIds([]);
       setChatImages([]);
@@ -1049,7 +1070,6 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setThreadId(thread.id);
       setThreadTitle(thread.title);
       setSavedThreadTitle(thread.title);
-      setFormalRvState(undefined);
       setMessages([]);
       setActiveSourceIds([]);
       setChatImages([]);
@@ -1074,7 +1094,6 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setThreadId(next.id);
       setThreadTitle(next.title);
       setSavedThreadTitle(next.title);
-      setFormalRvState(next.formalRvState);
       setMessages(nextMessages);
       setActiveSourceIds(nextActiveSources);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -1087,18 +1106,46 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     setActiveSourceIds((current) => active ? [...new Set([...current, sourceId])] : current.filter((id) => id !== sourceId));
   };
 
-  const importSources = async (files: FileList | null) => {
-    if (!repository || !threadId || !files?.length) return;
+  const attachFiles = async () => {
+    if (!repository || !threadId || sending || attachmentBusy) return;
+    setAttachmentBusy(true);
     setError(null);
     try {
-      for (const file of Array.from(files)) {
-        if (!file.name.toLowerCase().match(/\.(txt|md)$/)) throw new Error("Workspace Source must be a .txt or .md file.");
-        const source = await createTextWorkspaceSource(repository, workspace.id, file.name, await file.text());
-        await repository.setChatSourceActive(threadId, source.id, true);
-        setSources((current) => [source, ...current]);
-        setActiveSourceIds((current) => [...new Set([...current, source.id])]);
+      const attachments = await chooseAndImportAttachments(settings.interfaceLanguage === "pl" ? "Dołącz dokumenty lub obrazy" : "Attach documents or images");
+      const createdSourceIds: string[] = [];
+      const nextImages: ProviderImageInput[] = [];
+      const nextImageNames: string[] = [];
+      const rejectedImages: string[] = [];
+      for (const attachment of attachments) {
+        if (attachment.kind === "document") {
+          const source = await createImportedWorkspaceSource(repository, workspace.id, attachment);
+          createdSourceIds.push(source.id);
+          continue;
+        }
+        if (!selectedModel?.capabilities.supportsVision || !selectedModel.capabilities.inputModalities.includes("image")) {
+          rejectedImages.push(attachment.displayName);
+          continue;
+        }
+        nextImages.push({ mimeType: attachment.mimeType, dataBase64: attachment.dataBase64 });
+        nextImageNames.push(attachment.displayName);
       }
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+      for (const sourceId of createdSourceIds) {
+        await repository.setChatSourceActive(threadId, sourceId, true);
+      }
+      if (createdSourceIds.length) {
+        setSources(await repository.listWorkspaceSources(workspace.id));
+        setActiveSourceIds((current) => [...new Set([...current, ...createdSourceIds])]);
+      }
+      setChatImages((current) => [...current, ...nextImages].slice(0, 8));
+      setChatImageNames((current) => [...current, ...nextImageNames].slice(0, 8));
+      if (rejectedImages.length) {
+        setError(`${copy.modelNoVision} ${rejectedImages.join(", ")}`);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAttachmentBusy(false);
+    }
   };
 
   const removeSource = async (source: WorkspaceSource) => {
@@ -1108,14 +1155,16 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     setActiveSourceIds((current) => current.filter((id) => id !== source.id));
   };
 
-  const attachChatImages = async (files: FileList | null) => {
-    if (!files?.length || !selectedModel) return;
-    if (!selectedModel.capabilities.supportsVision || !selectedModel.capabilities.inputModalities.includes("image")) { setError(copy.modelNoVision); return; }
-    try {
-      const fileArray = Array.from(files).slice(0, 8);
-      setChatImages(await Promise.all(fileArray.map(imageFileToProviderInput)));
-      setChatImageNames(fileArray.map((file) => file.name));
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  const removeChatImage = (index: number) => {
+    setChatImages((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    setChatImageNames((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const commitMaxOutputTokens = () => {
+    const next = threadId
+      ? saveChatOutputTokens(threadId, effectiveMaxOutputTokens, selectedModel?.capabilities.maxOutputTokens)
+      : effectiveMaxOutputTokens;
+    setMaxOutputTokens(String(next));
   };
 
   const send = async () => {
@@ -1134,17 +1183,11 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         providerConfig: activeProvider,
         model: selectedModel,
         content,
-        requestedSettings: profileGenerationDefaults(profile, selectedModel),
-        ...(mode === "manual_rv" ? { rvSystemPrompt: buildEffectiveViewerPrompt(language, localizedViewerEditablePrompt(profile?.defaultViewerSystemPrompt, language)) } : {}),
+        requestedSettings: { ...profileGenerationDefaults(profile, selectedModel), maxOutputTokens: effectiveMaxOutputTokens },
+        ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
         sources: selectedSources,
         images: chatImages,
-        ...(mode === "manual_rv" && manualProtocol !== "none" ? {
-          attachedProtocol: manualProtocol === "rcp"
-            ? getFullRcp(language).content
-            : manualProtocol === "telepathic"
-              ? getTelepathicProtocol(language).content
-              : getRvLite(language, manualProtocol === "lite-core" ? "core" : "extended").content,
-        } : {}),
+        ...(attachedProtocol ? { attachedProtocol } : {}),
       });
       setChatImages([]);
       setChatImageNames([]);
@@ -1197,19 +1240,8 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setThreadId(next.id);
       setThreadTitle(next.title);
       setSavedThreadTitle(next.title);
-      setFormalRvState(next.formalRvState);
       setMessages(nextMessages);
       setActiveSourceIds(nextActiveSources);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-  };
-
-  const advanceFormalRvState = async () => {
-    if (!repository || !threadId || mode !== "manual_rv") return;
-    const next: ChatThread["formalRvState"] = !formalRvState ? "BLIND" : formalRvState === "BLIND" ? "REVEALED" : undefined;
-    try {
-      await repository.setChatThreadFormalRvState(threadId, next);
-      setFormalRvState(next);
-      setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
@@ -1225,7 +1257,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
           <div className="hierarchy-menu-popover">
             <label><span>{copy.threadGroupTitle}</span><input value={threadGroupTitle} maxLength={160} onChange={(event) => setThreadGroupTitle(event.target.value)} /></label>
             <button className="secondary-button" disabled={!threadGroupTitle.trim() || threadGroupTitle.trim() === savedThreadGroupTitle} onClick={() => void renameThreadGroup()}><Pencil size={13} />{copy.renameThreadGroup}</button>
-            <button className="secondary-button danger-action" disabled={!threadGroupId || sending || threads.some((item) => item.formalRvState === "BLIND")} onClick={() => void archiveCurrentThreadGroup()}><Archive size={13} />{copy.archiveThreadGroup}</button>
+            <button className="secondary-button danger-action" disabled={!threadGroupId || sending} onClick={() => void archiveCurrentThreadGroup()}><Archive size={13} />{copy.archiveThreadGroup}</button>
           </div>
         </details>
       </div>
@@ -1237,7 +1269,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         <div className="conversation-switcher">
           <label><span>{copy.chatThreads}</span><select value={threadId ?? ""} disabled={!threadId || sending} onChange={(event) => void openThread(event.target.value)}>{threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}</select></label>
           <button className="secondary-button" disabled={!repository || sending} onClick={() => void createNewThread()}><Plus size={13} />{copy.newChat}</button>
-          <button className="secondary-button danger-action" disabled={!threadId || sending || formalRvState === "BLIND"} title={formalRvState === "BLIND" ? copy.endBlindBeforeArchive : copy.archiveChat} onClick={() => void archiveCurrentThread()}><Archive size={13} />{copy.archiveChat}</button>
+          <button className="secondary-button danger-action" disabled={!threadId || sending} title={copy.archiveChat} onClick={() => void archiveCurrentThread()}><Archive size={13} />{copy.archiveChat}</button>
           <details className="hierarchy-menu conversation-menu">
             <summary aria-label={copy.renameThread} title={copy.renameThread}>•••</summary>
             <div className="hierarchy-menu-popover">
@@ -1251,27 +1283,34 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
           {mode === "conversation" ? copy.systemActive : copy.viewerSystemActive}
         </span>
       </div>
-      {mode === "manual_rv" && <div className="formal-rv-control formal-rv-row"><span className={`formal-rv-state ${formalRvState?.toLowerCase() ?? "idle"}`}><LockKeyhole size={13} />{copy.formalManualState}: {formalRvState ?? "—"}</span><button className="secondary-button" onClick={() => void advanceFormalRvState()}>{!formalRvState ? copy.startFormalRv : formalRvState === "BLIND" ? copy.markRevealed : copy.endFormalRv}</button></div>}
       <div className="chat-model-bar">
         <span><KeyRound size={14} />{activeProvider?.label ?? copy.credentialPending}</span>
         <select value={modelId} onChange={(event) => setModelId(event.target.value)} disabled={!activeProvider || !models.length || sending}>
           <option value="">{models.length ? copy.selectModel : copy.noCachedModels}</option>
           {models.map((model) => <option key={model.modelId} value={model.modelId}>{model.recommended ? "★ " : ""}{model.displayName}</option>)}
         </select>
+        <label className="chat-output-limit"><span>{copy.maxOutputTokens}</span><input type="number" min={1} max={selectedModel?.capabilities.maxOutputTokens ?? 262144} value={maxOutputTokens} disabled={!selectedModel || sending} onChange={(event) => setMaxOutputTokens(event.target.value)} onBlur={commitMaxOutputTokens} /></label>
+        <span className={`chat-context-meter ${contextBudget.level}`} title={contextBudget.contextLimit === undefined
+          ? `${copy.estimatedContext}: ~${contextBudget.estimatedInputTokens.toLocaleString()} + ${contextBudget.reservedOutputTokens.toLocaleString()} output tokens`
+          : `${copy.estimatedContext}: ~${contextBudget.estimatedInputTokens.toLocaleString()} + ${contextBudget.reservedOutputTokens.toLocaleString()} output; ${contextBudget.remainingTokens?.toLocaleString()} remaining of ${contextBudget.contextLimit.toLocaleString()}`}>
+          {contextBudget.percent === undefined
+            ? (settings.interfaceLanguage === "pl" ? "Limit kontekstu niedostępny" : "Context limit unavailable")
+            : `${copy.estimatedContext}: ${contextBudget.percent}%`}
+        </span>
         {mode === "manual_rv" && <label className="manual-protocol-select"><span>{settings.interfaceLanguage === "pl" ? "Dołącz protokół" : "Attach protocol"}</span><select value={manualProtocol} onChange={(event) => setManualProtocol(event.target.value as typeof manualProtocol)} disabled={sending}><option value="none">{settings.interfaceLanguage === "pl" ? "Bez dodatkowego protokołu" : "No additional protocol"}</option><option value="rcp">Full RCP 1.5a</option><option value="lite-core">RV Lite Core 1.1.0</option><option value="lite-extended">RV Lite Extended 1.1.0</option><option value="telepathic">{settings.interfaceLanguage === "pl" ? "Protokół Telepatyczny 1.1" : "Telepathic Protocol 1.1"}</option></select></label>}
       </div>
       <div className="context-banner">
         <span className={mode === "conversation" ? "banner-icon violet" : "banner-icon cyan"}>{mode === "conversation" ? <MessageCircle size={22} /> : <ShieldCheck size={22} />}</span>
         <div><strong>{mode === "conversation" ? copy.conversationTitle : copy.manualTitle}</strong><p>{mode === "conversation" ? copy.conversationDesc : copy.manualDesc}</p></div>
       </div>
-      <details className="chat-sources"><summary><span><FileCheck2 size={14} />{copy.workspaceSources}</span><small>{copy.activeSources}: {activeSourceIds.length} · {copy.estimatedContext}: ~{estimatedContext.toLocaleString()} tokens</small></summary><div className="chat-source-body"><div className="chat-source-actions"><label className="secondary-button">{copy.addSource}<input type="file" multiple accept=".txt,.md,text/plain,text/markdown" onChange={(event) => void importSources(event.target.files)} /></label></div>{sources.length ? <div className="chat-source-list">{sources.map((source) => <label key={source.id}><input type="checkbox" checked={activeSourceIds.includes(source.id)} onChange={() => void toggleSource(source.id)} /><span><strong>{source.displayName}</strong><small>~{estimateTextTokens(source.content).toLocaleString()} tokens</small></span><button type="button" className="icon-button danger" title={copy.removeSource} onClick={(event) => { event.preventDefault(); void removeSource(source); }}><X size={13} /></button></label>)}</div> : <p>{copy.noSources}</p>}{contextExceeded && <div className="source-context-error">{copy.contextExceeded}</div>}</div></details>
+      <details className="chat-sources"><summary><span><FileCheck2 size={14} />{copy.workspaceSources}</span><small>{copy.activeSources}: {activeSourceIds.length} · {copy.estimatedContext}: ~{contextBudget.estimatedInputTokens.toLocaleString()} tokens</small></summary><div className="chat-source-body">{sources.length ? <div className="chat-source-list">{sources.map((source) => <label key={source.id}><input type="checkbox" checked={activeSourceIds.includes(source.id)} onChange={() => void toggleSource(source.id)} /><span><strong>{source.displayName}</strong><small>{source.sourceType.toUpperCase()} · ~{estimateTextTokens(source.content).toLocaleString()} tokens</small></span><button type="button" className="icon-button danger" title={copy.removeSource} onClick={(event) => { event.preventDefault(); void removeSource(source); }}><X size={13} /></button></label>)}</div> : <p>{copy.noSources}</p>}{contextExceeded && <div className="source-context-error">{copy.contextExceeded}</div>}</div></details>
       {messages.length === 0 ? <div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div> : <div className="message-list">{messages.map((message) => { const displayName = message.role === "user" ? humanIsBeDisplayName(profile) : aiIsBeDisplayName(profile); return <article className={`chat-message ${message.role}`} key={message.id}><span>{initials(displayName)}</span><div><small>{displayName}</small><SafeMarkdown content={message.content} /></div></article>; })}{sending && <div className="typing-row"><span className="loader-orb" />{copy.sending}</div>}</div>}
       {error && <div className="provider-error chat-error">{error}</div>}
+      {(selectedSources.length > 0 || chatImageNames.length > 0) && <div className="attachment-chips">{selectedSources.map((source) => <button type="button" key={source.id} title={copy.removeSource} onClick={() => void toggleSource(source.id)}><FileCheck2 size={12} /><span>{source.displayName} · {source.sourceType.toUpperCase()} · {settings.interfaceLanguage === "pl" ? "aktywne" : "active"} · ~{estimateTextTokens(source.content).toLocaleString()} tokens</span><X size={11} /></button>)}{chatImageNames.map((name, index) => <button type="button" key={`${name}-${index}`} onClick={() => removeChatImage(index)}><span>{name} · IMAGE · {settings.interfaceLanguage === "pl" ? "następna tura" : "next turn"} · ~2,048 tokens</span><X size={11} /></button>)}</div>}
       <div className="composer">
         <textarea rows={2} placeholder={copy.messagePlaceholder} value={input} onChange={(event) => setInput(event.target.value)} disabled={!selectedModel || sending} />
-        <div className="composer-actions"><label className={`composer-image-button ${selectedModel?.capabilities.supportsVision ? "" : "disabled"}`} title={selectedModel?.capabilities.supportsVision ? copy.addImage : copy.modelNoVision}>▣<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" disabled={!selectedModel?.capabilities.supportsVision || sending} onChange={(event) => void attachChatImages(event.target.files)} /></label><button disabled={!selectedModel || !input.trim() || sending || contextExceeded} onClick={() => void send()}>{sending ? copy.sending : copy.send}<ArrowRight size={15} /></button></div>
+        <div className="composer-actions"><button type="button" className="composer-attachment-button" title={settings.interfaceLanguage === "pl" ? "Dołącz dokumenty lub obrazy" : "Attach documents or images"} disabled={!repository || !threadId || sending || attachmentBusy} onClick={() => void attachFiles()}><Paperclip size={17} /></button><button disabled={!selectedModel || !input.trim() || sending || contextExceeded} onClick={() => void send()}>{sending ? copy.sending : copy.send}<ArrowRight size={15} /></button></div>
       </div>
-      {chatImageNames.length > 0 && <div className="chat-image-chips"><small>{copy.attachedImages}</small>{chatImageNames.map((name) => <span key={name}>{name}</span>)}</div>}
     </section>
   );
 }
@@ -2408,6 +2447,31 @@ function SettingsScreen({ copy, settings, repository, onChange }: { copy: Return
 }
 
 function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: ReturnType<typeof getCopy>; onOpen: (resource: ProtocolResource | RvLiteProtocolResource | TelepathicProtocolResource) => void; onOpenPrompt: (resource: FactoryPromptResource) => void }) {
+  const [documents, setDocuments] = useState<BuiltinDocumentManifest[]>([]);
+  const [openDocument, setOpenDocument] = useState<{ manifest: BuiltinDocumentManifest; content: string } | null>(null);
+  const [documentBusy, setDocumentBusy] = useState(false);
+  const [documentMessage, setDocumentMessage] = useState<string | null>(null);
+  const [documentError, setDocumentError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    void listBuiltinDocuments().then(setDocuments).catch((cause) => setDocumentError(cause instanceof Error ? cause.message : String(cause)));
+  }, []);
+  const readDocument = async (manifest: BuiltinDocumentManifest) => {
+    setDocumentBusy(true); setDocumentError(null); setDocumentMessage(null);
+    try {
+      const parsed = await readBuiltinDocument(manifest.id);
+      setOpenDocument({ manifest, content: parsed.content });
+    } catch (cause) { setDocumentError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setDocumentBusy(false); }
+  };
+  const saveDocument = async (manifest: BuiltinDocumentManifest) => {
+    setDocumentBusy(true); setDocumentError(null); setDocumentMessage(null);
+    try {
+      const path = await saveBuiltinDocument(manifest.id, copy.home === "Home" ? "Save the original DOCX" : "Zapisz oryginalny plik DOCX");
+      if (path) setDocumentMessage(`${copy.home === "Home" ? "Saved" : "Zapisano"}: ${path}`);
+    } catch (cause) { setDocumentError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setDocumentBusy(false); }
+  };
   const protocolCards = [
     { id: "rcp", name: copy.fullRcp, version: "1.5a", pl: getFullRcp("pl"), en: getFullRcp("en") },
     { id: "lite-core", name: `${copy.rvLite} Core`, version: "1.1.0", pl: getRvLite("pl", "core"), en: getRvLite("en", "core") },
@@ -2417,9 +2481,14 @@ function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: ReturnType<t
   const prompts = getFactoryPromptResources();
   const promptCards = (["ai-viewer-system-prompt", "ai-monitor-system-prompt"] as const).map((id) => ({ id, name: id === "ai-viewer-system-prompt" ? "AI Viewer System Prompt" : "AI Monitor System Prompt", pl: prompts.find((item) => item.id === id && item.language === "pl")!, en: prompts.find((item) => item.id === id && item.language === "en")! }));
   return <div className="about-settings-grid">
-    <section className="panel about-protocol-card"><PanelHeader title={copy.protocolLibrary} icon={<FileCheck2 size={18} />} /><div className="about-card-body"><p>{copy.protocolLibraryLead}</p><div className="about-protocol-list">{protocolCards.map((protocol) => <article key={protocol.id}><span className="resource-orb"><FileCheck2 size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{protocol.name}</strong><code>v{protocol.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpen(protocol.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpen(protocol.en)}>{copy.readEnglish}</button></div></article>)}{promptCards.map((prompt) => <article key={prompt.id}><span className="resource-orb"><BrainCircuit size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{prompt.name}</strong><code>v{prompt.pl.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpenPrompt(prompt.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpenPrompt(prompt.en)}>{copy.readEnglish}</button></div></article>)}</div><div className="content-license-notice"><ShieldCheck size={16} /><div><strong>{copy.home === "Home" ? "Two-license model" : "Model dwóch licencji"}</strong><p>{copy.home === "Home" ? "Source code is licensed under the MIT License. Documentation, bundled prompts, training content, and other non-code visual assets are licensed under CC BY 4.0." : "Kod źródłowy jest objęty licencją MIT. Dokumentacja, dołączone prompty, materiały treningowe i inne niekodowe zasoby wizualne są objęte licencją CC BY 4.0."}</p></div></div></div></section>
+    <section className="panel about-protocol-card"><PanelHeader title={copy.protocolLibrary} icon={<FileCheck2 size={18} />} /><div className="about-card-body"><p>{copy.protocolLibraryLead}</p><div className="about-protocol-list">{protocolCards.map((protocol) => <article key={protocol.id}><span className="resource-orb"><FileCheck2 size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{protocol.name}</strong><code>v{protocol.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpen(protocol.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpen(protocol.en)}>{copy.readEnglish}</button></div></article>)}{promptCards.map((prompt) => <article key={prompt.id}><span className="resource-orb"><BrainCircuit size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{prompt.name}</strong><code>v{prompt.pl.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpenPrompt(prompt.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpenPrompt(prompt.en)}>{copy.readEnglish}</button></div></article>)}{documents.map((document) => <article key={document.id}><span className="resource-orb"><BookOpen size={18} /></span><div><small>DOCX · {document.language.toUpperCase()} · SHA-256</small><strong>{document.title}</strong><code>{document.sha256.slice(0, 16)}…</code></div><div className="about-protocol-actions"><button className="secondary-button" disabled={documentBusy} onClick={() => void readDocument(document)}>{copy.home === "Home" ? "Read" : "Czytaj"}</button><button className="secondary-button" disabled={documentBusy} onClick={() => void saveDocument(document)}><Download size={13} />{copy.home === "Home" ? "Save DOCX" : "Zapisz DOCX"}</button></div></article>)}</div>{documentMessage && <div className="storage-success"><Check size={14} />{documentMessage}</div>}{documentError && <div className="provider-error">{documentError}</div>}<div className="content-license-notice"><ShieldCheck size={16} /><div><strong>{copy.home === "Home" ? "Two-license model" : "Model dwóch licencji"}</strong><p>{copy.home === "Home" ? "Source code is licensed under the MIT License. Documentation, bundled prompts, training content, and other non-code visual assets are licensed under CC BY 4.0." : "Kod źródłowy jest objęty licencją MIT. Dokumentacja, dołączone prompty, materiały treningowe i inne niekodowe zasoby wizualne są objęte licencją CC BY 4.0."}</p></div></div></div></section>
     <section className="panel about-credits-card"><PanelHeader title={copy.credits} icon={<Users size={18} />} /><div className="about-card-body"><p>{copy.creditsLead}</p><div className="credit-group"><small>{copy.projectLead}</small><article><strong>Edward <code>lukeskytorep-bot</code></strong><p>{copy.projectLeadCredit}</p></article></div><div className="credit-group"><small>{copy.aiCollaborators}</small><article><strong>Orion via Active Model — Codex / ChatGPT</strong><p>{copy.orionCredit}</p></article><article><strong>Aion via Active Model — ChatGPT 4.0</strong><p>{copy.aionCredit}</p></article><article><strong>Aura via Active Model — Gemini 3.1 Pro</strong><p>{copy.auraCredit}</p></article></div><p className="human-directed-credit">{copy.humanDirectedCredit}</p><div className="about-license"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.projectLicense}</small><strong>Code: MIT</strong></span><span><small>Content</small><strong>CC BY 4.0</strong></span></div></div></section>
+    {openDocument && <BuiltinDocumentDialog copy={copy} document={openDocument} busy={documentBusy} onSave={() => void saveDocument(openDocument.manifest)} onClose={() => setOpenDocument(null)} />}
   </div>;
+}
+
+function BuiltinDocumentDialog({ copy, document, busy, onSave, onClose }: { copy: ReturnType<typeof getCopy>; document: { manifest: BuiltinDocumentManifest; content: string }; busy: boolean; onSave: () => void; onClose: () => void }) {
+  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="modal protocol-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>DOCX · {document.manifest.language.toUpperCase()}</small><h2>{document.manifest.title}</h2><p>{document.manifest.fileName} · {formatBytes(document.manifest.sizeBytes)}</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><div className="hash-grid"><code>SHA-256<br />{document.manifest.sha256}</code><code>{copy.wordCount}<br />{wordCount(document.content).toLocaleString()}</code></div><pre className="protocol-text">{document.content}</pre><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={onSave}><Download size={14} />{copy.home === "Home" ? "Save original DOCX" : "Zapisz oryginalny DOCX"}</button><button className="primary-button" onClick={onClose}>{copy.close}</button></div></section></div>;
 }
 
 function TargetSettingsCard({ copy, settings, repository, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; repository: AppRepository | null; onChange: (settings: Partial<AppSettings>) => void }) {
@@ -2444,6 +2513,7 @@ function AdvancedSettingsCard({ copy, repository }: { copy: ReturnType<typeof ge
   const [modelCount, setModelCount] = useState(0);
   const [capabilitySummary, setCapabilitySummary] = useState({ vision: 0, reasoning: 0, compatibility: 0 });
   const [debugEntries, setDebugEntries] = useState(() => listProviderDebug());
+  const [detailedDiagnostics, setDetailedDiagnostics] = useState(() => detailedProviderDiagnosticsEnabled());
   const [message, setMessage] = useState<string | null>(null);
   const refresh = () => { if (repository) void repository.listProviderModels().then((models) => { setModelCount(models.length); setCapabilitySummary({ vision: models.filter((model) => model.capabilities.supportsVision).length, reasoning: models.filter((model) => model.capabilities.reasoning.supported).length, compatibility: models.filter((model) => model.capabilities.source === "compatibility").length }); }); };
   useEffect(refresh, [repository]);
@@ -2453,7 +2523,13 @@ function AdvancedSettingsCard({ copy, repository }: { copy: ReturnType<typeof ge
     setModelCount(0); setCapabilitySummary({ vision: 0, reasoning: 0, compatibility: 0 }); setMessage(copy.resetCapabilityCache);
   };
   const clearDebug = () => { clearProviderDebug(); setDebugEntries([]); };
-  return <section className="panel advanced-settings-card"><PanelHeader title={copy.advanced} icon={<Settings2 size={18} />} /><div className="advanced-settings-body"><div className="advanced-version"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.cachedModelCount}</small><strong>{modelCount}</strong></span><span><small>{copy.visionRoutes}</small><strong>{capabilitySummary.vision}</strong></span><span><small>{copy.reasoningRoutes}</small><strong>{capabilitySummary.reasoning}</strong></span><span><small>{copy.compatibilityRoutes}</small><strong>{capabilitySummary.compatibility}</strong></span></div><p>{copy.debugSecurity}</p><button className="secondary-button" disabled={!repository || !modelCount} onClick={() => void reset()}>{copy.resetCapabilityCache}</button>{message && <div className="storage-success"><Check size={14} />{message}</div>}<div className="debug-log-heading"><div><strong>{copy.apiDebugLog}</strong><small>{copy.debugVolatile}</small></div><span><button className="secondary-button" type="button" onClick={() => setDebugEntries(listProviderDebug())}>{copy.refreshDebugLog}</button><button className="secondary-button" type="button" disabled={!debugEntries.length} onClick={clearDebug}>{copy.clearDebugLog}</button></span></div><div className="debug-log-list">{debugEntries.length === 0 ? <p>{copy.noDebugCalls}</p> : debugEntries.map((entry) => <details key={entry.id}><summary><span className={`debug-status ${entry.status}`}>{entry.status.toUpperCase()}</span><strong>{entry.provider} · {entry.modelId}</strong><small>{new Date(entry.capturedAt).toLocaleString()}</small></summary><div className="debug-payload">{entry.endpoint && <code>{entry.endpoint}</code>}{entry.error && <pre>{entry.error}</pre>}{entry.request !== undefined && <><h4>{copy.rawRequest}</h4><pre>{JSON.stringify(entry.request, null, 2)}</pre></>}{entry.response !== undefined && <><h4>{copy.rawResponse}</h4><pre>{JSON.stringify(entry.response, null, 2)}</pre></>}</div></details>)}</div></div></section>;
+  const toggleDetailedDiagnostics = () => {
+    const next = !detailedDiagnostics;
+    if (next && !window.confirm(copy.home === "Home" ? "Detailed diagnostics can temporarily keep redacted request and response bodies in memory. They may still contain sensitive conversation text. Enable only while troubleshooting?" : "Szczegółowa diagnostyka może tymczasowo przechowywać w pamięci zanonimizowane treści żądań i odpowiedzi. Nadal mogą one zawierać poufny tekst rozmowy. Włączyć tylko na czas diagnozy?")) return;
+    setDetailedProviderDiagnostics(next);
+    setDetailedDiagnostics(next);
+  };
+  return <section className="panel advanced-settings-card"><PanelHeader title={copy.advanced} icon={<Settings2 size={18} />} /><div className="advanced-settings-body"><div className="advanced-version"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.cachedModelCount}</small><strong>{modelCount}</strong></span><span><small>{copy.visionRoutes}</small><strong>{capabilitySummary.vision}</strong></span><span><small>{copy.reasoningRoutes}</small><strong>{capabilitySummary.reasoning}</strong></span><span><small>{copy.compatibilityRoutes}</small><strong>{capabilitySummary.compatibility}</strong></span></div><p>{copy.debugSecurity}</p><label className="detailed-diagnostics-toggle"><input type="checkbox" checked={detailedDiagnostics} onChange={toggleDetailedDiagnostics} /><span><strong>{copy.home === "Home" ? "Detailed request/response diagnostics" : "Szczegółowa diagnostyka żądań i odpowiedzi"}</strong><small>{copy.home === "Home" ? "Off by default and held only in volatile memory." : "Domyślnie wyłączona; dane są przechowywane wyłącznie w pamięci ulotnej."}</small></span></label><button className="secondary-button" disabled={!repository || !modelCount} onClick={() => void reset()}>{copy.resetCapabilityCache}</button>{message && <div className="storage-success"><Check size={14} />{message}</div>}<div className="debug-log-heading"><div><strong>{copy.apiDebugLog}</strong><small>{copy.debugVolatile}</small></div><span><button className="secondary-button" type="button" onClick={() => setDebugEntries(listProviderDebug())}>{copy.refreshDebugLog}</button><button className="secondary-button" type="button" disabled={!debugEntries.length} onClick={clearDebug}>{copy.clearDebugLog}</button></span></div><div className="debug-log-list">{debugEntries.length === 0 ? <p>{copy.noDebugCalls}</p> : debugEntries.map((entry) => <details key={entry.id}><summary><span className={`debug-status ${entry.status}`}>{entry.status.toUpperCase()}</span><strong>{entry.provider} · {entry.modelId}</strong><small>{new Date(entry.capturedAt).toLocaleString()}</small></summary><div className="debug-payload">{entry.endpoint && <code>{entry.endpoint}</code>}{entry.usage && <code>tokens: {entry.usage.inputTokens ?? "?"} + {entry.usage.outputTokens ?? "?"}</code>}{entry.error && <pre>{entry.error}</pre>}{entry.request !== undefined && <><h4>{copy.rawRequest}</h4><pre>{JSON.stringify(entry.request, null, 2)}</pre></>}{entry.response !== undefined && <><h4>{copy.rawResponse}</h4><pre>{JSON.stringify(entry.response, null, 2)}</pre></>}</div></details>)}</div></div></section>;
 }
 
 function StorageSettingsCard({ copy, repository }: { copy: ReturnType<typeof getCopy>; repository: AppRepository | null }) {

@@ -240,8 +240,6 @@ export class BrowserRepository implements AppRepository {
     const groups = read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []);
     const group = groups.find((item) => item.id === groupId && !item.archivedAt);
     if (!group) throw new Error("Thread not found.");
-    const activeConversation = read<ChatThread[]>(CHAT_THREADS_KEY, []).find((item) => item.threadGroupId === groupId && item.formalRvState === "BLIND" && !item.archivedAt);
-    if (activeConversation) throw new Error("A Thread containing a blind Manual RV conversation cannot be archived.");
     const timestamp = nowIso();
     write(CHAT_THREAD_GROUPS_KEY, groups.map((item) => item.id === groupId ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
     write(CHAT_THREADS_KEY, read<ChatThread[]>(CHAT_THREADS_KEY, []).map((item) => item.threadGroupId === groupId && !item.archivedAt ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
@@ -287,7 +285,6 @@ export class BrowserRepository implements AppRepository {
     const threads = read<ChatThread[]>(CHAT_THREADS_KEY, []);
     const thread = threads.find((item) => item.id === threadId && !item.archivedAt);
     if (!thread) throw new Error("Chat thread not found.");
-    if (thread.formalRvState === "BLIND") throw new Error("A blind Manual RV thread must be ended before it can be archived.");
     const timestamp = nowIso();
     write(CHAT_THREADS_KEY, threads.map((item) => item.id === threadId ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
   }

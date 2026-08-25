@@ -1,6 +1,7 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { providerChat as nativeProviderChat } from "../providers/native";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
+import { isRetryableProviderError, waitBeforeProviderRetry } from "../providers/retry";
 import type { ProtocolResource } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
@@ -293,6 +294,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         break;
       } catch (cause) {
         costAuthorization.failure();
+        if (input.signal?.aborted) return stop("USER STOP");
         if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(sessionId, {
@@ -302,6 +304,8 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
           metadata: { phase, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt },
         });
         response = null;
+        if (attempt < maxRetries && isRetryableProviderError(cause)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+        else break;
       }
     }
     if (!response) {
@@ -325,7 +329,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
       eventType: "VIEWER_RESPONSE",
       role: "assistant",
       content: response.content,
-      metadata: { phase, finishReason: response.finishReason, usage: response.usage, requestDurationMs: responseDurationMs },
+      metadata: { phase, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs },
     });
     // Persistence is awaited before any next provider call. This is the autosave boundary.
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
@@ -372,6 +376,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
             break;
           } catch (cause) {
             costAuthorization.failure();
+            if (input.signal?.aborted) return stop("USER STOP");
             if (!taskResponse) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
             taskError = cause instanceof Error ? cause.message : String(cause);
             await input.repository.appendSessionEvent(sessionId, {
@@ -381,6 +386,8 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
               metadata: { phase, attempt: attempt + 1, source: "special_task", requestDurationMs: Date.now() - requestStartedAt },
             });
             taskResponse = null;
+            if (attempt < maxRetries && isRetryableProviderError(cause)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+            else break;
           }
         }
         if (!taskResponse) return stop(`AUTO-STOP: Viewer failed during Special Task${taskError ? ` — ${taskError}` : ""}`);
@@ -402,7 +409,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
           eventType: "VIEWER_SPECIAL_TASK_RESPONSE",
           role: "assistant",
           content: taskResponse.content,
-          metadata: { phase, finishReason: taskResponse.finishReason, usage: taskResponse.usage, requestDurationMs: taskDurationMs },
+          metadata: { phase, finishReason: taskResponse.finishReason, actualModel: taskResponse.actualModel ?? "unavailable", providerRequestId: taskResponse.providerRequestId ?? "unavailable", usage: taskResponse.usage, usageAccuracy: taskResponse.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: taskDurationMs },
         });
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
@@ -504,6 +511,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
             break;
           } catch (cause) {
             costAuthorization.failure();
+            if (input.signal?.aborted) return stop("USER STOP");
             if (!deepening) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
             deepeningError = cause instanceof Error ? cause.message : String(cause);
             await input.repository.appendSessionEvent(sessionId, {
@@ -513,6 +521,8 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
               metadata: { phase, attempt: attempt + 1, source: "monitor_intervention", requestDurationMs: Date.now() - requestStartedAt },
             });
             deepening = null;
+            if (attempt < maxRetries && isRetryableProviderError(cause)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+            else break;
           }
         }
         if (!deepening) {
@@ -535,7 +545,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
           eventType: "VIEWER_MONITOR_RESPONSE",
           role: "assistant",
           content: deepening.content,
-          metadata: { phase, exchangeNumber, finishReason: deepening.finishReason, usage: deepening.usage, requestDurationMs: deepeningDurationMs },
+          metadata: { phase, exchangeNumber, finishReason: deepening.finishReason, actualModel: deepening.actualModel ?? "unavailable", providerRequestId: deepening.providerRequestId ?? "unavailable", usage: deepening.usage, usageAccuracy: deepening.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: deepeningDurationMs },
         });
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);

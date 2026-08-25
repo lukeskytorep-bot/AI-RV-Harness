@@ -10,6 +10,6 @@ describe("application version", () => {
     expect(APP_VERSION).toBe(packageJson.version);
     expect(tauriConfig.version).toBe(APP_VERSION);
     expect(cargoManifest).toMatch(new RegExp(`^version = "${APP_VERSION.replaceAll(".", "\\.")}"$`, "m"));
-    expect(nativeProviders).toContain(`AI-RV-Harness/${APP_VERSION}`);
+    expect(nativeProviders).toContain('env!("CARGO_PKG_VERSION")');
   });
 });
