@@ -1181,6 +1181,13 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 .special-task-disclosure > summary svg { flex: 0 0 auto; color: var(--violet); transition: transform 160ms ease; }
 .special-task-disclosure[open] > summary svg { transform: rotate(90deg); }
 .special-task-disclosure > .special-task-builder { padding: 12px; border-top: 1px solid var(--border); }
+.telepathic-predefined-questions { display: grid; gap: 8px; margin-top: 12px; }
+.telepathic-predefined-questions textarea { width: 100%; resize: vertical; }
+.telepathic-question-stage { display: grid; gap: 12px; margin: 14px 0; padding: 16px; border: 1px solid color-mix(in srgb, var(--violet) 48%, var(--border)); border-radius: 14px; background: color-mix(in srgb, var(--violet) 9%, var(--panel)); }
+.telepathic-question-stage > div:first-child { display: flex; align-items: center; gap: 10px; }
+.telepathic-question-stage > div:first-child span { display: grid; gap: 3px; }
+.telepathic-question-stage textarea { width: 100%; resize: vertical; }
+.telepathic-question-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .manual-protocol-select { min-width: 260px; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 8.5px; font-weight: 700; }
 .manual-protocol-select select { min-width: 190px; width: 100%; }
 .post-reveal-conversation { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }

@@ -90,6 +90,8 @@ export interface SessionProgress {
   transcript: string;
   stopReason?: string;
   metrics?: SessionRunMetrics;
+  awaitingStep8Questions?: boolean;
+  telepathicQuestionCount?: number;
 }
 
 export interface AutomaticRcpRunResult {
@@ -335,9 +337,76 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     if (!input.monitor && phase === 4) {
       const specialTask = renderSpecialTask(input.specialTask, input.sessionLanguage);
       if (specialTask) {
-        const taskPrompt = `SPECIAL VIEWER TASK — apply now using neutral blind-session labels only:\n${specialTask}`;
+        const taskPrompt = input.sessionLanguage === "pl"
+          ? `SPECJALNE ZADANIE VIEWERA — wykonaj je teraz, używając wyłącznie neutralnych etykiet ślepej sesji:\n${specialTask}`
+          : `SPECIAL VIEWER TASK — apply it now using neutral blind-session labels only:\n${specialTask}`;
         messages.push({ role: "user", content: taskPrompt });
         await input.repository.appendSessionEvent(sessionId, { eventType: "SPECIAL_TASK_INJECTED", role: "controller", content: taskPrompt, metadata: { phase, recipient: "viewer" } });
+
+        let taskResponse: ProviderChatResponse | null = null;
+        let taskError = "";
+        let taskDurationMs = 0;
+        for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+          if (input.signal?.aborted) return stop("USER STOP");
+          let costAuthorization;
+          try {
+            costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
+          } catch (cause) {
+            if (cause instanceof CostGuardStop) return stop(cause.message);
+            throw cause;
+          }
+          const requestStartedAt = Date.now();
+          try {
+            taskResponse = await chat({
+              config: input.providerConfig,
+              modelId: input.model.modelId,
+              messages: [...messages],
+              settings: effectiveSettings,
+              timeoutMs: input.requestTimeoutMs,
+              signal: input.signal,
+            });
+            taskResponse = { ...taskResponse, usage: costAuthorization.success(taskResponse.usage) };
+            taskDurationMs = Date.now() - requestStartedAt;
+            metrics = recordProviderRequest(metrics, taskResponse.usage, taskDurationMs);
+            if (!taskResponse.content.trim()) throw new Error("empty provider response");
+            break;
+          } catch (cause) {
+            costAuthorization.failure();
+            if (!taskResponse) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
+            taskError = cause instanceof Error ? cause.message : String(cause);
+            await input.repository.appendSessionEvent(sessionId, {
+              eventType: "PROVIDER_ERROR",
+              role: "controller",
+              content: taskError,
+              metadata: { phase, attempt: attempt + 1, source: "special_task", requestDurationMs: Date.now() - requestStartedAt },
+            });
+            taskResponse = null;
+          }
+        }
+        if (!taskResponse) return stop(`AUTO-STOP: Viewer failed during Special Task${taskError ? ` — ${taskError}` : ""}`);
+
+        const rawTaskContent = taskResponse.content;
+        const sanitizedTask = sanitizeRepetitiveOutput(rawTaskContent, input.sessionLanguage);
+        taskResponse = { ...taskResponse, content: sanitizedTask.content };
+        if (sanitizedTask.truncated) {
+          await input.repository.appendSessionEvent(sessionId, {
+            eventType: "OUTPUT_TRUNCATED_LOOP",
+            role: "controller",
+            content: sanitizedTask.finding?.fragment,
+            metadata: { phase, source: "special_task", rule: sanitizedTask.finding?.rule, originalLength: sanitizedTask.originalLength, retainedLength: sanitizedTask.retainedLength, rawOutputSha256: await sha256Text(rawTaskContent) },
+          });
+        }
+        messages.push({ role: "assistant", content: taskResponse.content });
+        transcript = appendSpecialTaskTranscript(transcript, phase, taskPrompt, taskResponse.content, input.sessionLanguage);
+        await input.repository.appendSessionEvent(sessionId, {
+          eventType: "VIEWER_SPECIAL_TASK_RESPONSE",
+          role: "assistant",
+          content: taskResponse.content,
+          metadata: { phase, finishReason: taskResponse.finishReason, usage: taskResponse.usage, requestDurationMs: taskDurationMs },
+        });
+        await input.repository.updatePreRevealTranscript(sessionId, transcript);
+        notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
+        if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
       }
     }
 
@@ -554,6 +623,13 @@ export function appendMonitorTranscript(current: string, phase: number, command:
   const block = language === "pl"
     ? `### Pogłębienie AI Monitora po Fazie ${phase}\n\n#### Dokładne polecenie Monitora\n\n${command.trim()}\n\n#### Odpowiedź Viewera\n\n${content.trim()}`
     : `### AI Monitor deepening after Phase ${phase}\n\n#### Exact Monitor instruction\n\n${command.trim()}\n\n#### Viewer response\n\n${content.trim()}`;
+  return current ? `${current}\n\n${block}` : block;
+}
+
+export function appendSpecialTaskTranscript(current: string, phase: number, command: string, content: string, language: InterfaceLanguage): string {
+  const block = language === "pl"
+    ? `## Zadanie specjalne — po Fazie ${phase}\n\n### Dokładne polecenie kontrolera\n\n${command.trim()}\n\n### Odpowiedź Viewera\n\n${content.trim()}`
+    : `## Special Task — after Phase ${phase}\n\n### Exact controller instruction\n\n${command.trim()}\n\n### Viewer response\n\n${content.trim()}`;
   return current ? `${current}\n\n${block}` : block;
 }
 

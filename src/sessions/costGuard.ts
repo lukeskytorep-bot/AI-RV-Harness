@@ -3,9 +3,11 @@ import type { EffectiveGenerationSettings, ProviderMessage, ProviderModel, Provi
 const COST_EPSILON = 1e-12;
 
 export class SessionCostGuard {
-  private upperBoundSpentUsd = 0;
+  private upperBoundSpentUsd: number;
 
-  constructor(private readonly limitUsd?: number) {}
+  constructor(private readonly limitUsd?: number, initialSpentUsd = 0) {
+    this.upperBoundSpentUsd = Number.isFinite(initialSpentUsd) && initialSpentUsd > 0 ? initialSpentUsd : 0;
+  }
 
   validateModel(model: ProviderModel): void {
     if (!this.enabled) return;

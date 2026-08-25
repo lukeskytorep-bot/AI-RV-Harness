@@ -101,6 +101,37 @@ describe("automatic RCP controller", () => {
     });
   });
 
+  it("executes a Special Viewer Task as a separate post-Phase-4 call and saves its answer in the transcript", async () => {
+    const log: string[] = [];
+    const requests: string[] = [];
+    let savedTranscript = "";
+    const repository = fakeRepository(log);
+    repository.updatePreRevealTranscript = async (_id: string, transcript: string) => { savedTranscript = transcript; log.push("saved"); };
+    const result = await runAutomaticRcpSession({
+      repository,
+      workspaceId: "w",
+      profileId: "p",
+      providerConfig: config,
+      model,
+      protocol: getFullRcp("en"),
+      sessionLanguage: "en",
+      requestedSettings: { maxOutputTokens: 1024 },
+      specialTask: { selectedOptions: ["subject_a", "subject_b"] },
+      chat: async ({ messages }) => {
+        requests.push(messages.at(-1)?.content ?? "");
+        return { content: `Separate blind response ${requests.length} with new details.`, usage: {} };
+      },
+    });
+    expect(result.state).toBe("AwaitingReveal");
+    expect(requests).toHaveLength(7);
+    expect(requests[3]).toContain("Phase 4");
+    expect(requests[4]).toContain("SPECIAL VIEWER TASK");
+    expect(requests[5]).toContain("Phase 5");
+    expect(savedTranscript).toContain("## Special Task — after Phase 4");
+    expect(savedTranscript).toContain("Separate blind response 5");
+    expect(log).toContain("event:VIEWER_SPECIAL_TASK_RESPONSE");
+  });
+
   it("keeps an automatic target out of every blind provider request, then reveals after sealing", async () => {
     const log: string[] = [];
     const target = {
@@ -150,6 +181,33 @@ describe("automatic RCP controller", () => {
     expect(log).toContain("event:MONITOR_INTERVENTION");
     expect(log).not.toContain("event:MONITOR_ATTEMPT_REJECTED");
     expect(log).toContain("sealed");
+  });
+
+  it("withholds a Special Task from AI Monitor before Phase 4 and includes it from Phase 4 onward", async () => {
+    const monitorPackets: string[] = [];
+    await runAutomaticRcpSession({
+      repository: fakeRepository([]), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+      specialTask: { selectedOptions: ["subject_a", "subject_b"] }, monitor: { providerConfig: config, model },
+      chat: async ({ messages }) => {
+        const monitorRequest = messages.some((message) => message.role === "system" && message.content.includes("AI Monitor conducting a blind"));
+        if (monitorRequest) {
+          monitorPackets.push(messages.at(-1)?.content ?? "");
+          return { content: "CONTINUE_PROTOCOL", usage: {} };
+        }
+        return { content: "Distinct Viewer evidence for the current phase.", usage: {} };
+      },
+    });
+    expect(monitorPackets).toHaveLength(5);
+    expect(monitorPackets[0]).toContain("CURRENT PHASE: 2");
+    expect(monitorPackets[0]).not.toContain("SPECIAL MONITOR TASK");
+    expect(monitorPackets[1]).toContain("CURRENT PHASE: 3");
+    expect(monitorPackets[1]).not.toContain("SPECIAL MONITOR TASK");
+    expect(monitorPackets[2]).toContain("CURRENT PHASE: 4");
+    expect(monitorPackets[2]).toContain("SPECIAL MONITOR TASK");
+    expect(monitorPackets[2]).toContain("Subject A");
+    expect(monitorPackets[2]).toContain("Subject B");
+    expect(monitorPackets[4]).toContain("SPECIAL MONITOR TASK");
   });
 
   it("honors STOP after sealing and never auto-reveals the target", async () => {

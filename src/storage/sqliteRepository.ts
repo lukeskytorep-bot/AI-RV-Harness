@@ -1,7 +1,7 @@
 import Database from "@tauri-apps/plugin-sql";
 import type { AppSettings, ChatMessage, ChatMode, ChatThread, ChatThreadGroup, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CreateProviderConfigInput, ProviderConfig, ProviderKind, ProviderModel } from "../providers/types";
-import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
+import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionEventRecord, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
 import type { CreateJudgeRunInput, FrozenJudgeScoreInput, JudgeNarrative, JudgeScoreRecord } from "../judge/types";
 import { computeJudgeTotal } from "../domain/scoring";
@@ -102,6 +102,7 @@ type ChatThreadRow = { id: string; workspace_id: string; mode: ChatMode; thread_
 type ChatMessageRow = { id: string; thread_id: string; role: "user" | "assistant"; content: string; created_at: string };
 type WorkspaceSourceRow = { id: string; workspace_id: string; source_type: "text" | "markdown"; display_name: string; content_text: string | null; content_hash: string | null; metadata_json: string; created_at: string };
 type RevealRow = { reveal_source: RevealInput["source"]; reveal_text: string | null; artifact_manifest_json: string; reveal_hash: string };
+type SessionEventRow = { id: string; session_id: string; sequence_number: number; event_type: string; role: SessionEventRecord["role"] | null; content: string | null; metadata_json: string; created_at: string };
 type JudgeScoreRow = {
   id: string;
   judge_run_id: string;
@@ -711,6 +712,7 @@ export class SqliteRepository implements AppRepository {
       ...(values.textScale ? { textScale: values.textScale as AppSettings["textScale"] } : {}),
       ...(values.animations ? { animations: values.animations === "true" } : {}),
       ...(values.trainingDirectory !== undefined ? { trainingDirectory: values.trainingDirectory } : {}),
+      ...(values.telepathicStarterPackVersion !== undefined ? { telepathicStarterPackVersion: values.telepathicStarterPackVersion } : {}),
     };
   }
 
@@ -1078,6 +1080,24 @@ export class SqliteRepository implements AppRepository {
          FROM session_events WHERE session_id = $2`,
       [createId("event"), sessionId, event.eventType, event.role ?? null, event.content ?? null, JSON.stringify(event.metadata ?? {}), timestamp],
     );
+  }
+
+  async listSessionEvents(sessionId: string): Promise<SessionEventRecord[]> {
+    const rows = await this.db.select<SessionEventRow[]>(
+      `SELECT id, session_id, sequence_number, event_type, role, content, metadata_json, created_at
+         FROM session_events WHERE session_id = $1 ORDER BY sequence_number`,
+      [sessionId],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      sessionId: row.session_id,
+      sequenceNumber: Number(row.sequence_number),
+      eventType: row.event_type,
+      ...(row.role ? { role: row.role } : {}),
+      ...(row.content !== null ? { content: row.content } : {}),
+      metadata: JSON.parse(row.metadata_json || "{}") as Record<string, unknown>,
+      createdAt: row.created_at,
+    }));
   }
 
   async updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void> {

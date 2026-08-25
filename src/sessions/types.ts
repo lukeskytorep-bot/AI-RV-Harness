@@ -46,6 +46,13 @@ export interface SessionEventInput {
   metadata?: Record<string, unknown>;
 }
 
+export interface SessionEventRecord extends SessionEventInput {
+  id: string;
+  sessionId: string;
+  sequenceNumber: number;
+  createdAt: string;
+}
+
 export interface SpecialTaskSnapshot {
   selectedOptions: string[];
   customText?: string;
@@ -121,6 +128,14 @@ export interface SessionSnapshot {
     fullContent: string;
   };
   specialTask?: SpecialTaskSnapshot;
+  telepathic?: {
+    controllerStepCount: 9;
+    step8QuestionMode: "predefined" | "manual" | "monitor";
+    predefinedQuestions: string[];
+    fixedDeepeningAfterSteps: readonly [3, 4, 5];
+    stepMapping: ReadonlyArray<{ controllerStep: number; protocolSections: string[] }>;
+    targetKind: "telepathic" | "external";
+  };
   revealSource: "external" | "automatic";
   targetId?: string;
   researchProjectId?: string;

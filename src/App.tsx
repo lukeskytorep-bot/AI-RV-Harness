@@ -37,7 +37,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { getCopy } from "./i18n";
 import { PROVIDER_LABELS, ProviderSettings } from "./components/ProviderSettings";
 import { resolveSessionLanguage } from "./domain/localization";
-import { getFullRcp, getRvLite, type ProtocolResource, type RvLiteProtocolResource } from "./resources/protocolRegistry";
+import { getFullRcp, getRvLite, getTelepathicProtocol, type ProtocolResource, type RvLiteProtocolResource, type TelepathicProtocolResource } from "./resources/protocolRegistry";
 import { createRepository, isTauriRuntime } from "./storage";
 import { createId, type AppRepository } from "./storage/repository";
 import type {
@@ -56,7 +56,7 @@ import { sendChatTurn } from "./chat/engine";
 import type { ChatMessage, ChatMode, ChatThread, ChatThreadGroup } from "./types";
 import { runBlindJudging } from "./judge/engine";
 import type { JudgingResult } from "./judge/types";
-import { chooseRandomTarget, createUserTarget, targetHasSupportedReveal, updateUserTarget } from "./targets/service";
+import { chooseRandomTarget, createUserTarget, targetIsEligibleForProtocol, updateUserTarget, userTargetKind } from "./targets/service";
 import { localizedTargetReveal, localizedTargetTitle } from "./targets/localization";
 import type { TargetRecord, TargetUsageRecord } from "./targets/types";
 import { dryRunCustomProtocol, saveCustomProtocol } from "./protocols/custom";
@@ -97,6 +97,15 @@ import { aiIsBeDisplayName, humanIsBeDisplayName } from "./domain/isBeIdentity";
 import { TRAINING_CATEGORIES, TRAINING_CATEGORY_LABELS, isFactoryTrainingTargetId } from "./targets/bundled";
 import { buildEffectiveMonitorPrompt, buildEffectiveViewerPrompt, factoryMonitorEditablePrompt, factoryViewerEditablePrompt, getFactoryPromptResources, localizedMonitorEditablePrompt, localizedViewerEditablePrompt, lockedActivityDefinition, lockedMonitorExecution, lockedViewerIdentity, type FactoryPromptResource } from "./resources/systemPrompts";
 import { SPECIAL_TASK_OPTIONS, specialTaskUsesMappedLabels, type SpecialTaskInput, type SpecialTaskOption } from "./sessions/specialTask";
+import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from "./targets/telepathicBundled";
+import {
+  resumeTelepathicManualQuestionStage,
+  runAutomaticTelepathicSession,
+  telepathicManualRecoveryState,
+  type TelepathicManualQuestionHandle,
+  type TelepathicManualRecoveryState,
+  type TelepathicQuestionMode,
+} from "./sessions/telepathicController";
 
 type Page = "home" | "profiles" | "workspaces" | "research" | "targets" | "training" | "settings" | "workspace";
 type WorkspaceTab = "chat" | "rv" | "monitor";
@@ -141,8 +150,14 @@ export default function App() {
           repo.listProfiles(),
           repo.listWorkspaces(),
         ]);
+        let nextSettings = { ...createDefaultSettings(), ...storedSettings };
+        if (storedSettings.telepathicStarterPackVersion !== TELEPATHIC_STARTER_PACK_VERSION) {
+          stage = "telepathic-user-targets.seed";
+          await seedBundledTelepathicTargets(repo);
+          nextSettings = { ...nextSettings, telepathicStarterPackVersion: TELEPATHIC_STARTER_PACK_VERSION };
+          await repo.saveSettings(nextSettings);
+        }
         if (cancelled) return;
-        const nextSettings = { ...createDefaultSettings(), ...storedSettings };
         setRepository(repo);
         setSettings(nextSettings);
         setProfiles(storedProfiles);
@@ -864,7 +879,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
   const [chatImageNames, setChatImageNames] = useState<string[]>([]);
   const [modelId, setModelId] = useState("");
   const [input, setInput] = useState("");
-  const [manualProtocol, setManualProtocol] = useState<"none" | "rcp" | "lite-core" | "lite-extended">("none");
+  const [manualProtocol, setManualProtocol] = useState<"none" | "rcp" | "lite-core" | "lite-extended" | "telepathic">("none");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
@@ -1123,7 +1138,13 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         ...(mode === "manual_rv" ? { rvSystemPrompt: buildEffectiveViewerPrompt(language, localizedViewerEditablePrompt(profile?.defaultViewerSystemPrompt, language)) } : {}),
         sources: selectedSources,
         images: chatImages,
-        ...(mode === "manual_rv" && manualProtocol !== "none" ? { attachedProtocol: manualProtocol === "rcp" ? getFullRcp(language).content : getRvLite(language, manualProtocol === "lite-core" ? "core" : "extended").content } : {}),
+        ...(mode === "manual_rv" && manualProtocol !== "none" ? {
+          attachedProtocol: manualProtocol === "rcp"
+            ? getFullRcp(language).content
+            : manualProtocol === "telepathic"
+              ? getTelepathicProtocol(language).content
+              : getRvLite(language, manualProtocol === "lite-core" ? "core" : "extended").content,
+        } : {}),
       });
       setChatImages([]);
       setChatImageNames([]);
@@ -1237,7 +1258,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
           <option value="">{models.length ? copy.selectModel : copy.noCachedModels}</option>
           {models.map((model) => <option key={model.modelId} value={model.modelId}>{model.recommended ? "★ " : ""}{model.displayName}</option>)}
         </select>
-        {mode === "manual_rv" && <label className="manual-protocol-select"><span>{settings.interfaceLanguage === "pl" ? "Dołącz protokół" : "Attach protocol"}</span><select value={manualProtocol} onChange={(event) => setManualProtocol(event.target.value as typeof manualProtocol)} disabled={sending}><option value="none">{settings.interfaceLanguage === "pl" ? "Bez dodatkowego protokołu" : "No additional protocol"}</option><option value="rcp">Full RCP 1.5a</option><option value="lite-core">RV Lite Core 1.1.0</option><option value="lite-extended">RV Lite Extended 1.1.0</option></select></label>}
+        {mode === "manual_rv" && <label className="manual-protocol-select"><span>{settings.interfaceLanguage === "pl" ? "Dołącz protokół" : "Attach protocol"}</span><select value={manualProtocol} onChange={(event) => setManualProtocol(event.target.value as typeof manualProtocol)} disabled={sending}><option value="none">{settings.interfaceLanguage === "pl" ? "Bez dodatkowego protokołu" : "No additional protocol"}</option><option value="rcp">Full RCP 1.5a</option><option value="lite-core">RV Lite Core 1.1.0</option><option value="lite-extended">RV Lite Extended 1.1.0</option><option value="telepathic">{settings.interfaceLanguage === "pl" ? "Protokół Telepatyczny 1.1" : "Telepathic Protocol 1.1"}</option></select></label>}
       </div>
       <div className="context-banner">
         <span className={mode === "conversation" ? "banner-icon violet" : "banner-icon cyan"}>{mode === "conversation" ? <MessageCircle size={22} /> : <ShieldCheck size={22} />}</span>
@@ -1258,10 +1279,16 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
 function RvSessionPanel({ copy, settings, profile, workspace, repository }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; repository: AppRepository | null }) {
   const [executionScope, setExecutionScope] = useState<"single" | "batch">("single");
   const [runType, setRunType] = useState<"automatic" | "monitor">("automatic");
-  const [protocol, setProtocol] = useState<"rcp" | "lite" | "custom">("rcp");
+  const [protocol, setProtocol] = useState<"rcp" | "lite" | "custom" | "telepathic">("rcp");
   const [liteVariant, setLiteVariant] = useState<"core" | "extended">("extended");
   const [specialTaskOptions, setSpecialTaskOptions] = useState<SpecialTaskOption[]>([]);
   const [specialTaskText, setSpecialTaskText] = useState("");
+  const [telepathicQuestionMode, setTelepathicQuestionMode] = useState<TelepathicQuestionMode>("manual");
+  const [telepathicQuestionsText, setTelepathicQuestionsText] = useState("");
+  const [manualQuestionHandle, setManualQuestionHandle] = useState<TelepathicManualQuestionHandle | null>(null);
+  const [telepathicRecovery, setTelepathicRecovery] = useState<Record<string, TelepathicManualRecoveryState>>({});
+  const [manualQuestionText, setManualQuestionText] = useState("");
+  const [manualQuestionBusy, setManualQuestionBusy] = useState(false);
   const [revealSource, setRevealSource] = useState<"automatic" | "external">(settings.defaultRevealSource);
   const [sessionLanguage, setSessionLanguage] = useState<SessionLanguageSetting>(settings.sessionLanguage);
   const [resourceOpen, setResourceOpen] = useState(false);
@@ -1307,17 +1334,20 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const resolvedLanguage = resolveSessionLanguage(settings.interfaceLanguage, sessionLanguage);
   const rcp = getFullRcp(resolvedLanguage);
   const rvLite = getRvLite(resolvedLanguage, liteVariant);
+  const telepathic = getTelepathicProtocol(resolvedLanguage);
+  const telepathicQuestions = telepathicQuestionsText.split(/\r?\n/).map((question) => question.trim()).filter(Boolean);
   const specialTask: SpecialTaskInput | undefined = specialTaskOptions.length || specialTaskText.trim() ? { selectedOptions: specialTaskOptions, ...(specialTaskText.trim() ? { customText: specialTaskText.trim() } : {}) } : undefined;
   const activeProvider = providerConfigs.find((item) => item.credentialId === profile?.credentialId) ?? null;
   const selectedModel = models.find((item) => item.modelId === modelId) ?? null;
   const monitorModel = allModels.find((item) => `${item.providerConfigId}::${item.modelId}` === monitorModelKey) ?? null;
   const monitorProvider = monitorModel ? providerConfigs.find((item) => item.id === monitorModel.providerConfigId) ?? null : null;
-  const eligibleTargets = targets.filter((target) => target.collection === "user" && targetHasSupportedReveal(target));
+  const eligibleTargets = targets.filter((target) => targetIsEligibleForProtocol(target, protocol));
   const batchPool = eligibleTargets;
-  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, modelId, protocol, liteVariant, specialTaskOptions, specialTaskText, customProtocolVersionId, runType, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
+  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, modelId, protocol, liteVariant, specialTaskOptions, specialTaskText, telepathicQuestionMode, telepathicQuestions, customProtocolVersionId, runType, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
-  const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : 6;
+  const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : protocol === "telepathic" ? 9 : 6;
   const running = sessionRunning || batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
+  const recoveryInspectionKey = recentSessions.map((session) => `${session.id}:${session.state}:${session.updatedAt}`).join("|");
 
   useEffect(() => {
     let cancelled = false;
@@ -1356,6 +1386,24 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   }, [repository, resolvedLanguage]);
 
   useEffect(() => {
+    let cancelled = false;
+    if (!repository) return;
+    const incomplete = recentSessions.filter((session) => session.state === "BlindRunning" || session.state === "Preflight");
+    void Promise.all(incomplete.map(async (session) => {
+      const snapshot = await repository.getSessionSnapshot(session.id);
+      if (!snapshot?.telepathic || snapshot.telepathic.step8QuestionMode !== "manual" || snapshot.monitor) return null;
+      const state = telepathicManualRecoveryState(await repository.listSessionEvents(session.id));
+      return state ? [session.id, state] as const : null;
+    })).then((items) => {
+      if (cancelled) return;
+      setTelepathicRecovery(Object.fromEntries(items.filter((item): item is readonly [string, TelepathicManualRecoveryState] => Boolean(item))));
+    }).catch(() => {
+      if (!cancelled) setTelepathicRecovery({});
+    });
+    return () => { cancelled = true; };
+  }, [repository, recoveryInspectionKey]);
+
+  useEffect(() => {
     if (!selectedModel) return;
     const limit = selectedModel.capabilities.maxOutputTokens;
     const profileDefaults = profileGenerationDefaults(profile, selectedModel);
@@ -1363,6 +1411,15 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     setReasoning(profileDefaults.reasoningEffort ?? "");
     setTemperature(profileDefaults.temperature === undefined ? "" : String(profileDefaults.temperature));
   }, [selectedModel?.modelId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, settings.defaultMaxOutputTokens]);
+
+  useEffect(() => {
+    if (protocol !== "telepathic") return;
+    setTelepathicQuestionMode((current) => {
+      if (runType === "monitor") return current === "predefined" ? current : "monitor";
+      if (executionScope === "batch") return "predefined";
+      return current === "monitor" ? "manual" : current;
+    });
+  }, [executionScope, protocol, runType]);
 
   const preflightBatch = () => {
     const failures: string[] = [];
@@ -1372,6 +1429,9 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     if (!isRunModeCompatible(runType, protocol)) failures.push(copy.rvLiteUnavailable);
     if (runType === "monitor" && (!monitorModel || !monitorProvider)) failures.push(copy.monitorModel);
     if (!Number.isFinite(Number(maxOutputTokens)) || Number(maxOutputTokens) <= 0) failures.push(copy.maxOutputTokens);
+    if (protocol === "telepathic" && telepathicQuestionMode === "predefined" && telepathicQuestions.length === 0) failures.push(settings.interfaceLanguage === "pl" ? "Wpisz pytania po Kroku 8" : "Enter Step 8 questions");
+    if (protocol === "telepathic" && runType === "monitor" && telepathicQuestions.length > 5) failures.push(settings.interfaceLanguage === "pl" ? "AI Monitor może zadać najwyżej 5 pytań" : "AI Monitor may ask at most 5 questions");
+    if (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") failures.push(settings.interfaceLanguage === "pl" ? "Tryb ręcznych pytań nie jest dostępny w batchu" : "Manual questions are unavailable in batch mode");
     if (batchCount < 1 || batchCount > batchPool.length) failures.push(copy.batchTargetPreflight);
     if (failures.length) {
       setBatchPreflightSignature(null);
@@ -1424,6 +1484,9 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     if (protocol === "custom" && !selectedCustomProtocol) return;
     if (!isRunModeCompatible(runType, protocol)) return;
     if (runType === "monitor" && (!monitorModel || !monitorProvider)) return;
+    if (protocol === "telepathic" && telepathicQuestionMode === "predefined" && telepathicQuestions.length === 0) return;
+    if (protocol === "telepathic" && runType === "monitor" && telepathicQuestions.length > 5) return;
+    if (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") return;
     const automaticTarget = executionScope === "single" && revealSource === "automatic"
       ? selectedTargetId === "__random__" ? chooseRandomTarget(eligibleTargets) : eligibleTargets.find((target) => target.id === selectedTargetId) ?? null
       : null;
@@ -1447,6 +1510,8 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     setPostRevealText("");
     setBatchResults([]);
     setBatchProgress(null);
+    setManualQuestionHandle(null);
+    setManualQuestionText("");
     const controller = new AbortController();
     abortRef.current = controller;
     const requestedSettings = {
@@ -1462,6 +1527,33 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
       }
       if (protocol === "custom" && selectedCustomProtocol) {
         const result = await runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        if (result.state === "Revealed") await automaticReview(result.sessionId, executionScope === "single");
+        return result;
+      }
+      if (protocol === "telepathic") {
+        const result = await runAutomaticTelepathicSession({
+          repository,
+          workspaceId: workspace.id,
+          profileId: profile.id,
+          aiIsBeDisplayName: aiIsBeDisplayName(profile),
+          humanIsBeDisplayName: humanIsBeDisplayName(profile),
+          providerConfig: activeProvider,
+          model: selectedModel,
+          protocol: telepathic,
+          sessionLanguage: resolvedLanguage,
+          requestedSettings,
+          step8Questions: { mode: telepathicQuestionMode, ...(telepathicQuestions.length ? { questions: telepathicQuestions } : {}) },
+          ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
+          signal: controller.signal,
+          maxRetries: settings.maxRetries,
+          requestTimeoutMs: settings.requestTimeoutMs,
+          sessionCodePrefix: settings.sessionCodePrefix,
+          ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}),
+          onProgress: setProgress,
+          ...(executionScope === "single" && runType === "automatic" && telepathicQuestionMode === "manual" ? { onManualQuestionStage: setManualQuestionHandle } : {}),
+          ...(target ? { automaticTarget: target } : {}),
+          ...(runType === "monitor" && monitorModel && monitorProvider ? { monitor: { providerConfig: monitorProvider, model: monitorModel, editablePrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, resolvedLanguage) } } : {}),
+        });
         if (result.state === "Revealed") await automaticReview(result.sessionId, executionScope === "single");
         return result;
       }
@@ -1512,6 +1604,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
       runGuardRef.current.release();
       setSessionRunning(false);
       setBatchRunning(false);
+      setManualQuestionHandle(null);
       abortRef.current = null;
       try {
         const sessions = await repository.listRvSessions(workspace.id);
@@ -1564,7 +1657,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const saveExternalRevealTarget = async () => {
     if (!repository || (!acceptedRevealText && !acceptedRevealArtifacts.length) || !saveTargetTitle.trim()) return;
     try {
-      const target = await createUserTarget(repository, { title: saveTargetTitle, ...(acceptedRevealText ? { revealText: acceptedRevealText } : {}), ...(acceptedRevealArtifacts.length ? { revealArtifacts: acceptedRevealArtifacts } : {}), source: "external_blind_session" });
+      const target = await createUserTarget(repository, { title: saveTargetTitle, ...(acceptedRevealText ? { revealText: acceptedRevealText } : {}), ...(acceptedRevealArtifacts.length ? { revealArtifacts: acceptedRevealArtifacts } : {}), source: "external_blind_session", targetKind: protocol === "telepathic" ? "telepathic" : "general" });
       setTargets((current) => [target, ...current]);
       setTargetSaved(true);
     } catch (cause) {
@@ -1587,6 +1680,64 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     const storedReveal = await repository.getReveal(session.id);
     setAcceptedRevealText(storedReveal?.text ?? "");
     setAcceptedRevealArtifacts(storedReveal?.artifactManifest ?? []);
+  };
+
+  const resumeTelepathicSession = async (session: RvSession) => {
+    if (!repository || !runGuardRef.current.tryAcquire()) return;
+    setRunError(null);
+    setProtocol("telepathic");
+    setRunType("automatic");
+    setExecutionScope("single");
+    setSessionRunning(true);
+    setManualQuestionHandle(null);
+    setManualQuestionText("");
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const snapshot = await repository.getSessionSnapshot(session.id);
+      if (!snapshot?.telepathic) throw new Error(settings.interfaceLanguage === "pl" ? "Brak snapshota sesji telepatycznej." : "The telepathic session snapshot is unavailable.");
+      const providerConfig = providerConfigs.find((item) => item.id === snapshot.providerConfigId);
+      const viewerModel = allModels.find((item) => item.providerConfigId === snapshot.providerConfigId && item.modelId === snapshot.modelId && item.route === snapshot.modelRoute);
+      if (!providerConfig || !viewerModel) throw new Error(copy.postRevealRouteUnavailable);
+      const automaticTarget = snapshot.revealSource === "automatic" ? targets.find((target) => target.id === snapshot.targetId) : undefined;
+      if (snapshot.revealSource === "automatic" && !automaticTarget) throw new Error(settings.interfaceLanguage === "pl" ? "Zapisany cel telepatyczny jest niedostępny." : "The captured telepathic target is unavailable.");
+      setSessionLanguage(snapshot.sessionLanguage);
+      setActiveTargetId(snapshot.targetId ?? null);
+      setProgress({
+        sessionId: session.id,
+        sessionCode: session.sessionCode,
+        state: "BlindRunning",
+        transcript: session.preRevealTranscript,
+        phase: telepathicRecovery[session.id] === "seal" ? 9 : 8,
+        ...(telepathicRecovery[session.id] === "questions" ? { awaitingStep8Questions: true } : {}),
+      });
+      const result = await resumeTelepathicManualQuestionStage({
+        repository,
+        session,
+        providerConfig,
+        model: viewerModel,
+        ...(automaticTarget ? { automaticTarget } : {}),
+        signal: controller.signal,
+        maxRetries: settings.maxRetries,
+        requestTimeoutMs: settings.requestTimeoutMs,
+        ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}),
+        onManualQuestionStage: setManualQuestionHandle,
+        onProgress: setProgress,
+      });
+      if (result.state === "Revealed") await automaticReview(result.sessionId, true);
+    } catch (cause) {
+      setRunError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      runGuardRef.current.release();
+      setSessionRunning(false);
+      setManualQuestionHandle(null);
+      abortRef.current = null;
+      try {
+        setRecentSessions((await repository.listRvSessions(workspace.id)).filter((item) => !item.researchProjectId));
+      } catch (cause) {
+        setRunError(cause instanceof Error ? cause.message : String(cause));
+      }
+    }
   };
 
   const preserveInterrupted = async (session: RvSession) => {
@@ -1654,6 +1805,26 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     }
   };
 
+  const askManualTelepathicQuestion = async () => {
+    if (!manualQuestionHandle || !manualQuestionText.trim() || manualQuestionBusy) return;
+    setManualQuestionBusy(true);
+    setRunError(null);
+    try {
+      await manualQuestionHandle.ask(manualQuestionText.trim());
+      setManualQuestionText("");
+    } catch (cause) {
+      setRunError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setManualQuestionBusy(false);
+    }
+  };
+
+  const finishManualTelepathicQuestions = () => {
+    if (!manualQuestionHandle || manualQuestionBusy) return;
+    manualQuestionHandle.finish();
+    setManualQuestionHandle(null);
+  };
+
   return (
     <section className={metadataOpen ? "session-layout metadata-open" : "session-layout metadata-closed"}>
       <div className="session-main panel">
@@ -1667,6 +1838,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
             {executionScope === "batch" && batchProgress && <div className="batch-progress-strip"><strong>{copy.batchProgress}</strong><span>{batchProgress.current} / {batchProgress.total}</span><small>{copy.completedSessions}: {batchProgress.completed}</small></div>}
             {progress.metrics && <div className="session-run-metrics"><span><small>{copy.apiCalls}</small><strong>{progress.metrics.requestCount}</strong></span>{progress.metrics.totalTokens !== undefined && <span><small>{copy.tokens}</small><strong>{Math.round(progress.metrics.totalTokens).toLocaleString()}</strong></span>}{progress.metrics.costUsd !== undefined && <span><small>{copy.cost}</small><strong>${progress.metrics.costUsd.toFixed(4)}</strong></span>}<span><small>{copy.elapsed}</small><strong>{formatDuration(progress.metrics.sessionDurationMs)}</strong></span></div>}
             {progress.transcript ? <SafeMarkdown className="live-transcript" content={progress.transcript} /> : <div className="session-wait"><span className="loader-orb" /><p>{progress.state === "Preflight" ? "Preflight" : `${copy.runningPhase} ${progress.phase ?? 1}`}</p></div>}
+            {progress.awaitingStep8Questions && manualQuestionHandle && <section className="telepathic-question-stage"><div><BrainCircuit size={18} /><span><strong>{settings.interfaceLanguage === "pl" ? "Krok 8 zakończony — pytania T9" : "Step 8 complete — T9 questions"}</strong><small>{settings.interfaceLanguage === "pl" ? `Zadane pytania: ${progress.telepathicQuestionCount ?? 0}. Możesz zadawać kolejne pojedynczo.` : `Questions asked: ${progress.telepathicQuestionCount ?? 0}. You may ask more, one at a time.`}</small></span></div><textarea rows={3} value={manualQuestionText} onChange={(event) => setManualQuestionText(event.target.value)} disabled={manualQuestionBusy} placeholder={settings.interfaceLanguage === "pl" ? "Wpisz pytanie do AI Viewera…" : "Enter a question for the AI Viewer…"} /><div className="telepathic-question-actions"><button className="secondary-button" disabled={!manualQuestionText.trim() || manualQuestionBusy} onClick={() => void askManualTelepathicQuestion()}>{manualQuestionBusy ? copy.sending : (settings.interfaceLanguage === "pl" ? "Zadaj pytanie" : "Ask question")}</button><button className="primary-button" disabled={manualQuestionBusy} onClick={finishManualTelepathicQuestions}>{settings.interfaceLanguage === "pl" ? "Zakończ Krok 8 i przejdź do Kroku 9" : "Finish Step 8 and continue to Step 9"}</button></div></section>}
             {progress.state === "AwaitingReveal" && <div className="reveal-box"><div><LockKeyhole size={18} /><span><strong>{copy.awaitingReveal}</strong><small>{copy.blindRunComplete}</small></span></div><textarea rows={5} value={revealText} onChange={(event) => setRevealText(event.target.value)} placeholder={copy.revealPlaceholder} /><div className="reveal-artifact-row"><label className="secondary-button reveal-file-button">{copy.revealFiles}<input type="file" multiple accept=".txt,.md,image/png,image/jpeg,image/webp,image/gif" disabled={artifactBusy} onChange={(event) => void attachRevealFiles(event.target.files)} /></label>{artifactBusy && <small>{copy.storingFile}</small>}{revealArtifacts.map((artifact) => <span className="reveal-artifact-chip" key={`${artifact.artifactId}-${artifact.originalFileName}`}>{artifact.mimeType.startsWith("image/") ? "▣" : "≡"} {artifact.originalFileName}</span>)}</div>{revealArtifacts.some((artifact) => artifact.mimeType.startsWith("image/")) && <small className="vision-guard-note">{copy.imageJudgeGuard}</small>}<button className="primary-button" disabled={artifactBusy || (!revealText.trim() && !revealArtifacts.length)} onClick={() => void submitReveal()}>{copy.submitReveal}</button></div>}
             {(progress.state === "Revealed" || progress.state === "Completed") && <>
               <div className="reveal-success"><Check size={18} /><div><strong>🔓 {copy.revealAccepted}</strong><p>{copy.blindRunComplete}</p></div></div>
@@ -1692,7 +1864,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
             <Choice active={runType === "automatic"} onClick={() => setRunType("automatic")} icon={<Waves size={18} />} title={copy.automatic} />
             <Choice disabled={!canSelectMonitor(protocol)} active={runType === "monitor"} onClick={() => setRunType("monitor")} icon={<BrainCircuit size={18} />} title={copy.automaticMonitor} />
           </div>
-          {(!canSelectMonitor(protocol) || runType === "monitor") && <small className="mode-compatibility-note">{copy.rvLiteUnavailable}</small>}
+          {!canSelectMonitor(protocol) && <small className="mode-compatibility-note">{copy.rvLiteUnavailable}</small>}
         </ConfigBlock>
         {runType === "monitor" && <ConfigBlock label={copy.monitorModel}>
           <div className="monitor-model-config">
@@ -1707,11 +1879,13 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
           <div className="choice-grid three">
             <Choice active={protocol === "rcp"} onClick={() => setProtocol("rcp")} icon={<FileCheck2 size={18} />} title={copy.fullRcp} meta="v1.5a" />
             <Choice disabled={!canSelectProtocol(runType, "lite")} active={protocol === "lite"} onClick={() => setProtocol("lite")} icon={<Sparkles size={18} />} title={copy.rvLite} meta="v1.1.0" />
+            <Choice disabled={!canSelectProtocol(runType, "telepathic")} active={protocol === "telepathic"} onClick={() => setProtocol("telepathic")} icon={<BrainCircuit size={18} />} title={settings.interfaceLanguage === "pl" ? "Protokół Telepatyczny" : "Telepathic Protocol"} meta="v1.1" />
             <Choice disabled={!canSelectProtocol(runType, "custom")} active={protocol === "custom"} onClick={() => setProtocol("custom")} icon={<Settings2 size={18} />} title={copy.customProtocol} meta={customProtocols.length ? `${customProtocols.length}` : undefined} />
           </div>
-          {runType === "monitor" && <small className="mode-compatibility-note">{copy.rvLiteUnavailable}</small>}
+          {runType === "monitor" && protocol !== "telepathic" && protocol !== "rcp" && <small className="mode-compatibility-note">{copy.rvLiteUnavailable}</small>}
         </ConfigBlock>
         {protocol === "lite" && <ConfigBlock label={settings.interfaceLanguage === "pl" ? "Wariant RV Lite" : "RV Lite variant"}><div className="choice-grid two"><Choice active={liteVariant === "core"} onClick={() => setLiteVariant("core")} icon={<FileCheck2 size={18} />} title="Core" meta={settings.interfaceLanguage === "pl" ? "4 podstawowe kroki" : "4 core steps"} /><Choice active={liteVariant === "extended"} onClick={() => setLiteVariant("extended")} icon={<Sparkles size={18} />} title="Extended" meta={settings.interfaceLanguage === "pl" ? "4 kroki + pogłębianie po kroku 3" : "4 steps + deepening after Step 3"} /></div></ConfigBlock>}
+        {protocol === "telepathic" && <ConfigBlock label={settings.interfaceLanguage === "pl" ? "Pytania po Kroku 8 (T9)" : "Questions after Step 8 (T9)"}><div className="choice-grid two">{runType === "automatic" && executionScope === "single" && <Choice active={telepathicQuestionMode === "manual"} onClick={() => setTelepathicQuestionMode("manual")} icon={<MessageCircle size={18} />} title={settings.interfaceLanguage === "pl" ? "Zatrzymaj i pytaj ręcznie" : "Pause for manual questions"} />}{runType === "monitor" && <Choice active={telepathicQuestionMode === "monitor"} onClick={() => setTelepathicQuestionMode("monitor")} icon={<BrainCircuit size={18} />} title={settings.interfaceLanguage === "pl" ? "AI Monitor wybiera pytania" : "AI Monitor chooses questions"} />}<Choice active={telepathicQuestionMode === "predefined"} onClick={() => setTelepathicQuestionMode("predefined")} icon={<FileCheck2 size={18} />} title={settings.interfaceLanguage === "pl" ? "Pytania wpisane przed sesją" : "Pre-entered questions"} /></div>{telepathicQuestionMode === "predefined" && <label className="telepathic-predefined-questions"><span>{settings.interfaceLanguage === "pl" ? "Jedno pytanie w każdym wierszu" : "One question per line"}</span><textarea rows={5} value={telepathicQuestionsText} onChange={(event) => setTelepathicQuestionsText(event.target.value)} placeholder={settings.interfaceLanguage === "pl" ? "Co jest najważniejszą intencją podmiotu?\nJak podmiot postrzega najbliższe otoczenie?" : "What is the subject's most important intention?\nHow does the subject perceive the immediate surroundings?"} /><small>{runType === "monitor" ? (settings.interfaceLanguage === "pl" ? `${Math.min(telepathicQuestions.length, 5)}/5 pytań Monitora` : `${Math.min(telepathicQuestions.length, 5)}/5 Monitor questions`) : (settings.interfaceLanguage === "pl" ? `${telepathicQuestions.length} pytań` : `${telepathicQuestions.length} questions`)}</small></label>}<small>{settings.interfaceLanguage === "pl" ? "Zadania specjalne są wyłączone dla Protokołu Telepatycznego. Po Krokach 3, 4 i 5 kontroler wykona dodatkowe obowiązkowe pogłębienie." : "Special Tasks are disabled for the Telepathic Protocol. The controller performs an additional mandatory deepening after Steps 3, 4, and 5."}</small></ConfigBlock>}
         {(protocol === "rcp" || protocol === "lite") && <details className="special-task-disclosure"><summary><span><strong>{settings.interfaceLanguage === "pl" ? "Zadanie specjalne — opcjonalne" : "Special task — optional"}</strong><small>{specialTaskOptions.length || specialTaskText.trim() ? (settings.interfaceLanguage === "pl" ? "Skonfigurowano" : "Configured") : (settings.interfaceLanguage === "pl" ? "Rozwiń, aby ustawić" : "Expand to configure")}</small></span><ChevronRight size={15} /></summary><div className="special-task-builder"><p>{protocol === "rcp" ? (settings.interfaceLanguage === "pl" ? "Zadanie zostanie przekazane bezpośrednio po Fazie 4." : "The task is supplied immediately after Phase 4.") : (settings.interfaceLanguage === "pl" ? "Zadanie zostanie przekazane bezpośrednio po kroku 3." : "The task is supplied immediately after Step 3.")}</p><p>{settings.interfaceLanguage === "pl" ? "Służy do neutralnego skierowania Viewera lub Monitora ku konkretnej osobie, istocie, strukturze, obiektowi, aktywności albo zdarzeniu będącemu częścią celu. Po sesji Target Reveal musi jasno wyjaśnić, co oznaczało każde użyte oznaczenie, np. Subject A lub Object A, aby Viewer mógł porównać dane z celem." : "It neutrally directs the Viewer or Monitor toward a specific subject, structure, object, activity, or event that is part of the target. After the session, the Target Reveal must clearly explain every label used, such as Subject A or Object A, so the Viewer can compare the data with the target."}</p><div>{SPECIAL_TASK_OPTIONS.map((option) => <label key={option}><input type="checkbox" checked={specialTaskOptions.includes(option)} onChange={(event) => setSpecialTaskOptions((current) => event.target.checked ? [...current, option] : current.filter((item) => item !== option))} /><span>{specialTaskOptionLabel(option, settings.interfaceLanguage)}</span></label>)}</div><textarea rows={3} value={specialTaskText} onChange={(event) => setSpecialTaskText(event.target.value)} placeholder={settings.interfaceLanguage === "pl" ? "Lub wpisz własne neutralne zadanie…" : "Or enter a custom neutral task…"} />{specialTaskUsesMappedLabels(specialTask) && <small className="special-task-warning"><ShieldCheck size={13} />{settings.interfaceLanguage === "pl" ? "W Target Reveal opisz jednoznacznie, czym są użyte oznaczenia Subject/Structure/Object A–C." : "The Target Reveal must clearly define every Subject/Structure/Object A–C label used here."}</small>}</div></details>}
         {protocol === "custom" && <ConfigBlock label={copy.customProtocolSelect}>
           <div className="custom-protocol-select"><select value={customProtocolVersionId} onChange={(event) => setCustomProtocolVersionId(event.target.value)}><option value="">{copy.noCustomProtocols}</option>{customProtocols.map((item) => <option key={item.versionId} value={item.versionId}>{item.displayName} · {item.version}</option>)}</select><div className="custom-protocol-buttons"><button className="secondary-button" onClick={() => { setCustomBuilderNew(true); setCustomBuilderOpen(true); }}><Plus size={15} />{copy.newCustomProtocol}</button>{selectedCustomProtocol && <button className="secondary-button" onClick={() => { setCustomBuilderNew(false); setCustomBuilderOpen(true); }}>{copy.editCustomProtocol}</button>}</div><small>{copy.customMonitorNote}</small></div>
@@ -1750,7 +1924,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
           {eligibleTargets.length ? <select className="session-language-select" value={selectedTargetId} onChange={(event) => setSelectedTargetId(event.target.value)}><option value="__random__">🎲 {copy.randomTarget}</option>{eligibleTargets.map((target) => <option key={target.id} value={target.id}>{copy.myTargets} · {localizedTargetTitle(target, resolvedLanguage)}</option>)}</select> : <div className="route-summary target-empty-warning"><Crosshair size={16} /><span><strong>{copy.noEligibleTargets}</strong><small>{copy.noEligibleTargetsLead}</small></span></div>}
         </ConfigBlock>}</> : <ConfigBlock label={copy.targetPool}><div className="batch-config"><label><span>{copy.targetPool}</span><strong>{copy.myTargets}</strong></label><label><span>{copy.batchCount}</span><input type="number" min={1} max={Math.max(1, batchPool.length)} value={batchCount} onChange={(event) => setBatchCount(Math.max(1, Number(event.target.value) || 1))} /></label><small>{copy.eligibleTargets}: {batchPool.length}</small>{batchPool.length === 0 && <small className="target-source-error">{copy.noEligibleTargetsLead}</small>}<div className="batch-preflight-actions"><button className="secondary-button" onClick={preflightBatch}>{copy.runPreflight}</button>{batchPreflightSignature === batchConfigSignature && <span className="status-chip ready"><Check size={12} />{copy.preflightPassed}</span>}</div></div></ConfigBlock>}
         <div className="start-block">
-          <button className="primary-button start-button" disabled={!isTauriRuntime() || !activeProvider || !selectedModel || !maxOutputTokens || Number(maxOutputTokens) <= 0 || (runType === "monitor" && (protocol !== "rcp" || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
+          <button className="primary-button start-button" disabled={!isTauriRuntime() || !activeProvider || !selectedModel || !maxOutputTokens || Number(maxOutputTokens) <= 0 || (runType === "monitor" && (!canSelectMonitor(protocol) || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (protocol === "telepathic" && telepathicQuestionMode === "predefined" && (!telepathicQuestions.length || (runType === "monitor" && telepathicQuestions.length > 5))) || (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
           <p>{activeProvider ? copy.controllerReady : copy.configureProviderFirst}</p>
         </div>
         </>}
@@ -1758,23 +1932,38 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
       </div>
       <button className="session-metadata-toggle" title={metadataOpen ? (settings.interfaceLanguage === "pl" ? "Ukryj informacje o protokole" : "Hide protocol information") : (settings.interfaceLanguage === "pl" ? "Pokaż informacje o protokole" : "Show protocol information")} onClick={() => setMetadataOpen((current) => !current)}>{metadataOpen ? "›" : "‹"}</button>
       {metadataOpen && <aside className="session-side">
-        <details className="panel recent-sessions-side" open><summary><Clock3 size={15} /><strong>{copy.recentSessions}</strong><span>{recentSessions.length}</span></summary>{recentSessions.length ? <div className="recent-session-list">{recentSessions.map((session) => <div key={session.id}><button className="recent-session-open" disabled={session.state === "BlindRunning" || session.state === "Preflight"} onClick={() => void loadStoredSession(session)}><span><strong>{session.sessionCode}</strong><small>{session.state}</small></span><ChevronRight size={13} /></button>{(session.state === "BlindRunning" || session.state === "Preflight") && <div className="session-recovery"><small>{copy.recoveryRequired}</small><button onClick={() => void preserveInterrupted(session)}>{copy.markInterrupted}</button></div>}</div>)}</div> : <p className="recent-session-empty">{copy.noSessions}</p>}</details>
+        <details className="panel recent-sessions-side" open>
+          <summary><Clock3 size={15} /><strong>{copy.recentSessions}</strong><span>{recentSessions.length}</span></summary>
+          {recentSessions.length ? <div className="recent-session-list">{recentSessions.map((session) => {
+            const recovery = telepathicRecovery[session.id];
+            const incomplete = session.state === "BlindRunning" || session.state === "Preflight";
+            const recoveryLabel = recovery === "questions"
+              ? (settings.interfaceLanguage === "pl" ? "Wznów pytania Kroku 8" : "Resume Step 8 questions")
+              : recovery === "step9"
+                ? (settings.interfaceLanguage === "pl" ? "Kontynuuj do Kroku 9" : "Continue to Step 9")
+                : (settings.interfaceLanguage === "pl" ? "Dokończ zapis i Reveal" : "Finish sealing and Reveal");
+            return <div key={session.id}>
+              <button className="recent-session-open" disabled={incomplete} onClick={() => void loadStoredSession(session)}><span><strong>{session.sessionCode}</strong><small>{session.state}</small></span><ChevronRight size={13} /></button>
+              {incomplete && <div className="session-recovery"><small>{recovery ? (settings.interfaceLanguage === "pl" ? "Znaleziono bezpieczny checkpoint Protokołu Telepatycznego." : "A safe Telepathic Protocol checkpoint was found.") : copy.recoveryRequired}</small>{recovery && <button disabled={sessionRunning || batchRunning} onClick={() => void resumeTelepathicSession(session)}>{recoveryLabel}</button>}<button disabled={sessionRunning || batchRunning} onClick={() => void preserveInterrupted(session)}>{copy.markInterrupted}</button></div>}
+            </div>;
+          })}</div> : <p className="recent-session-empty">{copy.noSessions}</p>}
+        </details>
         <section className="panel protocol-card">
           <span className="resource-orb"><FileCheck2 size={22} /></span>
           <span className="status-chip ready"><Check size={13} />{copy.statusReady}</span>
-          <h3>{protocol === "custom" ? selectedCustomProtocol?.displayName ?? copy.customProtocol : protocol === "lite" ? `${copy.rvLite} v1.1.0` : copy.rcpReady}</h3>
+          <h3>{protocol === "custom" ? selectedCustomProtocol?.displayName ?? copy.customProtocol : protocol === "lite" ? `${copy.rvLite} v1.1.0` : protocol === "telepathic" ? (settings.interfaceLanguage === "pl" ? "Protokół Telepatyczny v1.1" : "Telepathic Protocol v1.1") : copy.rcpReady}</h3>
           <p>{protocol === "custom" ? selectedCustomProtocol?.description ?? copy.dryRunLead : copy.rcpReadyDesc}</p>
           <dl>
             <div><dt>{copy.sessionLanguage}</dt><dd>{resolvedLanguage.toUpperCase()}</dd></div>
-            <div><dt>{protocol === "custom" ? copy.blindSteps : copy.wordCount}</dt><dd>{protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : wordCount(protocol === "lite" ? rvLite.content : rcp.content).toLocaleString()}</dd></div>
-            <div><dt>Version</dt><dd>{protocol === "custom" ? selectedCustomProtocol?.version ?? "—" : protocol === "lite" ? rvLite.version : rcp.version}</dd></div>
+            <div><dt>{protocol === "custom" ? copy.blindSteps : copy.wordCount}</dt><dd>{protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : wordCount(protocol === "lite" ? rvLite.content : protocol === "telepathic" ? telepathic.content : rcp.content).toLocaleString()}</dd></div>
+            <div><dt>Version</dt><dd>{protocol === "custom" ? selectedCustomProtocol?.version ?? "—" : protocol === "lite" ? rvLite.version : protocol === "telepathic" ? telepathic.version : rcp.version}</dd></div>
           </dl>
           {protocol === "custom" ? <button className="secondary-button full" disabled={!selectedCustomProtocol} onClick={() => { setCustomBuilderNew(false); setCustomBuilderOpen(true); }}>{copy.previewDryRun}</button> : <button className="secondary-button full" onClick={() => setResourceOpen(true)}>{copy.inspectProtocol}</button>}
         </section>
         <section className="integrity-card"><LockKeyhole size={18} /><div><strong>🔒 BLIND</strong><p>Reveal boundary is a separate state transition.</p></div></section>
         <section className="integrity-card"><ShieldCheck size={18} /><div><strong>External Blind</strong><p>{copy.externalReady}</p></div></section>
       </aside>}
-      {resourceOpen && <ProtocolDialog copy={copy} resource={protocol === "lite" ? rvLite : rcp} onClose={() => setResourceOpen(false)} />}
+      {resourceOpen && <ProtocolDialog copy={copy} resource={protocol === "lite" ? rvLite : protocol === "telepathic" ? telepathic : rcp} onClose={() => setResourceOpen(false)} />}
       {customBuilderOpen && repository && <CustomProtocolDialog copy={copy} repository={repository} language={resolvedLanguage} base={customBuilderNew ? null : selectedCustomProtocol} onCancel={() => setCustomBuilderOpen(false)} onSaved={customProtocolSaved} />}
     </section>
   );
@@ -2088,13 +2277,14 @@ function TargetsScreen({ copy, settings, repository }: { copy: ReturnType<typeof
     void reload().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
   }, [repository]);
   const training = targets.filter((target) => target.collection === "training");
-  const mine = targets.filter((target) => target.collection === "user");
+  const mine = targets.filter((target) => target.collection === "user" && userTargetKind(target) === "general");
+  const telepathicTargets = targets.filter((target) => target.collection === "user" && userTargetKind(target) === "telepathic");
   const usedTargetIds = new Set([...usage.map((item) => item.targetId), ...researchLockedTargetIds]);
-  const createTarget = async (title: string, revealText: string, tags: string[], images: File[]) => {
+  const createTarget = async (title: string, revealText: string, tags: string[], images: File[], targetKind: "general" | "telepathic") => {
     if (!repository) return;
     const targetId = createId("target");
     const revealArtifacts = images.length ? await Promise.all(images.map((file) => storeTargetArtifact(targetId, file))) : [];
-    const target = await createUserTarget(repository, { id: targetId, title, ...(revealText.trim() ? { revealText } : {}), ...(revealArtifacts.length ? { revealArtifacts } : {}), tags });
+    const target = await createUserTarget(repository, { id: targetId, title, ...(revealText.trim() ? { revealText } : {}), ...(revealArtifacts.length ? { revealArtifacts } : {}), tags, targetKind });
     setTargets((current) => [target, ...current]);
     setDialogOpen(false);
   };
@@ -2121,6 +2311,7 @@ function TargetsScreen({ copy, settings, repository }: { copy: ReturnType<typeof
       <div className="target-columns">
         <section className="panel target-panel"><PanelHeader title={`${copy.trainingTargets} · ${training.length}`} icon={<Crosshair size={18} />} />{training.length ? <div className="training-target-groups">{TRAINING_CATEGORIES.map((category) => { const items = training.filter((target) => target.sourceMetadata.category === category); return <details key={category}><summary><span>{TRAINING_CATEGORY_LABELS[category][settings.interfaceLanguage]}</span><b>{items.length}</b></summary><TargetList copy={copy} language={settings.interfaceLanguage} targets={items} usedTargetIds={usedTargetIds} /></details>; })}</div> : <EmptyState icon={<FileCheck2 size={28} />} title={copy.statusNext} body={copy.targetPackPending} />}</section>
         <section className="panel target-panel"><PanelHeader title={`${copy.myTargets} · ${mine.length}`} icon={<LockKeyhole size={18} />} />{mine.length ? <TargetList copy={copy} language={settings.interfaceLanguage} targets={mine} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onDelete={(target) => void deleteTarget(target)} /> : <EmptyState icon={<Plus size={28} />} title={copy.noPrivateTargets} body={copy.secureLocal} action={<button className="secondary-button" onClick={() => setDialogOpen(true)}><Plus size={15} />{copy.addTarget}</button>} />}</section>
+        <section className="panel target-panel"><PanelHeader title={`${settings.interfaceLanguage === "pl" ? "Moje cele telepatyczne" : "My Telepathic Targets"} · ${telepathicTargets.length}`} icon={<BrainCircuit size={18} />} />{telepathicTargets.length ? <TargetList copy={copy} language={settings.interfaceLanguage} targets={telepathicTargets} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onDelete={(target) => void deleteTarget(target)} /> : <EmptyState icon={<BrainCircuit size={28} />} title={settings.interfaceLanguage === "pl" ? "Brak celów telepatycznych" : "No telepathic targets"} body={settings.interfaceLanguage === "pl" ? "Dodaj osobę, istotę lub grupę przeznaczoną dla Protokołu Telepatycznego." : "Add a person, being, or group intended for the Telepathic Protocol."} />}</section>
       </div>
       <p className="target-support-note">{copy.textRevealOnly}</p>
       {error && <div className="provider-error">{error}</div>}
@@ -2138,11 +2329,12 @@ function TargetList({ copy, language, targets, usedTargetIds, onEdit, onDelete }
   })}</div>;
 }
 
-function CreateTargetDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; onCancel: () => void; onCreate: (title: string, revealText: string, tags: string[], images: File[]) => Promise<void> }) {
+function CreateTargetDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; onCancel: () => void; onCreate: (title: string, revealText: string, tags: string[], images: File[], targetKind: "general" | "telepathic") => Promise<void> }) {
   const [title, setTitle] = useState("");
   const [revealText, setRevealText] = useState("");
   const [tags, setTags] = useState("");
   const [images, setImages] = useState<File[]>([]);
+  const [targetKind, setTargetKind] = useState<"general" | "telepathic">("general");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent) => {
@@ -2151,13 +2343,13 @@ function CreateTargetDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typ
     setSaving(true);
     setError(null);
     try {
-      await onCreate(title, revealText, tags.split(","), images);
+      await onCreate(title, revealText, tags.split(","), images, targetKind);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setSaving(false);
     }
   };
-  return <FormDialog title={copy.addTarget} onCancel={onCancel}><form onSubmit={(event) => void submit(event)}><label>{copy.targetName}<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>{copy.targetReveal}<textarea rows={7} value={revealText} onChange={(event) => setRevealText(event.target.value)} /></label><label>{copy.targetImages}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" disabled={!isTauriRuntime() || saving} onChange={(event) => setImages(Array.from(event.target.files ?? []).slice(0, 8))} /></label>{images.length > 0 && <div className="form-image-list">{images.map((file) => <span key={`${file.name}-${file.size}`}>▣ {file.name}</span>)}</div>}<label>{copy.targetTags}<input value={tags} onChange={(event) => setTags(event.target.value)} /></label><small className="form-hint">{copy.home === "Home" ? "Every added target is saved in My Targets and can be selected independently in Partial Training." : "Każdy dodany cel jest zapisywany w Moich celach i może zostać osobno wybrany w treningu częściowym."}</small>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!title.trim() || (!revealText.trim() && !images.length) || saving}>{copy.saveTarget}</button></div></form></FormDialog>;
+  return <FormDialog title={copy.addTarget} onCancel={onCancel}><form onSubmit={(event) => void submit(event)}><label>{copy.home === "Home" ? "Target category" : "Kategoria celu"}<select value={targetKind} onChange={(event) => setTargetKind(event.target.value as typeof targetKind)}><option value="general">{copy.home === "Home" ? "General RV target" : "Ogólny cel RV"}</option><option value="telepathic">{copy.home === "Home" ? "Telepathic target (person / being / group)" : "Cel telepatyczny (osoba / istota / grupa)"}</option></select></label><label>{copy.targetName}<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>{copy.targetReveal}<textarea rows={7} value={revealText} onChange={(event) => setRevealText(event.target.value)} /></label><label>{copy.targetImages}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" disabled={!isTauriRuntime() || saving} onChange={(event) => setImages(Array.from(event.target.files ?? []).slice(0, 8))} /></label>{images.length > 0 && <div className="form-image-list">{images.map((file) => <span key={`${file.name}-${file.size}`}>▣ {file.name}</span>)}</div>}<label>{copy.targetTags}<input value={tags} onChange={(event) => setTags(event.target.value)} /></label><small className="form-hint">{targetKind === "telepathic" ? (copy.home === "Home" ? "This target appears only when the Telepathic Protocol is selected." : "Ten cel pojawi się wyłącznie po wybraniu Protokołu Telepatycznego.") : (copy.home === "Home" ? "This target is available to Full RCP, RV Lite, and custom protocols." : "Ten cel jest dostępny dla Full RCP, RV Lite i protokołów własnych.")}</small>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!title.trim() || (!revealText.trim() && !images.length) || saving}>{copy.saveTarget}</button></div></form></FormDialog>;
 }
 
 function EditTargetDialog({ copy, target, onCancel, onSave }: { copy: ReturnType<typeof getCopy>; target: TargetRecord; onCancel: () => void; onSave: (title: string, revealText: string, tags: string[]) => Promise<void> }) {
@@ -2178,7 +2370,7 @@ function EditTargetDialog({ copy, target, onCancel, onSave }: { copy: ReturnType
 
 function SettingsScreen({ copy, settings, repository, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; repository: AppRepository | null; onChange: (settings: Partial<AppSettings>) => void }) {
   const [tab, setTab] = useState<"providers" | "models" | "storage" | "targets" | "sessions" | "appearance" | "advanced" | "about">("providers");
-  const [protocolResource, setProtocolResource] = useState<ProtocolResource | RvLiteProtocolResource | null>(null);
+  const [protocolResource, setProtocolResource] = useState<ProtocolResource | RvLiteProtocolResource | TelepathicProtocolResource | null>(null);
   const [promptResource, setPromptResource] = useState<FactoryPromptResource | null>(null);
   const tabs = [
     ["providers", copy.providersApi], ["models", copy.models], ["storage", copy.storage], ["targets", copy.targets], ["sessions", copy.sessions], ["appearance", copy.appearance], ["advanced", copy.advanced], ["about", copy.aboutProtocols],
@@ -2215,11 +2407,12 @@ function SettingsScreen({ copy, settings, repository, onChange }: { copy: Return
   );
 }
 
-function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: ReturnType<typeof getCopy>; onOpen: (resource: ProtocolResource | RvLiteProtocolResource) => void; onOpenPrompt: (resource: FactoryPromptResource) => void }) {
+function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: ReturnType<typeof getCopy>; onOpen: (resource: ProtocolResource | RvLiteProtocolResource | TelepathicProtocolResource) => void; onOpenPrompt: (resource: FactoryPromptResource) => void }) {
   const protocolCards = [
     { id: "rcp", name: copy.fullRcp, version: "1.5a", pl: getFullRcp("pl"), en: getFullRcp("en") },
     { id: "lite-core", name: `${copy.rvLite} Core`, version: "1.1.0", pl: getRvLite("pl", "core"), en: getRvLite("en", "core") },
     { id: "lite-extended", name: `${copy.rvLite} Extended`, version: "1.1.0", pl: getRvLite("pl", "extended"), en: getRvLite("en", "extended") },
+    { id: "telepathic", name: copy.home === "Home" ? "Telepathic Protocol" : "Protokół Telepatyczny", version: "1.1", pl: getTelepathicProtocol("pl"), en: getTelepathicProtocol("en") },
   ] as const;
   const prompts = getFactoryPromptResources();
   const promptCards = (["ai-viewer-system-prompt", "ai-monitor-system-prompt"] as const).map((id) => ({ id, name: id === "ai-viewer-system-prompt" ? "AI Viewer System Prompt" : "AI Monitor System Prompt", pl: prompts.find((item) => item.id === id && item.language === "pl")!, en: prompts.find((item) => item.id === id && item.language === "en")! }));
@@ -2232,17 +2425,19 @@ function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: ReturnType<t
 function TargetSettingsCard({ copy, settings, repository, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; repository: AppRepository | null; onChange: (settings: Partial<AppSettings>) => void }) {
   const [trainingCount, setTrainingCount] = useState(0);
   const [userCount, setUserCount] = useState(0);
+  const [telepathicCount, setTelepathicCount] = useState(0);
   const [usageCount, setUsageCount] = useState(0);
   useEffect(() => {
     if (!repository) return;
     void Promise.all([repository.listTargets(), repository.listTargetUsage()]).then(([targets, usage]) => {
       setTrainingCount(targets.filter((target) => target.collection === "training").length);
-      setUserCount(targets.filter((target) => target.collection === "user").length);
+      setUserCount(targets.filter((target) => target.collection === "user" && userTargetKind(target) === "general").length);
+      setTelepathicCount(targets.filter((target) => target.collection === "user" && userTargetKind(target) === "telepathic").length);
       setUsageCount(usage.length);
     });
   }, [repository]);
   const updatePrefix = (value: string) => onChange({ sessionCodePrefix: value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12) || "RVH" });
-  return <section className="panel target-settings-card"><PanelHeader title={copy.targets} icon={<Crosshair size={18} />} /><div className="target-settings-summary"><span><small>{copy.trainingTargets}</small><strong>{trainingCount}</strong></span><span><small>{copy.myTargets}</small><strong>{userCount}</strong></span><span><small>{copy.trackedTargetUses}</small><strong>{usageCount}</strong></span></div><div className="target-settings-body"><label><span>{copy.repeatBehavior}</span><select value={settings.targetRepeatPolicy} onChange={(event) => onChange({ targetRepeatPolicy: event.target.value as AppSettings["targetRepeatPolicy"] })}><option value="allow">{copy.allowRepeatedTraining}</option><option value="avoid_profile">{copy.avoidPreviouslyUsedTraining}</option></select></label><label><span>{copy.sessionCodePrefix}</span><input value={settings.sessionCodePrefix} maxLength={12} onChange={(event) => updatePrefix(event.target.value)} /></label><div className="training-pack-status"><div><strong>{copy.trainingTargets}</strong><p>{copy.targetPackPending}</p></div></div></div></section>;
+  return <section className="panel target-settings-card"><PanelHeader title={copy.targets} icon={<Crosshair size={18} />} /><div className="target-settings-summary"><span><small>{copy.trainingTargets}</small><strong>{trainingCount}</strong></span><span><small>{copy.myTargets}</small><strong>{userCount}</strong></span><span><small>{settings.interfaceLanguage === "pl" ? "Telepatyczne" : "Telepathic"}</small><strong>{telepathicCount}</strong></span><span><small>{copy.trackedTargetUses}</small><strong>{usageCount}</strong></span></div><div className="target-settings-body"><label><span>{copy.repeatBehavior}</span><select value={settings.targetRepeatPolicy} onChange={(event) => onChange({ targetRepeatPolicy: event.target.value as AppSettings["targetRepeatPolicy"] })}><option value="allow">{copy.allowRepeatedTraining}</option><option value="avoid_profile">{copy.avoidPreviouslyUsedTraining}</option></select></label><label><span>{copy.sessionCodePrefix}</span><input value={settings.sessionCodePrefix} maxLength={12} onChange={(event) => updatePrefix(event.target.value)} /></label><div className="training-pack-status"><div><strong>{copy.trainingTargets}</strong><p>{copy.targetPackPending}</p></div></div></div></section>;
 }
 
 function AdvancedSettingsCard({ copy, repository }: { copy: ReturnType<typeof getCopy>; repository: AppRepository | null }) {
@@ -2305,7 +2500,7 @@ function SessionSettingsCard({ copy, settings, onChange }: { copy: ReturnType<ty
   return <section className="panel session-settings-card"><PanelHeader title={copy.sessions} icon={<CircleStop size={18} />} /><div className="session-settings-body"><label><span>{copy.sessionLanguage}</span><select value={settings.sessionLanguage} onChange={(event) => onChange({ sessionLanguage: event.target.value as SessionLanguageSetting })}><option value="same">{copy.sameAsInterface}</option><option value="pl">Polski</option><option value="en">English</option></select></label><label><span>{copy.requestTimeout}</span><div><input type="number" min={1} max={600} value={Math.round(settings.requestTimeoutMs / 1000)} onChange={(event) => onChange({ requestTimeoutMs: Math.max(1, Math.min(600, Number(event.target.value) || 120)) * 1000 })} /><small>s</small></div></label><label><span>{copy.retryPolicy}</span><select value={settings.maxRetries} onChange={(event) => onChange({ maxRetries: Number(event.target.value) })}>{[0, 1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label><label><span>{copy.defaultMaxOutput}</span><input type="number" min={1} max={262144} value={settings.defaultMaxOutputTokens} onChange={(event) => onChange({ defaultMaxOutputTokens: Math.max(1, Number(event.target.value) || 8192) })} /></label><label><span>{copy.hardSessionCostLimit}</span><div><input type="number" min={0} step="0.01" value={settings.maxSessionCostUsd} onChange={(event) => onChange({ maxSessionCostUsd: Math.max(0, Number(event.target.value) || 0) })} /><small>USD · {settings.maxSessionCostUsd > 0 ? copy.enabled : copy.disabled}</small></div></label><label><span>{copy.defaultReveal}</span><select value={settings.defaultRevealSource} onChange={(event) => onChange({ defaultRevealSource: event.target.value as AppSettings["defaultRevealSource"] })}><option value="external">{copy.externalBlind}</option><option value="automatic">{copy.automaticTarget}</option></select></label><div className="mandatory-autosave"><ShieldCheck size={16} /><div><strong>{copy.mandatoryAutosave}</strong><p>{copy.sessionRules}</p></div></div></div></section>;
 }
 
-function ProtocolDialog({ copy, resource, onClose }: { copy: ReturnType<typeof getCopy>; resource: ProtocolResource | RvLiteProtocolResource; onClose: () => void }) {
+function ProtocolDialog({ copy, resource, onClose }: { copy: ReturnType<typeof getCopy>; resource: ProtocolResource | RvLiteProtocolResource | TelepathicProtocolResource; onClose: () => void }) {
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="modal protocol-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>

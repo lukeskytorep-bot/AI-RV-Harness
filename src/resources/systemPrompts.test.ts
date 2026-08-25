@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildEffectiveMonitorPrompt,
+  buildEffectiveTelepathicMonitorPrompt,
   buildEffectiveViewerPrompt,
   factoryMonitorEditablePrompt,
   localizedMonitorEditablePrompt,
@@ -50,5 +51,14 @@ describe("factory system prompts", () => {
     expect(prompt).toContain("LOCKED EXECUTION RULE");
     expect(prompt).toContain("CONTINUE_PROTOCOL");
     expect(prompt).toContain("EDITABLE MONITOR BODY");
+  });
+
+  it("injects the separate locked nine-step Telepathic Monitor schedule", () => {
+    const prompt = buildEffectiveTelepathicMonitorPrompt("en", "EDITABLE TELEPATHIC MONITOR BODY");
+    expect(prompt).toContain("LOCKED TELEPATHIC EXECUTION RULE");
+    expect(prompt).toContain("Steps 2, 3, 4, 5, 6, 7, and 8");
+    expect(prompt).toContain("not invoked after Step 9");
+    expect(prompt).toContain("whole session and all data gathered so far");
+    expect(prompt).toContain("EDITABLE TELEPATHIC MONITOR BODY");
   });
 });

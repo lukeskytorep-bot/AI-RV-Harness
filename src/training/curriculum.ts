@@ -1,5 +1,6 @@
 import type { TargetRecord } from "../targets/types";
 import { BUNDLED_TRAINING_TARGETS, FACTORY_TARGET_PACK_VERSION, TRAINING_CATEGORIES, type TrainingCategory, validateFactoryTrainingPack } from "../targets/bundled";
+import { userTargetKind } from "../targets/service";
 
 export const FACTORY_CURRICULUM_ID = "factory-training-curriculum";
 export const FACTORY_CURRICULUM_VERSION = "1.0.0";
@@ -47,7 +48,7 @@ export function selectPartialTrainingTargets(
     selected.push(...shuffle(pool).slice(0, count));
   }
   const userCount = Math.max(0, Math.floor(myTargetsCount));
-  const userPool = targets.filter((target) => target.collection === "user");
+  const userPool = targets.filter((target) => target.collection === "user" && userTargetKind(target) === "general");
   if (userCount > userPool.length) throw new Error(`my_targets: requested ${userCount}, available ${userPool.length}`);
   selected.push(...shuffle(userPool).slice(0, userCount));
   return selected;

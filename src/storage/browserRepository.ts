@@ -1,6 +1,6 @@
 import type { AppSettings, ChatMessage, ChatMode, ChatThread, ChatThreadGroup, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CreateProviderConfigInput, ProviderConfig, ProviderModel } from "../providers/types";
-import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
+import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionEventRecord, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
 import type { CreateJudgeRunInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
 import { computeJudgeTotal } from "../domain/scoring";
@@ -557,9 +557,16 @@ export class BrowserRepository implements AppRepository {
   }
 
   async appendSessionEvent(sessionId: string, event: SessionEventInput): Promise<void> {
-    const all = read<Array<SessionEventInput & { id: string; sessionId: string; sequenceNumber: number; createdAt: string }>>(SESSION_EVENTS_KEY, []);
+    const all = read<SessionEventRecord[]>(SESSION_EVENTS_KEY, []);
     const sequenceNumber = all.filter((item) => item.sessionId === sessionId).reduce((max, item) => Math.max(max, item.sequenceNumber), 0) + 1;
     write(SESSION_EVENTS_KEY, [...all, { ...event, id: createId("event"), sessionId, sequenceNumber, createdAt: nowIso() }]);
+  }
+
+  async listSessionEvents(sessionId: string): Promise<SessionEventRecord[]> {
+    return read<SessionEventRecord[]>(SESSION_EVENTS_KEY, [])
+      .filter((event) => event.sessionId === sessionId)
+      .sort((left, right) => left.sequenceNumber - right.sequenceNumber)
+      .map((event) => structuredClone(event));
   }
 
   async updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void> {

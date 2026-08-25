@@ -160,13 +160,9 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   for (let index = 0; index < steps.length; index += 1) {
     const promptNumber = index + 1;
     if (input.signal?.aborted) return stopRun("USER STOP");
-    const specialTask = promptNumber === 3 ? renderSpecialTask(input.specialTask, input.sessionLanguage) : undefined;
-    const prompt = specialTask ? injectRvLiteSpecialTask(steps[index], specialTask, input.sessionLanguage, input.protocol.variant) : steps[index];
+    const prompt = steps[index];
     messages.push({ role: "user", content: prompt });
     await input.repository.appendSessionEvent(sessionId, { eventType: "CONTROLLER_STEP", role: "controller", content: prompt, metadata: { promptNumber, protocolFamily: "rv-lite" } });
-    if (specialTask) {
-      await input.repository.appendSessionEvent(sessionId, { eventType: "SPECIAL_TASK_INJECTED", role: "controller", content: specialTask, metadata: { promptNumber, recipient: "viewer", injectAfter: "rv_lite_step_3" } });
-    }
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, promptNumber, undefined, metrics, startedAtMs);
 
     let response: ProviderChatResponse | null = null;
@@ -217,6 +213,65 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, promptNumber, undefined, metrics, startedAtMs);
     if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) return stopRun("AUTO-STOP: configured session cost limit exceeded");
+
+    if (promptNumber === 3) {
+      const specialTask = renderSpecialTask(input.specialTask, input.sessionLanguage);
+      if (specialTask) {
+        const taskPrompt = input.sessionLanguage === "pl"
+          ? `SPECJALNE ZADANIE VIEWERA — wykonaj je teraz, po zakończeniu Kroku 3, używając wyłącznie neutralnych etykiet ślepej sesji:\n${specialTask}`
+          : `SPECIAL VIEWER TASK — perform it now, after completing Step 3, using only neutral blind-session labels:\n${specialTask}`;
+        messages.push({ role: "user", content: taskPrompt });
+        await input.repository.appendSessionEvent(sessionId, { eventType: "SPECIAL_TASK_INJECTED", role: "controller", content: taskPrompt, metadata: { promptNumber, recipient: "viewer", injectAfter: "rv_lite_step_3" } });
+
+        let taskResponse: ProviderChatResponse | null = null;
+        let taskError = "";
+        let taskDurationMs = 0;
+        for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+          if (input.signal?.aborted) return stopRun("USER STOP");
+          let costAuthorization;
+          try {
+            costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
+          } catch (cause) {
+            if (cause instanceof CostGuardStop) return stopRun(cause.message);
+            throw cause;
+          }
+          const requestStartedAt = Date.now();
+          try {
+            taskResponse = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal });
+            taskResponse = { ...taskResponse, usage: costAuthorization.success(taskResponse.usage) };
+            taskDurationMs = Date.now() - requestStartedAt;
+            metrics = recordProviderRequest(metrics, taskResponse.usage, taskDurationMs);
+            if (!taskResponse.content.trim()) throw new Error("empty provider response");
+            break;
+          } catch (cause) {
+            costAuthorization.failure();
+            if (!taskResponse) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
+            taskError = cause instanceof Error ? cause.message : String(cause);
+            await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: taskError, metadata: { promptNumber, attempt: attempt + 1, source: "special_task", requestDurationMs: Date.now() - requestStartedAt } });
+            taskResponse = null;
+          }
+        }
+        if (!taskResponse) return stopRun(`AUTO-STOP: Viewer failed during Special Task${taskError ? ` — ${taskError}` : ""}`);
+
+        const rawTaskContent = taskResponse.content;
+        const sanitizedTask = sanitizeRepetitiveOutput(rawTaskContent, input.sessionLanguage);
+        taskResponse = { ...taskResponse, content: sanitizedTask.content };
+        if (sanitizedTask.truncated) {
+          await input.repository.appendSessionEvent(sessionId, {
+            eventType: "OUTPUT_TRUNCATED_LOOP",
+            role: "controller",
+            content: sanitizedTask.finding?.fragment,
+            metadata: { promptNumber, source: "special_task", rule: sanitizedTask.finding?.rule, originalLength: sanitizedTask.originalLength, retainedLength: sanitizedTask.retainedLength, rawOutputSha256: await sha256Text(rawTaskContent) },
+          });
+        }
+        messages.push({ role: "assistant", content: taskResponse.content });
+        transcript = appendRvLiteSpecialTaskTranscript(transcript, taskPrompt, taskResponse.content, input.sessionLanguage);
+        await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_SPECIAL_TASK_RESPONSE", role: "assistant", content: taskResponse.content, metadata: { promptNumber, finishReason: taskResponse.finishReason, usage: taskResponse.usage, requestDurationMs: taskDurationMs } });
+        await input.repository.updatePreRevealTranscript(sessionId, transcript);
+        notify(input, sessionId, sessionCode, "BlindRunning", transcript, promptNumber, undefined, metrics, startedAtMs);
+        if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) return stopRun("AUTO-STOP: configured session cost limit exceeded");
+      }
+    }
   }
 
   // STOP always wins, including the narrow boundary after Prompt 4 and before sealing/reveal.
@@ -243,21 +298,11 @@ export function appendRvLiteTranscript(current: string, promptNumber: number, pr
   return current ? `${current}\n\n${block}` : block;
 }
 
-export function injectRvLiteSpecialTask(
-  prompt: string,
-  task: string,
-  language: InterfaceLanguage,
-  variant: "core" | "extended",
-): string {
+export function appendRvLiteSpecialTaskTranscript(current: string, command: string, content: string, language: InterfaceLanguage): string {
   const block = language === "pl"
-    ? `Po zakończeniu Kroku 3 wykonaj poniższe SPECJALNE ZADANIE VIEWERA, używając wyłącznie neutralnych etykiet ślepej sesji:\n\n${task}`
-    : `After completing Step 3, perform the following SPECIAL VIEWER TASK using only neutral blind-session labels:\n\n${task}`;
-  if (variant === "extended") {
-    const marker = language === "pl" ? "Po zakończeniu Kroku 3 **obowiązkowo wykonaj Deepening Movement**:" : "After completing Step 3, **you MUST perform the Deepening Movement**:";
-    if (prompt.includes(marker)) return prompt.replace(marker, `${block}\n\n${marker}`);
-  }
-  const closing = language === "pl" ? "Nie nazywaj celu ani nie zgaduj, czym jest." : "Do not name or guess the target.";
-  return prompt.includes(closing) ? prompt.replace(closing, `${block}\n\n${closing}`) : `${prompt}\n\n${block}`;
+    ? `## RV Lite — zadanie specjalne po Kroku 3\n\n### Dokładne polecenie kontrolera\n\n${command.trim()}\n\n### Odpowiedź Viewera\n\n${content.trim()}`
+    : `## RV Lite — Special Task after Step 3\n\n### Exact controller instruction\n\n${command.trim()}\n\n### Viewer response\n\n${content.trim()}`;
+  return current ? `${current}\n\n${block}` : block;
 }
 
 function validate(input: AutomaticRvLiteRunInput): void {

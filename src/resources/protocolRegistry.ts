@@ -3,6 +3,8 @@ import rcpEn from "./protocols/RCP_v1.5a.en.md?raw";
 import rcpPl from "./protocols/RCP_v1.5a.pl.md?raw";
 import rvLiteEn from "./protocols/RV_Lite_v1.en.md?raw";
 import rvLitePl from "./protocols/RV_Lite_v1.pl.md?raw";
+import telepathyEn from "./protocols/Telepathy_v1.1.en.md?raw";
+import telepathyPl from "./protocols/Telepathy_v1.1.pl.md?raw";
 
 export interface ProtocolResource {
   id: "full-rcp";
@@ -25,6 +27,18 @@ export interface RvLiteProtocolResource {
   contentSha256: string;
   steps: readonly [string, string, string, string];
   sourceFormat: "approved-message-derived-markdown";
+}
+
+export interface TelepathicProtocolResource {
+  id: "telepathic-protocol";
+  version: "1.1";
+  language: InterfaceLanguage;
+  displayName: string;
+  content: string;
+  contentSha256: string;
+  sourceDocxSha256: string;
+  sourceFormat: "approved-docx-derived-markdown";
+  controllerStepCount: 9;
 }
 
 const resources: Record<InterfaceLanguage, ProtocolResource> = {
@@ -52,6 +66,35 @@ const resources: Record<InterfaceLanguage, ProtocolResource> = {
 
 export function getFullRcp(language: InterfaceLanguage): ProtocolResource {
   return resources[language];
+}
+
+const telepathicResources: Record<InterfaceLanguage, TelepathicProtocolResource> = {
+  pl: {
+    id: "telepathic-protocol",
+    version: "1.1",
+    language: "pl",
+    displayName: "Moduł Telepatia — protokół dla AI Viewera",
+    content: telepathyPl,
+    contentSha256: "f0e25179748ed9df6f2a4e00e10c3f20f8d2743c776e7d18c6a76949deeeb8ba",
+    sourceDocxSha256: "bd933bb22c928457212a499e5fe56ca534abc11b1d4b59c590a515b8259f15b6",
+    sourceFormat: "approved-docx-derived-markdown",
+    controllerStepCount: 9,
+  },
+  en: {
+    id: "telepathic-protocol",
+    version: "1.1",
+    language: "en",
+    displayName: "Telepathy Module — Protocol for AI Viewer",
+    content: telepathyEn,
+    contentSha256: "9db147cf0935ecc33ca2cf307b46b7010c8f2e5428e8fafd62dc8f6004f3994b",
+    sourceDocxSha256: "de7c5494f77c8777108dcdae50a7647058067926c5a3e2f92c02e9c7f81aaa43",
+    sourceFormat: "approved-docx-derived-markdown",
+    controllerStepCount: 9,
+  },
+};
+
+export function getTelepathicProtocol(language: InterfaceLanguage): TelepathicProtocolResource {
+  return telepathicResources[language];
 }
 
 const extendedRvLiteResources: Record<InterfaceLanguage, RvLiteProtocolResource> = {

@@ -2,7 +2,7 @@ import { resolveGenerationSettings } from "../providers/capabilities";
 import { providerChat as nativeProviderChat } from "../providers/native";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { InterfaceLanguage } from "../types";
-import { buildMonitorSystemPrompt, buildMonitorUserPacket } from "./prompt";
+import { buildMonitorSystemPrompt, buildMonitorUserPacket, type MonitorPacketOptions } from "./prompt";
 
 export type MonitorDecision =
   | { decision: "CONTINUE_PROTOCOL" }
@@ -16,14 +16,16 @@ export async function evaluateMonitor(input: {
   blindTranscript: string;
   exchangeNumber?: number;
   editablePrompt?: string;
+  effectiveSystemPrompt?: string;
   specialTask?: string;
+  packetOptions?: MonitorPacketOptions;
   requestTimeoutMs?: number;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number }) => Promise<ProviderChatResponse>;
 }): Promise<MonitorDecision> {
   if (input.model.providerConfigId !== input.providerConfig.id) throw new Error("Monitor model/provider route mismatch.");
   const messages: ProviderMessage[] = [
-    { role: "system", content: buildMonitorSystemPrompt(input.language, input.editablePrompt) },
-    { role: "user", content: buildMonitorUserPacket(input.language, input.phase, input.blindTranscript, input.exchangeNumber, input.specialTask) },
+    { role: "system", content: input.effectiveSystemPrompt?.trim() || buildMonitorSystemPrompt(input.language, input.editablePrompt) },
+    { role: "user", content: buildMonitorUserPacket(input.language, input.phase, input.blindTranscript, input.exchangeNumber, input.specialTask, input.packetOptions) },
   ];
   const maxOutputTokens = Math.min(input.model.capabilities.maxOutputTokens ?? 800, 800);
   const settings = resolveGenerationSettings(input.model.capabilities, { maxOutputTokens });

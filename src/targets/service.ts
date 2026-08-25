@@ -4,7 +4,7 @@ import type { RevealArtifactRecord } from "../sessions/types";
 import type { InterfaceLanguage } from "../types";
 import { localizedTargetReveal } from "./localization";
 import type { RevealInput } from "../sessions/types";
-import type { TargetRecord } from "./types";
+import type { TargetRecord, UserTargetKind } from "./types";
 import type { TrainingCategory } from "./bundled";
 
 type TargetRepository = Pick<AppRepository, "createTarget">;
@@ -12,7 +12,7 @@ type TargetMutationRepository = Pick<AppRepository, "updateTarget">;
 
 export async function createUserTarget(
   repository: TargetRepository,
-  input: { id?: string; title: string; revealText?: string; revealArtifacts?: RevealArtifactRecord[]; tags?: string[]; source?: string; trainingCategory?: TrainingCategory },
+  input: { id?: string; title: string; revealText?: string; revealArtifacts?: RevealArtifactRecord[]; tags?: string[]; source?: string; trainingCategory?: TrainingCategory; targetKind?: UserTargetKind },
 ): Promise<TargetRecord> {
   const title = input.title.trim();
   const revealText = input.revealText?.trim();
@@ -28,9 +28,18 @@ export async function createUserTarget(
     ...(revealText ? { revealText } : {}),
     ...(revealArtifacts.length ? { revealArtifacts } : {}),
     tags,
-    sourceMetadata: { origin: input.source ?? "user_created", ...(input.trainingCategory ? { category: input.trainingCategory, trainingEligible: true } : {}) },
+    sourceMetadata: { origin: input.source ?? "user_created", targetKind: input.targetKind ?? "general", ...(input.trainingCategory ? { category: input.trainingCategory, trainingEligible: true } : {}) },
     contentHash: await sha256Text(canonical),
   });
+}
+
+export function userTargetKind(target: TargetRecord): UserTargetKind {
+  return target.collection === "user" && target.sourceMetadata.targetKind === "telepathic" ? "telepathic" : "general";
+}
+
+export function targetIsEligibleForProtocol(target: TargetRecord, protocol: "rcp" | "lite" | "custom" | "telepathic"): boolean {
+  if (target.collection !== "user" || !targetHasSupportedReveal(target)) return false;
+  return protocol === "telepathic" ? userTargetKind(target) === "telepathic" : userTargetKind(target) === "general";
 }
 
 export async function updateUserTarget(

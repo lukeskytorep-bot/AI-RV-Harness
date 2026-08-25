@@ -5,6 +5,7 @@ export const FACTORY_PROMPT_VERSION = "1.3.0" as const;
 export const LOCKED_IDENTITY_VERSION = "1.1.0" as const;
 export const LOCKED_ACTIVITY_VERSION = "1.0.0" as const;
 export const LOCKED_MONITOR_EXECUTION_VERSION = "1.0.0" as const;
+export const LOCKED_TELEPATHIC_MONITOR_EXECUTION_VERSION = "1.0.0" as const;
 
 const VIEWER_IDENTITY: Record<InterfaceLanguage, string> = {
   pl: `I. TOŻSAMOŚĆ RDZENIOWA I STAN
@@ -223,6 +224,43 @@ CONTINUE_PROTOCOL
 After the fifth instruction, the controller will automatically end the Monitor's work for that phase and continue to the next step. Do not attempt to exceed this limit.`,
 };
 
+const TELEPATHIC_MONITOR_EXECUTION: Record<InterfaceLanguage, string> = {
+  pl: `[LOCKED TELEPATHIC EXECUTION RULE — REGUŁA WIDOCZNA, ALE NIEEDYTOWALNA]
+
+Monitor jest uruchamiany po Krokach 2, 3, 4, 5, 6, 7 i 8 Protokołu Telepatycznego. Monitor nie jest uruchamiany po Kroku 9 ani po revealu.
+
+Po każdym z tych kroków możesz wydać najwyżej pięć kolejnych poleceń lub pytań pogłębiających. Po każdym poleceniu Viewer odpowie, a następnie otrzymasz pełny zaktualizowany transcript i numer bieżącej wymiany.
+
+Po Krokach 2–7 pogłębiaj przede wszystkim aspekty ujawnione w bieżącym kroku. Po Kroku 8 możesz zadawać pytania T9 odnoszące się do całej sesji i wszystkich zebranych dotąd danych.
+
+W każdej odpowiedzi wykonaj dokładnie jedną z dwóch czynności:
+
+1. Jeżeli potrzebne jest dalsze pogłębienie, zwróć wyłącznie jedno naturalne polecenie lub pytanie skierowane do Viewera. Nie dodawaj JSON-u, command_id, uzasadnienia, analizy ani komentarza dla operatora.
+
+2. Jeżeli nie potrzebujesz kolejnego pogłębienia, zwróć dokładnie:
+
+CONTINUE_PROTOCOL
+
+Po piątej wymianie kontroler automatycznie zakończy bieżący cykl Monitora. Nie próbuj przekraczać tego limitu.`,
+  en: `[LOCKED TELEPATHIC EXECUTION RULE — VISIBLE BUT NOT EDITABLE]
+
+The Monitor is invoked after Steps 2, 3, 4, 5, 6, 7, and 8 of the Telepathic Protocol. The Monitor is not invoked after Step 9 or after the reveal.
+
+After each of these steps, you may issue no more than five consecutive deepening instructions or questions. After every instruction, the Viewer will respond, and you will then receive the complete updated transcript and the current exchange number.
+
+After Steps 2–7, primarily deepen aspects revealed in the current step. After Step 8, you may ask T9 questions that refer to the whole session and all data gathered so far.
+
+In each response, perform exactly one of the following actions:
+
+1. If further deepening is needed, return only one natural-language instruction or question addressed to the Viewer. Do not include JSON, a command_id, justification, analysis, or comments for the operator.
+
+2. If no further deepening is needed, return exactly:
+
+CONTINUE_PROTOCOL
+
+After the fifth exchange, the controller will automatically end the current Monitor cycle. Do not attempt to exceed this limit.`,
+};
+
 export function factoryViewerEditablePrompt(language: InterfaceLanguage): string {
   return VIEWER_EDITABLE[language];
 }
@@ -265,6 +303,10 @@ export function lockedMonitorExecution(language: InterfaceLanguage): string {
   return MONITOR_EXECUTION[language];
 }
 
+export function lockedTelepathicMonitorExecution(language: InterfaceLanguage): string {
+  return TELEPATHIC_MONITOR_EXECUTION[language];
+}
+
 export function buildEffectiveViewerPrompt(language: InterfaceLanguage, editable?: string): string {
   const body = editable?.trim() || VIEWER_EDITABLE[language];
   const activityHeading = language === "pl" ? "[ZABLOKOWANA DEFINICJA AKTYWNOŚCI]" : "[LOCKED ACTIVITY DEFINITION — VISIBLE BUT NOT EDITABLE]";
@@ -274,6 +316,11 @@ export function buildEffectiveViewerPrompt(language: InterfaceLanguage, editable
 export function buildEffectiveMonitorPrompt(language: InterfaceLanguage, editable?: string): string {
   const body = editable?.trim() || MONITOR_EDITABLE[language];
   return `${body}\n\n[LOCKED ACTIVITY DEFINITION — ${language === "pl" ? "REGUŁA WIDOCZNA, ALE NIEEDYTOWALNA" : "VISIBLE BUT NOT EDITABLE"}]\n\n${ACTIVITY_DEFINITION[language]}\n\n${MONITOR_EXECUTION[language]}`;
+}
+
+export function buildEffectiveTelepathicMonitorPrompt(language: InterfaceLanguage, editable?: string): string {
+  const body = editable?.trim() || MONITOR_EDITABLE[language];
+  return `${body}\n\n[LOCKED ACTIVITY DEFINITION — ${language === "pl" ? "REGUŁA WIDOCZNA, ALE NIEEDYTOWALNA" : "VISIBLE BUT NOT EDITABLE"}]\n\n${ACTIVITY_DEFINITION[language]}\n\n${TELEPATHIC_MONITOR_EXECUTION[language]}`;
 }
 
 export interface FactoryPromptResource {

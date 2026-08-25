@@ -1,6 +1,7 @@
 import type { RevealArtifactRecord } from "../sessions/types";
 
 export type TargetCollection = "training" | "user";
+export type UserTargetKind = "general" | "telepathic";
 
 export interface TargetRecord {
   id: string;

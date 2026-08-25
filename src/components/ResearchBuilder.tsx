@@ -11,7 +11,7 @@ import type { ResearchAssignmentRecord, ResearchConditionDefinition, ResearchCon
 import { isTauriRuntime } from "../storage";
 import type { AppRepository } from "../storage/repository";
 import type { TargetRecord, TargetUsageRecord } from "../targets/types";
-import { targetHasSupportedReveal } from "../targets/service";
+import { targetHasSupportedReveal, userTargetKind } from "../targets/service";
 import { localizedTargetTitle } from "../targets/localization";
 import type { AppSettings, InterfaceLanguage, Profile, Workspace } from "../types";
 import { resolveSessionLanguage } from "../domain/localization";
@@ -124,6 +124,7 @@ function ResearchConfigBuilder({ copy, settings, repository, profiles, workspace
   const usedByParticipants = new Set(usage.filter((item) => !item.profileId || participatingProfileIds.has(item.profileId)).map((item) => item.targetId));
   const eligibleTargets = targets
     .filter(targetHasSupportedReveal)
+    .filter((target) => target.collection !== "user" || userTargetKind(target) === "general")
     .filter((target) => targetSource === "all" || target.collection === targetSource)
     .filter((target) => !unusedOnly || !usedByParticipants.has(target.id));
   const targetPoolSignature = eligibleTargets.map((target) => target.id).sort().join("|");

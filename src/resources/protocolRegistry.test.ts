@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getRvLite, renderRvLiteSteps } from "./protocolRegistry";
+import { getRvLite, getTelepathicProtocol, renderRvLiteSteps } from "./protocolRegistry";
 
 describe("RV Lite resources", () => {
   it("contains exactly four Viewer prompts in both approved language resources", () => {
@@ -23,5 +23,18 @@ describe("RV Lite resources", () => {
     expect(plNamed[1]).toContain("RVH-1234");
     expect(plNamed.join("\n")).not.toContain("{{PROFILE_NAME_SUFFIX}}");
     expect(enNamed.join("\n")).not.toContain("{{PROFILE_NAME_CLAUSE}}");
+  });
+});
+
+describe("Telepathic Protocol resources", () => {
+  it("ships the approved Polish and English v1.1 documents for the nine-step controller", () => {
+    const pl = getTelepathicProtocol("pl");
+    const en = getTelepathicProtocol("en");
+    expect(pl.controllerStepCount).toBe(9);
+    expect(en.controllerStepCount).toBe(9);
+    expect(pl.content).toContain("T10 – Podsumowanie telepatyczne");
+    expect(en.content).toContain("T10 – Telepathic Summary");
+    expect(pl.sourceDocxSha256).toHaveLength(64);
+    expect(en.sourceDocxSha256).toHaveLength(64);
   });
 });

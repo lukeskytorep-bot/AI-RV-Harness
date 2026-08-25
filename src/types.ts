@@ -49,6 +49,7 @@ export interface AppSettings {
   textScale: "small" | "normal" | "large";
   animations: boolean;
   trainingDirectory?: string;
+  telepathicStarterPackVersion?: string;
 }
 
 export interface Profile {

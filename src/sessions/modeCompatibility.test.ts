@@ -11,5 +11,7 @@ describe("Automatic session mode compatibility", () => {
     expect(canSelectProtocol("monitor", "lite")).toBe(false);
     expect(canSelectProtocol("monitor", "custom")).toBe(false);
     expect(canSelectProtocol("monitor", "rcp")).toBe(true);
+    expect(canSelectProtocol("monitor", "telepathic")).toBe(true);
+    expect(canSelectMonitor("telepathic")).toBe(true);
   });
 });
