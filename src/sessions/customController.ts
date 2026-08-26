@@ -1,7 +1,7 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { providerChat as nativeProviderChat } from "../providers/native";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
-import { isRetryableProviderError, waitBeforeProviderRetry } from "../providers/retry";
+import { shouldRetryProviderError, waitBeforeProviderRetry } from "../providers/retry";
 import type { CustomProtocolVersion } from "../protocols/types";
 import type { AppRepository } from "../storage/repository";
 import { buildAutomaticTargetReveal, targetHasSupportedReveal } from "../targets/service";
@@ -11,7 +11,7 @@ import type { TargetRecord } from "../targets/types";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
 import { sha256Text, type SessionProgress } from "./controller";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics } from "./metrics";
-import type { RvSessionState, SessionSnapshot } from "./types";
+import type { RvSession, RvSessionState, SessionSnapshot } from "./types";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
 import {
@@ -45,6 +45,7 @@ export interface AutomaticCustomRunInput {
   sessionLanguage: InterfaceLanguage;
   requestedSettings: GenerationSettings;
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
+  resumeSession?: RvSession;
   automaticTarget?: TargetRecord;
   signal?: AbortSignal;
   maxRetries?: number;
@@ -68,8 +69,8 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   if (effectiveSettings.omitted.length) throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
   const costGuard = new SessionCostGuard(input.maxSessionCostUsd);
   costGuard.validateModel(input.model);
-  const sessionId = `session_${crypto.randomUUID()}`;
-  const sessionCode = createSessionCode(input.sessionCodePrefix);
+  const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
+  const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
   const messages: ProviderMessage[] = [
@@ -180,7 +181,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { step, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
         response = null;
-        if (attempt < maxRetries && isRetryableProviderError(cause)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+        if (shouldRetryProviderError(cause, attempt, maxRetries)) await waitBeforeProviderRetry(attempt, input.signal, cause);
         else break;
       }
     }

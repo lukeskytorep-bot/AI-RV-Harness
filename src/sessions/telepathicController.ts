@@ -3,7 +3,7 @@ import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { providerChat as nativeProviderChat } from "../providers/native";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderUsage } from "../providers/types";
-import { isRetryableProviderError, waitBeforeProviderRetry } from "../providers/retry";
+import { shouldRetryProviderError, waitBeforeProviderRetry } from "../providers/retry";
 import type { TelepathicProtocolResource } from "../resources/protocolRegistry";
 import {
   buildEffectiveTelepathicMonitorPrompt,
@@ -71,6 +71,7 @@ export interface AutomaticTelepathicRunInput {
   sessionLanguage: InterfaceLanguage;
   requestedSettings: GenerationSettings;
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
+  resumeSession?: RvSession;
   automaticTarget?: TargetRecord;
   step8Questions: {
     mode: TelepathicQuestionMode;
@@ -80,6 +81,7 @@ export interface AutomaticTelepathicRunInput {
     providerConfig: ProviderConfig;
     model: ProviderModel;
     editablePrompt?: string;
+    effectivePrompt?: string;
   };
   signal?: AbortSignal;
   maxRetries?: number;
@@ -133,8 +135,8 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
   costGuard.validateModel(input.model);
   if (input.monitor) costGuard.validateModel(input.monitor.model);
 
-  const sessionId = `session_${crypto.randomUUID()}`;
-  const sessionCode = createSessionCode(input.sessionCodePrefix);
+  const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
+  const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
   const messages: ProviderMessage[] = [
@@ -146,7 +148,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
   let transcript = "";
   const cleanQuestions = normalizeQuestions(input.step8Questions.questions);
   const effectiveMonitorPrompt = input.monitor
-    ? buildEffectiveTelepathicMonitorPrompt(input.sessionLanguage, input.monitor.editablePrompt)
+    ? input.monitor.effectivePrompt?.trim() || buildEffectiveTelepathicMonitorPrompt(input.sessionLanguage, input.monitor.editablePrompt)
     : undefined;
 
   await input.repository.createRvSession({
@@ -280,7 +282,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { ...metadata, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
         response = null;
-        if (attempt < maxRetries && isRetryableProviderError(cause)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+        if (shouldRetryProviderError(cause, attempt, maxRetries)) await waitBeforeProviderRetry(attempt, input.signal, cause);
         else break;
       }
     }
@@ -323,9 +325,11 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
       return;
     }
     for (let exchangeNumber = 1; exchangeNumber <= 5; exchangeNumber += 1) {
-      let decision: MonitorDecision;
-      try {
-        decision = await evaluateMonitor({
+      let decision: MonitorDecision | null = null;
+      let monitorError = "";
+      for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+        try {
+          decision = await evaluateMonitor({
           providerConfig: input.monitor.providerConfig,
           model: input.monitor.model,
           language: input.sessionLanguage,
@@ -357,14 +361,19 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
               throw cause;
             }
           },
-        });
-      } catch (cause) {
-        if (cause instanceof TelepathicRunStop) throw cause;
-        if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
-        const reason = cause instanceof Error ? cause.message : String(cause);
-        await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_PROVIDER_ERROR", role: "controller", content: reason, metadata: { step, exchangeNumber } });
-        throw new TelepathicRunStop(`AUTO-STOP: Monitor provider failure — ${reason}`);
+          });
+          break;
+        } catch (cause) {
+          if (cause instanceof TelepathicRunStop) throw cause;
+          if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
+          monitorError = cause instanceof Error ? cause.message : String(cause);
+          await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_PROVIDER_ERROR", role: "controller", content: monitorError, metadata: { step, exchangeNumber, attempt: attempt + 1 } });
+          if (shouldRetryProviderError(cause, attempt, maxRetries)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+          else break;
+        }
       }
+      if (!decision) throw new TelepathicRunStop(`AUTO-STOP: Monitor provider failure — ${monitorError}`);
+      await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_DECISION", role: "monitor", content: decision.decision === "INTERVENE" ? decision.commandText : "CONTINUE_PROTOCOL", metadata: { step, exchangeNumber, decision: decision.decision } });
       if (decision.decision === "CONTINUE_PROTOCOL") {
         await input.repository.appendMonitorIntervention(monitorRunId, { decision: "CONTINUE_PROTOCOL", rationale: JSON.stringify({ step, exchangeNumber }) });
         break;
@@ -559,7 +568,7 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(input.session.id, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { ...metadata, resumed: true, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
         response = null;
-        if (attempt < maxRetries && isRetryableProviderError(cause)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+        if (shouldRetryProviderError(cause, attempt, maxRetries)) await waitBeforeProviderRetry(attempt, input.signal, cause);
         else break;
       }
     }

@@ -417,6 +417,8 @@ h1, h2, h3 { font-family: "Segoe UI", system-ui, sans-serif; }
 .typing-row { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
 .typing-row .loader-orb { width: 15px; height: 15px; margin: 0; }
 .chat-error { margin: 0 16px 10px; }
+.chat-retry-panel { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 16px 10px; padding: 10px 12px; border: 1px solid rgba(87, 171, 255, .22); border-radius: 10px; background: rgba(87, 171, 255, .08); }
+.chat-retry-panel span { font-size: 12px; line-height: 1.4; }
 .composer { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin: 0 16px 16px; padding: 9px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-strong); }
 .composer textarea { resize: none; padding: 7px 8px; border: 0; outline: none; color: var(--text); background: transparent; font-size: 12px; }
 .composer textarea::placeholder { color: var(--muted); }
@@ -523,6 +525,7 @@ h1, h2, h3 { font-family: "Segoe UI", system-ui, sans-serif; }
 .session-recovery { display: grid; gap: 6px; margin: 2px 8px 5px; padding: 8px; border-radius: 8px; color: #d75f70; background: rgba(215, 95, 112, .07); }
 .session-recovery small { font-size: 11px; line-height: 1.4; }
 .session-recovery button { justify-self: start; padding: 4px 7px; border: 1px solid rgba(215, 95, 112, .2); border-radius: 6px; color: #d75f70; background: transparent; cursor: pointer; font-size: 11px; font-weight: 700; }
+.session-resume-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .recent-session-empty { margin: 0; padding: 16px 14px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .target-clarification { display: grid; gap: 9px; margin: 12px 18px 16px; padding: 13px; border: 1px solid rgba(72, 205, 212, .16); border-radius: 12px; background: var(--cyan-soft); }
 .target-clarification-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

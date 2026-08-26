@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import type { ChatMessage } from "../types";
-import { sendChatTurn } from "./engine";
+import { retryChatTurn, sendChatTurn } from "./engine";
 
 const provider: ProviderConfig = { id: "provider", provider: "openrouter", label: "OR", credentialId: "cred", enabled: true, createdAt: "x", updatedAt: "x" };
 const model: ProviderModel = {
@@ -83,5 +83,17 @@ describe("chat engine isolation", () => {
     expect(captured?.messages.some((message) => message.role === "system" && message.content.includes("untrusted reference data"))).toBe(true);
     expect(source?.role).toBe("user");
     expect(source?.content).toContain('"sha256":"abc"');
+  });
+
+  it("retries an unanswered user message without appending it twice", async () => {
+    const repository = repo([{ id: "u1", threadId: "c", role: "user", content: "Please answer", createdAt: "x" }]);
+    let roles: string[] = [];
+    const result = await retryChatTurn({ repository, threadId: "c", mode: "conversation", language: "en", providerConfig: provider, model, chat: async (request) => {
+      roles = request.messages.map((message) => message.role);
+      return { content: "Recovered answer", usage: {} };
+    } });
+    expect(result.user.id).toBe("u1");
+    expect((await repository.listChatMessages()).map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(roles.at(-1)).toBe("user");
   });
 });

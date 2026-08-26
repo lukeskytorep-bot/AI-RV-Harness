@@ -180,7 +180,7 @@ async fn json_response(response: reqwest::Response, secret: &str) -> Result<(Val
         .or_else(|| response.headers().get("request-id"))
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    let body = response.text().await.map_err(|error| error.to_string())?;
+    let body = response.text().await.map_err(|error| format!("provider response body read failed: {error}"))?;
     if !status.is_success() {
         return Err(safe_provider_error(status, &body, secret, retry_after_ms));
     }
@@ -542,14 +542,14 @@ fn parse_chat_response(
 }
 
 fn parse_openai_compatible_response(payload: Value, request_id: Option<String>) -> Result<ProviderChatResponse, String> {
+    if let Some(error) = provider_payload_error(&payload) {
+        return Err(error);
+    }
     let actual_model = payload.get("model").and_then(Value::as_str).map(str::to_string);
-    let content = payload
-        .pointer("/choices/0/message/content")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    let finish_reason = payload.pointer("/choices/0/finish_reason").and_then(Value::as_str).map(str::to_string);
+    let content = extract_openai_text(payload.pointer("/choices/0/message/content"));
     if content.trim().is_empty() {
-        return Err("provider returned an empty assistant response".to_string());
+        return Err(empty_response_error(finish_reason.as_deref(), None));
     }
     let usage = payload.get("usage").unwrap_or(&Value::Null);
     let reasoning_tokens = usage
@@ -558,7 +558,7 @@ fn parse_openai_compatible_response(payload: Value, request_id: Option<String>) 
         .or_else(|| usage.get("reasoning_tokens").and_then(Value::as_u64));
     Ok(ProviderChatResponse {
         content,
-        finish_reason: payload.pointer("/choices/0/finish_reason").and_then(Value::as_str).map(str::to_string),
+        finish_reason,
         actual_model,
         usage: ProviderUsage {
             input_tokens: usage.get("prompt_tokens").and_then(Value::as_u64),
@@ -573,7 +573,12 @@ fn parse_openai_compatible_response(payload: Value, request_id: Option<String>) 
 }
 
 fn parse_google_response(payload: Value, request_id: Option<String>) -> Result<ProviderChatResponse, String> {
+    if let Some(error) = provider_payload_error(&payload) {
+        return Err(error);
+    }
     let actual_model = payload.get("modelVersion").and_then(Value::as_str).map(str::to_string);
+    let finish_reason = payload.pointer("/candidates/0/finishReason").and_then(Value::as_str).map(str::to_string);
+    let block_reason = payload.pointer("/promptFeedback/blockReason").and_then(Value::as_str);
     let parts = payload
         .pointer("/candidates/0/content/parts")
         .and_then(Value::as_array)
@@ -585,12 +590,12 @@ fn parse_google_response(payload: Value, request_id: Option<String>) -> Result<P
         .collect::<Vec<_>>()
         .join("");
     if content.trim().is_empty() {
-        return Err("provider returned an empty assistant response".to_string());
+        return Err(empty_response_error(finish_reason.as_deref(), block_reason));
     }
     let usage = payload.get("usageMetadata").unwrap_or(&Value::Null);
     Ok(ProviderChatResponse {
         content,
-        finish_reason: payload.pointer("/candidates/0/finishReason").and_then(Value::as_str).map(str::to_string),
+        finish_reason,
         actual_model,
         usage: ProviderUsage {
             input_tokens: usage.get("promptTokenCount").and_then(Value::as_u64),
@@ -605,7 +610,11 @@ fn parse_google_response(payload: Value, request_id: Option<String>) -> Result<P
 }
 
 fn parse_anthropic_response(payload: Value, request_id: Option<String>) -> Result<ProviderChatResponse, String> {
+    if let Some(error) = provider_payload_error(&payload) {
+        return Err(error);
+    }
     let actual_model = payload.get("model").and_then(Value::as_str).map(str::to_string);
+    let finish_reason = payload.get("stop_reason").and_then(Value::as_str).map(str::to_string);
     let content = payload
         .get("content")
         .and_then(Value::as_array)
@@ -619,14 +628,14 @@ fn parse_anthropic_response(payload: Value, request_id: Option<String>) -> Resul
         })
         .unwrap_or_default();
     if content.trim().is_empty() {
-        return Err("provider returned an empty assistant response".to_string());
+        return Err(empty_response_error(finish_reason.as_deref(), None));
     }
     let usage = payload.get("usage").unwrap_or(&Value::Null);
     let input = usage.get("input_tokens").and_then(Value::as_u64);
     let output = usage.get("output_tokens").and_then(Value::as_u64);
     Ok(ProviderChatResponse {
         content,
-        finish_reason: payload.get("stop_reason").and_then(Value::as_str).map(str::to_string),
+        finish_reason,
         actual_model,
         usage: ProviderUsage {
             input_tokens: input,
@@ -641,6 +650,51 @@ fn parse_anthropic_response(payload: Value, request_id: Option<String>) -> Resul
         provider_request_id: request_id,
         debug_payload: None,
     })
+}
+
+fn extract_openai_text(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(text)) => text.to_string(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| match part {
+                Value::String(text) => Some(text.as_str()),
+                Value::Object(_) => part.get("text").and_then(Value::as_str)
+                    .or_else(|| part.pointer("/text/value").and_then(Value::as_str)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+        _ => String::new(),
+    }
+}
+
+fn provider_payload_error(payload: &Value) -> Option<String> {
+    let error = payload.get("error")?;
+    let message = error.get("message").and_then(Value::as_str)
+        .or_else(|| error.as_str())
+        .unwrap_or("provider returned an error payload");
+    let code = error.get("code").and_then(|value| value.as_str().map(str::to_string).or_else(|| value.as_i64().map(|number| number.to_string())));
+    let kind = error.get("type").and_then(Value::as_str);
+    let safe_message = message.chars().take(500).collect::<String>();
+    Some(format!(
+        "provider error payload{}{}: {}",
+        code.as_deref().map(|value| format!(" code={value}")).unwrap_or_default(),
+        kind.map(|value| format!(" type={value}")).unwrap_or_default(),
+        safe_message,
+    ))
+}
+
+fn empty_response_error(finish_reason: Option<&str>, block_reason: Option<&str>) -> String {
+    if let Some(reason) = block_reason {
+        return format!("provider blocked the response [block-reason={reason}]");
+    }
+    match finish_reason {
+        Some(reason) if matches!(reason.to_ascii_lowercase().as_str(), "content_filter" | "safety" | "blocked" | "recitation") =>
+            format!("provider blocked the response [finish-reason={reason}]"),
+        Some(reason) => format!("provider returned an empty assistant response [finish-reason={reason}]"),
+        None => "provider returned an empty assistant response".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -749,6 +803,49 @@ mod tests {
         request.reasoning_transport_value = Some("xhigh".to_string());
         let (_, body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
         assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("xhigh")));
+    }
+
+    #[test]
+    fn parses_openai_compatible_text_part_arrays() {
+        let parsed = parse_openai_compatible_response(json!({
+            "model": "array-model",
+            "choices": [{
+                "message": { "content": [
+                    { "type": "text", "text": "first " },
+                    { "type": "output_text", "text": "second" }
+                ]},
+                "finish_reason": "stop"
+            }],
+            "usage": {}
+        }), None).unwrap();
+        assert_eq!(parsed.content, "first second");
+    }
+
+    #[test]
+    fn reports_empty_and_blocked_responses_distinctly() {
+        let empty = parse_openai_compatible_response(json!({
+            "choices": [{ "message": { "content": "" }, "finish_reason": "stop" }]
+        }), None).unwrap_err();
+        assert!(empty.contains("empty assistant response"));
+        assert!(empty.contains("finish-reason=stop"));
+
+        let blocked = parse_google_response(json!({
+            "promptFeedback": { "blockReason": "SAFETY" },
+            "candidates": []
+        }), None).unwrap_err();
+        assert!(blocked.contains("blocked"));
+        assert!(blocked.contains("SAFETY"));
+    }
+
+    #[test]
+    fn exposes_structured_provider_errors_without_dumping_the_payload() {
+        let error = parse_openai_compatible_response(json!({
+            "error": { "code": 503, "type": "upstream_unavailable", "message": "try again" },
+            "unrelated": "must not appear"
+        }), None).unwrap_err();
+        assert!(error.contains("code=503"));
+        assert!(error.contains("upstream_unavailable"));
+        assert!(!error.contains("must not appear"));
     }
 
     #[test]

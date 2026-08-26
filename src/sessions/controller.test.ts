@@ -184,6 +184,31 @@ describe("automatic RCP controller", () => {
     expect(log).toContain("sealed");
   });
 
+  it("retries a transient empty Monitor response once without repeating Viewer work", async () => {
+    const log: string[] = [];
+    let viewerCalls = 0;
+    let monitorCalls = 0;
+    const result = await runAutomaticRcpSession({
+      repository: fakeRepository(log), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, maxRetries: 5,
+      monitor: { providerConfig: config, model },
+      chat: async ({ messages }) => {
+        const monitorRequest = messages.some((message) => message.role === "system" && message.content.includes("AI Monitor conducting a blind"));
+        if (monitorRequest) {
+          monitorCalls += 1;
+          if (monitorCalls === 1) throw new Error("provider returned an empty assistant response");
+          return { content: "CONTINUE_PROTOCOL", usage: {} };
+        }
+        viewerCalls += 1;
+        return { content: `Distinct Viewer response ${viewerCalls}.`, usage: {} };
+      },
+    });
+    expect(result.state).toBe("AwaitingReveal");
+    expect(viewerCalls).toBe(6);
+    expect(monitorCalls).toBe(6);
+    expect(log.filter((entry) => entry === "event:MONITOR_PROVIDER_ERROR")).toHaveLength(1);
+  });
+
   it("withholds a Special Task from AI Monitor before Phase 4 and includes it from Phase 4 onward", async () => {
     const monitorPackets: string[] = [];
     await runAutomaticRcpSession({

@@ -92,11 +92,23 @@ export async function sendChatTurn(input: {
   images?: ProviderImageInput[];
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings> }) => Promise<ProviderChatResponse>;
 }): Promise<{ user: ChatMessage; assistant: ChatMessage; response: ProviderChatResponse }> {
+  return executeChatTurn(input, true);
+}
+
+export async function retryChatTurn(input: Omit<Parameters<typeof sendChatTurn>[0], "content">): Promise<{ user: ChatMessage; assistant: ChatMessage; response: ProviderChatResponse }> {
+  const history = await input.repository.listChatMessages(input.threadId);
+  const last = history.at(-1);
+  if (!last || last.role !== "user") throw new Error("There is no unanswered user message to retry.");
+  return executeChatTurn({ ...input, content: last.content }, false);
+}
+
+async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], appendUser: boolean): Promise<{ user: ChatMessage; assistant: ChatMessage; response: ProviderChatResponse }> {
   const content = input.content.trim();
   if (!content) throw new Error("Message cannot be empty.");
   if (input.model.providerConfigId !== input.providerConfig.id) throw new Error("Model/provider route mismatch.");
 
-  const history = await input.repository.listChatMessages(input.threadId);
+  const storedHistory = await input.repository.listChatMessages(input.threadId);
+  const history = appendUser ? storedHistory : storedHistory.slice(0, -1);
   const messages = buildChatProviderMessages({
     mode: input.mode,
     language: input.language,
@@ -121,7 +133,7 @@ export async function sendChatTurn(input: {
   }
   const settings = resolveGenerationSettings(input.model.capabilities, { ...input.requestedSettings, maxOutputTokens });
   if (settings.omitted.length) throw new Error(`Unsupported generation settings: ${settings.omitted.join(", ")}`);
-  const user = await input.repository.appendChatMessage(input.threadId, "user", content);
+  const user = appendUser ? await input.repository.appendChatMessage(input.threadId, "user", content) : storedHistory.at(-1)!;
   const response = await (input.chat ?? nativeProviderChat)({
     config: input.providerConfig,
     modelId: input.model.modelId,

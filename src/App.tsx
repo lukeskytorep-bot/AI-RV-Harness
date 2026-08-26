@@ -53,7 +53,8 @@ import type {
 import { PROVIDER_KINDS, type ProviderConfig } from "./providers/types";
 import type { ProviderImageInput, ProviderKind, ProviderModel, ReasoningEffort } from "./providers/types";
 import { runAutomaticRcpSession, submitExternalReveal, type SessionProgress } from "./sessions/controller";
-import { buildChatProviderMessages, sendChatTurn } from "./chat/engine";
+import { buildChatProviderMessages, retryChatTurn, sendChatTurn } from "./chat/engine";
+import { clearPendingChatTurn, loadPendingChatTurn, savePendingChatTurn, type PendingChatTurn } from "./chat/pendingTurn";
 import { estimateContextBudget } from "./chat/contextBudget";
 import { clampChatOutputTokens, defaultChatOutputTokens, loadChatOutputTokens, saveChatOutputTokens } from "./chat/outputPreference";
 import type { ChatMessage, ChatMode, ChatThread, ChatThreadGroup } from "./types";
@@ -66,6 +67,7 @@ import { dryRunCustomProtocol, saveCustomProtocol } from "./protocols/custom";
 import type { CustomProtocolVersion } from "./protocols/types";
 import { runAutomaticCustomSession } from "./sessions/customController";
 import { runAutomaticRvLiteSession } from "./sessions/rvLiteController";
+import { createSessionReplay, isRecoverableProviderInterruption } from "./sessions/resumeReplay";
 import { runOrdinaryBatch, selectBatchTargets, type OrdinaryBatchProgress, type OrdinaryBatchSessionResult } from "./sessions/batch";
 import { ResearchBuilder } from "./components/ResearchBuilder";
 import { TrainingScreen } from "./components/TrainingScreen";
@@ -309,7 +311,7 @@ export default function App() {
               onProfilesChanged={refreshProfiles}
             />
           ) : page === "workspaces" ? (
-            <WorkspacesScreen copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={openWorkspace} />
+            <WorkspacesScreen copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={openWorkspace} onCreateWorkspace={() => setWorkspaceDialogFor("__choose__")} onCreateProfile={() => setProfileDialog(true)} />
           ) : page === "research" ? (
             <ResearchScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
           ) : page === "targets" ? (
@@ -346,8 +348,9 @@ export default function App() {
         <CreateWorkspaceDialog
           copy={copy}
           profile={profiles.find((item) => item.id === workspaceDialogFor) ?? null}
+          profiles={profiles}
           onCancel={() => setWorkspaceDialogFor(null)}
-          onCreate={(name, description) => createWorkspace(workspaceDialogFor, name, description)}
+          onCreate={(profileId, name, description) => createWorkspace(profileId, name, description)}
         />
       )}
     </div>
@@ -741,14 +744,15 @@ function MiniStat({ icon, title, value }: { icon: ReactNode; title: string; valu
   return <div className="mini-stat"><span>{icon}</span><div><small>{title}</small><strong>{value}</strong></div></div>;
 }
 
-function WorkspacesScreen({ copy, profiles, workspaces, onOpenWorkspace }: { copy: ReturnType<typeof getCopy>; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void }) {
-  return <div className="page"><PageHeader title={copy.allWorkspaces} subtitle={copy.allWorkspacesLead} /><section className="panel workspace-directory-panel"><WorkspaceDirectoryList copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={onOpenWorkspace} /></section></div>;
+function WorkspacesScreen({ copy, profiles, workspaces, onOpenWorkspace, onCreateWorkspace, onCreateProfile }: { copy: ReturnType<typeof getCopy>; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void; onCreateWorkspace: () => void; onCreateProfile: () => void }) {
+  const createAction = profiles.length ? <button className="primary-button" onClick={onCreateWorkspace}><Plus size={16} />{copy.createWorkspace}</button> : <button className="primary-button" onClick={onCreateProfile}><Plus size={16} />{copy.createProfile}</button>;
+  return <div className="page"><PageHeader title={copy.allWorkspaces} subtitle={copy.allWorkspacesLead} action={createAction} /><section className="panel workspace-directory-panel"><WorkspaceDirectoryList copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={onOpenWorkspace} emptyAction={createAction} /></section></div>;
 }
 
-function WorkspaceDirectoryList({ copy, profiles, workspaces, onOpenWorkspace }: { copy: ReturnType<typeof getCopy>; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void }) {
+function WorkspaceDirectoryList({ copy, profiles, workspaces, onOpenWorkspace, emptyAction }: { copy: ReturnType<typeof getCopy>; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void; emptyAction?: ReactNode }) {
   const [query, setQuery] = useState("");
   const groups = useMemo(() => filterWorkspaceDirectory(workspaces, profiles, query), [workspaces, profiles, query]);
-  return <div className="workspace-directory"><label className="workspace-search"><RadioTower size={16} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy.searchWorkspaces} /></label>{groups.length ? <div className="workspace-directory-groups">{groups.map((group) => <section key={group.profile.id}><header><span className="avatar tiny">{initials(aiIsBeDisplayName(group.profile))}</span><div><strong>{aiIsBeDisplayName(group.profile)}</strong><small>{group.workspaces.length} {copy.workspacesCount}</small></div></header><div>{group.workspaces.map((workspace) => <button key={workspace.id} onClick={() => onOpenWorkspace(workspace)}><span><RadioTower size={16} /><span><strong>{workspace.name}</strong><small>{workspace.description || new Date(workspace.lastOpenedAt).toLocaleString()}</small></span></span><ArrowRight size={15} /></button>)}</div></section>)}</div> : <EmptyState icon={<RadioTower size={26} />} title={copy.noMatchingWorkspaces} body={copy.allWorkspacesLead} />}</div>;
+  return <div className="workspace-directory"><label className="workspace-search"><RadioTower size={16} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy.searchWorkspaces} /></label>{groups.length ? <div className="workspace-directory-groups">{groups.map((group) => <section key={group.profile.id}><header><span className="avatar tiny">{initials(aiIsBeDisplayName(group.profile))}</span><div><strong>{aiIsBeDisplayName(group.profile)}</strong><small>{group.workspaces.length} {copy.workspacesCount}</small></div></header><div>{group.workspaces.map((workspace) => <button key={workspace.id} onClick={() => onOpenWorkspace(workspace)}><span><RadioTower size={16} /><span><strong>{workspace.name}</strong><small>{workspace.description || new Date(workspace.lastOpenedAt).toLocaleString()}</small></span></span><ArrowRight size={15} /></button>)}</div></section>)}</div> : <EmptyState icon={<RadioTower size={26} />} title={copy.noMatchingWorkspaces} body={copy.allWorkspacesLead} action={emptyAction} />}</div>;
 }
 
 function WorkspaceSwitcherDialog({ copy, profiles, workspaces, onOpenWorkspace, onClose }: { copy: ReturnType<typeof getCopy>; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void; onClose: () => void }) {
@@ -888,6 +892,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingRetry, setPendingRetry] = useState<PendingChatTurn | null>(null);
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
   const activeProvider = providerConfigs.find((item) => item.credentialId === profile?.credentialId) ?? null;
   const selectedModel = models.find((item) => item.modelId === modelId) ?? null;
@@ -967,6 +972,10 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     const next = threadId ? loadChatOutputTokens(threadId, fallback, selectedModel.capabilities.maxOutputTokens) : fallback;
     setMaxOutputTokens(String(next));
   }, [threadId, selectedModel?.modelId, selectedModel?.capabilities.maxOutputTokens, settings.defaultMaxOutputTokens]);
+
+  useEffect(() => {
+    setPendingRetry(threadId ? loadPendingChatTurn(threadId, messages) : null);
+  }, [threadId, messages]);
 
   const selectedSources = sources.filter((source) => activeSourceIds.includes(source.id));
   const effectiveMaxOutputTokens = (() => {
@@ -1174,6 +1183,23 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     setInput("");
     setSending(true);
     setError(null);
+    const pending: PendingChatTurn = {
+      threadId,
+      mode,
+      language,
+      providerConfigId: activeProvider.id,
+      modelId: selectedModel.modelId,
+      content,
+      requestedSettings: { ...profileGenerationDefaults(profile, selectedModel), maxOutputTokens: effectiveMaxOutputTokens },
+      ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
+      ...(attachedProtocol ? { attachedProtocol } : {}),
+      sourceIds: selectedSources.map((source) => source.id),
+      images: chatImages,
+      imageNames: chatImageNames,
+      createdAt: new Date().toISOString(),
+    };
+    savePendingChatTurn(pending);
+    setPendingRetry(pending);
     setMessages((current) => [...current, { id: "pending-user", threadId, role: "user", content, createdAt: new Date().toISOString() }]);
     try {
       await sendChatTurn({
@@ -1190,12 +1216,54 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         images: chatImages,
         ...(attachedProtocol ? { attachedProtocol } : {}),
       });
+      clearPendingChatTurn(threadId);
+      setPendingRetry(null);
       setChatImages([]);
       setChatImageNames([]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setMessages(await repository.listChatMessages(threadId));
+      const storedMessages = await repository.listChatMessages(threadId);
+      if (storedMessages.at(-1)?.role !== "user") {
+        clearPendingChatTurn(threadId);
+        setPendingRetry(null);
+      }
+      setMessages(storedMessages);
+      setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
+      setSending(false);
+    }
+  };
+
+  const retryPendingResponse = async () => {
+    if (!repository || !pendingRetry || sending) return;
+    const providerConfig = providerConfigs.find((item) => item.id === pendingRetry.providerConfigId);
+    const model = models.find((item) => item.providerConfigId === pendingRetry.providerConfigId && item.modelId === pendingRetry.modelId);
+    if (!providerConfig || !model) {
+      setError(settings.interfaceLanguage === "pl" ? "Zapisany model lub połączenie nie jest obecnie dostępne. Przywróć je, aby ponowić odpowiedź." : "The saved model or connection is currently unavailable. Restore it to retry the response.");
+      return;
+    }
+    setSending(true);
+    setError(null);
+    try {
+      await retryChatTurn({
+        repository,
+        threadId: pendingRetry.threadId,
+        mode: pendingRetry.mode,
+        language: pendingRetry.language,
+        providerConfig,
+        model,
+        requestedSettings: pendingRetry.requestedSettings,
+        ...(pendingRetry.rvSystemPrompt ? { rvSystemPrompt: pendingRetry.rvSystemPrompt } : {}),
+        ...(pendingRetry.attachedProtocol ? { attachedProtocol: pendingRetry.attachedProtocol } : {}),
+        sources: sources.filter((source) => pendingRetry.sourceIds.includes(source.id)),
+        images: pendingRetry.images,
+      });
+      clearPendingChatTurn(pendingRetry.threadId);
+      setPendingRetry(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setMessages(await repository.listChatMessages(pendingRetry.threadId));
       setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
       setSending(false);
     }
@@ -1326,10 +1394,11 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       <details className="chat-sources"><summary><span><FileCheck2 size={14} />{copy.workspaceSources}</span><small>{copy.activeSources}: {activeSourceIds.length} · {copy.estimatedContext}: ~{contextBudget.estimatedInputTokens.toLocaleString()} tokens</small></summary><div className="chat-source-body">{sources.length ? <div className="chat-source-list">{sources.map((source) => <label key={source.id}><input type="checkbox" checked={activeSourceIds.includes(source.id)} onChange={() => void toggleSource(source.id)} /><span><strong>{source.displayName}</strong><small>{source.sourceType.toUpperCase()} · ~{estimateTextTokens(source.content).toLocaleString()} tokens</small></span><button type="button" className="icon-button danger" title={copy.removeSource} onClick={(event) => { event.preventDefault(); void removeSource(source); }}><X size={13} /></button></label>)}</div> : <p>{copy.noSources}</p>}{contextExceeded && <div className="source-context-error">{copy.contextExceeded}</div>}</div></details>
       {messages.length === 0 ? <div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div> : <div className="message-list">{messages.map((message, index) => { const displayName = message.role === "user" ? humanIsBeDisplayName(profile) : aiIsBeDisplayName(profile); const date = new Date(message.createdAt); const previous = index > 0 ? new Date(messages[index - 1].createdAt) : null; const dayChanged = !previous || date.toDateString() !== previous.toDateString(); return <div className="chat-message-block" key={message.id}>{dayChanged && <div className="chat-date-separator"><span>{date.toLocaleDateString(settings.interfaceLanguage === "pl" ? "pl-PL" : "en-GB", { dateStyle: "full" })}</span></div>}<article className={`chat-message ${message.role}`}><span>{initials(displayName)}</span><div><small>{displayName} · {date.toLocaleTimeString(settings.interfaceLanguage === "pl" ? "pl-PL" : "en-GB", { hour: "2-digit", minute: "2-digit" })}</small><SafeMarkdown content={message.content} /></div></article></div>; })}{sending && <div className="typing-row"><span className="loader-orb" />{copy.sending}</div>}</div>}
       {error && <div className="provider-error chat-error">{error}</div>}
+      {pendingRetry && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Ostatnia wiadomość nie otrzymała odpowiedzi AI." : "The last message did not receive an AI response."}</span><button className="secondary-button" disabled={sending} onClick={() => void retryPendingResponse()}>{settings.interfaceLanguage === "pl" ? "Ponów odpowiedź" : "Retry response"}</button></div>}
       {(selectedSources.length > 0 || chatImageNames.length > 0) && <div className="attachment-chips">{selectedSources.map((source) => <button type="button" key={source.id} title={copy.removeSource} onClick={() => void toggleSource(source.id)}><FileCheck2 size={12} /><span>{source.displayName} · {source.sourceType.toUpperCase()} · {settings.interfaceLanguage === "pl" ? "aktywne" : "active"} · ~{estimateTextTokens(source.content).toLocaleString()} tokens</span><X size={11} /></button>)}{chatImageNames.map((name, index) => <button type="button" key={`${name}-${index}`} onClick={() => removeChatImage(index)}><span>{name} · IMAGE · {settings.interfaceLanguage === "pl" ? "następna tura" : "next turn"} · ~2,048 tokens</span><X size={11} /></button>)}</div>}
       <div className="composer">
-        <textarea rows={2} placeholder={copy.messagePlaceholder} value={input} onChange={(event) => setInput(event.target.value)} disabled={!selectedModel || sending} />
-        <div className="composer-actions"><button type="button" className="composer-attachment-button" title={settings.interfaceLanguage === "pl" ? "Dołącz dokumenty lub obrazy" : "Attach documents or images"} disabled={!repository || !threadId || sending || attachmentBusy} onClick={() => void attachFiles()}><Paperclip size={17} /></button><button disabled={!selectedModel || !input.trim() || sending || contextExceeded} onClick={() => void send()}>{sending ? copy.sending : copy.send}<ArrowRight size={15} /></button></div>
+        <textarea rows={2} placeholder={copy.messagePlaceholder} value={input} onChange={(event) => setInput(event.target.value)} disabled={!selectedModel || sending || Boolean(pendingRetry)} />
+        <div className="composer-actions"><button type="button" className="composer-attachment-button" title={settings.interfaceLanguage === "pl" ? "Dołącz dokumenty lub obrazy" : "Attach documents or images"} disabled={!repository || !threadId || sending || attachmentBusy || Boolean(pendingRetry)} onClick={() => void attachFiles()}><Paperclip size={17} /></button><button disabled={!selectedModel || !input.trim() || sending || contextExceeded || Boolean(pendingRetry)} onClick={() => void send()}>{sending ? copy.sending : copy.send}<ArrowRight size={15} /></button></div>
       </div>
     </section>
   );
@@ -1346,6 +1415,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const [telepathicQuestionsText, setTelepathicQuestionsText] = useState("");
   const [manualQuestionHandle, setManualQuestionHandle] = useState<TelepathicManualQuestionHandle | null>(null);
   const [telepathicRecovery, setTelepathicRecovery] = useState<Record<string, TelepathicManualRecoveryState>>({});
+  const [recoverableSessions, setRecoverableSessions] = useState<Record<string, true>>({});
   const [manualQuestionText, setManualQuestionText] = useState("");
   const [manualQuestionBusy, setManualQuestionBusy] = useState(false);
   const [revealSource, setRevealSource] = useState<"automatic" | "external">(settings.defaultRevealSource);
@@ -1459,6 +1529,16 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     }).catch(() => {
       if (!cancelled) setTelepathicRecovery({});
     });
+    return () => { cancelled = true; };
+  }, [repository, recoveryInspectionKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!repository) return;
+    const interrupted = recentSessions.filter((session) => session.state === "Interrupted" && !session.preRevealSealedAt);
+    void Promise.all(interrupted.map(async (session) => [session.id, isRecoverableProviderInterruption(session, await repository.listSessionEvents(session.id))] as const)).then((items) => {
+      if (!cancelled) setRecoverableSessions(Object.fromEntries(items.filter((item) => item[1]).map(([id]) => [id, true])));
+    }).catch(() => { if (!cancelled) setRecoverableSessions({}); });
     return () => { cancelled = true; };
   }, [repository, recoveryInspectionKey]);
 
@@ -1815,6 +1895,80 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     }
   };
 
+  const runCapturedSession = async (session: RvSession, resume: boolean) => {
+    if (!repository || !profile || !runGuardRef.current.tryAcquire()) return;
+    setRunError(null);
+    setExecutionScope("single");
+    setSessionRunning(true);
+    setManualQuestionHandle(null);
+    setManualQuestionText("");
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const snapshot = await repository.getSessionSnapshot(session.id);
+      if (!snapshot) throw new Error(settings.interfaceLanguage === "pl" ? "Brak zapisanego snapshota tej sesji." : "The saved session snapshot is unavailable.");
+      const providerConfig = providerConfigs.find((item) => item.id === snapshot.providerConfigId);
+      const viewerModel = allModels.find((item) => item.providerConfigId === snapshot.providerConfigId && item.modelId === snapshot.modelId && item.route === snapshot.modelRoute);
+      if (!providerConfig || !viewerModel) throw new Error(copy.postRevealRouteUnavailable);
+      const capturedTarget = snapshot.revealSource === "automatic" ? targets.find((target) => target.id === snapshot.targetId) : undefined;
+      if (snapshot.revealSource === "automatic" && !capturedTarget) throw new Error(settings.interfaceLanguage === "pl" ? "Zapisany cel tej sesji jest niedostępny." : "The saved target for this session is unavailable.");
+      const capturedMonitorProvider = snapshot.monitor ? providerConfigs.find((item) => item.id === snapshot.monitor?.providerConfigId) : undefined;
+      const capturedMonitorModel = snapshot.monitor ? allModels.find((item) => item.providerConfigId === snapshot.monitor?.providerConfigId && item.modelId === snapshot.monitor?.modelId && item.route === snapshot.monitor?.modelRoute) : undefined;
+      if (snapshot.monitor && (!capturedMonitorProvider || !capturedMonitorModel)) throw new Error(copy.postRevealRouteUnavailable);
+      const events = resume ? await repository.listSessionEvents(session.id) : [];
+      if (resume && !isRecoverableProviderInterruption(session, events)) throw new Error(settings.interfaceLanguage === "pl" ? "Ta sesja nie została przerwana przez odzyskiwalny błąd providera." : "This session was not interrupted by a recoverable provider error.");
+      const monitorRuns = snapshot.monitor ? await repository.listMonitorRuns(workspace.id) : [];
+      const monitorRun = monitorRuns.find((item) => item.sessionId === session.id);
+      const replay = resume ? createSessionReplay({ repository, session, events, ...(monitorRun ? { monitorRun } : {}) }) : null;
+      const runRepository = replay?.repository ?? repository;
+      const runChat = replay?.chat;
+      const viewerPrompt = snapshot.rvSystemPrompt ? { id: snapshot.rvSystemPrompt.id, version: snapshot.rvSystemPrompt.version, content: snapshot.rvSystemPrompt.fullContent, contentSha256: snapshot.rvSystemPrompt.contentSha256 } : undefined;
+      const capturedSpecialTask: SpecialTaskInput | undefined = snapshot.specialTask ? { selectedOptions: snapshot.specialTask.selectedOptions as SpecialTaskOption[], ...(snapshot.specialTask.customText ? { customText: snapshot.specialTask.customText } : {}) } : undefined;
+      const monitor = snapshot.monitor && capturedMonitorProvider && capturedMonitorModel ? { providerConfig: capturedMonitorProvider, model: capturedMonitorModel, effectivePrompt: snapshot.monitor.effectivePrompt } : undefined;
+      setSessionLanguage(snapshot.sessionLanguage);
+      setRunType(snapshot.monitor ? "monitor" : "automatic");
+      setActiveTargetId(snapshot.targetId ?? null);
+      setProgress({ sessionId: session.id, sessionCode: session.sessionCode, state: "BlindRunning", transcript: session.preRevealTranscript });
+
+      let result;
+      if (snapshot.protocol.id === "rv-lite") {
+        setProtocol("lite");
+        const variant = snapshot.protocol.variant ?? "extended";
+        setLiteVariant(variant);
+        const resource = getRvLite(snapshot.sessionLanguage, variant);
+        if (resource.contentSha256 !== snapshot.protocol.contentSha256) throw new Error("The captured RV Lite protocol version is unavailable.");
+        result = await runAutomaticRvLiteSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, profileName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress });
+      } else if (snapshot.protocol.id === "telepathic-protocol") {
+        setProtocol("telepathic");
+        const resource = getTelepathicProtocol(snapshot.sessionLanguage);
+        if (resource.contentSha256 !== snapshot.protocol.contentSha256) throw new Error("The captured Telepathic Protocol version is unavailable.");
+        const questionMode = snapshot.telepathic?.step8QuestionMode ?? "predefined";
+        setTelepathicQuestionMode(questionMode);
+        result = await runAutomaticTelepathicSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, step8Questions: { mode: questionMode, questions: snapshot.telepathic?.predefinedQuestions ?? [] }, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress, ...(questionMode === "manual" && !snapshot.monitor ? { onManualQuestionStage: setManualQuestionHandle } : {}) });
+      } else if (snapshot.protocol.id === "full-rcp") {
+        setProtocol("rcp");
+        const current = getFullRcp(snapshot.sessionLanguage);
+        const resource: ProtocolResource = { ...current, content: snapshot.protocol.fullContent, contentSha256: snapshot.protocol.contentSha256 };
+        result = await runAutomaticRcpSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress });
+      } else {
+        setProtocol("custom");
+        const saved = JSON.parse(snapshot.protocol.fullContent) as { systemPrompt?: string; steps: string[] };
+        const resource: CustomProtocolVersion = { protocolId: snapshot.protocol.id, versionId: `captured:${snapshot.protocol.id}:${snapshot.protocol.version}`, displayName: snapshot.protocol.id, version: snapshot.protocol.version, language: snapshot.sessionLanguage, ...(saved.systemPrompt ? { systemPrompt: saved.systemPrompt } : {}), steps: saved.steps, contentHash: snapshot.protocol.contentSha256, createdAt: snapshot.createdAt };
+        result = await runAutomaticCustomSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress });
+      }
+      await finishRevealedSession(result);
+    } catch (cause) {
+      setRunError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      runGuardRef.current.release();
+      setSessionRunning(false);
+      setManualQuestionHandle(null);
+      abortRef.current = null;
+      try { setRecentSessions((await repository.listRvSessions(workspace.id)).filter((item) => !item.researchProjectId)); }
+      catch (cause) { setRunError(cause instanceof Error ? cause.message : String(cause)); }
+    }
+  };
+
   const preserveInterrupted = async (session: RvSession) => {
     if (!repository) return;
     await repository.updateRvSessionState(session.id, "Interrupted", "RECOVERY: incomplete blind run preserved after restart");
@@ -1924,7 +2078,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
               {executionScope === "single" && progress.state === "Revealed" && <button className="secondary-button save-only-button" onClick={() => void completeWithoutEvaluation()}>{copy.saveOnly}</button>}
               {executionScope === "single" && <div className="session-export-action"><button className="secondary-button" disabled={!isTauriRuntime() || sessionExportBusy} onClick={() => void saveCurrentSession()}><Download size={15} />{sessionExportBusy ? copy.savingSession : copy.saveSession}</button>{sessionExportPath && <div className="storage-success">{copy.sessionExported}: {sessionExportPath}</div>}</div>}
             </>}
-            {progress.state === "Interrupted" && <div className="provider-error"><CircleStop size={16} /><span><strong>{copy.interrupted}</strong>{progress.stopReason ? ` · ${progress.stopReason}` : ""}</span></div>}
+            {progress.state === "Interrupted" && <><div className="provider-error"><CircleStop size={16} /><span><strong>{copy.interrupted}</strong>{recoverableSessions[progress.sessionId] ? <><small>{settings.interfaceLanguage === "pl" ? "Provider modelu nie zwrócił kompletnej odpowiedzi. Dotychczasowy przebieg został zapisany i można go kontynuować." : "The model provider did not return a complete response. The completed portion was saved and can be continued."}</small>{progress.stopReason && <details><summary>{settings.interfaceLanguage === "pl" ? "Szczegół techniczny" : "Technical detail"}</summary>{progress.stopReason}</details>}</> : progress.stopReason ? ` · ${progress.stopReason}` : ""}</span></div>{recoverableSessions[progress.sessionId] && (() => { const interruptedSession = recentSessions.find((item) => item.id === progress.sessionId); return interruptedSession ? <div className="session-resume-actions"><button className="primary-button" disabled={sessionRunning || batchRunning} onClick={() => void runCapturedSession(interruptedSession, true)}>{settings.interfaceLanguage === "pl" ? "Kontynuuj sesję" : "Continue session"}</button><button className="secondary-button" disabled={sessionRunning || batchRunning} onClick={() => void runCapturedSession(interruptedSession, false)}>{settings.interfaceLanguage === "pl" ? "Rozpocznij ponownie" : "Start again"}</button></div> : null; })()}</>}
             {executionScope === "batch" && batchResults.length > 0 && !batchRunning && <BatchEvaluation copy={copy} repository={repository} sessions={batchResults} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} onCompleted={() => void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId)))} />}
             {!running && <button className="secondary-button new-session-button" onClick={() => { setProgress(null); setRunError(null); setActiveTargetId(null); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setPostRevealTranscript(""); setPostRevealText(""); setSessionExportPath(null); setBatchResults([]); setBatchProgress(null); }}>{copy.newAutomaticSession}</button>}
           </div>
@@ -2013,6 +2167,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
           {recentSessions.length ? <div className="recent-session-list">{recentSessions.map((session) => {
             const recovery = telepathicRecovery[session.id];
             const incomplete = session.state === "BlindRunning" || session.state === "Preflight";
+            const providerRecovery = Boolean(recoverableSessions[session.id]);
             const recoveryLabel = recovery === "questions"
               ? (settings.interfaceLanguage === "pl" ? "Wznów pytania Kroku 8" : "Resume Step 8 questions")
               : recovery === "step9"
@@ -2021,6 +2176,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
             return <div key={session.id}>
               <button className="recent-session-open" disabled={incomplete} onClick={() => void loadStoredSession(session)}><span><strong>{session.sessionCode}</strong><small>{session.state}</small></span><ChevronRight size={13} /></button>
               {incomplete && <div className="session-recovery"><small>{recovery ? (settings.interfaceLanguage === "pl" ? "Znaleziono bezpieczny checkpoint Protokołu Telepatycznego." : "A safe Telepathic Protocol checkpoint was found.") : copy.recoveryRequired}</small>{recovery && <button disabled={sessionRunning || batchRunning} onClick={() => void resumeTelepathicSession(session)}>{recoveryLabel}</button>}<button disabled={sessionRunning || batchRunning} onClick={() => void preserveInterrupted(session)}>{copy.markInterrupted}</button></div>}
+              {providerRecovery && <div className="session-recovery"><small>{settings.interfaceLanguage === "pl" ? "Sesja może zostać bezpiecznie wznowiona od nieudanego wywołania." : "The session can safely resume from the failed call."}</small><button disabled={sessionRunning || batchRunning} onClick={() => void runCapturedSession(session, true)}>{settings.interfaceLanguage === "pl" ? "Kontynuuj" : "Continue"}</button><button disabled={sessionRunning || batchRunning} onClick={() => void runCapturedSession(session, false)}>{settings.interfaceLanguage === "pl" ? "Od początku" : "Start again"}</button></div>}
             </div>;
           })}</div> : <p className="recent-session-empty">{copy.noSessions}</p>}
         </details>
@@ -2849,11 +3005,12 @@ function EditProfileDialog({ copy, profile, providers, models, onCancel, onSave 
   return <FormDialog title={copy.editProfile} onCancel={onCancel} modalClassName="profile-edit-modal"><form className="profile-edit-form" onSubmit={(event) => void submit(event)}><div className="identity-name-grid"><label>{copy.aiIsBeName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div><small className="form-hint">{copy.identityNamesLead}</small><label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label><fieldset className="profile-edit-ai"><legend>{copy.profileAiDefaults}</legend><p>{copy.aiDefaultsLead}</p>{providers.length ? <><label><span>{copy.profileCredential}</span><select value={providerConfigId} onChange={(event) => { setProviderConfigId(event.target.value); setViewerModelId(""); setReasoning(""); setTemperature(""); setAiTouched(true); }}><option value="">{copy.selectProviderConnection}</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.credentialHint ?? "••••••••"}</option>)}</select></label><label><span>{copy.defaultViewerModel}</span><select value={validViewerModelId} onChange={(event) => selectViewer(event.target.value)} disabled={!provider}><option value="">{viewerModels.length ? copy.selectModel : copy.noCachedModels}</option>{viewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label><ViewerProfileControls copy={copy} model={viewerModel} reasoning={reasoning} temperature={temperature} systemPrompt={systemPrompt} onReasoning={(value) => { setReasoning(value); setAiTouched(true); }} onTemperature={(value) => { setTemperature(value); setAiTouched(true); }} onSystemPrompt={(value) => { setSystemPrompt(value); setAiTouched(true); }} /><label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><select value={judgeModelKey} onChange={(event) => { setJudgeModelKey(event.target.value); setAiTouched(true); }}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`edit-judge-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label><label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><select value={monitorModelKey} onChange={(event) => { setMonitorModelKey(event.target.value); setAiTouched(true); }}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`edit-monitor-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label></> : <small>{copy.configureProviderFirst}</small>}</fieldset>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving}>{saving ? copy.saving : copy.saveChanges}</button></div></form></FormDialog>;
 }
 
-function CreateWorkspaceDialog({ copy, profile, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; profile: Profile | null; onCancel: () => void; onCreate: (name: string, description?: string) => Promise<void> }) {
+function CreateWorkspaceDialog({ copy, profile, profiles, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; profile: Profile | null; profiles: Profile[]; onCancel: () => void; onCreate: (profileId: string, name: string, description?: string) => Promise<void> }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const submit = (event: FormEvent) => { event.preventDefault(); if (name.trim()) void onCreate(name, description); };
-  return <FormDialog title={`${copy.createWorkspace}${profile ? ` · ${aiIsBeDisplayName(profile)}` : ""}`} onCancel={onCancel}><form onSubmit={submit}><label>{copy.workspaceName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.workspaceDescription}<textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!name.trim()}>{copy.create}</button></div></form></FormDialog>;
+  const [profileId, setProfileId] = useState(profile?.id ?? profiles[0]?.id ?? "");
+  const submit = (event: FormEvent) => { event.preventDefault(); if (profileId && name.trim()) void onCreate(profileId, name, description); };
+  return <FormDialog title={`${copy.createWorkspace}${profile ? ` · ${aiIsBeDisplayName(profile)}` : ""}`} onCancel={onCancel}><form onSubmit={submit}>{!profile && profiles.length > 1 && <label>{copy.home === "Home" ? "Profile" : "Profil"}<select autoFocus value={profileId} onChange={(event) => setProfileId(event.target.value)}>{profiles.map((item) => <option key={item.id} value={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></label>}<label>{copy.workspaceName}<input autoFocus={Boolean(profile) || profiles.length <= 1} value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.workspaceDescription}<textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!profileId || !name.trim()}>{copy.create}</button></div></form></FormDialog>;
 }
 
 function FormDialog({ title, onCancel, children, modalClassName = "" }: { title: string; onCancel: () => void; children: ReactNode; modalClassName?: string }) {

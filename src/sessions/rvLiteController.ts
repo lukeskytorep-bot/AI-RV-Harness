@@ -1,7 +1,7 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { providerChat as nativeProviderChat } from "../providers/native";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
-import { isRetryableProviderError, waitBeforeProviderRetry } from "../providers/retry";
+import { shouldRetryProviderError, waitBeforeProviderRetry } from "../providers/retry";
 import { renderRvLiteSteps, type RvLiteProtocolResource } from "../resources/protocolRegistry";
 import {
   lockedActivityDefinition,
@@ -18,7 +18,7 @@ import { APP_VERSION } from "../version";
 import { sha256Text, type SessionProgress } from "./controller";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics } from "./metrics";
 import { createSessionCode } from "./sessionCode";
-import type { RvSessionState, SessionSnapshot } from "./types";
+import type { RvSession, RvSessionState, SessionSnapshot } from "./types";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
 import type { SpecialTaskInput } from "./specialTask";
@@ -49,6 +49,7 @@ export interface AutomaticRvLiteRunInput {
   sessionLanguage: InterfaceLanguage;
   requestedSettings: GenerationSettings;
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
+  resumeSession?: RvSession;
   automaticTarget?: TargetRecord;
   specialTask?: SpecialTaskInput;
   signal?: AbortSignal;
@@ -74,8 +75,8 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   const costGuard = new SessionCostGuard(input.maxSessionCostUsd);
   costGuard.validateModel(input.model);
 
-  const sessionId = `session_${crypto.randomUUID()}`;
-  const sessionCode = createSessionCode(input.sessionCodePrefix);
+  const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
+  const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const steps = renderRvLiteSteps(input.protocol, input.profileName, sessionCode);
   const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
@@ -194,7 +195,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { promptNumber, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
         response = null;
-        if (attempt < maxRetries && isRetryableProviderError(cause)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+        if (shouldRetryProviderError(cause, attempt, maxRetries)) await waitBeforeProviderRetry(attempt, input.signal, cause);
         else break;
       }
     }
@@ -255,7 +256,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
             taskError = cause instanceof Error ? cause.message : String(cause);
             await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: taskError, metadata: { promptNumber, attempt: attempt + 1, source: "special_task", requestDurationMs: Date.now() - requestStartedAt } });
             taskResponse = null;
-            if (attempt < maxRetries && isRetryableProviderError(cause)) await waitBeforeProviderRetry(attempt, input.signal, cause);
+            if (shouldRetryProviderError(cause, attempt, maxRetries)) await waitBeforeProviderRetry(attempt, input.signal, cause);
             else break;
           }
         }
