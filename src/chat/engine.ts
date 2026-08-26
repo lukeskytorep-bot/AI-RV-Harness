@@ -7,6 +7,7 @@ import type { AppRepository } from "../storage/repository";
 import type { ChatMessage, ChatMode, InterfaceLanguage } from "../types";
 import type { WorkspaceSource } from "../sources/types";
 import { DEFAULT_UNKNOWN_OUTPUT_LIMIT, estimateContextBudget } from "./contextBudget";
+import { buildLocalTemporalContext } from "./temporalContext";
 
 type ChatRepository = Pick<AppRepository, "listChatMessages" | "appendChatMessage">;
 
@@ -21,6 +22,7 @@ export function buildChatProviderMessages(input: {
   attachedProtocol?: string;
   sources?: WorkspaceSource[];
   images?: ProviderImageInput[];
+  now?: Date;
 }): ProviderMessage[] {
   const scopedHistory: ScopedChatMessage[] = input.history.map((message) => ({
     id: message.id,
@@ -40,6 +42,10 @@ export function buildChatProviderMessages(input: {
         explicitSystemInstruction: input.rvSystemPrompt,
         attachedProtocol: input.attachedProtocol,
       });
+
+  if (input.mode === "conversation") {
+    messages = [messages[0], { role: "system", content: buildLocalTemporalContext(input.language, input.now) }, ...messages.slice(1)];
+  }
 
   if (input.sources?.length) {
     const currentUserMessage = messages.at(-1)!;

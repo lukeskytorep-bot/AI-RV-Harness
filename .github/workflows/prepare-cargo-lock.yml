@@ -24,7 +24,7 @@ jobs:
       - name: Upload Cargo.lock for review and a separate commit
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: AI-RV-Harness-v0.7.9-Cargo-lock
+          name: AI-RV-Harness-v0.7.10-Cargo-lock
           path: src-tauri/Cargo.lock
           if-no-files-found: error
           retention-days: 14

@@ -15,7 +15,7 @@ import { JUDGE_RUBRIC_VERSION, type JudgeNarrative, type JudgeScoreRecord, type 
 
 export type JudgeRepository = Pick<
   AppRepository,
-  "getReveal" | "getViewerEvidence" | "recordFrozenJudgeResult" | "listJudgeScores"
+  "getReveal" | "getViewerEvidence" | "getSessionSnapshot" | "recordFrozenJudgeResult" | "listJudgeScores"
 >;
 
 export interface JudgeSelection {
@@ -48,11 +48,14 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
   if (input.judges.length < 1 || input.judges.length > 3) throw new RangeError("Select between 1 and 3 Judges.");
   for (const judge of input.judges) validateJudgeRoute(judge);
 
-  const [reveal, evidence, existing] = await Promise.all([
+  const [reveal, evidence, existing, snapshot] = await Promise.all([
     input.repository.getReveal(input.sessionId),
     input.repository.getViewerEvidence(input.sessionId),
     input.repository.listJudgeScores(input.sessionId),
+    input.repository.getSessionSnapshot(input.sessionId),
   ]);
+  if (!snapshot) throw new Error("Session Snapshot is required before Judge evaluation.");
+  const language = snapshot.sessionLanguage;
   if (!reveal) throw new Error("Reveal is required before Judge evaluation.");
   if (!evidence.trim()) throw new Error("No pre-reveal Viewer evidence is available for judging.");
   if (existing.length + input.judges.length > 3) throw new RangeError("A session may have at most 3 frozen Judge scores.");
@@ -88,16 +91,30 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
     if (settings.omitted.length) throw new Error(`Judge model does not support required generation settings: ${settings.omitted.join(", ")}`);
 
     // Each Judge gets a fresh two-message context. No Viewer/Monitor/model/research metadata is added here.
-    const response = await chat({
+    const languageDirective = language === "pl"
+      ? "[JĘZYK ODPOWIEDZI] Wszystkie wartości tekstowe i elementy list w JSON-ie zapisz wyłącznie po polsku; angielskie nazwy kluczy pozostaw bez zmian."
+      : "[RESPONSE LANGUAGE] Write every textual value and list item in the JSON exclusively in English; keep the English property names unchanged.";
+    const messages: ProviderMessage[] = [
+      { role: "system", content: getJudgePrompt(language) },
+      { role: "user", content: `${languageDirective}\n\n${packetWire}`, ...(judgeImages.length ? { images: judgeImages } : {}) },
+    ];
+    let response = await chat({
       config: judge.providerConfig,
       modelId: judge.model.modelId,
-      messages: [
-        { role: "system", content: getJudgePrompt(input.language) },
-        { role: "user", content: packetWire, ...(judgeImages.length ? { images: judgeImages } : {}) },
-      ],
+      messages,
       settings,
     });
-    const parsed = parseJudgeOutput(response.content);
+    let parsed = parseJudgeOutput(response.content);
+    if (!narrativeMatchesLanguage(parsed.narrative, language)) {
+      const originalScores = parsed.scores;
+      const correction = language === "pl"
+        ? "Popraw wyłącznie język wartości tekstowych na polski. Zachowaj dokładnie te same wyniki liczbowe, nie dodawaj danych i zwróć wyłącznie JSON o tym samym schemacie."
+        : "Correct only the language of all textual values to English. Keep exactly the same numeric scores, add no data, and return only JSON with the same schema.";
+      response = await chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: [...messages, { role: "assistant", content: response.content }, { role: "user", content: correction }], settings });
+      parsed = parseJudgeOutput(response.content);
+      if (JSON.stringify(parsed.scores) !== JSON.stringify(originalScores)) throw new Error("Judge language correction changed frozen score candidates.");
+      if (!narrativeMatchesLanguage(parsed.narrative, language)) throw new Error("Judge returned narrative text in the wrong session language.");
+    }
     pending.push({ judge, parsed, judgeIndex: existing.length + index + 1 });
     input.onProgress?.(index + 1, input.judges.length);
   }
@@ -189,6 +206,14 @@ function requireString(value: unknown, field: string): string {
 function requireStringArray(value: unknown, field: string): string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error(`Judge field ${field} must be a text array.`);
   return value.map((item) => item.trim()).filter(Boolean);
+}
+
+function narrativeMatchesLanguage(narrative: JudgeNarrative, language: InterfaceLanguage): boolean {
+  const text = [...narrative.strongestMatches, ...narrative.majorMissesContradictions, ...narrative.confabulationObservations, narrative.conciseRationale].join(" ").toLowerCase();
+  if (!text.trim()) return true;
+  const polishSignals = /[ąćęłńóśźż]/.test(text) || /\b(ale|oraz|jest|są|brak|cel|sesj|zgodn|trafn|opis|widoczn|najsiln)\w*\b/.test(text);
+  const englishSignals = /\b(the|and|this|that|with|from|target|session|evidence|match|miss|strongest|structure|structural|color|unsupported|substantial|correspondence)\b/.test(text);
+  return language === "pl" ? polishSignals || !englishSignals : englishSignals || !polishSignals;
 }
 
 export { computeJudgeTotal };

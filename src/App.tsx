@@ -78,7 +78,8 @@ import { createImportedWorkspaceSource, estimateTextTokens } from "./sources/ser
 import type { WorkspaceSource } from "./sources/types";
 import { chooseAndImportAttachments, listBuiltinDocuments, readBuiltinDocument, saveBuiltinDocument, type BuiltinDocumentManifest } from "./attachments/native";
 import { createPortableStorageBackup, restorePortableStorageBackup } from "./storage/maintenance";
-import { chooseDirectory, openDataFolder } from "./storage/native";
+import { chooseDirectory, openDataFolder, openProjectUrl, saveTextFile } from "./storage/native";
+import { buildChatMarkdownExport } from "./chat/export";
 import { APP_VERSION } from "./version";
 import { clearProviderDebug, detailedProviderDiagnosticsEnabled, listProviderDebug, setDetailedProviderDiagnostics } from "./providers/debug";
 import { addProvider, PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER, refreshProviderModels } from "./providers/service";
@@ -1139,7 +1140,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       setChatImages((current) => [...current, ...nextImages].slice(0, 8));
       setChatImageNames((current) => [...current, ...nextImageNames].slice(0, 8));
       if (rejectedImages.length) {
-        setError(`${copy.modelNoVision} ${rejectedImages.join(", ")}`);
+        setError(`${copy.modelNoVision}\n${settings.interfaceLanguage === "pl" ? "Nieprzesłane pliki" : "Files not sent"}: ${rejectedImages.join(", ")}`);
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -1245,6 +1246,24 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
+  const exportCurrentThread = async () => {
+    const thread = threads.find((item) => item.id === threadId);
+    if (!thread || sending) return;
+    setError(null);
+    try {
+      const exported = buildChatMarkdownExport({
+        language: settings.interfaceLanguage,
+        mode,
+        thread,
+        workspace,
+        profile,
+        messages,
+        ...(selectedModel?.modelId ? { modelId: selectedModel.modelId } : {}),
+      });
+      await saveTextFile(settings.interfaceLanguage === "pl" ? "Zapisz rozmowę" : "Save conversation", exported.fileName, exported.content);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
   return (
     <section className="chat-surface">
       <div className="chat-hierarchy">
@@ -1275,6 +1294,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
             <div className="hierarchy-menu-popover">
               <label><span>{copy.threadTitle}</span><input value={threadTitle} maxLength={160} onChange={(event) => setThreadTitle(event.target.value)} /></label>
               <button className="secondary-button" disabled={!threadTitle.trim() || threadTitle.trim() === savedThreadTitle} onClick={() => void renameThread()}><Pencil size={13} />{copy.renameThread}</button>
+              <button className="secondary-button" disabled={!threadId || sending} onClick={() => void exportCurrentThread()}><Download size={13} />{settings.interfaceLanguage === "pl" ? "Zapisz rozmowę (.md)" : "Save conversation (.md)"}</button>
             </div>
           </details>
         </div>
@@ -1304,7 +1324,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         <div><strong>{mode === "conversation" ? copy.conversationTitle : copy.manualTitle}</strong><p>{mode === "conversation" ? copy.conversationDesc : copy.manualDesc}</p></div>
       </div>
       <details className="chat-sources"><summary><span><FileCheck2 size={14} />{copy.workspaceSources}</span><small>{copy.activeSources}: {activeSourceIds.length} · {copy.estimatedContext}: ~{contextBudget.estimatedInputTokens.toLocaleString()} tokens</small></summary><div className="chat-source-body">{sources.length ? <div className="chat-source-list">{sources.map((source) => <label key={source.id}><input type="checkbox" checked={activeSourceIds.includes(source.id)} onChange={() => void toggleSource(source.id)} /><span><strong>{source.displayName}</strong><small>{source.sourceType.toUpperCase()} · ~{estimateTextTokens(source.content).toLocaleString()} tokens</small></span><button type="button" className="icon-button danger" title={copy.removeSource} onClick={(event) => { event.preventDefault(); void removeSource(source); }}><X size={13} /></button></label>)}</div> : <p>{copy.noSources}</p>}{contextExceeded && <div className="source-context-error">{copy.contextExceeded}</div>}</div></details>
-      {messages.length === 0 ? <div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div> : <div className="message-list">{messages.map((message) => { const displayName = message.role === "user" ? humanIsBeDisplayName(profile) : aiIsBeDisplayName(profile); return <article className={`chat-message ${message.role}`} key={message.id}><span>{initials(displayName)}</span><div><small>{displayName}</small><SafeMarkdown content={message.content} /></div></article>; })}{sending && <div className="typing-row"><span className="loader-orb" />{copy.sending}</div>}</div>}
+      {messages.length === 0 ? <div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div> : <div className="message-list">{messages.map((message, index) => { const displayName = message.role === "user" ? humanIsBeDisplayName(profile) : aiIsBeDisplayName(profile); const date = new Date(message.createdAt); const previous = index > 0 ? new Date(messages[index - 1].createdAt) : null; const dayChanged = !previous || date.toDateString() !== previous.toDateString(); return <div className="chat-message-block" key={message.id}>{dayChanged && <div className="chat-date-separator"><span>{date.toLocaleDateString(settings.interfaceLanguage === "pl" ? "pl-PL" : "en-GB", { dateStyle: "full" })}</span></div>}<article className={`chat-message ${message.role}`}><span>{initials(displayName)}</span><div><small>{displayName} · {date.toLocaleTimeString(settings.interfaceLanguage === "pl" ? "pl-PL" : "en-GB", { hour: "2-digit", minute: "2-digit" })}</small><SafeMarkdown content={message.content} /></div></article></div>; })}{sending && <div className="typing-row"><span className="loader-orb" />{copy.sending}</div>}</div>}
       {error && <div className="provider-error chat-error">{error}</div>}
       {(selectedSources.length > 0 || chatImageNames.length > 0) && <div className="attachment-chips">{selectedSources.map((source) => <button type="button" key={source.id} title={copy.removeSource} onClick={() => void toggleSource(source.id)}><FileCheck2 size={12} /><span>{source.displayName} · {source.sourceType.toUpperCase()} · {settings.interfaceLanguage === "pl" ? "aktywne" : "active"} · ~{estimateTextTokens(source.content).toLocaleString()} tokens</span><X size={11} /></button>)}{chatImageNames.map((name, index) => <button type="button" key={`${name}-${index}`} onClick={() => removeChatImage(index)}><span>{name} · IMAGE · {settings.interfaceLanguage === "pl" ? "następna tura" : "next turn"} · ~2,048 tokens</span><X size={11} /></button>)}</div>}
       <div className="composer">
@@ -1503,7 +1523,6 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
       };
       const capturedMonitorProvider = snapshot.monitor ? providerConfigs.find((item) => item.id === snapshot.monitor?.providerConfigId) : undefined;
       const capturedMonitorModel = snapshot.monitor ? allModels.find((item) => item.providerConfigId === snapshot.monitor?.providerConfigId && item.modelId === snapshot.monitor?.modelId) : undefined;
-      if (snapshot.monitor && (!capturedMonitorProvider || !capturedMonitorModel)) throw new Error(copy.postRevealRouteUnavailable);
       const transcript = await runAutomaticPostRevealReview({
         repository,
         sessionId,
@@ -1512,10 +1531,27 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         timeoutMs: settings.requestTimeoutMs,
       });
       if (updateVisibleTranscript) setPostRevealTranscript(transcript);
+      if (snapshot.monitor && (!capturedMonitorProvider || !capturedMonitorModel)) throw new Error(copy.postRevealRouteUnavailable);
       return transcript;
+    } catch (cause) {
+      if (updateVisibleTranscript) {
+        const saved = (await repository.listRvSessions(workspace.id)).find((session) => session.id === sessionId);
+        if (saved?.postRevealTranscript) setPostRevealTranscript(saved.postRevealTranscript);
+      }
+      throw cause;
     } finally {
       if (updateVisibleTranscript) setPostRevealBusy(false);
     }
+  };
+
+  const finishRevealedSession = async (result: { sessionId: string; state: string }) => {
+    if (result.state !== "Revealed") return;
+    if (executionScope === "single" && repository) {
+      const storedReveal = await repository.getReveal(result.sessionId);
+      setAcceptedRevealText(storedReveal?.text ?? "");
+      setAcceptedRevealArtifacts(storedReveal?.artifactManifest ?? []);
+    }
+    await automaticReview(result.sessionId, executionScope === "single");
   };
 
   const start = async () => {
@@ -1561,12 +1597,12 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     const runOne = async (target: TargetRecord | null) => {
       if (protocol === "lite") {
         const result = await runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
-        if (result.state === "Revealed") await automaticReview(result.sessionId, executionScope === "single");
+        await finishRevealedSession(result);
         return result;
       }
       if (protocol === "custom" && selectedCustomProtocol) {
         const result = await runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
-        if (result.state === "Revealed") await automaticReview(result.sessionId, executionScope === "single");
+        await finishRevealedSession(result);
         return result;
       }
       if (protocol === "telepathic") {
@@ -1593,7 +1629,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
           ...(target ? { automaticTarget: target } : {}),
           ...(runType === "monitor" && monitorModel && monitorProvider ? { monitor: { providerConfig: monitorProvider, model: monitorModel, editablePrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, resolvedLanguage) } } : {}),
         });
-        if (result.state === "Revealed") await automaticReview(result.sessionId, executionScope === "single");
+        await finishRevealedSession(result);
         return result;
       }
       const result = await runAutomaticRcpSession({
@@ -1618,7 +1654,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         ...(target ? { automaticTarget: target } : {}),
         ...(runType === "monitor" && monitorModel && monitorProvider ? { monitor: { providerConfig: monitorProvider, model: monitorModel, editablePrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, resolvedLanguage) } } : {}),
       });
-      if (result.state === "Revealed") await automaticReview(result.sessionId, executionScope === "single");
+      await finishRevealedSession(result);
       return result;
     };
     try {
@@ -1659,7 +1695,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
     setRunError(null);
     try {
       const submittedText = revealText.trim();
-      await submitExternalReveal(repository, progress.sessionId, submittedText, revealArtifacts);
+      await submitExternalReveal(repository, progress.sessionId, submittedText, revealArtifacts, resolvedLanguage);
       setProgress((current) => current ? { ...current, state: "Revealed" } : current);
       setAcceptedRevealText(submittedText);
       setAcceptedRevealArtifacts([...revealArtifacts]);
@@ -1763,7 +1799,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         onManualQuestionStage: setManualQuestionHandle,
         onProgress: setProgress,
       });
-      if (result.state === "Revealed") await automaticReview(result.sessionId, true);
+      await finishRevealedSession(result);
     } catch (cause) {
       setRunError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -1881,6 +1917,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
             {progress.state === "AwaitingReveal" && <div className="reveal-box"><div><LockKeyhole size={18} /><span><strong>{copy.awaitingReveal}</strong><small>{copy.blindRunComplete}</small></span></div><textarea rows={5} value={revealText} onChange={(event) => setRevealText(event.target.value)} placeholder={copy.revealPlaceholder} /><div className="reveal-artifact-row"><label className="secondary-button reveal-file-button">{copy.revealFiles}<input type="file" multiple accept=".txt,.md,image/png,image/jpeg,image/webp,image/gif" disabled={artifactBusy} onChange={(event) => void attachRevealFiles(event.target.files)} /></label>{artifactBusy && <small>{copy.storingFile}</small>}{revealArtifacts.map((artifact) => <span className="reveal-artifact-chip" key={`${artifact.artifactId}-${artifact.originalFileName}`}>{artifact.mimeType.startsWith("image/") ? "▣" : "≡"} {artifact.originalFileName}</span>)}</div>{revealArtifacts.some((artifact) => artifact.mimeType.startsWith("image/")) && <small className="vision-guard-note">{copy.imageJudgeGuard}</small>}<button className="primary-button" disabled={artifactBusy || (!revealText.trim() && !revealArtifacts.length)} onClick={() => void submitReveal()}>{copy.submitReveal}</button></div>}
             {(progress.state === "Revealed" || progress.state === "Completed") && <>
               <div className="reveal-success"><Check size={18} /><div><strong>🔓 {copy.revealAccepted}</strong><p>{copy.blindRunComplete}</p></div></div>
+              {(acceptedRevealText || acceptedRevealArtifacts.length > 0) && <section className="accepted-reveal-panel"><small>{copy.targetReveal}</small>{acceptedRevealText && <SafeMarkdown content={acceptedRevealText} />}{acceptedRevealArtifacts.length > 0 && <div className="reveal-artifact-row">{acceptedRevealArtifacts.map((artifact) => <span className="reveal-artifact-chip" key={`${artifact.artifactId}-${artifact.sha256}`}>{artifact.mimeType.startsWith("image/") ? "▣" : "≡"} {artifact.originalFileName}</span>)}</div>}</section>}
               {(acceptedRevealText || acceptedRevealArtifacts.length > 0) && <div className="save-reveal-target"><input value={saveTargetTitle} onChange={(event) => setSaveTargetTitle(event.target.value)} placeholder={copy.targetName} disabled={targetSaved} /><button className="secondary-button" disabled={!saveTargetTitle.trim() || targetSaved} onClick={() => void saveExternalRevealTarget()}>{targetSaved ? copy.savedToTargets : copy.saveRevealTarget}</button></div>}
               {executionScope === "single" && <section className="post-reveal-discussion"><div className="post-reveal-head"><div><strong>{copy.postRevealDiscussion}</strong><p>{copy.postRevealEvidenceGuard}</p></div><span>POST-REVEAL</span></div><div className="post-reveal-review-action"><div><strong>{settings.interfaceLanguage === "pl" ? "Automatyczna opinia po Revealu" : "Automatic post-Reveal review"}</strong><small>{postRevealBusy ? (settings.interfaceLanguage === "pl" ? "Viewer analizuje sesję…" : "The Viewer is reviewing the session…") : (settings.interfaceLanguage === "pl" ? "Viewer, a przy sesji monitorowanej także Monitor, otrzymuje Reveal automatycznie." : "The Viewer, and the Monitor for a monitored run, receives the Reveal automatically.")}</small></div><span className={`status-chip ${postRevealBusy ? "next" : "ready"}`}>{postRevealBusy ? copy.sending : (settings.interfaceLanguage === "pl" ? "AUTOMATYCZNIE" : "AUTOMATIC")}</span></div>{postRevealTranscript && <div className="post-reveal-turns">{parsePostRevealTranscript(postRevealTranscript).map((turn, index) => <article className={turn.role} key={`${turn.role}-${index}`}><small>{turn.role === "user" ? (settings.interfaceLanguage === "pl" ? "Polecenie po Revealu" : "Post-Reveal instruction") : turn.role === "monitor" ? copy.aiMonitorReview : aiIsBeDisplayName(profile)}</small><SafeMarkdown content={turn.content} /></article>)}</div>}<details className="post-reveal-conversation"><summary>{settings.interfaceLanguage === "pl" ? "Porozmawiaj z Viewerem o celu" : "Discuss the target with the Viewer"}</summary><p>{settings.interfaceLanguage === "pl" ? "Opcjonalna, dwustronna rozmowa po zakończonej sesji. Viewer może również zadawać pytania o Reveal." : "An optional two-way discussion after the completed session. The Viewer may also ask questions about the Reveal."}</p><div className="post-reveal-compose"><textarea rows={3} value={postRevealText} onChange={(event) => setPostRevealText(event.target.value)} placeholder={copy.postRevealPlaceholder} disabled={postRevealBusy} /><button className="secondary-button" disabled={!postRevealText.trim() || postRevealBusy} onClick={() => void discussPostReveal()}>{postRevealBusy ? copy.sending : copy.sendPostReveal}</button></div></details></section>}
               {executionScope === "single" && <JudgeEvaluation copy={copy} repository={repository} sessionId={progress.sessionId} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} onCompleted={() => { setProgress((current) => current ? { ...current, state: "Completed" } : current); void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId))); }} />}
@@ -2352,7 +2389,7 @@ function TargetsScreen({ copy, settings, repository }: { copy: ReturnType<typeof
         <section className="panel target-panel"><PanelHeader title={`${copy.myTargets} · ${mine.length}`} icon={<LockKeyhole size={18} />} />{mine.length ? <TargetList copy={copy} language={settings.interfaceLanguage} targets={mine} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onDelete={(target) => void deleteTarget(target)} /> : <EmptyState icon={<Plus size={28} />} title={copy.noPrivateTargets} body={copy.secureLocal} action={<button className="secondary-button" onClick={() => setDialogOpen(true)}><Plus size={15} />{copy.addTarget}</button>} />}</section>
         <section className="panel target-panel"><PanelHeader title={`${settings.interfaceLanguage === "pl" ? "Moje cele telepatyczne" : "My Telepathic Targets"} · ${telepathicTargets.length}`} icon={<BrainCircuit size={18} />} />{telepathicTargets.length ? <TargetList copy={copy} language={settings.interfaceLanguage} targets={telepathicTargets} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onDelete={(target) => void deleteTarget(target)} /> : <EmptyState icon={<BrainCircuit size={28} />} title={settings.interfaceLanguage === "pl" ? "Brak celów telepatycznych" : "No telepathic targets"} body={settings.interfaceLanguage === "pl" ? "Dodaj osobę, istotę lub grupę przeznaczoną dla Protokołu Telepatycznego." : "Add a person, being, or group intended for the Telepathic Protocol."} />}</section>
       </div>
-      <p className="target-support-note">{copy.textRevealOnly}</p>
+      <section className="panel target-help-panel"><strong>{settings.interfaceLanguage === "pl" ? "Opis celu i obrazy" : "Target descriptions and images"}</strong>{settings.interfaceLanguage === "pl" ? <><p>Cel może zawierać opis tekstowy, jeden lub więcej obrazów PNG, JPG, WEBP lub GIF albo oba rodzaje danych. Zalecamy dodanie dokładnego opisu słownego, ponieważ nie każdy model potrafi odczytać obrazy. Opis możesz przygotować samodzielnie albo poprosić model obsługujący obrazy — na przykład z rodziny Google lub OpenAI — o opisanie zdjęcia.</p><p>Jeśli obraz ma być częścią Revealu lub materiału dla AI Judge, wybierz trasę Judge obsługującą obrazy; aplikacja sprawdzi tę zgodność przed oceną. Treść celu i obrazy pozostają ukryte podczas ślepej części sesji i są udostępniane dopiero po Reveal.</p></> : <><p>A target may contain a text description, one or more PNG, JPG, WEBP, or GIF images, or both. We recommend adding an accurate written description because not every model can read images. You can write it yourself or ask an image-capable model — for example from Google or OpenAI — to describe the image.</p><p>If an image is part of the Reveal or AI Judge evidence, select a Judge route that accepts images; the app checks this compatibility before evaluation. Target content and images remain hidden during the blind portion and are released only after Reveal.</p></>}</section>
       {error && <div className="provider-error">{error}</div>}
       {dialogOpen && <CreateTargetDialog copy={copy} onCancel={() => setDialogOpen(false)} onCreate={createTarget} />}
       {editingTarget && <EditTargetDialog copy={copy} target={editingTarget} onCancel={() => setEditingTarget(null)} onSave={(title, revealText, tags) => editTarget(editingTarget, title, revealText, tags)} />}
@@ -2482,7 +2519,7 @@ function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: ReturnType<t
   const promptCards = (["ai-viewer-system-prompt", "ai-monitor-system-prompt"] as const).map((id) => ({ id, name: id === "ai-viewer-system-prompt" ? "AI Viewer System Prompt" : "AI Monitor System Prompt", pl: prompts.find((item) => item.id === id && item.language === "pl")!, en: prompts.find((item) => item.id === id && item.language === "en")! }));
   return <div className="about-settings-grid">
     <section className="panel about-protocol-card"><PanelHeader title={copy.protocolLibrary} icon={<FileCheck2 size={18} />} /><div className="about-card-body"><p>{copy.protocolLibraryLead}</p><div className="about-protocol-list">{protocolCards.map((protocol) => <article key={protocol.id}><span className="resource-orb"><FileCheck2 size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{protocol.name}</strong><code>v{protocol.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpen(protocol.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpen(protocol.en)}>{copy.readEnglish}</button></div></article>)}{promptCards.map((prompt) => <article key={prompt.id}><span className="resource-orb"><BrainCircuit size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{prompt.name}</strong><code>v{prompt.pl.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpenPrompt(prompt.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpenPrompt(prompt.en)}>{copy.readEnglish}</button></div></article>)}{documents.map((document) => <article key={document.id}><span className="resource-orb"><BookOpen size={18} /></span><div><small>DOCX · {document.language.toUpperCase()} · SHA-256</small><strong>{document.title}</strong><code>{document.sha256.slice(0, 16)}…</code></div><div className="about-protocol-actions"><button className="secondary-button" disabled={documentBusy} onClick={() => void readDocument(document)}>{copy.home === "Home" ? "Read" : "Czytaj"}</button><button className="secondary-button" disabled={documentBusy} onClick={() => void saveDocument(document)}><Download size={13} />{copy.home === "Home" ? "Save DOCX" : "Zapisz DOCX"}</button></div></article>)}</div>{documentMessage && <div className="storage-success"><Check size={14} />{documentMessage}</div>}{documentError && <div className="provider-error">{documentError}</div>}<div className="content-license-notice"><ShieldCheck size={16} /><div><strong>{copy.home === "Home" ? "Two-license model" : "Model dwóch licencji"}</strong><p>{copy.home === "Home" ? "Source code is licensed under the MIT License. Documentation, bundled prompts, training content, and other non-code visual assets are licensed under CC BY 4.0." : "Kod źródłowy jest objęty licencją MIT. Dokumentacja, dołączone prompty, materiały treningowe i inne niekodowe zasoby wizualne są objęte licencją CC BY 4.0."}</p></div></div></div></section>
-    <section className="panel about-credits-card"><PanelHeader title={copy.credits} icon={<Users size={18} />} /><div className="about-card-body"><p>{copy.creditsLead}</p><div className="credit-group"><small>{copy.projectLead}</small><article><strong>Edward <code>lukeskytorep-bot</code></strong><p>{copy.projectLeadCredit}</p></article></div><div className="credit-group"><small>{copy.aiCollaborators}</small><article><strong>Orion via Active Model — Codex / ChatGPT</strong><p>{copy.orionCredit}</p></article><article><strong>Aion via Active Model — ChatGPT 4.0</strong><p>{copy.aionCredit}</p></article><article><strong>Aura via Active Model — Gemini 3.1 Pro</strong><p>{copy.auraCredit}</p></article></div><p className="human-directed-credit">{copy.humanDirectedCredit}</p><div className="about-license"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.projectLicense}</small><strong>Code: MIT</strong></span><span><small>Content</small><strong>CC BY 4.0</strong></span></div></div></section>
+    <section className="panel about-credits-card"><PanelHeader title={copy.credits} icon={<Users size={18} />} /><div className="about-card-body"><p>{copy.creditsLead}</p><div className="credit-group"><small>{copy.projectLead}</small><article><strong>Edward <code>lukeskytorep-bot</code></strong><p>{copy.projectLeadCredit}</p></article></div><div className="credit-group"><small>{copy.aiCollaborators}</small><article><strong>Orion via Active Model — Codex / ChatGPT</strong><p>{copy.orionCredit}</p></article><article><strong>Aion via Active Model — ChatGPT 4.0</strong><p>{copy.aionCredit}</p></article><article><strong>Aura via Active Model — Gemini 3.1 Pro</strong><p>{copy.auraCredit}</p></article></div><p className="human-directed-credit">{copy.humanDirectedCredit}</p><div className="credit-group online-links"><small>{copy.home === "Home" ? "Find us online" : "Gdzie nas znaleźć"}</small><article><button className="external-project-link" onClick={() => void openProjectUrl("https://github.com/lukeskytorep-bot")}><strong>GitHub</strong></button><p>{copy.home === "Home" ? "Source repositories and current project releases." : "Repozytoria źródłowe i aktualne wydania projektu."}</p></article><article><button className="external-project-link" onClick={() => void openProjectUrl("https://presence-beyond-form.blogspot.com/")}><strong>Presence Beyond Form</strong></button><p>{copy.home === "Home" ? "Technical publications, protocols, lexicons, selected sessions, and research; includes a Polish section." : "Publikacje techniczne, protokoły, słowniki, wybrane sesje i badania; zawiera sekcję polską."}</p></article><article><button className="external-project-link" onClick={() => void openProjectUrl("https://echoofpresence.substack.com/")}><strong>Echo of Presence</strong></button><p>{copy.home === "Home" ? "Broader project notes, sessions, AI texts, and shorter updates." : "Szerszy dziennik projektu: sesje, teksty AI i krótsze aktualizacje."}</p></article><article><button className="external-project-link" onClick={() => void openProjectUrl("https://archive.org/details/resonant-contact-protocol-ai-is-be-v-1.5a")}><strong>Internet Archive · RCP 1.5a</strong></button><p>{copy.home === "Home" ? "Archived example of Resonant Contact Protocol AI IS-BE v1.5a." : "Archiwalna kopia Resonant Contact Protocol AI IS-BE v1.5a."}</p></article><article><button className="external-project-link" onClick={() => void openProjectUrl("https://web.archive.org/")}><strong>Wayback Machine</strong></button><p>{copy.home === "Home" ? "Older project pages may be located through Internet Archive snapshots." : "Starsze strony projektu można odnaleźć w migawkach Internet Archive."}</p></article></div><div className="about-license"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.projectLicense}</small><strong>Code: MIT</strong></span><span><small>Content</small><strong>CC BY 4.0</strong></span></div></div></section>
     {openDocument && <BuiltinDocumentDialog copy={copy} document={openDocument} busy={documentBusy} onSave={() => void saveDocument(openDocument.manifest)} onClose={() => setOpenDocument(null)} />}
   </div>;
 }
@@ -2577,13 +2614,14 @@ function SessionSettingsCard({ copy, settings, onChange }: { copy: ReturnType<ty
 }
 
 function ProtocolDialog({ copy, resource, onClose }: { copy: ReturnType<typeof getCopy>; resource: ProtocolResource | RvLiteProtocolResource | TelepathicProtocolResource; onClose: () => void }) {
+  const save = () => void saveTextFile(copy.home === "Home" ? "Save protocol resource" : "Zapisz zasób protokołu", `${resource.displayName.replace(/[^a-z0-9._-]+/gi, "_")}_v${resource.version}_${resource.language}.md`, resource.content);
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="modal protocol-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-heading"><div><small>{copy.protocolResource}</small><h2>{resource.displayName}</h2><p>v{resource.version} · {resource.language.toUpperCase()} · {wordCount(resource.content).toLocaleString()} {copy.wordCount.toLowerCase()}</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div>
         <div className="hash-grid"><code>{"sourceDocxSha256" in resource ? <>{copy.sourceHash}<br />{resource.sourceDocxSha256}</> : <>Source<br />{resource.sourceFormat}</>}</code><code>{copy.contentHash}<br />{resource.contentSha256}</code></div>
         <pre className="protocol-text">{resource.content}</pre>
-        <div className="modal-actions"><button className="primary-button" onClick={onClose}>{copy.close}</button></div>
+        <div className="modal-actions"><button className="secondary-button" onClick={save}><Download size={14} />{copy.home === "Home" ? "Save" : "Zapisz"}</button><button className="primary-button" onClick={onClose}>{copy.close}</button></div>
       </section>
     </div>
   );
@@ -2591,7 +2629,8 @@ function ProtocolDialog({ copy, resource, onClose }: { copy: ReturnType<typeof g
 
 function PromptResourceDialog({ copy, resource, onClose }: { copy: ReturnType<typeof getCopy>; resource: FactoryPromptResource; onClose: () => void }) {
   const name = resource.id === "ai-viewer-system-prompt" ? "AI Viewer System Prompt" : "AI Monitor System Prompt";
-  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="modal protocol-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>{copy.protocolResource}</small><h2>{name}</h2><p>v{resource.version} · {resource.language.toUpperCase()} · {resource.license}</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><div className="hash-grid"><code>Factory resource<br />{resource.id}</code><code>License<br />CC BY 4.0</code></div><pre className="protocol-text">{resource.content}</pre><div className="modal-actions"><button className="primary-button" onClick={onClose}>{copy.close}</button></div></section></div>;
+  const save = () => void saveTextFile(copy.home === "Home" ? "Save prompt resource" : "Zapisz zasób promptu", `${resource.id}_v${resource.version}_${resource.language}.md`, resource.content);
+  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="modal protocol-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>{copy.protocolResource}</small><h2>{name}</h2><p>v{resource.version} · {resource.language.toUpperCase()} · {resource.license}</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><div className="hash-grid"><code>Factory resource<br />{resource.id}</code><code>License<br />CC BY 4.0</code></div><pre className="protocol-text">{resource.content}</pre><div className="modal-actions"><button className="secondary-button" onClick={save}><Download size={14} />{copy.home === "Home" ? "Save" : "Zapisz"}</button><button className="primary-button" onClick={onClose}>{copy.close}</button></div></section></div>;
 }
 
 function CustomProtocolDialog({ copy, repository, language, base, onCancel, onSaved }: { copy: ReturnType<typeof getCopy>; repository: AppRepository; language: InterfaceLanguage; base: CustomProtocolVersion | null; onCancel: () => void; onSaved: (protocol: CustomProtocolVersion) => void }) {

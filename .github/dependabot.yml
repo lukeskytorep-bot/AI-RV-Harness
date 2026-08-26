@@ -4,7 +4,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # Release stabilization: keep version-update PRs paused until the 0.7.9
+    # Release stabilization: keep version-update PRs paused until the 0.7.10
     # release checks are green. Dependabot security updates remain managed by
     # the repository security settings.
     open-pull-requests-limit: 0

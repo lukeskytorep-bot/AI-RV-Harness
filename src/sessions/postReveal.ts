@@ -5,6 +5,7 @@ import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderMod
 import type { AppRepository } from "../storage/repository";
 import { parsePostRevealTranscript } from "./postRevealTranscript";
 import { buildEffectiveMonitorPrompt } from "../resources/systemPrompts";
+import { politeRevealTransition } from "./courtesy";
 
 type PostRevealRepository = Pick<AppRepository, "appendPostRevealTurn" | "getReveal" | "getSessionSnapshot" | "getViewerEvidence" | "listTargetClarifications">;
 
@@ -86,9 +87,10 @@ export async function runAutomaticPostRevealReview(input: {
 }): Promise<string> {
   const snapshot = await input.repository.getSessionSnapshot(input.sessionId);
   if (!snapshot) throw new Error("The captured Session Snapshot is required for the automatic post-Reveal review.");
-  const request = snapshot.sessionLanguage === "pl"
+  const reviewInstruction = snapshot.sessionLanguage === "pl"
     ? "Porównaj teraz zapieczętowany zapis części ślepej z ujawnionym celem. Opisz konkretnie: co poszło dobrze, co poszło źle lub było nietrafne, co było częściowo trafne, co warto poprawić w następnych sesjach oraz co już działa dobrze. Wyraźnie oddziel analizę po Revealu od wcześniejszych danych blind i nie dopisuj nowych percepcji do zapieczętowanej części sesji."
     : "Now compare the sealed blind-session record with the revealed target. Describe specifically: what went well, what was wrong or inaccurate, what was partly accurate, what should be improved in future sessions, and what already works well. Clearly separate this post-Reveal analysis from the earlier blind data and do not add new perceptions to the sealed session record.";
+  const request = `${politeRevealTransition(snapshot.sessionLanguage)}\n\n${reviewInstruction}`;
   const viewerResult = await sendPostRevealTurn({
     repository: input.repository,
     sessionId: input.sessionId,

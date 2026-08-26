@@ -73,6 +73,7 @@ describe("automatic RCP controller", () => {
       researchConditionInstruction: { id: "condition_a", version: "1", content: "CUSTOM VARIABLE A", contentSha256: "d".repeat(64) },
       chat: async ({ messages }) => {
         calls += 1;
+        if (calls === 1) expect(messages.at(-1)?.content).toContain("Hello, AI IS-BE.");
         if (calls > 1) expect(log).toContain(`save:${calls - 1}`);
         expect(messages.some((message) => message.role === "system" && message.content === "FIXED PROFILE VIEWER PROMPT")).toBe(true);
         expect(messages.some((message) => message.role === "system" && message.content.includes("CUSTOM VARIABLE A"))).toBe(true);

@@ -62,4 +62,32 @@ describe("post-reveal discussion", () => {
     expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(3, "s", "monitor", "Ocena Monitora");
     expect(result).toContain('"role":"monitor"');
   });
+
+  it("keeps the already persisted Viewer review when the Monitor call fails", async () => {
+    let transcript = "";
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({
+        providerConfigId: "pc", modelId: "viewer", sessionLanguage: "en", workspaceId: "workspace",
+        monitor: { providerConfigId: "pc-monitor", modelId: "monitor", effectivePrompt: "Monitor prompt" },
+      }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Lighthouse", hash: "h" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
+      listTargetClarifications: vi.fn().mockResolvedValue([]),
+      listMonitorRuns: vi.fn().mockResolvedValue([{ id: "run", sessionId: "s" }]),
+      listMonitorInterventions: vi.fn().mockResolvedValue([]),
+      appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant" | "monitor", content: string) => {
+        transcript += `${JSON.stringify({ role, content })}\n`;
+        return transcript;
+      }),
+    };
+    const monitorConfig: ProviderConfig = { ...config, id: "pc-monitor", label: "Monitor" };
+    const monitorModel: ProviderModel = { ...model, providerConfigId: "pc-monitor", modelId: "monitor", displayName: "Monitor", route: "openrouter:monitor" };
+    const chat = vi.fn(async ({ config: usedConfig }: { config: ProviderConfig }) => {
+      if (usedConfig.id === "pc-monitor") throw new Error("monitor unavailable");
+      return { content: "Viewer review remains saved", usage: {} };
+    });
+    await expect(runAutomaticPostRevealReview({ repository: repository as never, sessionId: "s", viewer: { providerConfig: config, model }, monitor: { providerConfig: monitorConfig, model: monitorModel }, chat: chat as never })).rejects.toThrow("monitor unavailable");
+    expect(transcript).toContain("Viewer review remains saved");
+    expect(transcript).not.toContain('"role":"monitor"');
+  });
 });

@@ -89,6 +89,14 @@ export async function openFolder(path: string): Promise<void> {
   await invoke("open_folder", { path });
 }
 
+export async function openProjectUrl(url: string): Promise<void> {
+  await invoke("open_project_url", { url });
+}
+
 export async function chooseDirectory(title: string, initialDirectory?: string): Promise<string | null> {
   return invoke<string | null>("choose_directory", { title, initialDirectory });
+}
+
+export async function saveTextFile(title: string, fileName: string, content: string): Promise<string | null> {
+  return invoke<string | null>("save_text_file", { title, fileName, content });
 }

@@ -23,6 +23,7 @@ import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
 import type { SpecialTaskInput } from "./specialTask";
 import { renderSpecialTask } from "./specialTask";
+import { politeRevealTransition } from "./courtesy";
 
 type RvLiteSessionRepository = Pick<
   AppRepository,
@@ -290,6 +291,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   if (input.signal?.aborted) return stopRun("USER STOP");
   if (!input.automaticTarget) return { sessionId, sessionCode, state: "AwaitingReveal", transcript };
 
+  await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_TRANSITION", role: "controller", content: politeRevealTransition(input.sessionLanguage) });
   const reveal = await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage);
   await input.repository.acceptReveal(sessionId, reveal);
   await input.repository.recordTargetUsage({ targetId: input.automaticTarget.id, profileId: input.profileId, sessionId });

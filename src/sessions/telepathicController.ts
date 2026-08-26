@@ -33,6 +33,7 @@ import {
   telepathicStepPrompt,
 } from "./telepathicControllerPrompts";
 import type { RvSession, RvSessionState, SessionEventRecord, SessionSnapshot } from "./types";
+import { politeRevealTransition, politeSessionGreeting } from "./courtesy";
 
 type TelepathicSessionRepository = Pick<
   AppRepository,
@@ -378,7 +379,8 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
 
   try {
     for (let step = 1; step <= 9; step += 1) {
-      const prompt = telepathicStepPrompt(input.sessionLanguage, step, sessionCode);
+      const stepPrompt = telepathicStepPrompt(input.sessionLanguage, step, sessionCode);
+      const prompt = step === 1 ? `${politeSessionGreeting(input.sessionLanguage, input.aiIsBeDisplayName)}\n\n${stepPrompt}` : stepPrompt;
       notify(input, sessionId, sessionCode, "BlindRunning", transcript, step, metrics, startedAtMs);
       const response = await viewerCall(prompt, { step, telepathicPhase: step === 1 ? "T0-T1" : step === 2 ? "T2" : step === 9 ? "T10" : `T${step}` });
       await persist(appendTelepathicStepTranscript(transcript, step, prompt, response.content, input.sessionLanguage), step);
@@ -450,6 +452,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
   if (input.signal?.aborted) return stopRun("USER STOP");
   if (!input.automaticTarget) return { sessionId, sessionCode, state: "AwaitingReveal", transcript };
 
+  await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_TRANSITION", role: "controller", content: politeRevealTransition(input.sessionLanguage) });
   const reveal = await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage);
   await input.repository.acceptReveal(sessionId, reveal);
   await input.repository.recordTargetUsage({ targetId: input.automaticTarget.id, profileId: input.profileId, sessionId });
@@ -636,6 +639,7 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
   await input.repository.appendSessionEvent(input.session.id, { eventType: "PRE_REVEAL_SEALED", role: "controller", metadata: { sha256: transcriptHash, resumed: true, metrics: snapshotSessionMetrics(metrics, startedAtMs) } });
   notifyResume("AwaitingReveal");
   if (!input.automaticTarget) return { sessionId: input.session.id, sessionCode: input.session.sessionCode, state: "AwaitingReveal", transcript };
+  await input.repository.appendSessionEvent(input.session.id, { eventType: "REVEAL_TRANSITION", role: "controller", content: politeRevealTransition(snapshot.sessionLanguage), metadata: { resumed: true } });
   const reveal = await buildAutomaticTargetReveal(input.automaticTarget, snapshot.sessionLanguage);
   await input.repository.acceptReveal(input.session.id, reveal);
   await input.repository.recordTargetUsage({ targetId: input.automaticTarget.id, profileId: input.session.profileId, sessionId: input.session.id });

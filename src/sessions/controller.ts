@@ -18,6 +18,7 @@ import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
 import type { SpecialTaskInput } from "./specialTask";
 import { renderSpecialTask } from "./specialTask";
+import { politeRevealTransition, politeSessionGreeting } from "./courtesy";
 import {
   buildEffectiveMonitorPrompt,
   lockedActivityDefinition,
@@ -255,7 +256,8 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
 
   for (let phase = 1; phase <= 6; phase += 1) {
     if (input.signal?.aborted) return stop("USER STOP");
-    const controllerPrompt = rcpPhasePrompt(input.sessionLanguage, phase, sessionCode);
+    const phasePrompt = rcpPhasePrompt(input.sessionLanguage, phase, sessionCode);
+    const controllerPrompt = phase === 1 ? `${politeSessionGreeting(input.sessionLanguage, input.aiIsBeDisplayName)}\n\n${phasePrompt}` : phasePrompt;
     messages.push({ role: "user", content: controllerPrompt });
     await input.repository.appendSessionEvent(sessionId, {
       eventType: "CONTROLLER_STEP",
@@ -565,6 +567,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   notify(input, sessionId, sessionCode, "AwaitingReveal", transcript, undefined, undefined, metrics, startedAtMs);
   if (input.signal?.aborted) return stop("USER STOP");
   if (input.automaticTarget) {
+    await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_TRANSITION", role: "controller", content: politeRevealTransition(input.sessionLanguage) });
     const reveal = await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage);
     await input.repository.acceptReveal(sessionId, reveal);
     await input.repository.recordTargetUsage({ targetId: input.automaticTarget.id, profileId: input.profileId, researchProjectId: input.researchProjectId, sessionId });
@@ -643,13 +646,14 @@ export function appendSpecialTaskTranscript(current: string, phase: number, comm
   return current ? `${current}\n\n${block}` : block;
 }
 
-export async function submitExternalReveal(repository: SessionRepository, sessionId: string, text: string, artifactManifest: RevealArtifactRecord[] = []): Promise<void> {
+export async function submitExternalReveal(repository: SessionRepository, sessionId: string, text: string, artifactManifest: RevealArtifactRecord[] = [], language: InterfaceLanguage = "en"): Promise<void> {
   const clean = text.trim();
   if (!clean && !artifactManifest.length) throw new Error("Reveal cannot be empty.");
   const source = clean && artifactManifest.length ? "external_mixed" : artifactManifest.length ? "external_artifact" : "external_text";
   const hashMaterial = artifactManifest.length
     ? JSON.stringify({ text: clean || null, artifacts: artifactManifest.map((artifact) => ({ artifactId: artifact.artifactId, mimeType: artifact.mimeType, size: artifact.size, sha256: artifact.sha256 })) })
     : clean;
+  await repository.appendSessionEvent(sessionId, { eventType: "REVEAL_TRANSITION", role: "controller", content: politeRevealTransition(language) });
   await repository.acceptReveal(sessionId, { source, ...(clean ? { text: clean } : {}), ...(artifactManifest.length ? { artifactManifest } : {}), hash: await sha256Text(hashMaterial) });
   await repository.appendSessionEvent(sessionId, { eventType: "REVEAL_ACCEPTED", role: "controller", metadata: { source, artifactCount: artifactManifest.length } });
 }

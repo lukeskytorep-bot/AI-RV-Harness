@@ -36,6 +36,7 @@ describe("automatic Telepathic Protocol controller", () => {
       repository: repository(log, snapshots),
       workspaceId: "w",
       profileId: "profile",
+      aiIsBeDisplayName: "Leo",
       providerConfig: config,
       model,
       protocol: getTelepathicProtocol("en"),
@@ -49,6 +50,7 @@ describe("automatic Telepathic Protocol controller", () => {
     });
     expect(result.state).toBe("AwaitingReveal");
     expect(prompts).toHaveLength(13);
+    expect(prompts[0]).toContain("Hello, Leo.");
     expect(prompts[0]).toContain("T0 (Telepathic Reset), followed by T1");
     expect(prompts[3]).toContain("Return now only to Step 3");
     expect(prompts[5]).toContain("Return now only to Step 4");

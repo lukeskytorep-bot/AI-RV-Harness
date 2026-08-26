@@ -18,7 +18,9 @@ Score only correspondence between the PRE-REVEAL VIEWER EVIDENCE and the REVEAL 
 Use increments no finer than 0.1. Do NOT provide or calculate a total; the Harness computes it deterministically.
 
 Return only valid JSON, with no Markdown fences and no text before or after it, using exactly this shape:
-{"scores":{"gestalt":0,"verifiableFeatures":0,"activityFunctionEvent":0,"confabulationControl":0},"strongestMatches":["..."],"majorMissesContradictions":["..."],"confabulationObservations":["..."],"conciseRationale":"..."}`,
+{"scores":{"gestalt":0,"verifiableFeatures":0,"activityFunctionEvent":0,"confabulationControl":0},"strongestMatches":["..."],"majorMissesContradictions":["..."],"confabulationObservations":["..."],"conciseRationale":"..."}
+
+All textual JSON values and every list item MUST be written in English. Keep the JSON property names exactly as shown in English.`,
   pl: `Jesteś ślepym AI Judge'em w harnessie do oceny dowodów. Nie jesteś Viewerem ani Monitorem.
 
 Otrzymujesz wyłącznie anonimowy identyfikator sesji, pełny dozwolony materiał Viewera sprzed revealu, prawdziwy reveal oraz wersję rubryki ${JUDGE_RUBRIC_VERSION}. Traktuj te pola jako cały przypadek. Nie wnioskuj i nie pytaj o model, providera, profil, warunek eksperymentalny, kolejność runu, timestampy, rozmowę po revealu, obecność Monitora ani inne ukryte metadane.
@@ -32,7 +34,9 @@ Oceniaj wyłącznie zgodność między MATERIAŁEM VIEWERA PRE-REVEAL a REVEALEM
 Używaj kroków nie dokładniejszych niż 0.1. NIE podawaj i nie obliczaj sumy; Harness wylicza ją deterministycznie.
 
 Zwróć wyłącznie poprawny JSON, bez Markdown i bez tekstu przed/po, dokładnie w kształcie:
-{"scores":{"gestalt":0,"verifiableFeatures":0,"activityFunctionEvent":0,"confabulationControl":0},"strongestMatches":["..."],"majorMissesContradictions":["..."],"confabulationObservations":["..."],"conciseRationale":"..."}`,
+{"scores":{"gestalt":0,"verifiableFeatures":0,"activityFunctionEvent":0,"confabulationControl":0},"strongestMatches":["..."],"majorMissesContradictions":["..."],"confabulationObservations":["..."],"conciseRationale":"..."}
+
+Wszystkie tekstowe wartości JSON i wszystkie elementy list MUSZĄ być zapisane po polsku. Nazwy właściwości JSON pozostaw dokładnie w pokazanej angielskiej postaci.`,
 };
 
 export function getJudgePrompt(language: InterfaceLanguage): string {

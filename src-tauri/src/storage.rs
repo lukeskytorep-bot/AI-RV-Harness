@@ -492,6 +492,28 @@ pub fn open_folder(path: String) -> Result<(), String> {
     open_directory(&directory)
 }
 
+#[tauri::command]
+pub fn open_project_url(url: String) -> Result<(), String> {
+    const ALLOWED_PROJECT_URLS: [&str; 5] = [
+        "https://github.com/lukeskytorep-bot",
+        "https://presence-beyond-form.blogspot.com/",
+        "https://echoofpresence.substack.com/",
+        "https://archive.org/details/resonant-contact-protocol-ai-is-be-v-1.5a",
+        "https://web.archive.org/",
+    ];
+    if !ALLOWED_PROJECT_URLS.contains(&url.as_str()) {
+        return Err("external URL is not on the project allowlist".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("explorer");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+    command.arg(url).spawn().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 fn open_directory(directory: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = Command::new("explorer");

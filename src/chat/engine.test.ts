@@ -29,6 +29,8 @@ describe("chat engine isolation", () => {
       return { content: "Hi", usage: {} };
     } });
     expect(packet).toContain("active conversation partner");
+    expect(packet).toContain("LOCAL TEMPORAL CONTEXT");
+    expect(packet).toContain("IANA time zone");
   });
 
   it("Manual RV sends no Conversation system prompt and only attaches RCP when explicitly requested", async () => {
@@ -39,6 +41,7 @@ describe("chat engine isolation", () => {
     } });
     expect(packet).not.toContain("active conversation partner");
     expect(packet).not.toContain("EXPLICITLY ATTACHED RV PROTOCOL");
+    expect(packet).not.toContain("LOCAL TEMPORAL CONTEXT");
     expect(JSON.parse(packet).some((message: { role: string }) => message.role === "system")).toBe(false);
   });
 
