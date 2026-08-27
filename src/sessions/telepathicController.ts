@@ -1,4 +1,4 @@
-import { evaluateMonitor, type MonitorDecision } from "../monitor/engine";
+import { evaluateMonitor, isIncompleteMonitorResponse, type MonitorDecision } from "../monitor/engine";
 import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { providerChat as nativeProviderChat } from "../providers/native";
@@ -336,6 +336,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
           phase: step,
           blindTranscript: transcript,
           exchangeNumber,
+          attempt,
           effectiveSystemPrompt: effectiveMonitorPrompt,
           packetOptions: { stageKind: "step", protocolName: "Telepathic Protocol v1.1", wholeSessionScope: step === 8 },
           requestTimeoutMs: input.requestTimeoutMs,
@@ -353,7 +354,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
               const response = { ...raw, usage: authorization.success(raw.usage) };
               const requestDurationMs = Date.now() - requestStartedAt;
               metrics = recordProviderRequest(metrics, response.usage, requestDurationMs);
-              await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", content: raw.content, metadata: { step, exchangeNumber, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs } });
+              await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", content: raw.content, metadata: { step, exchangeNumber, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs, reasoningSource: raw.reasoningSource, reasoningCharacterCount: raw.reasoningContent?.length ?? 0, failed: isIncompleteMonitorResponse(raw) } });
               return response;
             } catch (cause) {
               authorization.failure();

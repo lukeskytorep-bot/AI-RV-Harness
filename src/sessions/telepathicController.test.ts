@@ -88,6 +88,42 @@ describe("automatic Telepathic Protocol controller", () => {
     expect(monitorPackets.at(-1)).toContain("SCOPE: You may formulate a T9 question");
   });
 
+  it("keeps Monitor reasoning out of the Viewer path and does not duplicate Step 8", async () => {
+    const baseRepository = repository([]);
+    let savedTranscript = "";
+    baseRepository.updatePreRevealTranscript = async (_id: string, transcript: string) => { savedTranscript = transcript; };
+    const viewerPrompts: string[] = [];
+    let step7MonitorCalls = 0;
+    const finalInstruction = "Examine the perceived subject from above. Describe only new spatial relations. Keep the answer blind.";
+    const privateReasoning = "PRIVATE-MONITOR-THOUGHT ".repeat(300);
+
+    const result = await runAutomaticTelepathicSession({
+      repository: baseRepository, workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getTelepathicProtocol("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+      step8Questions: { mode: "monitor" }, monitor: { providerConfig: config, model },
+      chat: async ({ messages }) => {
+        const monitorRequest = messages.some((message) => message.role === "system" && message.content.includes("LOCKED TELEPATHIC EXECUTION RULE"));
+        if (monitorRequest) {
+          const packet = messages.at(-1)?.content ?? "";
+          if (packet.includes("CURRENT STEP: 7")) {
+            step7MonitorCalls += 1;
+            if (step7MonitorCalls === 1) return { content: finalInstruction, reasoningContent: privateReasoning, reasoningSource: "openai_reasoning_content", usage: {} };
+          }
+          return { content: "CONTINUE_PROTOCOL", reasoningContent: privateReasoning, reasoningSource: "openai_reasoning_content", usage: {} };
+        }
+        expect(JSON.stringify(messages)).not.toContain("PRIVATE-MONITOR-THOUGHT");
+        viewerPrompts.push(messages.at(-1)?.content ?? "");
+        return { content: `Viewer response ${viewerPrompts.length} with distinct evidence.`, usage: {} };
+      },
+    });
+
+    expect(result.state).toBe("AwaitingReveal");
+    expect(viewerPrompts.filter((prompt) => prompt === finalInstruction)).toHaveLength(1);
+    expect(viewerPrompts.filter((prompt) => prompt.includes("Controller Step 8:"))).toHaveLength(1);
+    expect(savedTranscript).toContain(finalInstruction);
+    expect(savedTranscript).not.toContain("PRIVATE-MONITOR-THOUGHT");
+  });
+
   it("reveals an eligible stored telepathic target automatically after Step 9", async () => {
     const log: string[] = [];
     const result = await runAutomaticTelepathicSession({

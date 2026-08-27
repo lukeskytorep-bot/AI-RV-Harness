@@ -15,6 +15,8 @@ describe("provider retry policy", () => {
     expect(providerRetryAllowance(error, 5)).toBe(1);
     expect(shouldRetryProviderError(error, 0, 5)).toBe(true);
     expect(shouldRetryProviderError(error, 1, 5)).toBe(false);
+    expect(providerRetryCategory(new Error("provider returned reasoning without a final assistant response [finish-reason=length]"))).toBe("single_recovery");
+    expect(providerRetryCategory(new Error("provider returned an incomplete assistant response [finish-reason=max_tokens]"))).toBe("single_recovery");
   });
 
   it("retries transient gateway statuses according to the configured count", () => {

@@ -209,6 +209,34 @@ describe("automatic RCP controller", () => {
     expect(log.filter((entry) => entry === "event:MONITOR_PROVIDER_ERROR")).toHaveLength(1);
   });
 
+  it("retries a truncated Monitor completion with a larger budget without repeating Viewer work", async () => {
+    const log: string[] = [];
+    let viewerCalls = 0;
+    let monitorCalls = 0;
+    const monitorBudgets: number[] = [];
+    const result = await runAutomaticRcpSession({
+      repository: fakeRepository(log), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, maxRetries: 5,
+      monitor: { providerConfig: config, model },
+      chat: async ({ messages, settings }) => {
+        const monitorRequest = messages.some((message) => message.role === "system" && message.content.includes("AI Monitor conducting a blind"));
+        if (monitorRequest) {
+          monitorCalls += 1;
+          monitorBudgets.push(settings.effective.maxOutputTokens ?? 0);
+          if (monitorCalls === 1) return { content: "Partial reasoning-era output", finishReason: "length", usage: {} };
+          return { content: "CONTINUE_PROTOCOL", usage: {} };
+        }
+        viewerCalls += 1;
+        return { content: `Distinct Viewer response ${viewerCalls}.`, usage: {} };
+      },
+    });
+    expect(result.state).toBe("AwaitingReveal");
+    expect(viewerCalls).toBe(6);
+    expect(monitorCalls).toBe(6);
+    expect(monitorBudgets.slice(0, 2)).toEqual([4096, 8192]);
+    expect(log.filter((entry) => entry === "event:MONITOR_PROVIDER_ERROR")).toHaveLength(1);
+  });
+
   it("withholds a Special Task from AI Monitor before Phase 4 and includes it from Phase 4 onward", async () => {
     const monitorPackets: string[] = [];
     await runAutomaticRcpSession({

@@ -30,7 +30,7 @@ describe("durable session replay", () => {
       events: [
         event(1, "VIEWER_RESPONSE", "saved viewer", { usage: { totalTokens: 10 } }),
         event(2, "MONITOR_TELEMETRY", "CONTINUE_PROTOCOL", { usage: { totalTokens: 2 } }),
-        event(3, "MONITOR_TELEMETRY", undefined, { failed: true }),
+        event(3, "MONITOR_TELEMETRY", "truncated monitor output that must not be replayed", { failed: true, finishReason: "length" }),
       ],
       liveChat,
     });

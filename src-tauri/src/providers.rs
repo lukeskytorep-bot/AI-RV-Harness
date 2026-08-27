@@ -84,6 +84,9 @@ struct ProviderUsage {
 #[derive(Debug, Serialize)]
 pub struct ProviderChatResponse {
     content: String,
+    reasoning_content: Option<String>,
+    reasoning_details: Option<Vec<Value>>,
+    reasoning_source: Option<String>,
     finish_reason: Option<String>,
     actual_model: Option<String>,
     usage: ProviderUsage,
@@ -547,9 +550,19 @@ fn parse_openai_compatible_response(payload: Value, request_id: Option<String>) 
     }
     let actual_model = payload.get("model").and_then(Value::as_str).map(str::to_string);
     let finish_reason = payload.pointer("/choices/0/finish_reason").and_then(Value::as_str).map(str::to_string);
-    let content = extract_openai_text(payload.pointer("/choices/0/message/content"));
+    let message = payload.pointer("/choices/0/message").unwrap_or(&Value::Null);
+    let raw_content = extract_openai_text(message.get("content"));
+    let reasoning_details = message.get("reasoning_details").and_then(Value::as_array).cloned();
+    let (native_reasoning, native_source) = extract_openai_reasoning(message, reasoning_details.as_deref());
+    let normalized = normalize_reasoning_response(raw_content, native_reasoning, native_source);
+    let content = normalized.content;
     if content.trim().is_empty() {
-        return Err(empty_response_error(finish_reason.as_deref(), None));
+        return Err(empty_response_error_with_reasoning(
+            finish_reason.as_deref(),
+            None,
+            normalized.reasoning_content.as_deref(),
+            normalized.incomplete_tag,
+        ));
     }
     let usage = payload.get("usage").unwrap_or(&Value::Null);
     let reasoning_tokens = usage
@@ -558,6 +571,9 @@ fn parse_openai_compatible_response(payload: Value, request_id: Option<String>) 
         .or_else(|| usage.get("reasoning_tokens").and_then(Value::as_u64));
     Ok(ProviderChatResponse {
         content,
+        reasoning_content: normalized.reasoning_content,
+        reasoning_details,
+        reasoning_source: normalized.reasoning_source,
         finish_reason,
         actual_model,
         usage: ProviderUsage {
@@ -584,17 +600,43 @@ fn parse_google_response(payload: Value, request_id: Option<String>) -> Result<P
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let content = parts
+    let raw_content = parts
         .iter()
+        .filter(|part| part.get("thought").and_then(Value::as_bool) != Some(true))
         .filter_map(|part| part.get("text").and_then(Value::as_str))
         .collect::<Vec<_>>()
         .join("");
+    let native_reasoning = parts
+        .iter()
+        .filter(|part| part.get("thought").and_then(Value::as_bool) == Some(true))
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("");
+    let reasoning_details = parts
+        .iter()
+        .filter(|part| part.get("thought").and_then(Value::as_bool) == Some(true))
+        .cloned()
+        .collect::<Vec<_>>();
+    let normalized = normalize_reasoning_response(
+        raw_content,
+        (!native_reasoning.trim().is_empty()).then_some(native_reasoning),
+        Some("google_thought_parts".to_string()),
+    );
+    let content = normalized.content;
     if content.trim().is_empty() {
-        return Err(empty_response_error(finish_reason.as_deref(), block_reason));
+        return Err(empty_response_error_with_reasoning(
+            finish_reason.as_deref(),
+            block_reason,
+            normalized.reasoning_content.as_deref(),
+            normalized.incomplete_tag,
+        ));
     }
     let usage = payload.get("usageMetadata").unwrap_or(&Value::Null);
     Ok(ProviderChatResponse {
         content,
+        reasoning_content: normalized.reasoning_content,
+        reasoning_details: (!reasoning_details.is_empty()).then_some(reasoning_details),
+        reasoning_source: normalized.reasoning_source,
         finish_reason,
         actual_model,
         usage: ProviderUsage {
@@ -615,26 +657,50 @@ fn parse_anthropic_response(payload: Value, request_id: Option<String>) -> Resul
     }
     let actual_model = payload.get("model").and_then(Value::as_str).map(str::to_string);
     let finish_reason = payload.get("stop_reason").and_then(Value::as_str).map(str::to_string);
-    let content = payload
-        .get("content")
-        .and_then(Value::as_array)
-        .map(|blocks| {
-            blocks
-                .iter()
-                .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
-                .filter_map(|block| block.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("")
+    let blocks = payload.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
+    let raw_content = blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("");
+    let native_reasoning = blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
+        .filter_map(|block| block.get("thinking").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("");
+    let reasoning_details = blocks
+        .iter()
+        .filter(|block| matches!(block.get("type").and_then(Value::as_str), Some("thinking") | Some("redacted_thinking")))
+        .map(|block| if block.get("type").and_then(Value::as_str) == Some("redacted_thinking") {
+            json!({ "type": "redacted_thinking", "redacted": true })
+        } else {
+            block.clone()
         })
-        .unwrap_or_default();
+        .collect::<Vec<_>>();
+    let normalized = normalize_reasoning_response(
+        raw_content,
+        (!native_reasoning.trim().is_empty()).then_some(native_reasoning),
+        Some("anthropic_thinking".to_string()),
+    );
+    let content = normalized.content;
     if content.trim().is_empty() {
-        return Err(empty_response_error(finish_reason.as_deref(), None));
+        return Err(empty_response_error_with_reasoning(
+            finish_reason.as_deref(),
+            None,
+            normalized.reasoning_content.as_deref(),
+            normalized.incomplete_tag,
+        ));
     }
     let usage = payload.get("usage").unwrap_or(&Value::Null);
     let input = usage.get("input_tokens").and_then(Value::as_u64);
     let output = usage.get("output_tokens").and_then(Value::as_u64);
     Ok(ProviderChatResponse {
         content,
+        reasoning_content: normalized.reasoning_content,
+        reasoning_details: (!reasoning_details.is_empty()).then_some(reasoning_details),
+        reasoning_source: normalized.reasoning_source,
         finish_reason,
         actual_model,
         usage: ProviderUsage {
@@ -653,6 +719,10 @@ fn parse_anthropic_response(payload: Value, request_id: Option<String>) -> Resul
 }
 
 fn extract_openai_text(content: Option<&Value>) -> String {
+    extract_final_text_parts(content)
+}
+
+fn extract_reasoning_text(content: Option<&Value>) -> String {
     match content {
         Some(Value::String(text)) => text.to_string(),
         Some(Value::Array(parts)) => parts
@@ -660,13 +730,174 @@ fn extract_openai_text(content: Option<&Value>) -> String {
             .filter_map(|part| match part {
                 Value::String(text) => Some(text.as_str()),
                 Value::Object(_) => part.get("text").and_then(Value::as_str)
-                    .or_else(|| part.pointer("/text/value").and_then(Value::as_str)),
+                    .or_else(|| part.pointer("/text/value").and_then(Value::as_str))
+                    .or_else(|| part.get("thinking").and_then(Value::as_str))
+                    .or_else(|| part.get("reasoning").and_then(Value::as_str)),
                 _ => None,
             })
             .collect::<Vec<_>>()
             .join(""),
         _ => String::new(),
     }
+}
+
+fn extract_final_text_parts(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(text)) => text.to_string(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| match part {
+                Value::String(text) => Some(text.as_str()),
+                Value::Object(_) => {
+                    let kind = part.get("type").and_then(Value::as_str).unwrap_or_default().to_ascii_lowercase();
+                    let reasoning_part = kind.contains("reason") || kind.contains("think") || kind.contains("thought");
+                    if reasoning_part {
+                        None
+                    } else {
+                        part.get("text").and_then(Value::as_str)
+                            .or_else(|| part.pointer("/text/value").and_then(Value::as_str))
+                            .or_else(|| part.get("thinking").and_then(Value::as_str))
+                            .or_else(|| part.get("reasoning").and_then(Value::as_str))
+                    }
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+        _ => String::new(),
+    }
+}
+
+#[derive(Debug)]
+struct NormalizedReasoningResponse {
+    content: String,
+    reasoning_content: Option<String>,
+    reasoning_source: Option<String>,
+    incomplete_tag: bool,
+}
+
+fn extract_openai_reasoning(message: &Value, details: Option<&[Value]>) -> (Option<String>, Option<String>) {
+    for (field, source) in [
+        ("reasoning", "openai_reasoning"),
+        ("reasoning_content", "openai_reasoning_content"),
+        ("thinking", "openai_thinking"),
+    ] {
+        let text = extract_reasoning_text(message.get(field));
+        if !text.trim().is_empty() {
+            return (Some(text), Some(source.to_string()));
+        }
+    }
+    let embedded = extract_embedded_reasoning(message.get("content"));
+    if !embedded.trim().is_empty() {
+        return (Some(embedded), Some("openai_reasoning_details".to_string()));
+    }
+    let text = details
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|detail| detail.get("text").and_then(Value::as_str)
+            .or_else(|| detail.pointer("/summary/0/text").and_then(Value::as_str)))
+        .collect::<Vec<_>>()
+        .join("");
+    if text.trim().is_empty() {
+        (None, None)
+    } else {
+        (Some(text), Some("openai_reasoning_details".to_string()))
+    }
+}
+
+fn extract_embedded_reasoning(content: Option<&Value>) -> String {
+    content
+        .and_then(Value::as_array)
+        .map(|parts| parts
+            .iter()
+            .filter(|part| {
+                let kind = part.get("type").and_then(Value::as_str).unwrap_or_default().to_ascii_lowercase();
+                kind.contains("reason") || kind.contains("think") || kind.contains("thought")
+            })
+            .filter_map(|part| part.get("text").and_then(Value::as_str)
+                .or_else(|| part.pointer("/text/value").and_then(Value::as_str))
+                .or_else(|| part.get("thinking").and_then(Value::as_str))
+                .or_else(|| part.get("reasoning").and_then(Value::as_str)))
+            .collect::<Vec<_>>()
+            .join(""))
+        .unwrap_or_default()
+}
+
+fn normalize_reasoning_response(
+    raw_content: String,
+    native_reasoning: Option<String>,
+    native_source: Option<String>,
+) -> NormalizedReasoningResponse {
+    let tagged = split_tagged_reasoning(&raw_content);
+    let has_native_reasoning = native_reasoning.as_deref().is_some_and(|value| !value.trim().is_empty());
+    NormalizedReasoningResponse {
+        content: tagged.as_ref().map(|value| value.content.clone()).unwrap_or(raw_content),
+        reasoning_content: if has_native_reasoning {
+            native_reasoning
+        } else {
+            tagged.as_ref().and_then(|value| (!value.reasoning.trim().is_empty()).then(|| value.reasoning.clone()))
+        },
+        reasoning_source: if has_native_reasoning {
+            native_source
+        } else if tagged.is_some() {
+            Some("tagged_content".to_string())
+        } else {
+            None
+        },
+        incomplete_tag: tagged.as_ref().is_some_and(|value| value.incomplete),
+    }
+}
+
+#[derive(Debug)]
+struct TaggedReasoningSplit {
+    content: String,
+    reasoning: String,
+    incomplete: bool,
+}
+
+fn split_tagged_reasoning(value: &str) -> Option<TaggedReasoningSplit> {
+    const TAGS: [(&str, &str); 6] = [
+        ("<think>", "</think>"),
+        ("<thinking>", "</thinking>"),
+        ("<reason>", "</reason>"),
+        ("<reasoning>", "</reasoning>"),
+        ("<thought>", "</thought>"),
+        ("<|begin_of_thought|>", "<|end_of_thought|>"),
+    ];
+    let lower = value.to_ascii_lowercase();
+    let mut cursor = 0usize;
+    let mut content = String::new();
+    let mut reasoning_parts = Vec::new();
+    let mut found = false;
+    let mut incomplete = false;
+
+    while cursor < value.len() {
+        let next = TAGS.iter().filter_map(|(open, close)| {
+            lower[cursor..].find(*open).map(|offset| (cursor + offset, *open, *close))
+        }).min_by_key(|entry| entry.0);
+        let Some((start, open, close)) = next else {
+            content.push_str(&value[cursor..]);
+            break;
+        };
+        found = true;
+        content.push_str(&value[cursor..start]);
+        let reasoning_start = start + open.len();
+        if let Some(close_offset) = lower[reasoning_start..].find(close) {
+            let reasoning_end = reasoning_start + close_offset;
+            reasoning_parts.push(value[reasoning_start..reasoning_end].to_string());
+            cursor = reasoning_end + close.len();
+        } else {
+            reasoning_parts.push(value[reasoning_start..].to_string());
+            cursor = value.len();
+            incomplete = true;
+        }
+    }
+
+    found.then(|| TaggedReasoningSplit {
+        content,
+        reasoning: reasoning_parts.join("\n\n"),
+        incomplete,
+    })
 }
 
 fn provider_payload_error(payload: &Value) -> Option<String> {
@@ -695,6 +926,24 @@ fn empty_response_error(finish_reason: Option<&str>, block_reason: Option<&str>)
         Some(reason) => format!("provider returned an empty assistant response [finish-reason={reason}]"),
         None => "provider returned an empty assistant response".to_string(),
     }
+}
+
+fn empty_response_error_with_reasoning(
+    finish_reason: Option<&str>,
+    block_reason: Option<&str>,
+    reasoning_content: Option<&str>,
+    incomplete_tag: bool,
+) -> String {
+    if block_reason.is_some() {
+        return empty_response_error(finish_reason, block_reason);
+    }
+    if incomplete_tag || reasoning_content.is_some_and(|value| !value.trim().is_empty()) {
+        return match finish_reason {
+            Some(reason) => format!("provider returned reasoning without a final assistant response [finish-reason={reason}]"),
+            None => "provider returned reasoning without a final assistant response".to_string(),
+        };
+    }
+    empty_response_error(finish_reason, block_reason)
 }
 
 #[cfg(test)]
@@ -819,6 +1068,155 @@ mod tests {
             "usage": {}
         }), None).unwrap();
         assert_eq!(parsed.content, "first second");
+        assert!(parsed.reasoning_content.is_none());
+    }
+
+    #[test]
+    fn preserves_plain_content_without_inventing_reasoning() {
+        let parsed = parse_openai_compatible_response(json!({
+            "choices": [{ "message": { "content": "ordinary final response" }, "finish_reason": "stop" }]
+        }), None).unwrap();
+        assert_eq!(parsed.content, "ordinary final response");
+        assert!(parsed.reasoning_content.is_none());
+        assert!(parsed.reasoning_source.is_none());
+    }
+
+    #[test]
+    fn separates_openrouter_reasoning_from_final_content() {
+        let parsed = parse_openai_compatible_response(json!({
+            "model": "reasoning-model",
+            "choices": [{
+                "message": {
+                    "reasoning": "Long private reasoning that must not reach the Viewer.",
+                    "content": "Ask the Viewer to describe the northern edge in three sentences.",
+                    "reasoning_details": [{ "type": "reasoning.text", "text": "detail" }]
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": { "completion_tokens_details": { "reasoning_tokens": 1200 } }
+        }), None).unwrap();
+        assert_eq!(parsed.content, "Ask the Viewer to describe the northern edge in three sentences.");
+        assert_eq!(parsed.reasoning_content.as_deref(), Some("Long private reasoning that must not reach the Viewer."));
+        assert_eq!(parsed.reasoning_source.as_deref(), Some("openai_reasoning"));
+        assert_eq!(parsed.reasoning_details.as_ref().map(Vec::len), Some(1));
+        assert_eq!(parsed.usage.reasoning_tokens, Some(1200));
+    }
+
+    #[test]
+    fn supports_reasoning_content_alias_and_reasoning_details_fallback() {
+        let alias = parse_openai_compatible_response(json!({
+            "choices": [{ "message": { "reasoning_content": "DeepSeek reasoning", "content": "Final answer" }, "finish_reason": "stop" }]
+        }), None).unwrap();
+        assert_eq!(alias.reasoning_content.as_deref(), Some("DeepSeek reasoning"));
+        assert_eq!(alias.reasoning_source.as_deref(), Some("openai_reasoning_content"));
+
+        let details = parse_openai_compatible_response(json!({
+            "choices": [{ "message": { "reasoning_details": [{ "text": "Detailed reasoning" }], "content": "Final answer" }, "finish_reason": "stop" }]
+        }), None).unwrap();
+        assert_eq!(details.reasoning_content.as_deref(), Some("Detailed reasoning"));
+        assert_eq!(details.reasoning_source.as_deref(), Some("openai_reasoning_details"));
+    }
+
+    #[test]
+    fn supports_ollama_style_thinking_field() {
+        let parsed = parse_openai_compatible_response(json!({
+            "choices": [{ "message": { "thinking": "hidden thought", "content": "visible final" }, "finish_reason": "stop" }]
+        }), None).unwrap();
+        assert_eq!(parsed.content, "visible final");
+        assert_eq!(parsed.reasoning_content.as_deref(), Some("hidden thought"));
+        assert_eq!(parsed.reasoning_source.as_deref(), Some("openai_thinking"));
+    }
+
+    #[test]
+    fn separates_typed_reasoning_parts_inside_content_arrays() {
+        let parsed = parse_openai_compatible_response(json!({
+            "choices": [{ "message": { "content": [
+                { "type": "reasoning", "text": "hidden reasoning" },
+                { "type": "output_text", "text": "visible final" }
+            ] }, "finish_reason": "stop" }]
+        }), None).unwrap();
+        assert_eq!(parsed.content, "visible final");
+        assert_eq!(parsed.reasoning_content.as_deref(), Some("hidden reasoning"));
+    }
+
+    #[test]
+    fn reports_reasoning_only_length_completion_as_incomplete() {
+        let error = parse_openai_compatible_response(json!({
+            "choices": [{ "message": { "reasoning_content": "unfinished reasoning", "content": "" }, "finish_reason": "length" }]
+        }), None).unwrap_err();
+        assert!(error.contains("reasoning without a final assistant response"));
+        assert!(error.contains("finish-reason=length"));
+    }
+
+    #[test]
+    fn separates_closed_reasoning_tags_and_rejects_unclosed_reasoning_only_output() {
+        let parsed = parse_openai_compatible_response(json!({
+            "choices": [{ "message": { "content": "<think>hidden chain</think>Final instruction with two sentences. Keep both." }, "finish_reason": "stop" }]
+        }), None).unwrap();
+        assert_eq!(parsed.content, "Final instruction with two sentences. Keep both.");
+        assert_eq!(parsed.reasoning_content.as_deref(), Some("hidden chain"));
+        assert_eq!(parsed.reasoning_source.as_deref(), Some("tagged_content"));
+
+        let error = parse_openai_compatible_response(json!({
+            "choices": [{ "message": { "content": "<|begin_of_thought|>unfinished" }, "finish_reason": "length" }]
+        }), None).unwrap_err();
+        assert!(error.contains("reasoning without a final assistant response"));
+    }
+
+    #[test]
+    fn recognizes_supported_reasoning_tag_pairs_without_semantic_guessing() {
+        for value in [
+            "<think>x</think>final",
+            "<thinking>x</thinking>final",
+            "<reason>x</reason>final",
+            "<reasoning>x</reasoning>final",
+            "<thought>x</thought>final",
+            "<|begin_of_thought|>x<|end_of_thought|>final",
+        ] {
+            let split = split_tagged_reasoning(value).unwrap();
+            assert_eq!(split.content, "final");
+            assert_eq!(split.reasoning, "x");
+            assert!(!split.incomplete);
+        }
+        assert!(split_tagged_reasoning("Wait, this is a normal final response.").is_none());
+    }
+
+    #[test]
+    fn separates_google_thought_parts_from_visible_parts() {
+        let parsed = parse_google_response(json!({
+            "modelVersion": "gemini-reasoning",
+            "candidates": [{
+                "content": { "parts": [
+                    { "thought": true, "text": "internal analysis" },
+                    { "text": "visible answer" }
+                ]},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": { "thoughtsTokenCount": 42 }
+        }), None).unwrap();
+        assert_eq!(parsed.content, "visible answer");
+        assert_eq!(parsed.reasoning_content.as_deref(), Some("internal analysis"));
+        assert_eq!(parsed.reasoning_source.as_deref(), Some("google_thought_parts"));
+        assert_eq!(parsed.usage.reasoning_tokens, Some(42));
+    }
+
+    #[test]
+    fn separates_anthropic_thinking_and_preserves_redacted_details() {
+        let parsed = parse_anthropic_response(json!({
+            "model": "claude-reasoning",
+            "content": [
+                { "type": "thinking", "thinking": "internal analysis", "signature": "sig" },
+                { "type": "redacted_thinking", "data": "opaque" },
+                { "type": "text", "text": "visible answer" }
+            ],
+            "stop_reason": "end_turn",
+            "usage": {}
+        }), None).unwrap();
+        assert_eq!(parsed.content, "visible answer");
+        assert_eq!(parsed.reasoning_content.as_deref(), Some("internal analysis"));
+        assert_eq!(parsed.reasoning_source.as_deref(), Some("anthropic_thinking"));
+        assert_eq!(parsed.reasoning_details.as_ref().map(Vec::len), Some(2));
+        assert!(parsed.reasoning_details.as_ref().unwrap()[1].get("data").is_none());
     }
 
     #[test]

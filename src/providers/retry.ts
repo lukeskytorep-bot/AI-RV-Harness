@@ -12,7 +12,7 @@ export function providerRetryCategory(cause: unknown): ProviderRetryCategory {
   const payloadCode = Number(message.match(/\bcode=(\d{3})\b/)?.[1]);
   if (Number.isFinite(payloadCode)) return [425, 429, 502, 503, 504].includes(payloadCode) ? "standard" : "never";
   if (/content[_ -]?filter|safety|blocked|block reason|prompt feedback|context length|context window|maximum context|invalid model|model not found|unauthorized|forbidden|api key|credential|permission|route mismatch|cancelled|canceled|user stop|cost limit/.test(message)) return "never";
-  if (/decod(?:e|ing).*response body|response body.*(?:incomplete|closed|read)|invalid json|empty (?:assistant|provider) response|timed? out|timeout|connection reset|connection closed|unexpected eof|network error|error sending request|connect error|dns error|temporarily unavailable|overloaded/.test(message)) return "single_recovery";
+  if (/decod(?:e|ing).*response body|response body.*(?:incomplete|closed|read)|invalid json|empty (?:assistant|provider) response|reasoning without a final assistant response|incomplete assistant response|timed? out|timeout|connection reset|connection closed|unexpected eof|network error|error sending request|connect error|dns error|temporarily unavailable|overloaded/.test(message)) return "single_recovery";
   return "never";
 }
 

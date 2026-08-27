@@ -13,6 +13,9 @@ import type {
 
 type NativeChatResponse = {
   content: string;
+  reasoning_content?: string | null;
+  reasoning_details?: unknown[] | null;
+  reasoning_source?: string | null;
   finish_reason?: string | null;
   actual_model?: string | null;
   usage?: {
@@ -115,9 +118,17 @@ export async function providerChat(input: {
       totalTokens: response.usage?.total_tokens ?? undefined,
       costUsd: response.usage?.cost_usd ?? undefined,
     },
+    reasoning: response.reasoning_content ? {
+      source: response.reasoning_source ?? "unavailable",
+      characterCount: response.reasoning_content.length,
+      detailCount: response.reasoning_details?.length ?? 0,
+    } : undefined,
   });
   return {
     content: response.content,
+    reasoningContent: response.reasoning_content ?? undefined,
+    reasoningDetails: response.reasoning_details ?? undefined,
+    reasoningSource: response.reasoning_source ?? undefined,
     finishReason: response.finish_reason ?? undefined,
     actualModel: response.actual_model ?? undefined,
     usage: {

@@ -161,6 +161,9 @@ export interface ProviderUsage {
 
 export interface ProviderChatResponse {
   content: string;
+  reasoningContent?: string;
+  reasoningDetails?: unknown[];
+  reasoningSource?: "openai_reasoning" | "openai_reasoning_content" | "openai_reasoning_details" | "openai_thinking" | "google_thought_parts" | "anthropic_thinking" | "tagged_content" | string;
   finishReason?: string;
   actualModel?: string;
   usage: ProviderUsage;

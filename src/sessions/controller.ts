@@ -6,7 +6,7 @@ import type { ProtocolResource } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
 import type { TargetRecord } from "../targets/types";
-import { evaluateMonitor, type MonitorDecision } from "../monitor/engine";
+import { evaluateMonitor, isIncompleteMonitorResponse, type MonitorDecision } from "../monitor/engine";
 import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
 import { RCP_CONTROLLER_PROMPT_ID, RCP_CONTROLLER_PROMPT_VERSION, rcpPhasePrompt } from "./controllerPrompts";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics, type SessionRunMetrics } from "./metrics";
@@ -434,6 +434,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
             phase,
             blindTranscript: transcript,
             exchangeNumber,
+            attempt,
             effectiveSystemPrompt: effectiveMonitorPrompt,
             ...(phase >= 4 ? { specialTask: renderSpecialTask(input.specialTask, input.sessionLanguage) } : {}),
             requestTimeoutMs: input.requestTimeoutMs,
@@ -445,7 +446,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
                 const monitorResponse = { ...rawMonitorResponse, usage: costAuthorization.success(rawMonitorResponse.usage) };
                 const requestDurationMs = Date.now() - requestStartedAt;
                 metrics = recordProviderRequest(metrics, monitorResponse.usage, requestDurationMs);
-                await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", content: rawMonitorResponse.content, metadata: { phase, exchangeNumber, usage: monitorResponse.usage, requestDurationMs } });
+                await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", content: rawMonitorResponse.content, metadata: { phase, exchangeNumber, usage: monitorResponse.usage, requestDurationMs, reasoningSource: rawMonitorResponse.reasoningSource, reasoningCharacterCount: rawMonitorResponse.reasoningContent?.length ?? 0, failed: isIncompleteMonitorResponse(rawMonitorResponse) } });
                 return monitorResponse;
               } catch (cause) {
                 costAuthorization.failure();

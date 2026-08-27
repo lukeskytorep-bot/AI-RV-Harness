@@ -12,6 +12,11 @@ export interface ProviderDebugEntry {
   request?: unknown;
   response?: unknown;
   usage?: ProviderUsage;
+  reasoning?: {
+    source: string;
+    characterCount: number;
+    detailCount: number;
+  };
   error?: string;
 }
 
