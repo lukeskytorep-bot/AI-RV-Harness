@@ -22,6 +22,8 @@ import { sharedResearchCapabilities, type SharedResearchCapabilities } from "../
 import { reasoningOptions } from "../providers/modelReasoningRegistry";
 import { chooseDirectory } from "../storage/native";
 import { SessionInspection } from "./SessionInspection";
+import { estimateViewerNoteTokens, prepareViewerNotesForSession, VIEWER_NOTES_ESTIMATOR_VERSION } from "../aiCenter/viewerNotes";
+import type { ViewerNoteVersion, ViewerNotesSessionSnapshot } from "../aiCenter/types";
 
 type Copy = ReturnType<typeof getCopy>;
 
@@ -31,7 +33,7 @@ function researchReasoningLabel(copy: Copy, model: ProviderModel | null, effort:
   return option.verification === "unverified" ? `${option.label} · ${copy.unverified}` : option.label;
 }
 
-const TEMPLATE_ORDER: ResearchTemplateType[] = ["reasoning", "temperature", "profile", "model", "practice", "system_prompt"];
+const TEMPLATE_ORDER: ResearchTemplateType[] = ["reasoning", "temperature", "profile", "model", "practice", "system_prompt", "viewer_notes"];
 
 export function ResearchBuilder({ copy, settings, profiles, workspaces, repository }: { copy: Copy; settings: AppSettings; profiles: Profile[]; workspaces: Workspace[]; repository: AppRepository | null }) {
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -98,6 +100,10 @@ function ResearchConfigBuilder({ copy, settings, repository, profiles, workspace
   const [profileIds, setProfileIds] = useState<string[]>([]);
   const [modelKeys, setModelKeys] = useState<string[]>([]);
   const [variants, setVariants] = useState(["", ""]);
+  const [viewerNoteVersions, setViewerNoteVersions] = useState<ViewerNoteVersion[]>([]);
+  const [viewerNoteVersionId, setViewerNoteVersionId] = useState("");
+  const [viewerNotesLoading, setViewerNotesLoading] = useState(false);
+  const [viewerNotesLoadError, setViewerNotesLoadError] = useState<string | null>(null);
   const [systemPromptSource, setSystemPromptSource] = useState<"profile" | "custom">("profile");
   const [customResearchSystemPrompt, setCustomResearchSystemPrompt] = useState("");
   const [targetIds, setTargetIds] = useState<string[]>([]);
@@ -177,6 +183,24 @@ function ResearchConfigBuilder({ copy, settings, repository, profiles, workspace
     setPreflight(null); setPreflightConfig(null); setDryRun(null);
   }, [sharedCapabilities.reasoningEfforts.join("|"), sharedCapabilities.temperatureSupported, sharedCapabilities.temperatureMin, sharedCapabilities.temperatureMax, sharedCapabilities.maxOutputTokens]);
   useEffect(() => {
+    let cancelled = false;
+    if (template !== "viewer_notes" || !baseProfile || !baseProvider || !baseModel) {
+      setViewerNoteVersions([]); setViewerNoteVersionId(""); setViewerNotesLoadError(null); setViewerNotesLoading(false);
+      return () => { cancelled = true; };
+    }
+    setViewerNotesLoading(true); setViewerNotesLoadError(null);
+    void prepareViewerNotesForSession({ repository, profileId: baseProfile.id, providerConfig: baseProvider, model: baseModel, enabled: true })
+      .then(async (snapshot) => {
+        const versions = (await repository.listViewerNoteVersions(snapshot.aiIdentityId)).slice(0, 5);
+        if (cancelled) return;
+        setViewerNoteVersions(versions);
+        setViewerNoteVersionId((current) => versions.some((item) => item.id === current) ? current : versions[0]?.id ?? "");
+      })
+      .catch((cause) => { if (!cancelled) { setViewerNoteVersions([]); setViewerNoteVersionId(""); setViewerNotesLoadError(message(cause)); } })
+      .finally(() => { if (!cancelled) setViewerNotesLoading(false); });
+    return () => { cancelled = true; };
+  }, [template, repository, baseProfile?.id, baseProvider?.id, baseModel?.modelId, baseModel?.route]);
+  useEffect(() => {
     setTargetIds([]); setPreflight(null); setPreflightConfig(null); setDryRun(null);
   }, [targetSelectionMode, targetSource, targetPoolSignature, randomTargetCount]);
 
@@ -243,6 +267,27 @@ function ResearchConfigBuilder({ copy, settings, repository, profiles, workspace
     } else if (template === "system_prompt") {
       const values = variants.map((value) => value.trim()).filter(Boolean).slice(0, 4);
       conditions = await Promise.all(values.map(async (content, index) => base(`prompt_${index + 1}`, `Prompt ${String.fromCharCode(65 + index)}`, { systemPrompt: { id: `research_prompt_${index + 1}`, version: "1", content, contentSha256: await sha256Text(content) } })));
+    } else if (template === "viewer_notes") {
+      const prepared = await prepareViewerNotesForSession({ repository, profileId: baseProfile.id, providerConfig: baseProvider, model: baseModel, enabled: true });
+      const selected = viewerNoteVersions.find((item) => item.id === viewerNoteVersionId);
+      if (!selected) throw new Error(language === "pl" ? "Wybierz jedną z pięciu ostatnich wersji Viewer Notes. Badanie wymaga istniejącej, zamrożonej wersji." : "Select one of the five most recent Viewer Notes versions. The study requires an existing frozen version.");
+      const frozen: ViewerNotesSessionSnapshot = {
+        ...prepared,
+        enabled: true,
+        versionId: selected.id,
+        versionNumber: selected.versionNumber,
+        content: selected.content,
+        contentSha256: selected.contentSha256,
+        estimatedTokens: estimateViewerNoteTokens(selected.content),
+        estimatorVersion: VIEWER_NOTES_ESTIMATOR_VERSION,
+        capacityTokens: selected.capacityTokensAtCreation,
+        capturedAt: new Date().toISOString(),
+      };
+      const withoutNotes: ViewerNotesSessionSnapshot = { ...frozen, enabled: false, content: "", contentSha256: await sha256Text(""), estimatedTokens: 0 };
+      conditions = [
+        base("no_notes", language === "pl" ? "Bez notatek" : "No Notes", { viewerNotes: withoutNotes }),
+        base("frozen_notes", language === "pl" ? `Zamrożone notatki v${selected.versionNumber}` : `Frozen Notes v${selected.versionNumber}`, { viewerNotes: frozen }),
+      ];
     } else {
       const values = variants.map((value) => value.trim()).filter(Boolean).slice(0, 4);
       conditions = await Promise.all(values.map(async (content, index) => base(`custom_${index + 1}`, `Condition ${index + 1}`, { customValue: content, conditionInstruction: { id: `custom_condition_${index + 1}`, version: "1", content, contentSha256: await sha256Text(content) } })));
@@ -323,7 +368,7 @@ function ResearchConfigBuilder({ copy, settings, repository, profiles, workspace
         customSystemPrompt={customResearchSystemPrompt}
         onCustomSystemPrompt={(value) => { setCustomResearchSystemPrompt(value); setPreflight(null); setPreflightConfig(null); setDryRun(null); }}
       />
-      <TemplateConditions copy={copy} template={template} baseModel={baseModel} baseProvider={baseProvider} models={models} providers={providers} profiles={profiles} reasoningLevels={reasoningLevels} setReasoningLevels={setReasoningLevels} temperatureValues={temperatureValues} setTemperatureValues={setTemperatureValues} profileIds={profileIds} setProfileIds={setProfileIds} modelKeys={modelKeys} setModelKeys={setModelKeys} variants={variants} setVariants={setVariants} />
+      <TemplateConditions copy={copy} template={template} baseModel={baseModel} baseProvider={baseProvider} models={models} providers={providers} profiles={profiles} reasoningLevels={reasoningLevels} setReasoningLevels={setReasoningLevels} temperatureValues={temperatureValues} setTemperatureValues={setTemperatureValues} profileIds={profileIds} setProfileIds={setProfileIds} modelKeys={modelKeys} setModelKeys={setModelKeys} variants={variants} setVariants={setVariants} viewerNoteVersions={viewerNoteVersions} viewerNoteVersionId={viewerNoteVersionId} setViewerNoteVersionId={(value) => { setViewerNoteVersionId(value); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} viewerNotesLoading={viewerNotesLoading} viewerNotesLoadError={viewerNotesLoadError} language={language} />
       <div className="research-form-section research-target-selector"><div className="research-section-head"><div><strong>{copy.researchTargets}</strong><small>{targetSelectionMode === "random" ? `${randomTargetCount} · ${copy.randomSelection}` : `${targetIds.length} ${copy.selectedOf} ${eligibleTargets.length}`}</small></div></div><div className="research-target-controls"><label><span>{copy.researchTargetSource}</span><select value={targetSource} onChange={(event) => setTargetSource(event.target.value as ResearchTargetSource)}><option value="training">{copy.trainingTargets}</option><option value="user">{copy.myTargets}</option><option value="all">{copy.bothTargetPools}</option></select></label><label><span>{copy.targetSelectionMethod}</span><select value={targetSelectionMode} onChange={(event) => setTargetSelectionMode(event.target.value as ResearchTargetSelectionMode)}><option value="random">{copy.randomSelection}</option><option value="manual">{copy.manualSelection}</option></select></label></div>{targetSelectionMode === "random" ? <div className="research-random-targets"><label><span>{copy.numberOfTargets}</span><input type="number" min={1} max={Math.max(1, eligibleTargets.length)} value={randomTargetCount} onChange={(event) => setRandomTargetCount(Math.max(1, Math.min(eligibleTargets.length || 1, Number(event.target.value) || 1)))} /></label><small>{copy.randomTargetsAtPreflight}</small></div> : <><div className="research-target-search"><Search size={14} /><input value={targetSearch} onChange={(event) => setTargetSearch(event.target.value)} placeholder={copy.searchTargets} /><button className="secondary-button" type="button" disabled={!visibleManualTargets.length} onClick={() => updateSelectedTargets([...new Set([...targetIds, ...visibleManualTargets.map((target) => target.id)])])}>{copy.selectVisible}</button><button className="secondary-button" type="button" disabled={!targetIds.length} onClick={() => updateSelectedTargets([])}>{copy.clearSelection}</button></div><div className="research-check-grid target-manual-grid">{visibleManualTargets.map((target) => <label key={target.id}><input type="checkbox" checked={targetIds.includes(target.id)} onChange={() => updateSelectedTargets(toggle(targetIds, target.id))} /><span>{target.collection === "training" ? copy.trainingTargets : copy.myTargets} · {localizedTargetTitle(target, settings.interfaceLanguage)}</span></label>)}</div></>}{!eligibleTargets.length && <small>{copy.noEligibleTargets}</small>}</div>
       <FormRow label={copy.repetitions}><input type="number" min={1} max={100} value={repetitions} onChange={(event) => setRepetitions(Math.max(1, Math.min(100, Number(event.target.value) || 1)))} /></FormRow><div className="research-inline-check"><label><input type="checkbox" checked={unusedOnly} onChange={(event) => setUnusedOnly(event.target.checked)} />{copy.unusedOnly}</label></div>
       <div className="research-form-section research-evaluation-section"><div className="research-section-head"><div><strong>{copy.researchEvaluation}</strong><small>{copy.researchEvaluationLead}</small></div><select value={evaluationMode} onChange={(event) => setEvaluationMode(event.target.value as "save_only" | "ai_judges")}><option value="save_only">{copy.saveOnlyExternal}</option><option value="ai_judges">{copy.useAiJudges}</option></select></div>{evaluationMode === "save_only" ? <p className="research-evaluation-note">{copy.saveOnlyResearchLead}</p> : <><div className="research-section-head judge-count-row"><strong>{copy.judgeModels}</strong><select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></div>{Array.from({ length: judgeCount }, (_, index) => <select className="research-judge-select" key={index} value={judgeKeys[index]} onChange={(event) => setJudgeKeys((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))}><option value="">{copy.judgeModel} {index + 1}</option>{models.map((model) => <option key={modelKey(model)} value={modelKey(model)}>{providerLabel(providers, model.providerConfigId)} · {model.displayName}</option>)}</select>)}</>}</div>
@@ -378,13 +423,14 @@ function ResearchViewerSettings(props: {
   </div>;
 }
 
-function TemplateConditions(props: { copy: Copy; template: ResearchTemplateType; baseModel: ProviderModel | null; baseProvider: ProviderConfig | null; models: ProviderModel[]; providers: ProviderConfig[]; profiles: Profile[]; reasoningLevels: ReasoningEffort[]; setReasoningLevels: (value: ReasoningEffort[]) => void; temperatureValues: string; setTemperatureValues: (value: string) => void; profileIds: string[]; setProfileIds: (value: string[]) => void; modelKeys: string[]; setModelKeys: (value: string[]) => void; variants: string[]; setVariants: (value: string[]) => void }) {
+function TemplateConditions(props: { copy: Copy; template: ResearchTemplateType; baseModel: ProviderModel | null; baseProvider: ProviderConfig | null; models: ProviderModel[]; providers: ProviderConfig[]; profiles: Profile[]; reasoningLevels: ReasoningEffort[]; setReasoningLevels: (value: ReasoningEffort[]) => void; temperatureValues: string; setTemperatureValues: (value: string) => void; profileIds: string[]; setProfileIds: (value: string[]) => void; modelKeys: string[]; setModelKeys: (value: string[]) => void; variants: string[]; setVariants: (value: string[]) => void; viewerNoteVersions: ViewerNoteVersion[]; viewerNoteVersionId: string; setViewerNoteVersionId: (value: string) => void; viewerNotesLoading: boolean; viewerNotesLoadError: string | null; language: InterfaceLanguage }) {
   const { copy, template, baseModel, baseProvider } = props;
   if (template === "practice") return <div className="research-form-section"><strong>{copy.researchConditions}</strong><div className="condition-pills"><span>FIRST</span><span>SECOND</span></div></div>;
   if (template === "reasoning") return <div className="research-form-section"><strong>{copy.reasoningLevels}</strong><div className="research-check-grid">{baseModel?.capabilities.reasoning.efforts.map((effort) => <label key={effort}><input type="checkbox" checked={props.reasoningLevels.includes(effort)} onChange={() => props.setReasoningLevels(toggle(props.reasoningLevels, effort))} /><span>{researchReasoningLabel(copy, baseModel, effort)}</span></label>)}</div>{baseModel?.capabilities.reasoning.mandatory && <small>{copy.reasoningMandatory}</small>}{!baseModel?.capabilities.reasoning.efforts.length && <small>{baseModel?.capabilities.reasoning.registryStatus === "known" ? copy.reasoningAutoOnly : copy.unknown}</small>}</div>;
   if (template === "temperature") return <FormRow label={copy.temperatureValues}><input value={props.temperatureValues} onChange={(event) => props.setTemperatureValues(event.target.value)} disabled={!baseModel?.capabilities.temperature.supported} /></FormRow>;
   if (template === "profile") return <div className="research-form-section"><strong>{copy.profilesToCompare}</strong><div className="research-check-grid">{props.profiles.map((profile) => { const provider = props.providers.find((item) => item.credentialId === profile.credentialId); const matched = props.models.some((model) => model.providerConfigId === provider?.id && model.modelId === baseModel?.modelId); return <label key={profile.id} className={!matched ? "disabled" : ""}><input type="checkbox" disabled={!matched} checked={props.profileIds.includes(profile.id)} onChange={() => props.setProfileIds(toggle(props.profileIds, profile.id))} /><span>{profile.name || copy.unnamedProfile}</span></label>; })}</div></div>;
   if (template === "model") return <div className="research-form-section"><strong>{copy.modelsToCompare}</strong><div className="research-check-grid models">{props.models.filter((model) => model.providerConfigId === baseProvider?.id).map((model) => <label key={modelKey(model)}><input type="checkbox" checked={props.modelKeys.includes(modelKey(model))} onChange={() => props.setModelKeys(toggle(props.modelKeys, modelKey(model)))} /><span>{model.displayName}</span></label>)}</div></div>;
+  if (template === "viewer_notes") return <div className="research-form-section"><div className="research-section-head"><div><strong>{props.language === "pl" ? "Zamrożona wersja Viewer Notes" : "Frozen Viewer Notes version"}</strong><small>{props.language === "pl" ? "Jedna z pięciu ostatnich wersji; ta sama treść przez całe badanie." : "One of the five most recent versions; identical content for the entire study."}</small></div></div><select value={props.viewerNoteVersionId} disabled={props.viewerNotesLoading || !props.viewerNoteVersions.length} onChange={(event) => props.setViewerNoteVersionId(event.target.value)}><option value="">{props.viewerNotesLoading ? "…" : props.language === "pl" ? "Wybierz wersję" : "Select a version"}</option>{props.viewerNoteVersions.map((version) => <option key={version.id} value={version.id}>v{version.versionNumber} · {version.estimatedTokens}/{version.capacityTokensAtCreation} tokens · {new Date(version.createdAt).toLocaleString()}</option>)}</select>{props.viewerNotesLoadError && <small className="provider-error">{props.viewerNotesLoadError}</small>}{!props.viewerNotesLoading && !props.viewerNotesLoadError && !props.viewerNoteVersions.length && <small>{props.language === "pl" ? "Ten Viewer nie ma jeszcze notatek. Najpierw ukończ sesję z włączonymi Viewer Notes." : "This Viewer has no notes yet. First complete a session with Viewer Notes enabled."}</small>}<div className="condition-pills"><span>{props.language === "pl" ? "BEZ NOTATEK" : "NO NOTES"}</span><span>{props.language === "pl" ? "ZAMROŻONE NOTATKI" : "FROZEN NOTES"}</span></div></div>;
   const label = template === "system_prompt" ? copy.systemPromptVariants : copy.customConditionInstructions;
   return <div className="research-form-section"><div className="research-section-head"><strong>{label}</strong><button className="secondary-button" disabled={props.variants.length >= 4} onClick={() => props.setVariants([...props.variants, ""])}>{copy.addVariant}</button></div><div className="research-variants">{props.variants.map((variant, index) => <div key={index}><textarea className={template === "system_prompt" ? "system-prompt-variant-editor" : undefined} rows={template === "system_prompt" ? 8 : 3} maxLength={100000} value={variant} onChange={(event) => props.setVariants(props.variants.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} placeholder={`${copy.condition} ${index + 1}`} /><button className="icon-button danger" disabled={props.variants.length <= 2} onClick={() => props.setVariants(props.variants.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button></div>)}</div></div>;
 }
@@ -485,8 +531,8 @@ function message(cause: unknown): string { return cause instanceof Error ? cause
 async function sha256Text(text: string): Promise<string> { const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)); return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join(""); }
 
 function templateName(copy: Copy, type: ResearchTemplateType): string {
-  return ({ reasoning: copy.reasoningCalibration, temperature: copy.temperatureTest, profile: copy.profileComparison, model: copy.modelComparison, practice: copy.practiceEffect, system_prompt: copy.promptComparison, custom: copy.customVariable } as const)[type];
+  return ({ reasoning: copy.reasoningCalibration, temperature: copy.temperatureTest, profile: copy.profileComparison, model: copy.modelComparison, practice: copy.practiceEffect, system_prompt: copy.promptComparison, viewer_notes: copy.viewerNotesImpact, custom: copy.customVariable } as const)[type];
 }
 function templateMeta(copy: Copy, type: ResearchTemplateType): string {
-  return ({ reasoning: "NONE · LOW · MEDIUM · HIGH", temperature: copy.temperature, profile: "Profile A · B", model: "Model A · B", practice: "FIRST ↔ SECOND", system_prompt: "Prompt A · B · C · D", custom: copy.researchConditions } as const)[type];
+  return ({ reasoning: "NONE · LOW · MEDIUM · HIGH", temperature: copy.temperature, profile: "Profile A · B", model: "Model A · B", practice: "FIRST ↔ SECOND", system_prompt: "Prompt A · B · C · D", viewer_notes: "NO NOTES ↔ FROZEN NOTES", custom: copy.researchConditions } as const)[type];
 }

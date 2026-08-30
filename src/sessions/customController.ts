@@ -20,6 +20,8 @@ import {
   lockedActivityDefinition,
   lockedViewerIdentity,
 } from "../resources/systemPrompts";
+import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
+import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 
 type CustomSessionRepository = Pick<
   AppRepository,
@@ -45,6 +47,7 @@ export interface AutomaticCustomRunInput {
   sessionLanguage: InterfaceLanguage;
   requestedSettings: GenerationSettings;
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
+  viewerNotes?: ViewerNotesSessionSnapshot;
   resumeSession?: RvSession;
   automaticTarget?: TargetRecord;
   signal?: AbortSignal;
@@ -76,6 +79,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   const messages: ProviderMessage[] = [
     ...(input.protocol.systemPrompt ? [{ role: "system" as const, content: input.protocol.systemPrompt }] : []),
     ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
+    ...(viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage)! }] : []),
   ];
   const startedAtMs = Date.now();
   let metrics = emptySessionRequestMetrics();
@@ -95,7 +99,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
 
   const fullProtocol = JSON.stringify({ systemPrompt: input.protocol.systemPrompt ?? "", steps: input.protocol.steps });
   const snapshot: SessionSnapshot = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     sessionId,
     sessionCode,
     profileId: input.profileId,
@@ -135,6 +139,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
         ],
       },
     } : {}),
+    ...(input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),
     revealSource: input.automaticTarget ? "automatic" : "external",
     ...(input.automaticTarget ? { targetId: input.automaticTarget.id } : {}),
     applicationVersion: APP_VERSION,

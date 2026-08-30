@@ -2,12 +2,13 @@ import type { AppSettings, ChatMessage, ChatMode, ChatThread, ChatThreadGroup, C
 import type { CreateProviderConfigInput, ProviderConfig, ProviderModel } from "../providers/types";
 import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionEventRecord, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
-import type { CreateJudgeRunInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
+import type { CreateJudgeRunInput, FrozenJudgeResultInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
 import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord, UpdateTargetInput } from "../targets/types";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
 import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchConditionRecord, ResearchConfig, ResearchLockPlan, ResearchProjectRecord, ResearchResults, ResearchState } from "../research/types";
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
+import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteVersion } from "../aiCenter/types";
 
 export interface AppRepository {
   listProfiles(): Promise<Profile[]>;
@@ -57,6 +58,18 @@ export interface AppRepository {
   createTrainingRun(input: CreateTrainingRunInput): Promise<TrainingRunRecord>;
   updateTrainingRun(id: string, input: UpdateTrainingRunInput): Promise<void>;
   listTrainingRuns(): Promise<TrainingRunRecord[]>;
+  ensureAiIdentity(input: EnsureAiIdentityInput): Promise<AiIdentity>;
+  listAiIdentities(profileId: string): Promise<AiIdentity[]>;
+  getViewerNoteBundle(aiIdentityId: string): Promise<ViewerNoteBundle | null>;
+  listViewerNoteVersions(aiIdentityId: string): Promise<ViewerNoteVersion[]>;
+  listViewerNoteActivationEvents(aiIdentityId: string): Promise<ViewerNoteActivationEvent[]>;
+  listViewerNoteReflectionRuns(aiIdentityId: string): Promise<ViewerNoteReflectionRun[]>;
+  setViewerNoteCapacity(aiIdentityId: string, capacityTokens: ViewerNoteCapacity): Promise<void>;
+  setViewerNotesDefaultEnabled(aiIdentityId: string, enabled: boolean): Promise<void>;
+  beginViewerNoteReflection(input: BeginViewerNoteReflectionInput): Promise<ViewerNoteReflectionRun>;
+  failViewerNoteReflection(runId: string, status: Exclude<ViewerNoteReflectionRun["status"], "PENDING" | "UPDATE" | "NO_CHANGE" | "STALE_BASE">, failureMessage: string, providerRequestId?: string, rawFinalResponseSha256?: string): Promise<void>;
+  commitViewerNoteReflection(input: CommitViewerNoteReflectionInput): Promise<ViewerNoteReflectionResult>;
+  restoreViewerNoteVersion(aiIdentityId: string, versionId: string, workspaceId?: string): Promise<void>;
   listCustomProtocols(language?: "pl" | "en"): Promise<CustomProtocolVersion[]>;
   saveCustomProtocolVersion(input: SaveCustomProtocolVersionInput): Promise<CustomProtocolVersion>;
   createRvSession(input: CreateRvSessionInput): Promise<RvSession>;
@@ -79,6 +92,7 @@ export interface AppRepository {
   listMonitorRuns(workspaceId: string): Promise<MonitorRunRecord[]>;
   listMonitorInterventions(monitorRunId: string): Promise<MonitorInterventionRecord[]>;
   recordFrozenJudgeResult(run: CreateJudgeRunInput, score: FrozenJudgeScoreInput): Promise<JudgeScoreRecord>;
+  recordFrozenJudgeResults(results: FrozenJudgeResultInput[]): Promise<JudgeScoreRecord[]>;
   listJudgeScores(sessionId: string): Promise<JudgeScoreRecord[]>;
   createResearchProject(config: ResearchConfig): Promise<ResearchProjectRecord>;
   getResearchProject(id: string): Promise<ResearchProjectRecord | null>;

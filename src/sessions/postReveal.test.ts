@@ -48,6 +48,12 @@ describe("post-reveal discussion", () => {
     const monitorConfig: ProviderConfig = { ...config, id: "pc-monitor", label: "Monitor" };
     const monitorModel: ProviderModel = { ...model, providerConfigId: "pc-monitor", modelId: "monitor", displayName: "Monitor", route: "openrouter:monitor" };
     const chat = vi.fn(async ({ config: usedConfig }: { config: ProviderConfig }) => ({ content: usedConfig.id === "pc" ? "Ocena Viewera" : "Ocena Monitora", usage: {} }));
+    const order: string[] = [];
+    repository.appendPostRevealTurn.mockImplementation(async (_id: string, role: "user" | "assistant" | "monitor", content: string) => {
+      order.push(role);
+      transcript += `${JSON.stringify({ role, content })}\n`;
+      return transcript;
+    });
 
     const result = await runAutomaticPostRevealReview({
       repository: repository as never,
@@ -55,11 +61,13 @@ describe("post-reveal discussion", () => {
       viewer: { providerConfig: config, model },
       monitor: { providerConfig: monitorConfig, model: monitorModel },
       chat: chat as never,
+      afterViewerReview: async ({ content }) => { order.push(`reflection:${content}`); },
     });
 
     expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(1, "s", "user", expect.stringContaining("co poszło dobrze"));
     expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(2, "s", "assistant", "Ocena Viewera");
     expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(3, "s", "monitor", "Ocena Monitora");
+    expect(order).toEqual(["user", "assistant", "reflection:Ocena Viewera", "monitor"]);
     expect(result).toContain('"role":"monitor"');
   });
 

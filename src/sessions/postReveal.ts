@@ -84,6 +84,7 @@ export async function runAutomaticPostRevealReview(input: {
   monitor?: { providerConfig: ProviderConfig; model: ProviderModel };
   timeoutMs?: number;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number }) => Promise<ProviderChatResponse>;
+  afterViewerReview?: (review: { content: string; transcript: string; response: ProviderChatResponse }) => Promise<void>;
 }): Promise<string> {
   const snapshot = await input.repository.getSessionSnapshot(input.sessionId);
   if (!snapshot) throw new Error("The captured Session Snapshot is required for the automatic post-Reveal review.");
@@ -101,6 +102,13 @@ export async function runAutomaticPostRevealReview(input: {
     timeoutMs: input.timeoutMs,
     ...(input.chat ? { chat: input.chat } : {}),
   });
+  if (input.afterViewerReview) {
+    try {
+      await input.afterViewerReview({ content: viewerResult.response.content, transcript: viewerResult.transcript, response: viewerResult.response });
+    } catch (cause) {
+      console.error("Viewer Notes reflection failed after the Viewer review; Monitor review will continue.", cause);
+    }
+  }
   if (!input.monitor) return viewerResult.transcript;
   const monitorResult = await sendMonitorPostRevealReview({
     repository: input.repository,

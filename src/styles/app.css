@@ -1357,6 +1357,70 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 .first-run-actions > span { display: flex; gap: 7px; }
 .first-run-error { margin: 0 32px 25px; }
 
+.viewer-notes-toggle, .manual-notes-toggle { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-soft); cursor: pointer; }
+.viewer-notes-toggle span { display: grid; gap: 3px; }
+.viewer-notes-toggle strong { font-size: 12px; }
+.viewer-notes-toggle small { color: var(--muted); font-size: 11px; }
+.viewer-notes-toggle input, .manual-notes-toggle input { width: 18px; height: 18px; accent-color: var(--violet); }
+.manual-notes-toggle { min-width: 145px; padding: 7px 9px; font-size: 11px; font-weight: 750; }
+
+.ai-center-page { display: grid; gap: 14px; }
+.ai-center-header { align-items: end; }
+.ai-center-header > div { max-width: 720px; }
+.ai-center-header > label { display: grid; min-width: 230px; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 750; }
+.ai-center-context { display: flex; align-items: center; gap: 7px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); font-size: 11px; }
+.ai-center-context svg { color: var(--violet); }
+.ai-center-context small { margin-left: auto; color: var(--muted); }
+.ai-center-tabs { margin: 0; }
+.ai-center-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.ai-center-card { display: grid; align-content: start; gap: 8px; padding: 17px; }
+.ai-center-card-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; color: var(--violet); background: var(--violet-soft); }
+.ai-center-card .status-chip { justify-self: start; }
+.ai-center-card h2 { margin: 2px 0 0; font-size: 15px; }
+.ai-center-card p { min-height: 48px; margin: 0; color: var(--muted-strong); font-size: 11px; line-height: 1.55; }
+.ai-center-card > small { color: var(--muted); font-size: 11px; }
+.ai-center-card button { justify-self: start; margin-top: 5px; }
+.ai-center-experimental { display: flex; align-items: flex-start; gap: 11px; margin-top: 12px; padding: 13px 15px; border: 1px solid rgba(83,111,218,.2); border-radius: 12px; background: var(--violet-soft); }
+.ai-center-experimental svg { flex: 0 0 auto; color: var(--violet); }
+.ai-center-experimental p { margin: 4px 0 0; color: var(--muted-strong); font-size: 11px; line-height: 1.5; }
+.ai-identity-list { display: grid; }
+.ai-identity-list article { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 12px; padding: 13px 15px; border-top: 1px solid var(--border); }
+.ai-identity-list article > div { display: grid; gap: 3px; }
+.ai-identity-list strong { font-size: 12px; }
+.ai-identity-list small { overflow-wrap: anywhere; color: var(--muted); font-size: 11px; }
+.ai-center-empty { display: grid; place-items: center; gap: 7px; padding: 34px; color: var(--muted); text-align: center; }
+.ai-center-empty p { max-width: 440px; margin: 0; font-size: 11px; line-height: 1.5; }
+.viewer-notes-layout { display: grid; grid-template-columns: 255px minmax(0, 1fr); align-items: start; gap: 12px; }
+.viewer-notes-identities { overflow: hidden; }
+.viewer-notes-identities > button { display: grid; width: 100%; gap: 3px; padding: 11px 13px; border: 0; border-top: 1px solid var(--border); color: var(--text); background: transparent; cursor: pointer; text-align: left; }
+.viewer-notes-identities > button:hover, .viewer-notes-identities > button.active { background: var(--violet-soft); }
+.viewer-notes-identities > button strong { font-size: 11px; }
+.viewer-notes-identities > button small { overflow-wrap: anywhere; color: var(--muted); font-size: 10px; }
+.viewer-notes-identities > button span { color: var(--violet); font-size: 10px; font-weight: 800; }
+.viewer-notes-main { display: grid; gap: 12px; min-width: 0; }
+.viewer-notes-current { overflow: hidden; }
+.viewer-notes-title { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 16px; }
+.viewer-notes-title > div { display: grid; gap: 4px; }
+.viewer-notes-title h2 { margin: 0; font-size: 16px; }
+.viewer-notes-title p { margin: 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.viewer-notes-title label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 750; }
+.viewer-notes-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; border-block: 1px solid var(--border); background: var(--border); }
+.viewer-notes-metrics span { display: grid; gap: 3px; padding: 10px 13px; background: var(--surface-soft); }
+.viewer-notes-metrics small { color: var(--muted); font-size: 10px; }
+.viewer-notes-metrics strong { font-size: 11px; }
+.viewer-notes-document { max-height: 460px; overflow: auto; padding: 16px; }
+.viewer-notes-document > p { color: var(--muted); font-size: 11px; line-height: 1.55; }
+.viewer-note-history, .viewer-note-runs { display: grid; }
+.viewer-note-history article, .viewer-note-runs article { display: flex; align-items: start; justify-content: space-between; gap: 13px; padding: 11px 14px; border-top: 1px solid var(--border); }
+.viewer-note-history article > div, .viewer-note-runs article > div { display: grid; min-width: 0; gap: 3px; }
+.viewer-note-history strong, .viewer-note-runs strong { font-size: 11px; }
+.viewer-note-history small, .viewer-note-runs small { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.viewer-note-history p { margin: 2px 0 0; color: var(--muted-strong); font-size: 11px; }
+.viewer-notes-help { padding: 0; overflow: hidden; }
+.viewer-notes-help summary { padding: 14px 16px; cursor: pointer; font-size: 12px; font-weight: 800; }
+.viewer-notes-help > div { display: grid; gap: 9px; padding: 0 16px 16px; }
+.viewer-notes-help p { margin: 0; color: var(--muted-strong); font-size: 11px; line-height: 1.6; }
+
 @media (max-width: 1180px) {
   body { min-width: 920px; }
   .app-shell { grid-template-columns: 210px minmax(0, 1fr); }
@@ -1364,4 +1428,6 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
   .page { width: calc(100% - 42px); }
   .template-grid { grid-template-columns: repeat(2, 1fr); }
   .session-layout { grid-template-columns: minmax(0, 1fr) 275px; }
+  .ai-center-cards { grid-template-columns: 1fr; }
+  .viewer-notes-layout { grid-template-columns: 220px minmax(0, 1fr); }
 }

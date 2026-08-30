@@ -58,7 +58,7 @@ import { clearPendingChatTurn, loadPendingChatTurn, savePendingChatTurn, type Pe
 import { estimateContextBudget } from "./chat/contextBudget";
 import { clampChatOutputTokens, defaultChatOutputTokens, loadChatOutputTokens, saveChatOutputTokens } from "./chat/outputPreference";
 import type { ChatMessage, ChatMode, ChatThread, ChatThreadGroup } from "./types";
-import { runBlindJudging } from "./judge/engine";
+import { runBlindJudging, selectMissingJudgeSelections } from "./judge/engine";
 import type { JudgingResult } from "./judge/types";
 import { chooseRandomTarget, createUserTarget, targetIsEligibleForProtocol, updateUserTarget, userTargetKind } from "./targets/service";
 import { localizedTargetReveal, localizedTargetTitle } from "./targets/localization";
@@ -71,6 +71,7 @@ import { createSessionReplay, isRecoverableProviderInterruption } from "./sessio
 import { runOrdinaryBatch, selectBatchTargets, type OrdinaryBatchProgress, type OrdinaryBatchSessionResult } from "./sessions/batch";
 import { ResearchBuilder } from "./components/ResearchBuilder";
 import { TrainingScreen } from "./components/TrainingScreen";
+import { AiCenterScreen, type AiCenterView } from "./components/AiCenterScreen";
 import { buildCalibrationHistory, type CalibrationHistoryItem } from "./research/calibration";
 import { storeRevealArtifact, storeTargetArtifact } from "./artifacts/native";
 import type { RevealArtifactRecord, RvSession } from "./sessions/types";
@@ -113,8 +114,9 @@ import {
   type TelepathicManualRecoveryState,
   type TelepathicQuestionMode,
 } from "./sessions/telepathicController";
+import { prepareViewerNotesForSession, runViewerNoteReflection, viewerNotesSystemBlock } from "./aiCenter/viewerNotes";
 
-type Page = "home" | "profiles" | "workspaces" | "research" | "targets" | "training" | "settings" | "workspace";
+type Page = "home" | "profiles" | "workspaces" | "research" | "targets" | "training" | "ai-center" | "settings" | "workspace";
 type WorkspaceTab = "chat" | "rv" | "monitor";
 
 export default function App() {
@@ -124,6 +126,7 @@ export default function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [page, setPage] = useState<Page>("home");
   const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("chat");
+  const [aiCenterView, setAiCenterView] = useState<AiCenterView>("overview");
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [profileDialog, setProfileDialog] = useState(false);
@@ -214,7 +217,10 @@ export default function App() {
     settingsSaveQueueRef.current.queue.enqueue(settings);
   }, [repository, loading, settings]);
 
-  const navigate = (destination: Page) => setPage(destination);
+  const navigate = (destination: Page) => {
+    if (destination === "ai-center") setAiCenterView("overview");
+    setPage(destination);
+  };
 
   const openWorkspace = async (workspace: Workspace) => {
     setActiveWorkspaceId(workspace.id);
@@ -307,7 +313,7 @@ export default function App() {
               onCreateProfile={() => setProfileDialog(true)}
               onCreateWorkspace={(profileId) => setWorkspaceDialogFor(profileId)}
               onOpenWorkspace={openWorkspace}
-              repository={repository}
+              repository={repository!}
               onProfilesChanged={refreshProfiles}
             />
           ) : page === "workspaces" ? (
@@ -318,6 +324,20 @@ export default function App() {
             <TargetsScreen copy={copy} settings={settings} repository={repository} />
           ) : page === "training" ? (
             <TrainingScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
+          ) : page === "ai-center" ? (
+            <AiCenterScreen
+              settings={settings}
+              profiles={profiles}
+              workspaces={workspaces}
+              activeProfileId={activeProfileId}
+              workspaceFilterId={activeWorkspace?.profileId === activeProfileId ? activeWorkspace.id : null}
+              repository={repository!}
+              initialView={aiCenterView}
+              onProfileChange={(profileId) => { setActiveProfileId(profileId); setActiveWorkspaceId(workspaces.find((item) => item.profileId === profileId)?.id ?? null); }}
+              monitorPanel={activeWorkspace && activeWorkspace.profileId === activeProfileId
+                ? <MonitorPanel copy={copy} settings={settings} profile={profiles.find((item) => item.id === activeProfileId) ?? null} workspace={activeWorkspace} repository={repository} />
+                : <EmptyCard>{settings.interfaceLanguage === "pl" ? "Utwórz lub wybierz Workspace tego Profilu, aby otworzyć historię AI Monitora." : "Create or select a Workspace for this Profile to open AI Monitor history."}</EmptyCard>}
+            />
           ) : page === "settings" ? (
             <SettingsScreen copy={copy} settings={settings} repository={repository} onChange={updateSettings} />
           ) : activeWorkspace ? (
@@ -334,6 +354,7 @@ export default function App() {
               onOpenWorkspace={openWorkspace}
               createdNotice={workspaceCreatedNotice?.workspaceId === activeWorkspace.id ? workspaceCreatedNotice : null}
               onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
+              onOpenAiMonitor={() => { setAiCenterView("monitor"); setPage("ai-center"); }}
             />
           ) : (
             <EmptyCard>{copy.noWorkspace}</EmptyCard>
@@ -592,6 +613,7 @@ function Sidebar({ page, copy, compact, onNavigate }: { page: Page; copy: Return
     { id: "research", icon: FlaskConical, label: copy.research },
     { id: "targets", icon: Crosshair, label: copy.targets },
     { id: "training", icon: GraduationCap, label: copy.training },
+    { id: "ai-center", icon: BrainCircuit, label: "AI Center" },
     { id: "settings", icon: Settings2, label: copy.settings },
   ];
   return (
@@ -852,7 +874,7 @@ function CalibrationHistory({ copy, items }: { copy: ReturnType<typeof getCopy>;
   return <section className="calibration-history"><div className="calibration-history-head"><strong>{copy.calibrationHistory}</strong><small>{items.length}</small></div>{items.length ? <div className="calibration-list">{items.slice(0, 5).map((item) => <article key={item.projectId}><div><strong>{item.modelId}</strong><span className={`status-chip ${item.historical ? "next" : "ready"}`}>{item.historical ? copy.historicalCalibration : copy.currentPairing}</span></div><small>{item.providerLabel}{item.credentialHint ? ` · ${item.credentialHint}` : ""}</small><dl><div><dt>{copy.lastCalibration}</dt><dd>{new Date(item.completedAt).toLocaleDateString()}</dd></div><div><dt>{copy.tested}</dt><dd>{item.tested.join(" / ")}</dd></div><div><dt>{copy.bestObserved}</dt><dd>{item.bestObserved.join(" / ") || "—"}</dd></div><div><dt>n</dt><dd>{item.n}</dd></div></dl></article>)}</div> : <p>{copy.noCalibrationHistory}</p>}</section>;
 }
 
-function WorkspaceScreen({ copy, settings, profile, workspace, tab, onTab, repository, profiles, workspaces, onOpenWorkspace, createdNotice, onDismissCreatedNotice }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; tab: WorkspaceTab; onTab: (tab: WorkspaceTab) => void; repository: AppRepository | null; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void; createdNotice: { workspaceId: string; workspaceName: string; profileName: string } | null; onDismissCreatedNotice: () => void }) {
+function WorkspaceScreen({ copy, settings, profile, workspace, tab, onTab, repository, profiles, workspaces, onOpenWorkspace, createdNotice, onDismissCreatedNotice, onOpenAiMonitor }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; tab: WorkspaceTab; onTab: (tab: WorkspaceTab) => void; repository: AppRepository | null; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void; createdNotice: { workspaceId: string; workspaceName: string; profileName: string } | null; onDismissCreatedNotice: () => void; onOpenAiMonitor: () => void }) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   return (
     <><div className="page workspace-page">
@@ -861,7 +883,7 @@ function WorkspaceScreen({ copy, settings, profile, workspace, tab, onTab, repos
       <div className="module-tabs">
         <button className={tab === "chat" ? "module-tab active" : "module-tab"} onClick={() => onTab("chat")}><MessageCircle size={17} />{copy.chat}</button>
         <button className={tab === "rv" ? "module-tab active" : "module-tab"} onClick={() => onTab("rv")}><Crosshair size={17} />{copy.rvSession}</button>
-        <button className={tab === "monitor" ? "module-tab active" : "module-tab"} onClick={() => onTab("monitor")}><BrainCircuit size={17} />{copy.aiMonitor}</button>
+        <button className="module-tab" onClick={onOpenAiMonitor}><BrainCircuit size={17} />AI Center · {copy.aiMonitor}</button>
       </div>
       {tab === "chat" ? <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} /> : tab === "rv" ? <RvSessionPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} /> : <MonitorPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} />}
     </div>{switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={onOpenWorkspace} onClose={() => setSwitcherOpen(false)} />}</>
@@ -888,6 +910,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
   const [modelId, setModelId] = useState("");
   const [input, setInput] = useState("");
   const [manualProtocol, setManualProtocol] = useState<"none" | "rcp" | "lite-core" | "lite-extended" | "telepathic">("none");
+  const [manualViewerNotesEnabled, setManualViewerNotesEnabled] = useState(true);
   const [maxOutputTokens, setMaxOutputTokens] = useState(String(settings.defaultMaxOutputTokens));
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [sending, setSending] = useState(false);
@@ -1183,6 +1206,19 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
     setInput("");
     setSending(true);
     setError(null);
+    let effectiveRvSystemPrompt = rvSystemPrompt;
+    try {
+      if (mode === "manual_rv" && manualViewerNotesEnabled && profile) {
+        const snapshot = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: true });
+        const notesBlock = viewerNotesSystemBlock(snapshot, language);
+        if (notesBlock) effectiveRvSystemPrompt = [rvSystemPrompt, notesBlock].filter(Boolean).join("\n\n");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setInput(content);
+      setSending(false);
+      return;
+    }
     const pending: PendingChatTurn = {
       threadId,
       mode,
@@ -1191,7 +1227,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
       modelId: selectedModel.modelId,
       content,
       requestedSettings: { ...profileGenerationDefaults(profile, selectedModel), maxOutputTokens: effectiveMaxOutputTokens },
-      ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
+      ...(effectiveRvSystemPrompt ? { rvSystemPrompt: effectiveRvSystemPrompt } : {}),
       ...(attachedProtocol ? { attachedProtocol } : {}),
       sourceIds: selectedSources.map((source) => source.id),
       images: chatImages,
@@ -1211,7 +1247,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         model: selectedModel,
         content,
         requestedSettings: { ...profileGenerationDefaults(profile, selectedModel), maxOutputTokens: effectiveMaxOutputTokens },
-        ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
+        ...(effectiveRvSystemPrompt ? { rvSystemPrompt: effectiveRvSystemPrompt } : {}),
         sources: selectedSources,
         images: chatImages,
         ...(attachedProtocol ? { attachedProtocol } : {}),
@@ -1385,7 +1421,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
             ? (settings.interfaceLanguage === "pl" ? "Limit kontekstu niedostępny" : "Context limit unavailable")
             : `${copy.estimatedContext}: ${contextBudget.percent}%`}
         </span>
-        {mode === "manual_rv" && <label className="manual-protocol-select"><span>{settings.interfaceLanguage === "pl" ? "Dołącz protokół" : "Attach protocol"}</span><select value={manualProtocol} onChange={(event) => setManualProtocol(event.target.value as typeof manualProtocol)} disabled={sending}><option value="none">{settings.interfaceLanguage === "pl" ? "Bez dodatkowego protokołu" : "No additional protocol"}</option><option value="rcp">Full RCP 1.5a</option><option value="lite-core">RV Lite Core 1.1.0</option><option value="lite-extended">RV Lite Extended 1.1.0</option><option value="telepathic">{settings.interfaceLanguage === "pl" ? "Protokół Telepatyczny 1.1" : "Telepathic Protocol 1.1"}</option></select></label>}
+        {mode === "manual_rv" && <><label className="manual-protocol-select"><span>{settings.interfaceLanguage === "pl" ? "Dołącz protokół" : "Attach protocol"}</span><select value={manualProtocol} onChange={(event) => setManualProtocol(event.target.value as typeof manualProtocol)} disabled={sending}><option value="none">{settings.interfaceLanguage === "pl" ? "Bez dodatkowego protokołu" : "No additional protocol"}</option><option value="rcp">Full RCP 1.5a</option><option value="lite-core">RV Lite Core 1.1.0</option><option value="lite-extended">RV Lite Extended 1.1.0</option><option value="telepathic">{settings.interfaceLanguage === "pl" ? "Protokół Telepatyczny 1.1" : "Telepathic Protocol 1.1"}</option></select></label><label className="manual-notes-toggle" title={settings.interfaceLanguage === "pl" ? "Dołącz aktualne Viewer Notes tej instancji AI do Manual RV." : "Attach this AI identity's current Viewer Notes to Manual RV."}><span>Viewer Notes</span><input type="checkbox" checked={manualViewerNotesEnabled} onChange={(event) => setManualViewerNotesEnabled(event.target.checked)} disabled={sending} /></label></>}
       </div>
       <div className="context-banner">
         <span className={mode === "conversation" ? "banner-icon violet" : "banner-icon cyan"}>{mode === "conversation" ? <MessageCircle size={22} /> : <ShieldCheck size={22} />}</span>
@@ -1407,6 +1443,7 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
 function RvSessionPanel({ copy, settings, profile, workspace, repository }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; repository: AppRepository | null }) {
   const [executionScope, setExecutionScope] = useState<"single" | "batch">("single");
   const [runType, setRunType] = useState<"automatic" | "monitor">("automatic");
+  const [viewerNotesEnabled, setViewerNotesEnabled] = useState(true);
   const [protocol, setProtocol] = useState<"rcp" | "lite" | "custom" | "telepathic">("rcp");
   const [liteVariant, setLiteVariant] = useState<"core" | "extended">("extended");
   const [specialTaskOptions, setSpecialTaskOptions] = useState<SpecialTaskOption[]>([]);
@@ -1472,7 +1509,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   const monitorProvider = monitorModel ? providerConfigs.find((item) => item.id === monitorModel.providerConfigId) ?? null : null;
   const eligibleTargets = targets.filter((target) => targetIsEligibleForProtocol(target, protocol));
   const batchPool = eligibleTargets;
-  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, modelId, protocol, liteVariant, specialTaskOptions, specialTaskText, telepathicQuestionMode, telepathicQuestions, customProtocolVersionId, runType, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
+  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, modelId, protocol, liteVariant, specialTaskOptions, specialTaskText, telepathicQuestionMode, telepathicQuestions, customProtocolVersionId, runType, viewerNotesEnabled, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
   const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : protocol === "telepathic" ? 9 : 6;
   const running = sessionRunning || batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
@@ -1609,6 +1646,9 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         viewer: { providerConfig: viewerProvider, model: viewerModel },
         ...(capturedMonitorProvider && capturedMonitorModel ? { monitor: { providerConfig: capturedMonitorProvider, model: capturedMonitorModel } } : {}),
         timeoutMs: settings.requestTimeoutMs,
+        afterViewerReview: async ({ content }) => {
+          await runViewerNoteReflection({ repository, sessionId, viewerReview: content, providerConfig: viewerProvider, model: viewerModel, timeoutMs: settings.requestTimeoutMs });
+        },
       });
       if (updateVisibleTranscript) setPostRevealTranscript(transcript);
       if (snapshot.monitor && (!capturedMonitorProvider || !capturedMonitorModel)) throw new Error(copy.postRevealRouteUnavailable);
@@ -1675,13 +1715,14 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
       ...(maxOutputTokens.trim() ? { maxOutputTokens: Number(maxOutputTokens) } : {}),
     };
     const runOne = async (target: TargetRecord | null) => {
+      const viewerNotes = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: viewerNotesEnabled });
       if (protocol === "lite") {
-        const result = await runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        const result = await runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
         await finishRevealedSession(result);
         return result;
       }
       if (protocol === "custom" && selectedCustomProtocol) {
-        const result = await runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        const result = await runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
         await finishRevealedSession(result);
         return result;
       }
@@ -1697,6 +1738,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
           protocol: telepathic,
           sessionLanguage: resolvedLanguage,
           requestedSettings,
+          viewerNotes,
           step8Questions: { mode: telepathicQuestionMode, ...(telepathicQuestions.length ? { questions: telepathicQuestions } : {}) },
           ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
           signal: controller.signal,
@@ -1721,6 +1763,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         protocol: rcp,
         sessionLanguage: resolvedLanguage,
         requestedSettings,
+        viewerNotes,
         aiIsBeDisplayName: aiIsBeDisplayName(profile),
         humanIsBeDisplayName: humanIsBeDisplayName(profile),
         ...(specialTask ? { specialTask } : {}),
@@ -1937,24 +1980,24 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         setLiteVariant(variant);
         const resource = getRvLite(snapshot.sessionLanguage, variant);
         if (resource.contentSha256 !== snapshot.protocol.contentSha256) throw new Error("The captured RV Lite protocol version is unavailable.");
-        result = await runAutomaticRvLiteSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, profileName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress });
+        result = await runAutomaticRvLiteSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, profileName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, ...(snapshot.viewerNotes ? { viewerNotes: snapshot.viewerNotes } : {}), ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress });
       } else if (snapshot.protocol.id === "telepathic-protocol") {
         setProtocol("telepathic");
         const resource = getTelepathicProtocol(snapshot.sessionLanguage);
         if (resource.contentSha256 !== snapshot.protocol.contentSha256) throw new Error("The captured Telepathic Protocol version is unavailable.");
         const questionMode = snapshot.telepathic?.step8QuestionMode ?? "predefined";
         setTelepathicQuestionMode(questionMode);
-        result = await runAutomaticTelepathicSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, step8Questions: { mode: questionMode, questions: snapshot.telepathic?.predefinedQuestions ?? [] }, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress, ...(questionMode === "manual" && !snapshot.monitor ? { onManualQuestionStage: setManualQuestionHandle } : {}) });
+        result = await runAutomaticTelepathicSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, viewerNotes: snapshot.viewerNotes, step8Questions: { mode: questionMode, questions: snapshot.telepathic?.predefinedQuestions ?? [] }, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress, ...(questionMode === "manual" && !snapshot.monitor ? { onManualQuestionStage: setManualQuestionHandle } : {}) });
       } else if (snapshot.protocol.id === "full-rcp") {
         setProtocol("rcp");
         const current = getFullRcp(snapshot.sessionLanguage);
         const resource: ProtocolResource = { ...current, content: snapshot.protocol.fullContent, contentSha256: snapshot.protocol.contentSha256 };
-        result = await runAutomaticRcpSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress });
+        result = await runAutomaticRcpSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, viewerNotes: snapshot.viewerNotes, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress });
       } else {
         setProtocol("custom");
         const saved = JSON.parse(snapshot.protocol.fullContent) as { systemPrompt?: string; steps: string[] };
         const resource: CustomProtocolVersion = { protocolId: snapshot.protocol.id, versionId: `captured:${snapshot.protocol.id}:${snapshot.protocol.version}`, displayName: snapshot.protocol.id, version: snapshot.protocol.version, language: snapshot.sessionLanguage, ...(saved.systemPrompt ? { systemPrompt: saved.systemPrompt } : {}), steps: saved.steps, contentHash: snapshot.protocol.contentSha256, createdAt: snapshot.createdAt };
-        result = await runAutomaticCustomSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress });
+        result = await runAutomaticCustomSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, viewerNotes: snapshot.viewerNotes, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress });
       }
       await finishRevealedSession(result);
     } catch (cause) {
@@ -2096,6 +2139,12 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
           </div>
           {!canSelectMonitor(protocol) && <small className="mode-compatibility-note">{copy.rvLiteUnavailable}</small>}
         </ConfigBlock>
+        <ConfigBlock label="Viewer Notes">
+          <label className="viewer-notes-toggle" title={settings.interfaceLanguage === "pl" ? "Gdy są włączone, bieżące notatki tego Viewera pomagają w sesji, a po Revealu i własnej ocenie Viewer może je sam zaktualizować. Opinie Monitora i Judge są wykluczone." : "When enabled, this Viewer's current notes may help during the session. After Reveal and the Viewer's own review, the Viewer may update them. Monitor and Judge opinions are excluded."}>
+            <span><strong>{settings.interfaceLanguage === "pl" ? "Użyj Viewer Notes" : "Use Viewer Notes"}</strong><small>{settings.interfaceLanguage === "pl" ? "Eksperymentalne · domyślnie włączone" : "Experimental · enabled by default"}</small></span>
+            <input type="checkbox" checked={viewerNotesEnabled} onChange={(event) => setViewerNotesEnabled(event.target.checked)} />
+          </label>
+        </ConfigBlock>
         {runType === "monitor" && <ConfigBlock label={copy.monitorModel}>
           <div className="monitor-model-config">
             <select value={monitorModelKey} onChange={(event) => setMonitorModelKey(event.target.value)}>
@@ -2226,13 +2275,19 @@ function JudgeEvaluation({
   const [busy, setBusy] = useState(false);
   const [completed, setCompleted] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [addingJudges, setAddingJudges] = useState(false);
   const keyFor = (model: ProviderModel) => `${model.providerConfigId}::${model.modelId}`;
+  const keyForRoute = (route: string) => {
+    const model = models.find((item) => item.route === route);
+    return model ? keyFor(model) : "";
+  };
   const activeSelections = selections.slice(0, judgeCount).map((key) => models.find((model) => keyFor(model) === key) ?? null);
   const ready = activeSelections.every(Boolean) && activeSelections.length === judgeCount;
 
   useEffect(() => {
     setJudgeCount(1);
     setSelections([defaultModelKey ?? "", "", ""]);
+    setAddingJudges(false);
   }, [defaultModelKey, sessionId]);
 
   useEffect(() => {
@@ -2265,9 +2320,20 @@ function JudgeEvaluation({
     setError(null);
     setCompleted(0);
     try {
-      const next = await runBlindJudging({ repository, sessionId, language, judges, onProgress: (done) => setCompleted(done) });
+      const existing = await repository.listJudgeScores(sessionId);
+      const missingJudges = selectMissingJudgeSelections(existing, judges);
+      const next = missingJudges.length
+        ? await runBlindJudging({
+          repository,
+          sessionId,
+          language,
+          judges: missingJudges,
+          onProgress: (done) => setCompleted(existing.length + done),
+        })
+        : { anonymousSessionId: "stored", scores: existing, aggregate: aggregateJudgeScores(existing) };
       await repository.updateRvSessionState(sessionId, "Completed");
       setResult(next);
+      setAddingJudges(false);
       onCompleted?.();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -2276,19 +2342,36 @@ function JudgeEvaluation({
     }
   };
 
+  const addAnotherJudge = () => {
+    if (!result || result.scores.length >= 3 || busy) return;
+    const existingKeys = result.scores.map((score) => keyForRoute(score.modelRoute));
+    if (existingKeys.some((key) => !key)) {
+      setError(language === "pl"
+        ? "Nie można dodać Judge’a: trasa jednego z zapisanych Judge’ów nie jest już dostępna. Przywróć tę samą konfigurację modelu."
+        : "Cannot add a Judge because a stored Judge route is no longer available. Restore the same model configuration first.");
+      return;
+    }
+    const nextCount = result.scores.length + 1;
+    setJudgeCount(nextCount);
+    setSelections(Array.from({ length: 3 }, (_, index) => existingKeys[index] ?? (index === result.scores.length ? defaultModelKey ?? "" : "")));
+    setAddingJudges(true);
+    setError(null);
+  };
+
   return (
     <section className="judge-evaluation">
       <div className="judge-heading">
         <span><ShieldCheck size={18} /></span>
         <div><strong>{copy.judgeEvaluation}</strong><p>{copy.judgeLead}</p></div>
       </div>
-      {!result ? <>
+      {(!result || addingJudges) && <>
         <div className="judge-config">
-          <label><span>{copy.judgeCount}</span><select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))} disabled={busy}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>
-          {Array.from({ length: judgeCount }, (_, index) => <label key={index}><span>{copy.judgeModel} {index + 1}</span><select value={selections[index]} onChange={(event) => setSelections((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} disabled={busy}><option value="">{copy.selectModel}</option>{models.map((model) => { const provider = providerConfigs.find((item) => item.id === model.providerConfigId); return <option key={keyFor(model)} value={keyFor(model)}>{provider?.label ?? model.provider} · {model.displayName}</option>; })}</select></label>)}
+          <label><span>{copy.judgeCount}</span><select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))} disabled={busy || Boolean(result)}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>
+          {Array.from({ length: judgeCount }, (_, index) => <label key={index}><span>{copy.judgeModel} {index + 1}</span><select value={selections[index]} onChange={(event) => setSelections((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} disabled={busy || Boolean(result && index < result.scores.length)}><option value="">{copy.selectModel}</option>{models.map((model) => { const provider = providerConfigs.find((item) => item.id === model.providerConfigId); return <option key={keyFor(model)} value={keyFor(model)}>{provider?.label ?? model.provider} · {model.displayName}</option>; })}</select></label>)}
         </div>
         <div className="judge-actions"><small>{busy ? `${copy.judging} ${completed}/${judgeCount}` : copy.judgeRequiresModels}</small><button className="primary-button" disabled={!isTauriRuntime() || !ready || busy} onClick={() => void evaluate()}>{busy ? copy.judging : copy.runJudges}</button></div>
-      </> : <div className="judge-results">
+      </>}
+      {result && <div className="judge-results">
         <div className="judge-aggregate">
           <span><small>{copy.meanScore}</small><strong>{result.aggregate.mean.total.toFixed(2)} / 10</strong></span>
           <span><small>{copy.medianScore}</small><strong>{result.aggregate.medianTotal.toFixed(2)}</strong></span>
@@ -2303,6 +2386,7 @@ function JudgeEvaluation({
           <JudgeNarrativeRow label={copy.confabNotes} values={score.narrative.confabulationObservations} />
           <div className="judge-rationale"><small>{copy.rationale}</small><SafeMarkdown content={score.narrative.conciseRationale} /></div>
         </article>)}</div>
+        {!addingJudges && result.scores.length < 3 && <button className="secondary-button" disabled={busy} onClick={addAnotherJudge}>{language === "pl" ? "Dodaj kolejnego Judge’a" : "Add another Judge"}</button>}
       </div>}
       {error && <div className="provider-error">{error}</div>}
     </section>
@@ -2375,9 +2459,11 @@ function BatchEvaluation({
       for (let index = 0; index < eligible.length; index += 1) {
         const session = eligible[index];
         const existing = await repository.listJudgeScores(session.sessionId);
-        const result = existing.length
-          ? { anonymousSessionId: "stored", scores: existing, aggregate: aggregateJudgeScores(existing) }
-          : await runBlindJudging({ repository, sessionId: session.sessionId, language, judges });
+        const missingJudges = selectMissingJudgeSelections(existing, judges);
+        const result = missingJudges.length
+          ? await runBlindJudging({ repository, sessionId: session.sessionId, language, judges: missingJudges })
+          : { anonymousSessionId: "stored", scores: existing, aggregate: aggregateJudgeScores(existing) };
+        if (result.scores.length !== judgeCount) throw new Error("Judge score set is incomplete after recovery.");
         await repository.updateRvSessionState(session.sessionId, "Completed");
         nextResults.push({ sessionCode: session.sessionCode, result });
         setResults([...nextResults]);

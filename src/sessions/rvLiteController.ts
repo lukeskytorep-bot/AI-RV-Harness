@@ -24,6 +24,8 @@ import { sanitizeRepetitiveOutput } from "./repetitionGuard";
 import type { SpecialTaskInput } from "./specialTask";
 import { renderSpecialTask } from "./specialTask";
 import { politeRevealTransition } from "./courtesy";
+import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
+import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 
 type RvLiteSessionRepository = Pick<
   AppRepository,
@@ -49,6 +51,7 @@ export interface AutomaticRvLiteRunInput {
   sessionLanguage: InterfaceLanguage;
   requestedSettings: GenerationSettings;
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
+  viewerNotes?: ViewerNotesSessionSnapshot;
   resumeSession?: RvSession;
   automaticTarget?: TargetRecord;
   specialTask?: SpecialTaskInput;
@@ -80,9 +83,10 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   const steps = renderRvLiteSteps(input.protocol, input.profileName, sessionCode);
   const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
-  const messages: ProviderMessage[] = input.rvSystemPrompt?.content.trim()
-    ? [{ role: "system", content: input.rvSystemPrompt.content.trim() }]
-    : [];
+  const messages: ProviderMessage[] = [
+    ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
+    ...(viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage)! }] : []),
+  ];
   const startedAtMs = Date.now();
   let metrics = emptySessionRequestMetrics();
   let transcript = "";
@@ -100,7 +104,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   await input.repository.updateRvSessionState(sessionId, "Preflight");
 
   const snapshot: SessionSnapshot = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     sessionId,
     sessionCode,
     profileId: input.profileId,
@@ -141,6 +145,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         ],
       },
     } : {}),
+    ...(input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),
     ...(renderSpecialTask(input.specialTask, input.sessionLanguage) ? {
       specialTask: {
         selectedOptions: input.specialTask?.selectedOptions ?? [],

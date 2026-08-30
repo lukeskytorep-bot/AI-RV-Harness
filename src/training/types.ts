@@ -22,6 +22,7 @@ export interface TrainingRunRecord {
   categories: TrainingCategory[];
   judgeModelRoutes: string[];
   pauseAfterBlock: boolean;
+  viewerNotesEnabled?: boolean;
   directoryPath?: string;
   estimatedCostUsd?: number;
   actualCostUsd?: number;

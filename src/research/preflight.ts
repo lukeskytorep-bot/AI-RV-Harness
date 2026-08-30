@@ -87,7 +87,7 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     if (condition.conditionInstruction?.content.trim()) conditionInstructionContents.add(condition.conditionInstruction.content.trim());
 
     const protocol = getFullRcp(config.sessionLanguage);
-    const roughInputTokens = Math.ceil((protocol.content.length + (condition.systemPrompt?.content.length ?? 0)) / 3.5);
+    const roughInputTokens = Math.ceil((protocol.content.length + (condition.systemPrompt?.content.length ?? 0) + (condition.viewerNotes?.content.length ?? 0)) / 3.5);
     if (model.capabilities.contextTokens && roughInputTokens >= model.capabilities.contextTokens) checks.push(fail(`${prefix}:context`, `${condition.label}: estimated protocol context exceeds the advertised context window`));
     else if (model.capabilities.contextTokens) checks.push(pass(`${prefix}:context`, `${condition.label}: advertised context window is sufficient for protocol preflight`));
     else checks.push(warn(`${prefix}:context`, `${condition.label}: provider did not advertise a context limit`));
@@ -144,6 +144,27 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
         ? pass("custom_condition_design", "Every Custom Variable condition has a distinct frozen instruction")
         : fail("custom_condition_design", "Custom Variable requires a distinct frozen instruction for every condition"));
     }
+  }
+
+  if (config.templateType === "viewer_notes") {
+    const without = config.conditions.find((condition) => condition.key === "no_notes");
+    const frozen = config.conditions.find((condition) => condition.key === "frozen_notes");
+    const designIsValid = config.conditions.length === 2
+      && without?.viewerNotes?.enabled === false
+      && without.viewerNotes.content === ""
+      && frozen?.viewerNotes?.enabled === true
+      && Boolean(frozen.viewerNotes.versionId)
+      && Boolean(frozen.viewerNotes.content.trim())
+      && frozen.viewerNotes.aiIdentityId === without.viewerNotes.aiIdentityId
+      && frozen.viewerNotes.versionId === without.viewerNotes.versionId;
+    checks.push(designIsValid
+      ? pass("viewer_notes_design", "No Notes and one immutable Frozen Notes snapshot are locked for the exact same Viewer identity")
+      : fail("viewer_notes_design", "Viewer Notes Impact requires exactly No Notes and one non-empty Frozen Notes version for the same Viewer identity"));
+    checks.push(pass("viewer_notes_feedback", "Viewer Notes updates are disabled during Research; the frozen version cannot drift between sessions"));
+  } else {
+    checks.push(config.conditions.every((condition) => !condition.viewerNotes?.enabled)
+      ? pass("viewer_notes_control", "Viewer Notes are excluded from this Research template")
+      : fail("viewer_notes_control", "Viewer Notes may vary only in the dedicated Viewer Notes Impact template"));
   }
 
   if (config.judges.length === 0) {

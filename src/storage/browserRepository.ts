@@ -2,7 +2,7 @@ import type { AppSettings, ChatMessage, ChatMode, ChatThread, ChatThreadGroup, C
 import type { CreateProviderConfigInput, ProviderConfig, ProviderModel } from "../providers/types";
 import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionEventRecord, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
-import type { CreateJudgeRunInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
+import type { CreateJudgeRunInput, FrozenJudgeResultInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
 import { computeJudgeTotal } from "../domain/scoring";
 import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord, UpdateTargetInput } from "../targets/types";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
@@ -14,6 +14,7 @@ import { serializePostRevealTurn } from "../sessions/postRevealTranscript";
 import { verifySealedViewerEvidence } from "../sessions/evidence";
 import { applyReasoningRegistryToProviderModel } from "../providers/modelReasoningRegistry";
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
+import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteSettings, ViewerNoteVersion } from "../aiCenter/types";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
@@ -43,6 +44,11 @@ const WORKSPACE_SOURCES_KEY = "rvh.dev.workspace_sources";
 const CHAT_SOURCE_SELECTION_KEY = "rvh.dev.chat_source_selection";
 const TARGET_CLARIFICATIONS_KEY = "rvh.dev.target_clarifications";
 const TRAINING_RUNS_KEY = "rvh.dev.training_runs";
+const AI_IDENTITIES_KEY = "rvh.dev.ai_identities";
+const AI_NOTE_SETTINGS_KEY = "rvh.dev.ai_note_settings";
+const AI_NOTE_VERSIONS_KEY = "rvh.dev.ai_note_versions";
+const AI_NOTE_REFLECTION_RUNS_KEY = "rvh.dev.ai_note_reflection_runs";
+const AI_NOTE_ACTIVATION_EVENTS_KEY = "rvh.dev.ai_note_activation_events";
 
 function read<T>(key: string, fallback: T): T {
   try {
@@ -62,6 +68,134 @@ function isLegacyStarterTrainingTarget(target: TargetRecord): boolean {
 }
 
 export class BrowserRepository implements AppRepository {
+  async ensureAiIdentity(input: EnsureAiIdentityInput): Promise<AiIdentity> {
+    const identities = read<AiIdentity[]>(AI_IDENTITIES_KEY, []);
+    const normalizedBaseUrl = input.baseUrl?.trim().replace(/\/+$/, "").toLowerCase();
+    const existing = identities.find((item) => item.profileId === input.profileId
+      && item.credentialFingerprint === input.credentialFingerprint
+      && item.provider === input.provider
+      && (item.normalizedBaseUrl ?? "") === (normalizedBaseUrl ?? "")
+      && item.modelRoute === input.modelRoute
+      && item.role === input.role);
+    const timestamp = nowIso();
+    if (existing) {
+      const updated: AiIdentity = { ...existing, providerConfigId: input.providerConfigId, modelId: input.modelId, modelDisplayName: input.modelDisplayName, credentialDisplay: input.credentialDisplay, routeStatus: "available", lastUsedAt: timestamp, updatedAt: timestamp };
+      write(AI_IDENTITIES_KEY, identities.map((item) => item.id === updated.id ? updated : item));
+      return updated;
+    }
+    const identity: AiIdentity = {
+      id: createId("ai_identity"), profileId: input.profileId, credentialFingerprint: input.credentialFingerprint,
+      credentialDisplay: input.credentialDisplay, providerConfigId: input.providerConfigId, provider: input.provider,
+      ...(normalizedBaseUrl ? { normalizedBaseUrl } : {}), modelId: input.modelId, modelRoute: input.modelRoute,
+      modelDisplayName: input.modelDisplayName, role: input.role, routeStatus: "available", firstUsedAt: timestamp,
+      lastUsedAt: timestamp, createdAt: timestamp, updatedAt: timestamp,
+    };
+    write(AI_IDENTITIES_KEY, [identity, ...identities]);
+    if (input.role === "viewer") {
+      const settings = read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []);
+      write(AI_NOTE_SETTINGS_KEY, [...settings, { aiIdentityId: identity.id, noteType: "viewer_self_notes", capacityTokens: 1024, defaultEnabled: true, experimentalStatus: "experimental", updatedAt: timestamp }]);
+    }
+    return identity;
+  }
+
+  async listAiIdentities(profileId: string): Promise<AiIdentity[]> {
+    return read<AiIdentity[]>(AI_IDENTITIES_KEY, []).filter((item) => item.profileId === profileId).sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt));
+  }
+
+  async getViewerNoteBundle(aiIdentityId: string): Promise<ViewerNoteBundle | null> {
+    const identity = read<AiIdentity[]>(AI_IDENTITIES_KEY, []).find((item) => item.id === aiIdentityId);
+    if (!identity) return null;
+    let settings = read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []).find((item) => item.aiIdentityId === aiIdentityId);
+    if (!settings) {
+      settings = { aiIdentityId, noteType: "viewer_self_notes", capacityTokens: 1024, defaultEnabled: true, experimentalStatus: "experimental", updatedAt: nowIso() };
+      write(AI_NOTE_SETTINGS_KEY, [...read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []), settings]);
+    }
+    const versions = await this.listViewerNoteVersions(aiIdentityId);
+    return { identity, settings, activeVersion: versions.find((item) => item.id === settings?.activeVersionId), versions, activationEvents: await this.listViewerNoteActivationEvents(aiIdentityId), reflectionRuns: await this.listViewerNoteReflectionRuns(aiIdentityId) };
+  }
+
+  async listViewerNoteVersions(aiIdentityId: string): Promise<ViewerNoteVersion[]> {
+    return read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []).filter((item) => item.aiIdentityId === aiIdentityId).sort((a, b) => b.versionNumber - a.versionNumber);
+  }
+
+  async listViewerNoteActivationEvents(aiIdentityId: string): Promise<ViewerNoteActivationEvent[]> {
+    return read<ViewerNoteActivationEvent[]>(AI_NOTE_ACTIVATION_EVENTS_KEY, []).filter((item) => item.aiIdentityId === aiIdentityId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async listViewerNoteReflectionRuns(aiIdentityId: string): Promise<ViewerNoteReflectionRun[]> {
+    return read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []).filter((item) => item.aiIdentityId === aiIdentityId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async setViewerNoteCapacity(aiIdentityId: string, capacityTokens: ViewerNoteCapacity): Promise<void> {
+    const settings = read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []);
+    const current = settings.find((item) => item.aiIdentityId === aiIdentityId);
+    if (!current) throw new Error("Viewer Notes settings not found.");
+    const active = current.activeVersionId ? read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []).find((item) => item.id === current.activeVersionId) : undefined;
+    if (active && active.estimatedTokens > capacityTokens) throw new Error(`Capacity cannot be reduced below the active notes size (${active.estimatedTokens} estimated tokens).`);
+    write(AI_NOTE_SETTINGS_KEY, settings.map((item) => item.aiIdentityId === aiIdentityId ? { ...item, capacityTokens, updatedAt: nowIso() } : item));
+  }
+
+  async setViewerNotesDefaultEnabled(aiIdentityId: string, enabled: boolean): Promise<void> {
+    const settings = read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []);
+    if (!settings.some((item) => item.aiIdentityId === aiIdentityId)) throw new Error("Viewer Notes settings not found.");
+    write(AI_NOTE_SETTINGS_KEY, settings.map((item) => item.aiIdentityId === aiIdentityId ? { ...item, defaultEnabled: enabled, updatedAt: nowIso() } : item));
+  }
+
+  async beginViewerNoteReflection(input: BeginViewerNoteReflectionInput): Promise<ViewerNoteReflectionRun> {
+    const all = read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []);
+    const existing = all.find((item) => item.id === input.id || (item.aiIdentityId === input.aiIdentityId && item.sourceSessionId === input.sourceSessionId));
+    if (existing) return existing;
+    const run: ViewerNoteReflectionRun = { ...input, noteType: "viewer_self_notes", attemptCount: 0, status: "PENDING", createdAt: nowIso() };
+    write(AI_NOTE_REFLECTION_RUNS_KEY, [run, ...all]);
+    return run;
+  }
+
+  async failViewerNoteReflection(runId: string, status: Exclude<ViewerNoteReflectionRun["status"], "PENDING" | "UPDATE" | "NO_CHANGE" | "STALE_BASE">, failureMessage: string, providerRequestId?: string, rawFinalResponseSha256?: string): Promise<void> {
+    const all = read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []);
+    write(AI_NOTE_REFLECTION_RUNS_KEY, all.map((item) => item.id === runId ? { ...item, status, failureMessage, attemptCount: item.attemptCount + 1, ...(providerRequestId ? { providerRequestId } : {}), ...(rawFinalResponseSha256 ? { rawFinalResponseSha256 } : {}), completedAt: nowIso() } : item));
+  }
+
+  async commitViewerNoteReflection(input: CommitViewerNoteReflectionInput): Promise<ViewerNoteReflectionResult> {
+    const runs = read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []);
+    const run = runs.find((item) => item.id === input.runId);
+    if (!run) throw new Error("Viewer Notes reflection run not found.");
+    if (run.status === "UPDATE") return { status: "UPDATE", version: read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []).find((item) => item.reflectionRunId === run.id) };
+    if (run.status === "NO_CHANGE") return { status: "NO_CHANGE" };
+    const settings = read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []);
+    const current = settings.find((item) => item.aiIdentityId === input.aiIdentityId);
+    if (!current) throw new Error("Viewer Notes settings not found.");
+    const versions = read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []);
+    const active = current.activeVersionId ? versions.find((item) => item.id === current.activeVersionId) : undefined;
+    if ((active?.id ?? undefined) !== input.baseVersionId || (active?.contentSha256 ?? undefined) !== input.baseContentSha256) {
+      write(AI_NOTE_REFLECTION_RUNS_KEY, runs.map((item) => item.id === run.id ? { ...item, status: "STALE_BASE", failureMessage: "Active Viewer Notes changed while reflection was running.", completedAt: nowIso() } : item));
+      return { status: "STALE_BASE" };
+    }
+    const completedAt = nowIso();
+    if (input.decision === "NO_CHANGE") {
+      write(AI_NOTE_REFLECTION_RUNS_KEY, runs.map((item) => item.id === run.id ? { ...item, status: "NO_CHANGE", attemptCount: item.attemptCount + 1, changeSummary: input.changeSummary, providerRequestId: input.providerRequestId, rawFinalResponseSha256: input.rawFinalResponseSha256, completedAt } : item));
+      return { status: "NO_CHANGE" };
+    }
+    if (!input.notes || !input.contentSha256 || input.estimatedTokens === undefined) throw new Error("Complete Viewer Notes are required for UPDATE.");
+    const version: ViewerNoteVersion = { id: createId("ai_note_version"), aiIdentityId: input.aiIdentityId, versionNumber: Math.max(0, ...versions.filter((item) => item.aiIdentityId === input.aiIdentityId).map((item) => item.versionNumber)) + 1, content: input.notes, contentSha256: input.contentSha256, estimatedTokens: input.estimatedTokens, estimatorVersion: "conservative-char-v1", capacityTokensAtCreation: input.capacityTokens, sourceSessionId: input.sourceSessionId, sourceWorkspaceId: input.sourceWorkspaceId, protocolId: input.protocolId, sessionRunType: input.sessionRunType, changeSummary: input.changeSummary, ...(input.baseVersionId ? { baseVersionId: input.baseVersionId } : {}), ...(input.baseContentSha256 ? { baseContentSha256: input.baseContentSha256 } : {}), reflectionRunId: input.runId, reflectionPacketSha256: input.reflectionPacketSha256, modelRouteSnapshot: input.modelRouteSnapshot, generationSettingsSnapshot: input.generationSettingsSnapshot, createdAt: completedAt };
+    const activation: ViewerNoteActivationEvent = { id: createId("ai_note_activation"), aiIdentityId: input.aiIdentityId, ...(active ? { fromVersionId: active.id } : {}), toVersionId: version.id, activationSource: active ? "model_update" : "initial_version", workspaceId: input.sourceWorkspaceId, sourceSessionId: input.sourceSessionId, createdAt: completedAt };
+    write(AI_NOTE_VERSIONS_KEY, [version, ...versions]);
+    write(AI_NOTE_ACTIVATION_EVENTS_KEY, [activation, ...read<ViewerNoteActivationEvent[]>(AI_NOTE_ACTIVATION_EVENTS_KEY, [])]);
+    write(AI_NOTE_SETTINGS_KEY, settings.map((item) => item.aiIdentityId === input.aiIdentityId ? { ...item, activeVersionId: version.id, updatedAt: completedAt } : item));
+    write(AI_NOTE_REFLECTION_RUNS_KEY, runs.map((item) => item.id === run.id ? { ...item, status: "UPDATE", attemptCount: item.attemptCount + 1, changeSummary: input.changeSummary, providerRequestId: input.providerRequestId, rawFinalResponseSha256: input.rawFinalResponseSha256, completedAt } : item));
+    return { status: "UPDATE", version };
+  }
+
+  async restoreViewerNoteVersion(aiIdentityId: string, versionId: string, workspaceId?: string): Promise<void> {
+    const settings = read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []);
+    const current = settings.find((item) => item.aiIdentityId === aiIdentityId);
+    const version = read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []).find((item) => item.id === versionId && item.aiIdentityId === aiIdentityId);
+    if (!current || !version) throw new Error("Viewer Notes version not found.");
+    if (version.estimatedTokens > current.capacityTokens) throw new Error("The selected version does not fit the current capacity.");
+    const timestamp = nowIso();
+    write(AI_NOTE_SETTINGS_KEY, settings.map((item) => item.aiIdentityId === aiIdentityId ? { ...item, activeVersionId: version.id, updatedAt: timestamp } : item));
+    write(AI_NOTE_ACTIVATION_EVENTS_KEY, [{ id: createId("ai_note_activation"), aiIdentityId, ...(current.activeVersionId ? { fromVersionId: current.activeVersionId } : {}), toVersionId: version.id, activationSource: "human_restore", ...(workspaceId ? { workspaceId } : {}), createdAt: timestamp }, ...read<ViewerNoteActivationEvent[]>(AI_NOTE_ACTIVATION_EVENTS_KEY, [])]);
+  }
+
   async createTrainingRun(input: CreateTrainingRunInput): Promise<TrainingRunRecord> {
     const all = read<TrainingRunRecord[]>(TRAINING_RUNS_KEY, []);
     const timestamp = nowIso();
@@ -630,20 +764,30 @@ export class BrowserRepository implements AppRepository {
   }
 
   async recordFrozenJudgeResult(run: CreateJudgeRunInput, score: FrozenJudgeScoreInput): Promise<JudgeScoreRecord> {
+    return (await this.recordFrozenJudgeResults([{ run, score }]))[0];
+  }
+
+  async recordFrozenJudgeResults(results: FrozenJudgeResultInput[]): Promise<JudgeScoreRecord[]> {
+    if (!results.length) return [];
     const runs = read<CreateJudgeRunInput[]>(JUDGE_RUNS_KEY, []);
-    if (runs.some((item) => item.sessionId === run.sessionId && item.judgeIndex === run.judgeIndex)) throw new Error("Judge index is already recorded for this session.");
+    const seen = new Set(runs.map((item) => `${item.sessionId}::${item.judgeIndex}`));
+    for (const { run } of results) {
+      const key = `${run.sessionId}::${run.judgeIndex}`;
+      if (seen.has(key)) throw new Error("Judge index is already recorded for this session.");
+      seen.add(key);
+    }
     const timestamp = nowIso();
-    const record: JudgeScoreRecord = {
+    const records = results.map(({ run, score }) => ({
       ...score,
       judgeIndex: run.judgeIndex,
       modelRoute: run.modelRoute,
       total: computeJudgeTotal(score),
       frozenAt: timestamp,
       createdAt: timestamp,
-    };
-    write(JUDGE_RUNS_KEY, [...runs, structuredClone(run)]);
-    write(JUDGE_SCORES_KEY, [...read<JudgeScoreRecord[]>(JUDGE_SCORES_KEY, []), structuredClone(record)]);
-    return record;
+    }));
+    write(JUDGE_RUNS_KEY, [...runs, ...results.map(({ run }) => structuredClone(run))]);
+    write(JUDGE_SCORES_KEY, [...read<JudgeScoreRecord[]>(JUDGE_SCORES_KEY, []), ...structuredClone(records)]);
+    return records;
   }
 
   async listJudgeScores(sessionId: string): Promise<JudgeScoreRecord[]> {

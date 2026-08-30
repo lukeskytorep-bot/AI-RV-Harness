@@ -34,6 +34,8 @@ import {
 } from "./telepathicControllerPrompts";
 import type { RvSession, RvSessionState, SessionEventRecord, SessionSnapshot } from "./types";
 import { politeRevealTransition, politeSessionGreeting } from "./courtesy";
+import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
+import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 
 type TelepathicSessionRepository = Pick<
   AppRepository,
@@ -71,6 +73,7 @@ export interface AutomaticTelepathicRunInput {
   sessionLanguage: InterfaceLanguage;
   requestedSettings: GenerationSettings;
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
+  viewerNotes?: ViewerNotesSessionSnapshot;
   resumeSession?: RvSession;
   automaticTarget?: TargetRecord;
   step8Questions: {
@@ -142,6 +145,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
   const messages: ProviderMessage[] = [
     { role: "system", content: input.protocol.content },
     ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
+    ...(viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage)! }] : []),
   ];
   const startedAtMs = Date.now();
   let metrics = emptySessionRequestMetrics();
@@ -163,7 +167,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
   await input.repository.updateRvSessionState(sessionId, "Preflight");
 
   const snapshot: SessionSnapshot = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     sessionId,
     sessionCode,
     profileId: input.profileId,
@@ -228,6 +232,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
         ],
       },
     } : {}),
+    ...(input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),
     revealSource: input.automaticTarget ? "automatic" : "external",
     ...(input.automaticTarget ? { targetId: input.automaticTarget.id } : {}),
     applicationVersion: APP_VERSION,

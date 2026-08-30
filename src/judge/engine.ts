@@ -16,7 +16,7 @@ import { JUDGE_RUBRIC_VERSION, type JudgeNarrative, type JudgeScoreRecord, type 
 export type JudgeRepository = Pick<
   AppRepository,
   "getReveal" | "getViewerEvidence" | "getSessionSnapshot" | "recordFrozenJudgeResult" | "listJudgeScores"
->;
+> & Partial<Pick<AppRepository, "recordFrozenJudgeResults">>;
 
 export interface JudgeSelection {
   providerConfig: ProviderConfig;
@@ -119,12 +119,13 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
     input.onProgress?.(index + 1, input.judges.length);
   }
 
-  // Freeze only after every requested Judge returned a valid response. Provider/JSON failures
-  // therefore cannot leave an ordinary evaluation half-complete.
-  for (const item of pending) {
+  // Freeze only after every requested Judge returned a valid response. The desktop repository
+  // persists the complete group in one SQLite transaction, so neither provider/JSON nor database
+  // failures can leave this requested group half-frozen.
+  const frozenInputs = pending.map((item) => {
     const judgeRunId = createId("judge");
-    const record = await input.repository.recordFrozenJudgeResult(
-      {
+    return {
+      run: {
         id: judgeRunId,
         sessionId: input.sessionId,
         judgeIndex: item.judgeIndex,
@@ -133,21 +134,36 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
         anonymousSessionId,
         packetHash,
       },
-      {
+      score: {
         id: createId("judge_score"),
         judgeRunId,
         ...item.parsed.scores,
         narrative: item.parsed.narrative,
       },
-    );
-    scores.push(record);
-  }
+    };
+  });
+  const frozen = input.repository.recordFrozenJudgeResults
+    ? await input.repository.recordFrozenJudgeResults(frozenInputs)
+    : await Promise.all(frozenInputs.map(({ run, score }) => input.repository.recordFrozenJudgeResult(run, score)));
+  scores.push(...frozen);
 
   return {
     anonymousSessionId,
     scores,
     aggregate: aggregateJudgeScores(scores),
   };
+}
+
+export function selectMissingJudgeSelections(existing: JudgeScoreRecord[], selected: JudgeSelection[]): JudgeSelection[] {
+  if (existing.length > selected.length) {
+    throw new Error("The session already contains more frozen Judge scores than the selected evaluation design.");
+  }
+  for (let index = 0; index < existing.length; index += 1) {
+    if (existing[index].modelRoute !== selected[index].model.route) {
+      throw new Error(`Frozen Judge ${index + 1} does not match the selected Judge route.`);
+    }
+  }
+  return selected.slice(existing.length);
 }
 
 export function parseJudgeOutput(content: string): ParsedJudgeOutput {

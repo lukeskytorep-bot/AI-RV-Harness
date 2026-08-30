@@ -15,7 +15,16 @@ This directory contains project documentation that is useful for development, re
 
 ## Current release documentation
 
-The current source baseline is v0.7.11:
+The current development baseline is v0.7.12:
+
+- [AI Center implementation plan](releases/v0.7.12/AI_CENTER_IMPLEMENTATION_PLAN_PL.md)
+- [AI Center wiki documentation](releases/v0.7.12/AI_CENTER_VIEWER_NOTES_WIKI_EN.md)
+- [Implementation report](releases/v0.7.12/IMPLEMENTATION_REPORT_v0.7.12_PL.md)
+- [Application instructions](releases/v0.7.12/APPLY_UPDATE_v0.7.12_PL.md)
+- [Changed-file manifest](releases/v0.7.12/CHANGED_FILES_v0.7.12.txt)
+- [Changed-file SHA-256 checksums](releases/v0.7.12/SHA256SUMS_v0.7.12.txt)
+
+The previous public v0.7.11 baseline remains archived here:
 
 - [Reasoning compatibility plan](releases/v0.7.11/AI_RV_Harness_v0.7.11_REASONING_COMPATIBILITY_PLAN_PL.md)
 - [Implementation report](releases/v0.7.11/AI_RV_Harness_v0.7.11_IMPLEMENTATION_REPORT_PL.md)

@@ -2,15 +2,19 @@
 
 AI RV Harness is a local-first desktop workspace for blind AI Remote Viewing sessions and controlled RV research. The desktop stack is Tauri 2 + React/TypeScript + Rust + SQLite, with Windows as the primary release platform.
 
-## Current release — 0.7.11
+## Current development baseline — 0.7.12
 
-Version 0.7.11 is the current Windows and Linux desktop release. It includes the complete public feature set introduced through v0.7.10 and improves compatibility with reasoning-capable provider responses used by ordinary Viewers and AI Monitors.
+Version 0.7.12 is the development baseline built on the complete v0.7.11 Windows and Linux release. It introduces a separate **AI Center** for Profile-wide AI roles and an experimental, versioned Viewer Notes system.
+
+Viewer Notes belong to one exact Profile + credential identity + provider + model route + Viewer role. They are shared across that Profile's Workspaces but never transferred between models or roles. Notes are frozen before each supported session, supplied as a separate read-only system data block, and may be replaced only by the same Viewer after Reveal and its own post-Reveal review. Monitor opinions, Judge results and later operator discussion are excluded. Every version is immutable, capacity is enforced without truncation, stale concurrent updates are blocked, and a human restoration of an earlier version is explicitly audited.
+
+AI Center is a top-level navigation destination with Overview, the existing AI Monitor, Viewer Notes and AI Identities. RV Session, Training and Manual RV provide a simple Viewer Notes switch enabled by default. Research adds a blinded **Viewer Notes Impact** design comparing `No Notes` with one of the five most recent immutable `Frozen Notes` versions under Experiment Lock.
 
 Provider reasoning and final assistant content are now normalized separately across supported OpenAI-compatible, Google and Anthropic response shapes. The Harness preserves a model's final instruction while keeping provider reasoning out of Viewer evidence, Monitor interventions and normal transcripts. Incomplete reasoning-only responses are treated as recoverable provider failures instead of valid protocol instructions.
 
 Blackbox remains available through its documented OpenAI-compatible API. Release workflows build Windows NSIS/MSI and Linux AppImage/DEB packages, run the required quality gates and create GitHub Artifact Attestations for the expected assets. External GitHub Actions remain pinned to reviewed full commit SHAs.
 
-Release documentation is organized under [`docs/releases/`](docs/releases/). The v0.7.11 design, implementation report, changed-file manifest and public notes are in [`docs/releases/v0.7.11/`](docs/releases/v0.7.11/). See [`docs/README.md`](docs/README.md) for the complete documentation index and organization policy.
+Release documentation is organized under [`docs/releases/`](docs/releases/). The v0.7.12 implementation records are in [`docs/releases/v0.7.12/`](docs/releases/v0.7.12/), while the public v0.7.11 records remain unchanged in their historical directory. See [`docs/README.md`](docs/README.md) for the complete documentation index and organization policy.
 
 Implemented end to end:
 
@@ -59,7 +63,7 @@ After every automatic Reveal the Viewer now receives the Reveal and produces a s
 
 `.github/workflows/release-windows.yml` and `.github/workflows/release-linux.yml` run manually from `main`, prevent overlapping releases, require the reviewed and committed `src-tauri/Cargo.lock`, run the relevant quality gates, create/update a draft GitHub Release and attest the generated packages. CI never commits or pushes repository changes.
 
-The reviewed v0.7.11 `src-tauri/Cargo.lock` is committed with this source. If a future dependency or package-version change requires regeneration and Rust is unavailable locally, use the manual `Prepare Cargo lockfile` workflow for that new version, review the generated lockfile and commit it separately. Normal CI and release workflows intentionally refuse to continue when the required lockfile is missing or stale.
+The package version is now 0.7.12. The included `src-tauri/Cargo.lock` carries the matching root package version and must be verified by Rust CI. If dependency resolution reports it as stale, use the manual `Prepare Cargo lockfile` workflow for v0.7.12, review the generated lockfile and commit it separately. Normal CI and release workflows intentionally refuse to continue when the required lockfile is missing or stale.
 
 ## Windows installer trust
 

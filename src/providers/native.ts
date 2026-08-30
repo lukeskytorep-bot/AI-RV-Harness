@@ -52,6 +52,11 @@ export async function hasCredentialSecret(credentialId: string): Promise<boolean
   return invoke<boolean>("has_credential", { credentialId });
 }
 
+export async function credentialIdentityFingerprint(credentialId: string): Promise<string> {
+  requireDesktop();
+  return invoke<string>("credential_identity_fingerprint", { credentialId });
+}
+
 export async function discoverModels(config: ProviderConfig): Promise<ProviderModel[]> {
   requireDesktop();
   const payload = await invoke<unknown>("provider_discover_models", {

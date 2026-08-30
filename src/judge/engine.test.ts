@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import type { JudgeRepository } from "./engine";
-import { parseJudgeOutput, runBlindJudging } from "./engine";
-import type { JudgeScoreRecord } from "./types";
+import { parseJudgeOutput, runBlindJudging, selectMissingJudgeSelections } from "./engine";
+import type { FrozenJudgeResultInput, JudgeScoreRecord } from "./types";
 
 const provider: ProviderConfig = {
   id: "provider_judge", provider: "openrouter", label: "Judge API", credentialId: "cred_judge", enabled: true,
@@ -69,6 +69,44 @@ describe("blind Judge engine", () => {
     expect(result.aggregate.mean.total).toBe(7.7);
   });
 
+  it("freezes a requested multi-Judge group through one batch repository call", async () => {
+    const recordFrozenJudgeResults = vi.fn(async (items: FrozenJudgeResultInput[]) => items.map(({ run, score }) => ({
+      ...score,
+      judgeIndex: run.judgeIndex,
+      modelRoute: run.modelRoute,
+      total: score.gestalt + score.verifiableFeatures + score.activityFunctionEvent + score.confabulationControl,
+      frozenAt: "2026-01-01T00:00:00.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    })));
+    const recordFrozenJudgeResult = vi.fn(() => { throw new Error("single-write path must not be used"); });
+    const repository: JudgeRepository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "en" }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "A tower", hash: "hash" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("Tall angular form."),
+      listJudgeScores: vi.fn().mockResolvedValue([]),
+      recordFrozenJudgeResult,
+      recordFrozenJudgeResults,
+    };
+    const result = await runBlindJudging({
+      repository,
+      sessionId: "session",
+      language: "en",
+      judges: [{ providerConfig: provider, model }, { providerConfig: provider, model }],
+      chat: vi.fn().mockResolvedValue({ content: judgeJson, usage: {} }),
+    });
+    expect(recordFrozenJudgeResults).toHaveBeenCalledTimes(1);
+    expect(recordFrozenJudgeResults.mock.calls[0][0]).toHaveLength(2);
+    expect(recordFrozenJudgeResult).not.toHaveBeenCalled();
+    expect(result.scores).toHaveLength(2);
+  });
+
+  it("resumes only missing Judges and rejects a changed frozen route", () => {
+    const secondModel = { ...model, modelId: "judge-model-2", route: "openrouter:judge-model-2" };
+    const selected = [{ providerConfig: provider, model }, { providerConfig: provider, model: secondModel }];
+    expect(selectMissingJudgeSelections([{ ...scoreRecord(), modelRoute: model.route }], selected)).toEqual([selected[1]]);
+    expect(() => selectMissingJudgeSelections([{ ...scoreRecord(), modelRoute: "openrouter:different" }], selected)).toThrow(/does not match/);
+  });
+
   it("refuses an artifact reveal instead of silently dropping it", async () => {
     const repository: JudgeRepository = {
       getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "en" }),
@@ -119,3 +157,25 @@ describe("blind Judge engine", () => {
     expect(result.scores[0].narrative.conciseRationale).toContain("trafny");
   });
 });
+
+function scoreRecord(): JudgeScoreRecord {
+  return {
+    id: "stored",
+    judgeRunId: "run",
+    judgeIndex: 1,
+    modelRoute: model.route,
+    gestalt: 2.5,
+    verifiableFeatures: 2.2,
+    activityFunctionEvent: 1.4,
+    confabulationControl: 1.6,
+    total: 7.7,
+    narrative: {
+      strongestMatches: ["match"],
+      majorMissesContradictions: [],
+      confabulationObservations: [],
+      conciseRationale: "Rationale",
+    },
+    frozenAt: "now",
+    createdAt: "now",
+  };
+}

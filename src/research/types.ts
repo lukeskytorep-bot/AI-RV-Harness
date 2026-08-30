@@ -1,6 +1,7 @@
 import type { JudgeComponentScores } from "../domain/scoring";
 import type { EffectiveGenerationSettings, GenerationSettings, ModelCapabilities } from "../providers/types";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
+import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import type { ResearchTargetSelectionMode, ResearchTargetSource } from "./targetSelection";
 
 export const RESEARCH_TEMPLATE_TYPES = [
@@ -10,6 +11,7 @@ export const RESEARCH_TEMPLATE_TYPES = [
   "model",
   "practice",
   "system_prompt",
+  "viewer_notes",
   "custom",
 ] as const;
 
@@ -31,6 +33,8 @@ export interface ResearchConditionDefinition {
   conditionInstruction?: ResearchSystemPromptSnapshot;
   practiceOrder?: "FIRST" | "SECOND";
   customValue?: string;
+  /** Immutable notes snapshot captured before Experiment Lock. */
+  viewerNotes?: ViewerNotesSessionSnapshot;
 }
 
 export interface ResearchJudgeDefinition {

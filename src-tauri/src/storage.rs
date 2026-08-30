@@ -14,7 +14,7 @@ use tauri::Manager;
 
 const BACKUP_SCHEMA_VERSION: u8 = 1;
 const DATABASE_FILE_NAME: &str = "rv_harness.db";
-const CURRENT_MIGRATION_VERSION: i64 = 19;
+const CURRENT_MIGRATION_VERSION: i64 = 20;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

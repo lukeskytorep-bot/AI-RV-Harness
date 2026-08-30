@@ -28,6 +28,8 @@ import {
   LOCKED_IDENTITY_VERSION,
   LOCKED_MONITOR_EXECUTION_VERSION,
 } from "../resources/systemPrompts";
+import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
+import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 
 export { detectRepetitiveOutput } from "./repetitionGuard";
 
@@ -65,6 +67,7 @@ export interface AutomaticRcpRunInput {
   humanIsBeDisplayName?: string;
   specialTask?: SpecialTaskInput;
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
+  viewerNotes?: ViewerNotesSessionSnapshot;
   researchConditionInstruction?: ViewerSystemPromptSnapshot;
   resumeSession?: RvSession;
   monitor?: {
@@ -131,6 +134,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   const messages: ProviderMessage[] = [
     { role: "system", content: input.protocol.content },
     ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
+    ...(viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage)! }] : []),
     ...(input.researchConditionInstruction?.content.trim() ? [{ role: "system" as const, content: `[LOCKED RESEARCH CONDITION INSTRUCTION]\n${input.researchConditionInstruction.content.trim()}` }] : []),
   ];
   const stop = (reason: string) => stopRun(input, sessionId, sessionCode, transcript, reason, metrics, startedAtMs);
@@ -148,7 +152,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   if (!input.resumeSession) await input.onSessionCreated?.(sessionId, sessionCode);
 
   const snapshot: SessionSnapshot = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     sessionId,
     sessionCode,
     profileId: input.profileId,
@@ -217,6 +221,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         ],
       },
     } : {}),
+    ...(input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),
     ...(input.researchConditionInstruction ? {
       researchConditionInstruction: {
         id: input.researchConditionInstruction.id,

@@ -27,6 +27,7 @@ import { exportTrainingRun } from "../training/export";
 import type { TrainingRunRecord } from "../training/types";
 import type { AppSettings, Profile, Workspace } from "../types";
 import { SessionInspection } from "./SessionInspection";
+import { prepareViewerNotesForSession, runViewerNoteReflection } from "../aiCenter/viewerNotes";
 
 type Copy = ReturnType<typeof getCopy>;
 type Mode = "full" | "partial";
@@ -56,6 +57,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   const [judgeCount, setJudgeCount] = useState(0);
   const [judgeRoutes, setJudgeRoutes] = useState(["", "", ""]);
   const [pauseAfterBlock, setPauseAfterBlock] = useState(false);
+  const [viewerNotesEnabled, setViewerNotesEnabled] = useState(true);
   const [activeRun, setActiveRun] = useState<TrainingRunRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [progressLine, setProgressLine] = useState("");
@@ -124,6 +126,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
       categories: [...new Set(plannedTargets.map((target) => target.sourceMetadata.category).filter((category): category is TrainingCategory => TRAINING_CATEGORIES.includes(category as TrainingCategory)))],
       judgeModelRoutes: judgeRoutes.slice(0, judgeCount),
       pauseAfterBlock,
+      viewerNotesEnabled,
     });
     setActiveRun(run);
     setRuns((current) => [run, ...current]);
@@ -153,6 +156,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
         const target = targetById.get(working.targetIds[index]);
         if (!target) throw new Error(`${text.targetMissing}: ${working.targetIds[index]}`);
         setProgressLine(`${text.session} ${index + 1}/${working.targetIds.length} · ${localizedTargetTitle(target, language)}`);
+        const viewerNotes = await prepareViewerNotesForSession({ repository, profileId: runProfile.id, providerConfig: runProvider, model: runModel, enabled: working.viewerNotesEnabled ?? false });
         const result = await runAutomaticRvLiteSession({
           repository,
           workspaceId: working.workspaceId,
@@ -164,6 +168,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
           protocol: getRvLite(language, working.protocolVariant),
           sessionLanguage: language,
           requestedSettings: profileGenerationDefaults(runProfile, runModel),
+          viewerNotes,
           ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
           automaticTarget: target,
           maxRetries: settings.maxRetries,
@@ -178,6 +183,9 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
           sessionId: result.sessionId,
           viewer: { providerConfig: runProvider, model: runModel },
           timeoutMs: settings.requestTimeoutMs,
+          afterViewerReview: async ({ content }) => {
+            await runViewerNoteReflection({ repository, sessionId: result.sessionId, viewerReview: content, providerConfig: runProvider, model: runModel, timeoutMs: settings.requestTimeoutMs });
+          },
         });
         if (judges.length) await runBlindJudging({ repository, sessionId: result.sessionId, language, judges });
         await repository.updateRvSessionState(result.sessionId, "Completed");
@@ -237,6 +245,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
         <TrainingSection title={text.identity}><div className="training-grid two"><label>{text.aiIsBe}<select value={profileId} onChange={(event) => setProfileId(event.target.value)}>{profiles.map((item) => <option key={item.id} value={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></label><label>{text.workspace}<select value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)}>{ownedWorkspaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div><small>{provider ? `${provider.label} · ${viewerModel?.displayName ?? text.noModel}` : text.noProvider}</small></TrainingSection>
         <TrainingSection title={text.protocol}><div className="training-choice-row"><button className={variant === "core" ? "active" : ""} onClick={() => setVariant("core")}><FileCheck2 size={18} /><span><strong>RV Lite Core</strong><small>{text.coreLead}</small></span></button><button className={variant === "extended" ? "active" : ""} onClick={() => setVariant("extended")}><GraduationCap size={18} /><span><strong>RV Lite Extended</strong><small>{text.extendedLead}</small></span></button></div></TrainingSection>
         <TrainingSection title={text.scope}><div className="training-choice-row"><button className={mode === "full" ? "active" : ""} onClick={() => setMode("full")}><Database size={18} /><span><strong>{text.full}</strong><small>{text.fullLead}</small></span></button><button className={mode === "partial" ? "active" : ""} onClick={() => setMode("partial")}><ShieldCheck size={18} /><span><strong>{text.partial}</strong><small>{text.partialLead}</small></span></button></div></TrainingSection>
+        <TrainingSection title="Viewer Notes"><label className="training-check" title={pl ? "Notatki są używane w sesji i mogą zostać zaktualizowane po Revealu i własnej ocenie Viewera. Monitor i Judge są wykluczeni." : "Notes are used in the session and may be updated after Reveal and the Viewer's own review. Monitor and Judge are excluded."}><input type="checkbox" checked={viewerNotesEnabled} onChange={(event) => setViewerNotesEnabled(event.target.checked)} /><span><strong>{pl ? "Użyj Viewer Notes" : "Use Viewer Notes"}</strong><small>{pl ? "Eksperymentalne · domyślnie włączone" : "Experimental · enabled by default"}</small></span></label></TrainingSection>
         {mode === "partial" && <TrainingSection title={text.categories}><div className="training-category-grid">{TRAINING_CATEGORIES.map((category) => { const available = targets.filter((target) => target.collection === "training" && target.sourceMetadata.category === category).length; return <label key={category}><span>{TRAINING_CATEGORY_LABELS[category][settings.interfaceLanguage]}<small>{text.factory} · {text.available}: {available}</small></span><input type="number" min={0} max={available} value={counts[category] ?? 0} onChange={(event) => setCounts((current) => ({ ...current, [category]: Math.max(0, Number(event.target.value) || 0) }))} /></label>; })}<label className="training-my-targets"><span>{text.user}<small>{text.available}: {targets.filter((target) => target.collection === "user" && userTargetKind(target) === "general").length}</small></span><input type="number" min={0} max={targets.filter((target) => target.collection === "user" && userTargetKind(target) === "general").length} value={myTargetsCount} onChange={(event) => setMyTargetsCount(Math.max(0, Number(event.target.value) || 0))} /></label></div></TrainingSection>}
         <TrainingSection title="AI Judge"><div className="training-grid two"><label>{text.judgeCount}<select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))}><option value={0}>0 · {text.none}</option><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>{Array.from({ length: judgeCount }, (_, index) => <label key={index}>Judge {index + 1}<select value={judgeRoutes[index]} onChange={(event) => setJudgeRoutes((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))}><option value="">{text.selectModel}</option>{models.map((model) => <option key={routeKey(model)} value={routeKey(model)}>{providers.find((item) => item.id === model.providerConfigId)?.label ?? model.provider} · {model.displayName}</option>)}</select></label>)}</div></TrainingSection>
         <TrainingSection title={text.execution}><label className="training-check"><input type="checkbox" checked={pauseAfterBlock} onChange={(event) => setPauseAfterBlock(event.target.checked)} /><span><strong>{text.pauseBlocks}</strong><small>{text.pauseBlocksLead}</small></span></label><div className="training-preflight"><span><small>{text.sessions}</small><strong>{plannedTargets.length}</strong></span><span><small>{text.viewerCalls}</small><strong>{plannedTargets.length * 4}</strong></span><span><small>{text.judgeCalls}</small><strong>{plannedTargets.length * judgeCount}</strong></span><span><small>{text.curriculum}</small><strong>{mode === "full" ? `${FACTORY_CURRICULUM_ID}:${FACTORY_CURRICULUM_VERSION}` : text.partial}</strong></span><span><small>{text.costCeiling}</small><strong>{settings.maxSessionCostUsd > 0 ? `≤ $${(plannedTargets.length * settings.maxSessionCostUsd).toFixed(2)}` : text.notConfigured}</strong></span></div></TrainingSection>

@@ -5,7 +5,7 @@ import { APP_VERSION } from "./version";
 
 describe("application version", () => {
   it("keeps frontend, package, and Tauri versions aligned", () => {
-    expect(APP_VERSION).toBe("0.7.11");
+    expect(APP_VERSION).toBe("0.7.12");
     expect(packageJson.version).toBe(APP_VERSION);
     expect(tauriConfig.version).toBe(APP_VERSION);
   });

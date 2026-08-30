@@ -125,6 +125,12 @@ pub fn run() {
             sql: include_str!("../migrations/019_add_blackbox_provider.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 20,
+            description: "ai_center_viewer_notes",
+            sql: include_str!("../migrations/020_ai_center_viewer_notes.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -147,6 +153,7 @@ pub fn run() {
             secrets::store_credential,
             secrets::has_credential,
             secrets::delete_credential,
+            secrets::credential_identity_fingerprint,
             providers::provider_discover_models,
             providers::provider_chat,
             providers::cancel_provider_request,

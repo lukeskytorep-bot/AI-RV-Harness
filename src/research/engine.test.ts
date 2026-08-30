@@ -100,4 +100,30 @@ describe("Research evidence boundaries", () => {
     expect(results.conditions[0].meanTotal).toBe(6);
     expect(state).toBe("Complete");
   });
+
+  it("resumes result computation after a temporary failure in Unblinded state", async () => {
+    const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "ScoresFrozen", config, scoresFrozenAt: "now", createdAt: "now", updatedAt: "now" };
+    let state: ResearchState = "ScoresFrozen";
+    let saved: ResearchResults | null = null;
+    const listBlindingMappings = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary mapping read failure"))
+      .mockResolvedValue([{ id: "map", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "cond", pairKey: "pair", mappingHash: "h", createdAt: "now" }]);
+    const repo = {
+      getResearchProject: vi.fn(async () => ({ ...project, state })),
+      getResearchResults: vi.fn(async () => saved),
+      setResearchProjectState: vi.fn(async (_id: string, next: ResearchState) => { state = next; }),
+      listResearchAssignments: vi.fn().mockResolvedValue([{ id: "a", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", sessionId: "s", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "Judged" }]),
+      listJudgeScores: vi.fn().mockResolvedValue([score]),
+      listBlindingMappings,
+      listResearchConditions: vi.fn().mockResolvedValue([{ id: "cond", researchProjectId: "r", conditionKey: "a", config: config.conditions[0] }]),
+      saveResearchResults: vi.fn(async (_id: string, results) => { saved = results; }),
+    } as unknown as AppRepository;
+
+    await expect(unblindAndComputeResearch(repo, "r")).rejects.toThrow("temporary mapping read failure");
+    expect(state).toBe("Unblinded");
+    const results = await unblindAndComputeResearch(repo, "r");
+    expect(results.sessions).toHaveLength(1);
+    expect(state).toBe("Complete");
+    expect(listBlindingMappings).toHaveBeenCalledTimes(2);
+  });
 });

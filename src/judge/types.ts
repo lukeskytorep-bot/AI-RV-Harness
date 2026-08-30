@@ -25,6 +25,11 @@ export interface FrozenJudgeScoreInput extends JudgeComponentScores {
   narrative: JudgeNarrative;
 }
 
+export interface FrozenJudgeResultInput {
+  run: CreateJudgeRunInput;
+  score: FrozenJudgeScoreInput;
+}
+
 export interface JudgeScoreRecord extends JudgeComponentScores {
   id: string;
   judgeRunId: string;

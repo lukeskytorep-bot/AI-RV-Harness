@@ -1,5 +1,5 @@
 import { aggregateJudgeScores } from "../domain/scoring";
-import { runBlindJudging, type JudgeSelection } from "../judge/engine";
+import { runBlindJudging, selectMissingJudgeSelections, type JudgeSelection } from "../judge/engine";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { getFullRcp } from "../resources/protocolRegistry";
@@ -106,6 +106,7 @@ export async function executeResearchSessions(input: {
       researchProjectId: project.id,
       ...(condition.systemPrompt ? { rvSystemPrompt: condition.systemPrompt } : {}),
       ...(condition.conditionInstruction ? { researchConditionInstruction: condition.conditionInstruction } : {}),
+      ...(condition.viewerNotes ? { viewerNotes: condition.viewerNotes } : {}),
       signal: input.signal,
       onSessionCreated: async (sessionId) => {
         linkedSessionId = sessionId;
@@ -167,17 +168,17 @@ export async function judgeResearch(input: {
   for (const assignment of assignments.sort((a, b) => a.judgeOrder - b.judgeOrder)) {
     if (!assignment.sessionId) throw new Error("A Research assignment has no completed session.");
     const existing = await input.repository.listJudgeScores(assignment.sessionId);
-    if (existing.length === judgeSelections.length) {
+    const missingJudges = selectMissingJudgeSelections(existing, judgeSelections);
+    if (!missingJudges.length) {
       if (assignment.status !== "Judged") await input.repository.updateResearchAssignment(assignment.id, assignment.sessionId, "Judged");
       completed += assignment.status === "Judged" ? 0 : 1;
       continue;
     }
-    if (existing.length > judgeSelections.length) throw new Error("Stored Judge count exceeds the locked Research design.");
     await runBlindJudging({
       repository: input.repository,
       sessionId: assignment.sessionId,
       language: project.config.sessionLanguage,
-      judges: judgeSelections.slice(existing.length),
+      judges: missingJudges,
       anonymousSessionId: assignment.anonymousSessionId,
     });
     const frozen = await input.repository.listJudgeScores(assignment.sessionId);
@@ -198,12 +199,18 @@ export async function unblindAndComputeResearch(repository: ResearchRepository, 
     await repository.setResearchProjectState(projectId, "Complete");
     return existingResults;
   }
-  if (project.state !== "ScoresFrozen") throw new Error("Blinding Key cannot be used until every Judge score is frozen.");
+  if (project.state !== "ScoresFrozen" && project.state !== "Unblinded") {
+    throw new Error("Blinding Key cannot be used until every Judge score is frozen.");
+  }
   await verifyAllResearchScoresFrozen(repository, projectId, project.config.judges.length);
 
   // This is the explicit evidence boundary: state is marked Unblinded before the key is read.
-  await repository.setResearchProjectState(projectId, "Unblinded");
-  project = await requireProject(repository, projectId);
+  // If computation or persistence fails after this point, a later call may safely resume from
+  // Unblinded because the key has already been exposed and every frozen score is re-verified.
+  if (project.state === "ScoresFrozen") {
+    await repository.setResearchProjectState(projectId, "Unblinded");
+    project = await requireProject(repository, projectId);
+  }
   const [assignments, mappings, conditions] = await Promise.all([
     repository.listResearchAssignments(projectId),
     repository.listBlindingMappings(projectId),
