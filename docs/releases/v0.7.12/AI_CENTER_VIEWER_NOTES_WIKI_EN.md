@@ -1,5 +1,9 @@
 # AI Center and experimental Viewer Notes
 
+> **Status:** Implemented in AI RV Harness v0.7.12  
+> **Design baseline:** AI RV Harness v0.7.11  
+> **Implementation release:** AI RV Harness v0.7.12
+
 AI Center is a top-level area of AI RV Harness for AI roles, role-specific history, and experimental model memory. It belongs to the active Profile rather than one Workspace. The first implementation contains Overview, the existing AI Monitor, Viewer Notes, and AI Identities.
 
 ## Identity boundary
@@ -27,4 +31,3 @@ Provider reasoning and final content remain separate. The notes parser consumes 
 ## Experimental status
 
 Viewer Notes are intentionally marked Experimental. They are designed for controlled comparison, not assumed to improve performance. If evidence does not support the feature, users may keep Notes off and the project may revise or remove the mechanism in a later release.
-

@@ -1,0 +1,82 @@
+name: Bug report
+description: Report a reproducible problem in AI RV Harness
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: Thank you for reporting a problem. Remove API keys, private targets, transcripts, and other sensitive data before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: AI RV Harness version
+      placeholder: v0.7.12
+    validations:
+      required: true
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Conversation
+        - Manual RV
+        - Automatic RV Session
+        - AI Monitor
+        - AI Judge
+        - Training
+        - Research
+        - AI Center / Viewer Notes
+        - Providers / Settings
+        - Targets / Workspaces / Profiles
+        - Installation / Update
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest reliable sequence and whether a Monitor, Judge, notes, or attachments were enabled.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and visible error
+    validations:
+      required: true
+  - type: input
+    id: provider-model
+    attributes:
+      label: Provider and exact model route, if relevant
+      placeholder: Provider / exact model / Viewer, Monitor, or Judge
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Add useful logs or screenshots only after removing credentials and private session data.
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: I removed API keys, private targets, transcripts, and personal data.
+          required: true

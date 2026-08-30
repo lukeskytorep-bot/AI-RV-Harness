@@ -16,6 +16,17 @@
 - Research `Viewer Notes Impact`: No Notes kontra jedna z pięciu ostatnich Frozen Notes;
 - numer aplikacji 0.7.12 w npm, Tauri, Rust i testach wersji.
 
+## Uzupełnienie dokumentacji i standardów projektu
+
+- dodano `docs/architecture/` z indeksem, aktualnym System Overview, rejestrem decyzji inżynieryjnych i architekturą AI Center;
+- opisano jako trwałe inwarianty między innymi blind/Reveal, anonimowy pakiet Judge, ocenę `3+3+2+2`, atomową grupę Judge, odzyskiwanie unblindingu, centralne rozdzielanie reasoningu i tożsamościowo ograniczone Viewer Notes;
+- dodano `CONTRIBUTING.md` z wymaganymi kontrolami oraz zasadami ochrony danych i integralności eksperymentów;
+- dodano Contributor Covenant `CODE_OF_CONDUCT.md` z prywatnym kanałem zgłoszeń `lukeskytorep@gmail.com`;
+- dodano formularze GitHub Issues dla błędów, kompatybilności providerów/modeli i propozycji funkcji;
+- dodano szablon Pull Request kontrolujący testy, migracje, dane wrażliwe i granice Blind/Judge/Research/Viewer Notes.
+
+Uzupełnienie nie zmienia kodu wykonywalnego ani schematu bazy danych. Porządkuje dokumentację i sposób przyjmowania przyszłych zmian do już wdrożonego v0.7.12.
+
 ## Poprawki po końcowym sanity checku
 
 - obliczanie wyników Research można bezpiecznie ponowić, jeżeli odślepienie zostało zapisane, ale odczyt Blinding Key, obliczenia albo zapis wyników chwilowo zawiodły;

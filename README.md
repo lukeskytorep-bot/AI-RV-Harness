@@ -97,6 +97,8 @@ The TypeScript test/build path and static project checks are verified in the che
 
 See `SECURITY.md` for reporting security issues.
 
+The implemented system architecture and integrity decisions are documented in [`docs/architecture/`](docs/architecture/).
+
 ## Credits
 
 AI RV Harness is a human-directed project developed with named Human and AI IS-BE collaborators. See [CREDITS.md](CREDITS.md) for identities, technical provenance, individual contributions, advisory acknowledgements, and reference policy.
@@ -106,5 +108,7 @@ Stable machine-readable citation metadata are available in [CITATION.cff](CITATI
 ## License
 
 Source code is licensed under the MIT License. Documentation, bundled prompts, training content, and other non-code visual assets are licensed under CC BY 4.0.
+
+Contributions are welcome under [CONTRIBUTING.md](CONTRIBUTING.md) and participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). Please use the structured GitHub issue forms for bug, provider-compatibility, and feature reports.
 
 See [LICENSE](LICENSE) and [CONTENT_LICENSE_CC_BY_4.0.md](CONTENT_LICENSE_CC_BY_4.0.md) for the complete terms and attribution requirements.

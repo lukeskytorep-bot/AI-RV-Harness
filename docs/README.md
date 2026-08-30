@@ -6,6 +6,7 @@ This directory contains project documentation that is useful for development, re
 
 | Directory | Purpose |
 | --- | --- |
+| [`architecture/`](architecture/) | Current system overview, engineering invariants, integrity safeguards, and feature architecture. |
 | [`checkpoints/`](checkpoints/) | Historical implementation checkpoints from v0.6.0 through v0.7.7. |
 | [`releases/`](releases/) | Version-specific plans, notes, reports, manifests, verification records and patch documentation. |
 | [`specifications/`](specifications/) | As-built functional and technical specifications. |
@@ -16,6 +17,11 @@ This directory contains project documentation that is useful for development, re
 ## Current release documentation
 
 The current development baseline is v0.7.12:
+
+- [Architecture documentation index](architecture/README.md)
+- [System overview](architecture/SYSTEM_OVERVIEW.md)
+- [Engineering design and integrity safeguards](architecture/ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md)
+- [AI Center and Viewer Notes architecture](architecture/AI_CENTER_AND_VIEWER_NOTES.md)
 
 - [AI Center implementation plan](releases/v0.7.12/AI_CENTER_IMPLEMENTATION_PLAN_PL.md)
 - [AI Center wiki documentation](releases/v0.7.12/AI_CENTER_VIEWER_NOTES_WIKI_EN.md)
@@ -40,6 +46,7 @@ The repository root is reserved for files that developers, hosting platforms and
 - `README.md`;
 - `LICENSE` and the supplementary content licence;
 - `SECURITY.md`;
+- `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md`;
 - `CREDITS.md`;
 - `CITATION.cff`;
 - package, TypeScript, Vite, Tauri and environment configuration files.
@@ -63,6 +70,8 @@ The authoritative project-level files remain in the repository root:
 - [MIT source-code licence](../LICENSE)
 - [CC BY 4.0 content licence](../CONTENT_LICENSE_CC_BY_4.0.md)
 - [Security policy](../SECURITY.md)
+- [Contributing guide](../CONTRIBUTING.md)
+- [Code of Conduct](../CODE_OF_CONDUCT.md)
 - [Credits](../CREDITS.md)
 - [Citation metadata](../CITATION.cff)
 - [Credits and attribution records](credits/)

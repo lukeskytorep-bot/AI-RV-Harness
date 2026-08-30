@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Private security report
+    url: https://github.com/lukeskytorep-bot/AI-RV-Harness/security/advisories/new
+    about: Report vulnerabilities privately instead of opening a public issue.
+  - name: Project documentation
+    url: https://github.com/lukeskytorep-bot/AI-RV-Harness/wiki
+    about: Review the project Wiki before opening a support or design issue.

@@ -1,0 +1,64 @@
+name: Provider or model compatibility
+description: Report response parsing, reasoning, routing, or reliability behavior for one exact model
+title: "[Provider]: "
+body:
+  - type: input
+    id: version
+    attributes:
+      label: AI RV Harness version
+      placeholder: v0.7.12
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Exact model identifier
+    validations:
+      required: true
+  - type: dropdown
+    id: role
+    attributes:
+      label: Model role
+      options:
+        - Viewer
+        - AI Monitor
+        - AI Judge
+        - Conversation
+        - Manual RV
+        - Viewer Notes reflection
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed behavior
+      description: Describe empty content, truncated output, visible reasoning, invalid JSON, timeout, or other behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction and frequency
+      description: State how often it occurs and whether retry or Continue recovered the session.
+    validations:
+      required: true
+  - type: textarea
+    id: sanitized-error
+    attributes:
+      label: Sanitized error or response metadata
+      description: Never include keys, credentials, private targets, or private transcripts.
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I used the exact model identifier shown above.
+          required: true
+        - label: I removed credentials and private session data.
+          required: true

@@ -1,9 +1,20 @@
 AI RV Harness v0.7.12 — changed/new files relative to complete v0.7.11
 
 README.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
 package-lock.json
 package.json
+.github/ISSUE_TEMPLATE/bug_report.yml
+.github/ISSUE_TEMPLATE/config.yml
+.github/ISSUE_TEMPLATE/feature_request.yml
+.github/ISSUE_TEMPLATE/provider_compatibility.yml
+.github/pull_request_template.md
 docs/README.md
+docs/architecture/README.md
+docs/architecture/SYSTEM_OVERVIEW.md
+docs/architecture/ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md
+docs/architecture/AI_CENTER_AND_VIEWER_NOTES.md
 docs/releases/v0.7.12/AI_CENTER_IMPLEMENTATION_PLAN_PL.md
 docs/releases/v0.7.12/AI_CENTER_VIEWER_NOTES_WIKI_EN.md
 docs/releases/v0.7.12/APPLY_UPDATE_v0.7.12_PL.md

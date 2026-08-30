@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a focused improvement to AI RV Harness
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or need
+      description: Describe the user or research problem before describing the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: integrity
+    attributes:
+      label: Blinding, scoring, privacy, or reproducibility implications
+      description: Explain any effect on sessions, Reveal, Judge, Research, Viewer Notes, stored data, or provider calls.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing issues and documentation for this feature.
+          required: true
