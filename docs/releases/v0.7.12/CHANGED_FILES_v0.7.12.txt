@@ -29,6 +29,8 @@ src-tauri/src/lib.rs
 src-tauri/src/secrets.rs
 src-tauri/src/storage.rs
 src/App.tsx
+src/aiCenter/baseVersion.test.ts
+src/aiCenter/baseVersion.ts
 src/aiCenter/types.ts
 src/aiCenter/viewerNotes.test.ts
 src/aiCenter/viewerNotes.ts
@@ -40,6 +42,8 @@ src/judge/engine.test.ts
 src/judge/engine.ts
 src/judge/types.ts
 src/providers/native.ts
+src/providers/outputRecovery.test.ts
+src/providers/outputRecovery.ts
 src/research/engine.test.ts
 src/research/engine.ts
 src/research/preflight.ts
@@ -56,6 +60,7 @@ src/storage/browserRepository.ts
 src/storage/aiCenterMigration.test.ts
 src/storage/repository.ts
 src/storage/sqliteRepository.ts
+src/storage/viewerNotesBootstrap.test.ts
 src/styles/app.css
 src/training/types.ts
 src/version.test.ts

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import type { JudgeRepository } from "./engine";
-import { parseJudgeOutput, runBlindJudging, selectMissingJudgeSelections } from "./engine";
+import { buildJudgeRepairPrompt, parseJudgeOutput, runBlindJudging, selectMissingJudgeSelections } from "./engine";
 import type { FrozenJudgeResultInput, JudgeScoreRecord } from "./types";
 
 const provider: ProviderConfig = {
@@ -155,6 +155,40 @@ describe("blind Judge engine", () => {
     expect(chat).toHaveBeenCalledTimes(2);
     expect(chat.mock.calls[0][0].messages[0].content).toContain("MUSZĄ być zapisane po polsku");
     expect(result.scores[0].narrative.conciseRationale).toContain("trafny");
+  });
+
+  it("retries one reasoning-only length failure with a larger budget", async () => {
+    const highCapacityModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, contextTokens: 100_000, maxOutputTokens: 16_384 } };
+    const repository: JudgeRepository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "en" }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Tower", hash: "hash" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("Tall angular structure"),
+      listJudgeScores: vi.fn().mockResolvedValue([]),
+      recordFrozenJudgeResult: vi.fn(async (run, score) => ({ ...score, judgeIndex: run.judgeIndex, modelRoute: run.modelRoute, total: 7.7, frozenAt: "now", createdAt: "now" })),
+    };
+    const chat = vi.fn()
+      .mockRejectedValueOnce(new Error("provider returned reasoning without a final assistant response [finish-reason=length]"))
+      .mockResolvedValueOnce({ content: judgeJson, usage: {} });
+    await runBlindJudging({ repository, sessionId: "s", language: "en", judges: [{ providerConfig: provider, model: highCapacityModel }], chat });
+    expect(chat.mock.calls.map((call) => call[0].settings.effective.maxOutputTokens)).toEqual([8192, 16384]);
+  });
+
+  it("repairs one complete malformed JSON response without changing the Judge route", async () => {
+    const repository: JudgeRepository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "en" }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Tower", hash: "hash" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("Tall angular structure"),
+      listJudgeScores: vi.fn().mockResolvedValue([]),
+      recordFrozenJudgeResult: vi.fn(async (run, score) => ({ ...score, judgeIndex: run.judgeIndex, modelRoute: run.modelRoute, total: 7.7, frozenAt: "now", createdAt: "now" })),
+    };
+    const chat = vi.fn()
+      .mockResolvedValueOnce({ content: "scores: not valid JSON", finishReason: "stop", usage: {} })
+      .mockResolvedValueOnce({ content: judgeJson, finishReason: "stop", usage: {} });
+    await runBlindJudging({ repository, sessionId: "s", language: "en", judges: [{ providerConfig: provider, model }], chat });
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(chat.mock.calls[1][0].config.id).toBe(provider.id);
+    expect(chat.mock.calls[1][0].messages[1].content).toContain("scores: not valid JSON");
+    expect(buildJudgeRepairPrompt("raw", "en")).toContain("do not recalculate");
   });
 });
 

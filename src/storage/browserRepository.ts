@@ -15,6 +15,7 @@ import { verifySealedViewerEvidence } from "../sessions/evidence";
 import { applyReasoningRegistryToProviderModel } from "../providers/modelReasoningRegistry";
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteSettings, ViewerNoteVersion } from "../aiCenter/types";
+import { assertViewerNoteBasePair } from "../aiCenter/baseVersion";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
@@ -142,6 +143,7 @@ export class BrowserRepository implements AppRepository {
   }
 
   async beginViewerNoteReflection(input: BeginViewerNoteReflectionInput): Promise<ViewerNoteReflectionRun> {
+    assertViewerNoteBasePair(input);
     const all = read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []);
     const existing = all.find((item) => item.id === input.id || (item.aiIdentityId === input.aiIdentityId && item.sourceSessionId === input.sourceSessionId));
     if (existing) return existing;
@@ -156,6 +158,7 @@ export class BrowserRepository implements AppRepository {
   }
 
   async commitViewerNoteReflection(input: CommitViewerNoteReflectionInput): Promise<ViewerNoteReflectionResult> {
+    assertViewerNoteBasePair(input);
     const runs = read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []);
     const run = runs.find((item) => item.id === input.runId);
     if (!run) throw new Error("Viewer Notes reflection run not found.");

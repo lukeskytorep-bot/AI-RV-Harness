@@ -98,4 +98,26 @@ describe("post-reveal discussion", () => {
     expect(transcript).toContain("Viewer review remains saved");
     expect(transcript).not.toContain('"role":"monitor"');
   });
+
+  it("retries one reasoning-only Viewer review without duplicating the persisted user turn", async () => {
+    let transcript = "";
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ providerConfigId: "pc", modelId: "viewer", sessionLanguage: "en", generationSettings: { requested: { reasoningEffort: "high" } } }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Lighthouse", hash: "h" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
+      listTargetClarifications: vi.fn().mockResolvedValue([]),
+      appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant" | "monitor", content: string) => {
+        transcript += `${JSON.stringify({ role, content })}\n`;
+        return transcript;
+      }),
+    };
+    const highCapacityModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 16_384 } };
+    const chat = vi.fn()
+      .mockRejectedValueOnce(new Error("provider returned reasoning without a final assistant response [finish-reason=length]"))
+      .mockResolvedValueOnce({ content: "Complete Viewer review", finishReason: "stop", usage: {} });
+    await sendPostRevealTurn({ repository, sessionId: "s", existingTranscript: "", providerConfig: config, model: highCapacityModel, content: "Review the session.", chat });
+    expect(chat.mock.calls.map((call) => call[0].settings.effective.maxOutputTokens)).toEqual([8192, 16384]);
+    expect(repository.appendPostRevealTurn.mock.calls.filter((call) => call[1] === "user")).toHaveLength(1);
+    expect(repository.appendPostRevealTurn.mock.calls.filter((call) => call[1] === "assistant")).toHaveLength(1);
+  });
 });

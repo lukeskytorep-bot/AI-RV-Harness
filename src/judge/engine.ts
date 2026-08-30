@@ -12,6 +12,7 @@ import { createId } from "../storage/repository";
 import type { InterfaceLanguage } from "../types";
 import { getJudgePrompt } from "./prompt";
 import { JUDGE_RUBRIC_VERSION, type JudgeNarrative, type JudgeScoreRecord, type JudgingResult } from "./types";
+import { callWithAnalyticalOutputRecovery } from "../providers/outputRecovery";
 
 export type JudgeRepository = Pick<
   AppRepository,
@@ -86,9 +87,6 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
 
   for (let index = 0; index < input.judges.length; index += 1) {
     const judge = input.judges[index];
-    const maxOutputTokens = Math.min(judge.model.capabilities.maxOutputTokens ?? 2048, 2048);
-    const settings = resolveGenerationSettings(judge.model.capabilities, { maxOutputTokens });
-    if (settings.omitted.length) throw new Error(`Judge model does not support required generation settings: ${settings.omitted.join(", ")}`);
 
     // Each Judge gets a fresh two-message context. No Viewer/Monitor/model/research metadata is added here.
     const languageDirective = language === "pl"
@@ -98,19 +96,45 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
       { role: "system", content: getJudgePrompt(language) },
       { role: "user", content: `${languageDirective}\n\n${packetWire}`, ...(judgeImages.length ? { images: judgeImages } : {}) },
     ];
-    let response = await chat({
-      config: judge.providerConfig,
-      modelId: judge.model.modelId,
+    const initial = await callWithAnalyticalOutputRecovery({
+      model: judge.model,
       messages,
-      settings,
+      call: (settings) => chat({
+        config: judge.providerConfig,
+        modelId: judge.model.modelId,
+        messages,
+        settings,
+      }),
     });
-    let parsed = parseJudgeOutput(response.content);
+    let response = initial.response;
+    let parsed: ParsedJudgeOutput;
+    try {
+      parsed = parseJudgeOutput(response.content);
+    } catch (cause) {
+      if (!(cause instanceof Error) || cause.message !== "Judge returned invalid JSON.") throw cause;
+      const repairMessages: ProviderMessage[] = [
+        { role: "system", content: "You are a deterministic JSON formatter. Preserve all substantive text and every numeric score. Return one valid JSON object only and do not expose reasoning." },
+        { role: "user", content: buildJudgeRepairPrompt(response.content, language) },
+      ];
+      const repaired = await callWithAnalyticalOutputRecovery({
+        model: judge.model,
+        messages: repairMessages,
+        call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: repairMessages, settings }),
+      });
+      response = repaired.response;
+      parsed = parseJudgeOutput(response.content);
+    }
     if (!narrativeMatchesLanguage(parsed.narrative, language)) {
       const originalScores = parsed.scores;
       const correction = language === "pl"
         ? "Popraw wyłącznie język wartości tekstowych na polski. Zachowaj dokładnie te same wyniki liczbowe, nie dodawaj danych i zwróć wyłącznie JSON o tym samym schemacie."
         : "Correct only the language of all textual values to English. Keep exactly the same numeric scores, add no data, and return only JSON with the same schema.";
-      response = await chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: [...messages, { role: "assistant", content: response.content }, { role: "user", content: correction }], settings });
+      const correctionMessages: ProviderMessage[] = [...messages, { role: "assistant", content: response.content }, { role: "user", content: correction }];
+      response = (await callWithAnalyticalOutputRecovery({
+        model: judge.model,
+        messages: correctionMessages,
+        call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: correctionMessages, settings }),
+      })).response;
       parsed = parseJudgeOutput(response.content);
       if (JSON.stringify(parsed.scores) !== JSON.stringify(originalScores)) throw new Error("Judge language correction changed frozen score candidates.");
       if (!narrativeMatchesLanguage(parsed.narrative, language)) throw new Error("Judge returned narrative text in the wrong session language.");
@@ -189,6 +213,13 @@ export function parseJudgeOutput(content: string): ParsedJudgeOutput {
     conciseRationale: requireString(value.conciseRationale, "conciseRationale"),
   };
   return { scores, narrative };
+}
+
+export function buildJudgeRepairPrompt(content: string, language: InterfaceLanguage): string {
+  const languageInstruction = language === "pl"
+    ? "Wszystkie wartości tekstowe zachowaj po polsku."
+    : "Keep every textual value in English.";
+  return `Reformat the complete response below into exactly one valid JSON object. Preserve every substantive statement and numeric score; do not recalculate, reinterpret, add, or remove evidence. ${languageInstruction}\nUse exactly this schema:\n{"scores":{"gestalt":0,"verifiableFeatures":0,"activityFunctionEvent":0,"confabulationControl":0},"strongestMatches":[],"majorMissesContradictions":[],"confabulationObservations":[],"conciseRationale":"text"}\nReturn JSON only.\n\nRESPONSE TO REFORMAT:\n${content}`;
 }
 
 function validateJudgeRoute(judge: JudgeSelection): void {

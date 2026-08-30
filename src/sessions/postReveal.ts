@@ -6,6 +6,7 @@ import type { AppRepository } from "../storage/repository";
 import { parsePostRevealTranscript } from "./postRevealTranscript";
 import { buildEffectiveMonitorPrompt } from "../resources/systemPrompts";
 import { politeRevealTransition } from "./courtesy";
+import { analyticalOutputBudget, callWithAnalyticalOutputRecovery } from "../providers/outputRecovery";
 
 type PostRevealRepository = Pick<AppRepository, "appendPostRevealTurn" | "getReveal" | "getSessionSnapshot" | "getViewerEvidence" | "listTargetClarifications">;
 
@@ -55,21 +56,20 @@ export async function sendPostRevealTurn(input: {
       : ({ role: turn.role, content: turn.content } satisfies ProviderMessage)),
     { role: "user", content },
   ];
-  const maxOutputTokens = Math.min(input.model.capabilities.maxOutputTokens ?? 4096, 4096);
-  const estimatedInputTokens = Math.ceil(messages.reduce((sum, message) => sum + message.content.length, 0) / 3.5) + images.length * 1500;
-  if (input.model.capabilities.contextTokens && estimatedInputTokens + maxOutputTokens > input.model.capabilities.contextTokens) {
-    throw new Error("Post-reveal discussion exceeds this model route's available context.");
-  }
-  const settings = resolveGenerationSettings(input.model.capabilities, { maxOutputTokens });
-
+  analyticalOutputBudget({ model: input.model, messages, attempt: 0 });
   await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
-  const response = await (input.chat ?? nativeProviderChat)({
-    config: input.providerConfig,
-    modelId: input.model.modelId,
+  const response = (await callWithAnalyticalOutputRecovery({
+    model: input.model,
     messages,
-    settings,
-    timeoutMs: input.timeoutMs,
-  });
+    requestedSettings: snapshot.generationSettings?.requested,
+    call: (settings) => (input.chat ?? nativeProviderChat)({
+      config: input.providerConfig,
+      modelId: input.model.modelId,
+      messages,
+      settings,
+      timeoutMs: input.timeoutMs,
+    }),
+  })).response;
   const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "assistant", response.content);
   return { transcript, response };
 }
@@ -162,11 +162,11 @@ export async function sendMonitorPostRevealReview(input: {
     clarifications.length ? `[SUPPLEMENTARY TARGET CLARIFICATIONS — POST-REVEAL ONLY]\n${clarifications.map((item) => item.content).join("\n\n")}` : "",
   ].filter(Boolean).join("\n\n");
   const messages: ProviderMessage[] = [{ role: "system", content: system }, { role: "user", content: packet, ...(images.length ? { images } : {}) }];
-  const maxOutputTokens = Math.min(input.model.capabilities.maxOutputTokens ?? 4096, 4096);
-  const estimatedInputTokens = Math.ceil(messages.reduce((sum, message) => sum + message.content.length, 0) / 3.5) + images.length * 1500;
-  if (input.model.capabilities.contextTokens && estimatedInputTokens + maxOutputTokens > input.model.capabilities.contextTokens) throw new Error("Monitor post-reveal review exceeds this model route's available context.");
-  const settings = resolveGenerationSettings(input.model.capabilities, { maxOutputTokens });
-  const response = await (input.chat ?? nativeProviderChat)({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs });
+  const response = (await callWithAnalyticalOutputRecovery({
+    model: input.model,
+    messages,
+    call: (settings) => (input.chat ?? nativeProviderChat)({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs }),
+  })).response;
   const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "monitor", response.content);
   return { transcript, response };
 }

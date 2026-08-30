@@ -19,6 +19,7 @@ import { SqliteWriteCoordinator } from "./sqliteWriteCoordinator";
 import { applyReasoningRegistryToProviderModel } from "../providers/modelReasoningRegistry";
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteSettings, ViewerNoteVersion } from "../aiCenter/types";
+import { assertViewerNoteBasePair } from "../aiCenter/baseVersion";
 
 type ProfileRow = {
   id: string;
@@ -446,6 +447,7 @@ export class SqliteRepository implements AppRepository {
   }
 
   async beginViewerNoteReflection(input: BeginViewerNoteReflectionInput): Promise<ViewerNoteReflectionRun> {
+    assertViewerNoteBasePair(input);
     const existing = await this.db.select<ViewerNoteReflectionRunRow[]>("SELECT * FROM ai_note_reflection_runs WHERE id = $1 OR (ai_identity_id = $2 AND source_session_id = $3) LIMIT 1", [input.id, input.aiIdentityId, input.sourceSessionId]);
     if (existing[0]) return mapViewerNoteReflectionRun(existing[0]);
     const createdAt = nowIso();
@@ -464,6 +466,7 @@ export class SqliteRepository implements AppRepository {
   }
 
   async commitViewerNoteReflection(input: CommitViewerNoteReflectionInput): Promise<ViewerNoteReflectionResult> {
+    assertViewerNoteBasePair(input);
     const existingRuns = await this.db.select<ViewerNoteReflectionRunRow[]>("SELECT * FROM ai_note_reflection_runs WHERE id = $1 LIMIT 1", [input.runId]);
     const run = existingRuns[0];
     if (!run) throw new Error("Viewer Notes reflection run not found.");

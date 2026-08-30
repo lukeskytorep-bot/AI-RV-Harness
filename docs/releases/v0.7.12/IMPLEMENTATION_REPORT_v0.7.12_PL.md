@@ -1,5 +1,21 @@
 # AI RV Harness v0.7.12 — raport wdrożenia
 
+## Końcowa korekta przed publikacją
+
+Po pierwszych praktycznych testach kandydata v0.7.12 wdrożono dodatkowy pakiet niezawodności i porządkowania interfejsu:
+
+- naprawiono bootstrap pierwszej wersji Viewer Notes: brak aktywnej wersji nie jest już przedstawiany jako wersja bez identyfikatora, ale z hashem pustej treści;
+- `baseVersionId` i `baseContentSha256` są walidowane jako nierozłączna para w logice refleksji oraz obu repozytoriach;
+- AI Judge, Viewer Review, Monitor Review i Viewer Notes Reflection otrzymały wspólny budżet analityczny 8192 tokenów oraz jedną próbę ratunkową z 16384 tokenami, ograniczaną przez trasę i wolne miejsce w kontekście;
+- odpowiedź reasoning-only albo oznaczona `finishReason=length` jest ponawiana jako całe wywołanie, natomiast wyłącznie kompletny, składniowo błędny JSON może otrzymać jedną naprawę formatu;
+- retry zachowuje tę samą trasę modelu i nie dubluje transkryptu, wyników Judge ani wersji notatek;
+- kontrola kontekstu chroni dłuższe sesje Full RCP i RV Lite Extended bez skracania materiału blind;
+- przyciski kart `Recent training runs` zostały przeniesione pod metadane i mogą się zawijać; `Resume` ma osobny, widoczny styl;
+- usunięto mylący skrót AI Center z wnętrza Workspace; AI Center pozostaje samodzielną pozycją głównej nawigacji;
+- skróconą, niepełną listę Credits w Settings zastąpiono podziękowaniem i odnośnikiem do oficjalnego `CREDITS.md`.
+
+Testy regresyjne obejmują pierwszą wersję Viewer Notes, walidację pary bazowej, recovery `8192 → 16384`, odpowiedź oznaczoną `length`, naprawę kompletnego JSON-u Judge oraz brak podwójnego zapisu post-Reveal podczas retry.
+
 ## Wykonany zakres
 
 - osobny przycisk AI Center w lewej nawigacji;
