@@ -2,13 +2,15 @@
 
 AI RV Harness is a local-first desktop workspace for blind AI Remote Viewing sessions and controlled RV research. The desktop stack is Tauri 2 + React/TypeScript + Rust + SQLite, with Windows as the primary release platform.
 
-## Current checkpoint — 0.7.9
+## Current release — 0.7.11
 
-This is a substantial v1 implementation checkpoint, not a claim that the complete v1 distribution is releasable yet.
+Version 0.7.11 is the current Windows and Linux desktop release. It includes the complete public feature set introduced through v0.7.10 and improves compatibility with reasoning-capable provider responses used by ordinary Viewers and AI Monitors.
 
-Checkpoint 0.7.9 consolidates the complete 0.7.8 telepathic and Special Task work and hardens the release path. It adds the unified native attachment picker for TXT/Markdown/PDF/DOCX and one-turn images, conservative shared context budgeting with a visible output reserve, the four exact PL/EN Telepathy and Field Perception documents, pre-migration database backup plus post-migration/restore validation, real image-signature validation, privacy-gated provider diagnostics, and a cautious throttling-only automatic retry policy. Manual RV no longer exposes a formal blind/revealed control.
+Provider reasoning and final assistant content are now normalized separately across supported OpenAI-compatible, Google and Anthropic response shapes. The Harness preserves a model's final instruction while keeping provider reasoning out of Viewer evidence, Monitor interventions and normal transcripts. Incomplete reasoning-only responses are treated as recoverable provider failures instead of valid protocol instructions.
 
-Blackbox is available through its documented OpenAI-compatible API with fixed official endpoints and a local contract simulator. Linux AppImage and Debian package workflows are included alongside Windows NSIS/MSI. Both release workflows create a Draft Release and generate GitHub Artifact Attestations for every expected installer/package; the workflow fails if any expected artifact set is empty. All external GitHub Actions are pinned to reviewed full commit SHAs. Linux remains conditional until the generated packages pass the real-system checklist described in `RELEASE_CHECKLIST_v0.7.9.md`.
+Blackbox remains available through its documented OpenAI-compatible API. Release workflows build Windows NSIS/MSI and Linux AppImage/DEB packages, run the required quality gates and create GitHub Artifact Attestations for the expected assets. External GitHub Actions remain pinned to reviewed full commit SHAs.
+
+Release documentation is organized under [`docs/releases/`](docs/releases/). The v0.7.11 design, implementation report, changed-file manifest and public notes are in [`docs/releases/v0.7.11/`](docs/releases/v0.7.11/). See [`docs/README.md`](docs/README.md) for the complete documentation index and organization policy.
 
 Implemented end to end:
 
@@ -57,11 +59,11 @@ After every automatic Reveal the Viewer now receives the Reveal and produces a s
 
 `.github/workflows/release-windows.yml` and `.github/workflows/release-linux.yml` run manually from `main`, prevent overlapping releases, require the reviewed and committed `src-tauri/Cargo.lock`, run the relevant quality gates, create/update a draft GitHub Release and attest the generated packages. CI never commits or pushes repository changes.
 
-If Rust is unavailable locally, run the manual `Prepare Cargo lockfile` workflow once, download its `AI-RV-Harness-v0.7.9-Cargo-lock` artifact, review `Cargo.lock`, place it in `src-tauri/Cargo.lock`, and commit it. The normal CI and release workflows intentionally refuse to continue until that file is present.
+The reviewed v0.7.11 `src-tauri/Cargo.lock` is committed with this source. If a future dependency or package-version change requires regeneration and Rust is unavailable locally, use the manual `Prepare Cargo lockfile` workflow for that new version, review the generated lockfile and commit it separately. Normal CI and release workflows intentionally refuse to continue when the required lockfile is missing or stale.
 
 ## Windows installer trust
 
-Checkpoint 0.7.9 is not Authenticode-signed, so Windows SmartScreen or third-party endpoint protection may warn again for every newly built installer hash. GitHub Artifact Attestation proves build provenance but does not replace a Windows publisher signature. Removing the recurring publisher warning requires a stable Authenticode identity (for example Microsoft Artifact Signing or another trusted certificate configured in the Tauri release workflow) or distribution through Microsoft Store. See the [Microsoft SmartScreen reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) and [Tauri Windows code-signing guide](https://v2.tauri.app/distribute/sign/windows/).
+The v0.7.11 Windows packages are not Authenticode-signed, so Windows SmartScreen or third-party endpoint protection may warn for a newly built installer hash. GitHub Artifact Attestation proves build provenance but does not replace a Windows publisher signature. Removing the recurring publisher warning requires a stable Authenticode identity (for example Microsoft Artifact Signing or another trusted certificate configured in the Tauri release workflow) or distribution through Microsoft Store. See the [Microsoft SmartScreen reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) and [Tauri Windows code-signing guide](https://v2.tauri.app/distribute/sign/windows/).
 
 ## Development and verification
 
@@ -93,7 +95,9 @@ See `SECURITY.md` for reporting security issues.
 
 ## Credits
 
-AI RV Harness is a human-led project developed with multiple AI collaborators. See [CREDITS.md](CREDITS.md) for individual contributions.
+AI RV Harness is a human-directed project developed with named Human and AI IS-BE collaborators. See [CREDITS.md](CREDITS.md) for identities, technical provenance, individual contributions, advisory acknowledgements, and reference policy.
+
+Stable machine-readable citation metadata are available in [CITATION.cff](CITATION.cff). The citation intentionally has no release date or version number, so it identifies the continuing project rather than one particular build.
 
 ## License
 
