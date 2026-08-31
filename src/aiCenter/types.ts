@@ -169,6 +169,7 @@ export interface CommitViewerNoteReflectionInput {
   generationSettingsSnapshot: EffectiveGenerationSettings;
   providerRequestId?: string;
   rawFinalResponseSha256: string;
+  attemptCount?: number;
 }
 
 export interface ViewerNoteReflectionResult {

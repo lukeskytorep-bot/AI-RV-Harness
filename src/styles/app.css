@@ -312,13 +312,29 @@ h1, h2, h3 { font-family: "Segoe UI", system-ui, sans-serif; }
 .workspace-directory-groups > section > header strong { font-size: 11px; }
 .workspace-directory-groups > section > header small { color: var(--muted); font-size: 11px; }
 .workspace-directory-groups > section > div { display: grid; padding: 5px; }
-.workspace-directory-groups button { min-height: 45px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 9px; border: 0; border-radius: 8px; color: var(--text); background: transparent; cursor: pointer; text-align: left; }
-.workspace-directory-groups button:hover { background: var(--surface-hover); }
-.workspace-directory-groups button > span { min-width: 0; display: flex; align-items: center; gap: 9px; }
-.workspace-directory-groups button > span > svg { flex: 0 0 auto; color: var(--violet); }
-.workspace-directory-groups button > span > span { min-width: 0; display: grid; gap: 2px; }
-.workspace-directory-groups button strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-directory-groups button small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-directory-row { position: relative; display: flex; align-items: stretch; min-width: 0; }
+.workspace-open-button { min-height: 45px; min-width: 0; flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 9px; border: 0; border-radius: 8px; color: var(--text); background: transparent; cursor: pointer; text-align: left; }
+.workspace-open-button:hover, .workspace-actions summary:hover, .workspace-actions button:hover { background: var(--surface-hover); }
+.workspace-open-button > span { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.workspace-open-button > span > svg { flex: 0 0 auto; color: var(--violet); }
+.workspace-open-button > span > span { min-width: 0; display: grid; gap: 2px; }
+.workspace-open-button strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-open-button small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-actions { position: relative; align-self: center; }
+.workspace-actions summary { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; cursor: pointer; list-style: none; }
+.workspace-actions summary::-webkit-details-marker { display: none; }
+.workspace-actions > div { position: absolute; z-index: 20; top: 36px; right: 0; width: 150px; padding: 5px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); }
+.workspace-actions button { width: 100%; min-height: 34px; display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding: 6px 8px; border: 0; border-radius: 7px; color: var(--text); background: transparent; cursor: pointer; }
+.credits-url-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }
+.credits-url-row code { overflow-wrap: anywhere; color: var(--violet); }
+.archive-recovery { display: grid; gap: 12px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
+.archive-groups { display: grid; gap: 8px; }
+.archive-groups > details { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }
+.archive-groups > details > summary { padding: 10px 12px; cursor: pointer; font-weight: 700; }
+.archive-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border-top: 1px solid var(--border); }
+.archive-row > span { min-width: 0; display: grid; gap: 2px; }
+.archive-row strong, .archive-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.archive-row small { color: var(--muted); }
 .workspace-switcher-modal { width: min(720px, calc(100vw - 40px)); max-height: 82vh; padding-bottom: 18px; }
 .workspace-switcher-modal > .workspace-directory { padding: 0 18px; }
 .workspace-created-notice { display: flex; align-items: center; gap: 9px; margin: -13px 0 15px; padding: 9px 11px; border: 1px solid rgba(68, 190, 137, .2); border-radius: 10px; color: var(--green); background: rgba(68, 190, 137, .07); }

@@ -12,24 +12,34 @@ import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflec
 
 export interface AppRepository {
   listProfiles(): Promise<Profile[]>;
+  listArchivedProfiles(): Promise<Profile[]>;
   createProfile(input: CreateProfileInput): Promise<Profile>;
   updateProfile(id: string, input: UpdateProfileInput): Promise<void>;
   archiveProfile(id: string): Promise<void>;
+  restoreProfile(id: string): Promise<void>;
   setProfileAiConfiguration(profileId: string, input: ProfileAiConfigurationInput): Promise<void>;
   listWorkspaces(profileId?: string): Promise<Workspace[]>;
+  listArchivedWorkspaces(): Promise<Workspace[]>;
   createWorkspace(input: CreateWorkspaceInput): Promise<Workspace>;
+  renameWorkspace(id: string, name: string): Promise<void>;
+  archiveWorkspace(id: string): Promise<void>;
+  restoreWorkspace(id: string, name?: string): Promise<void>;
   touchWorkspace(id: string): Promise<void>;
   setProfileCredential(profileId: string, credentialId?: string, provider?: string): Promise<void>;
   listChatThreadGroups(workspaceId: string, mode: ChatMode): Promise<ChatThreadGroup[]>;
   createChatThreadGroup(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThreadGroup>;
   renameChatThreadGroup(groupId: string, title: string): Promise<void>;
   archiveChatThreadGroup(groupId: string): Promise<void>;
+  listArchivedChatThreadGroups(): Promise<ChatThreadGroup[]>;
+  restoreChatThreadGroup(groupId: string): Promise<void>;
   listChatThreads(workspaceId: string, mode: ChatMode): Promise<ChatThread[]>;
   createChatThread(workspaceId: string, mode: ChatMode, title?: string, threadGroupId?: string): Promise<ChatThread>;
   getOrCreateChatThread(workspaceId: string, mode: ChatMode): Promise<ChatThread>;
   touchChatThread(threadId: string): Promise<void>;
   renameChatThread(threadId: string, title: string): Promise<void>;
   archiveChatThread(threadId: string): Promise<void>;
+  listArchivedChatThreads(): Promise<ChatThread[]>;
+  restoreChatThread(threadId: string): Promise<void>;
   setChatThreadFormalRvState(threadId: string, state?: ChatThread["formalRvState"]): Promise<void>;
   listChatMessages(threadId: string): Promise<ChatMessage[]>;
   appendChatMessage(threadId: string, role: ChatMessage["role"], content: string): Promise<ChatMessage>;
@@ -67,7 +77,7 @@ export interface AppRepository {
   setViewerNoteCapacity(aiIdentityId: string, capacityTokens: ViewerNoteCapacity): Promise<void>;
   setViewerNotesDefaultEnabled(aiIdentityId: string, enabled: boolean): Promise<void>;
   beginViewerNoteReflection(input: BeginViewerNoteReflectionInput): Promise<ViewerNoteReflectionRun>;
-  failViewerNoteReflection(runId: string, status: Exclude<ViewerNoteReflectionRun["status"], "PENDING" | "UPDATE" | "NO_CHANGE" | "STALE_BASE">, failureMessage: string, providerRequestId?: string, rawFinalResponseSha256?: string): Promise<void>;
+  failViewerNoteReflection(runId: string, status: Exclude<ViewerNoteReflectionRun["status"], "PENDING" | "UPDATE" | "NO_CHANGE" | "STALE_BASE">, failureMessage: string, providerRequestId?: string, rawFinalResponseSha256?: string, attemptCount?: number): Promise<void>;
   commitViewerNoteReflection(input: CommitViewerNoteReflectionInput): Promise<ViewerNoteReflectionResult>;
   restoreViewerNoteVersion(aiIdentityId: string, versionId: string, workspaceId?: string): Promise<void>;
   listCustomProtocols(language?: "pl" | "en"): Promise<CustomProtocolVersion[]>;

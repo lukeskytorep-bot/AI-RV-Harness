@@ -1,0 +1,15 @@
+docs/architecture/AI_CENTER_AND_VIEWER_NOTES.md
+docs/releases/v0.7.12/APPLY_POST_TEST_HOTFIX_PL.md
+docs/releases/v0.7.12/POST_TEST_HOTFIX_CHANGED_FILES.txt
+docs/releases/v0.7.12/POST_TEST_HOTFIX_IMPLEMENTATION_PL.md
+docs/releases/v0.7.12/POST_TEST_HOTFIX_SHA256SUMS.txt
+src/App.tsx
+src/aiCenter/types.ts
+src/aiCenter/viewerNotes.test.ts
+src/aiCenter/viewerNotes.ts
+src/components/AiCenterScreen.tsx
+src/storage/browserRepository.ts
+src/storage/repository.ts
+src/storage/sqliteRepository.ts
+src/storage/workspaceDirectoryPersistence.test.ts
+src/styles/app.css

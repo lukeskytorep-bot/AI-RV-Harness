@@ -152,9 +152,9 @@ export class BrowserRepository implements AppRepository {
     return run;
   }
 
-  async failViewerNoteReflection(runId: string, status: Exclude<ViewerNoteReflectionRun["status"], "PENDING" | "UPDATE" | "NO_CHANGE" | "STALE_BASE">, failureMessage: string, providerRequestId?: string, rawFinalResponseSha256?: string): Promise<void> {
+  async failViewerNoteReflection(runId: string, status: Exclude<ViewerNoteReflectionRun["status"], "PENDING" | "UPDATE" | "NO_CHANGE" | "STALE_BASE">, failureMessage: string, providerRequestId?: string, rawFinalResponseSha256?: string, attemptCount = 1): Promise<void> {
     const all = read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []);
-    write(AI_NOTE_REFLECTION_RUNS_KEY, all.map((item) => item.id === runId ? { ...item, status, failureMessage, attemptCount: item.attemptCount + 1, ...(providerRequestId ? { providerRequestId } : {}), ...(rawFinalResponseSha256 ? { rawFinalResponseSha256 } : {}), completedAt: nowIso() } : item));
+    write(AI_NOTE_REFLECTION_RUNS_KEY, all.map((item) => item.id === runId ? { ...item, status, failureMessage, attemptCount: item.attemptCount + attemptCount, ...(providerRequestId ? { providerRequestId } : {}), ...(rawFinalResponseSha256 ? { rawFinalResponseSha256 } : {}), completedAt: nowIso() } : item));
   }
 
   async commitViewerNoteReflection(input: CommitViewerNoteReflectionInput): Promise<ViewerNoteReflectionResult> {
@@ -175,7 +175,7 @@ export class BrowserRepository implements AppRepository {
     }
     const completedAt = nowIso();
     if (input.decision === "NO_CHANGE") {
-      write(AI_NOTE_REFLECTION_RUNS_KEY, runs.map((item) => item.id === run.id ? { ...item, status: "NO_CHANGE", attemptCount: item.attemptCount + 1, changeSummary: input.changeSummary, providerRequestId: input.providerRequestId, rawFinalResponseSha256: input.rawFinalResponseSha256, completedAt } : item));
+      write(AI_NOTE_REFLECTION_RUNS_KEY, runs.map((item) => item.id === run.id ? { ...item, status: "NO_CHANGE", attemptCount: item.attemptCount + (input.attemptCount ?? 1), changeSummary: input.changeSummary, providerRequestId: input.providerRequestId, rawFinalResponseSha256: input.rawFinalResponseSha256, completedAt } : item));
       return { status: "NO_CHANGE" };
     }
     if (!input.notes || !input.contentSha256 || input.estimatedTokens === undefined) throw new Error("Complete Viewer Notes are required for UPDATE.");
@@ -184,7 +184,7 @@ export class BrowserRepository implements AppRepository {
     write(AI_NOTE_VERSIONS_KEY, [version, ...versions]);
     write(AI_NOTE_ACTIVATION_EVENTS_KEY, [activation, ...read<ViewerNoteActivationEvent[]>(AI_NOTE_ACTIVATION_EVENTS_KEY, [])]);
     write(AI_NOTE_SETTINGS_KEY, settings.map((item) => item.aiIdentityId === input.aiIdentityId ? { ...item, activeVersionId: version.id, updatedAt: completedAt } : item));
-    write(AI_NOTE_REFLECTION_RUNS_KEY, runs.map((item) => item.id === run.id ? { ...item, status: "UPDATE", attemptCount: item.attemptCount + 1, changeSummary: input.changeSummary, providerRequestId: input.providerRequestId, rawFinalResponseSha256: input.rawFinalResponseSha256, completedAt } : item));
+    write(AI_NOTE_REFLECTION_RUNS_KEY, runs.map((item) => item.id === run.id ? { ...item, status: "UPDATE", attemptCount: item.attemptCount + (input.attemptCount ?? 1), changeSummary: input.changeSummary, providerRequestId: input.providerRequestId, rawFinalResponseSha256: input.rawFinalResponseSha256, completedAt } : item));
     return { status: "UPDATE", version };
   }
 
@@ -227,6 +227,10 @@ export class BrowserRepository implements AppRepository {
     return read<Profile[]>(PROFILES_KEY, []).filter((profile) => !profile.archivedAt).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
+  async listArchivedProfiles(): Promise<Profile[]> {
+    return read<Profile[]>(PROFILES_KEY, []).filter((profile) => Boolean(profile.archivedAt)).sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
+  }
+
   async createProfile(input: CreateProfileInput): Promise<Profile> {
     const profiles = read<Profile[]>(PROFILES_KEY, []);
     const timestamp = nowIso();
@@ -259,9 +263,20 @@ export class BrowserRepository implements AppRepository {
   }
 
   async archiveProfile(id: string): Promise<void> {
-    const timestamp = nowIso();
+    const priorWorkspaceArchives = read<Workspace[]>(WORKSPACES_KEY, []).filter((workspace) => workspace.profileId === id && workspace.archivedAt).map((workspace) => Date.parse(workspace.archivedAt!)).filter(Number.isFinite);
+    const timestamp = new Date(Math.max(Date.now(), (priorWorkspaceArchives.length ? Math.max(...priorWorkspaceArchives) : 0) + 1)).toISOString();
     write(PROFILES_KEY, read<Profile[]>(PROFILES_KEY, []).map((profile) => profile.id === id ? { ...profile, archivedAt: timestamp, updatedAt: timestamp } : profile));
     write(WORKSPACES_KEY, read<Workspace[]>(WORKSPACES_KEY, []).map((workspace) => workspace.profileId === id ? { ...workspace, archivedAt: timestamp, updatedAt: timestamp } : workspace));
+  }
+
+  async restoreProfile(id: string): Promise<void> {
+    const profiles = read<Profile[]>(PROFILES_KEY, []);
+    const profile = profiles.find((item) => item.id === id && item.archivedAt);
+    if (!profile) throw new Error("Archived Profile not found.");
+    const archivedAt = profile.archivedAt;
+    const timestamp = nowIso();
+    write(PROFILES_KEY, profiles.map((item) => item.id === id ? { ...item, archivedAt: undefined, updatedAt: timestamp } : item));
+    write(WORKSPACES_KEY, read<Workspace[]>(WORKSPACES_KEY, []).map((workspace) => workspace.profileId === id && workspace.archivedAt === archivedAt ? { ...workspace, archivedAt: undefined, updatedAt: timestamp } : workspace));
   }
 
   async setProfileAiConfiguration(profileId: string, input: ProfileAiConfigurationInput): Promise<void> {
@@ -297,6 +312,12 @@ export class BrowserRepository implements AppRepository {
       .sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
   }
 
+  async listArchivedWorkspaces(): Promise<Workspace[]> {
+    return read<Workspace[]>(WORKSPACES_KEY, [])
+      .filter((workspace) => Boolean(workspace.archivedAt))
+      .sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
+  }
+
   async createWorkspace(input: CreateWorkspaceInput): Promise<Workspace> {
     const all = read<Workspace[]>(WORKSPACES_KEY, []);
     const timestamp = nowIso();
@@ -311,6 +332,35 @@ export class BrowserRepository implements AppRepository {
     };
     write(WORKSPACES_KEY, [workspace, ...all]);
     return workspace;
+  }
+
+  async renameWorkspace(id: string, name: string): Promise<void> {
+    const clean = name.trim().slice(0, 160);
+    if (!clean) throw new Error("Workspace name is required.");
+    const all = read<Workspace[]>(WORKSPACES_KEY, []);
+    const current = all.find((workspace) => workspace.id === id);
+    if (!current) throw new Error("Workspace not found.");
+    if (all.some((workspace) => workspace.id !== id && workspace.profileId === current.profileId && !workspace.archivedAt && workspace.name.trim().toLocaleLowerCase() === clean.toLocaleLowerCase())) throw new Error("An active Workspace with this name already exists in the Profile.");
+    const timestamp = nowIso();
+    write(WORKSPACES_KEY, all.map((workspace) => workspace.id === id ? { ...workspace, name: clean, updatedAt: timestamp } : workspace));
+  }
+
+  async archiveWorkspace(id: string): Promise<void> {
+    const all = read<Workspace[]>(WORKSPACES_KEY, []);
+    if (!all.some((workspace) => workspace.id === id && !workspace.archivedAt)) throw new Error("Active Workspace not found.");
+    const timestamp = nowIso();
+    write(WORKSPACES_KEY, all.map((workspace) => workspace.id === id ? { ...workspace, archivedAt: timestamp, updatedAt: timestamp } : workspace));
+  }
+
+  async restoreWorkspace(id: string, name?: string): Promise<void> {
+    const all = read<Workspace[]>(WORKSPACES_KEY, []);
+    const current = all.find((workspace) => workspace.id === id && workspace.archivedAt);
+    if (!current) throw new Error("Archived Workspace not found.");
+    const clean = (name ?? current.name).trim().slice(0, 160);
+    if (!clean) throw new Error("Workspace name is required.");
+    if (all.some((workspace) => workspace.id !== id && workspace.profileId === current.profileId && !workspace.archivedAt && workspace.name.trim().toLocaleLowerCase() === clean.toLocaleLowerCase())) throw new Error("An active Workspace with this name already exists in the Profile.");
+    const timestamp = nowIso();
+    write(WORKSPACES_KEY, all.map((workspace) => workspace.id === id ? { ...workspace, name: clean, archivedAt: undefined, updatedAt: timestamp } : workspace));
   }
 
   async touchWorkspace(id: string): Promise<void> {
@@ -377,9 +427,26 @@ export class BrowserRepository implements AppRepository {
     const groups = read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []);
     const group = groups.find((item) => item.id === groupId && !item.archivedAt);
     if (!group) throw new Error("Thread not found.");
-    const timestamp = nowIso();
+    const threads = read<ChatThread[]>(CHAT_THREADS_KEY, []);
+    const priorChildArchives = threads.filter((item) => item.threadGroupId === groupId && item.archivedAt).map((item) => Date.parse(item.archivedAt!)).filter(Number.isFinite);
+    const timestamp = new Date(Math.max(Date.now(), (priorChildArchives.length ? Math.max(...priorChildArchives) : 0) + 1)).toISOString();
     write(CHAT_THREAD_GROUPS_KEY, groups.map((item) => item.id === groupId ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
-    write(CHAT_THREADS_KEY, read<ChatThread[]>(CHAT_THREADS_KEY, []).map((item) => item.threadGroupId === groupId && !item.archivedAt ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
+    write(CHAT_THREADS_KEY, threads.map((item) => item.threadGroupId === groupId && !item.archivedAt ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
+  }
+
+  async listArchivedChatThreadGroups(): Promise<ChatThreadGroup[]> {
+    return read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []).filter((group) => Boolean(group.archivedAt)).sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
+  }
+
+  async restoreChatThreadGroup(groupId: string): Promise<void> {
+    const groups = read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []);
+    const group = groups.find((item) => item.id === groupId && item.archivedAt);
+    if (!group) throw new Error("Archived Thread not found.");
+    if (read<Workspace[]>(WORKSPACES_KEY, []).find((item) => item.id === group.workspaceId)?.archivedAt) throw new Error("Restore the parent Workspace first.");
+    const archivedAt = group.archivedAt;
+    const timestamp = nowIso();
+    write(CHAT_THREAD_GROUPS_KEY, groups.map((item) => item.id === groupId ? { ...item, archivedAt: undefined, updatedAt: timestamp } : item));
+    write(CHAT_THREADS_KEY, read<ChatThread[]>(CHAT_THREADS_KEY, []).map((item) => item.threadGroupId === groupId && item.archivedAt === archivedAt ? { ...item, archivedAt: undefined, updatedAt: timestamp } : item));
   }
 
   async listChatThreads(workspaceId: string, mode: ChatMode): Promise<ChatThread[]> {
@@ -424,6 +491,21 @@ export class BrowserRepository implements AppRepository {
     if (!thread) throw new Error("Chat thread not found.");
     const timestamp = nowIso();
     write(CHAT_THREADS_KEY, threads.map((item) => item.id === threadId ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
+  }
+
+  async listArchivedChatThreads(): Promise<ChatThread[]> {
+    return read<ChatThread[]>(CHAT_THREADS_KEY, []).filter((thread) => Boolean(thread.archivedAt)).sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
+  }
+
+  async restoreChatThread(threadId: string): Promise<void> {
+    const threads = read<ChatThread[]>(CHAT_THREADS_KEY, []);
+    const thread = threads.find((item) => item.id === threadId && item.archivedAt);
+    if (!thread) throw new Error("Archived Conversation not found.");
+    if (read<Workspace[]>(WORKSPACES_KEY, []).find((item) => item.id === thread.workspaceId)?.archivedAt) throw new Error("Restore the parent Workspace first.");
+    const group = thread.threadGroupId ? read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []).find((item) => item.id === thread.threadGroupId) : undefined;
+    if (group?.archivedAt) throw new Error("Restore the parent Thread first.");
+    const timestamp = nowIso();
+    write(CHAT_THREADS_KEY, threads.map((item) => item.id === threadId ? { ...item, archivedAt: undefined, updatedAt: timestamp } : item));
   }
 
   async setChatThreadFormalRvState(threadId: string, state?: ChatThread["formalRvState"]): Promise<void> {

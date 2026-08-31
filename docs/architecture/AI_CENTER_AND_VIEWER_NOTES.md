@@ -46,35 +46,34 @@ They are not:
 - fine-tuning, LoRA, or a change to model weights;
 - a place to preserve the identity of a specific target.
 
-Only the same Viewer identity may create or revise its notes. A person cannot edit the text of an individual version. Human-authored guidance belongs in the System Prompt. The owner of the local data may still disable notes, export them, restore an older immutable version with a warning, or delete the entire history as an explicit privacy operation.
+Only the same Viewer identity may create or revise its notes. A person cannot edit the text of an individual version. Human-authored guidance belongs in the System Prompt. The owner of the local data may still disable notes, export them, or restore an older immutable version with a warning. Permanent deletion is reserved for a later data-management update.
 
 ## Simple session control
 
-Supported Training, automatic RV Session, monitored RV Session, and Manual RV Session screens show one simple control:
+Training and RV Session screens show one simple control:
 
 ```text
 Viewer Notes   [ ON ]
 ```
 
-The switch is **ON by default**. Version numbers, token usage, and history do not clutter the session setup. A short tooltip explains that ON uses the current notes and allows the same Viewer to review them after Reveal. Full details remain in AI Center.
+The switch is **ON by default**. Version numbers, token usage, and history do not clutter the session setup. A short tooltip explains whether the screen only reads the current notes or also permits Training reflection. Full details remain in AI Center.
 
-- **ON:** the active notes snapshot is included in the session. Post-session reflection is enabled only for controlled automatic and Training flows that reach Reveal and record the Viewer's own review.
-- **OFF:** no notes are included and no notes reflection is run after the session.
+- **ON:** the active notes snapshot is included in the session. Only Training may create or revise notes, once after every completed target that reaches Reveal and records the Viewer's own review.
+- **OFF:** no notes are included and Training does not run a notes reflection for that target.
 
-If no notes exist yet, ON permits the same Viewer to create the first version after a qualifying completed session.
+If no notes exist yet, ON permits the same Viewer to create the first version after a qualifying completed Training target.
 
-Manual RV may use the current snapshot as context, but it does not update Viewer Notes automatically. Manual RV has no controller-enforced Reveal and Viewer-review checkpoint from which a trustworthy reflection packet can be built.
+Manual, automatic, and monitored RV Sessions may use the current snapshot as read-only context, but they never update Viewer Notes. This keeps ordinary work separate from deliberate model training and prevents a long run of routine sessions from repeatedly rewriting the same memory.
 
 ## Session and reflection order
 
-The order is an integrity boundary, especially in monitored sessions:
+The order is an integrity boundary in Training:
 
 1. the blind Viewer evidence is sealed;
 2. the target is revealed;
 3. the Viewer gives its own post-Reveal assessment;
 4. if Viewer Notes were ON, the same Viewer reviews its notes;
-5. only after that may the AI Monitor provide its post-Reveal review;
-6. AI Judge and later operator discussion remain separate.
+5. AI Monitor, AI Judge, and later operator discussion remain separate and are not supplied to the notes reflection.
 
 The reflection packet contains only:
 
@@ -101,6 +100,8 @@ The available capacity levels are 1,024, 2,048, 4,096, and 8,192 estimated token
 `ceil((characters / 3.5) × 1.15)`
 
 Capacity may be increased. It may be reduced only when the current notes already fit within the lower level. Harness never truncates notes to satisfy a lower limit.
+
+If the Viewer's first valid `UPDATE` exceeds the selected capacity, Harness makes one content retry. The second prompt repeats the current notes, sealed blind evidence, Reveal, and the Viewer's own post-Reveal assessment. It also supplies the rejected complete proposal and exact estimates for the current notes, rejected proposal, and capacity. The Viewer may compress or reorganize its complete notes, replace less useful conclusions, shorten the new material, or return `NO_CHANGE`. A second over-capacity result is recorded as `FAILED_CAPACITY`; Harness does not truncate or silently alter it and does not make a third attempt.
 
 ## Canonical post-session reflection prompt
 
@@ -171,9 +172,9 @@ The Viewer Notes module shows:
 - frozen Research snapshots;
 - reflection outcomes such as `UPDATE`, `NO_CHANGE`, or a technical failure;
 - route status and identity metadata;
-- an expandable **How Viewer Notes work** guide at the bottom.
+- an expandable **How AI Center works** guide in Overview.
 
-The help guide explains ownership, the ON/OFF behavior, the post-Reveal update order, the exclusion of Monitor and Judge material, the inability to edit version text, and the difference between Viewer Notes and the System Prompt.
+The Overview guide explains Profile-wide ownership, the role boundary between Viewer, Monitor, and Judge, the ON/OFF behavior, Training-only updates, the post-Reveal update order, immutable versions, Research snapshots, and the difference between Viewer Notes and the System Prompt.
 
 ## Research design
 

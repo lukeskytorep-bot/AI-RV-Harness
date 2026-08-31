@@ -39,6 +39,7 @@ type ProfileRow = {
   default_judge_model_id: string | null;
   created_at: string;
   updated_at: string;
+  archived_at: string | null;
 };
 
 type WorkspaceRow = {
@@ -49,6 +50,7 @@ type WorkspaceRow = {
   created_at: string;
   updated_at: string;
   last_opened_at: string;
+  archived_at: string | null;
 };
 
 type ProviderConfigRow = {
@@ -247,6 +249,7 @@ function mapProfile(row: ProfileRow): Profile {
     defaultJudgeModelId: row.default_judge_model_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    archivedAt: row.archived_at ?? undefined,
   };
 }
 
@@ -259,6 +262,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastOpenedAt: row.last_opened_at,
+    ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
   };
 }
 
@@ -459,10 +463,10 @@ export class SqliteRepository implements AppRepository {
     return { ...input, noteType: "viewer_self_notes", attemptCount: 0, status: "PENDING", createdAt };
   }
 
-  async failViewerNoteReflection(runId: string, status: Exclude<ViewerNoteReflectionRun["status"], "PENDING" | "UPDATE" | "NO_CHANGE" | "STALE_BASE">, failureMessage: string, providerRequestId?: string, rawFinalResponseSha256?: string): Promise<void> {
-    await this.executeWrite(`UPDATE ai_note_reflection_runs SET status = $1, failure_message = $2, attempt_count = attempt_count + 1,
-      provider_request_id = COALESCE($3, provider_request_id), raw_final_response_sha256 = COALESCE($4, raw_final_response_sha256), completed_at = $5 WHERE id = $6`,
-    [status, failureMessage, providerRequestId ?? null, rawFinalResponseSha256 ?? null, nowIso(), runId]);
+  async failViewerNoteReflection(runId: string, status: Exclude<ViewerNoteReflectionRun["status"], "PENDING" | "UPDATE" | "NO_CHANGE" | "STALE_BASE">, failureMessage: string, providerRequestId?: string, rawFinalResponseSha256?: string, attemptCount = 1): Promise<void> {
+    await this.executeWrite(`UPDATE ai_note_reflection_runs SET status = $1, failure_message = $2, attempt_count = attempt_count + $3,
+      provider_request_id = COALESCE($4, provider_request_id), raw_final_response_sha256 = COALESCE($5, raw_final_response_sha256), completed_at = $6 WHERE id = $7`,
+    [status, failureMessage, attemptCount, providerRequestId ?? null, rawFinalResponseSha256 ?? null, nowIso(), runId]);
   }
 
   async commitViewerNoteReflection(input: CommitViewerNoteReflectionInput): Promise<ViewerNoteReflectionResult> {
@@ -477,9 +481,9 @@ export class SqliteRepository implements AppRepository {
     if (run.status === "NO_CHANGE") return { status: "NO_CHANGE" };
     const completedAt = nowIso();
     if (input.decision === "NO_CHANGE") {
-      await this.executeWrite(`UPDATE ai_note_reflection_runs SET status = 'NO_CHANGE', attempt_count = attempt_count + 1, change_summary = $1,
-        provider_request_id = $2, raw_final_response_sha256 = $3, completed_at = $4 WHERE id = $5`,
-      [input.changeSummary, input.providerRequestId ?? null, input.rawFinalResponseSha256, completedAt, input.runId]);
+      await this.executeWrite(`UPDATE ai_note_reflection_runs SET status = 'NO_CHANGE', attempt_count = attempt_count + $1, change_summary = $2,
+        provider_request_id = $3, raw_final_response_sha256 = $4, completed_at = $5 WHERE id = $6`,
+      [input.attemptCount ?? 1, input.changeSummary, input.providerRequestId ?? null, input.rawFinalResponseSha256, completedAt, input.runId]);
       return { status: "NO_CHANGE" };
     }
     if (!input.notes || !input.contentSha256 || input.estimatedTokens === undefined) throw new Error("Complete Viewer Notes are required for UPDATE.");
@@ -501,8 +505,8 @@ export class SqliteRepository implements AppRepository {
           (id, ai_identity_id, from_version_id, to_version_id, activation_source, workspace_id, source_session_id, created_at)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, values: [activationId, input.aiIdentityId, input.baseVersionId ?? null, versionId, activationSource, input.sourceWorkspaceId, input.sourceSessionId, completedAt] },
         { query: "UPDATE ai_note_settings SET active_version_id = $1, updated_at = $2 WHERE ai_identity_id = $3", values: [versionId, completedAt, input.aiIdentityId] },
-        { query: `UPDATE ai_note_reflection_runs SET status = 'UPDATE', attempt_count = attempt_count + 1, change_summary = $1,
-          provider_request_id = $2, raw_final_response_sha256 = $3, completed_at = $4 WHERE id = $5`, values: [input.changeSummary, input.providerRequestId ?? null, input.rawFinalResponseSha256, completedAt, input.runId] },
+        { query: `UPDATE ai_note_reflection_runs SET status = 'UPDATE', attempt_count = attempt_count + $1, change_summary = $2,
+          provider_request_id = $3, raw_final_response_sha256 = $4, completed_at = $5 WHERE id = $6`, values: [input.attemptCount ?? 1, input.changeSummary, input.providerRequestId ?? null, input.rawFinalResponseSha256, completedAt, input.runId] },
       ]);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -569,11 +573,26 @@ export class SqliteRepository implements AppRepository {
               p.default_monitor_model_id,
               p.default_judge_provider_config_id,
               p.default_judge_model_id,
-              p.created_at, p.updated_at
+              p.created_at, p.updated_at, p.archived_at
          FROM profiles p
          LEFT JOIN credentials_metadata c ON c.id = p.credential_id
         WHERE p.archived_at IS NULL
         ORDER BY p.updated_at DESC`,
+    );
+    return rows.map(mapProfile);
+  }
+
+  async listArchivedProfiles(): Promise<Profile[]> {
+    const rows = await this.db.select<ProfileRow[]>(
+      `SELECT p.id, p.display_name, p.human_display_name, p.note, p.credential_id,
+              c.provider AS credential_provider, p.default_viewer_model_id,
+              p.default_viewer_reasoning_effort, p.default_viewer_temperature,
+              p.default_viewer_system_prompt, p.default_monitor_system_prompt,
+              p.default_monitor_provider_config_id, p.default_monitor_model_id,
+              p.default_judge_provider_config_id, p.default_judge_model_id,
+              p.created_at, p.updated_at, p.archived_at
+         FROM profiles p LEFT JOIN credentials_metadata c ON c.id = p.credential_id
+        WHERE p.archived_at IS NOT NULL ORDER BY p.archived_at DESC`,
     );
     return rows.map(mapProfile);
   }
@@ -640,10 +659,23 @@ export class SqliteRepository implements AppRepository {
   }
 
   async archiveProfile(id: string): Promise<void> {
-    const timestamp = nowIso();
+    const prior = await this.db.select<Array<{ latest: string | null }>>("SELECT MAX(archived_at) AS latest FROM workspaces WHERE profile_id = $1", [id]);
+    const latest = prior[0]?.latest ? Date.parse(prior[0].latest) : 0;
+    const timestamp = new Date(Math.max(Date.now(), (Number.isFinite(latest) ? latest : 0) + 1)).toISOString();
     await this.executeTransaction([
       { query: "UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE profile_id = $2 AND archived_at IS NULL", values: [timestamp, id] },
       { query: "UPDATE profiles SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", values: [timestamp, id] },
+    ]);
+  }
+
+  async restoreProfile(id: string): Promise<void> {
+    const rows = await this.db.select<Array<{ archived_at: string }>>("SELECT archived_at FROM profiles WHERE id = $1 AND archived_at IS NOT NULL", [id]);
+    const archivedAt = rows[0]?.archived_at;
+    if (!archivedAt) throw new Error("Archived Profile not found.");
+    const timestamp = nowIso();
+    await this.executeTransaction([
+      { query: "UPDATE profiles SET archived_at = NULL, updated_at = $1 WHERE id = $2", values: [timestamp, id] },
+      { query: "UPDATE workspaces SET archived_at = NULL, updated_at = $1 WHERE profile_id = $2 AND archived_at = $3", values: [timestamp, id, archivedAt] },
     ]);
   }
 
@@ -682,18 +714,24 @@ export class SqliteRepository implements AppRepository {
   async listWorkspaces(profileId?: string): Promise<Workspace[]> {
     const rows = profileId
       ? await this.db.select<WorkspaceRow[]>(
-          `SELECT id, profile_id, name, description, created_at, updated_at, last_opened_at
+          `SELECT id, profile_id, name, description, created_at, updated_at, last_opened_at, archived_at
              FROM workspaces
             WHERE profile_id = $1 AND archived_at IS NULL
             ORDER BY last_opened_at DESC`,
           [profileId],
         )
       : await this.db.select<WorkspaceRow[]>(
-          `SELECT id, profile_id, name, description, created_at, updated_at, last_opened_at
+          `SELECT id, profile_id, name, description, created_at, updated_at, last_opened_at, archived_at
              FROM workspaces
             WHERE archived_at IS NULL
             ORDER BY last_opened_at DESC`,
         );
+    return rows.map(mapWorkspace);
+  }
+
+  async listArchivedWorkspaces(): Promise<Workspace[]> {
+    const rows = await this.db.select<WorkspaceRow[]>(`SELECT id, profile_id, name, description, created_at, updated_at, last_opened_at, archived_at
+      FROM workspaces WHERE archived_at IS NOT NULL ORDER BY archived_at DESC`);
     return rows.map(mapWorkspace);
   }
 
@@ -722,6 +760,33 @@ export class SqliteRepository implements AppRepository {
       ],
     );
     return workspace;
+  }
+
+  async renameWorkspace(id: string, name: string): Promise<void> {
+    const clean = name.trim().slice(0, 160);
+    if (!clean) throw new Error("Workspace name is required.");
+    const current = await this.db.select<Array<{ profile_id: string }>>("SELECT profile_id FROM workspaces WHERE id = $1 LIMIT 1", [id]);
+    if (!current[0]) throw new Error("Workspace not found.");
+    const duplicate = await this.db.select<Array<{ id: string }>>("SELECT id FROM workspaces WHERE profile_id = $1 AND id <> $2 AND archived_at IS NULL AND lower(trim(name)) = lower($3) LIMIT 1", [current[0].profile_id, id, clean]);
+    if (duplicate[0]) throw new Error("An active Workspace with this name already exists in the Profile.");
+    await this.executeWrite("UPDATE workspaces SET name = $1, updated_at = $2 WHERE id = $3", [clean, nowIso(), id]);
+  }
+
+  async archiveWorkspace(id: string): Promise<void> {
+    const active = await this.db.select<Array<{ id: string }>>("SELECT id FROM workspaces WHERE id = $1 AND archived_at IS NULL LIMIT 1", [id]);
+    if (!active[0]) throw new Error("Active Workspace not found.");
+    const timestamp = nowIso();
+    await this.executeWrite("UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", [timestamp, id]);
+  }
+
+  async restoreWorkspace(id: string, name?: string): Promise<void> {
+    const current = await this.db.select<Array<{ profile_id: string; name: string }>>("SELECT profile_id, name FROM workspaces WHERE id = $1 AND archived_at IS NOT NULL LIMIT 1", [id]);
+    if (!current[0]) throw new Error("Archived Workspace not found.");
+    const clean = (name ?? current[0].name).trim().slice(0, 160);
+    if (!clean) throw new Error("Workspace name is required.");
+    const duplicate = await this.db.select<Array<{ id: string }>>("SELECT id FROM workspaces WHERE profile_id = $1 AND id <> $2 AND archived_at IS NULL AND lower(trim(name)) = lower($3) LIMIT 1", [current[0].profile_id, id, clean]);
+    if (duplicate[0]) throw new Error("An active Workspace with this name already exists in the Profile.");
+    await this.executeWrite("UPDATE workspaces SET name = $1, archived_at = NULL, updated_at = $2 WHERE id = $3", [clean, nowIso(), id]);
   }
 
   async touchWorkspace(id: string): Promise<void> {
@@ -782,10 +847,30 @@ export class SqliteRepository implements AppRepository {
   }
 
   async archiveChatThreadGroup(groupId: string): Promise<void> {
-    const timestamp = nowIso();
+    const prior = await this.db.select<Array<{ latest: string | null }>>("SELECT MAX(archived_at) AS latest FROM chat_threads WHERE thread_group_id = $1", [groupId]);
+    const latest = prior[0]?.latest ? Date.parse(prior[0].latest) : 0;
+    const timestamp = new Date(Math.max(Date.now(), (Number.isFinite(latest) ? latest : 0) + 1)).toISOString();
     await this.executeTransaction([
       { query: "UPDATE chat_thread_groups SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", values: [timestamp, groupId] },
       { query: "UPDATE chat_threads SET archived_at = $1, updated_at = $1 WHERE thread_group_id = $2 AND archived_at IS NULL", values: [timestamp, groupId] },
+    ]);
+  }
+
+  async listArchivedChatThreadGroups(): Promise<ChatThreadGroup[]> {
+    const rows = await this.db.select<ChatThreadGroupRow[]>(`SELECT id, workspace_id, mode, title, created_at, updated_at, archived_at
+      FROM chat_thread_groups WHERE archived_at IS NOT NULL ORDER BY archived_at DESC`);
+    return rows.map(mapChatThreadGroup);
+  }
+
+  async restoreChatThreadGroup(groupId: string): Promise<void> {
+    const rows = await this.db.select<Array<{ archived_at: string; workspace_id: string }>>("SELECT archived_at, workspace_id FROM chat_thread_groups WHERE id = $1 AND archived_at IS NOT NULL LIMIT 1", [groupId]);
+    if (!rows[0]) throw new Error("Archived Thread not found.");
+    const workspace = await this.db.select<Array<{ archived_at: string | null }>>("SELECT archived_at FROM workspaces WHERE id = $1 LIMIT 1", [rows[0].workspace_id]);
+    if (workspace[0]?.archived_at) throw new Error("Restore the parent Workspace first.");
+    const timestamp = nowIso();
+    await this.executeTransaction([
+      { query: "UPDATE chat_thread_groups SET archived_at = NULL, updated_at = $1 WHERE id = $2", values: [timestamp, groupId] },
+      { query: "UPDATE chat_threads SET archived_at = NULL, updated_at = $1 WHERE thread_group_id = $2 AND archived_at = $3", values: [timestamp, groupId, rows[0].archived_at] },
     ]);
   }
 
@@ -837,6 +922,24 @@ export class SqliteRepository implements AppRepository {
     if (!rows[0]) throw new Error("Chat thread not found.");
     const timestamp = nowIso();
     await this.executeWrite("UPDATE chat_threads SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", [timestamp, threadId]);
+  }
+
+  async listArchivedChatThreads(): Promise<ChatThread[]> {
+    const rows = await this.db.select<ChatThreadRow[]>(`SELECT id, workspace_id, mode, thread_group_id, title, formal_rv_state, created_at, updated_at, archived_at
+      FROM chat_threads WHERE archived_at IS NOT NULL ORDER BY archived_at DESC`);
+    return rows.map(mapChatThread);
+  }
+
+  async restoreChatThread(threadId: string): Promise<void> {
+    const rows = await this.db.select<Array<{ thread_group_id: string | null; workspace_id: string }>>("SELECT thread_group_id, workspace_id FROM chat_threads WHERE id = $1 AND archived_at IS NOT NULL LIMIT 1", [threadId]);
+    if (!rows[0]) throw new Error("Archived Conversation not found.");
+    const workspace = await this.db.select<Array<{ archived_at: string | null }>>("SELECT archived_at FROM workspaces WHERE id = $1 LIMIT 1", [rows[0].workspace_id]);
+    if (workspace[0]?.archived_at) throw new Error("Restore the parent Workspace first.");
+    if (rows[0].thread_group_id) {
+      const group = await this.db.select<Array<{ archived_at: string | null }>>("SELECT archived_at FROM chat_thread_groups WHERE id = $1 LIMIT 1", [rows[0].thread_group_id]);
+      if (group[0]?.archived_at) throw new Error("Restore the parent Thread first.");
+    }
+    await this.executeWrite("UPDATE chat_threads SET archived_at = NULL, updated_at = $1 WHERE id = $2", [nowIso(), threadId]);
   }
 
   async setChatThreadFormalRvState(threadId: string, state?: ChatThread["formalRvState"]): Promise<void> {
