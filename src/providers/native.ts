@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { isTauriRuntime } from "../storage";
 import { normalizeModelDiscovery } from "./capabilities";
 import { detailedProviderDiagnosticsEnabled, recordProviderDebug } from "./debug";
+import { normalizeProviderCallError } from "./providerError";
 import type {
   EffectiveGenerationSettings,
   ProviderChatResponse,
@@ -65,7 +66,8 @@ export async function discoverModels(config: ProviderConfig): Promise<ProviderMo
   return normalizeModelDiscovery(config, payload);
 }
 
-export async function providerChat(input: {
+/** One physical HTTP attempt. Domain code must use requestExecutor instead. */
+export async function providerChatAttempt(input: {
   config: ProviderConfig;
   modelId: string;
   messages: ProviderMessage[];
@@ -98,13 +100,14 @@ export async function providerChat(input: {
       },
     });
   } catch (cause) {
+    const normalized = normalizeProviderCallError(cause);
     recordProviderDebug({
       provider: input.config.provider,
       modelId: input.modelId,
       status: "error",
-      error: cause instanceof Error ? cause.message : String(cause),
+      error: normalized.message,
     });
-    throw cause;
+    throw normalized;
   } finally {
     input.signal?.removeEventListener("abort", cancel);
   }

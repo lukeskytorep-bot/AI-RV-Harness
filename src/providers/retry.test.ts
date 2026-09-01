@@ -15,8 +15,8 @@ describe("provider retry policy", () => {
     expect(providerRetryAllowance(error, 5)).toBe(1);
     expect(shouldRetryProviderError(error, 0, 5)).toBe(true);
     expect(shouldRetryProviderError(error, 1, 5)).toBe(false);
-    expect(providerRetryCategory(new Error("provider returned reasoning without a final assistant response [finish-reason=length]"))).toBe("single_recovery");
-    expect(providerRetryCategory(new Error("provider returned an incomplete assistant response [finish-reason=max_tokens]"))).toBe("single_recovery");
+    expect(providerRetryCategory(new Error("provider returned reasoning without a final assistant response [finish-reason=length]"))).toBe("never");
+    expect(providerRetryCategory(new Error("provider returned an incomplete assistant response [finish-reason=max_tokens]"))).toBe("never");
   });
 
   it("retries transient gateway statuses according to the configured count", () => {
@@ -39,8 +39,9 @@ describe("provider retry policy", () => {
     expect(isRetryableProviderError(new Error("invalid model id"))).toBe(false);
   });
 
-  it("uses bounded exponential backoff", () => {
-    expect([0, 1, 2, 8].map(providerRetryDelayMs)).toEqual([150, 300, 600, 2000]);
+  it("uses bounded full-jitter exponential backoff", () => {
+    expect([0, 1, 2, 8].map((attempt) => providerRetryDelayMs(attempt, undefined, () => 1))).toEqual([500, 1000, 2000, 8000]);
+    expect(providerRetryDelayMs(2, undefined, () => 0.25)).toBe(500);
     expect(providerRetryDelayMs(0, new Error("provider request failed (429) [retry-after-ms=4500]: wait"))).toBe(4500);
     expect(providerRetryDelayMs(0, new Error("provider request failed (429) [retry-after-ms=999999]: wait"))).toBe(30_000);
   });

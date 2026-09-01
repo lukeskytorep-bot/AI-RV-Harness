@@ -168,6 +168,14 @@ export interface ProviderChatResponse {
   actualModel?: string;
   usage: ProviderUsage;
   providerRequestId?: string;
+  execution?: {
+    operationId: string;
+    logicalRequestId: string;
+    physicalAttempts: number;
+    elapsedMs: number;
+    recoveredFrom?: string;
+    ambiguousBillingAttempts: number;
+  };
 }
 
 export interface ProviderConnectionResult {

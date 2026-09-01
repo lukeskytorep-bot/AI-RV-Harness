@@ -1,6 +1,6 @@
 import { loadRevealImageForJudge } from "../artifacts/native";
 import { resolveGenerationSettings } from "../providers/capabilities";
-import { providerChat as nativeProviderChat } from "../providers/native";
+import { executeProviderChat } from "../providers/requestExecutor";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import { parsePostRevealTranscript } from "./postRevealTranscript";
@@ -18,7 +18,9 @@ export async function sendPostRevealTurn(input: {
   model: ProviderModel;
   content: string;
   timeoutMs?: number;
-  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number }) => Promise<ProviderChatResponse>;
+  maxRetries?: number;
+  signal?: AbortSignal;
+  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<{ transcript: string; response: ProviderChatResponse }> {
   const content = input.content.trim();
   if (!content) throw new Error("Post-reveal message cannot be empty.");
@@ -62,12 +64,16 @@ export async function sendPostRevealTurn(input: {
     model: input.model,
     messages,
     requestedSettings: snapshot.generationSettings?.requested,
-    call: (settings) => (input.chat ?? nativeProviderChat)({
+    call: (settings) => executeProviderChat({
       config: input.providerConfig,
       modelId: input.model.modelId,
       messages,
       settings,
       timeoutMs: input.timeoutMs,
+      signal: input.signal,
+      configuredRetries: input.maxRetries,
+      operationId: "post-reveal.viewer",
+      attempt: input.chat,
     }),
   })).response;
   const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "assistant", response.content);
@@ -83,7 +89,9 @@ export async function runAutomaticPostRevealReview(input: {
   viewer: { providerConfig: ProviderConfig; model: ProviderModel };
   monitor?: { providerConfig: ProviderConfig; model: ProviderModel };
   timeoutMs?: number;
-  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number }) => Promise<ProviderChatResponse>;
+  maxRetries?: number;
+  signal?: AbortSignal;
+  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
   afterViewerReview?: (review: { content: string; transcript: string; response: ProviderChatResponse }) => Promise<void>;
 }): Promise<string> {
   const snapshot = await input.repository.getSessionSnapshot(input.sessionId);
@@ -100,6 +108,8 @@ export async function runAutomaticPostRevealReview(input: {
     model: input.viewer.model,
     content: request,
     timeoutMs: input.timeoutMs,
+    maxRetries: input.maxRetries,
+    signal: input.signal,
     ...(input.chat ? { chat: input.chat } : {}),
   });
   if (input.afterViewerReview) {
@@ -117,6 +127,8 @@ export async function runAutomaticPostRevealReview(input: {
     providerConfig: input.monitor.providerConfig,
     model: input.monitor.model,
     timeoutMs: input.timeoutMs,
+    maxRetries: input.maxRetries,
+    signal: input.signal,
     ...(input.chat ? { chat: input.chat } : {}),
   });
   return monitorResult.transcript;
@@ -129,7 +141,9 @@ export async function sendMonitorPostRevealReview(input: {
   providerConfig: ProviderConfig;
   model: ProviderModel;
   timeoutMs?: number;
-  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number }) => Promise<ProviderChatResponse>;
+  maxRetries?: number;
+  signal?: AbortSignal;
+  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<{ transcript: string; response: ProviderChatResponse }> {
   const [snapshot, reveal, evidence, clarifications] = await Promise.all([
     input.repository.getSessionSnapshot(input.sessionId),
@@ -165,7 +179,7 @@ export async function sendMonitorPostRevealReview(input: {
   const response = (await callWithAnalyticalOutputRecovery({
     model: input.model,
     messages,
-    call: (settings) => (input.chat ?? nativeProviderChat)({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs }),
+    call: (settings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "post-reveal.monitor", attempt: input.chat }),
   })).response;
   const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "monitor", response.content);
   return { transcript, response };

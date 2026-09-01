@@ -1,6 +1,6 @@
 import { buildConversationPayload, buildManualRvPayload, type ScopedChatMessage } from "../domain/chatContext";
 import { resolveGenerationSettings } from "../providers/capabilities";
-import { providerChat as nativeProviderChat } from "../providers/native";
+import { executeProviderChat } from "../providers/requestExecutor";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderImageInput, ProviderMessage, ProviderModel } from "../providers/types";
 import { getConversationPrompt } from "../resources/prompts/conversation";
 import type { AppRepository } from "../storage/repository";
@@ -90,7 +90,10 @@ export async function sendChatTurn(input: {
   attachedProtocol?: string;
   sources?: WorkspaceSource[];
   images?: ProviderImageInput[];
-  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings> }) => Promise<ProviderChatResponse>;
+  maxRetries?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<{ user: ChatMessage; assistant: ChatMessage; response: ProviderChatResponse }> {
   return executeChatTurn(input, true);
 }
@@ -134,11 +137,16 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   const settings = resolveGenerationSettings(input.model.capabilities, { ...input.requestedSettings, maxOutputTokens });
   if (settings.omitted.length) throw new Error(`Unsupported generation settings: ${settings.omitted.join(", ")}`);
   const user = appendUser ? await input.repository.appendChatMessage(input.threadId, "user", content) : storedHistory.at(-1)!;
-  const response = await (input.chat ?? nativeProviderChat)({
+  const response = await executeProviderChat({
     config: input.providerConfig,
     modelId: input.model.modelId,
     messages,
     settings,
+    timeoutMs: input.timeoutMs,
+    signal: input.signal,
+    configuredRetries: input.maxRetries,
+    operationId: input.mode === "conversation" ? "chat.conversation" : "chat.manual-rv",
+    attempt: input.chat,
   });
   const assistant = await input.repository.appendChatMessage(input.threadId, "assistant", response.content);
   return { user, assistant, response };

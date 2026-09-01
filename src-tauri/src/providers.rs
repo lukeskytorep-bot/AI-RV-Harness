@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, sync::{LazyLock, Mutex}, time::Duration};
+use std::{collections::{HashMap, HashSet}, error::Error as StdError, sync::{LazyLock, Mutex}, time::Duration};
 
 use futures_util::future::{AbortHandle, Abortable};
 use reqwest::{Client, RequestBuilder, Url};
@@ -101,6 +101,87 @@ struct ProviderDebugPayload {
     response: Option<Value>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCallError {
+    code: String,
+    message: String,
+    phase: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    http_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_error_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_after_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_request_id: Option<String>,
+}
+
+impl ProviderCallError {
+    fn new(code: &str, message: impl Into<String>, phase: &str) -> Self {
+        Self {
+            code: code.to_string(),
+            message: message.into(),
+            phase: phase.to_string(),
+            http_status: None,
+            provider_error_type: None,
+            provider_code: None,
+            retry_after_ms: None,
+            provider_request_id: None,
+        }
+    }
+
+    fn configuration(message: impl Into<String>) -> Self {
+        Self::new("configuration", message, "before_dispatch")
+    }
+}
+
+fn error_chain(error: &reqwest::Error) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(next) = source {
+        let text = next.to_string();
+        if !parts.iter().any(|part| part == &text) {
+            parts.push(text);
+        }
+        source = next.source();
+    }
+    parts.join(": ")
+}
+
+fn request_error(error: reqwest::Error, phase: &str) -> ProviderCallError {
+    let code = if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_decode() {
+        "response_body_decode"
+    } else if error.is_body() {
+        "response_body_read"
+    } else {
+        "request_send"
+    };
+    ProviderCallError::new(code, error_chain(&error), phase)
+}
+
+fn provider_error_metadata(payload: &Value) -> (Option<String>, Option<String>) {
+    let Some(error) = payload.get("error") else {
+        return (None, None);
+    };
+    let error_type = error.get("type")
+        .or_else(|| error.get("error_type"))
+        .or_else(|| error.pointer("/metadata/error_type"))
+        .or_else(|| payload.get("error_type"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let code = error.get("code").or_else(|| error.pointer("/metadata/code")).and_then(|value| {
+        value.as_str().map(str::to_string).or_else(|| value.as_i64().map(|number| number.to_string()))
+    });
+    (error_type, code)
+}
+
 fn provider_base_url(provider: ProviderKind, custom: Option<&str>) -> Result<String, String> {
     let fixed = match provider {
         ProviderKind::Openrouter => Some("https://openrouter.ai/api/v1"),
@@ -191,6 +272,52 @@ async fn json_response(response: reqwest::Response, secret: &str) -> Result<(Val
     Ok((value, request_id))
 }
 
+async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result<(Value, Option<String>), ProviderCallError> {
+    let status = response.status();
+    let retry_after_ms = response
+        .headers()
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|seconds| seconds.saturating_mul(1_000).min(30_000));
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .or_else(|| response.headers().get("request-id"))
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let body = response.text().await.map_err(|error| {
+        let mut failure = request_error(error, "reading_body");
+        failure.provider_request_id = request_id.clone();
+        failure
+    })?;
+    if !status.is_success() {
+        let parsed = serde_json::from_str::<Value>(&body).ok();
+        let (provider_error_type, provider_code) = parsed.as_ref().map(provider_error_metadata).unwrap_or_default();
+        let mut failure = ProviderCallError::new(
+            "http_status",
+            safe_provider_error(status, &body, secret, retry_after_ms),
+            "reading_body",
+        );
+        failure.http_status = Some(status.as_u16());
+        failure.provider_error_type = provider_error_type;
+        failure.provider_code = provider_code;
+        failure.retry_after_ms = retry_after_ms;
+        failure.provider_request_id = request_id;
+        return Err(failure);
+    }
+    let value = serde_json::from_str(&body).map_err(|error| {
+        let mut failure = ProviderCallError::new(
+            "invalid_provider_json",
+            format!("provider returned invalid JSON: {error}"),
+            "parsing_body",
+        );
+        failure.provider_request_id = request_id.clone();
+        failure
+    })?;
+    Ok((value, request_id))
+}
+
 #[tauri::command]
 pub async fn provider_discover_models(request: ProviderRequest) -> Result<Value, String> {
     let secret = secrets::get_credential(&request.credential_id)?;
@@ -210,11 +337,11 @@ pub async fn provider_discover_models(request: ProviderRequest) -> Result<Value,
 }
 
 #[tauri::command]
-pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatResponse, String> {
-    validate_chat_request(&request)?;
-    let secret = secrets::get_credential(&request.credential_id)?;
-    let base = provider_base_url(request.provider, request.base_url.as_deref())?;
-    let (url, body) = build_chat_request(&request, &base)?;
+pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatResponse, ProviderCallError> {
+    validate_chat_request(&request).map_err(ProviderCallError::configuration)?;
+    let secret = secrets::get_credential(&request.credential_id).map_err(ProviderCallError::configuration)?;
+    let base = provider_base_url(request.provider, request.base_url.as_deref()).map_err(ProviderCallError::configuration)?;
+    let (url, body) = build_chat_request(&request, &base).map_err(ProviderCallError::configuration)?;
     let debug_endpoint = url.clone();
     let debug_request = request.detailed_diagnostics.then(|| {
         let mut value = body.clone();
@@ -223,7 +350,7 @@ pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatR
     });
     let timeout_ms = request.timeout_ms.unwrap_or(120_000);
     let (payload, request_id) = send_chat_request(
-        authenticated(client()?.post(url).json(&body), request.provider, &secret)
+        authenticated(client().map_err(ProviderCallError::configuration)?.post(url).json(&body), request.provider, &secret)
             .timeout(Duration::from_millis(timeout_ms)),
         request.request_id.as_deref(),
         &secret,
@@ -234,7 +361,21 @@ pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatR
         scrub_debug_value(&mut value, &secret, None);
         value
     });
-    let mut parsed = parse_chat_response(request.provider, payload, request_id)?;
+    let mut parsed = parse_chat_response(request.provider, payload.clone(), request_id.clone()).map_err(|message| {
+        let (provider_error_type, provider_code) = provider_error_metadata(&payload);
+        let code = if provider_error_type.is_some() || provider_code.is_some() {
+            "provider_error"
+        } else if message.to_ascii_lowercase().contains("empty") && !message.to_ascii_lowercase().contains("reasoning without") {
+            "empty_assistant_response"
+        } else {
+            "unknown"
+        };
+        let mut failure = ProviderCallError::new(code, message, "validating_response");
+        failure.provider_error_type = provider_error_type;
+        failure.provider_code = provider_code;
+        failure.provider_request_id = request_id;
+        failure
+    })?;
     parsed.debug_payload = Some(ProviderDebugPayload {
         endpoint: debug_endpoint,
         request: debug_request,
@@ -262,37 +403,37 @@ pub fn cancel_provider_request(request_id: String) -> Result<bool, String> {
     }
 }
 
-async fn send_chat_request(builder: RequestBuilder, request_id: Option<&str>, secret: &str) -> Result<(Value, Option<String>), String> {
+async fn send_chat_request(builder: RequestBuilder, request_id: Option<&str>, secret: &str) -> Result<(Value, Option<String>), ProviderCallError> {
     let Some(request_id) = request_id else {
-        let response = builder.send().await.map_err(|error| error.to_string())?;
-        return json_response(response, secret).await;
+        let response = builder.send().await.map_err(|error| request_error(error, "awaiting_headers"))?;
+        return chat_json_response(response, secret).await;
     };
-    validate_request_id(request_id)?;
+    validate_request_id(request_id).map_err(ProviderCallError::configuration)?;
     let (handle, registration) = AbortHandle::new_pair();
     {
         let mut registry = CHAT_CANCELLATIONS
             .lock()
-            .map_err(|_| "provider cancellation registry is unavailable".to_string())?;
+            .map_err(|_| ProviderCallError::configuration("provider cancellation registry is unavailable"))?;
         if registry.cancelled_before_start.remove(request_id) {
-            return Err("provider request cancelled".to_string());
+            return Err(ProviderCallError::new("cancelled", "provider request cancelled", "before_dispatch"));
         }
         if registry.active.insert(request_id.to_string(), handle).is_some() {
-            return Err("duplicate provider request id".to_string());
+            return Err(ProviderCallError::configuration("duplicate provider request id"));
         }
     }
     let request = async {
-        let response = builder.send().await.map_err(|error| error.to_string())?;
-        json_response(response, secret).await
+        let response = builder.send().await.map_err(|error| request_error(error, "awaiting_headers"))?;
+        chat_json_response(response, secret).await
     };
     let result = Abortable::new(request, registration).await;
     CHAT_CANCELLATIONS
         .lock()
-        .map_err(|_| "provider cancellation registry is unavailable".to_string())?
+        .map_err(|_| ProviderCallError::configuration("provider cancellation registry is unavailable"))?
         .active
         .remove(request_id);
     match result {
         Ok(response) => response,
-        Err(_) => Err("provider request cancelled".to_string()),
+        Err(_) => Err(ProviderCallError::new("cancelled", "provider request cancelled", "awaiting_headers")),
     }
 }
 

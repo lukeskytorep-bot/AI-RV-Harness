@@ -1,9 +1,8 @@
 import { evaluateMonitor, isIncompleteMonitorResponse, type MonitorDecision } from "../monitor/engine";
 import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
 import { resolveGenerationSettings } from "../providers/capabilities";
-import { providerChat as nativeProviderChat } from "../providers/native";
+import { createProviderChatExecutor, providerChatOnce } from "../providers/requestExecutor";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderUsage } from "../providers/types";
-import { shouldRetryProviderError, waitBeforeProviderRetry } from "../providers/retry";
 import type { TelepathicProtocolResource } from "../resources/protocolRegistry";
 import {
   buildEffectiveTelepathicMonitorPrompt,
@@ -140,8 +139,9 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
 
   const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
-  const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
+  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.telepathic", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code } }) });
+  const rawChat = (request: Parameters<typeof chat>[0]) => providerChatOnce(request, input.chat);
   const messages: ProviderMessage[] = [
     { role: "system", content: input.protocol.content },
     ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
@@ -263,7 +263,8 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     let response: ProviderChatResponse | null = null;
     let lastError = "";
     let responseDurationMs = 0;
-    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    {
+      const attempt = 0;
       if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
       let authorization;
       try {
@@ -279,7 +280,6 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
         responseDurationMs = Date.now() - requestStartedAt;
         metrics = recordProviderRequest(metrics, response.usage, responseDurationMs);
         if (!response.content.trim()) throw new Error("empty provider response");
-        break;
       } catch (cause) {
         authorization.failure();
         if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
@@ -287,8 +287,6 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { ...metadata, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
         response = null;
-        if (shouldRetryProviderError(cause, attempt, maxRetries)) await waitBeforeProviderRetry(attempt, input.signal, cause);
-        else break;
       }
     }
     if (!response) throw new TelepathicRunStop(`AUTO-STOP: repeated Viewer provider failures${lastError ? ` — ${lastError}` : ""}`);
@@ -332,7 +330,8 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     for (let exchangeNumber = 1; exchangeNumber <= 5; exchangeNumber += 1) {
       let decision: MonitorDecision | null = null;
       let monitorError = "";
-      for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      {
+        const attempt = 0;
         try {
           decision = await evaluateMonitor({
           providerConfig: input.monitor.providerConfig,
@@ -345,6 +344,14 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
           effectiveSystemPrompt: effectiveMonitorPrompt,
           packetOptions: { stageKind: "step", protocolName: "Telepathic Protocol v1.1", wholeSessionScope: step === 8 },
           requestTimeoutMs: input.requestTimeoutMs,
+          maxRetries,
+          signal: input.signal,
+          onOutputRecovery: async (cause) => {
+            await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_PROVIDER_ERROR", role: "controller", content: cause.message, metadata: { step, exchangeNumber, attempt: 1, recovery: "output_budget" } });
+          },
+          onTransportAttemptFailure: async (cause, context) => {
+            await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_PROVIDER_ERROR", role: "controller", content: cause.message, metadata: { step, exchangeNumber, attempt: context.physicalAttempt, logicalRequestId: context.logicalRequestId, recovery: "transport" } });
+          },
           chat: async (request) => {
             let authorization;
             try {
@@ -355,7 +362,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
             }
             const requestStartedAt = Date.now();
             try {
-              const raw = await chat({ ...request, signal: input.signal });
+              const raw = await rawChat({ ...request, signal: input.signal });
               const response = { ...raw, usage: authorization.success(raw.usage) };
               const requestDurationMs = Date.now() - requestStartedAt;
               metrics = recordProviderRequest(metrics, response.usage, requestDurationMs);
@@ -368,14 +375,11 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
             }
           },
           });
-          break;
         } catch (cause) {
           if (cause instanceof TelepathicRunStop) throw cause;
           if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
           monitorError = cause instanceof Error ? cause.message : String(cause);
           await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_PROVIDER_ERROR", role: "controller", content: monitorError, metadata: { step, exchangeNumber, attempt: attempt + 1 } });
-          if (shouldRetryProviderError(cause, attempt, maxRetries)) await waitBeforeProviderRetry(attempt, input.signal, cause);
-          else break;
         }
       }
       if (!decision) throw new TelepathicRunStop(`AUTO-STOP: Monitor provider failure — ${monitorError}`);
@@ -502,8 +506,8 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
   const recoveryState = telepathicManualRecoveryState(events);
   if (!recoveryState) throw new Error("No durable Step 8 telepathic recovery checkpoint was found.");
 
-  const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
+  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.telepathic-resume", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(input.session.id, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, resumed: true } }) });
   const messages = rebuildViewerMessages(snapshot, events);
   const startedAtMs = Date.now();
   let metrics = rebuildViewerMetrics(events);
@@ -550,7 +554,8 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
     let response: ProviderChatResponse | null = null;
     let lastError = "";
     let responseDurationMs = 0;
-    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    {
+      const attempt = 0;
       if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
       let authorization;
       try {
@@ -566,7 +571,6 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
         responseDurationMs = Date.now() - requestStartedAt;
         metrics = recordProviderRequest(metrics, response.usage, responseDurationMs);
         if (!response.content.trim()) throw new Error("empty provider response");
-        break;
       } catch (cause) {
         authorization.failure();
         if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
@@ -574,8 +578,6 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(input.session.id, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { ...metadata, resumed: true, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
         response = null;
-        if (shouldRetryProviderError(cause, attempt, maxRetries)) await waitBeforeProviderRetry(attempt, input.signal, cause);
-        else break;
       }
     }
     if (!response) throw new TelepathicRunStop(`AUTO-STOP: repeated Viewer provider failures${lastError ? ` — ${lastError}` : ""}`);

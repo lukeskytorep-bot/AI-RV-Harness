@@ -183,11 +183,12 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
           sessionId: result.sessionId,
           viewer: { providerConfig: runProvider, model: runModel },
           timeoutMs: settings.requestTimeoutMs,
+          maxRetries: settings.maxRetries,
           afterViewerReview: async ({ content }) => {
-            await runViewerNoteReflection({ repository, sessionId: result.sessionId, viewerReview: content, providerConfig: runProvider, model: runModel, timeoutMs: settings.requestTimeoutMs });
+            await runViewerNoteReflection({ repository, sessionId: result.sessionId, viewerReview: content, providerConfig: runProvider, model: runModel, timeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries });
           },
         });
-        if (judges.length) await runBlindJudging({ repository, sessionId: result.sessionId, language, judges });
+        if (judges.length) await runBlindJudging({ repository, sessionId: result.sessionId, language, judges, maxRetries: settings.maxRetries, timeoutMs: settings.requestTimeoutMs });
         await repository.updateRvSessionState(result.sessionId, "Completed");
         working = {
           ...working,

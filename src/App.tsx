@@ -1264,6 +1264,8 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         ...(effectiveRvSystemPrompt ? { rvSystemPrompt: effectiveRvSystemPrompt } : {}),
         sources: selectedSources,
         images: chatImages,
+        maxRetries: settings.maxRetries,
+        timeoutMs: settings.requestTimeoutMs,
         ...(attachedProtocol ? { attachedProtocol } : {}),
       });
       clearPendingChatTurn(threadId);
@@ -1307,6 +1309,8 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         ...(pendingRetry.attachedProtocol ? { attachedProtocol: pendingRetry.attachedProtocol } : {}),
         sources: sources.filter((source) => pendingRetry.sourceIds.includes(source.id)),
         images: pendingRetry.images,
+        maxRetries: settings.maxRetries,
+        timeoutMs: settings.requestTimeoutMs,
       });
       clearPendingChatTurn(pendingRetry.threadId);
       setPendingRetry(null);
@@ -1660,6 +1664,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         viewer: { providerConfig: viewerProvider, model: viewerModel },
         ...(capturedMonitorProvider && capturedMonitorModel ? { monitor: { providerConfig: capturedMonitorProvider, model: capturedMonitorModel } } : {}),
         timeoutMs: settings.requestTimeoutMs,
+        maxRetries: settings.maxRetries,
       });
       if (updateVisibleTranscript) setPostRevealTranscript(transcript);
       if (snapshot.monitor && (!capturedMonitorProvider || !capturedMonitorModel)) throw new Error(copy.postRevealRouteUnavailable);
@@ -2074,7 +2079,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         rawMetadata: {},
         refreshedAt: snapshot.capabilityCapturedAt,
       };
-      const result = await sendPostRevealTurn({ repository, sessionId: progress.sessionId, existingTranscript: postRevealTranscript, providerConfig, model: viewerModel, content: postRevealText, timeoutMs: settings.requestTimeoutMs });
+      const result = await sendPostRevealTurn({ repository, sessionId: progress.sessionId, existingTranscript: postRevealTranscript, providerConfig, model: viewerModel, content: postRevealText, timeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries });
       setPostRevealTranscript(result.transcript);
       setPostRevealText("");
       setRecentSessions((await repository.listRvSessions(workspace.id)).filter((session) => !session.researchProjectId));
@@ -2128,12 +2133,12 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
               {(acceptedRevealText || acceptedRevealArtifacts.length > 0) && <section className="accepted-reveal-panel"><small>{copy.targetReveal}</small>{acceptedRevealText && <SafeMarkdown content={acceptedRevealText} />}{acceptedRevealArtifacts.length > 0 && <div className="reveal-artifact-row">{acceptedRevealArtifacts.map((artifact) => <span className="reveal-artifact-chip" key={`${artifact.artifactId}-${artifact.sha256}`}>{artifact.mimeType.startsWith("image/") ? "▣" : "≡"} {artifact.originalFileName}</span>)}</div>}</section>}
               {(acceptedRevealText || acceptedRevealArtifacts.length > 0) && <div className="save-reveal-target"><input value={saveTargetTitle} onChange={(event) => setSaveTargetTitle(event.target.value)} placeholder={copy.targetName} disabled={targetSaved} /><button className="secondary-button" disabled={!saveTargetTitle.trim() || targetSaved} onClick={() => void saveExternalRevealTarget()}>{targetSaved ? copy.savedToTargets : copy.saveRevealTarget}</button></div>}
               {executionScope === "single" && <section className="post-reveal-discussion"><div className="post-reveal-head"><div><strong>{copy.postRevealDiscussion}</strong><p>{copy.postRevealEvidenceGuard}</p></div><span>POST-REVEAL</span></div><div className="post-reveal-review-action"><div><strong>{settings.interfaceLanguage === "pl" ? "Automatyczna opinia po Revealu" : "Automatic post-Reveal review"}</strong><small>{postRevealBusy ? (settings.interfaceLanguage === "pl" ? "Viewer analizuje sesję…" : "The Viewer is reviewing the session…") : (settings.interfaceLanguage === "pl" ? "Viewer, a przy sesji monitorowanej także Monitor, otrzymuje Reveal automatycznie." : "The Viewer, and the Monitor for a monitored run, receives the Reveal automatically.")}</small></div><span className={`status-chip ${postRevealBusy ? "next" : "ready"}`}>{postRevealBusy ? copy.sending : (settings.interfaceLanguage === "pl" ? "AUTOMATYCZNIE" : "AUTOMATIC")}</span></div>{postRevealTranscript && <div className="post-reveal-turns">{parsePostRevealTranscript(postRevealTranscript).map((turn, index) => <article className={turn.role} key={`${turn.role}-${index}`}><small>{turn.role === "user" ? (settings.interfaceLanguage === "pl" ? "Polecenie po Revealu" : "Post-Reveal instruction") : turn.role === "monitor" ? copy.aiMonitorReview : aiIsBeDisplayName(profile)}</small><SafeMarkdown content={turn.content} /></article>)}</div>}<details className="post-reveal-conversation"><summary>{settings.interfaceLanguage === "pl" ? "Porozmawiaj z Viewerem o celu" : "Discuss the target with the Viewer"}</summary><p>{settings.interfaceLanguage === "pl" ? "Opcjonalna, dwustronna rozmowa po zakończonej sesji. Viewer może również zadawać pytania o Reveal." : "An optional two-way discussion after the completed session. The Viewer may also ask questions about the Reveal."}</p><div className="post-reveal-compose"><textarea rows={3} value={postRevealText} onChange={(event) => setPostRevealText(event.target.value)} placeholder={copy.postRevealPlaceholder} disabled={postRevealBusy} /><button className="secondary-button" disabled={!postRevealText.trim() || postRevealBusy} onClick={() => void discussPostReveal()}>{postRevealBusy ? copy.sending : copy.sendPostReveal}</button></div></details></section>}
-              {executionScope === "single" && <JudgeEvaluation copy={copy} repository={repository} sessionId={progress.sessionId} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} onCompleted={() => { setProgress((current) => current ? { ...current, state: "Completed" } : current); void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId))); }} />}
+              {executionScope === "single" && <JudgeEvaluation copy={copy} repository={repository} sessionId={progress.sessionId} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} maxRetries={settings.maxRetries} timeoutMs={settings.requestTimeoutMs} onCompleted={() => { setProgress((current) => current ? { ...current, state: "Completed" } : current); void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId))); }} />}
               {executionScope === "single" && progress.state === "Revealed" && <button className="secondary-button save-only-button" onClick={() => void completeWithoutEvaluation()}>{copy.saveOnly}</button>}
               {executionScope === "single" && <div className="session-export-action"><button className="secondary-button" disabled={!isTauriRuntime() || sessionExportBusy} onClick={() => void saveCurrentSession()}><Download size={15} />{sessionExportBusy ? copy.savingSession : copy.saveSession}</button>{sessionExportPath && <div className="storage-success">{copy.sessionExported}: {sessionExportPath}</div>}</div>}
             </>}
             {progress.state === "Interrupted" && <><div className="provider-error"><CircleStop size={16} /><span><strong>{copy.interrupted}</strong>{recoverableSessions[progress.sessionId] ? <><small>{settings.interfaceLanguage === "pl" ? "Provider modelu nie zwrócił kompletnej odpowiedzi. Dotychczasowy przebieg został zapisany i można go kontynuować." : "The model provider did not return a complete response. The completed portion was saved and can be continued."}</small>{progress.stopReason && <details><summary>{settings.interfaceLanguage === "pl" ? "Szczegół techniczny" : "Technical detail"}</summary>{progress.stopReason}</details>}</> : progress.stopReason ? ` · ${progress.stopReason}` : ""}</span></div>{recoverableSessions[progress.sessionId] && (() => { const interruptedSession = recentSessions.find((item) => item.id === progress.sessionId); return interruptedSession ? <div className="session-resume-actions"><button className="primary-button" disabled={sessionRunning || batchRunning} onClick={() => void runCapturedSession(interruptedSession, true)}>{settings.interfaceLanguage === "pl" ? "Kontynuuj sesję" : "Continue session"}</button><button className="secondary-button" disabled={sessionRunning || batchRunning} onClick={() => void runCapturedSession(interruptedSession, false)}>{settings.interfaceLanguage === "pl" ? "Rozpocznij ponownie" : "Start again"}</button></div> : null; })()}</>}
-            {executionScope === "batch" && batchResults.length > 0 && !batchRunning && <BatchEvaluation copy={copy} repository={repository} sessions={batchResults} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} onCompleted={() => void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId)))} />}
+            {executionScope === "batch" && batchResults.length > 0 && !batchRunning && <BatchEvaluation copy={copy} repository={repository} sessions={batchResults} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} defaultModelKey={resolveRoleDefault(profile, "judge", allModels)} maxRetries={settings.maxRetries} timeoutMs={settings.requestTimeoutMs} onCompleted={() => void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId)))} />}
             {!running && <button className="secondary-button new-session-button" onClick={() => { setProgress(null); setRunError(null); setActiveTargetId(null); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setPostRevealTranscript(""); setPostRevealText(""); setSessionExportPath(null); setBatchResults([]); setBatchProgress(null); }}>{copy.newAutomaticSession}</button>}
           </div>
         ) : <>
@@ -2269,6 +2274,8 @@ function JudgeEvaluation({
   models,
   providerConfigs,
   defaultModelKey,
+  maxRetries,
+  timeoutMs,
   onCompleted,
 }: {
   copy: ReturnType<typeof getCopy>;
@@ -2278,6 +2285,8 @@ function JudgeEvaluation({
   models: ProviderModel[];
   providerConfigs: ProviderConfig[];
   defaultModelKey?: string;
+  maxRetries?: number;
+  timeoutMs?: number;
   onCompleted?: () => void;
 }) {
   const [judgeCount, setJudgeCount] = useState(1);
@@ -2339,6 +2348,8 @@ function JudgeEvaluation({
           sessionId,
           language,
           judges: missingJudges,
+          maxRetries,
+          timeoutMs,
           onProgress: (done) => setCompleted(existing.length + done),
         })
         : { anonymousSessionId: "stored", scores: existing, aggregate: aggregateJudgeScores(existing) };
@@ -2412,6 +2423,8 @@ function BatchEvaluation({
   models,
   providerConfigs,
   defaultModelKey,
+  maxRetries,
+  timeoutMs,
   onCompleted,
 }: {
   copy: ReturnType<typeof getCopy>;
@@ -2421,6 +2434,8 @@ function BatchEvaluation({
   models: ProviderModel[];
   providerConfigs: ProviderConfig[];
   defaultModelKey?: string;
+  maxRetries?: number;
+  timeoutMs?: number;
   onCompleted?: () => void;
 }) {
   const eligible = sessions.filter((session) => session.state === "Revealed" || session.state === "Completed");
@@ -2472,7 +2487,7 @@ function BatchEvaluation({
         const existing = await repository.listJudgeScores(session.sessionId);
         const missingJudges = selectMissingJudgeSelections(existing, judges);
         const result = missingJudges.length
-          ? await runBlindJudging({ repository, sessionId: session.sessionId, language, judges: missingJudges })
+          ? await runBlindJudging({ repository, sessionId: session.sessionId, language, judges: missingJudges, maxRetries, timeoutMs })
           : { anonymousSessionId: "stored", scores: existing, aggregate: aggregateJudgeScores(existing) };
         if (result.scores.length !== judgeCount) throw new Error("Judge score set is incomplete after recovery.");
         await repository.updateRvSessionState(session.sessionId, "Completed");

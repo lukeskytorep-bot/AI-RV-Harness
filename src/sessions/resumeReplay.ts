@@ -1,4 +1,4 @@
-import { providerChat as nativeProviderChat } from "../providers/native";
+import { providerChatOnce } from "../providers/requestExecutor";
 import type { EffectiveGenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderUsage } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import type { MonitorRunRecord } from "../monitor/types";
@@ -67,7 +67,9 @@ export function createSessionReplay(input: {
       return replay;
     }
     await beginLiveContinuation();
-    return (input.liveChat ?? nativeProviderChat)(request);
+    // The resumed controller owns retry. Replay supplies exactly one physical
+    // live attempt after all durable responses have been replayed.
+    return providerChatOnce(request, input.liveChat);
   };
 
   const repository = new Proxy(base, {

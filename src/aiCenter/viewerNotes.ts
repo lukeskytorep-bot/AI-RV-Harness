@@ -1,5 +1,5 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
-import { providerChat as nativeProviderChat } from "../providers/native";
+import { executeProviderChat } from "../providers/requestExecutor";
 import { credentialIdentityFingerprint } from "../providers/native";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import { sha256Text } from "../sessions/controller";
@@ -299,7 +299,9 @@ export async function runViewerNoteReflection(input: {
   providerConfig: ProviderConfig;
   model: ProviderModel;
   timeoutMs?: number;
-  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number }) => Promise<ProviderChatResponse>;
+  maxRetries?: number;
+  signal?: AbortSignal;
+  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<ViewerNoteReflectionResult | null> {
   const [snapshot, reveal, evidence] = await Promise.all([
     input.repository.getSessionSnapshot(input.sessionId),
@@ -375,7 +377,7 @@ export async function runViewerNoteReflection(input: {
       messages: reflectionMessages,
       requestedSettings: snapshot.generationSettings.requested,
       minimumUsefulTokens: Math.min(8192, Math.max(1024, packet.capacityTokens)),
-      call: (attemptSettings) => (input.chat ?? nativeProviderChat)({ config: input.providerConfig, modelId: input.model.modelId, messages: reflectionMessages, settings: attemptSettings, timeoutMs: input.timeoutMs }),
+      call: (attemptSettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: reflectionMessages, settings: attemptSettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.reflect", attempt: input.chat }),
     });
     response = result.response;
     settings = result.settings;
@@ -396,12 +398,16 @@ export async function runViewerNoteReflection(input: {
         model: input.model,
         messages: repairMessages,
         minimumUsefulTokens: 1024,
-        call: (repairSettings) => (input.chat ?? nativeProviderChat)({
+        call: (repairSettings) => executeProviderChat({
           config: input.providerConfig,
           modelId: input.model.modelId,
           messages: repairMessages,
           settings: repairSettings,
           timeoutMs: input.timeoutMs,
+          signal: input.signal,
+          configuredRetries: input.maxRetries,
+          operationId: "viewer-notes.json-repair",
+          attempt: input.chat,
         }),
       });
       finalResponse = repair.response;
@@ -434,7 +440,7 @@ export async function runViewerNoteReflection(input: {
           messages: retryMessages,
           requestedSettings: snapshot.generationSettings.requested,
           minimumUsefulTokens: Math.min(8192, Math.max(1024, packet.capacityTokens)),
-          call: (retrySettings) => (input.chat ?? nativeProviderChat)({ config: input.providerConfig, modelId: input.model.modelId, messages: retryMessages, settings: retrySettings, timeoutMs: input.timeoutMs }),
+          call: (retrySettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: retryMessages, settings: retrySettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.capacity-retry", attempt: input.chat }),
         });
         finalResponse = retry.response;
         settings = retry.settings;
@@ -453,7 +459,7 @@ export async function runViewerNoteReflection(input: {
             model: input.model,
             messages: repairMessages,
             minimumUsefulTokens: 1024,
-            call: (repairSettings) => (input.chat ?? nativeProviderChat)({ config: input.providerConfig, modelId: input.model.modelId, messages: repairMessages, settings: repairSettings, timeoutMs: input.timeoutMs }),
+            call: (repairSettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: repairMessages, settings: repairSettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.capacity-json-repair", attempt: input.chat }),
           });
           finalResponse = repair.response;
           parsed = parseViewerNoteReflection(finalResponse.content);

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { runAutomaticPostRevealReview, sendPostRevealTurn } from "./postReveal";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
+import { ProviderCallError } from "../providers/providerError";
 
 const config: ProviderConfig = { id: "pc", provider: "openrouter", label: "P", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
 const model: ProviderModel = { providerConfigId: "pc", provider: "openrouter", modelId: "viewer", displayName: "Viewer", route: "openrouter:viewer", capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: [], contextTokens: 100_000, maxOutputTokens: 4096, source: "provider", capturedAt: "now" }, pricing: {}, recommended: false, rawMetadata: {}, refreshedAt: "now" };
@@ -117,6 +118,27 @@ describe("post-reveal discussion", () => {
       .mockResolvedValueOnce({ content: "Complete Viewer review", finishReason: "stop", usage: {} });
     await sendPostRevealTurn({ repository, sessionId: "s", existingTranscript: "", providerConfig: config, model: highCapacityModel, content: "Review the session.", chat });
     expect(chat.mock.calls.map((call) => call[0].settings.effective.maxOutputTokens)).toEqual([8192, 16384]);
+    expect(repository.appendPostRevealTurn.mock.calls.filter((call) => call[1] === "user")).toHaveLength(1);
+    expect(repository.appendPostRevealTurn.mock.calls.filter((call) => call[1] === "assistant")).toHaveLength(1);
+  });
+
+  it("retries a Viewer body-read failure without duplicating either persisted turn", async () => {
+    let transcript = "";
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ providerConfigId: "pc", modelId: "viewer", sessionLanguage: "en" }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Lighthouse", hash: "h" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
+      listTargetClarifications: vi.fn().mockResolvedValue([]),
+      appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant" | "monitor", content: string) => {
+        transcript += `${JSON.stringify({ role, content })}\n`;
+        return transcript;
+      }),
+    };
+    const chat = vi.fn()
+      .mockRejectedValueOnce(new ProviderCallError({ code: "response_body_read", message: "body closed", phase: "reading_body" }))
+      .mockResolvedValueOnce({ content: "Recovered review", usage: {} });
+    await sendPostRevealTurn({ repository, sessionId: "s", existingTranscript: "", providerConfig: config, model, content: "Review.", maxRetries: 5, chat });
+    expect(chat).toHaveBeenCalledTimes(2);
     expect(repository.appendPostRevealTurn.mock.calls.filter((call) => call[1] === "user")).toHaveLength(1);
     expect(repository.appendPostRevealTurn.mock.calls.filter((call) => call[1] === "assistant")).toHaveLength(1);
   });

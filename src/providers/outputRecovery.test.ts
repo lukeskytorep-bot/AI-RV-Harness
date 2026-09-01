@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ProviderModel } from "./types";
+import type { ProviderChatResponse, ProviderModel } from "./types";
 import { analyticalOutputBudget, callWithAnalyticalOutputRecovery, isOutputLimitFailure } from "./outputRecovery";
+import { ProviderCallError } from "./providerError";
+import { executeProviderRequest } from "./requestExecutor";
 
 const model: ProviderModel = {
   providerConfigId: "pc",
@@ -55,6 +57,25 @@ describe("analytical output recovery", () => {
     await expect(callWithAnalyticalOutputRecovery({ model, messages: [{ role: "user", content: "Evaluate" }], call })).rejects.toThrow("unauthorized");
     expect(call).toHaveBeenCalledTimes(1);
     expect(isOutputLimitFailure(new Error("Judge returned invalid JSON."))).toBe(false);
+  });
+
+  it("keeps output recovery separate from transport retry (three physical calls, not multiplied)", async () => {
+    const physical = vi.fn()
+      .mockResolvedValueOnce({ content: "partial", finishReason: "length", usage: {} })
+      .mockRejectedValueOnce(new ProviderCallError({ code: "response_body_decode", message: "decode", phase: "reading_body" }))
+      .mockResolvedValueOnce({ content: "complete", finishReason: "stop", usage: {} });
+    const result = await callWithAnalyticalOutputRecovery({
+      model,
+      messages: [{ role: "user", content: "Evaluate" }],
+      call: async () => (await executeProviderRequest<ProviderChatResponse>({
+        operationId: "test.output-and-transport",
+        configuredRetries: 5,
+        executeAttempt: physical as () => Promise<ProviderChatResponse>,
+        sleep: async () => undefined,
+      })).value,
+    });
+    expect(result.response.content).toBe("complete");
+    expect(physical).toHaveBeenCalledTimes(3);
   });
 
   it("protects the context window and refuses an unusably small remainder", () => {

@@ -125,6 +125,7 @@ export async function executeResearchSessions(input: {
         sessionId: result.sessionId,
         viewer: { providerConfig: provider, model },
         timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
+        maxRetries: project.config.sessionPolicy?.maxRetries,
       });
     }
     await input.repository.updateResearchAssignment(assignment.id, result.sessionId, "SessionComplete");
@@ -180,6 +181,8 @@ export async function judgeResearch(input: {
       language: project.config.sessionLanguage,
       judges: missingJudges,
       anonymousSessionId: assignment.anonymousSessionId,
+      maxRetries: project.config.sessionPolicy?.maxRetries,
+      timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
     });
     const frozen = await input.repository.listJudgeScores(assignment.sessionId);
     if (frozen.length !== judgeSelections.length || frozen.some((score) => !score.frozenAt)) throw new Error("Judge score freeze verification failed.");
