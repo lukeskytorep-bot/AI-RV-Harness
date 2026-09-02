@@ -38,10 +38,6 @@ export function providerRetryAllowance(cause: unknown, configuredRetries: number
   return category === "standard" ? configured : category === "single_recovery" ? 1 : 0;
 }
 
-export function shouldRetryProviderError(cause: unknown, failedAttempt: number, configuredRetries: number): boolean {
-  return failedAttempt < providerRetryAllowance(cause, configuredRetries);
-}
-
 export function isRetryableProviderError(cause: unknown): boolean {
   return providerRetryCategory(cause) !== "never";
 }
@@ -54,15 +50,4 @@ export function providerRetryDelayMs(failedAttempt: number, cause?: unknown, ran
   if (Number.isFinite(retryAfter) && retryAfter > 0) return Math.min(30_000, retryAfter);
   const ceiling = Math.min(8_000, 500 * 2 ** Math.max(0, failedAttempt));
   return Math.floor(Math.max(0, Math.min(1, random())) * ceiling);
-}
-
-export async function waitBeforeProviderRetry(failedAttempt: number, signal?: AbortSignal, cause?: unknown): Promise<void> {
-  if (signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
-  await new Promise<void>((resolve, reject) => {
-    const timer = globalThis.setTimeout(resolve, providerRetryDelayMs(failedAttempt, cause));
-    signal?.addEventListener("abort", () => {
-      globalThis.clearTimeout(timer);
-      reject(new DOMException("Provider request cancelled", "AbortError"));
-    }, { once: true });
-  });
 }

@@ -2,6 +2,13 @@
 
 These documents describe the implemented architecture and integrity model of AI RV Harness v0.7.12. Release-specific plans, reports, manifests, and verification records remain under [`docs/releases/`](../releases/).
 
+The private v0.7.13 modularization work adds the following living architecture records:
+
+- [Code map](CODE_MAP.md)
+- [Module boundaries](MODULE_BOUNDARIES.md)
+- [ADR-0001: Modular monolith](decisions/ADR-0001-MODULAR_MONOLITH.md)
+- [Central provider retry architecture](PROVIDER_RETRY_ARCHITECTURE_FINAL_PL.md)
+
 ## Documents
 
 | Document | Purpose |

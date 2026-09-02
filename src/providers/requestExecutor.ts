@@ -63,67 +63,60 @@ export interface ExecuteProviderRequestInput<T> {
   random?: () => number;
 }
 
-const activeLogicalRequests = new Set<string>();
 const PROVIDER_EXECUTOR_BRAND = Symbol("provider-request-executor");
 
 export async function executeProviderRequest<T>(input: ExecuteProviderRequestInput<T>): Promise<ProviderExecutionResult<T>> {
   const logicalRequestId = crypto.randomUUID();
-  if (activeLogicalRequests.has(logicalRequestId)) throw new Error(`Nested provider retry context detected: ${logicalRequestId}`);
-  activeLogicalRequests.add(logicalRequestId);
   const operationStartedAt = Date.now();
   let physicalAttempts = 0;
   let ambiguousBillingAttempts = 0;
   let recoveredFrom: string | undefined;
 
-  try {
-    while (true) {
-      if (input.signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
-      const context: ProviderAttemptContext = {
-        operationId: input.operationId,
-        logicalRequestId,
-        physicalAttempt: physicalAttempts + 1,
-        startedAtMs: Date.now(),
+  while (true) {
+    if (input.signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
+    const context: ProviderAttemptContext = {
+      operationId: input.operationId,
+      logicalRequestId,
+      physicalAttempt: physicalAttempts + 1,
+      startedAtMs: Date.now(),
+    };
+    physicalAttempts += 1;
+    try {
+      const value = await input.executeAttempt(context);
+      return {
+        value,
+        report: {
+          operationId: input.operationId,
+          logicalRequestId,
+          physicalAttempts,
+          elapsedMs: Date.now() - operationStartedAt,
+          ...(recoveredFrom ? { recoveredFrom } : {}),
+          ambiguousBillingAttempts,
+        },
       };
-      physicalAttempts += 1;
-      try {
-        const value = await input.executeAttempt(context);
-        return {
-          value,
-          report: {
-            operationId: input.operationId,
-            logicalRequestId,
-            physicalAttempts,
-            elapsedMs: Date.now() - operationStartedAt,
-            ...(recoveredFrom ? { recoveredFrom } : {}),
-            ambiguousBillingAttempts,
-          },
-        };
-      } catch (cause) {
-        if (input.signal?.aborted || (cause instanceof DOMException && cause.name === "AbortError")) throw cause;
-        const error = normalizeProviderCallError(cause);
-        if (["response_body_read", "response_body_decode", "invalid_provider_json"].includes(error.details.code)) {
-          ambiguousBillingAttempts += 1;
-        }
-        await input.onAttemptFailure?.(error, context);
-        const allowance = providerRetryAllowance(error, input.configuredRetries ?? 2);
-        const failedAttemptIndex = physicalAttempts - 1;
-        if (failedAttemptIndex >= allowance) {
-          throw new ProviderExecutionError(error, {
-            operationId: input.operationId,
-            logicalRequestId,
-            physicalAttempts,
-            elapsedMs: Date.now() - operationStartedAt,
-            ...(recoveredFrom ? { recoveredFrom } : {}),
-            ambiguousBillingAttempts,
-          });
-        }
-        recoveredFrom ??= error.details.code;
-        const delayMs = providerRetryDelayMs(failedAttemptIndex, error, input.random);
-        await (input.sleep ?? waitForRetry)(delayMs, input.signal);
+    } catch (cause) {
+      if (input.signal?.aborted || (cause instanceof DOMException && cause.name === "AbortError")) throw cause;
+      const error = normalizeProviderCallError(cause);
+      if (["response_body_read", "response_body_decode", "invalid_provider_json"].includes(error.details.code)) {
+        ambiguousBillingAttempts += 1;
       }
+      await input.onAttemptFailure?.(error, context);
+      const allowance = providerRetryAllowance(error, input.configuredRetries ?? 2);
+      const failedAttemptIndex = physicalAttempts - 1;
+      if (failedAttemptIndex >= allowance) {
+        throw new ProviderExecutionError(error, {
+          operationId: input.operationId,
+          logicalRequestId,
+          physicalAttempts,
+          elapsedMs: Date.now() - operationStartedAt,
+          ...(recoveredFrom ? { recoveredFrom } : {}),
+          ambiguousBillingAttempts,
+        });
+      }
+      recoveredFrom ??= error.details.code;
+      const delayMs = providerRetryDelayMs(failedAttemptIndex, error, input.random);
+      await (input.sleep ?? waitForRetry)(delayMs, input.signal);
     }
-  } finally {
-    activeLogicalRequests.delete(logicalRequestId);
   }
 }
 

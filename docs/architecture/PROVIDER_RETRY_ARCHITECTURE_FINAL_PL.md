@@ -1,8 +1,20 @@
 # Jednolita architektura retry providera — projekt końcowy
 
-**Zakres:** AI RV Harness v0.7.12 i następny hotfix  
-**Status:** zaimplementowano w hotfixie v0.7.12  
+**Zakres:** AI RV Harness — publiczne v0.7.12 i prywatna baza testowa v0.7.13  
+**Status:** zaimplementowano; w v0.7.13 trwa audyt zamykający  
 **Cel:** jedna spójna obsługa przejściowych błędów providera we wszystkich wywołaniach inferencji, bez zagnieżdżonych retry i bez duplikowania danych sesji.
+
+## Stan audytu — 2 września 2026
+
+W prywatnej bazie v0.7.13 wykonano pierwsze utwardzenie po wdrożeniu:
+
+- usunięto nieużywane helpery `shouldRetryProviderError` i `waitBeforeProviderRetry`;
+- usunięto nieskuteczną kontrolę `activeLogicalRequests`, która sprawdzała nowo wygenerowany identyfikator;
+- zachowano działającą ochronę brandowanego executora przed bezpośrednim opakowaniem executora drugim executorem;
+- dodano automatyczny test granicy importów, który dopuszcza `providerChatAttempt` wyłącznie w `native.ts` i `requestExecutor.ts`;
+- po zmianie przeszły typecheck, 79 plików testowych / 231 testów oraz build produkcyjny.
+
+Do pełnego zamknięcia audytu pozostają macierze kontraktowe wszystkich rodzin wywołań, integracyjne testy cancellation i braku podwójnego zapisu oraz Rust/Tauri CI.
 
 ## 1. Decyzja w skrócie
 

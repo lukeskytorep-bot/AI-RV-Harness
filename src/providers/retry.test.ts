@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRetryableProviderError, providerRetryAllowance, providerRetryCategory, providerRetryDelayMs, shouldRetryProviderError } from "./retry";
+import { isRetryableProviderError, providerRetryAllowance, providerRetryCategory, providerRetryDelayMs } from "./retry";
 
 describe("provider retry policy", () => {
   it("automatically retries only explicit not-yet-processed and throttling responses", () => {
@@ -13,8 +13,8 @@ describe("provider retry policy", () => {
     const error = new Error("error decoding response body");
     expect(providerRetryCategory(error)).toBe("single_recovery");
     expect(providerRetryAllowance(error, 5)).toBe(1);
-    expect(shouldRetryProviderError(error, 0, 5)).toBe(true);
-    expect(shouldRetryProviderError(error, 1, 5)).toBe(false);
+    expect(0).toBeLessThan(providerRetryAllowance(error, 5));
+    expect(1).not.toBeLessThan(providerRetryAllowance(error, 5));
     expect(providerRetryCategory(new Error("provider returned reasoning without a final assistant response [finish-reason=length]"))).toBe("never");
     expect(providerRetryCategory(new Error("provider returned an incomplete assistant response [finish-reason=max_tokens]"))).toBe("never");
   });
@@ -22,8 +22,8 @@ describe("provider retry policy", () => {
   it("retries transient gateway statuses according to the configured count", () => {
     const error = new Error("provider request failed (504): gateway timeout");
     expect(providerRetryAllowance(error, 3)).toBe(3);
-    expect(shouldRetryProviderError(error, 2, 3)).toBe(true);
-    expect(shouldRetryProviderError(error, 3, 3)).toBe(false);
+    expect(2).toBeLessThan(providerRetryAllowance(error, 3));
+    expect(3).not.toBeLessThan(providerRetryAllowance(error, 3));
     expect(providerRetryAllowance(new Error("provider error payload code=503 type=upstream_unavailable: try again"), 2)).toBe(2);
   });
 
