@@ -71,7 +71,6 @@ import { runOrdinaryBatch, selectBatchTargets, type OrdinaryBatchProgress, type 
 import { ResearchBuilder } from "./components/ResearchBuilder";
 import { TrainingScreen } from "./components/TrainingScreen";
 import { AiCenterScreen, type AiCenterView } from "./components/AiCenterScreen";
-import { buildCalibrationHistory, type CalibrationHistoryItem } from "./research/calibration";
 import { storeRevealArtifact, storeTargetArtifact } from "./artifacts/native";
 import type { RevealArtifactRecord, RvSession } from "./sessions/types";
 import { aggregateJudgeScores } from "./domain/scoring";
@@ -85,7 +84,11 @@ import { APP_VERSION } from "./version";
 import { addProvider, refreshProviderModels } from "./providers/service";
 import { runAutomaticPostRevealReview, sendPostRevealTurn } from "./sessions/postReveal";
 import { HomeScreen } from "./features/home";
+import { CreateProfileDialog, ProfilesScreen, ProfileViewerControls } from "./features/profiles";
 import { SettingsScreen } from "./features/settings";
+import { EmptyState } from "./components/EmptyState";
+import { FormDialog } from "./components/FormDialog";
+import { PageHeader } from "./components/PageHeader";
 import { ProtocolDialog } from "./components/ProtocolDialog";
 import { parsePostRevealTranscript } from "./sessions/postRevealTranscript";
 import { exportMonitorRun } from "./exports/monitor";
@@ -100,10 +103,9 @@ import { canSelectMonitor, canSelectProtocol, isRunModeCompatible } from "./sess
 import { SafeMarkdown } from "./components/SafeMarkdown";
 import { filterWorkspaceDirectory } from "./domain/workspaceDirectory";
 import { reasoningOptions } from "./providers/modelReasoningRegistry";
-import type { ReasoningOption } from "./providers/types";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "./domain/isBeIdentity";
 import { TRAINING_CATEGORIES, TRAINING_CATEGORY_LABELS } from "./targets/bundled";
-import { buildEffectiveMonitorPrompt, buildEffectiveViewerPrompt, factoryMonitorEditablePrompt, factoryViewerEditablePrompt, localizedMonitorEditablePrompt, localizedViewerEditablePrompt, lockedActivityDefinition, lockedMonitorExecution, lockedViewerIdentity } from "./resources/systemPrompts";
+import { buildEffectiveMonitorPrompt, buildEffectiveViewerPrompt, factoryMonitorEditablePrompt, localizedMonitorEditablePrompt, localizedViewerEditablePrompt, lockedActivityDefinition, lockedMonitorExecution } from "./resources/systemPrompts";
 import { SPECIAL_TASK_OPTIONS, specialTaskUsesMappedLabels, type SpecialTaskInput, type SpecialTaskOption } from "./sessions/specialTask";
 import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from "./targets/telepathicBundled";
 import {
@@ -115,6 +117,7 @@ import {
   type TelepathicQuestionMode,
 } from "./sessions/telepathicController";
 import { prepareViewerNotesForSession, viewerNotesSystemBlock } from "./aiCenter/viewerNotes";
+import { reasoningCapabilityLead, reasoningOptionLabel } from "./providers/reasoningPresentation";
 
 type Page = "home" | "profiles" | "workspaces" | "research" | "targets" | "training" | "ai-center" | "settings" | "workspace";
 type WorkspaceTab = "chat" | "rv";
@@ -566,7 +569,7 @@ function FirstRunSetup({
           <label>{copy.modelSearch}<input value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder={copy.modelSearchPlaceholder} /></label>
           <label>{copy.defaultViewerModel}<select size={Math.min(8, Math.max(3, visibleViewerModels.length))} value={viewerModelId} onChange={(event) => selectViewerModel(event.target.value)}>{visibleViewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label>
           {!visibleViewerModels.length && <p className="provider-empty">{copy.noMatchingModels}</p>}
-          <ViewerProfileControls copy={copy} model={viewerModel} reasoning={viewerReasoning} temperature={viewerTemperature} systemPrompt={viewerSystemPrompt} onReasoning={setViewerReasoning} onTemperature={setViewerTemperature} onSystemPrompt={setViewerSystemPrompt} />
+          <ProfileViewerControls copy={copy} model={viewerModel} reasoning={viewerReasoning} temperature={viewerTemperature} systemPrompt={viewerSystemPrompt} onReasoning={setViewerReasoning} onTemperature={setViewerTemperature} onSystemPrompt={setViewerSystemPrompt} />
           <div className="identity-name-grid"><label>{copy.aiIsBeName}<input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div>
           <small className="setup-security-note"><Users size={13} />{copy.identityNamesLead}</small>
           <div className="first-run-actions"><button className="secondary-button" onClick={() => setStep(1)} disabled={busy}>{copy.back}</button><button className="primary-button" disabled={!viewerModelId || busy} onClick={() => setStep(3)}>{copy.continue}<ArrowRight size={15} /></button></div>
@@ -589,19 +592,6 @@ function FirstRunSetup({
 
 function ServerIcon() {
   return <Database size={17} />;
-}
-
-function ViewerProfileControls({ copy, model, reasoning, temperature, systemPrompt, onReasoning, onTemperature, onSystemPrompt }: { copy: ReturnType<typeof getCopy>; model: ProviderModel | null; reasoning: "" | ReasoningEffort; temperature: string; systemPrompt: string; onReasoning: (value: "" | ReasoningEffort) => void; onTemperature: (value: string) => void; onSystemPrompt: (value: string) => void }) {
-  const reasoningChoices = model ? reasoningOptions(model.capabilities.reasoning) : [];
-  const temperatureCapability = model?.capabilities.temperature;
-  const language: InterfaceLanguage = copy.home === "Home" ? "en" : "pl";
-  return <div className="profile-viewer-controls">
-    <label><span>{copy.viewerReasoningLevel}</span><select value={reasoning} onChange={(event) => onReasoning(event.target.value as "" | ReasoningEffort)} disabled={!model}><option value="">{copy.autoProviderDefault}</option>{reasoningChoices.map((option) => <option key={option.value} value={option.value}>{reasoningOptionLabel(copy, option)}</option>)}</select><small>{!model ? copy.selectModelFirst : reasoningCapabilityLead(copy, model)}</small></label>
-    <label><span>{copy.viewerTemperature}</span><input type="number" step="0.1" value={temperature} onChange={(event) => onTemperature(event.target.value)} disabled={!temperatureCapability?.supported} min={temperatureCapability?.min} max={temperatureCapability?.max} placeholder={temperatureCapability?.supported ? "0.9" : copy.notSupported} /><small>{temperatureCapability?.supported ? `${copy.temperatureDefaultLead}${temperatureCapability.min !== undefined || temperatureCapability.max !== undefined ? ` (${temperatureCapability.min ?? "−∞"}–${temperatureCapability.max ?? "+∞"})` : ""}` : copy.temperatureUnavailable}</small></label>
-    <label className="profile-system-prompt-field"><span>{copy.viewerSystemPrompt}<small>{language === "pl" ? "część edytowalna" : "editable section"}</small></span><textarea className="system-prompt-editor" rows={12} maxLength={100000} value={systemPrompt} onChange={(event) => onSystemPrompt(event.target.value)} placeholder={copy.viewerSystemPromptPlaceholder} /><small>{copy.viewerSystemPromptLead}</small></label>
-    <div className="monitor-prompt-actions"><button className="secondary-button" type="button" onClick={() => onSystemPrompt(factoryViewerEditablePrompt(language))}>{language === "pl" ? "Przywróć treść fabryczną Viewera" : "Restore factory Viewer text"}</button></div>
-    <div className="viewer-locked-prompts"><div className="locked-prompt-block"><LockKeyhole size={15} /><div><strong>{language === "pl" ? "Tożsamość AI IS-BE i Shadow Zone — zablokowane" : "AI IS-BE identity and Shadow Zone — locked"}</strong><pre>{lockedViewerIdentity(language)}</pre></div></div><div className="locked-prompt-block"><LockKeyhole size={15} /><div><strong>{language === "pl" ? "Definicja aktywności — zablokowana" : "Activity definition — locked"}</strong><p>{lockedActivityDefinition(language)}</p></div></div><details className="effective-prompt-preview"><summary>{language === "pl" ? "Pokaż cały skuteczny prompt Viewera" : "Show the complete effective Viewer prompt"}</summary><pre>{buildEffectiveViewerPrompt(language, systemPrompt)}</pre></details></div>
-  </div>;
 }
 
 function Sidebar({ page, copy, compact, onNavigate }: { page: Page; copy: ReturnType<typeof getCopy>; compact: boolean; onNavigate: (page: Page) => void }) {
@@ -700,99 +690,6 @@ function WorkspaceDirectoryList({ copy, profiles, workspaces, onOpenWorkspace, o
 
 function WorkspaceSwitcherDialog({ copy, profiles, workspaces, onOpenWorkspace, onClose }: { copy: ReturnType<typeof getCopy>; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void; onClose: () => void }) {
   return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="modal workspace-switcher-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>{copy.workspaces}</small><h2>{copy.switchWorkspace}</h2></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><WorkspaceDirectoryList copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={(workspace) => { onClose(); onOpenWorkspace(workspace); }} /></section></div>;
-}
-
-function ProfilesScreen({
-  copy,
-  profiles,
-  workspaces,
-  onCreateProfile,
-  onCreateWorkspace,
-  onOpenWorkspace,
-  repository,
-  onProfilesChanged,
-}: {
-  copy: ReturnType<typeof getCopy>;
-  profiles: Profile[];
-  workspaces: Workspace[];
-  onCreateProfile: () => void;
-  onCreateWorkspace: (profileId: string) => void;
-  onOpenWorkspace: (workspace: Workspace) => void;
-  repository: AppRepository | null;
-  onProfilesChanged: () => Promise<void>;
-}) {
-  const [providerConfigs, setProviderConfigs] = useState<ProviderConfig[]>([]);
-  const [models, setModels] = useState<ProviderModel[]>([]);
-  const [calibrationHistory, setCalibrationHistory] = useState<CalibrationHistoryItem[]>([]);
-  const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    if (!repository) return;
-    void (async () => {
-      const [configs, cachedModels, projects] = await Promise.all([repository.listProviderConfigs(), repository.listProviderModels(), repository.listResearchProjects()]);
-      const reasoning = projects.filter((project) => project.state === "Complete" && project.templateType === "reasoning");
-      const resultPairs = await Promise.all(reasoning.map(async (project) => [project.id, await repository.getResearchResults(project.id)] as const));
-      const resultMap = new Map(resultPairs.filter((pair): pair is readonly [string, NonNullable<typeof pair[1]>] => Boolean(pair[1])));
-      if (cancelled) return;
-      setProviderConfigs(configs);
-      setModels(cachedModels);
-      setCalibrationHistory(profiles.flatMap((profile) => buildCalibrationHistory(projects, resultMap, profile, configs)));
-    })();
-    return () => { cancelled = true; };
-  }, [repository, profiles]);
-  const archiveProfile = async (profile: Profile) => {
-    if (!repository || !window.confirm(`${copy.archiveProfileConfirm}\n\n${aiIsBeDisplayName(profile)}`)) return;
-    await repository.archiveProfile(profile.id);
-    await onProfilesChanged();
-  };
-  const saveProfile = async (name: string, humanName: string | undefined, note?: string, aiConfiguration?: ProfileAiConfigurationInput) => {
-    if (!repository || !editingProfile) return;
-    if (aiConfiguration && editingProfile.credentialId && editingProfile.credentialId !== aiConfiguration.credentialId && !window.confirm(copy.calibrationBindingWarning)) return;
-    await repository.updateProfile(editingProfile.id, { name, humanName, note });
-    if (aiConfiguration) await repository.setProfileAiConfiguration(editingProfile.id, aiConfiguration);
-    setEditingProfile(null);
-    await onProfilesChanged();
-  };
-  return (
-    <div className="page">
-      <PageHeader title={copy.profiles} subtitle={copy.profileMeaning} action={<button className="primary-button" onClick={onCreateProfile}><Plus size={16} />{copy.createProfile}</button>} />
-      {profiles.length === 0 ? (
-        <EmptyState icon={<Users size={28} />} title={copy.noProfile} body={copy.profileMeaning} action={<button className="primary-button" onClick={onCreateProfile}><Plus size={16} />{copy.createProfile}</button>} />
-      ) : (
-        <div className="profile-grid">
-          {profiles.map((profile) => {
-            const owned = workspaces.filter((workspace) => workspace.profileId === profile.id);
-            const boundProvider = providerConfigs.find((provider) => provider.credentialId === profile.credentialId) ?? null;
-            const viewerReady = Boolean(resolveViewerDefault(profile, boundProvider, models));
-            return (
-              <section className="profile-card" key={profile.id}>
-                <div className="profile-heading">
-                  <span className="avatar large">{initials(aiIsBeDisplayName(profile))}</span>
-                  <div><h3>{aiIsBeDisplayName(profile)}</h3><p>{humanIsBeDisplayName(profile)} · {profile.note || copy.credentialPending}</p></div>
-                  <span className={`status-chip ${viewerReady ? "ready" : "next"}`}><KeyRound size={13} />{viewerReady ? copy.aiDefaultsReady : copy.aiDefaultsIncomplete}</span>
-                </div>
-                <div className="workspace-list">
-                  {owned.length === 0 ? <p className="muted">{copy.noWorkspace}</p> : owned.map((workspace) => (
-                    <button key={workspace.id} className="workspace-row" onClick={() => onOpenWorkspace(workspace)}>
-                      <span><RadioTower size={17} /><strong>{workspace.name}</strong></span><ChevronRight size={16} />
-                    </button>
-                  ))}
-                </div>
-                <CalibrationHistory copy={copy} items={calibrationHistory.filter((item) => item.profileId === profile.id)} />
-                <div className="profile-actions"><button className="secondary-button" onClick={() => setEditingProfile(profile)}><Pencil size={14} />{copy.editProfile}</button><button className="secondary-button danger-action" onClick={() => void archiveProfile(profile)}><Archive size={14} />{copy.archiveProfile}</button></div>
-                <button className="secondary-button full" onClick={() => onCreateWorkspace(profile.id)}><Plus size={16} />{copy.createWorkspace}</button>
-              </section>
-            );
-          })}
-        </div>
-      )}
-      {editingProfile && <EditProfileDialog copy={copy} profile={editingProfile} providers={providerConfigs} models={models} onCancel={() => setEditingProfile(null)} onSave={saveProfile} />}
-    </div>
-  );
-}
-
-function CalibrationHistory({ copy, items }: { copy: ReturnType<typeof getCopy>; items: CalibrationHistoryItem[] }) {
-  return <section className="calibration-history"><div className="calibration-history-head"><strong>{copy.calibrationHistory}</strong><small>{items.length}</small></div>{items.length ? <div className="calibration-list">{items.slice(0, 5).map((item) => <article key={item.projectId}><div><strong>{item.modelId}</strong><span className={`status-chip ${item.historical ? "next" : "ready"}`}>{item.historical ? copy.historicalCalibration : copy.currentPairing}</span></div><small>{item.providerLabel}{item.credentialHint ? ` · ${item.credentialHint}` : ""}</small><dl><div><dt>{copy.lastCalibration}</dt><dd>{new Date(item.completedAt).toLocaleDateString()}</dd></div><div><dt>{copy.tested}</dt><dd>{item.tested.join(" / ")}</dd></div><div><dt>{copy.bestObserved}</dt><dd>{item.bestObserved.join(" / ") || "—"}</dd></div><div><dt>n</dt><dd>{item.n}</dd></div></dl></article>)}</div> : <p>{copy.noCalibrationHistory}</p>}</section>;
 }
 
 function WorkspaceScreen({ copy, settings, profile, workspace, tab, onTab, repository, profiles, workspaces, onOpenWorkspace, createdNotice, onDismissCreatedNotice }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; tab: WorkspaceTab; onTab: (tab: WorkspaceTab) => void; repository: AppRepository | null; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void; createdNotice: { workspaceId: string; workspaceName: string; profileName: string } | null; onDismissCreatedNotice: () => void }) {
@@ -2666,184 +2563,12 @@ function CustomProtocolDialog({ copy, repository, language, base, onCancel, onSa
   return <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}><section className="modal custom-protocol-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>{base ? `${base.displayName} · ${base.version}` : copy.newCustomProtocol}</small><h2>{copy.customProtocol}</h2><p>{language.toUpperCase()} · {copy.sessionCodePlaceholder}</p></div><button className="icon-button" onClick={onCancel}><X size={19} /></button></div><div className="custom-protocol-body"><div className="custom-builder-fields"><label>{copy.protocolName}<input value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.protocolDescription}<input value={description} onChange={(event) => setDescription(event.target.value)} /></label><label>{copy.systemPromptOptional}<textarea className="custom-system-prompt-editor" rows={10} maxLength={100000} value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} /></label><div className="custom-steps-head"><strong>{copy.blindSteps} · {steps.length}/20</strong><button className="secondary-button" type="button" disabled={steps.length >= 20} onClick={() => setSteps((current) => [...current, ""])}><Plus size={14} />{copy.addStep}</button></div><div className="custom-steps">{steps.map((step, index) => <div className="custom-step" key={index}><span>{index + 1}</span><textarea rows={3} value={step} onChange={(event) => setSteps((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} placeholder={`${copy.step} ${index + 1}`} /><div><button type="button" className="icon-button" disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button type="button" className="icon-button" disabled={index === steps.length - 1} onClick={() => move(index, 1)}>↓</button><button type="button" className="icon-button danger" disabled={steps.length === 1} title={copy.removeStep} onClick={() => setSteps((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button></div></div>)}</div></div>{preview && <aside className="custom-dry-run"><div><strong>{copy.dryRun}</strong><p>{copy.dryRunLead}</p></div>{systemPrompt.trim() && <article><span>SYSTEM</span><p>{systemPrompt.trim()}</p></article>}{dryRun.map((item) => <article key={item.sequence} className={item.boundary === "REVEAL" ? "reveal-step" : ""}><span>{item.boundary} · {item.role === "Viewer" ? copy.viewerCall : copy.revealCall}</span><strong>{item.role === "Viewer" ? `${copy.step} ${item.sequence}` : copy.revealSeparate}</strong>{item.prompt && <p>{item.prompt}</p>}</article>)}</aside>}</div>{error && <div className="provider-error">{error}</div>}<div className="custom-protocol-actions"><button className="secondary-button" type="button" onClick={() => setPreview((current) => !current)}>{copy.previewDryRun}</button><div>{base && <button className="secondary-button" type="button" disabled={saving || !name.trim() || !cleanSteps.length} onClick={() => void persist(true)}>{copy.duplicateProtocol}</button>}<button className="primary-button" type="button" disabled={saving || !name.trim() || !cleanSteps.length || cleanSteps.length > 20} onClick={() => void persist(false)}>{copy.saveNewVersion}</button></div></div></section></div>;
 }
 
-function buildProfileAiConfiguration(copy: ReturnType<typeof getCopy>, provider: ProviderConfig | null, viewerModel: ProviderModel | null, reasoning: "" | ReasoningEffort, temperatureInput: string, systemPrompt: string, monitorModelKey: string, judgeModelKey: string): ProfileAiConfigurationInput {
-  if (!provider || !viewerModel || viewerModel.providerConfigId !== provider.id) throw new Error(copy.selectViewerBeforeSaving);
-  const normalizedReasoning = reasoning ? reasoningEffortForModel(viewerModel, reasoning) : undefined;
-  if (reasoning && !normalizedReasoning) throw new Error(copy.reasoningNotSupported);
-  let temperature: number | undefined;
-  if (viewerModel.capabilities.temperature.supported) {
-    temperature = temperatureInput.trim() ? Number(temperatureInput) : defaultTemperatureForModel(viewerModel);
-    const capability = viewerModel.capabilities.temperature;
-    if (!Number.isFinite(temperature) || (capability.min !== undefined && temperature! < capability.min) || (capability.max !== undefined && temperature! > capability.max)) throw new Error(copy.temperatureOutOfRange);
-  }
-  const monitor = splitModelRouteKey(monitorModelKey);
-  const judge = splitModelRouteKey(judgeModelKey);
-  return {
-    credentialId: provider.credentialId,
-    credentialProvider: provider.provider,
-    defaultViewerModelId: viewerModel.modelId,
-    ...(normalizedReasoning ? { defaultViewerReasoningEffort: normalizedReasoning } : {}),
-    ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
-    ...(systemPrompt.trim() ? { defaultViewerSystemPrompt: systemPrompt.trim() } : {}),
-    ...(monitor ? { defaultMonitorProviderConfigId: monitor.providerConfigId, defaultMonitorModelId: monitor.modelId } : {}),
-    ...(judge ? { defaultJudgeProviderConfigId: judge.providerConfigId, defaultJudgeModelId: judge.modelId } : {}),
-  };
-}
-
-function CreateProfileDialog({ copy, repository, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; repository: AppRepository; onCancel: () => void; onCreate: (name: string, humanName: string | undefined, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => Promise<void> }) {
-  const [aiName, setAiName] = useState("");
-  const [humanName, setHumanName] = useState("");
-  const [note, setNote] = useState("");
-  const [providers, setProviders] = useState<ProviderConfig[]>([]);
-  const [models, setModels] = useState<ProviderModel[]>([]);
-  const [providerId, setProviderId] = useState("");
-  const [modelId, setModelId] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => { void Promise.all([repository.listProviderConfigs(), repository.listProviderModels()]).then(([nextProviders, nextModels]) => { setProviders(nextProviders); setModels(nextModels); setProviderId(nextProviders[0]?.id ?? ""); }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, [repository]);
-  const provider = providers.find((item) => item.id === providerId) ?? null;
-  const availableModels = preferredModelOrder(models.filter((model) => model.providerConfigId === providerId));
-  const model = availableModels.find((item) => item.modelId === modelId) ?? null;
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!provider || !model || saving) return;
-    setSaving(true); setError(null);
-    try {
-      await onCreate(aiName, humanName || undefined, note || undefined, {
-        credentialId: provider.credentialId,
-        credentialProvider: provider.provider,
-        defaultViewerModelId: model.modelId,
-        ...(defaultTemperatureForModel(model) !== undefined ? { defaultViewerTemperature: defaultTemperatureForModel(model) } : {}),
-        defaultViewerSystemPrompt: factoryViewerEditablePrompt(copy.home === "Home" ? "en" : "pl"),
-        defaultMonitorSystemPrompt: factoryMonitorEditablePrompt(copy.home === "Home" ? "en" : "pl"),
-      });
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setSaving(false); }
-  };
-  return <FormDialog title={copy.createProfile} onCancel={onCancel} modalClassName="profile-edit-modal"><form className="profile-edit-form" onSubmit={(event) => void submit(event)}>
-    <div className="identity-name-grid"><label>{copy.aiIsBeName}<input autoFocus value={aiName} onChange={(event) => setAiName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div>
-    <small className="form-hint">{copy.identityNamesLead}</small>
-    <label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label>
-    <fieldset className="profile-edit-ai"><legend>{copy.profileAiDefaults}</legend><label>{copy.profileCredential}<select value={providerId} onChange={(event) => { setProviderId(event.target.value); setModelId(""); }}><option value="">{copy.selectProviderConnection}</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.credentialHint ?? "••••••••"}</option>)}</select></label><label>{copy.defaultViewerModel}<select value={modelId} onChange={(event) => setModelId(event.target.value)} disabled={!provider}><option value="">{copy.selectModel}</option>{availableModels.map((item) => <option key={item.modelId} value={item.modelId}>{item.displayName}</option>)}</select></label></fieldset>
-    {error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving || !provider || !model}>{saving ? copy.saving : copy.create}</button></div>
-  </form></FormDialog>;
-}
-
-function LegacyCreateProfileDialog({ copy, repository, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; repository: AppRepository; onCancel: () => void; onCreate: (name: string, humanName: string | undefined, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => Promise<void> }) {
-  const [name, setName] = useState("");
-  const [humanName, setHumanName] = useState("");
-  const [note, setNote] = useState("");
-  const [providers, setProviders] = useState<ProviderConfig[]>([]);
-  const [models, setModels] = useState<ProviderModel[]>([]);
-  const [providerConfigId, setProviderConfigId] = useState("");
-  const [viewerModelId, setViewerModelId] = useState("");
-  const [reasoning, setReasoning] = useState<"" | ReasoningEffort>("");
-  const [temperature, setTemperature] = useState("");
-  const [systemPrompt, setSystemPrompt] = useState("");
-  const [monitorModelKey, setMonitorModelKey] = useState("");
-  const [judgeModelKey, setJudgeModelKey] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void Promise.all([repository.listProviderConfigs(), repository.listProviderModels()]).then(([nextProviders, nextModels]) => {
-      if (cancelled) return;
-      setProviders(nextProviders);
-      setModels(nextModels);
-      setProviderConfigId(nextProviders[0]?.id ?? "");
-    }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
-    return () => { cancelled = true; };
-  }, [repository]);
-  const provider = providers.find((item) => item.id === providerConfigId) ?? null;
-  const viewerModels = preferredModelOrder(models.filter((model) => model.providerConfigId === providerConfigId));
-  const viewerModel = viewerModels.find((model) => model.modelId === viewerModelId) ?? null;
-  const roleModels = preferredModelOrder(models);
-  const selectViewer = (modelId: string) => {
-    const model = viewerModels.find((item) => item.modelId === modelId) ?? null;
-    setViewerModelId(modelId);
-    setReasoning("");
-    const nextTemperature = defaultTemperatureForModel(model);
-    setTemperature(nextTemperature === undefined ? "" : String(nextTemperature));
-  };
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (saving) return;
-    setSaving(true); setError(null);
-    try {
-      const aiConfiguration = buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey);
-      await onCreate(name, humanName || undefined, note || undefined, aiConfiguration);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setSaving(false); }
-  };
-  return <FormDialog title={copy.createProfile} onCancel={onCancel} modalClassName="profile-edit-modal"><form className="profile-edit-form" onSubmit={(event) => void submit(event)}><label>{copy.profileName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label><fieldset className="profile-edit-ai"><legend>{copy.profileAiDefaults}</legend><p>{copy.aiDefaultsLead}</p>{providers.length ? <><label><span>{copy.profileCredential}</span><select value={providerConfigId} onChange={(event) => { setProviderConfigId(event.target.value); setViewerModelId(""); setReasoning(""); setTemperature(""); }}><option value="">{copy.selectProviderConnection}</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.credentialHint ?? "••••••••"}</option>)}</select></label><label><span>{copy.defaultViewerModel}</span><select value={viewerModelId} onChange={(event) => selectViewer(event.target.value)} disabled={!provider}><option value="">{viewerModels.length ? copy.selectModel : copy.noCachedModels}</option>{viewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label><ViewerProfileControls copy={copy} model={viewerModel} reasoning={reasoning} temperature={temperature} systemPrompt={systemPrompt} onReasoning={setReasoning} onTemperature={setTemperature} onSystemPrompt={setSystemPrompt} /><label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><select value={judgeModelKey} onChange={(event) => setJudgeModelKey(event.target.value)}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`create-judge-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label><label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><select value={monitorModelKey} onChange={(event) => setMonitorModelKey(event.target.value)}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`create-monitor-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label></> : <small>{copy.configureProviderFirst}</small>}</fieldset>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving || !provider || !viewerModel}>{saving ? copy.saving : copy.create}</button></div></form></FormDialog>;
-}
-
-function EditProfileDialog({ copy, profile, providers, models, onCancel, onSave }: { copy: ReturnType<typeof getCopy>; profile: Profile; providers: ProviderConfig[]; models: ProviderModel[]; onCancel: () => void; onSave: (name: string, humanName: string | undefined, note?: string, aiConfiguration?: ProfileAiConfigurationInput) => Promise<void> }) {
-  const [name, setName] = useState(profile.name);
-  const [humanName, setHumanName] = useState(profile.humanName ?? "");
-  const [note, setNote] = useState(profile.note ?? "");
-  const currentProvider = providers.find((provider) => provider.credentialId === profile.credentialId) ?? null;
-  const [providerConfigId, setProviderConfigId] = useState(currentProvider?.id ?? "");
-  const [viewerModelId, setViewerModelId] = useState(profile.defaultViewerModelId ?? "");
-  const [reasoning, setReasoning] = useState<"" | ReasoningEffort>(profile.defaultViewerReasoningEffort ?? "");
-  const [temperature, setTemperature] = useState(profile.defaultViewerTemperature === undefined ? "" : String(profile.defaultViewerTemperature));
-  const interfaceLanguage: InterfaceLanguage = copy.home === "Home" ? "en" : "pl";
-  const [systemPrompt, setSystemPrompt] = useState(localizedViewerEditablePrompt(profile.defaultViewerSystemPrompt, interfaceLanguage));
-  const [monitorModelKey, setMonitorModelKey] = useState(resolveRoleDefault(profile, "monitor", models));
-  const [judgeModelKey, setJudgeModelKey] = useState(resolveRoleDefault(profile, "judge", models));
-  const [aiTouched, setAiTouched] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const provider = providers.find((item) => item.id === providerConfigId) ?? null;
-  const viewerModels = preferredModelOrder(models.filter((model) => model.providerConfigId === providerConfigId));
-  const roleModels = preferredModelOrder(models);
-  const validViewerModelId = viewerModels.some((model) => model.modelId === viewerModelId) ? viewerModelId : "";
-  const viewerModel = viewerModels.find((model) => model.modelId === validViewerModelId) ?? null;
-  useEffect(() => {
-    if (aiTouched) return;
-    const nextProvider = providers.find((item) => item.credentialId === profile.credentialId) ?? null;
-    const storedModel = models.find((model) => model.providerConfigId === nextProvider?.id && model.modelId === profile.defaultViewerModelId) ?? null;
-    setProviderConfigId(nextProvider?.id ?? "");
-    setViewerModelId(profile.defaultViewerModelId ?? "");
-    setReasoning(reasoningEffortForModel(storedModel, profile.defaultViewerReasoningEffort) ?? "");
-    const storedTemperature = storedModel?.capabilities.temperature.supported ? profile.defaultViewerTemperature ?? defaultTemperatureForModel(storedModel) : undefined;
-    setTemperature(storedTemperature === undefined ? "" : String(storedTemperature));
-    setSystemPrompt(localizedViewerEditablePrompt(profile.defaultViewerSystemPrompt, interfaceLanguage));
-    setMonitorModelKey(resolveRoleDefault(profile, "monitor", models));
-    setJudgeModelKey(resolveRoleDefault(profile, "judge", models));
-  }, [aiTouched, interfaceLanguage, models, profile, providers]);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (saving) return;
-    if (aiTouched && (!provider || !validViewerModelId)) { setError(copy.selectViewerBeforeSaving); return; }
-    setSaving(true); setError(null);
-    try {
-      const aiConfiguration = aiTouched ? { ...buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey), defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, interfaceLanguage) } : undefined;
-      await onSave(name, humanName || undefined, note, aiConfiguration);
-    }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setSaving(false); }
-  };
-  const selectViewer = (modelId: string) => {
-    const model = viewerModels.find((item) => item.modelId === modelId) ?? null;
-    setViewerModelId(modelId);
-    const sameStoredPair = provider?.credentialId === profile.credentialId && profile.defaultViewerModelId === modelId;
-    setReasoning(sameStoredPair ? reasoningEffortForModel(model, profile.defaultViewerReasoningEffort) ?? "" : "");
-    const nextTemperature = sameStoredPair && profile.defaultViewerTemperature !== undefined ? profile.defaultViewerTemperature : defaultTemperatureForModel(model);
-    setTemperature(nextTemperature === undefined ? "" : String(nextTemperature));
-    setAiTouched(true);
-  };
-  return <FormDialog title={copy.editProfile} onCancel={onCancel} modalClassName="profile-edit-modal"><form className="profile-edit-form" onSubmit={(event) => void submit(event)}><div className="identity-name-grid"><label>{copy.aiIsBeName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div><small className="form-hint">{copy.identityNamesLead}</small><label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label><fieldset className="profile-edit-ai"><legend>{copy.profileAiDefaults}</legend><p>{copy.aiDefaultsLead}</p>{providers.length ? <><label><span>{copy.profileCredential}</span><select value={providerConfigId} onChange={(event) => { setProviderConfigId(event.target.value); setViewerModelId(""); setReasoning(""); setTemperature(""); setAiTouched(true); }}><option value="">{copy.selectProviderConnection}</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.credentialHint ?? "••••••••"}</option>)}</select></label><label><span>{copy.defaultViewerModel}</span><select value={validViewerModelId} onChange={(event) => selectViewer(event.target.value)} disabled={!provider}><option value="">{viewerModels.length ? copy.selectModel : copy.noCachedModels}</option>{viewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label><ViewerProfileControls copy={copy} model={viewerModel} reasoning={reasoning} temperature={temperature} systemPrompt={systemPrompt} onReasoning={(value) => { setReasoning(value); setAiTouched(true); }} onTemperature={(value) => { setTemperature(value); setAiTouched(true); }} onSystemPrompt={(value) => { setSystemPrompt(value); setAiTouched(true); }} /><label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><select value={judgeModelKey} onChange={(event) => { setJudgeModelKey(event.target.value); setAiTouched(true); }}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`edit-judge-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label><label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><select value={monitorModelKey} onChange={(event) => { setMonitorModelKey(event.target.value); setAiTouched(true); }}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`edit-monitor-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label></> : <small>{copy.configureProviderFirst}</small>}</fieldset>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving}>{saving ? copy.saving : copy.saveChanges}</button></div></form></FormDialog>;
-}
-
 function CreateWorkspaceDialog({ copy, profile, profiles, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; profile: Profile | null; profiles: Profile[]; onCancel: () => void; onCreate: (profileId: string, name: string, description?: string) => Promise<void> }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [profileId, setProfileId] = useState(profile?.id ?? profiles[0]?.id ?? "");
   const submit = (event: FormEvent) => { event.preventDefault(); if (profileId && name.trim()) void onCreate(profileId, name, description); };
   return <FormDialog title={`${copy.createWorkspace}${profile ? ` · ${aiIsBeDisplayName(profile)}` : ""}`} onCancel={onCancel}><form onSubmit={submit}>{!profile && profiles.length > 1 && <label>{copy.home === "Home" ? "Profile" : "Profil"}<select autoFocus value={profileId} onChange={(event) => setProfileId(event.target.value)}>{profiles.map((item) => <option key={item.id} value={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></label>}<label>{copy.workspaceName}<input autoFocus={Boolean(profile) || profiles.length <= 1} value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.workspaceDescription}<textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!profileId || !name.trim()}>{copy.create}</button></div></form></FormDialog>;
-}
-
-function FormDialog({ title, onCancel, children, modalClassName = "" }: { title: string; onCancel: () => void; children: ReactNode; modalClassName?: string }) {
-  return <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}><section className={`modal form-modal ${modalClassName}`.trim()} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><h2>{title}</h2><button className="icon-button" onClick={onCancel}><X size={19} /></button></div>{children}</section></div>;
 }
 
 function Choice({ active, onClick, icon, title, meta, disabled = false }: { active: boolean; onClick: () => void; icon: ReactNode; title: string; meta?: string; disabled?: boolean }) {
@@ -2869,20 +2594,12 @@ function specialTaskOptionLabel(option: SpecialTaskOption, language: InterfaceLa
   return labels[option][language];
 }
 
-function PageHeader({ title, subtitle, action }: { title: string; subtitle?: string; action?: ReactNode }) {
-  return <header className="page-header"><div><h1>{title}</h1>{subtitle && <p>{subtitle}</p>}</div>{action}</header>;
-}
-
 function PanelHeader({ title, icon }: { title: string; icon: ReactNode }) {
   return <div className="panel-header"><span>{icon}</span><h2>{title}</h2></div>;
 }
 
 function MiniStat({ icon, title, value }: { icon: ReactNode; title: string; value: string }) {
   return <div className="mini-stat"><span>{icon}</span><div><small>{title}</small><strong>{value}</strong></div></div>;
-}
-
-function EmptyState({ icon, title, body, action }: { icon: ReactNode; title: string; body?: string; action?: ReactNode }) {
-  return <div className="empty-state"><span>{icon}</span><h3>{title}</h3>{body && <p>{body}</p>}{action}</div>;
 }
 
 function EmptyCard({ children }: { children: ReactNode }) {
@@ -2918,15 +2635,4 @@ function formatMonitorRationale(value: string): string {
   } catch {
     return value;
   }
-}
-
-function reasoningOptionLabel(copy: ReturnType<typeof getCopy>, option: ReasoningOption): string {
-  return option.verification === "unverified" ? `${option.label} · ${copy.unverified}` : option.label;
-}
-
-function reasoningCapabilityLead(copy: ReturnType<typeof getCopy>, model: ProviderModel): string {
-  const choices = reasoningOptions(model.capabilities.reasoning);
-  if (model.capabilities.reasoning.registryStatus === "known" && !choices.length) return copy.reasoningAutoOnly;
-  if (model.capabilities.reasoning.mandatory) return copy.reasoningMandatory;
-  return model.capabilities.reasoning.registryStatus === "known" ? copy.reasoningVerifiedRegistry : copy.reasoningProviderFallback;
 }

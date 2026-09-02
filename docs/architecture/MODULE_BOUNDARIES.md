@@ -45,12 +45,14 @@ The active public feature entry points are:
 | --- | --- | --- | --- |
 | Home | `src/features/home/index.ts` | Home rendering and local presentational helpers | navigation state, persistence, provider calls, session execution |
 | Settings | `src/features/settings/index.ts` | Settings tabs, settings-specific cards, local dialogs and repository-backed maintenance UI | canonical application settings state, top-level navigation, provider transport, session execution |
+| Profiles | `src/features/profiles/index.ts` | Profiles rendering, profile forms, Viewer-default controls, calibration-history presentation and ordered profile edit/archive operations | canonical profile list, top-level navigation, repository construction, Workspace lifecycle, first-run orchestration |
 
 Example:
 
 ```ts
 import { HomeScreen } from "./features/home";
 import { SettingsScreen } from "./features/settings";
+import { ProfilesScreen } from "./features/profiles";
 ```
 
 Avoid:
@@ -59,7 +61,7 @@ Avoid:
 import { HomeResumeCard } from "./features/home/components/HomeResumeCard";
 ```
 
-Internal files may remain private even if TypeScript technically permits a deep import. New callers must import Home and Settings from their module roots, not directly from `HomeScreen.tsx` or `SettingsScreen.tsx`. The architecture test now enforces the Settings public entry point and keeps its implementation out of `App.tsx`.
+Internal files may remain private even if TypeScript technically permits a deep import. New callers must import Home, Settings and Profiles from their module roots, not directly from implementation files. The architecture test enforces the Settings and Profiles public entry points and keeps both implementations out of `App.tsx`.
 
 ## Cross-domain operations
 

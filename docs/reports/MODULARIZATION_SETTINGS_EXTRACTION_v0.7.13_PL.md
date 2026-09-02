@@ -1,6 +1,6 @@
 # AI RV Harness v0.7.13 — raport ekstrakcji modułu Settings
 
-> **Status:** wykonano lokalnie; oczekuje na potwierdzenie części Rust w GitHub Actions  
+> **Status:** wykonano i potwierdzono w GitHub Actions, łącznie z testami Rust i Clippy  
 > **Rodzaj zmiany:** refaktoryzacja frontendowa bez celowej zmiany zachowania oraz dwie małe, jawne poprawki produktu  
 > **Etap planu:** Etap 4 — stopniowe odchudzanie `App.tsx`
 
@@ -81,12 +81,14 @@ Wynik lokalny:
 - produkcyjny build Vite zakończył się poprawnie;
 - pozostało istniejące, nieblokujące ostrzeżenie o głównym chunku większym niż 500 kB.
 
-Lokalne środowisko nie zawiera `cargo` ani `rustfmt`. Nowy test nagłówków OpenRouter oraz cały kod Rust muszą zostać potwierdzone przez:
+Lokalne środowisko nie zawierało `cargo` ani `rustfmt`. Nowy test nagłówków OpenRouter oraz cały kod Rust zostały następnie potwierdzone przez zielony przebieg GitHub Actions obejmujący:
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml --locked
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 ```
+
+Pierwszy przebieg Clippy ujawnił `clippy::result_large_err`; reprezentację dużych pól błędu zmniejszono bez zmiany kontraktu JSON. Po tej korekcie użytkownik potwierdził pełny zielony przebieg workflowów.
 
 ## 7. Świadomie niewykonane działania
 

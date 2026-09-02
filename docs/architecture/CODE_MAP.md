@@ -12,7 +12,8 @@ This document maps responsibilities, not every source file. Historical release r
 | Application bootstrap, active profile, active Workspace and top-level navigation | `src/App.tsx` | Keep in the future `AppShell`. |
 | Home screen | `src/features/home/` | First extracted feature; keep its public import through `src/features/home/index.ts`. |
 | Settings screen | `src/features/settings/` | Extracted feature; import through `src/features/settings/index.ts`. |
-| Profiles, Workspaces, Chat, RV Sessions and Targets screens | `src/App.tsx` | Extract one screen at a time into `src/features/`. |
+| Profiles screen and profile-specific forms | `src/features/profiles/` | Extracted feature; import through `src/features/profiles/index.ts`. |
+| Workspaces, Chat, RV Sessions and Targets screens | `src/App.tsx` | Extract one screen at a time into `src/features/`. |
 | Training screen | `src/components/TrainingScreen.tsx` | Move behind a future `features/training` public entry point. |
 | Research screen and builder | `src/research/`, `src/components/ResearchBuilder.tsx` | Consolidate behind `features/research`. |
 | AI Center interface | `src/components/AiCenterScreen.tsx`, `src/aiCenter/` | Preserve identity and Viewer Notes boundaries when modularized. |
@@ -55,7 +56,9 @@ This document maps responsibilities, not every source file. Historical release r
 
 `SettingsScreen` has been moved into `src/features/settings/` together with its private settings cards and dialogs. It owns tab selection and settings-specific UI state, while `App.tsx` continues to own the canonical `AppSettings` state and passes updates through `SettingsScreenProps.onChange`. The reusable read-only protocol dialog now lives in `src/components/ProtocolDialog.tsx`, because RV Sessions and Settings both use it.
 
-The next low-risk candidate is the Profiles screen. It should be extracted separately after characterizing profile creation, editing, archiving and provider-default dependencies.
+`ProfilesScreen` has been moved into `src/features/profiles/` together with profile creation and editing dialogs, Viewer-default controls, calibration-history rendering and the ordered persistence operations for edit/archive. `App.tsx` continues to own the canonical profile list, top-level navigation, first-run flow and repository initialization. Shared page/dialog primitives live under `src/components/`, while reasoning capability labels live under `src/providers/`.
+
+The next candidate should be selected separately after reviewing the remaining screen dependencies; Targets is the preferred lower-risk option before the large Workspace/RV surface.
 
 ## Updating this map
 
