@@ -39,6 +39,12 @@ The repository remains one application and one release process. Folder boundarie
 
 New feature modules should expose a small `index.ts`. Callers import from the module root rather than from internal component or controller paths.
 
+The first active public feature entry point is:
+
+| Module | Public entry point | Owns | Does not own |
+| --- | --- | --- | --- |
+| Home | `src/features/home/index.ts` | Home rendering and local presentational helpers | navigation state, persistence, provider calls, session execution |
+
 Example:
 
 ```ts
@@ -51,7 +57,7 @@ Avoid:
 import { HomeResumeCard } from "./features/home/components/HomeResumeCard";
 ```
 
-Internal files may remain private even if TypeScript technically permits a deep import. A later architecture test will enforce these boundaries after the first feature-module pattern is stable.
+Internal files may remain private even if TypeScript technically permits a deep import. New callers of Home must import from `src/features/home`, not directly from `HomeScreen.tsx`. A later architecture test will enforce this rule for every feature after at least two real feature modules establish a stable pattern.
 
 ## Cross-domain operations
 

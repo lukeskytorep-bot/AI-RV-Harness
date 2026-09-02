@@ -104,27 +104,27 @@ struct ProviderDebugPayload {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderCallError {
-    code: String,
-    message: String,
-    phase: String,
+    code: Box<str>,
+    message: Box<str>,
+    phase: Box<str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     http_status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    provider_error_type: Option<String>,
+    provider_error_type: Option<Box<str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    provider_code: Option<String>,
+    provider_code: Option<Box<str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     retry_after_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    provider_request_id: Option<String>,
+    provider_request_id: Option<Box<str>>,
 }
 
 impl ProviderCallError {
     fn new(code: &str, message: impl Into<String>, phase: &str) -> Self {
         Self {
-            code: code.to_string(),
-            message: message.into(),
-            phase: phase.to_string(),
+            code: code.into(),
+            message: message.into().into_boxed_str(),
+            phase: phase.into(),
             http_status: None,
             provider_error_type: None,
             provider_code: None,
@@ -166,7 +166,7 @@ fn request_error(error: reqwest::Error, phase: &str) -> ProviderCallError {
     ProviderCallError::new(code, error_chain(&error), phase)
 }
 
-fn provider_error_metadata(payload: &Value) -> (Option<String>, Option<String>) {
+fn provider_error_metadata(payload: &Value) -> (Option<Box<str>>, Option<Box<str>>) {
     let Some(error) = payload.get("error") else {
         return (None, None);
     };
@@ -175,9 +175,10 @@ fn provider_error_metadata(payload: &Value) -> (Option<String>, Option<String>) 
         .or_else(|| error.pointer("/metadata/error_type"))
         .or_else(|| payload.get("error_type"))
         .and_then(Value::as_str)
-        .map(str::to_string);
+        .map(Box::<str>::from);
     let code = error.get("code").or_else(|| error.pointer("/metadata/code")).and_then(|value| {
-        value.as_str().map(str::to_string).or_else(|| value.as_i64().map(|number| number.to_string()))
+        value.as_str().map(Box::<str>::from)
+            .or_else(|| value.as_i64().map(|number| number.to_string().into_boxed_str()))
     });
     (error_type, code)
 }
@@ -288,7 +289,7 @@ async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result
         .map(str::to_string);
     let body = response.text().await.map_err(|error| {
         let mut failure = request_error(error, "reading_body");
-        failure.provider_request_id = request_id.clone();
+        failure.provider_request_id = request_id.clone().map(String::into_boxed_str);
         failure
     })?;
     if !status.is_success() {
@@ -303,7 +304,7 @@ async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result
         failure.provider_error_type = provider_error_type;
         failure.provider_code = provider_code;
         failure.retry_after_ms = retry_after_ms;
-        failure.provider_request_id = request_id;
+        failure.provider_request_id = request_id.map(String::into_boxed_str);
         return Err(failure);
     }
     let value = serde_json::from_str(&body).map_err(|error| {
@@ -312,7 +313,7 @@ async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result
             format!("provider returned invalid JSON: {error}"),
             "parsing_body",
         );
-        failure.provider_request_id = request_id.clone();
+        failure.provider_request_id = request_id.clone().map(String::into_boxed_str);
         failure
     })?;
     Ok((value, request_id))
@@ -373,7 +374,7 @@ pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatR
         let mut failure = ProviderCallError::new(code, message, "validating_response");
         failure.provider_error_type = provider_error_type;
         failure.provider_code = provider_code;
-        failure.provider_request_id = request_id;
+        failure.provider_request_id = request_id.map(String::into_boxed_str);
         failure
     })?;
     parsed.debug_payload = Some(ProviderDebugPayload {
@@ -1143,6 +1144,28 @@ mod tests {
     fn provider_errors_redact_secret() {
         let error = safe_provider_error(reqwest::StatusCode::UNAUTHORIZED, "bad sk-secret", "sk-secret", None);
         assert!(!error.contains("sk-secret"));
+    }
+
+    #[test]
+    fn provider_call_error_stays_compact_and_serializes_compatibly() {
+        assert!(std::mem::size_of::<ProviderCallError>() <= 128);
+        let mut error = ProviderCallError::new("timeout", "request timed out", "awaiting_headers");
+        error.http_status = Some(504);
+        error.provider_error_type = Some("upstream_timeout".into());
+        error.provider_code = Some("gateway_timeout".into());
+        error.retry_after_ms = Some(1_000);
+        error.provider_request_id = Some("request-1".into());
+
+        assert_eq!(serde_json::to_value(error).unwrap(), json!({
+            "code": "timeout",
+            "message": "request timed out",
+            "phase": "awaiting_headers",
+            "httpStatus": 504,
+            "providerErrorType": "upstream_timeout",
+            "providerCode": "gateway_timeout",
+            "retryAfterMs": 1_000,
+            "providerRequestId": "request-1"
+        }));
     }
 
     #[test]

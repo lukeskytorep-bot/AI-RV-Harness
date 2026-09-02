@@ -10,7 +10,8 @@ This document maps responsibilities, not every source file. Historical release r
 | Responsibility | Current primary location | Direction |
 | --- | --- | --- |
 | Application bootstrap, active profile, active Workspace and top-level navigation | `src/App.tsx` | Keep in the future `AppShell`. |
-| Home, Profiles, Workspaces, Chat, RV Sessions, Targets and Settings screens | `src/App.tsx` | Extract one screen at a time into `src/features/`. |
+| Home screen | `src/features/home/` | First extracted feature; keep its public import through `src/features/home/index.ts`. |
+| Profiles, Workspaces, Chat, RV Sessions, Targets and Settings screens | `src/App.tsx` | Extract one screen at a time into `src/features/`. |
 | Training screen | `src/components/TrainingScreen.tsx` | Move behind a future `features/training` public entry point. |
 | Research screen and builder | `src/research/`, `src/components/ResearchBuilder.tsx` | Consolidate behind `features/research`. |
 | AI Center interface | `src/components/AiCenterScreen.tsx`, `src/aiCenter/` | Preserve identity and Viewer Notes boundaries when modularized. |
@@ -47,9 +48,11 @@ This document maps responsibilities, not every source file. Historical release r
 | Sources and attachments | `src/sources/`, `src/attachments/` | Never leak Reveal or target material into blind messages. |
 | PL/EN text | `src/i18n.ts`, versioned resources under `src/resources/` | Split later by domain; do not change wording during structural extraction. |
 
-## First extraction candidate
+## First extraction completed
 
-The first frontend extraction is `HomeScreen` from `src/App.tsx` into `src/features/home/`. Home is read-only, callback-driven and does not own provider calls, persistence transactions or session state. It is therefore the safest module for establishing the extraction pattern.
+`HomeScreen` has been moved from `src/App.tsx` into `src/features/home/`. The module owns its presentational components, accepts data and callbacks through `HomeScreenProps`, and does not own navigation, provider calls, persistence transactions or session state. Regression tests cover empty and populated rendering plus callback delegation.
+
+The next low-risk candidate is the Settings screen. It should be extracted separately, after its repository operations and local state have been inventoried and characterized by tests.
 
 ## Updating this map
 
