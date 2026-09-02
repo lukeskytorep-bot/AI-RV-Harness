@@ -1,6 +1,6 @@
 # AI RV Harness v0.7.13 — raport ekstrakcji modułu Home
 
-> **Status:** wykonano lokalnie; prywatna baza rozwojowa  
+> **Status:** wykonano i potwierdzono w GitHub Actions; prywatna baza rozwojowa  
 > **Rodzaj zmiany:** refaktoryzacja bez celowej zmiany zachowania  
 > **Etap planu:** Etap 3 — pierwszy wzorzec modułu frontendowego
 
@@ -55,7 +55,7 @@ Wprowadzona korekta:
 - test sprawdza także pełny JSON błędu, w tym `code`, `message`, `phase`, status HTTP, metadane providera, `Retry-After` i identyfikator żądania;
 - nie zastosowano `#[allow(clippy::result_large_err)]` i nie ukryto ostrzeżenia.
 
-W lokalnym środowisku nadal nie ma toolchainu Rust, dlatego ostateczne potwierdzenie `cargo test` i `cargo clippy -D warnings` należy do ponownego przebiegu GitHub Actions. Frontendowe testy, typecheck i build pozostają zaliczone.
+Po korekcie użytkownik potwierdził pełny zielony przebieg GitHub Actions, obejmujący także kontrolę Rust/Clippy. Frontendowe testy, typecheck i build również pozostały zaliczone.
 
 ## 5. Wpływ na `App.tsx`
 
@@ -71,4 +71,4 @@ W lokalnym środowisku nadal nie ma toolchainu Rust, dlatego ostateczne potwierd
 
 ## 7. Następny zalecany krok
 
-Przed ekstrakcją Settings należy najpierw zinwentaryzować jego lokalny stan, operacje repository i zależności od Tauri. Następnie dodać testy charakterystyki i przenieść Settings jako osobną, odwracalną zmianę. Nie należy łączyć tego z przebudową storage ani zmianą wyglądu.
+Settings został następnie wydzielony jako osobna, odwracalna zmiana opisana w `MODULARIZATION_SETTINGS_EXTRACTION_v0.7.13_PL.md`. Następnym niskiego ryzyka kandydatem jest Profiles, po wcześniejszym opisaniu zależności tworzenia, edycji i archiwizacji Profilu.

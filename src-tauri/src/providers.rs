@@ -220,12 +220,19 @@ static HTTP_CLIENT: LazyLock<Result<Client, String>> = LazyLock::new(|| {
         .map_err(|error| error.to_string())
 });
 
+const OPENROUTER_APP_REFERER: &str = "https://github.com/lukeskytorep-bot/AI-RV-Harness";
+const OPENROUTER_APP_TITLE: &str = "AI RV Harness";
+
 fn client() -> Result<&'static Client, String> {
     HTTP_CLIENT.as_ref().map_err(Clone::clone)
 }
 
 fn authenticated(builder: RequestBuilder, provider: ProviderKind, secret: &str) -> RequestBuilder {
     match provider {
+        ProviderKind::Openrouter => builder
+            .bearer_auth(secret)
+            .header("HTTP-Referer", OPENROUTER_APP_REFERER)
+            .header("X-OpenRouter-Title", OPENROUTER_APP_TITLE),
         ProviderKind::Google => builder.header("x-goog-api-key", secret),
         ProviderKind::Anthropic => builder
             .header("x-api-key", secret)
@@ -1419,6 +1426,40 @@ mod tests {
         assert_eq!(url, "https://api.blackbox.ai/chat/completions");
         assert_eq!(body.get("model"), Some(&json!("blackboxai/openai/gpt-5")));
         assert_eq!(endpoint(&base, "models"), "https://api.blackbox.ai/models");
+    }
+
+    #[tokio::test]
+    async fn openrouter_requests_include_application_attribution_headers() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_simulator_request(&mut socket).await;
+            let headers = request.to_ascii_lowercase();
+            assert!(headers.contains("authorization: bearer simulator-secret"));
+            assert!(headers.contains(&format!(
+                "http-referer: {}",
+                OPENROUTER_APP_REFERER.to_ascii_lowercase()
+            )));
+            assert!(headers.contains(&format!(
+                "x-openrouter-title: {}",
+                OPENROUTER_APP_TITLE.to_ascii_lowercase()
+            )));
+            let body = r#"{"data":[]}"#;
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let response = authenticated(
+            client().unwrap().get(format!("http://{address}/models")),
+            ProviderKind::Openrouter,
+            "simulator-secret",
+        )
+        .send()
+        .await
+        .unwrap();
+        assert!(response.status().is_success());
+        server.await.unwrap();
     }
 
     #[tokio::test]

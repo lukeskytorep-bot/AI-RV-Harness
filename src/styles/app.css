@@ -1299,7 +1299,8 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 .training-run-list article small { color: var(--muted); font-size: 11px; }
 .training-run-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
 .training-run-list .secondary-button { min-height: 31px; padding: 0 9px; font-size: 11px; }
-.training-run-list .training-resume-button { color: #8a3f00; border-color: color-mix(in srgb, #ef7d24 62%, var(--border)); background: color-mix(in srgb, #ef7d24 15%, var(--surface)); font-weight: 800; }
+.training-run-list .training-resume-button { color: color-mix(in srgb, #3b82f6 76%, var(--text)); border-color: color-mix(in srgb, #3b82f6 58%, var(--border)); background: color-mix(in srgb, #3b82f6 14%, var(--surface)); font-weight: 800; }
+.training-run-list .training-resume-button:hover:not(:disabled) { border-color: color-mix(in srgb, #3b82f6 76%, var(--border)); background: color-mix(in srgb, #3b82f6 22%, var(--surface)); }
 .training-run-list code { grid-column: 1 / -1; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; }
 .training-run-list article.expanded { background: var(--surface-soft); }
 .training-session-links { display: grid !important; grid-template-columns: 1fr; gap: 4px !important; }

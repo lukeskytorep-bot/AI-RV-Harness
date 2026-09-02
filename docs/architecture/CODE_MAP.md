@@ -11,7 +11,8 @@ This document maps responsibilities, not every source file. Historical release r
 | --- | --- | --- |
 | Application bootstrap, active profile, active Workspace and top-level navigation | `src/App.tsx` | Keep in the future `AppShell`. |
 | Home screen | `src/features/home/` | First extracted feature; keep its public import through `src/features/home/index.ts`. |
-| Profiles, Workspaces, Chat, RV Sessions, Targets and Settings screens | `src/App.tsx` | Extract one screen at a time into `src/features/`. |
+| Settings screen | `src/features/settings/` | Extracted feature; import through `src/features/settings/index.ts`. |
+| Profiles, Workspaces, Chat, RV Sessions and Targets screens | `src/App.tsx` | Extract one screen at a time into `src/features/`. |
 | Training screen | `src/components/TrainingScreen.tsx` | Move behind a future `features/training` public entry point. |
 | Research screen and builder | `src/research/`, `src/components/ResearchBuilder.tsx` | Consolidate behind `features/research`. |
 | AI Center interface | `src/components/AiCenterScreen.tsx`, `src/aiCenter/` | Preserve identity and Viewer Notes boundaries when modularized. |
@@ -48,11 +49,13 @@ This document maps responsibilities, not every source file. Historical release r
 | Sources and attachments | `src/sources/`, `src/attachments/` | Never leak Reveal or target material into blind messages. |
 | PL/EN text | `src/i18n.ts`, versioned resources under `src/resources/` | Split later by domain; do not change wording during structural extraction. |
 
-## First extraction completed
+## Frontend extractions completed
 
 `HomeScreen` has been moved from `src/App.tsx` into `src/features/home/`. The module owns its presentational components, accepts data and callbacks through `HomeScreenProps`, and does not own navigation, provider calls, persistence transactions or session state. Regression tests cover empty and populated rendering plus callback delegation.
 
-The next low-risk candidate is the Settings screen. It should be extracted separately, after its repository operations and local state have been inventoried and characterized by tests.
+`SettingsScreen` has been moved into `src/features/settings/` together with its private settings cards and dialogs. It owns tab selection and settings-specific UI state, while `App.tsx` continues to own the canonical `AppSettings` state and passes updates through `SettingsScreenProps.onChange`. The reusable read-only protocol dialog now lives in `src/components/ProtocolDialog.tsx`, because RV Sessions and Settings both use it.
+
+The next low-risk candidate is the Profiles screen. It should be extracted separately after characterizing profile creation, editing, archiving and provider-default dependencies.
 
 ## Updating this map
 

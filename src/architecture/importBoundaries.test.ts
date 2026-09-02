@@ -22,4 +22,17 @@ describe("architecture import boundaries", () => {
 
     expect(offenders, `${LOW_LEVEL_PROVIDER_SYMBOL} must only be used by requestExecutor.ts`).toEqual([]);
   });
+
+  it("uses the public Settings feature entry point and keeps its implementation out of App", () => {
+    const appSource = sourceFiles["../App.tsx"];
+    const deepImportOffenders = Object.entries(sourceFiles)
+      .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
+      .filter(({ projectPath }) => !/\.(?:test|spec)\.tsx?$/.test(projectPath))
+      .filter(({ content }) => /from\s+["'][^"']*features\/settings\//.test(content))
+      .map(({ projectPath }) => projectPath);
+
+    expect(appSource).toContain('from "./features/settings"');
+    expect(appSource).not.toContain("function SettingsScreen(");
+    expect(deepImportOffenders, "Settings consumers must import the public feature entry point").toEqual([]);
+  });
 });
