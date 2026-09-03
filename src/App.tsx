@@ -27,7 +27,6 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
-  Trash2,
   Users,
   Waves,
   X,
@@ -59,9 +58,9 @@ import { clampChatOutputTokens, defaultChatOutputTokens, loadChatOutputTokens, s
 import type { ChatMessage, ChatMode, ChatThread, ChatThreadGroup } from "./types";
 import { runBlindJudging, selectMissingJudgeSelections } from "./judge/engine";
 import type { JudgingResult } from "./judge/types";
-import { chooseRandomTarget, createUserTarget, targetIsEligibleForProtocol, updateUserTarget, userTargetKind } from "./targets/service";
-import { localizedTargetReveal, localizedTargetTitle } from "./targets/localization";
-import type { TargetRecord, TargetUsageRecord } from "./targets/types";
+import { chooseRandomTarget, createUserTarget, targetIsEligibleForProtocol } from "./targets/service";
+import { localizedTargetTitle } from "./targets/localization";
+import type { TargetRecord } from "./targets/types";
 import { dryRunCustomProtocol, saveCustomProtocol } from "./protocols/custom";
 import type { CustomProtocolVersion } from "./protocols/types";
 import { runAutomaticCustomSession } from "./sessions/customController";
@@ -71,7 +70,7 @@ import { runOrdinaryBatch, selectBatchTargets, type OrdinaryBatchProgress, type 
 import { ResearchBuilder } from "./components/ResearchBuilder";
 import { TrainingScreen } from "./components/TrainingScreen";
 import { AiCenterScreen, type AiCenterView } from "./components/AiCenterScreen";
-import { storeRevealArtifact, storeTargetArtifact } from "./artifacts/native";
+import { storeRevealArtifact } from "./artifacts/native";
 import type { RevealArtifactRecord, RvSession } from "./sessions/types";
 import { aggregateJudgeScores } from "./domain/scoring";
 import type { MonitorInterventionRecord, MonitorRunRecord } from "./monitor/types";
@@ -86,6 +85,7 @@ import { runAutomaticPostRevealReview, sendPostRevealTurn } from "./sessions/pos
 import { HomeScreen } from "./features/home";
 import { CreateProfileDialog, ProfilesScreen, ProfileViewerControls } from "./features/profiles";
 import { SettingsScreen } from "./features/settings";
+import { TargetsScreen } from "./features/targets";
 import { EmptyState } from "./components/EmptyState";
 import { FormDialog } from "./components/FormDialog";
 import { PageHeader } from "./components/PageHeader";
@@ -104,7 +104,6 @@ import { SafeMarkdown } from "./components/SafeMarkdown";
 import { filterWorkspaceDirectory } from "./domain/workspaceDirectory";
 import { reasoningOptions } from "./providers/modelReasoningRegistry";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "./domain/isBeIdentity";
-import { TRAINING_CATEGORIES, TRAINING_CATEGORY_LABELS } from "./targets/bundled";
 import { buildEffectiveMonitorPrompt, buildEffectiveViewerPrompt, factoryMonitorEditablePrompt, localizedMonitorEditablePrompt, localizedViewerEditablePrompt, lockedActivityDefinition, lockedMonitorExecution } from "./resources/systemPrompts";
 import { SPECIAL_TASK_OPTIONS, specialTaskUsesMappedLabels, type SpecialTaskInput, type SpecialTaskOption } from "./sessions/specialTask";
 import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from "./targets/telepathicBundled";
@@ -2403,116 +2402,6 @@ function ResearchScreen({ copy, settings, profiles, workspaces, repository }: { 
       <ResearchBuilder copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
     </div>
   );
-}
-
-function TargetsScreen({ copy, settings, repository }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; repository: AppRepository | null }) {
-  const [targets, setTargets] = useState<TargetRecord[]>([]);
-  const [usage, setUsage] = useState<TargetUsageRecord[]>([]);
-  const [researchLockedTargetIds, setResearchLockedTargetIds] = useState<string[]>([]);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingTarget, setEditingTarget] = useState<TargetRecord | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const reload = async () => {
-    if (!repository) return;
-    const [nextTargets, nextUsage, projects] = await Promise.all([repository.listTargets(), repository.listTargetUsage(), repository.listResearchProjects()]);
-    const assignments = (await Promise.all(projects.map((project) => repository.listResearchAssignments(project.id)))).flat();
-    setTargets(nextTargets);
-    setUsage(nextUsage);
-    setResearchLockedTargetIds([...new Set(assignments.map((assignment) => assignment.targetId))]);
-  };
-  useEffect(() => {
-    void reload().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
-  }, [repository]);
-  const training = targets.filter((target) => target.collection === "training");
-  const mine = targets.filter((target) => target.collection === "user" && userTargetKind(target) === "general");
-  const telepathicTargets = targets.filter((target) => target.collection === "user" && userTargetKind(target) === "telepathic");
-  const usedTargetIds = new Set([...usage.map((item) => item.targetId), ...researchLockedTargetIds]);
-  const createTarget = async (title: string, revealText: string, tags: string[], images: File[], targetKind: "general" | "telepathic") => {
-    if (!repository) return;
-    const targetId = createId("target");
-    const revealArtifacts = images.length ? await Promise.all(images.map((file) => storeTargetArtifact(targetId, file))) : [];
-    const target = await createUserTarget(repository, { id: targetId, title, ...(revealText.trim() ? { revealText } : {}), ...(revealArtifacts.length ? { revealArtifacts } : {}), tags, targetKind });
-    setTargets((current) => [target, ...current]);
-    setDialogOpen(false);
-  };
-  const editTarget = async (target: TargetRecord, title: string, revealText: string, tags: string[]) => {
-    if (!repository) return;
-    setError(null);
-    await updateUserTarget(repository, target, { title, revealText, tags });
-    setEditingTarget(null);
-    await reload();
-  };
-  const deleteTarget = async (target: TargetRecord) => {
-    if (!repository || !window.confirm(`${copy.deleteTargetConfirm}\n\n${localizedTargetTitle(target, settings.interfaceLanguage)}`)) return;
-    setError(null);
-    try {
-      await repository.deleteTarget(target.id);
-      await reload();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  };
-  return (
-    <div className="page">
-      <PageHeader title={copy.targets} subtitle={copy.targetsLead} action={<button className="primary-button" onClick={() => setDialogOpen(true)}><Plus size={16} />{copy.addTarget}</button>} />
-      <div className="target-columns">
-        <section className="panel target-panel"><PanelHeader title={`${copy.trainingTargets} · ${training.length}`} icon={<Crosshair size={18} />} />{training.length ? <div className="training-target-groups">{TRAINING_CATEGORIES.map((category) => { const items = training.filter((target) => target.sourceMetadata.category === category); return <details key={category}><summary><span>{TRAINING_CATEGORY_LABELS[category][settings.interfaceLanguage]}</span><b>{items.length}</b></summary><TargetList copy={copy} language={settings.interfaceLanguage} targets={items} usedTargetIds={usedTargetIds} /></details>; })}</div> : <EmptyState icon={<FileCheck2 size={28} />} title={copy.statusNext} body={copy.targetPackPending} />}</section>
-        <section className="panel target-panel"><PanelHeader title={`${copy.myTargets} · ${mine.length}`} icon={<LockKeyhole size={18} />} />{mine.length ? <TargetList copy={copy} language={settings.interfaceLanguage} targets={mine} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onDelete={(target) => void deleteTarget(target)} /> : <EmptyState icon={<Plus size={28} />} title={copy.noPrivateTargets} body={copy.secureLocal} action={<button className="secondary-button" onClick={() => setDialogOpen(true)}><Plus size={15} />{copy.addTarget}</button>} />}</section>
-        <section className="panel target-panel"><PanelHeader title={`${settings.interfaceLanguage === "pl" ? "Moje cele telepatyczne" : "My Telepathic Targets"} · ${telepathicTargets.length}`} icon={<BrainCircuit size={18} />} />{telepathicTargets.length ? <TargetList copy={copy} language={settings.interfaceLanguage} targets={telepathicTargets} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onDelete={(target) => void deleteTarget(target)} /> : <EmptyState icon={<BrainCircuit size={28} />} title={settings.interfaceLanguage === "pl" ? "Brak celów telepatycznych" : "No telepathic targets"} body={settings.interfaceLanguage === "pl" ? "Dodaj osobę, istotę lub grupę przeznaczoną dla Protokołu Telepatycznego." : "Add a person, being, or group intended for the Telepathic Protocol."} />}</section>
-      </div>
-      <section className="panel target-help-panel"><strong>{settings.interfaceLanguage === "pl" ? "Opis celu i obrazy" : "Target descriptions and images"}</strong>{settings.interfaceLanguage === "pl" ? <><p>Cel może zawierać opis tekstowy, jeden lub więcej obrazów PNG, JPG, WEBP lub GIF albo oba rodzaje danych. Zalecamy dodanie dokładnego opisu słownego, ponieważ nie każdy model potrafi odczytać obrazy. Opis możesz przygotować samodzielnie albo poprosić model obsługujący obrazy — na przykład z rodziny Google lub OpenAI — o opisanie zdjęcia.</p><p>Jeśli obraz ma być częścią Revealu lub materiału dla AI Judge, wybierz trasę Judge obsługującą obrazy; aplikacja sprawdzi tę zgodność przed oceną. Treść celu i obrazy pozostają ukryte podczas ślepej części sesji i są udostępniane dopiero po Reveal.</p></> : <><p>A target may contain a text description, one or more PNG, JPG, WEBP, or GIF images, or both. We recommend adding an accurate written description because not every model can read images. You can write it yourself or ask an image-capable model — for example from Google or OpenAI — to describe the image.</p><p>If an image is part of the Reveal or AI Judge evidence, select a Judge route that accepts images; the app checks this compatibility before evaluation. Target content and images remain hidden during the blind portion and are released only after Reveal.</p></>}</section>
-      {error && <div className="provider-error">{error}</div>}
-      {dialogOpen && <CreateTargetDialog copy={copy} onCancel={() => setDialogOpen(false)} onCreate={createTarget} />}
-      {editingTarget && <EditTargetDialog copy={copy} target={editingTarget} onCancel={() => setEditingTarget(null)} onSave={(title, revealText, tags) => editTarget(editingTarget, title, revealText, tags)} />}
-    </div>
-  );
-}
-
-function TargetList({ copy, language, targets, usedTargetIds, onEdit, onDelete }: { copy: ReturnType<typeof getCopy>; language: InterfaceLanguage; targets: TargetRecord[]; usedTargetIds: Set<string>; onEdit?: (target: TargetRecord) => void; onDelete?: (target: TargetRecord) => void }) {
-  return <div className="target-list">{targets.map((target) => {
-    const locked = usedTargetIds.has(target.id);
-    const revealText = localizedTargetReveal(target, language);
-    return <article className="target-card" key={target.id}><div className="target-card-head"><div><strong>{localizedTargetTitle(target, language)}</strong><small>{target.tags.length ? target.tags.join(" · ") : target.collection}</small></div>{target.collection === "user" && <div className="target-card-actions"><button className="icon-button" disabled={locked} title={locked ? copy.usedTargetLocked : copy.editTarget} onClick={() => onEdit?.(target)}><Pencil size={14} /></button><button className="icon-button danger" disabled={locked} title={locked ? copy.usedTargetLocked : copy.deleteTarget} onClick={() => onDelete?.(target)}><Trash2 size={14} /></button></div>}</div>{revealText && <details className="target-reveal-preview"><summary>{copy.targetReveal}</summary><p>{revealText}</p></details>}{Boolean(target.revealArtifacts?.length) && <div className="target-image-list">{target.revealArtifacts!.map((artifact) => <span key={`${artifact.artifactId}-${artifact.sha256}`}>▣ {artifact.originalFileName}</span>)}</div>}{locked && <small className="target-locked-note"><LockKeyhole size={11} />{copy.usedTargetLocked}</small>}{target.contentHash && <code>sha256 {target.contentHash.slice(0, 16)}…</code>}</article>;
-  })}</div>;
-}
-
-function CreateTargetDialog({ copy, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; onCancel: () => void; onCreate: (title: string, revealText: string, tags: string[], images: File[], targetKind: "general" | "telepathic") => Promise<void> }) {
-  const [title, setTitle] = useState("");
-  const [revealText, setRevealText] = useState("");
-  const [tags, setTags] = useState("");
-  const [images, setImages] = useState<File[]>([]);
-  const [targetKind, setTargetKind] = useState<"general" | "telepathic">("general");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!title.trim() || (!revealText.trim() && !images.length) || saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await onCreate(title, revealText, tags.split(","), images, targetKind);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setSaving(false);
-    }
-  };
-  return <FormDialog title={copy.addTarget} onCancel={onCancel}><form onSubmit={(event) => void submit(event)}><label>{copy.home === "Home" ? "Target category" : "Kategoria celu"}<select value={targetKind} onChange={(event) => setTargetKind(event.target.value as typeof targetKind)}><option value="general">{copy.home === "Home" ? "General RV target" : "Ogólny cel RV"}</option><option value="telepathic">{copy.home === "Home" ? "Telepathic target (person / being / group)" : "Cel telepatyczny (osoba / istota / grupa)"}</option></select></label><label>{copy.targetName}<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>{copy.targetReveal}<textarea rows={7} value={revealText} onChange={(event) => setRevealText(event.target.value)} /></label><label>{copy.targetImages}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" disabled={!isTauriRuntime() || saving} onChange={(event) => setImages(Array.from(event.target.files ?? []).slice(0, 8))} /></label>{images.length > 0 && <div className="form-image-list">{images.map((file) => <span key={`${file.name}-${file.size}`}>▣ {file.name}</span>)}</div>}<label>{copy.targetTags}<input value={tags} onChange={(event) => setTags(event.target.value)} /></label><small className="form-hint">{targetKind === "telepathic" ? (copy.home === "Home" ? "This target appears only when the Telepathic Protocol is selected." : "Ten cel pojawi się wyłącznie po wybraniu Protokołu Telepatycznego.") : (copy.home === "Home" ? "This target is available to Full RCP, RV Lite, and custom protocols." : "Ten cel jest dostępny dla Full RCP, RV Lite i protokołów własnych.")}</small>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!title.trim() || (!revealText.trim() && !images.length) || saving}>{copy.saveTarget}</button></div></form></FormDialog>;
-}
-
-function EditTargetDialog({ copy, target, onCancel, onSave }: { copy: ReturnType<typeof getCopy>; target: TargetRecord; onCancel: () => void; onSave: (title: string, revealText: string, tags: string[]) => Promise<void> }) {
-  const [title, setTitle] = useState(target.title);
-  const [revealText, setRevealText] = useState(target.revealText ?? "");
-  const [tags, setTags] = useState(target.tags.join(", "));
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!title.trim() || (!revealText.trim() && !target.revealArtifacts?.length) || saving) return;
-    setSaving(true); setError(null);
-    try { await onSave(title, revealText, tags.split(",")); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setSaving(false); }
-  };
-  return <FormDialog title={copy.editTarget} onCancel={onCancel}><form onSubmit={(event) => void submit(event)}><label>{copy.targetName}<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>{copy.targetReveal}<textarea rows={7} value={revealText} onChange={(event) => setRevealText(event.target.value)} /></label>{Boolean(target.revealArtifacts?.length) && <div><small className="form-hint">{copy.existingTargetImages}</small><div className="form-image-list">{target.revealArtifacts!.map((artifact) => <span key={`${artifact.artifactId}-${artifact.sha256}`}>▣ {artifact.originalFileName}</span>)}</div></div>}<label>{copy.targetTags}<input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!title.trim() || (!revealText.trim() && !target.revealArtifacts?.length) || saving}>{saving ? copy.saving : copy.saveChanges}</button></div></form></FormDialog>;
 }
 
 function CustomProtocolDialog({ copy, repository, language, base, onCancel, onSaved }: { copy: ReturnType<typeof getCopy>; repository: AppRepository; language: InterfaceLanguage; base: CustomProtocolVersion | null; onCancel: () => void; onSaved: (protocol: CustomProtocolVersion) => void }) {

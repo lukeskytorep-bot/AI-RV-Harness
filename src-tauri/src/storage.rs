@@ -15,6 +15,14 @@ use tauri::Manager;
 const BACKUP_SCHEMA_VERSION: u8 = 1;
 const DATABASE_FILE_NAME: &str = "rv_harness.db";
 const CURRENT_MIGRATION_VERSION: i64 = 20;
+const ALLOWED_PROJECT_URLS: [&str; 6] = [
+    "https://github.com/lukeskytorep-bot",
+    "https://github.com/lukeskytorep-bot/AI-RV-Harness/blob/main/CREDITS.md",
+    "https://presence-beyond-form.blogspot.com/",
+    "https://echoofpresence.substack.com/",
+    "https://archive.org/details/resonant-contact-protocol-ai-is-be-v-1.5a",
+    "https://web.archive.org/",
+];
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -494,16 +502,7 @@ pub fn open_folder(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_project_url(url: String) -> Result<(), String> {
-    const ALLOWED_PROJECT_URLS: [&str; 5] = [
-        "https://github.com/lukeskytorep-bot",
-        "https://presence-beyond-form.blogspot.com/",
-        "https://echoofpresence.substack.com/",
-        "https://archive.org/details/resonant-contact-protocol-ai-is-be-v-1.5a",
-        "https://web.archive.org/",
-    ];
-    if !ALLOWED_PROJECT_URLS.contains(&url.as_str()) {
-        return Err("external URL is not on the project allowlist".to_string());
-    }
+    validate_project_url(&url)?;
     #[cfg(target_os = "windows")]
     let mut command = Command::new("explorer");
     #[cfg(target_os = "macos")]
@@ -511,6 +510,13 @@ pub fn open_project_url(url: String) -> Result<(), String> {
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut command = Command::new("xdg-open");
     command.arg(url).spawn().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn validate_project_url(url: &str) -> Result<(), String> {
+    if !ALLOWED_PROJECT_URLS.contains(&url) {
+        return Err("external URL is not on the project allowlist".to_string());
+    }
     Ok(())
 }
 
@@ -715,4 +721,22 @@ fn preserve_sidecar(database: &Path, suffix: &str, safety_suffix: u64) -> Result
     if !source.exists() { return Ok(()); }
     let destination = database.with_file_name(format!("rv_harness.pre_restore_{safety_suffix}.db{suffix}"));
     fs::rename(source, destination).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_project_url;
+
+    #[test]
+    fn complete_project_credits_url_is_allowed() {
+        assert!(validate_project_url(
+            "https://github.com/lukeskytorep-bot/AI-RV-Harness/blob/main/CREDITS.md"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn arbitrary_external_url_is_rejected() {
+        assert!(validate_project_url("https://example.com/").is_err());
+    }
 }

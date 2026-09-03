@@ -13,7 +13,8 @@ This document maps responsibilities, not every source file. Historical release r
 | Home screen | `src/features/home/` | First extracted feature; keep its public import through `src/features/home/index.ts`. |
 | Settings screen | `src/features/settings/` | Extracted feature; import through `src/features/settings/index.ts`. |
 | Profiles screen and profile-specific forms | `src/features/profiles/` | Extracted feature; import through `src/features/profiles/index.ts`. |
-| Workspaces, Chat, RV Sessions and Targets screens | `src/App.tsx` | Extract one screen at a time into `src/features/`. |
+| Targets screen, dialogs and target-library operations | `src/features/targets/` | Extracted feature; import through `src/features/targets/index.ts`. |
+| Workspaces, Chat and RV Sessions screens | `src/App.tsx` | Extract one screen at a time into `src/features/`. |
 | Training screen | `src/components/TrainingScreen.tsx` | Move behind a future `features/training` public entry point. |
 | Research screen and builder | `src/research/`, `src/components/ResearchBuilder.tsx` | Consolidate behind `features/research`. |
 | AI Center interface | `src/components/AiCenterScreen.tsx`, `src/aiCenter/` | Preserve identity and Viewer Notes boundaries when modularized. |
@@ -58,7 +59,9 @@ This document maps responsibilities, not every source file. Historical release r
 
 `ProfilesScreen` has been moved into `src/features/profiles/` together with profile creation and editing dialogs, Viewer-default controls, calibration-history rendering and the ordered persistence operations for edit/archive. `App.tsx` continues to own the canonical profile list, top-level navigation, first-run flow and repository initialization. Shared page/dialog primitives live under `src/components/`, while reasoning capability labels live under `src/providers/`.
 
-The next candidate should be selected separately after reviewing the remaining screen dependencies; Targets is the preferred lower-risk option before the large Workspace/RV surface.
+`TargetsScreen` has been moved into `src/features/targets/` together with its create/edit dialogs, pure grouping and lock-state view model, and repository-backed target-library operations. `App.tsx` retains top-level navigation and passes only settings plus the repository contract. The existing target domain service remains the owner of normalization, hashing and protocol eligibility, while the feature coordinates UI-specific loading and persistence.
+
+The next candidate should be selected separately after reviewing the remaining screen dependencies. AI Center is preferable to the large Workspace/RV surface, provided Viewer Notes and Training ownership remain unchanged.
 
 ## Updating this map
 

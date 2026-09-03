@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { getCopy } from "../../i18n";
 import { createDefaultSettings } from "../../startupDefaults";
+import { PROJECT_CREDITS_URL } from "./CreditsCard";
 import { SettingsScreen, type SettingsScreenProps } from "./SettingsScreen";
 
 function makeProps(overrides: Partial<SettingsScreenProps> = {}): SettingsScreenProps {
@@ -34,5 +35,9 @@ describe("SettingsScreen", () => {
     renderToStaticMarkup(<SettingsScreen {...makeProps({ onChange })} />);
 
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("uses the canonical GitHub page for complete project credits", () => {
+    expect(PROJECT_CREDITS_URL).toBe("https://github.com/lukeskytorep-bot/AI-RV-Harness/blob/main/CREDITS.md");
   });
 });

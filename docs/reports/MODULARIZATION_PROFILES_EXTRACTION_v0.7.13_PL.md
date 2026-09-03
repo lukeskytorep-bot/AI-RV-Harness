@@ -1,6 +1,6 @@
 # AI RV Harness v0.7.13 — raport ekstrakcji modułu Profiles
 
-> **Status:** wykonano lokalnie; frontend zweryfikowany  
+> **Status:** wykonano i potwierdzono w GitHub Actions  
 > **Rodzaj zmiany:** refaktoryzacja frontendowa bez celowej zmiany zachowania oraz konserwacja GitHub Actions  
 > **Etap planu:** Etap 4 — stopniowe odchudzanie `App.tsx`
 
@@ -56,7 +56,7 @@ Zmiana obejmuje CI, CodeQL, przygotowanie `Cargo.lock` oraz workflowy wydawnicze
 - produkcyjny build Vite zakończył się poprawnie; pozostało wcześniejsze, nieblokujące ostrzeżenie o głównym chunku większym niż 500 kB;
 - wszystkie pięć workflowów YAML poprawnie przechodzi parser, a kontrola nie wykazała aktywnych wystąpień starych SHA.
 
-Kod Rust nie został zmieniony w tym kroku. Pełny GitHub Actions pozostaje końcowym potwierdzeniem działania przypiętych akcji na runnerach GitHub.
+Kod Rust nie został zmieniony w tym kroku. Użytkownik potwierdził 2 września 2026, że pełny GitHub Actions, w tym Rust i Clippy, zakończył się bez błędów i bez wcześniejszych ostrzeżeń o runtime Node.js 20.
 
 ## 6. Świadomie niewykonane działania
 
@@ -69,4 +69,4 @@ Kod Rust nie został zmieniony w tym kroku. Pełny GitHub Actions pozostaje koń
 
 ## 7. Następny krok
 
-Po potwierdzeniu GitHub Actions należy wybrać jeden kolejny ekran. Preferowany jest moduł Targets, ponieważ ma mniejszą powierzchnię ryzyka niż Workspace/RV Sessions. Przed przeniesieniem należy scharakteryzować testami wybór targetu, filtrowanie, zapis użytkownika i powiązanie z protokołami.
+GitHub Actions został potwierdzony. Następny osobny krok — moduł Targets — został wykonany i opisany w `docs/reports/MODULARIZATION_TARGETS_EXTRACTION_v0.7.13_PL.md`.

@@ -325,8 +325,6 @@ h1, h2, h3 { font-family: "Segoe UI", system-ui, sans-serif; }
 .workspace-actions summary::-webkit-details-marker { display: none; }
 .workspace-actions > div { position: absolute; z-index: 20; top: 36px; right: 0; width: 150px; padding: 5px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); }
 .workspace-actions button { width: 100%; min-height: 34px; display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding: 6px 8px; border: 0; border-radius: 7px; color: var(--text); background: transparent; cursor: pointer; }
-.credits-url-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }
-.credits-url-row code { overflow-wrap: anywhere; color: var(--violet); }
 .archive-recovery { display: grid; gap: 12px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
 .archive-groups { display: grid; gap: 8px; }
 .archive-groups > details { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }

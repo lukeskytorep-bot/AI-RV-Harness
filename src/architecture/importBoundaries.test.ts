@@ -50,4 +50,19 @@ describe("architecture import boundaries", () => {
     expect(appSource).not.toContain("function EditProfileDialog(");
     expect(deepImportOffenders, "Profiles consumers must import the public feature entry point").toEqual([]);
   });
+
+  it("uses the public Targets feature entry point and keeps its implementation out of App", () => {
+    const appSource = sourceFiles["../App.tsx"];
+    const deepImportOffenders = Object.entries(sourceFiles)
+      .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
+      .filter(({ projectPath }) => !/\.(?:test|spec)\.tsx?$/.test(projectPath))
+      .filter(({ content }) => /from\s+["'][^"']*features\/targets\//.test(content))
+      .map(({ projectPath }) => projectPath);
+
+    expect(appSource).toContain('from "./features/targets"');
+    expect(appSource).not.toContain("function TargetsScreen(");
+    expect(appSource).not.toContain("function CreateTargetDialog(");
+    expect(appSource).not.toContain("function EditTargetDialog(");
+    expect(deepImportOffenders, "Targets consumers must import the public feature entry point").toEqual([]);
+  });
 });
