@@ -33,7 +33,8 @@ export function buildChatMarkdownExport(input: {
   if (!input.messages.length) lines.push(label.empty, "");
   for (const message of input.messages) {
     const author = message.role === "user" ? humanName : aiName;
-    lines.push(`## ${author} · ${formatDateTime(message.createdAt, locale)}`, "", message.content.trim(), "");
+    const heading = input.mode === "manual_rv" ? `## ${author}` : `## ${author} · ${formatDateTime(message.createdAt, locale)}`;
+    lines.push(heading, "", message.content.trim(), "");
   }
   return { fileName: `${safeFileName(input.thread.title) || "conversation"}.md`, content: `${lines.join("\n").trimEnd()}\n` };
 }

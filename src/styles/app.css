@@ -406,6 +406,7 @@ h1, h2, h3 { font-family: "Segoe UI", system-ui, sans-serif; }
 .chat-date-separator { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 11px; text-align: center; }
 .chat-date-separator::before, .chat-date-separator::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .chat-date-separator span { padding: 0 5px; }
+.conversation-start-time { flex: 0 0 auto; margin: 16px 22px 0; }
 .research-help-panel { margin-top: 18px; overflow: hidden; }
 .research-help-panel > summary { cursor: pointer; display: flex; justify-content: space-between; gap: 16px; padding: 18px 20px; }
 .research-help-panel > summary span { color: var(--muted); font-size: 12px; }

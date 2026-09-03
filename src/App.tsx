@@ -54,6 +54,7 @@ import { runAutomaticRcpSession, submitExternalReveal, type SessionProgress } fr
 import { buildChatProviderMessages, retryChatTurn, sendChatTurn } from "./chat/engine";
 import { clearPendingChatTurn, loadPendingChatTurn, savePendingChatTurn, type PendingChatTurn } from "./chat/pendingTurn";
 import { estimateContextBudget } from "./chat/contextBudget";
+import { ChatMessageList } from "./chat/ChatMessageList";
 import { clampChatOutputTokens, defaultChatOutputTokens, loadChatOutputTokens, saveChatOutputTokens } from "./chat/outputPreference";
 import type { ChatMessage, ChatMode, ChatThread, ChatThreadGroup } from "./types";
 import { runBlindJudging, selectMissingJudgeSelections } from "./judge/engine";
@@ -69,7 +70,7 @@ import { createSessionReplay, isRecoverableProviderInterruption } from "./sessio
 import { runOrdinaryBatch, selectBatchTargets, type OrdinaryBatchProgress, type OrdinaryBatchSessionResult } from "./sessions/batch";
 import { ResearchBuilder } from "./components/ResearchBuilder";
 import { TrainingScreen } from "./components/TrainingScreen";
-import { AiCenterScreen, type AiCenterView } from "./components/AiCenterScreen";
+import { AiCenterScreen, type AiCenterView } from "./features/aiCenter";
 import { storeRevealArtifact } from "./artifacts/native";
 import type { RevealArtifactRecord, RvSession } from "./sessions/types";
 import { aggregateJudgeScores } from "./domain/scoring";
@@ -1248,7 +1249,16 @@ function ChatPanel({ copy, settings, profile, workspace, repository }: { copy: R
         <div><strong>{mode === "conversation" ? copy.conversationTitle : copy.manualTitle}</strong><p>{mode === "conversation" ? copy.conversationDesc : copy.manualDesc}</p></div>
       </div>
       <details className="chat-sources"><summary><span><FileCheck2 size={14} />{copy.workspaceSources}</span><small>{copy.activeSources}: {activeSourceIds.length} · {copy.estimatedContext}: ~{contextBudget.estimatedInputTokens.toLocaleString()} tokens</small></summary><div className="chat-source-body">{sources.length ? <div className="chat-source-list">{sources.map((source) => <label key={source.id}><input type="checkbox" checked={activeSourceIds.includes(source.id)} onChange={() => void toggleSource(source.id)} /><span><strong>{source.displayName}</strong><small>{source.sourceType.toUpperCase()} · ~{estimateTextTokens(source.content).toLocaleString()} tokens</small></span><button type="button" className="icon-button danger" title={copy.removeSource} onClick={(event) => { event.preventDefault(); void removeSource(source); }}><X size={13} /></button></label>)}</div> : <p>{copy.noSources}</p>}{contextExceeded && <div className="source-context-error">{copy.contextExceeded}</div>}</div></details>
-      {messages.length === 0 ? <div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div> : <div className="message-list">{messages.map((message, index) => { const displayName = message.role === "user" ? humanIsBeDisplayName(profile) : aiIsBeDisplayName(profile); const date = new Date(message.createdAt); const previous = index > 0 ? new Date(messages[index - 1].createdAt) : null; const dayChanged = !previous || date.toDateString() !== previous.toDateString(); return <div className="chat-message-block" key={message.id}>{dayChanged && <div className="chat-date-separator"><span>{date.toLocaleDateString(settings.interfaceLanguage === "pl" ? "pl-PL" : "en-GB", { dateStyle: "full" })}</span></div>}<article className={`chat-message ${message.role}`}><span>{initials(displayName)}</span><div><small>{displayName} · {date.toLocaleTimeString(settings.interfaceLanguage === "pl" ? "pl-PL" : "en-GB", { hour: "2-digit", minute: "2-digit" })}</small><SafeMarkdown content={message.content} /></div></article></div>; })}{sending && <div className="typing-row"><span className="loader-orb" />{copy.sending}</div>}</div>}
+      <ChatMessageList
+        language={settings.interfaceLanguage}
+        mode={mode}
+        threadCreatedAt={threads.find((thread) => thread.id === threadId && thread.mode === mode)?.createdAt}
+        messages={messages}
+        profile={profile}
+        sending={sending}
+        sendingLabel={copy.sending}
+        emptyState={<div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div>}
+      />
       {error && <div className="provider-error chat-error">{error}</div>}
       {pendingRetry && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Ostatnia wiadomość nie otrzymała odpowiedzi AI." : "The last message did not receive an AI response."}</span><button className="secondary-button" disabled={sending} onClick={() => void retryPendingResponse()}>{settings.interfaceLanguage === "pl" ? "Ponów odpowiedź" : "Retry response"}</button></div>}
       {(selectedSources.length > 0 || chatImageNames.length > 0) && <div className="attachment-chips">{selectedSources.map((source) => <button type="button" key={source.id} title={copy.removeSource} onClick={() => void toggleSource(source.id)}><FileCheck2 size={12} /><span>{source.displayName} · {source.sourceType.toUpperCase()} · {settings.interfaceLanguage === "pl" ? "aktywne" : "active"} · ~{estimateTextTokens(source.content).toLocaleString()} tokens</span><X size={11} /></button>)}{chatImageNames.map((name, index) => <button type="button" key={`${name}-${index}`} onClick={() => removeChatImage(index)}><span>{name} · IMAGE · {settings.interfaceLanguage === "pl" ? "następna tura" : "next turn"} · ~2,048 tokens</span><X size={11} /></button>)}</div>}

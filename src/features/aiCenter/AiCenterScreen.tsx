@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { BrainCircuit, Check, Clock3, Database, History, ShieldCheck, Sparkles, Users } from "lucide-react";
-import type { AiIdentity, ViewerNoteBundle, ViewerNoteCapacity } from "../aiCenter/types";
-import { VIEWER_NOTES_CAPACITIES, currentViewerNotesLabel } from "../aiCenter/viewerNotes";
-import { SafeMarkdown } from "./SafeMarkdown";
-import type { AppRepository } from "../storage/repository";
-import type { AppSettings, Profile, Workspace } from "../types";
-import { aiIsBeDisplayName } from "../domain/isBeIdentity";
+import type { AiIdentity, ViewerNoteBundle, ViewerNoteCapacity } from "../../aiCenter/types";
+import { VIEWER_NOTES_CAPACITIES, currentViewerNotesLabel } from "../../aiCenter/viewerNotes";
+import { SafeMarkdown } from "../../components/SafeMarkdown";
+import type { AppRepository } from "../../storage/repository";
+import type { AppSettings, Profile, Workspace } from "../../types";
+import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 
 export type AiCenterView = "overview" | "monitor" | "viewer-notes" | "identities";
 
-export function AiCenterScreen({ settings, profiles, workspaces, activeProfileId, workspaceFilterId, repository, initialView, monitorPanel, onProfileChange }: {
+export interface AiCenterScreenProps {
   settings: AppSettings;
   profiles: Profile[];
   workspaces: Workspace[];
@@ -19,7 +19,9 @@ export function AiCenterScreen({ settings, profiles, workspaces, activeProfileId
   initialView: AiCenterView;
   monitorPanel: ReactNode;
   onProfileChange: (profileId: string) => void;
-}) {
+}
+
+export function AiCenterScreen({ settings, profiles, workspaces, activeProfileId, workspaceFilterId, repository, initialView, monitorPanel, onProfileChange }: AiCenterScreenProps) {
   const pl = settings.interfaceLanguage === "pl";
   const [view, setView] = useState<AiCenterView>(initialView);
   const [identities, setIdentities] = useState<AiIdentity[]>([]);

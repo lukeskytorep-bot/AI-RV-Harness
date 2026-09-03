@@ -47,6 +47,7 @@ The active public feature entry points are:
 | Settings | `src/features/settings/index.ts` | Settings tabs, settings-specific cards, local dialogs and repository-backed maintenance UI | canonical application settings state, top-level navigation, provider transport, session execution |
 | Profiles | `src/features/profiles/index.ts` | Profiles rendering, profile forms, Viewer-default controls, calibration-history presentation and ordered profile edit/archive operations | canonical profile list, top-level navigation, repository construction, Workspace lifecycle, first-run orchestration |
 | Targets | `src/features/targets/index.ts` | Targets rendering, target forms, grouping and lock-state presentation, and ordered user-target operations | top-level navigation, repository implementation, target domain hashing, session target selection, protocol execution |
+| AI Center | `src/features/aiCenter/index.ts` | AI Center tabs, profile-scoped presentation, Viewer Notes capacity/restore controls and history rendering | top-level navigation, Monitor execution, Viewer identity rules, Viewer Notes reflection/update policy, repository implementation |
 
 Example:
 
@@ -55,6 +56,7 @@ import { HomeScreen } from "./features/home";
 import { SettingsScreen } from "./features/settings";
 import { ProfilesScreen } from "./features/profiles";
 import { TargetsScreen } from "./features/targets";
+import { AiCenterScreen } from "./features/aiCenter";
 ```
 
 Avoid:
@@ -63,7 +65,7 @@ Avoid:
 import { HomeResumeCard } from "./features/home/components/HomeResumeCard";
 ```
 
-Internal files may remain private even if TypeScript technically permits a deep import. New callers must import Home, Settings, Profiles and Targets from their module roots, not directly from implementation files. The architecture test enforces the Settings, Profiles and Targets public entry points and keeps their implementations out of `App.tsx`.
+Internal files may remain private even if TypeScript technically permits a deep import. New callers must import Home, Settings, Profiles, Targets and AI Center from their module roots, not directly from implementation files. The architecture test enforces these public entry points and keeps their implementations out of `App.tsx` or the shared component directory.
 
 ## Cross-domain operations
 

@@ -65,4 +65,18 @@ describe("architecture import boundaries", () => {
     expect(appSource).not.toContain("function EditTargetDialog(");
     expect(deepImportOffenders, "Targets consumers must import the public feature entry point").toEqual([]);
   });
+
+  it("uses the public AI Center feature entry point and keeps its implementation out of shared components", () => {
+    const appSource = sourceFiles["../App.tsx"];
+    const deepImportOffenders = Object.entries(sourceFiles)
+      .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
+      .filter(({ projectPath }) => !/\.(?:test|spec)\.tsx?$/.test(projectPath))
+      .filter(({ content }) => /from\s+["'][^"']*features\/aiCenter\//.test(content))
+      .map(({ projectPath }) => projectPath);
+
+    expect(appSource).toContain('from "./features/aiCenter"');
+    expect(appSource).not.toContain('from "./components/AiCenterScreen"');
+    expect(sourceFiles["../components/AiCenterScreen.tsx"]).toBeUndefined();
+    expect(deepImportOffenders, "AI Center consumers must import the public feature entry point").toEqual([]);
+  });
 });

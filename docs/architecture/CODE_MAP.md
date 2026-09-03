@@ -14,10 +14,11 @@ This document maps responsibilities, not every source file. Historical release r
 | Settings screen | `src/features/settings/` | Extracted feature; import through `src/features/settings/index.ts`. |
 | Profiles screen and profile-specific forms | `src/features/profiles/` | Extracted feature; import through `src/features/profiles/index.ts`. |
 | Targets screen, dialogs and target-library operations | `src/features/targets/` | Extracted feature; import through `src/features/targets/index.ts`. |
-| Workspaces, Chat and RV Sessions screens | `src/App.tsx` | Extract one screen at a time into `src/features/`. |
+| Workspaces and RV Sessions screens | `src/App.tsx` | Extract one screen at a time into `src/features/`. |
+| Conversation and Manual RV message timeline presentation | `src/chat/ChatMessageList.tsx` | Keeps display-only time policy separate from persisted `createdAt`; broader Chat orchestration remains in `App.tsx`. |
 | Training screen | `src/components/TrainingScreen.tsx` | Move behind a future `features/training` public entry point. |
 | Research screen and builder | `src/research/`, `src/components/ResearchBuilder.tsx` | Consolidate behind `features/research`. |
-| AI Center interface | `src/components/AiCenterScreen.tsx`, `src/aiCenter/` | Preserve identity and Viewer Notes boundaries when modularized. |
+| AI Center interface | `src/features/aiCenter/` | Extracted presentation feature; identity and Viewer Notes domain rules remain in `src/aiCenter/`. |
 | Shared safe rendering | `src/components/SafeMarkdown.tsx` | Shared UI infrastructure; must remain the path for AI-authored Markdown. |
 
 ## AI execution and protected workflows
@@ -61,7 +62,9 @@ This document maps responsibilities, not every source file. Historical release r
 
 `TargetsScreen` has been moved into `src/features/targets/` together with its create/edit dialogs, pure grouping and lock-state view model, and repository-backed target-library operations. `App.tsx` retains top-level navigation and passes only settings plus the repository contract. The existing target domain service remains the owner of normalization, hashing and protocol eligibility, while the feature coordinates UI-specific loading and persistence.
 
-The next candidate should be selected separately after reviewing the remaining screen dependencies. AI Center is preferable to the large Workspace/RV surface, provided Viewer Notes and Training ownership remain unchanged.
+`AiCenterScreen` has been moved into `src/features/aiCenter/` behind a public entry point. The feature owns AI Center navigation, profile-scoped presentation, Viewer Notes capacity/restore controls and read-only history rendering. Viewer identity, versioning and Training-only update policy remain owned by `src/aiCenter/` and the repository contract; `App.tsx` still composes the Workspace-specific Monitor panel.
+
+The next candidate should be selected separately after reviewing the remaining screen dependencies. Research is preferable to the large Workspace/RV surface because its builder is already mostly isolated. Training and RV Sessions remain later, higher-risk steps.
 
 ## Updating this map
 
