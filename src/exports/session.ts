@@ -3,6 +3,7 @@ import type { RevealArtifactRecord, RevealInput, RvSession, TargetClarificationR
 import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
 import type { AppRepository } from "../storage/repository";
 import type { InterfaceLanguage } from "../types";
+import { renderMarkdownExportDocument } from "./document";
 import { writeExportPackage, type ExportArtifactCopy, type ExportTextFile } from "./native";
 
 export async function exportSessionRecord(
@@ -11,19 +12,37 @@ export async function exportSessionRecord(
   sessionId: string,
   language: InterfaceLanguage,
   baseDirectory: string,
+  exportedAt = new Date(),
 ): Promise<string> {
-  const [sessions, reveal, scores, clarifications] = await Promise.all([
+  const [sessions, reveal, scores, clarifications, snapshot, workspaces, profiles] = await Promise.all([
     repository.listRvSessions(workspaceId),
     repository.getReveal(sessionId),
     repository.listJudgeScores(sessionId),
     repository.listTargetClarifications(sessionId),
+    repository.getSessionSnapshot(sessionId),
+    repository.listWorkspaces(),
+    repository.listProfiles(),
   ]);
   const session = sessions.find((item) => item.id === sessionId);
   if (!session) throw new Error(language === "pl" ? "Nie znaleziono sesji do zapisania." : "The session to save was not found.");
 
-  const exportId = `RV_Session_${safePart(session.sessionCode)}_${timestampPart()}`;
+  const workspace = workspaces.find((item) => item.id === session.workspaceId);
+  const profile = profiles.find((item) => item.id === session.profileId);
+  const exportId = `RV_Session_${safePart(session.sessionCode)}_${timestampPart(exportedAt)}`;
   const artifactCopies = revealArtifactCopies(reveal);
-  const completeSession = completeSessionMarkdown(session, reveal, scores, clarifications, language);
+  const completeSession = completeSessionMarkdown({
+    session,
+    reveal,
+    scores,
+    clarifications,
+    language,
+    exportedAt,
+    workspaceName: workspace?.name ?? session.workspaceId,
+    profileName: profile?.name ?? snapshot?.identities?.aiIsBeDisplayName ?? session.profileId,
+    protocol: snapshot ? `${snapshot.protocol.id} ${snapshot.protocol.version}` : undefined,
+    viewerModel: snapshot?.modelRoute ?? snapshot?.modelId,
+    monitorModel: snapshot?.monitor?.modelRoute ?? snapshot?.monitor?.modelId,
+  });
   const files: ExportTextFile[] = [
     { relativePath: "complete_session.md", content: completeSession },
   ];
@@ -41,13 +60,20 @@ export async function exportSessionRecord(
   return directory;
 }
 
-function completeSessionMarkdown(
-  session: RvSession,
-  reveal: RevealInput | null,
-  scores: JudgeScoreRecord[],
-  clarifications: TargetClarificationRecord[],
-  language: InterfaceLanguage,
-): string {
+function completeSessionMarkdown(input: {
+  session: RvSession;
+  reveal: RevealInput | null;
+  scores: JudgeScoreRecord[];
+  clarifications: TargetClarificationRecord[];
+  language: InterfaceLanguage;
+  exportedAt: Date;
+  workspaceName: string;
+  profileName: string;
+  protocol?: string;
+  viewerModel?: string;
+  monitorModel?: string;
+}): string {
+  const { session, reveal, scores, clarifications, language } = input;
   const pl = language === "pl";
   const judgeText = scores.length
     ? scores.map((score) => [
@@ -71,13 +97,12 @@ function completeSessionMarkdown(
   const clarificationText = clarifications.length
     ? clarifications.map((item) => `### ${item.createdAt}\n\n${item.content}`).join("\n\n")
     : "—";
-  return `# ${session.sessionCode} — ${pl ? "pełny zapis sesji" : "complete session record"}
-
-- ${pl ? "Stan" : "State"}: ${session.state}
-- ${pl ? "Utworzono" : "Created"}: ${session.createdAt}
-- ${pl ? "Zakończono" : "Completed"}: ${session.completedAt ?? "—"}
-
-## ${pl ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}
+  const mode = session.runType === "automatic_monitor"
+    ? (pl ? "RV z Monitorem" : "Monitored RV")
+    : session.runType === "automatic"
+      ? (pl ? "Automatyczna sesja RV" : "Automatic RV")
+      : "Manual RV";
+  const body = `## ${pl ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}
 
 ${session.preRevealTranscript.trim() || "—"}
 
@@ -101,6 +126,24 @@ ${judgeText}
 
 ${clarificationText}
 `;
+  return renderMarkdownExportDocument({
+    language,
+    title: `${session.sessionCode} — ${pl ? "pełny zapis sesji" : "complete session record"}`,
+    metadata: {
+      workspace: input.workspaceName,
+      profile: input.profileName,
+      mode,
+      protocol: input.protocol,
+      viewerModel: input.viewerModel,
+      monitorModel: input.monitorModel,
+      judgeModels: scores.map((score) => score.modelRoute),
+      state: session.state,
+      createdAt: session.createdAt,
+      completedAt: session.completedAt,
+      exportedAt: input.exportedAt,
+    },
+    body,
+  });
 }
 
 function revealArtifactCopies(reveal: RevealInput | null): ExportArtifactCopy[] {
@@ -115,8 +158,8 @@ function safePart(value: string): string {
   return safe || "session";
 }
 
-function timestampPart(): string {
-  return new Date().toISOString().replace(/[:.]/g, "-");
+function timestampPart(date: Date): string {
+  return date.toISOString().replace(/[:.]/g, "-");
 }
 
 async function sha256Text(text: string): Promise<string> {

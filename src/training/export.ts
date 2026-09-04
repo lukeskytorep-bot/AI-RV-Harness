@@ -6,6 +6,7 @@ import { TRAINING_CATEGORY_LABELS, type TrainingCategory } from "../targets/bund
 import type { InterfaceLanguage } from "../types";
 import type { TrainingRunRecord } from "./types";
 import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
+import { renderMarkdownExportDocument, type ExportMetadataField } from "../exports/document";
 
 export async function exportTrainingRun(
   repository: AppRepository,
@@ -14,10 +15,17 @@ export async function exportTrainingRun(
   language: InterfaceLanguage,
   baseDirectory?: string,
   recordInDatabase = true,
+  exportedAt = new Date(),
 ): Promise<string> {
-  const sessions = await repository.listRvSessions(run.workspaceId);
+  const [sessions, workspaces, profiles] = await Promise.all([
+    repository.listRvSessions(run.workspaceId),
+    repository.listWorkspaces(),
+    repository.listProfiles(),
+  ]);
   const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const targetById = new Map(targets.map((target) => [target.id, target]));
+  const workspaceName = workspaces.find((item) => item.id === run.workspaceId)?.name ?? run.workspaceId;
+  const profileName = profiles.find((item) => item.id === run.profileId)?.name ?? run.profileId;
   const files: Array<{ relativePath: string; content: string }> = [];
   const artifactCopies: Array<{ sourcePath: string; relativePath: string }> = [];
   const rows: string[] = [];
@@ -38,9 +46,10 @@ export async function exportTrainingRun(
     const target = targetById.get(targetId);
     if (!session || !target) continue;
     const folder = `${String(index + 1).padStart(3, "0")}_${safeName(session.sessionCode)}`;
-    const [reveal, scores] = await Promise.all([
+    const [reveal, scores, snapshot] = await Promise.all([
       repository.getReveal(session.id),
       repository.listJudgeScores(session.id),
+      repository.getSessionSnapshot(session.id),
     ]);
     const category = target.sourceMetadata.category as TrainingCategory | undefined;
     const title = localizedTargetTitle(target, language);
@@ -57,7 +66,24 @@ export async function exportTrainingRun(
     }).join("\n\n");
     files.push({
       relativePath: `sessions/${folder}/complete_session.md`,
-      content: `# ${session.sessionCode} — ${title}\n\n## ${language === "pl" ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}\n\n${session.preRevealTranscript.trim()}\n\n## Target Reveal\n\n${revealText}\n\n### ${language === "pl" ? "Pliki Revealu" : "Reveal files"}\n\n${revealFiles || "—"}\n\n## ${language === "pl" ? "Opinia Viewera i rozmowa po Revealu" : "Viewer review and post-Reveal discussion"}\n\n${postRevealTranscriptMarkdown(session.postRevealTranscript, language) || "—"}\n\n## AI Judge\n\n${judgeMarkdown}\n`,
+      content: renderMarkdownExportDocument({
+        language,
+        title: `${session.sessionCode} — ${title}`,
+        metadata: {
+          workspace: workspaceName,
+          profile: profileName,
+          mode: language === "pl" ? "Trening — sesja RV" : "Training — RV session",
+          protocol: snapshot ? `${snapshot.protocol.id} ${snapshot.protocol.version}` : `RV Lite ${run.protocolVariant}`,
+          viewerModel: snapshot?.modelRoute ?? run.modelRoute,
+          monitorModel: snapshot?.monitor?.modelRoute ?? snapshot?.monitor?.modelId,
+          judgeModels: scores.map((score) => score.modelRoute),
+          state: session.state,
+          createdAt: session.createdAt,
+          completedAt: session.completedAt,
+          exportedAt,
+        },
+        body: `## ${language === "pl" ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}\n\n${session.preRevealTranscript.trim() || "—"}\n\n## Target Reveal\n\n${revealText}\n\n### ${language === "pl" ? "Pliki Revealu" : "Reveal files"}\n\n${revealFiles || "—"}\n\n## ${language === "pl" ? "Opinia Viewera i rozmowa po Revealu" : "Viewer review and post-Reveal discussion"}\n\n${postRevealTranscriptMarkdown(session.postRevealTranscript, language) || "—"}\n\n## AI Judge\n\n${judgeMarkdown}`,
+      }),
     });
     resultRows.push({
       position: index + 1,
@@ -79,7 +105,30 @@ export async function exportTrainingRun(
   const judgeSummary = judgeResults.length
     ? judgeResults.map((judge) => `- Judge ${judge.judgeIndex}: ${judge.modelRoute} · ${judge.sessions} ${language === "pl" ? "sesji" : "sessions"} · ${language === "pl" ? "średnia" : "mean"} ${judge.meanScore ?? "—"}`).join("\n")
     : (language === "pl" ? "- W tym treningu nie użyto AI Judge'a." : "- No AI Judge was used in this training run.");
-  const summary = `# ${run.name}\n\n- ${language === "pl" ? "Numer treningu" : "Training run"}: ${run.runNumber}\n- ${language === "pl" ? "Stan" : "Status"}: ${run.status}\n- ${language === "pl" ? "Tryb" : "Mode"}: ${run.mode}\n- RV Lite: ${run.protocolVariant}\n- ${language === "pl" ? "Zakończono" : "Completed"}: ${run.completedTargetIds.length}/${run.targetIds.length}\n- ${language === "pl" ? "Utworzono" : "Created"}: ${run.createdAt}\n- ${language === "pl" ? "Łączna średnia AI Judge" : "Overall AI Judge mean"}: ${mean(resultRows.flatMap((item) => item.scores.map((score) => score.total))) ?? "—"}\n\n## AI Judge\n\n${judgeSummary}\n\n## ${language === "pl" ? "Sesje" : "Sessions"}\n\n| # | Session | Category | Target | Mean Judge score |\n|---:|---|---|---|---:|\n${rows.join("\n")}\n\n${language === "pl" ? "Każda sesja znajduje się w katalogu `sessions` jako jeden czytelny plik `complete_session.md`. Jeśli Reveal zawierał obraz, rzeczywisty plik obrazu znajduje się w podfolderze `reveal_files` danej sesji." : "Every session is stored under `sessions` as one readable `complete_session.md`. If the Reveal contained an image, the real image file is stored in that session's `reveal_files` folder."}\n`;
+  const overallMean = mean(resultRows.flatMap((item) => item.scores.map((score) => score.total)));
+  const additionalMetadata: ExportMetadataField[] = [
+    { label: language === "pl" ? "Numer treningu" : "Training run", value: run.runNumber },
+    { label: language === "pl" ? "Postęp" : "Progress", value: `${run.completedTargetIds.length}/${run.targetIds.length}` },
+    { label: language === "pl" ? "Łączna średnia AI Judge" : "Overall AI Judge mean", value: overallMean ?? "—" },
+  ];
+  const summary = renderMarkdownExportDocument({
+    language,
+    title: run.name,
+    metadata: {
+      workspace: workspaceName,
+      profile: profileName,
+      mode: language === "pl" ? "Trening" : "Training",
+      protocol: `RV Lite ${run.protocolVariant}`,
+      viewerModel: run.modelRoute,
+      judgeModels: run.judgeModelRoutes,
+      state: run.status,
+      createdAt: run.createdAt,
+      completedAt: run.completedAt,
+      exportedAt,
+    },
+    additionalMetadata,
+    body: `## AI Judge\n\n${judgeSummary}\n\n## ${language === "pl" ? "Sesje" : "Sessions"}\n\n| # | Session | Category | Target | Mean Judge score |\n|---:|---|---|---|---:|\n${rows.join("\n")}\n\n${language === "pl" ? "Każda sesja znajduje się w katalogu `sessions` jako jeden czytelny plik `complete_session.md`. Jeśli Reveal zawierał obraz, rzeczywisty plik obrazu znajduje się w podfolderze `reveal_files` danej sesji." : "Every session is stored under `sessions` as one readable `complete_session.md`. If the Reveal contained an image, the real image file is stored in that session's `reveal_files` folder."}`,
+  });
   files.unshift({ relativePath: "summary.md", content: summary });
   const exportId = `Training_${String(run.runNumber).padStart(3, "0")}_${run.createdAt.slice(0, 10)}`;
   const directory = await writeExportPackage({ exportId, files, artifactCopies, destination: "training", overwriteExisting: true, ...(baseDirectory?.trim() ? { baseDirectory: baseDirectory.trim() } : {}) });

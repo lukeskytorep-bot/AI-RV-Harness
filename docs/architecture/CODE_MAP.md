@@ -48,7 +48,10 @@ This document maps responsibilities, not every source file. Historical release r
 | Browser preview implementation | `src/storage/browserRepository.ts` | Preserve the shared contract where behavior is intended to match SQLite. |
 | Database migrations and native transactions | `src-tauri/src/database.rs` and storage migration code | Keep ordered, atomic and backwards compatible. |
 | Credentials | native credential commands and provider configuration modules | Secrets must never enter SQLite, exports or UI diagnostics. |
-| Human-readable and research exports | `src/exports/`, `src/artifacts/` | Preserve evidence-domain separation and existing formats. |
+| Shared human-readable Markdown document format and date/time policy | `src/exports/document/` | Reused by Conversation, Manual RV, RV Sessions and Training; optional fields remain mode-specific. |
+| Conversation and Manual RV export adapters | `src/chat/export.ts` | Map chat threads and messages to the shared document format. |
+| RV Session and Training export adapters | `src/exports/session.ts`, `src/training/export.ts` | Preserve Blind, Reveal, Viewer Review and Judge content while using shared metadata rendering. |
+| Research exports and technical artifacts | `src/exports/research.ts`, `src/artifacts/` | Preserve evidence-domain separation; Research package convergence is a separate future change. |
 | Sources and attachments | `src/sources/`, `src/attachments/` | Never leak Reveal or target material into blind messages. |
 | PL/EN text | `src/i18n.ts`, versioned resources under `src/resources/` | Split later by domain; do not change wording during structural extraction. |
 
@@ -65,6 +68,8 @@ This document maps responsibilities, not every source file. Historical release r
 `AiCenterScreen` has been moved into `src/features/aiCenter/` behind a public entry point. The feature owns AI Center navigation, profile-scoped presentation, Viewer Notes capacity/restore controls and read-only history rendering. Viewer identity, versioning and Training-only update policy remain owned by `src/aiCenter/` and the repository contract; `App.tsx` still composes the Workspace-specific Monitor panel.
 
 The next candidate should be selected separately after reviewing the remaining screen dependencies. Research is preferable to the large Workspace/RV surface because its builder is already mostly isolated. Training and RV Sessions remain later, higher-risk steps.
+
+The human-readable Markdown export document contract has also been centralized under `src/exports/document/`. Existing exporters remain adapters owned by their domains: Chat maps Conversation and Manual RV, Session maps saved RV records, and Training maps run summaries plus their individual sessions. The shared renderer owns metadata order, PL/EN labels and date/time formatting. It omits fields that do not apply, so Manual RV does not invent a completion timestamp.
 
 ## Updating this map
 

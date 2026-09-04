@@ -14,6 +14,9 @@ describe("chat Markdown export", () => {
     expect(result.fileName).toBe("Rozmowa_ Łódź.md");
     expect(result.content).toContain("## Edward");
     expect(result.content).toContain("Cześć — próba.");
+    expect(result.content).toContain("- Model Viewera: model");
+    expect(result.content).not.toContain("## Edward ·");
+    expect(result.content).not.toContain("2026-08-25T10:01:00Z");
     expect(result.content).not.toContain("secret-id");
   });
 
@@ -36,6 +39,7 @@ describe("chat Markdown export", () => {
     expect(result.content).toContain("## Nemo z SP i myśleniem\n\nDruga wiadomość");
     expect(result.content).not.toContain("## Ed ·");
     expect(result.content).not.toContain("## Nemo z SP i myśleniem ·");
+    expect(result.content).not.toContain("Zakończono:");
     expect(result.content).not.toContain("secret-id");
   });
 });

@@ -34,6 +34,7 @@ The repository remains one application and one release process. Folder boundarie
 10. Judge receives only the allowlisted evidence packet; it does not read arbitrary session storage.
 11. Viewer Notes updates remain limited to the Training workflow unless a separate product decision changes that rule.
 12. Shared helpers must have more than one genuine consumer. `shared` and `utils` are not fallback directories.
+13. Human-readable Markdown exports for Conversation, Manual RV, RV Sessions and Training must use `src/exports/document/` for metadata order, labels and date/time formatting. Domain adapters retain ownership of domain-specific sections.
 
 ## Public entry points
 
@@ -79,6 +80,9 @@ An operation spanning several domains must have one explicit application-level o
 | Complete a Training target and reflect Viewer Notes | training execution use case |
 | Archive or restore a Workspace | workspace management use case |
 | Export a complete Research record | research export use case |
+| Render common human-readable export metadata | `src/exports/document/` |
+
+The shared document renderer does not decide whether a session has ended. Each domain adapter supplies a real `completedAt` only when its workflow records formal completion. In particular, Manual RV omits `Zakończono` / `Completed`. The renderer must not infer it from `updatedAt` or export time.
 
 UI components initiate these operations and render their state; they do not coordinate multi-step persistence themselves after the relevant use case has been extracted.
 
