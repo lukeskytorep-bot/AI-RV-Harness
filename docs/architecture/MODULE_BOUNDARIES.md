@@ -34,7 +34,6 @@ The repository remains one application and one release process. Folder boundarie
 10. Judge receives only the allowlisted evidence packet; it does not read arbitrary session storage.
 11. Viewer Notes updates remain limited to the Training workflow unless a separate product decision changes that rule.
 12. Shared helpers must have more than one genuine consumer. `shared` and `utils` are not fallback directories.
-13. Human-readable Markdown exports for Conversation, Manual RV, RV Sessions and Training must use `src/exports/document/` for metadata order, labels and date/time formatting. Domain adapters retain ownership of domain-specific sections.
 
 ## Public entry points
 
@@ -49,6 +48,7 @@ The active public feature entry points are:
 | Profiles | `src/features/profiles/index.ts` | Profiles rendering, profile forms, Viewer-default controls, calibration-history presentation and ordered profile edit/archive operations | canonical profile list, top-level navigation, repository construction, Workspace lifecycle, first-run orchestration |
 | Targets | `src/features/targets/index.ts` | Targets rendering, target forms, grouping and lock-state presentation, and ordered user-target operations | top-level navigation, repository implementation, target domain hashing, session target selection, protocol execution |
 | AI Center | `src/features/aiCenter/index.ts` | AI Center tabs, profile-scoped presentation, Viewer Notes capacity/restore controls and history rendering | top-level navigation, Monitor execution, Viewer identity rules, Viewer Notes reflection/update policy, repository implementation |
+| Research | `src/features/research/index.ts` | Research screen, configuration builder, project controls, scoring/unblinding presentation and export initiation | top-level navigation, research methodology, experiment planning/execution rules, repository implementation, provider transport |
 
 Example:
 
@@ -58,6 +58,7 @@ import { SettingsScreen } from "./features/settings";
 import { ProfilesScreen } from "./features/profiles";
 import { TargetsScreen } from "./features/targets";
 import { AiCenterScreen } from "./features/aiCenter";
+import { ResearchScreen } from "./features/research";
 ```
 
 Avoid:
@@ -66,7 +67,7 @@ Avoid:
 import { HomeResumeCard } from "./features/home/components/HomeResumeCard";
 ```
 
-Internal files may remain private even if TypeScript technically permits a deep import. New callers must import Home, Settings, Profiles, Targets and AI Center from their module roots, not directly from implementation files. The architecture test enforces these public entry points and keeps their implementations out of `App.tsx` or the shared component directory.
+Internal files may remain private even if TypeScript technically permits a deep import. New callers must import Home, Settings, Profiles, Targets, AI Center and Research from their module roots, not directly from implementation files. The architecture test enforces these public entry points and keeps their implementations out of `App.tsx` or the shared component directory.
 
 ## Cross-domain operations
 
@@ -80,9 +81,6 @@ An operation spanning several domains must have one explicit application-level o
 | Complete a Training target and reflect Viewer Notes | training execution use case |
 | Archive or restore a Workspace | workspace management use case |
 | Export a complete Research record | research export use case |
-| Render common human-readable export metadata | `src/exports/document/` |
-
-The shared document renderer does not decide whether a session has ended. Each domain adapter supplies a real `completedAt` only when its workflow records formal completion. In particular, Manual RV omits `Zakończono` / `Completed`. The renderer must not infer it from `updatedAt` or export time.
 
 UI components initiate these operations and render their state; they do not coordinate multi-step persistence themselves after the relevant use case has been extracted.
 

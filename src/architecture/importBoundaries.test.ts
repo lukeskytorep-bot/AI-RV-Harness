@@ -79,4 +79,19 @@ describe("architecture import boundaries", () => {
     expect(sourceFiles["../components/AiCenterScreen.tsx"]).toBeUndefined();
     expect(deepImportOffenders, "AI Center consumers must import the public feature entry point").toEqual([]);
   });
+
+  it("uses the public Research feature entry point and keeps its implementation out of App and shared components", () => {
+    const appSource = sourceFiles["../App.tsx"];
+    const deepImportOffenders = Object.entries(sourceFiles)
+      .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
+      .filter(({ projectPath }) => !/\.(?:test|spec)\.tsx?$/.test(projectPath))
+      .filter(({ content }) => /from\s+["'][^"']*features\/research\//.test(content))
+      .map(({ projectPath }) => projectPath);
+
+    expect(appSource).toContain('from "./features/research"');
+    expect(appSource).not.toContain("function ResearchScreen(");
+    expect(appSource).not.toContain('from "./components/ResearchBuilder"');
+    expect(sourceFiles["../components/ResearchBuilder.tsx"]).toBeUndefined();
+    expect(deepImportOffenders, "Research consumers must import the public feature entry point").toEqual([]);
+  });
 });

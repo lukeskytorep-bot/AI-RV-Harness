@@ -68,9 +68,9 @@ import { runAutomaticCustomSession } from "./sessions/customController";
 import { runAutomaticRvLiteSession } from "./sessions/rvLiteController";
 import { createSessionReplay, isRecoverableProviderInterruption } from "./sessions/resumeReplay";
 import { runOrdinaryBatch, selectBatchTargets, type OrdinaryBatchProgress, type OrdinaryBatchSessionResult } from "./sessions/batch";
-import { ResearchBuilder } from "./components/ResearchBuilder";
 import { TrainingScreen } from "./components/TrainingScreen";
 import { AiCenterScreen, type AiCenterView } from "./features/aiCenter";
+import { ResearchScreen } from "./features/research";
 import { storeRevealArtifact } from "./artifacts/native";
 import type { RevealArtifactRecord, RvSession } from "./sessions/types";
 import { aggregateJudgeScores } from "./domain/scoring";
@@ -2397,20 +2397,6 @@ function MonitorPanel({ copy, settings, profile, workspace, repository }: { copy
       </details>
       {!runs.length ? <EmptyState icon={<MonitorCog size={28} />} title={copy.noMonitorRuns} body={copy.monitorLead} /> : <div className="monitor-history-layout"><div className="monitor-run-list">{runs.map((run) => <button className={run.id === selectedRunId ? "active" : ""} key={run.id} onClick={() => { setSelectedRunId(run.id); setExportPath(null); setExportError(null); }}><span><strong>{run.sessionCode}</strong><small>{run.modelRoute}</small></span><span>{run.interventionCount}</span></button>)}</div><div className="monitor-run-detail">{selected && <><div className="monitor-run-meta"><span><small>{copy.promptVersion}</small><strong>{selected.promptVersionId ?? "—"}</strong></span><span><small>{copy.libraryVersion}</small><strong>{selected.libraryVersion}</strong></span><span><small>{copy.interventions}</small><strong>{selected.interventionCount} / {selected.maxInterventions}</strong></span></div><div className="monitor-export-row"><button className="secondary-button" disabled={!isTauriRuntime() || exportingRun} onClick={() => void exportSelected()}>{exportingRun ? copy.exporting : copy.exportMonitorRun}</button><small>{copy.monitorExportSafe}</small></div></>}{interventions.length ? <div className="monitor-timeline">{interventions.map((item) => <article key={item.id} className={item.decision === "INTERVENE" ? "intervene" : "continue"}><div><span>{item.sequenceNumber}</span><strong>{item.decision === "INTERVENE" ? item.commandId ?? "INTERVENE" : copy.continueProtocol}</strong></div>{item.viewerEvidence && <div className="monitor-markdown-row"><b>{copy.viewerEvidence}</b><SafeMarkdown content={item.viewerEvidence} /></div>}{item.commandText && <div className="monitor-markdown-row"><b>{copy.monitorCommand}</b><SafeMarkdown content={item.commandText} /></div>}{item.rationale && <details className="monitor-rationale"><summary>{copy.rationale}</summary><SafeMarkdown content={formatMonitorRationale(item.rationale)} /></details>}</article>)}</div> : <p className="monitor-no-decisions">{copy.noMonitorRuns}</p>}{exportPath && <div className="storage-success"><Check size={14} />{copy.exportComplete} · {exportPath}</div>}{exportError && <div className="provider-error">{exportError}</div>}</div></div>}
     </section>
-  );
-}
-
-function ResearchScreen({ copy, settings, profiles, workspaces, repository }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profiles: Profile[]; workspaces: Workspace[]; repository: AppRepository | null }) {
-  return (
-    <div className="page">
-      <PageHeader title={copy.research} subtitle={copy.researchLead} />
-      <div className="research-guardrails">
-        <MiniStat icon={<LockKeyhole size={17} />} title={copy.blinded} value="Allowlist packets" />
-        <MiniStat icon={<ShieldCheck size={17} />} title={copy.locked} value="Config → immutable" />
-        <MiniStat icon={<FileCheck2 size={17} />} title="Scores" value="Freeze → unblind" />
-      </div>
-      <ResearchBuilder copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
-    </div>
   );
 }
 
