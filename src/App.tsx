@@ -68,7 +68,7 @@ import { runAutomaticCustomSession } from "./sessions/customController";
 import { runAutomaticRvLiteSession } from "./sessions/rvLiteController";
 import { createSessionReplay, isRecoverableProviderInterruption } from "./sessions/resumeReplay";
 import { runOrdinaryBatch, selectBatchTargets, type OrdinaryBatchProgress, type OrdinaryBatchSessionResult } from "./sessions/batch";
-import { TrainingScreen } from "./components/TrainingScreen";
+import { TrainingScreen } from "./features/training";
 import { AiCenterScreen, type AiCenterView } from "./features/aiCenter";
 import { ResearchScreen } from "./features/research";
 import { storeRevealArtifact } from "./artifacts/native";

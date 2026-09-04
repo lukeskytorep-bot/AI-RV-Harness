@@ -151,8 +151,11 @@ export async function executeProviderChat(input: {
     executeAttempt: () => attempt({
       config: input.config,
       modelId: input.modelId,
-      messages,
-      settings,
+      messages: messages.map((message) => ({
+        ...message,
+        ...(message.images ? { images: message.images.map((image) => ({ ...image })) } : {}),
+      })),
+      settings: structuredClone(settings),
       timeoutMs: input.timeoutMs,
       signal: input.signal,
     }),

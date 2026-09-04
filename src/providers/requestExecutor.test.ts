@@ -58,6 +58,44 @@ describe("provider request executor", () => {
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
+  it("cancels an active physical attempt without dispatching a retry", async () => {
+    const controller = new AbortController();
+    const attempt = vi.fn(async () => {
+      controller.abort();
+      throw new DOMException("Provider request cancelled", "AbortError");
+    });
+    await expect(executeProviderRequest({ operationId: "test.active-cancel", configuredRetries: 5, signal: controller.signal, executeAttempt: attempt })).rejects.toMatchObject({ name: "AbortError" });
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends an identical immutable payload on every physical retry", async () => {
+    const messages = [{ role: "user" as const, content: "original" }];
+    const settings = { requested: { maxOutputTokens: 64 }, effective: { maxOutputTokens: 64 }, omitted: [] as [] };
+    const payloads: string[] = [];
+    const attempt = vi.fn(async (request) => {
+      payloads.push(JSON.stringify({ messages: request.messages, settings: request.settings }));
+      request.messages[0].content = "attempt mutation";
+      request.settings.effective.maxOutputTokens = 999;
+      if (payloads.length === 1) throw failure("http_status", { httpStatus: 503 });
+      return { content: "ok", usage: {} };
+    });
+    const promise = executeProviderChat({
+      config: { id: "pc", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" },
+      modelId: "model",
+      messages,
+      settings,
+      configuredRetries: 1,
+      attempt,
+    });
+    messages[0].content = "caller mutation";
+    const response = await promise;
+    expect(response.content).toBe("ok");
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toBe(payloads[1]);
+    expect(payloads[0]).toContain("original");
+    expect(payloads[0]).not.toContain("999");
+  });
+
   it("reports every failed physical attempt to the audit callback", async () => {
     const onAttemptFailure = vi.fn();
     const attempt = vi.fn().mockRejectedValue(failure("response_body_read"));

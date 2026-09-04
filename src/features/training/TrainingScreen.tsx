@@ -1,33 +1,29 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, CircleStop, Database, Download, FileCheck2, GraduationCap, Play, ShieldCheck } from "lucide-react";
-import type { getCopy } from "../i18n";
-import { aiIsBeDisplayName, humanIsBeDisplayName } from "../domain/isBeIdentity";
-import { resolveSessionLanguage } from "../domain/localization";
-import { runBlindJudging } from "../judge/engine";
-import { resolveViewerDefault } from "../profileModelDefaults";
-import { profileGenerationDefaults, profileSystemPromptSnapshot } from "../profileViewerDefaults";
-import type { ProviderConfig, ProviderModel } from "../providers/types";
-import { getRvLite } from "../resources/protocolRegistry";
-import { runAutomaticRvLiteSession } from "../sessions/rvLiteController";
-import { runAutomaticPostRevealReview } from "../sessions/postReveal";
-import type { AppRepository } from "../storage/repository";
-import { isTauriRuntime } from "../storage";
-import { chooseDirectory } from "../storage/native";
+import type { getCopy } from "../../i18n";
+import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
+import { resolveSessionLanguage } from "../../domain/localization";
+import { resolveViewerDefault } from "../../profileModelDefaults";
+import { profileSystemPromptSnapshot } from "../../profileViewerDefaults";
+import type { ProviderConfig, ProviderModel } from "../../providers/types";
+import type { AppRepository } from "../../storage/repository";
+import { isTauriRuntime } from "../../storage";
+import { chooseDirectory } from "../../storage/native";
 import {
   TRAINING_CATEGORIES,
   TRAINING_CATEGORY_LABELS,
   validateFactoryTrainingPack,
   type TrainingCategory,
-} from "../targets/bundled";
-import type { TargetRecord } from "../targets/types";
-import { localizedTargetTitle } from "../targets/localization";
-import { userTargetKind } from "../targets/service";
-import { buildFactoryCurriculum, FACTORY_CURRICULUM_ID, FACTORY_CURRICULUM_VERSION, selectPartialTrainingTargets } from "../training/curriculum";
-import { exportTrainingRun } from "../training/export";
-import type { TrainingRunRecord } from "../training/types";
-import type { AppSettings, Profile, Workspace } from "../types";
-import { SessionInspection } from "./SessionInspection";
-import { prepareViewerNotesForSession, runViewerNoteReflection } from "../aiCenter/viewerNotes";
+} from "../../targets/bundled";
+import type { TargetRecord } from "../../targets/types";
+import { localizedTargetTitle } from "../../targets/localization";
+import { userTargetKind } from "../../targets/service";
+import { buildFactoryCurriculum, FACTORY_CURRICULUM_ID, FACTORY_CURRICULUM_VERSION, selectPartialTrainingTargets } from "../../training/curriculum";
+import { exportTrainingRun } from "../../training/export";
+import type { TrainingRunRecord } from "../../training/types";
+import type { AppSettings, Profile, Workspace } from "../../types";
+import { SessionInspection } from "../../components/SessionInspection";
+import { executeTrainingRun } from "./trainingExecution";
 
 type Copy = ReturnType<typeof getCopy>;
 type Mode = "full" | "partial";
@@ -66,6 +62,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [selectedSession, setSelectedSession] = useState<{ workspaceId: string; sessionId: string } | null>(null);
   const pauseRequested = useRef(false);
+  const executionAbort = useRef<AbortController | null>(null);
 
   const refresh = async () => {
     if (!repository) return;
@@ -82,6 +79,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   };
 
   useEffect(() => { void refresh().catch((cause) => setError(errorText(cause))); }, [repository]);
+  useEffect(() => () => executionAbort.current?.abort(), []);
   useEffect(() => {
     const first = workspaces.find((item) => item.profileId === profileId);
     if (!ownedWorkspaces.some((item) => item.id === workspaceId)) setWorkspaceId(first?.id ?? "");
@@ -138,7 +136,6 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     const runProfile = profiles.find((item) => item.id === initial.profileId);
     const runProvider = providers.find((item) => item.credentialId === runProfile?.credentialId);
     const runModel = models.find((item) => routeKey(item) === initial.modelRoute);
-    const targetById = new Map(targets.map((target) => [target.id, target]));
     if (!runProfile || !runProvider || !runModel) { setError(text.routeMissing); return; }
     const judges = initial.judgeModelRoutes.map((key) => {
       const model = models.find((item) => routeKey(item) === key);
@@ -147,80 +144,33 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
       return { model, providerConfig };
     });
     const rvSystemPrompt = await profileSystemPromptSnapshot(runProfile, language);
-    let working: TrainingRunRecord = { ...initial, sessionIds: initial.sessionIds ?? [], status: "Running" };
     pauseRequested.current = false;
-    setBusy(true); setError(null); setExportMessage(null); setActiveRun(working);
-    await repository.updateTrainingRun(working.id, { status: "Running" });
+    const controller = new AbortController();
+    executionAbort.current = controller;
+    setBusy(true); setError(null); setExportMessage(null); setActiveRun({ ...initial, status: "Running" });
     try {
-      for (let index = working.currentIndex; index < working.targetIds.length; index += 1) {
-        const target = targetById.get(working.targetIds[index]);
-        if (!target) throw new Error(`${text.targetMissing}: ${working.targetIds[index]}`);
-        setProgressLine(`${text.session} ${index + 1}/${working.targetIds.length} · ${localizedTargetTitle(target, language)}`);
-        const viewerNotes = await prepareViewerNotesForSession({ repository, profileId: runProfile.id, providerConfig: runProvider, model: runModel, enabled: working.viewerNotesEnabled ?? false });
-        const result = await runAutomaticRvLiteSession({
-          repository,
-          workspaceId: working.workspaceId,
-          profileId: runProfile.id,
-          profileName: aiIsBeDisplayName(runProfile),
-          humanIsBeDisplayName: humanIsBeDisplayName(runProfile),
-          providerConfig: runProvider,
-          model: runModel,
-          protocol: getRvLite(language, working.protocolVariant),
-          sessionLanguage: language,
-          requestedSettings: profileGenerationDefaults(runProfile, runModel),
-          viewerNotes,
-          ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
-          automaticTarget: target,
-          maxRetries: settings.maxRetries,
-          requestTimeoutMs: settings.requestTimeoutMs,
-          sessionCodePrefix: settings.sessionCodePrefix,
-          ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}),
-          onProgress: (item) => setProgressLine(`${text.session} ${index + 1}/${working.targetIds.length} · ${localizedTargetTitle(target, language)} · ${item.state}${item.phase ? ` · ${text.step} ${item.phase}/4` : ""}`),
-        });
-        if (result.state !== "Revealed") throw new Error(result.stopReason ?? text.sessionInterrupted);
-        await runAutomaticPostRevealReview({
-          repository,
-          sessionId: result.sessionId,
-          viewer: { providerConfig: runProvider, model: runModel },
-          timeoutMs: settings.requestTimeoutMs,
-          maxRetries: settings.maxRetries,
-          afterViewerReview: async ({ content }) => {
-            await runViewerNoteReflection({ repository, sessionId: result.sessionId, viewerReview: content, providerConfig: runProvider, model: runModel, timeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries });
-          },
-        });
-        if (judges.length) await runBlindJudging({ repository, sessionId: result.sessionId, language, judges, maxRetries: settings.maxRetries, timeoutMs: settings.requestTimeoutMs });
-        await repository.updateRvSessionState(result.sessionId, "Completed");
-        working = {
-          ...working,
-          completedTargetIds: [...working.completedTargetIds, target.id],
-          sessionIds: [...working.sessionIds, result.sessionId],
-          currentIndex: index + 1,
-          updatedAt: new Date().toISOString(),
-        };
-        await repository.updateTrainingRun(working.id, { completedTargetIds: working.completedTargetIds, sessionIds: working.sessionIds, currentIndex: working.currentIndex });
-        setActiveRun(working);
-        const atBlockBoundary = isBlockBoundary(working, index);
-        if (pauseRequested.current || (working.pauseAfterBlock && atBlockBoundary && index + 1 < working.targetIds.length)) {
-          working = { ...working, status: "Paused" };
-          await repository.updateTrainingRun(working.id, { status: "Paused" });
-          setProgressLine(text.pausedCheckpoint);
-          await refresh();
-          return;
-        }
-      }
-      working = { ...working, status: "Completed", completedAt: new Date().toISOString() };
-      await repository.updateTrainingRun(working.id, { status: "Completed", completedAt: working.completedAt });
-      setActiveRun(working);
-      setProgressLine(text.completed);
-      await refresh();
-    } catch (cause) {
-      const message = errorText(cause);
-      await repository.updateTrainingRun(working.id, { status: "Interrupted", error: message });
-      working = { ...working, status: "Interrupted", errors: [...working.errors, message] };
-      setActiveRun(working);
-      setError(message);
+      const outcome = await executeTrainingRun({
+        repository,
+        initial,
+        profile: runProfile,
+        providerConfig: runProvider,
+        model: runModel,
+        judges,
+        targets,
+        language,
+        settings,
+        ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
+        signal: controller.signal,
+        shouldPause: () => pauseRequested.current,
+        onRunChange: setActiveRun,
+        onProgress: ({ index, total, target, sessionProgress }) => setProgressLine(`${text.session} ${index + 1}/${total} · ${localizedTargetTitle(target, language)}${sessionProgress ? ` · ${sessionProgress.state}${sessionProgress.phase ? ` · ${text.step} ${sessionProgress.phase}/4` : ""}` : ""}`),
+      });
+      if (outcome.run.status === "Paused") setProgressLine(text.pausedCheckpoint);
+      if (outcome.run.status === "Completed") setProgressLine(text.completed);
+      if (outcome.error) setError(outcome.error);
       await refresh();
     } finally {
+      if (executionAbort.current === controller) executionAbort.current = null;
       setBusy(false);
     }
   };
@@ -266,13 +216,6 @@ function TrainingSection({ title, children }: { title: string; children: ReactNo
 
 function routeKey(model: ProviderModel): string { return `${model.providerConfigId}::${model.modelId}`; }
 function errorText(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }
-
-function isBlockBoundary(run: TrainingRunRecord, zeroBasedIndex: number): boolean {
-  if (run.mode === "full") return (zeroBasedIndex + 1) % 7 === 0;
-  const current = run.targetIds[zeroBasedIndex];
-  const next = run.targetIds[zeroBasedIndex + 1];
-  return !next || current.split("_").slice(0, 3).join("_") !== next.split("_").slice(0, 3).join("_");
-}
 
 function labels(pl: boolean) {
   return pl ? {

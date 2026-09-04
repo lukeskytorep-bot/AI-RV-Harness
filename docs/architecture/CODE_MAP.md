@@ -16,7 +16,7 @@ This document maps responsibilities, not every source file. Historical release r
 | Targets screen, dialogs and target-library operations | `src/features/targets/` | Extracted feature; import through `src/features/targets/index.ts`. |
 | Workspaces and RV Sessions screens | `src/App.tsx` | Extract one screen at a time into `src/features/`. |
 | Conversation and Manual RV message timeline presentation | `src/chat/ChatMessageList.tsx` | Keeps display-only time policy separate from persisted `createdAt`; broader Chat orchestration remains in `App.tsx`. |
-| Training screen | `src/components/TrainingScreen.tsx` | Move behind a future `features/training` public entry point. |
+| Training screen and long-run orchestration | `src/features/training/` | Extracted feature; import through `src/features/training/index.ts`. |
 | Research screen and builder | `src/features/research/` | Extracted feature; import through `src/features/research/index.ts`. |
 | AI Center interface | `src/features/aiCenter/` | Extracted presentation feature; identity and Viewer Notes domain rules remain in `src/aiCenter/`. |
 | Shared safe rendering | `src/components/SafeMarkdown.tsx` | Shared UI infrastructure; must remain the path for AI-authored Markdown. |
@@ -37,7 +37,7 @@ This document maps responsibilities, not every source file. Historical release r
 | AI Monitor decisions | `src/monitor/engine.ts` | Monitor never rewrites Viewer evidence. |
 | AI Judge | `src/judge/engine.ts` | Receives only the sanitized allowlist packet. |
 | Viewer Notes | `src/aiCenter/viewerNotes.ts` | Training-only update policy and immutable version history. |
-| Training orchestration | `src/training/`, `src/components/TrainingScreen.tsx` | One completed target may trigger at most one Notes version. |
+| Training orchestration | `src/features/training/trainingExecution.ts`, `src/training/` | Durable checkpoints select the first unfinished target; one completed target may trigger at most one Notes reflection. |
 
 ## Data and infrastructure
 
@@ -66,7 +66,9 @@ This document maps responsibilities, not every source file. Historical release r
 
 `ResearchScreen` and its builder have been moved into `src/features/research/` behind a public entry point. The feature owns Research configuration, preflight/lock presentation, project execution controls, scoring/unblinding presentation and package-export coordination. Research planning, target sampling, study controls, execution, persistence contracts and export construction remain in their existing domain/application modules under `src/research/`, `src/storage/` and `src/exports/`.
 
-The next candidate should be selected separately after reviewing the remaining screen dependencies. Training is more isolated than the large Workspace/RV surface, but it owns long-running execution and Viewer Notes updates, so its extraction should begin with characterization tests. Workspace and RV Sessions remain later, higher-risk steps.
+`TrainingScreen` and its long-running execution use case have been moved into `src/features/training/` behind a public entry point. The screen owns Training configuration and presentation. `trainingExecution.ts` owns target sequencing, durable per-target checkpoints, Resume from the first unfinished target, pause/cancellation propagation, post-Reveal review, optional judging and the Training-only Viewer Notes reflection trigger. Curriculum and export formats remain in `src/training/`; session, Judge and Viewer Notes domain rules remain with their existing owners.
+
+The next frontend candidate should be selected from Workspaces/Conversations. RV Sessions, Monitor and Judge remain later, higher-risk extractions.
 
 ## Updating this map
 

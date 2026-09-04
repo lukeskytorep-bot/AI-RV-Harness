@@ -94,4 +94,19 @@ describe("architecture import boundaries", () => {
     expect(sourceFiles["../components/ResearchBuilder.tsx"]).toBeUndefined();
     expect(deepImportOffenders, "Research consumers must import the public feature entry point").toEqual([]);
   });
+
+  it("uses the public Training feature entry point and keeps its implementation out of shared components", () => {
+    const appSource = sourceFiles["../App.tsx"];
+    const deepImportOffenders = Object.entries(sourceFiles)
+      .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
+      .filter(({ projectPath }) => !/\.(?:test|spec)\.tsx?$/.test(projectPath))
+      .filter(({ projectPath }) => !projectPath.startsWith("features/training/"))
+      .filter(({ content }) => /from\s+["'][^"']*features\/training\//.test(content))
+      .map(({ projectPath }) => projectPath);
+
+    expect(appSource).toContain('from "./features/training"');
+    expect(appSource).not.toContain('from "./components/TrainingScreen"');
+    expect(sourceFiles["../components/TrainingScreen.tsx"]).toBeUndefined();
+    expect(deepImportOffenders, "Training consumers must import the public feature entry point").toEqual([]);
+  });
 });
