@@ -1,7 +1,9 @@
 # Jednolita architektura retry providera — projekt końcowy
 
 **Zakres:** AI RV Harness — publiczne v0.7.12 i prywatna baza testowa v0.7.13  
-**Status:** zaimplementowano; w v0.7.13 trwa audyt zamykający  
+**Status:** `COMPLETED` — implementacja i audyt zamykający zakończone 4 września 2026
+
+> Aktualizacja zamknięcia: pełna macierz kontraktowa, cancellation, ochrona przed podwójnym zapisem oraz Rust/Tauri CI zostały potwierdzone. Szczegóły: `docs/reports/PROVIDER_TRANSPORT_RETRY_CLOSURE_AUDIT_v0.7.13_PL.md`.
 **Cel:** jedna spójna obsługa przejściowych błędów providera we wszystkich wywołaniach inferencji, bez zagnieżdżonych retry i bez duplikowania danych sesji.
 
 ## Stan audytu — 2 września 2026

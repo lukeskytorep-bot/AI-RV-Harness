@@ -167,4 +167,25 @@ describe("Training execution", () => {
     expect(outcome.run.completedTargetIds).toEqual([]);
     expect(testHarness.repository.updateRvSessionState).not.toHaveBeenCalledWith("session_t1", "Completed");
   });
+
+  it("resumes after a Judge failure without repeating the Viewer session, review, or reflection", async () => {
+    const testHarness = harness();
+    const judge = testHarness.dependencies!.runBlindJudging as ReturnType<typeof vi.fn>;
+    judge.mockRejectedValueOnce(new Error("Judge unavailable"));
+    const judges = [{ providerConfig: provider, model }];
+
+    const interrupted = await executeTrainingRun(input(run({ targetIds: ["t1"], judgeModelRoutes: [model.route] }), testHarness, { judges }));
+    expect(interrupted.run.status).toBe("Interrupted");
+    expect(interrupted.run.activeTargetCheckpoint).toEqual({ targetId: "t1", sessionId: "session_t1", stage: "review_completed" });
+
+    judge.mockResolvedValueOnce({ scores: [], aggregate: null });
+    const resumed = await executeTrainingRun(input(interrupted.run, testHarness, { judges }));
+
+    expect(resumed.run.status).toBe("Completed");
+    expect(resumed.run.sessionIds).toEqual(["session_t1"]);
+    expect(testHarness.runSession).toHaveBeenCalledTimes(1);
+    expect(testHarness.dependencies!.runAutomaticPostRevealReview).toHaveBeenCalledTimes(1);
+    expect(testHarness.reflect).toHaveBeenCalledTimes(1);
+    expect(judge).toHaveBeenCalledTimes(2);
+  });
 });

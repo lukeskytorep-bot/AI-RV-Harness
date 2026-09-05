@@ -130,7 +130,7 @@ export function BatchEvaluation({ copy, repository, sessions, language, models, 
   const eligible = sessions.filter((session) => session.state === "Revealed" || session.state === "Completed");
   const [judgeCount, setJudgeCount] = useState(1);
   const [selections, setSelections] = useState([defaultModelKey ?? "", "", ""]);
-  const [results, setResults] = useState<Array<{ sessionCode: string; result: JudgingResult }>>([]);
+  const [results, setResults] = useState<Array<{ sessionId: string; sessionCode: string; result: JudgingResult }>>([]);
   const [busy, setBusy] = useState(false);
   const [completed, setCompleted] = useState(0);
   const [savedOnly, setSavedOnly] = useState(false);
@@ -142,6 +142,9 @@ export function BatchEvaluation({ copy, repository, sessions, language, models, 
   useEffect(() => {
     setJudgeCount(1);
     setSelections([defaultModelKey ?? "", "", ""]);
+    setResults([]);
+    setSavedOnly(false);
+    setError(null);
   }, [defaultModelKey, sessions]);
 
   const saveOnly = async () => {
@@ -157,7 +160,7 @@ export function BatchEvaluation({ copy, repository, sessions, language, models, 
 
   const evaluate = async () => {
     if (!repository || !ready || busy || !eligible.length) return;
-    setBusy(true); setError(null); setCompleted(0); setSavedOnly(false); setResults([]);
+    setBusy(true); setError(null); setCompleted(results.length); setSavedOnly(false);
     try {
       const judges = activeSelections.map((model) => {
         const concreteModel = model as ProviderModel;
@@ -170,9 +173,10 @@ export function BatchEvaluation({ copy, repository, sessions, language, models, 
       if (imageRequired && judges.some((judge) => !judge.model.capabilities.supportsVision || !judge.model.capabilities.inputModalities.includes("image"))) {
         throw new Error("Vision Judge preflight failed: every selected Judge route must advertise image input support.");
       }
-      const nextResults: Array<{ sessionCode: string; result: JudgingResult }> = [];
-      for (let index = 0; index < eligible.length; index += 1) {
-        const session = eligible[index];
+      const nextResults = [...results];
+      const completedSessionIds = new Set(nextResults.map((item) => item.sessionId));
+      const pendingSessions = eligible.filter((session) => !completedSessionIds.has(session.sessionId));
+      for (const session of pendingSessions) {
         const existing = await repository.listJudgeScores(session.sessionId);
         const missingJudges = selectMissingJudgeSelections(existing, judges);
         const result = missingJudges.length
@@ -180,14 +184,14 @@ export function BatchEvaluation({ copy, repository, sessions, language, models, 
           : { anonymousSessionId: "stored", scores: existing, aggregate: aggregateJudgeScores(existing) };
         if (result.scores.length !== judgeCount) throw new Error("Judge score set is incomplete after recovery.");
         await repository.updateRvSessionState(session.sessionId, "Completed");
-        nextResults.push({ sessionCode: session.sessionCode, result });
+        nextResults.push({ sessionId: session.sessionId, sessionCode: session.sessionCode, result });
         setResults([...nextResults]);
-        setCompleted(index + 1);
+        setCompleted(nextResults.length);
       }
       onCompleted?.();
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
   };
 
-  return <section className="judge-evaluation batch-evaluation"><div className="judge-heading"><span><Database size={18} /></span><div><strong>{copy.batchEvaluation}</strong><p>{copy.batchEvaluationLead}</p></div></div><div className="batch-session-summary">{sessions.map((session) => <span key={session.sessionId}><code>{session.sessionCode}</code><small>{session.state}</small></span>)}</div>{!results.length && !savedOnly && <><div className="judge-config"><label><span>{copy.judgeCount}</span><select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))} disabled={busy}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>{Array.from({ length: judgeCount }, (_, index) => <label key={index}><span>{copy.judgeModel} {index + 1}</span><select value={selections[index]} onChange={(event) => setSelections((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} disabled={busy}><option value="">{copy.selectModel}</option>{models.map((model) => { const provider = providerConfigs.find((item) => item.id === model.providerConfigId); return <option key={keyFor(model)} value={keyFor(model)}>{provider?.label ?? model.provider} · {model.displayName}</option>; })}</select></label>)}</div><div className="batch-evaluation-actions"><button className="secondary-button" disabled={busy || !eligible.length} onClick={() => void saveOnly()}>{copy.saveOnly}</button><button className="primary-button" disabled={!isTauriRuntime() || !ready || busy || !eligible.length} onClick={() => void evaluate()}>{busy ? `${copy.judging} ${completed}/${eligible.length}` : copy.runBatchJudges}</button></div></>}{savedOnly && <div className="reveal-success"><Check size={16} /><div><strong>{copy.batchSaved}</strong><p>{copy.completedSessions}: {eligible.length}</p></div></div>}{results.length > 0 && <div className="batch-score-table">{results.map(({ sessionCode, result }) => <div key={sessionCode}><code>{sessionCode}</code><strong>{result.aggregate.mean.total.toFixed(2)} / 10</strong><small>{result.scores.length} Judge</small></div>)}</div>}{error && <div className="provider-error">{error}</div>}</section>;
+  return <section className="judge-evaluation batch-evaluation"><div className="judge-heading"><span><Database size={18} /></span><div><strong>{copy.batchEvaluation}</strong><p>{copy.batchEvaluationLead}</p></div></div><div className="batch-session-summary">{sessions.map((session) => <span key={session.sessionId}><code>{session.sessionCode}</code><small>{session.state}</small></span>)}</div>{results.length < eligible.length && !savedOnly && <><div className="judge-config"><label><span>{copy.judgeCount}</span><select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))} disabled={busy || results.length > 0}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>{Array.from({ length: judgeCount }, (_, index) => <label key={index}><span>{copy.judgeModel} {index + 1}</span><select value={selections[index]} onChange={(event) => setSelections((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} disabled={busy || results.length > 0}><option value="">{copy.selectModel}</option>{models.map((model) => { const provider = providerConfigs.find((item) => item.id === model.providerConfigId); return <option key={keyFor(model)} value={keyFor(model)}>{provider?.label ?? model.provider} · {model.displayName}</option>; })}</select></label>)}</div><div className="batch-evaluation-actions"><button className="secondary-button" disabled={busy || !eligible.length || results.length > 0} onClick={() => void saveOnly()}>{copy.saveOnly}</button><button className="primary-button" disabled={!isTauriRuntime() || !ready || busy || !eligible.length} onClick={() => void evaluate()}>{busy ? `${copy.judging} ${completed}/${eligible.length}` : copy.runBatchJudges}</button></div></>}{savedOnly && <div className="reveal-success"><Check size={16} /><div><strong>{copy.batchSaved}</strong><p>{copy.completedSessions}: {eligible.length}</p></div></div>}{results.length > 0 && <div className="batch-score-table">{results.map(({ sessionId, sessionCode, result }) => <details key={sessionId}><summary><code>{sessionCode}</code><strong>{result.aggregate.mean.total.toFixed(2)} / 10</strong><small>{result.scores.length} Judge</small></summary><JudgeResults copy={copy} scores={result.scores} /></details>)}</div>}{error && <div className="provider-error">{error}</div>}</section>;
 }

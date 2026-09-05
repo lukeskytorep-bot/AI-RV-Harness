@@ -101,7 +101,7 @@ export async function exportTrainingRun(
 
   const judgeResults = run.judgeModelRoutes.map((modelRoute, judgeIndex) => {
     const oneBasedJudgeIndex = judgeIndex + 1;
-    const totals = resultRows.flatMap((item) => item.scores.filter((score) => score.judgeIndex === oneBasedJudgeIndex || score.modelRoute === modelRoute).map((score) => score.total));
+    const totals = resultRows.flatMap((item) => item.scores.filter((score) => score.judgeIndex === oneBasedJudgeIndex).map((score) => score.total));
     return { judgeIndex: oneBasedJudgeIndex, modelRoute, sessions: totals.length, meanScore: mean(totals) };
   });
   const judgeSummary = judgeResults.length

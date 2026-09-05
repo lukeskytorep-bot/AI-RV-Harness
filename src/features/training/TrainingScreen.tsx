@@ -4,7 +4,7 @@ import type { getCopy } from "../../i18n";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 import { resolveSessionLanguage } from "../../domain/localization";
 import { resolveViewerDefault } from "../../profileModelDefaults";
-import { profileSystemPromptSnapshot } from "../../profileViewerDefaults";
+import { profileGenerationDefaults, profileSystemPromptSnapshot } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
 import type { AppRepository } from "../../storage/repository";
 import { isTauriRuntime } from "../../storage";
@@ -111,6 +111,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
       return;
     }
     const now = new Date();
+    const rvSystemPrompt = await profileSystemPromptSnapshot(profile, language);
     const run = await repository.createTrainingRun({
       name: `${text.trainingRun} ${runs.length + 1} · ${now.toLocaleDateString()}`,
       status: "Running",
@@ -125,6 +126,17 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
       judgeModelRoutes: judgeRoutes.slice(0, judgeCount),
       pauseAfterBlock,
       viewerNotesEnabled,
+      executionSnapshot: {
+        language,
+        generationSettings: profileGenerationDefaults(profile, viewerModel),
+        transport: {
+          maxRetries: settings.maxRetries,
+          requestTimeoutMs: settings.requestTimeoutMs,
+          sessionCodePrefix: settings.sessionCodePrefix,
+          maxSessionCostUsd: settings.maxSessionCostUsd,
+        },
+        ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
+      },
     });
     setActiveRun(run);
     setRuns((current) => [run, ...current]);

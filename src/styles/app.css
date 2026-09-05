@@ -563,7 +563,10 @@ h1, h2, h3 { font-family: "Segoe UI", system-ui, sans-serif; }
 .batch-session-summary small { color: var(--muted); font-size: 11px; }
 .batch-evaluation-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
 .batch-score-table { display: grid; gap: 5px; }
-.batch-score-table > div { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 8px 9px; border-radius: 8px; background: var(--surface); }
+.batch-score-table > details { padding: 8px 9px; border-radius: 8px; background: var(--surface); }
+.batch-score-table > details > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; cursor: pointer; list-style: none; }
+.batch-score-table > details > summary::-webkit-details-marker { display: none; }
+.batch-score-table > details > .judge-results { margin-top: 9px; }
 .batch-score-table code { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .batch-score-table strong { color: var(--violet); font-size: 11px; }
 .batch-score-table small { color: var(--muted); font-size: 11px; }

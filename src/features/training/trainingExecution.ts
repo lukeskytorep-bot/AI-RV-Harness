@@ -77,11 +77,18 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
     sessionIds: input.initial.sessionIds ?? [],
     currentIndex: firstPendingTrainingTargetIndex(input.initial),
     status: "Running",
+    executionSnapshot: input.initial.executionSnapshot ?? {
+      language: input.language,
+      generationSettings: profileGenerationDefaults(input.profile, input.model),
+      transport: { ...input.settings },
+      ...(input.rvSystemPrompt ? { rvSystemPrompt: input.rvSystemPrompt } : {}),
+    },
   };
+  const execution = working.executionSnapshot!;
   input.onRunChange?.(working);
 
   try {
-    await input.repository.updateTrainingRun(working.id, { status: "Running", currentIndex: working.currentIndex });
+    await input.repository.updateTrainingRun(working.id, { status: "Running", currentIndex: working.currentIndex, executionSnapshot: execution });
     for (let index = working.currentIndex; index < working.targetIds.length; index += 1) {
       if (input.signal?.aborted) throw new DOMException("Training cancelled", "AbortError");
       const targetId = working.targetIds[index];
@@ -90,83 +97,102 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
       if (!target) throw new Error(`Missing target: ${targetId}`);
       input.onProgress?.({ index, total: working.targetIds.length, target });
 
-      const viewerNotes = await dependencies.prepareViewerNotesForSession({
-        repository: input.repository,
-        profileId: input.profile.id,
-        providerConfig: input.providerConfig,
-        model: input.model,
-        enabled: working.viewerNotesEnabled ?? false,
-      });
-      const session = await dependencies.runAutomaticRvLiteSession({
-        repository: input.repository,
-        workspaceId: working.workspaceId,
-        profileId: input.profile.id,
-        profileName: aiIsBeDisplayName(input.profile),
-        humanIsBeDisplayName: humanIsBeDisplayName(input.profile),
-        providerConfig: input.providerConfig,
-        model: input.model,
-        protocol: getRvLite(input.language, working.protocolVariant),
-        sessionLanguage: input.language,
-        requestedSettings: profileGenerationDefaults(input.profile, input.model),
-        viewerNotes,
-        ...(input.rvSystemPrompt ? { rvSystemPrompt: input.rvSystemPrompt } : {}),
-        automaticTarget: target,
-        signal: input.signal,
-        maxRetries: input.settings.maxRetries,
-        requestTimeoutMs: input.settings.requestTimeoutMs,
-        sessionCodePrefix: input.settings.sessionCodePrefix,
-        ...(input.settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: input.settings.maxSessionCostUsd } : {}),
-        onProgress: (sessionProgress) => input.onProgress?.({ index, total: working.targetIds.length, target, sessionProgress }),
-      });
-      if (session.state !== "Revealed") throw new Error(session.stopReason ?? "The training session was interrupted.");
-
-      await dependencies.runAutomaticPostRevealReview({
-        repository: input.repository,
-        sessionId: session.sessionId,
-        viewer: { providerConfig: input.providerConfig, model: input.model },
-        timeoutMs: input.settings.requestTimeoutMs,
-        maxRetries: input.settings.maxRetries,
-        signal: input.signal,
-        afterViewerReview: async ({ content }) => {
-          await dependencies.runViewerNoteReflection({
-            repository: input.repository,
-            sessionId: session.sessionId,
-            viewerReview: content,
-            providerConfig: input.providerConfig,
-            model: input.model,
-            timeoutMs: input.settings.requestTimeoutMs,
-            maxRetries: input.settings.maxRetries,
-            signal: input.signal,
-          });
-        },
-      });
-      if (input.signal?.aborted) throw new DOMException("Training cancelled", "AbortError");
-      if (input.judges.length) {
-        await dependencies.runBlindJudging({
+      let checkpoint = working.activeTargetCheckpoint?.targetId === targetId ? working.activeTargetCheckpoint : undefined;
+      if (!checkpoint) {
+        const viewerNotes = await dependencies.prepareViewerNotesForSession({
           repository: input.repository,
-          sessionId: session.sessionId,
-          language: input.language,
-          judges: input.judges,
-          maxRetries: input.settings.maxRetries,
-          timeoutMs: input.settings.requestTimeoutMs,
-          signal: input.signal,
+          profileId: input.profile.id,
+          providerConfig: input.providerConfig,
+          model: input.model,
+          enabled: working.viewerNotesEnabled ?? false,
         });
+        const session = await dependencies.runAutomaticRvLiteSession({
+          repository: input.repository,
+          workspaceId: working.workspaceId,
+          profileId: input.profile.id,
+          profileName: aiIsBeDisplayName(input.profile),
+          humanIsBeDisplayName: humanIsBeDisplayName(input.profile),
+          providerConfig: input.providerConfig,
+          model: input.model,
+          protocol: getRvLite(execution.language, working.protocolVariant),
+          sessionLanguage: execution.language,
+          requestedSettings: execution.generationSettings,
+          viewerNotes,
+          ...(execution.rvSystemPrompt ? { rvSystemPrompt: execution.rvSystemPrompt } : {}),
+          automaticTarget: target,
+          signal: input.signal,
+          maxRetries: execution.transport.maxRetries,
+          requestTimeoutMs: execution.transport.requestTimeoutMs,
+          sessionCodePrefix: execution.transport.sessionCodePrefix,
+          ...(execution.transport.maxSessionCostUsd > 0 ? { maxSessionCostUsd: execution.transport.maxSessionCostUsd } : {}),
+          onProgress: (sessionProgress) => input.onProgress?.({ index, total: working.targetIds.length, target, sessionProgress }),
+        });
+        if (session.state !== "Revealed") throw new Error(session.stopReason ?? "The training session was interrupted.");
+        checkpoint = { targetId, sessionId: session.sessionId, stage: "session_revealed" };
+        working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
+        await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
+        input.onRunChange?.(working);
+      }
+
+      if (checkpoint.stage === "session_revealed") {
+        await dependencies.runAutomaticPostRevealReview({
+          repository: input.repository,
+          sessionId: checkpoint.sessionId,
+          viewer: { providerConfig: input.providerConfig, model: input.model },
+          timeoutMs: execution.transport.requestTimeoutMs,
+          maxRetries: execution.transport.maxRetries,
+          signal: input.signal,
+          afterViewerReview: async ({ content }) => {
+            await dependencies.runViewerNoteReflection({
+              repository: input.repository,
+              sessionId: checkpoint!.sessionId,
+              viewerReview: content,
+              providerConfig: input.providerConfig,
+              model: input.model,
+              timeoutMs: execution.transport.requestTimeoutMs,
+              maxRetries: execution.transport.maxRetries,
+              signal: input.signal,
+            });
+          },
+        });
+        checkpoint = { ...checkpoint, stage: "review_completed" };
+        working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
+        await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
+        input.onRunChange?.(working);
       }
       if (input.signal?.aborted) throw new DOMException("Training cancelled", "AbortError");
-      await input.repository.updateRvSessionState(session.sessionId, "Completed");
+      if (input.judges.length && checkpoint.stage === "review_completed") {
+        await dependencies.runBlindJudging({
+          repository: input.repository,
+          sessionId: checkpoint.sessionId,
+          language: execution.language,
+          judges: input.judges,
+          maxRetries: execution.transport.maxRetries,
+          timeoutMs: execution.transport.requestTimeoutMs,
+          signal: input.signal,
+        });
+        checkpoint = { ...checkpoint, stage: "judging_completed" };
+        working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
+        await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
+        input.onRunChange?.(working);
+      }
+      if (input.signal?.aborted) throw new DOMException("Training cancelled", "AbortError");
+      await input.repository.updateRvSessionState(checkpoint.sessionId, "Completed");
 
       completed.add(target.id);
       working = {
         ...working,
         completedTargetIds: [...working.completedTargetIds, target.id],
-        sessionIds: [...working.sessionIds, session.sessionId],
+        sessionIds: [...working.sessionIds, checkpoint.sessionId],
         currentIndex: index + 1,
+        activeTargetCheckpoint: undefined,
         updatedAt: now(),
       };
       await input.repository.updateTrainingRun(working.id, {
         completedTargetIds: working.completedTargetIds,
         sessionIds: working.sessionIds,
         currentIndex: working.currentIndex,
+        activeTargetCheckpoint: null,
       });
       input.onRunChange?.(working);
 

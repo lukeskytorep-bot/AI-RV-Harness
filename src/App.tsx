@@ -16,7 +16,6 @@ import {
   KeyRound,
   LockKeyhole,
   MessageCircle,
-  MonitorCog,
   Moon,
   Archive,
   Pencil,
@@ -49,6 +48,7 @@ import type {
   Workspace,
 } from "./types";
 import { PROVIDER_KINDS, type ProviderConfig } from "./providers/types";
+import { parseModelCapabilitiesSnapshot } from "./providers/capabilitySnapshot";
 import type { ProviderKind, ProviderModel, ReasoningEffort } from "./providers/types";
 import { runAutomaticRcpSession, submitExternalReveal, type SessionProgress } from "./sessions/controller";
 import { chooseRandomTarget, createUserTarget, targetIsEligibleForProtocol } from "./targets/service";
@@ -65,7 +65,6 @@ import { AiCenterScreen, type AiCenterView } from "./features/aiCenter";
 import { ResearchScreen } from "./features/research";
 import { storeRevealArtifact } from "./artifacts/native";
 import type { RevealArtifactRecord, RvSession } from "./sessions/types";
-import type { MonitorInterventionRecord, MonitorRunRecord } from "./monitor/types";
 import { chooseDirectory, saveTextFile } from "./storage/native";
 import { APP_VERSION } from "./version";
 import { addProvider, refreshProviderModels } from "./providers/service";
@@ -77,12 +76,12 @@ import { TargetsScreen } from "./features/targets";
 import { ChatPanel } from "./features/conversations";
 import { WorkspacesScreen, WorkspaceSwitcherDialog } from "./features/workspaces";
 import { BatchEvaluation, JudgeEvaluation } from "./features/judge";
+import { MonitorPanel } from "./features/monitor";
 import { EmptyState } from "./components/EmptyState";
 import { FormDialog } from "./components/FormDialog";
 import { PageHeader } from "./components/PageHeader";
 import { ProtocolDialog } from "./components/ProtocolDialog";
 import { parsePostRevealTranscript } from "./sessions/postRevealTranscript";
-import { exportMonitorRun } from "./exports/monitor";
 import { exportSessionRecord } from "./exports/session";
 import { ensureBundledTrainingTargets } from "./targets/bundled";
 import { createDefaultSettings } from "./startupDefaults";
@@ -94,7 +93,7 @@ import { canSelectMonitor, canSelectProtocol, isRunModeCompatible } from "./sess
 import { SafeMarkdown } from "./components/SafeMarkdown";
 import { reasoningOptions } from "./providers/modelReasoningRegistry";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "./domain/isBeIdentity";
-import { buildEffectiveMonitorPrompt, buildEffectiveViewerPrompt, factoryMonitorEditablePrompt, localizedMonitorEditablePrompt, localizedViewerEditablePrompt, lockedActivityDefinition, lockedMonitorExecution } from "./resources/systemPrompts";
+import { buildEffectiveViewerPrompt, localizedMonitorEditablePrompt, localizedViewerEditablePrompt } from "./resources/systemPrompts";
 import { SPECIAL_TASK_OPTIONS, specialTaskUsesMappedLabels, type SpecialTaskInput, type SpecialTaskOption } from "./sessions/specialTask";
 import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from "./targets/telepathicBundled";
 import {
@@ -860,7 +859,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         modelId: snapshot.modelId,
         displayName: snapshot.modelId,
         route: snapshot.modelRoute,
-        capabilities: snapshot.capabilitySnapshot as unknown as ProviderModel["capabilities"],
+        capabilities: parseModelCapabilitiesSnapshot(snapshot.capabilitySnapshot),
         pricing: {},
         recommended: false,
         rawMetadata: {},
@@ -1283,7 +1282,7 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
         modelId: snapshot.modelId,
         displayName: snapshot.modelId,
         route: snapshot.modelRoute,
-        capabilities: snapshot.capabilitySnapshot as unknown as ProviderModel["capabilities"],
+        capabilities: parseModelCapabilitiesSnapshot(snapshot.capabilitySnapshot),
         pricing: {},
         recommended: false,
         rawMetadata: {},
@@ -1476,87 +1475,6 @@ function RvSessionPanel({ copy, settings, profile, workspace, repository }: { co
   );
 }
 
-function MonitorPanel({ copy, settings, profile, workspace, repository }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; repository: AppRepository | null }) {
-  const [runs, setRuns] = useState<MonitorRunRecord[]>([]);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [interventions, setInterventions] = useState<MonitorInterventionRecord[]>([]);
-  const [exportingRun, setExportingRun] = useState(false);
-  const [exportPath, setExportPath] = useState<string | null>(null);
-  const [exportError, setExportError] = useState<string | null>(null);
-  const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
-  const [editablePrompt, setEditablePrompt] = useState(localizedMonitorEditablePrompt(profile?.defaultMonitorSystemPrompt, language));
-  const [promptSaved, setPromptSaved] = useState(false);
-  const [promptError, setPromptError] = useState<string | null>(null);
-  useEffect(() => {
-    setEditablePrompt(localizedMonitorEditablePrompt(profile?.defaultMonitorSystemPrompt, language));
-    setPromptSaved(false);
-    setPromptError(null);
-  }, [language, profile?.defaultMonitorSystemPrompt, profile?.id]);
-  useEffect(() => {
-    if (!repository) return;
-    void Promise.all([repository.listMonitorRuns(workspace.id), repository.listRvSessions(workspace.id), repository.listResearchProjects(workspace.id)]).then(([items, sessions, projects]) => {
-      const sessionById = new Map(sessions.map((session) => [session.id, session]));
-      const researchById = new Map(projects.map((project) => [project.id, project]));
-      const visible = items.filter((run) => {
-        const researchId = sessionById.get(run.sessionId)?.researchProjectId;
-        return !researchId || researchById.get(researchId)?.state === "Complete";
-      });
-      setRuns(visible);
-      setSelectedRunId((current) => current && visible.some((item) => item.id === current) ? current : visible[0]?.id ?? null);
-    });
-  }, [repository, workspace.id]);
-  useEffect(() => {
-    if (!repository || !selectedRunId) { setInterventions([]); return; }
-    void repository.listMonitorInterventions(selectedRunId).then(setInterventions);
-  }, [repository, selectedRunId]);
-  const selected = runs.find((run) => run.id === selectedRunId) ?? null;
-  const savePrompt = async () => {
-    if (!repository || !profile) return;
-    setPromptError(null);
-    try {
-      await repository.setProfileAiConfiguration(profile.id, {
-        credentialId: profile.credentialId,
-        credentialProvider: profile.credentialProvider,
-        defaultViewerModelId: profile.defaultViewerModelId,
-        defaultViewerReasoningEffort: profile.defaultViewerReasoningEffort,
-        defaultViewerTemperature: profile.defaultViewerTemperature,
-        defaultViewerSystemPrompt: profile.defaultViewerSystemPrompt,
-        defaultMonitorSystemPrompt: editablePrompt.trim() || factoryMonitorEditablePrompt(language),
-        defaultMonitorProviderConfigId: profile.defaultMonitorProviderConfigId,
-        defaultMonitorModelId: profile.defaultMonitorModelId,
-        defaultJudgeProviderConfigId: profile.defaultJudgeProviderConfigId,
-        defaultJudgeModelId: profile.defaultJudgeModelId,
-      });
-      setPromptSaved(true);
-    } catch (cause) { setPromptError(cause instanceof Error ? cause.message : String(cause)); }
-  };
-  const exportSelected = async () => {
-    if (!repository || !selected || exportingRun || !isTauriRuntime()) return;
-    setExportingRun(true); setExportError(null); setExportPath(null);
-    try { setExportPath(await exportMonitorRun(repository, workspace.id, selected, interventions)); }
-    catch (cause) { setExportError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setExportingRun(false); }
-  };
-  return (
-    <section className="panel monitor-panel">
-      <PanelHeader title={copy.monitorHistory} icon={<BrainCircuit size={18} />} />
-      <div className="role-guard"><ShieldCheck size={22} /><div><strong>{copy.blindRoleBoundary}</strong><p>{copy.monitorLead}</p></div></div>
-      <details className="monitor-prompt-editor" open>
-        <summary><BrainCircuit size={15} /><span><strong>{settings.interfaceLanguage === "pl" ? "System prompt AI Monitora" : "AI Monitor system prompt"}</strong><small>{settings.interfaceLanguage === "pl" ? "Cały skuteczny prompt jest widoczny; część użytkownika można zmieniać." : "The complete effective prompt is visible; the user section is editable."}</small></span></summary>
-        <div className="monitor-prompt-body">
-          <label><span>{settings.interfaceLanguage === "pl" ? "Część edytowalna" : "Editable section"}</span><textarea rows={18} maxLength={100000} value={editablePrompt} onChange={(event) => { setEditablePrompt(event.target.value); setPromptSaved(false); }} /></label>
-          <div className="locked-prompt-block"><LockKeyhole size={15} /><div><strong>{settings.interfaceLanguage === "pl" ? "Definicja aktywności — zablokowana" : "Activity definition — locked"}</strong><p>{lockedActivityDefinition(language)}</p></div></div>
-          <div className="locked-prompt-block"><LockKeyhole size={15} /><div><strong>{settings.interfaceLanguage === "pl" ? "Reguła wykonania — zablokowana" : "Execution rule — locked"}</strong><pre>{lockedMonitorExecution(language)}</pre></div></div>
-          <details className="effective-prompt-preview"><summary>{settings.interfaceLanguage === "pl" ? "Pokaż cały skuteczny prompt" : "Show the complete effective prompt"}</summary><pre>{buildEffectiveMonitorPrompt(language, editablePrompt)}</pre></details>
-          <div className="monitor-prompt-actions"><button className="secondary-button" type="button" onClick={() => { setEditablePrompt(factoryMonitorEditablePrompt(language)); setPromptSaved(false); }}>{settings.interfaceLanguage === "pl" ? "Przywróć treść fabryczną" : "Restore factory text"}</button><button className="primary-button" type="button" disabled={!profile} onClick={() => void savePrompt()}>{settings.interfaceLanguage === "pl" ? "Zapisz prompt" : "Save prompt"}</button>{promptSaved && <span><Check size={13} />{settings.interfaceLanguage === "pl" ? "Zapisano" : "Saved"}</span>}</div>
-          {promptError && <div className="provider-error">{promptError}</div>}
-        </div>
-      </details>
-      {!runs.length ? <EmptyState icon={<MonitorCog size={28} />} title={copy.noMonitorRuns} body={copy.monitorLead} /> : <div className="monitor-history-layout"><div className="monitor-run-list">{runs.map((run) => <button className={run.id === selectedRunId ? "active" : ""} key={run.id} onClick={() => { setSelectedRunId(run.id); setExportPath(null); setExportError(null); }}><span><strong>{run.sessionCode}</strong><small>{run.modelRoute}</small></span><span>{run.interventionCount}</span></button>)}</div><div className="monitor-run-detail">{selected && <><div className="monitor-run-meta"><span><small>{copy.promptVersion}</small><strong>{selected.promptVersionId ?? "—"}</strong></span><span><small>{copy.libraryVersion}</small><strong>{selected.libraryVersion}</strong></span><span><small>{copy.interventions}</small><strong>{selected.interventionCount} / {selected.maxInterventions}</strong></span></div><div className="monitor-export-row"><button className="secondary-button" disabled={!isTauriRuntime() || exportingRun} onClick={() => void exportSelected()}>{exportingRun ? copy.exporting : copy.exportMonitorRun}</button><small>{copy.monitorExportSafe}</small></div></>}{interventions.length ? <div className="monitor-timeline">{interventions.map((item) => <article key={item.id} className={item.decision === "INTERVENE" ? "intervene" : "continue"}><div><span>{item.sequenceNumber}</span><strong>{item.decision === "INTERVENE" ? item.commandId ?? "INTERVENE" : copy.continueProtocol}</strong></div>{item.viewerEvidence && <div className="monitor-markdown-row"><b>{copy.viewerEvidence}</b><SafeMarkdown content={item.viewerEvidence} /></div>}{item.commandText && <div className="monitor-markdown-row"><b>{copy.monitorCommand}</b><SafeMarkdown content={item.commandText} /></div>}{item.rationale && <details className="monitor-rationale"><summary>{copy.rationale}</summary><SafeMarkdown content={formatMonitorRationale(item.rationale)} /></details>}</article>)}</div> : <p className="monitor-no-decisions">{copy.noMonitorRuns}</p>}{exportPath && <div className="storage-success"><Check size={14} />{copy.exportComplete} · {exportPath}</div>}{exportError && <div className="provider-error">{exportError}</div>}</div></div>}
-    </section>
-  );
-}
-
 function CustomProtocolDialog({ copy, repository, language, base, onCancel, onSaved }: { copy: ReturnType<typeof getCopy>; repository: AppRepository; language: InterfaceLanguage; base: CustomProtocolVersion | null; onCancel: () => void; onSaved: (protocol: CustomProtocolVersion) => void }) {
   const [name, setName] = useState(base?.displayName ?? "");
   const [description, setDescription] = useState(base?.description ?? "");
@@ -1669,12 +1587,4 @@ function formatDuration(milliseconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
   return minutes ? `${minutes}:${String(remainder).padStart(2, "0")}` : `${remainder}s`;
-}
-
-function formatMonitorRationale(value: string): string {
-  try {
-    return `\`\`\`json\n${JSON.stringify(JSON.parse(value), null, 2)}\n\`\`\``;
-  } catch {
-    return value;
-  }
 }

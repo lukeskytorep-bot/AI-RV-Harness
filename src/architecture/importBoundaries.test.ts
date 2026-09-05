@@ -157,6 +157,20 @@ describe("architecture import boundaries", () => {
     expect(deepImportOffenders, "Judge consumers must import the public feature entry point").toEqual([]);
   });
 
+  it("uses the public Monitor feature entry point and keeps Monitor UI out of App", () => {
+    const appSource = sourceFiles["../App.tsx"];
+    const deepImportOffenders = Object.entries(sourceFiles)
+      .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
+      .filter(({ projectPath }) => !/\.(?:test|spec)\.tsx?$/.test(projectPath))
+      .filter(({ projectPath }) => !projectPath.startsWith("features/monitor/"))
+      .filter(({ content }) => /from\s+["'][^"']*features\/monitor\//.test(content))
+      .map(({ projectPath }) => projectPath);
+
+    expect(appSource).toContain('from "./features/monitor"');
+    expect(appSource).not.toContain("function MonitorPanel(");
+    expect(deepImportOffenders, "Monitor consumers must import the public feature entry point").toEqual([]);
+  });
+
   it("keeps complete session and Judge Markdown formatting centralized", () => {
     const sessionExport = sourceFiles["../exports/session.ts"];
     const trainingExport = sourceFiles["../training/export.ts"];
