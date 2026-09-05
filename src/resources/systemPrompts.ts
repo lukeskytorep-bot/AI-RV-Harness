@@ -1,4 +1,5 @@
 import type { InterfaceLanguage } from "../types";
+import { getJudgePrompt, JUDGE_PROMPT_ID, JUDGE_PROMPT_VERSION } from "../judge/prompt";
 
 export const CONTENT_LICENSE = "CC-BY-4.0" as const;
 export const FACTORY_PROMPT_VERSION = "1.3.0" as const;
@@ -324,7 +325,7 @@ export function buildEffectiveTelepathicMonitorPrompt(language: InterfaceLanguag
 }
 
 export interface FactoryPromptResource {
-  id: "ai-viewer-system-prompt" | "ai-monitor-system-prompt";
+  id: "ai-viewer-system-prompt" | "ai-monitor-system-prompt" | typeof JUDGE_PROMPT_ID;
   language: InterfaceLanguage;
   version: string;
   content: string;
@@ -338,5 +339,6 @@ export function getFactoryPromptResources(): FactoryPromptResource[] {
   return (["pl", "en"] as const).flatMap((language) => [
     { id: "ai-viewer-system-prompt" as const, language, version: FACTORY_PROMPT_VERSION, content: buildEffectiveViewerPrompt(language), editableDefault: VIEWER_EDITABLE[language], license: CONTENT_LICENSE, attribution: "AI RV Harness contributors — see CREDITS.md" as const, publishedAt: "2026-08-21" as const },
     { id: "ai-monitor-system-prompt" as const, language, version: FACTORY_PROMPT_VERSION, content: buildEffectiveMonitorPrompt(language), editableDefault: MONITOR_EDITABLE[language], license: CONTENT_LICENSE, attribution: "AI RV Harness contributors — see CREDITS.md" as const, publishedAt: "2026-08-21" as const },
+    { id: JUDGE_PROMPT_ID, language, version: JUDGE_PROMPT_VERSION, content: getJudgePrompt(language), editableDefault: getJudgePrompt(language), license: CONTENT_LICENSE, attribution: "AI RV Harness contributors — see CREDITS.md" as const, publishedAt: "2026-08-21" as const },
   ]);
 }

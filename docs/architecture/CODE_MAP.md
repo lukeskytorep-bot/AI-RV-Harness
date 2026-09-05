@@ -14,8 +14,9 @@ This document maps responsibilities, not every source file. Historical release r
 | Settings screen | `src/features/settings/` | Extracted feature; import through `src/features/settings/index.ts`. |
 | Profiles screen and profile-specific forms | `src/features/profiles/` | Extracted feature; import through `src/features/profiles/index.ts`. |
 | Targets screen, dialogs and target-library operations | `src/features/targets/` | Extracted feature; import through `src/features/targets/index.ts`. |
-| Workspaces and RV Sessions screens | `src/App.tsx` | Extract one screen at a time into `src/features/`. |
-| Conversation and Manual RV message timeline presentation | `src/chat/ChatMessageList.tsx` | Keeps display-only time policy separate from persisted `createdAt`; broader Chat orchestration remains in `App.tsx`. |
+| Workspace directory, switching and lifecycle presentation | `src/features/workspaces/` | Extracted feature; import through `src/features/workspaces/index.ts`. |
+| Conversation and Manual RV orchestration | `src/features/conversations/` | Extracted feature; import through `src/features/conversations/index.ts`; message rendering and chat use cases remain in `src/chat/`. |
+| RV Sessions screen | `src/App.tsx` | Later higher-risk extraction after protecting session transitions and Resume. |
 | Training screen and long-run orchestration | `src/features/training/` | Extracted feature; import through `src/features/training/index.ts`. |
 | Research screen and builder | `src/features/research/` | Extracted feature; import through `src/features/research/index.ts`. |
 | AI Center interface | `src/features/aiCenter/` | Extracted presentation feature; identity and Viewer Notes domain rules remain in `src/aiCenter/`. |
@@ -36,6 +37,7 @@ This document maps responsibilities, not every source file. Historical release r
 | Post-Reveal reviews | `src/sessions/postReveal.ts` | Viewer review precedes Monitor review; not blind evidence. |
 | AI Monitor decisions | `src/monitor/engine.ts` | Monitor never rewrites Viewer evidence. |
 | AI Judge | `src/judge/engine.ts` | Receives only the sanitized allowlist packet. |
+| Read-only AI Judge prompt resource | `src/judge/prompt.ts`, exposed through `src/resources/systemPrompts.ts` | About & Protocols displays and saves the exact runtime PL/EN prompt rather than a copied UI string. |
 | Viewer Notes | `src/aiCenter/viewerNotes.ts` | Training-only update policy and immutable version history. |
 | Training orchestration | `src/features/training/trainingExecution.ts`, `src/training/` | Durable checkpoints select the first unfinished target; one completed target may trigger at most one Notes reflection. |
 
@@ -68,7 +70,9 @@ This document maps responsibilities, not every source file. Historical release r
 
 `TrainingScreen` and its long-running execution use case have been moved into `src/features/training/` behind a public entry point. The screen owns Training configuration and presentation. `trainingExecution.ts` owns target sequencing, durable per-target checkpoints, Resume from the first unfinished target, pause/cancellation propagation, post-Reveal review, optional judging and the Training-only Viewer Notes reflection trigger. Curriculum and export formats remain in `src/training/`; session, Judge and Viewer Notes domain rules remain with their existing owners.
 
-The next frontend candidate should be selected from Workspaces/Conversations. RV Sessions, Monitor and Judge remain later, higher-risk extractions.
+`WorkspacesScreen`, its filtered directory, switcher dialog and ordered rename/archive operations have been moved into `src/features/workspaces/`. `ChatPanel` has been moved into `src/features/conversations/` together with Conversation and Manual RV UI orchestration. Existing chat engines, persistence contracts, source handling, provider execution and export builders retain their previous ownership. `App.tsx` composes both public feature entry points and retains top-level navigation plus the Workspace shell that selects Chat or RV Session.
+
+The next frontend candidate should be selected from RV Sessions, Monitor and Judge as a later, higher-risk extraction. It should begin with one protected panel rather than moving the entire block at once.
 
 ## Updating this map
 

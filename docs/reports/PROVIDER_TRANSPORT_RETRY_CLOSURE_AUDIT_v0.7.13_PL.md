@@ -2,7 +2,7 @@
 
 **Data:** 4 września 2026  
 **Zakres:** Etap 2 modularizacji  
-**Status kandydata:** audyt kodu i testy frontendowe zakończone; końcowy GitHub Actions Rust/Tauri oczekuje na push
+**Status:** `COMPLETED` — audyt kodu, testy frontendowe oraz końcowy GitHub Actions Rust/Tauri zaliczone
 
 ## Potwierdzony właściciel transport retry
 
@@ -56,13 +56,14 @@ Audyt zachowuje i ponownie uruchamia istniejące testy:
 - typecheck: zaliczony;
 - build Vite: zaliczony;
 - skan produkcyjnych importów niskopoziomowego transportu: zaliczony;
-- lokalny Rust/Tauri: niewykonany — brak polecenia `cargo` w środowisku.
+- lokalny Rust/Tauri: niewykonany — brak polecenia `cargo` w środowisku;
+- GitHub Actions: użytkownik potwierdził pełny zielony przebieg dokładnego kandydata, obejmujący Rust/Tauri, `cargo test` i Clippy z `-D warnings`.
 
-## Kryterium ostatecznego zamknięcia
+## Ostateczne zamknięcie
 
-Kod spełnia lokalne kryteria audytu zamykającego. Status Etapu 2 można zmienić na `COMPLETED` dopiero po zielonym przebiegu istniejącego GitHub Actions dla dokładnie tej paczki, obejmującym:
+Kryterium końcowe zostało spełnione przez zielony przebieg istniejącego GitHub Actions dla dokładnie tej paczki, obejmujący:
 
 - `cargo test --manifest-path src-tauri/Cargo.toml --all-targets --locked`;
 - `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings`.
 
-Do tego momentu obowiązuje status: `CLOSURE CANDIDATE — GITHUB CI PENDING`.
+Etap 2 ma od tej chwili status: `COMPLETED`.

@@ -109,4 +109,34 @@ describe("architecture import boundaries", () => {
     expect(sourceFiles["../components/TrainingScreen.tsx"]).toBeUndefined();
     expect(deepImportOffenders, "Training consumers must import the public feature entry point").toEqual([]);
   });
+
+  it("uses the public Workspaces feature entry point and keeps its screens out of App", () => {
+    const appSource = sourceFiles["../App.tsx"];
+    const deepImportOffenders = Object.entries(sourceFiles)
+      .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
+      .filter(({ projectPath }) => !/\.(?:test|spec)\.tsx?$/.test(projectPath))
+      .filter(({ projectPath }) => !projectPath.startsWith("features/workspaces/"))
+      .filter(({ content }) => /from\s+["'][^"']*features\/workspaces\//.test(content))
+      .map(({ projectPath }) => projectPath);
+
+    expect(appSource).toContain('from "./features/workspaces"');
+    expect(appSource).not.toContain("function WorkspacesScreen(");
+    expect(appSource).not.toContain("function WorkspaceDirectoryList(");
+    expect(appSource).not.toContain("function WorkspaceSwitcherDialog(");
+    expect(deepImportOffenders, "Workspaces consumers must import the public feature entry point").toEqual([]);
+  });
+
+  it("uses the public Conversations feature entry point and keeps ChatPanel out of App", () => {
+    const appSource = sourceFiles["../App.tsx"];
+    const deepImportOffenders = Object.entries(sourceFiles)
+      .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
+      .filter(({ projectPath }) => !/\.(?:test|spec)\.tsx?$/.test(projectPath))
+      .filter(({ projectPath }) => !projectPath.startsWith("features/conversations/"))
+      .filter(({ content }) => /from\s+["'][^"']*features\/conversations\//.test(content))
+      .map(({ projectPath }) => projectPath);
+
+    expect(appSource).toContain('from "./features/conversations"');
+    expect(appSource).not.toContain("function ChatPanel(");
+    expect(deepImportOffenders, "Conversations consumers must import the public feature entry point").toEqual([]);
+  });
 });

@@ -4,8 +4,10 @@ import {
   buildEffectiveTelepathicMonitorPrompt,
   buildEffectiveViewerPrompt,
   factoryMonitorEditablePrompt,
+  getFactoryPromptResources,
   localizedMonitorEditablePrompt,
 } from "./systemPrompts";
+import { getJudgePrompt, JUDGE_PROMPT_ID, JUDGE_PROMPT_VERSION } from "../judge/prompt";
 
 function bulletLines(value: string): string[] {
   return value.split("\n").filter((line) => line.startsWith("- "));
@@ -60,5 +62,16 @@ describe("factory system prompts", () => {
     expect(prompt).toContain("not invoked after Step 9");
     expect(prompt).toContain("whole session and all data gathered so far");
     expect(prompt).toContain("EDITABLE TELEPATHIC MONITOR BODY");
+  });
+
+  it("publishes the exact central Judge prompts in Polish and English", () => {
+    const resources = getFactoryPromptResources();
+    const polish = resources.find((item) => item.id === JUDGE_PROMPT_ID && item.language === "pl");
+    const english = resources.find((item) => item.id === JUDGE_PROMPT_ID && item.language === "en");
+
+    expect(polish).toMatchObject({ version: JUDGE_PROMPT_VERSION, content: getJudgePrompt("pl") });
+    expect(english).toMatchObject({ version: JUDGE_PROMPT_VERSION, content: getJudgePrompt("en") });
+    expect(polish?.content).toContain("3-3-2-2/v1");
+    expect(english?.content).toContain("3-3-2-2/v1");
   });
 });
