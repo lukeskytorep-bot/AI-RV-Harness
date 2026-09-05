@@ -18,7 +18,7 @@ describe("complete session export", () => {
         postRevealTranscript: "viewer review", createdAt: "2026-08-19T10:00:00Z", updatedAt: "2026-08-19T10:10:00Z", completedAt: "2026-08-19T10:10:00Z",
       }]),
       getReveal: vi.fn().mockResolvedValue({ source: "external_mixed", text: "true target", artifactManifest: [{ artifactId: "image", path: "/managed/reveal.png", originalFileName: "target image.png", mimeType: "image/png", size: 123, sha256: "a".repeat(64) }], hash: "reveal-hash" }),
-      listJudgeScores: vi.fn().mockResolvedValue([]),
+      listJudgeScores: vi.fn().mockResolvedValue([{ id: "score", judgeRunId: "judge-run", judgeIndex: 1, modelRoute: "openrouter:judge", gestalt: 2.5, verifiableFeatures: 2, activityFunctionEvent: 1.5, confabulationControl: 1, total: 7, narrative: { strongestMatches: ["silna struktura"], majorMissesContradictions: ["brak koloru"], confabulationObservations: ["niepoparta etykieta"], conciseRationale: "Istotna zgodność." }, frozenAt: "now", createdAt: "now" }]),
       getSessionSnapshot: vi.fn().mockResolvedValue({
         credentialId: "credential-secret-reference", credentialHint: "should-not-export",
         modelId: "viewer-model", modelRoute: "openrouter:viewer-model",
@@ -46,6 +46,11 @@ describe("complete session export", () => {
     expect(completeSession).toContain("- Tryb: Automatyczna sesja RV");
     expect(completeSession).toContain("- Protokół: full-rcp 1.5a");
     expect(completeSession).toContain("- Model Viewera: openrouter:viewer-model");
+    expect(completeSession).toContain("- Modele Judge: openrouter:judge");
+    expect(completeSession).toContain("Judge 1 — 7.0/10");
+    expect(completeSession).toContain("- Gestalt: 2.5/3");
+    expect(completeSession).toContain("- Kontrola konfabulacji: 1.0/2");
+    expect(completeSession).toContain("niepoparta etykieta");
     expect(completeSession).toContain("- Utworzono:");
     expect(completeSession).toContain("- Zakończono:");
     expect(completeSession).toContain("- Wyeksportowano:");

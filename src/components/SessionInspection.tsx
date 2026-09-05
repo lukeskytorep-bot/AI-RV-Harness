@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Download, FileCheck2, LockKeyhole, Scale, Sparkles } from "lucide-react";
 import { exportSessionRecord } from "../exports/session";
+import { JudgeResults } from "./JudgeResults";
+import { getCopy } from "../i18n";
 import type { JudgeScoreRecord } from "../judge/types";
 import type { RevealInput, RvSession, SessionSnapshot } from "../sessions/types";
 import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
@@ -17,6 +19,7 @@ export function SessionInspection({ repository, workspaceId, sessionId, language
   language: InterfaceLanguage;
 }) {
   const pl = language === "pl";
+  const copy = getCopy(language);
   const [session, setSession] = useState<RvSession | null>(null);
   const [reveal, setReveal] = useState<RevealInput | null>(null);
   const [scores, setScores] = useState<JudgeScoreRecord[]>([]);
@@ -74,6 +77,6 @@ export function SessionInspection({ repository, workspaceId, sessionId, language
     <article><h4><LockKeyhole size={15} />{pl ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}</h4><SafeMarkdown content={session.preRevealTranscript || (pl ? "Brak transkryptu." : "No transcript.")} /></article>
     {reveal && <article className="session-reveal"><h4><FileCheck2 size={15} />Target Reveal</h4>{reveal.text && <SafeMarkdown content={reveal.text} />}{reveal.artifactManifest?.length ? <ul>{reveal.artifactManifest.map((artifact) => <li key={artifact.artifactId}>{artifact.originalFileName} · {artifact.mimeType}</li>)}</ul> : null}</article>}
     <article><h4><Sparkles size={15} />{pl ? "Opinia Viewera i rozmowa po Revealu" : "Viewer review and post-Reveal discussion"}</h4>{session.postRevealTranscript ? <SafeMarkdown content={postRevealTranscriptMarkdown(session.postRevealTranscript, language)} /> : <p>{pl ? "Nie zapisano rozmowy po Revealu." : "No post-Reveal discussion was recorded."}</p>}</article>
-    <article><h4><Scale size={15} />{pl ? "Ocena AI Judge" : "AI Judge evaluation"}</h4>{scores.length ? <div className="session-score-list">{scores.map((score) => <section key={score.id}><strong>Judge {score.judgeIndex} · {score.total}/10</strong><small>{score.modelRoute}</small><p>{score.narrative.conciseRationale}</p><div><span>{pl ? "Najmocniejsze trafienia" : "Strongest matches"}: {score.narrative.strongestMatches.join(" · ") || "—"}</span><span>{pl ? "Główne chybienia" : "Major misses"}: {score.narrative.majorMissesContradictions.join(" · ") || "—"}</span></div></section>)}</div> : <p>{pl ? "W tej sesji nie użyto AI Judge'a." : "No AI Judge was used for this session."}</p>}</article>
+    <article><h4><Scale size={15} />{copy.judgeEvaluation}</h4>{scores.length ? <JudgeResults copy={copy} scores={scores} /> : <p>{pl ? "W tej sesji nie użyto AI Judge'a." : "No AI Judge was used for this session."}</p>}</article>
   </section>;
 }

@@ -5,8 +5,8 @@ import { localizedTargetTitle } from "../targets/localization";
 import { TRAINING_CATEGORY_LABELS, type TrainingCategory } from "../targets/bundled";
 import type { InterfaceLanguage } from "../types";
 import type { TrainingRunRecord } from "./types";
-import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
 import { renderMarkdownExportDocument, type ExportMetadataField } from "../exports/document";
+import { renderCompleteSessionMarkdown } from "../exports/sessionDocument";
 
 export async function exportTrainingRun(
   repository: AppRepository,
@@ -46,17 +46,15 @@ export async function exportTrainingRun(
     const target = targetById.get(targetId);
     if (!session || !target) continue;
     const folder = `${String(index + 1).padStart(3, "0")}_${safeName(session.sessionCode)}`;
-    const [reveal, scores, snapshot] = await Promise.all([
+    const [reveal, scores, snapshot, clarifications] = await Promise.all([
       repository.getReveal(session.id),
       repository.listJudgeScores(session.id),
       repository.getSessionSnapshot(session.id),
+      repository.listTargetClarifications(session.id),
     ]);
     const category = target.sourceMetadata.category as TrainingCategory | undefined;
     const title = localizedTargetTitle(target, language);
     const revealText = reveal?.text?.trim() || (language === "pl" ? "Reveal zawiera wyłącznie załączone pliki." : "The Reveal contains attached files only.");
-    const judgeMarkdown = scores.length
-      ? scores.map((score) => `### Judge ${score.judgeIndex} — ${score.total}/10\n\n${score.narrative.conciseRationale}\n\n- ${language === "pl" ? "Najmocniejsze trafienia" : "Strongest matches"}: ${score.narrative.strongestMatches.join("; ") || "—"}\n- ${language === "pl" ? "Główne chybienia" : "Major misses"}: ${score.narrative.majorMissesContradictions.join("; ") || "—"}`).join("\n\n")
-      : language === "pl" ? "W tej sesji nie użyto AI Judge'a." : "No AI Judge was used for this session.";
     const revealFiles = (reveal?.artifactManifest ?? []).map((artifact, artifactIndex) => {
       const relativePath = `reveal_files/${String(artifactIndex + 1).padStart(2, "0")}_${safeName(artifact.originalFileName)}`;
       artifactCopies.push({ sourcePath: artifact.path, relativePath: `sessions/${folder}/${relativePath}` });
@@ -66,9 +64,14 @@ export async function exportTrainingRun(
     }).join("\n\n");
     files.push({
       relativePath: `sessions/${folder}/complete_session.md`,
-      content: renderMarkdownExportDocument({
+      content: renderCompleteSessionMarkdown({
         language,
         title: `${session.sessionCode} — ${title}`,
+        session,
+        revealText,
+        revealFilesMarkdown: revealFiles || "—",
+        scores,
+        clarifications,
         metadata: {
           workspace: workspaceName,
           profile: profileName,
@@ -82,7 +85,6 @@ export async function exportTrainingRun(
           completedAt: session.completedAt,
           exportedAt,
         },
-        body: `## ${language === "pl" ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}\n\n${session.preRevealTranscript.trim() || "—"}\n\n## Target Reveal\n\n${revealText}\n\n### ${language === "pl" ? "Pliki Revealu" : "Reveal files"}\n\n${revealFiles || "—"}\n\n## ${language === "pl" ? "Opinia Viewera i rozmowa po Revealu" : "Viewer review and post-Reveal discussion"}\n\n${postRevealTranscriptMarkdown(session.postRevealTranscript, language) || "—"}\n\n## AI Judge\n\n${judgeMarkdown}`,
       }),
     });
     resultRows.push({

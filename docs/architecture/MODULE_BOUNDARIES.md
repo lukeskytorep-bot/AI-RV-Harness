@@ -52,6 +52,7 @@ The active public feature entry points are:
 | Training | `src/features/training/index.ts` | Training screen, long-run sequencing, durable checkpoint/Resume coordination, pause/cancellation propagation and orchestration of post-Reveal review, optional Judge and Viewer Notes reflection | top-level navigation, curriculum definitions, session protocol implementation, Judge rules, Viewer Notes versioning, repository implementation, provider transport |
 | Workspaces | `src/features/workspaces/index.ts` | Workspace directory, search/filter presentation, switcher dialog and ordered rename/archive coordination | top-level navigation, repository implementation, Profile lifecycle, RV Session execution |
 | Conversations | `src/features/conversations/index.ts` | Conversation and Manual RV screen state, thread/group/source coordination, model selection, retry UI and export initiation | provider transport, repository implementation, chat message construction rules, persistence schema, top-level Workspace navigation |
+| Judge | `src/features/judge/index.ts` | single-session and ordinary-batch Judge configuration, execution state, stored-score recovery and evaluation presentation | Judge prompt/rubric, evidence-packet construction, score persistence implementation, provider transport, top-level RV Session navigation |
 
 Example:
 
@@ -65,6 +66,7 @@ import { ResearchScreen } from "./features/research";
 import { TrainingScreen } from "./features/training";
 import { WorkspacesScreen, WorkspaceSwitcherDialog } from "./features/workspaces";
 import { ChatPanel } from "./features/conversations";
+import { BatchEvaluation, JudgeEvaluation } from "./features/judge";
 ```
 
 Avoid:
@@ -73,7 +75,9 @@ Avoid:
 import { HomeResumeCard } from "./features/home/components/HomeResumeCard";
 ```
 
-Internal files may remain private even if TypeScript technically permits a deep import. New callers must import Home, Settings, Profiles, Targets, AI Center, Research, Training, Workspaces and Conversations from their module roots, not directly from implementation files. The architecture test enforces these public entry points and keeps their implementations out of `App.tsx` or the shared component directory.
+Internal files may remain private even if TypeScript technically permits a deep import. New callers must import Home, Settings, Profiles, Targets, AI Center, Research, Training, Workspaces, Conversations and Judge from their module roots, not directly from implementation files. The architecture test enforces these public entry points and keeps their implementations out of `App.tsx`.
+
+`src/components/JudgeResults.tsx` is intentionally shared because it has two independent presentation contexts: the live RV evaluation and stored-session inspection used by Training and Research. `src/exports/sessionDocument.ts` is the sole owner of the readable complete-session section order and Judge Markdown. Domain exporters may choose package paths and safe metadata, but must not recreate the Judge narrative layout.
 
 ## Cross-domain operations
 

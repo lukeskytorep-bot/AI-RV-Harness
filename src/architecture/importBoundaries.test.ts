@@ -139,4 +139,33 @@ describe("architecture import boundaries", () => {
     expect(appSource).not.toContain("function ChatPanel(");
     expect(deepImportOffenders, "Conversations consumers must import the public feature entry point").toEqual([]);
   });
+
+  it("uses the public Judge feature entry point and keeps Judge UI out of App", () => {
+    const appSource = sourceFiles["../App.tsx"];
+    const deepImportOffenders = Object.entries(sourceFiles)
+      .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
+      .filter(({ projectPath }) => !/\.(?:test|spec)\.tsx?$/.test(projectPath))
+      .filter(({ projectPath }) => !projectPath.startsWith("features/judge/"))
+      .filter(({ content }) => /from\s+["'][^"']*features\/judge\//.test(content))
+      .map(({ projectPath }) => projectPath);
+
+    expect(appSource).toContain('from "./features/judge"');
+    expect(appSource).not.toContain("function JudgeEvaluation(");
+    expect(appSource).not.toContain("function BatchEvaluation(");
+    expect(appSource).not.toContain("function JudgeNarrativeRow(");
+    expect(sourceFiles["../components/SessionInspection.tsx"]).toContain("<JudgeResults");
+    expect(deepImportOffenders, "Judge consumers must import the public feature entry point").toEqual([]);
+  });
+
+  it("keeps complete session and Judge Markdown formatting centralized", () => {
+    const sessionExport = sourceFiles["../exports/session.ts"];
+    const trainingExport = sourceFiles["../training/export.ts"];
+    const researchExport = sourceFiles["../exports/research.ts"];
+
+    for (const consumer of [sessionExport, trainingExport, researchExport]) {
+      expect(consumer).toContain("renderCompleteSessionMarkdown");
+      expect(consumer).not.toContain("score.narrative.strongestMatches");
+      expect(consumer).not.toContain("score.narrative.confabulationObservations");
+    }
+  });
 });

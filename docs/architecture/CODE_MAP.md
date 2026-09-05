@@ -36,7 +36,10 @@ This document maps responsibilities, not every source file. Historical release r
 | Custom protocol execution | `src/sessions/customController.ts` | Execute the captured immutable protocol version. |
 | Post-Reveal reviews | `src/sessions/postReveal.ts` | Viewer review precedes Monitor review; not blind evidence. |
 | AI Monitor decisions | `src/monitor/engine.ts` | Monitor never rewrites Viewer evidence. |
-| AI Judge | `src/judge/engine.ts` | Receives only the sanitized allowlist packet. |
+| AI Judge execution | `src/judge/engine.ts` | Receives only the sanitized allowlist packet and freezes scores without UI ownership. |
+| AI Judge workflow UI | `src/features/judge/` | Extracted feature; owns single-session and batch evaluation controls through `src/features/judge/index.ts`. |
+| Shared AI Judge result presentation | `src/components/JudgeResults.tsx` | Canonical complete score presentation used by live RV and stored-session inspection in Training/Research. |
+| Complete session and Judge Markdown | `src/exports/sessionDocument.ts` | Canonical section order and complete frozen-score rendering used by RV Session, Training and Research exporters. |
 | Read-only AI Judge prompt resource | `src/judge/prompt.ts`, exposed through `src/resources/systemPrompts.ts` | About & Protocols displays and saves the exact runtime PL/EN prompt rather than a copied UI string. |
 | Viewer Notes | `src/aiCenter/viewerNotes.ts` | Training-only update policy and immutable version history. |
 | Training orchestration | `src/features/training/trainingExecution.ts`, `src/training/` | Durable checkpoints select the first unfinished target; one completed target may trigger at most one Notes reflection. |
@@ -72,7 +75,9 @@ This document maps responsibilities, not every source file. Historical release r
 
 `WorkspacesScreen`, its filtered directory, switcher dialog and ordered rename/archive operations have been moved into `src/features/workspaces/`. `ChatPanel` has been moved into `src/features/conversations/` together with Conversation and Manual RV UI orchestration. Existing chat engines, persistence contracts, source handling, provider execution and export builders retain their previous ownership. `App.tsx` composes both public feature entry points and retains top-level navigation plus the Workspace shell that selects Chat or RV Session.
 
-The next frontend candidate should be selected from RV Sessions, Monitor and Judge as a later, higher-risk extraction. It should begin with one protected panel rather than moving the entire block at once.
+`JudgeEvaluation` and `BatchEvaluation` have been moved from `App.tsx` into `src/features/judge/`. The interactive feature keeps the existing evaluation engine, model-route recovery, score freezing and add-another-Judge behavior. `JudgeResults` is a genuinely shared presentation component used by the live RV flow and by `SessionInspection`, which is shared by Training and Research. Complete-session Markdown is assembled by `src/exports/sessionDocument.ts`; ordinary RV, Training and Research retain their package/blinding adapters but no longer maintain competing Judge layouts.
+
+The next frontend candidate should be selected between RV Sessions and Monitor. It should remain one protected panel rather than moving both at once.
 
 ## Updating this map
 

@@ -1,10 +1,8 @@
-import type { JudgeScoreRecord } from "../judge/types";
-import type { RevealArtifactRecord, RevealInput, RvSession, TargetClarificationRecord } from "../sessions/types";
-import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
+import type { RevealArtifactRecord, RevealInput } from "../sessions/types";
 import type { AppRepository } from "../storage/repository";
 import type { InterfaceLanguage } from "../types";
-import { renderMarkdownExportDocument } from "./document";
 import { writeExportPackage, type ExportArtifactCopy, type ExportTextFile } from "./native";
+import { renderCompleteSessionMarkdown } from "./sessionDocument";
 
 export async function exportSessionRecord(
   repository: AppRepository,
@@ -30,18 +28,32 @@ export async function exportSessionRecord(
   const profile = profiles.find((item) => item.id === session.profileId);
   const exportId = `RV_Session_${safePart(session.sessionCode)}_${timestampPart(exportedAt)}`;
   const artifactCopies = revealArtifactCopies(reveal);
-  const completeSession = completeSessionMarkdown({
+  const mode = session.runType === "automatic_monitor"
+    ? (language === "pl" ? "RV z Monitorem" : "Monitored RV")
+    : session.runType === "automatic"
+      ? (language === "pl" ? "Automatyczna sesja RV" : "Automatic RV")
+      : "Manual RV";
+  const completeSession = renderCompleteSessionMarkdown({
+    title: `${session.sessionCode} — ${language === "pl" ? "pełny zapis sesji" : "complete session record"}`,
+    language,
     session,
-    reveal,
+    revealText: reveal?.text ?? "",
+    revealFilesMarkdown: revealFilesMarkdown(reveal),
     scores,
     clarifications,
-    language,
-    exportedAt,
-    workspaceName: workspace?.name ?? session.workspaceId,
-    profileName: profile?.name ?? snapshot?.identities?.aiIsBeDisplayName ?? session.profileId,
-    protocol: snapshot ? `${snapshot.protocol.id} ${snapshot.protocol.version}` : undefined,
-    viewerModel: snapshot?.modelRoute ?? snapshot?.modelId,
-    monitorModel: snapshot?.monitor?.modelRoute ?? snapshot?.monitor?.modelId,
+    metadata: {
+      workspace: workspace?.name ?? session.workspaceId,
+      profile: profile?.name ?? snapshot?.identities?.aiIsBeDisplayName ?? session.profileId,
+      mode,
+      protocol: snapshot ? `${snapshot.protocol.id} ${snapshot.protocol.version}` : undefined,
+      viewerModel: snapshot?.modelRoute ?? snapshot?.modelId,
+      monitorModel: snapshot?.monitor?.modelRoute ?? snapshot?.monitor?.modelId,
+      judgeModels: scores.map((score) => score.modelRoute),
+      state: session.state,
+      createdAt: session.createdAt,
+      completedAt: session.completedAt,
+      exportedAt,
+    },
   });
   const files: ExportTextFile[] = [
     { relativePath: "complete_session.md", content: completeSession },
@@ -60,90 +72,14 @@ export async function exportSessionRecord(
   return directory;
 }
 
-function completeSessionMarkdown(input: {
-  session: RvSession;
-  reveal: RevealInput | null;
-  scores: JudgeScoreRecord[];
-  clarifications: TargetClarificationRecord[];
-  language: InterfaceLanguage;
-  exportedAt: Date;
-  workspaceName: string;
-  profileName: string;
-  protocol?: string;
-  viewerModel?: string;
-  monitorModel?: string;
-}): string {
-  const { session, reveal, scores, clarifications, language } = input;
-  const pl = language === "pl";
-  const judgeText = scores.length
-    ? scores.map((score) => [
-      `### Judge ${score.judgeIndex} — ${score.total}/10`,
-      `- Model: ${score.modelRoute}`,
-      `- ${pl ? "Najmocniejsze trafienia" : "Strongest matches"}: ${score.narrative.strongestMatches.join(" · ") || "—"}`,
-      `- ${pl ? "Główne chybienia lub sprzeczności" : "Major misses or contradictions"}: ${score.narrative.majorMissesContradictions.join(" · ") || "—"}`,
-      `- ${pl ? "Konfabulacje" : "Confabulation observations"}: ${score.narrative.confabulationObservations.join(" · ") || "—"}`,
-      "",
-      score.narrative.conciseRationale,
-    ].join("\n")).join("\n\n")
-    : (pl ? "W tej sesji nie użyto AI Judge'a." : "No AI Judge was used for this session.");
-  const revealFiles = reveal?.artifactManifest?.length
-    ? reveal.artifactManifest.map((artifact, index) => {
-      const relativePath = `reveal_files/${String(index + 1).padStart(2, "0")}_${safePart(artifact.originalFileName)}`;
-      return artifact.mimeType.startsWith("image/")
-        ? `![${artifact.originalFileName}](${relativePath})\n\n- ${artifact.originalFileName} (${artifact.mimeType}, SHA-256: ${artifact.sha256})`
-        : `- [${artifact.originalFileName}](${relativePath}) (${artifact.mimeType}, SHA-256: ${artifact.sha256})`;
-    }).join("\n\n")
-    : "—";
-  const clarificationText = clarifications.length
-    ? clarifications.map((item) => `### ${item.createdAt}\n\n${item.content}`).join("\n\n")
-    : "—";
-  const mode = session.runType === "automatic_monitor"
-    ? (pl ? "RV z Monitorem" : "Monitored RV")
-    : session.runType === "automatic"
-      ? (pl ? "Automatyczna sesja RV" : "Automatic RV")
-      : "Manual RV";
-  const body = `## ${pl ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}
-
-${session.preRevealTranscript.trim() || "—"}
-
-## Target Reveal
-
-${reveal?.text?.trim() || "—"}
-
-### ${pl ? "Pliki Revealu" : "Reveal files"}
-
-${revealFiles}
-
-## ${pl ? "Opinia Viewera i rozmowa po Revealu" : "Viewer review and post-Reveal discussion"}
-
-${postRevealTranscriptMarkdown(session.postRevealTranscript, language) || "—"}
-
-## ${pl ? "Ocena AI Judge" : "AI Judge evaluation"}
-
-${judgeText}
-
-## ${pl ? "Późniejsze doprecyzowania celu" : "Later target clarifications"}
-
-${clarificationText}
-`;
-  return renderMarkdownExportDocument({
-    language,
-    title: `${session.sessionCode} — ${pl ? "pełny zapis sesji" : "complete session record"}`,
-    metadata: {
-      workspace: input.workspaceName,
-      profile: input.profileName,
-      mode,
-      protocol: input.protocol,
-      viewerModel: input.viewerModel,
-      monitorModel: input.monitorModel,
-      judgeModels: scores.map((score) => score.modelRoute),
-      state: session.state,
-      createdAt: session.createdAt,
-      completedAt: session.completedAt,
-      exportedAt: input.exportedAt,
-    },
-    body,
-  });
+function revealFilesMarkdown(reveal: RevealInput | null): string {
+  if (!reveal?.artifactManifest?.length) return "—";
+  return reveal.artifactManifest.map((artifact, index) => {
+    const relativePath = `reveal_files/${String(index + 1).padStart(2, "0")}_${safePart(artifact.originalFileName)}`;
+    return artifact.mimeType.startsWith("image/")
+      ? `![${artifact.originalFileName}](${relativePath})\n\n- ${artifact.originalFileName} (${artifact.mimeType}, SHA-256: ${artifact.sha256})`
+      : `- [${artifact.originalFileName}](${relativePath}) (${artifact.mimeType}, SHA-256: ${artifact.sha256})`;
+  }).join("\n\n");
 }
 
 function revealArtifactCopies(reveal: RevealInput | null): ExportArtifactCopy[] {

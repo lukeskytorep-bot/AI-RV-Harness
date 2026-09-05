@@ -1,12 +1,13 @@
 import { buildJudgePacket } from "../domain/judgePacket";
-import { JUDGE_RUBRIC_VERSION, type JudgeScoreRecord } from "../judge/types";
+import { JUDGE_RUBRIC_VERSION } from "../judge/types";
 import { getJudgePrompt } from "../judge/prompt";
 import type { AppRepository } from "../storage/repository";
-import type { RevealArtifactRecord, RvSession, TargetClarificationRecord } from "../sessions/types";
+import type { RevealArtifactRecord } from "../sessions/types";
 import { stableStringify } from "../research/planner";
 import type { ResearchResults } from "../research/types";
 import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
 import { writeExportPackage, type ExportArtifactCopy, type ExportTextFile } from "./native";
+import { renderCompleteSessionMarkdown } from "./sessionDocument";
 
 export async function exportResearchPackage(repository: AppRepository, projectId: string, baseDirectory?: string): Promise<{ directory: string; manifestHash: string }> {
   const project = await repository.getResearchProject(projectId);
@@ -83,7 +84,15 @@ export async function exportResearchPackage(repository: AppRepository, projectId
     if (!saveOnly) files.push({ relativePath: `judges/${assignment.anonymousSessionId}.json`, content: pretty(judgeScores) });
     files.push({
       relativePath: saveOnly ? `private_master/sessions/${assignment.anonymousSessionId}/complete_session.md` : `${base}/complete_session.md`,
-      content: completeResearchSessionMarkdown({ anonymousSessionId: assignment.anonymousSessionId, session, revealText: reveal?.text ?? "", artifacts: exportedArtifacts, judgeScores, clarifications, language: project.config.sessionLanguage, saveOnly }),
+      content: renderCompleteSessionMarkdown({
+        title: `${assignment.anonymousSessionId} — ${project.config.sessionLanguage === "pl" ? "pełny zapis sesji" : "complete session record"}`,
+        language: project.config.sessionLanguage,
+        session,
+        revealText: reveal?.text ?? "",
+        revealFilesMarkdown: readableArtifacts(exportedArtifacts, saveOnly ? "../../../" : `sessions/${assignment.anonymousSessionId}/`),
+        scores: judgeScores,
+        clarifications,
+      }),
     });
 
     const mapping = mappingByAnonymous.get(assignment.anonymousSessionId);
@@ -144,28 +153,6 @@ function saveOnlySessionsCsv(assignments: Array<{ anonymousSessionId: string; st
   return [["anonymous_session_id", "status", "session_saved"], ...assignments.map((assignment) => [assignment.anonymousSessionId, assignment.status, assignment.sessionId ? "yes" : "no"])]
     .map((row) => row.map(csvCell).join(","))
     .join("\r\n") + "\r\n";
-}
-
-function completeResearchSessionMarkdown(input: {
-  anonymousSessionId: string;
-  session: RvSession;
-  revealText: string;
-  artifacts: Array<{ mimeType: string; sha256: string; exportedPath: string }>;
-  judgeScores: JudgeScoreRecord[];
-  clarifications: TargetClarificationRecord[];
-  language: "pl" | "en";
-  saveOnly: boolean;
-}): string {
-  const pl = input.language === "pl";
-  const artifactPrefix = input.saveOnly ? "../../../" : `sessions/${input.anonymousSessionId}/`;
-  const artifacts = readableArtifacts(input.artifacts, artifactPrefix);
-  const judges = input.judgeScores.length
-    ? input.judgeScores.map((score) => [`### Judge ${score.judgeIndex} — ${score.total}/10`, `- ${pl ? "Model" : "Model"}: ${score.modelRoute}`, `- ${pl ? "Najmocniejsze trafienia" : "Strongest matches"}: ${score.narrative.strongestMatches.join(" · ") || "—"}`, `- ${pl ? "Główne chybienia lub sprzeczności" : "Major misses or contradictions"}: ${score.narrative.majorMissesContradictions.join(" · ") || "—"}`, `- ${pl ? "Konfabulacje" : "Confabulation observations"}: ${score.narrative.confabulationObservations.join(" · ") || "—"}`, "", score.narrative.conciseRationale].join("\n")).join("\n\n")
-    : (pl ? "W tej sesji nie użyto AI Judge'a." : "No AI Judge was used for this session.");
-  const clarifications = input.clarifications.length
-    ? input.clarifications.map((item) => `### ${item.createdAt}\n\n${item.content}`).join("\n\n")
-    : "—";
-  return `# ${input.anonymousSessionId} — ${pl ? "pełny zapis sesji" : "complete session record"}\n\n## ${pl ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}\n\n${input.session.preRevealTranscript.trim() || "—"}\n\n## Target Reveal\n\n${input.revealText.trim() || "—"}\n\n### ${pl ? "Pliki Revealu" : "Reveal files"}\n\n${artifacts || "—"}\n\n## ${pl ? "Opinia Viewera i rozmowa po Revealu" : "Viewer review and post-Reveal discussion"}\n\n${postRevealTranscriptMarkdown(input.session.postRevealTranscript, input.language) || "—"}\n\n## AI Judge\n\n${judges}\n\n## ${pl ? "Starsze doprecyzowania celu" : "Legacy target clarifications"}\n\n${clarifications}\n`;
 }
 
 function humanJudgePacketMarkdown(anonymousSessionId: string, evidence: string, revealText: string, artifacts: Array<{ mimeType: string; sha256: string; exportedPath: string }>, language: "pl" | "en"): string {

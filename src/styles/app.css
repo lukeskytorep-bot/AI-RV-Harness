@@ -1325,12 +1325,6 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 .session-inspection > article h4 { display: flex; align-items: center; gap: 7px; margin: 0 0 10px; font-size: 11px; }
 .session-inspection > article h4 svg { color: var(--violet); }
 .session-inspection .markdown-body { max-height: 540px; overflow: auto; font-size: 11px; line-height: 1.6; }
-.session-score-list { display: grid; gap: 7px; }
-.session-score-list > section { display: grid; gap: 4px; padding: 9px; border-radius: 9px; background: var(--surface-soft); }
-.session-score-list strong { font-size: 11px; }
-.session-score-list small, .session-score-list span { color: var(--muted); font-size: 11px; line-height: 1.45; }
-.session-score-list p { margin: 3px 0; font-size: 11px; line-height: 1.5; }
-.session-score-list > section > div { display: grid; gap: 3px; }
 .session-inspection-loading { margin-top: 12px; padding: 14px; color: var(--muted); font-size: 11px; text-align: center; }
 .research-session-history { margin-top: 15px; overflow: hidden; }
 .research-session-history > div:last-child { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; padding: 12px; }
