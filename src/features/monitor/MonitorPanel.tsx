@@ -24,9 +24,10 @@ export interface MonitorPanelProps {
   profile: Profile | null;
   workspace: Workspace;
   repository: AppRepository | null;
+  onProfileChanged?: () => Promise<void> | void;
 }
 
-export function MonitorPanel({ copy, settings, profile, workspace, repository }: MonitorPanelProps) {
+export function MonitorPanel({ copy, settings, profile, workspace, repository, onProfileChanged }: MonitorPanelProps) {
   const [runs, setRuns] = useState<MonitorRunRecord[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [interventions, setInterventions] = useState<MonitorInterventionRecord[]>([]);
@@ -37,6 +38,7 @@ export function MonitorPanel({ copy, settings, profile, workspace, repository }:
   const [editablePrompt, setEditablePrompt] = useState(localizedMonitorEditablePrompt(profile?.defaultMonitorSystemPrompt, language));
   const [promptSaved, setPromptSaved] = useState(false);
   const [promptError, setPromptError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     setEditablePrompt(localizedMonitorEditablePrompt(profile?.defaultMonitorSystemPrompt, language));
@@ -49,8 +51,10 @@ export function MonitorPanel({ copy, settings, profile, workspace, repository }:
     if (!repository) {
       setRuns([]);
       setSelectedRunId(null);
+      setLoadError(null);
       return () => { cancelled = true; };
     }
+    setLoadError(null);
     void Promise.all([
       repository.listMonitorRuns(workspace.id),
       repository.listRvSessions(workspace.id),
@@ -66,7 +70,7 @@ export function MonitorPanel({ copy, settings, profile, workspace, repository }:
       setRuns(visible);
       setSelectedRunId((current) => current && visible.some((item) => item.id === current) ? current : visible[0]?.id ?? null);
     }).catch((cause) => {
-      if (!cancelled) setExportError(cause instanceof Error ? cause.message : String(cause));
+      if (!cancelled) setLoadError(cause instanceof Error ? cause.message : String(cause));
     });
     return () => { cancelled = true; };
   }, [repository, workspace.id]);
@@ -91,19 +95,7 @@ export function MonitorPanel({ copy, settings, profile, workspace, repository }:
     if (!repository || !profile) return;
     setPromptError(null);
     try {
-      await repository.setProfileAiConfiguration(profile.id, {
-        credentialId: profile.credentialId,
-        credentialProvider: profile.credentialProvider,
-        defaultViewerModelId: profile.defaultViewerModelId,
-        defaultViewerReasoningEffort: profile.defaultViewerReasoningEffort,
-        defaultViewerTemperature: profile.defaultViewerTemperature,
-        defaultViewerSystemPrompt: profile.defaultViewerSystemPrompt,
-        defaultMonitorSystemPrompt: editablePrompt.trim() || factoryMonitorEditablePrompt(language),
-        defaultMonitorProviderConfigId: profile.defaultMonitorProviderConfigId,
-        defaultMonitorModelId: profile.defaultMonitorModelId,
-        defaultJudgeProviderConfigId: profile.defaultJudgeProviderConfigId,
-        defaultJudgeModelId: profile.defaultJudgeModelId,
-      });
+      await persistMonitorSystemPrompt(repository, profile.id, editablePrompt, language, onProfileChanged);
       setPromptSaved(true);
     } catch (cause) {
       setPromptError(cause instanceof Error ? cause.message : String(cause));
@@ -139,7 +131,21 @@ export function MonitorPanel({ copy, settings, profile, workspace, repository }:
       </div>
     </details>
     {!runs.length ? <EmptyState icon={<MonitorCog size={28} />} title={copy.noMonitorRuns} body={copy.monitorLead} /> : <div className="monitor-history-layout"><div className="monitor-run-list">{runs.map((run) => <button className={run.id === selectedRunId ? "active" : ""} key={run.id} onClick={() => { setSelectedRunId(run.id); setExportPath(null); setExportError(null); }}><span><strong>{run.sessionCode}</strong><small>{run.modelRoute}</small></span><span>{run.interventionCount}</span></button>)}</div><div className="monitor-run-detail">{selected && <><div className="monitor-run-meta"><span><small>{copy.promptVersion}</small><strong>{selected.promptVersionId ?? "—"}</strong></span><span><small>{copy.libraryVersion}</small><strong>{selected.libraryVersion}</strong></span><span><small>{copy.interventions}</small><strong>{selected.interventionCount} / {selected.maxInterventions}</strong></span></div><div className="monitor-export-row"><button className="secondary-button" disabled={!isTauriRuntime() || exportingRun} onClick={() => void exportSelected()}>{exportingRun ? copy.exporting : copy.exportMonitorRun}</button><small>{copy.monitorExportSafe}</small></div></>}{interventions.length ? <div className="monitor-timeline">{interventions.map((item) => <article key={item.id} className={item.decision === "INTERVENE" ? "intervene" : "continue"}><div><span>{item.sequenceNumber}</span><strong>{item.decision === "INTERVENE" ? item.commandId ?? "INTERVENE" : copy.continueProtocol}</strong></div>{item.viewerEvidence && <div className="monitor-markdown-row"><b>{copy.viewerEvidence}</b><SafeMarkdown content={item.viewerEvidence} /></div>}{item.commandText && <div className="monitor-markdown-row"><b>{copy.monitorCommand}</b><SafeMarkdown content={item.commandText} /></div>}{item.rationale && <details className="monitor-rationale"><summary>{copy.rationale}</summary><SafeMarkdown content={formatMonitorRationale(item.rationale)} /></details>}</article>)}</div> : <p className="monitor-no-decisions">{copy.noMonitorRuns}</p>}{exportPath && <div className="storage-success"><Check size={14} />{copy.exportComplete} · {exportPath}</div>}{exportError && <div className="provider-error">{exportError}</div>}</div></div>}
+    {loadError && <div className="provider-error" role="alert">{loadError}</div>}
   </section>;
+}
+
+export async function persistMonitorSystemPrompt(
+  repository: Pick<AppRepository, "setProfileMonitorSystemPrompt">,
+  profileId: string,
+  editablePrompt: string,
+  language: "pl" | "en",
+  onProfileChanged?: () => Promise<void> | void,
+): Promise<string> {
+  const prompt = editablePrompt.trim() || factoryMonitorEditablePrompt(language);
+  await repository.setProfileMonitorSystemPrompt(profileId, prompt);
+  await onProfileChanged?.();
+  return prompt;
 }
 
 function formatMonitorRationale(value: string): string {

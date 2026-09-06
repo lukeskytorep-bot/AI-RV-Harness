@@ -711,6 +711,13 @@ export class SqliteRepository implements AppRepository {
     );
   }
 
+  async setProfileMonitorSystemPrompt(profileId: string, prompt: string): Promise<void> {
+    await this.executeWrite(
+      "UPDATE profiles SET default_monitor_system_prompt = $1, updated_at = $2 WHERE id = $3",
+      [prompt.trim() || null, nowIso(), profileId],
+    );
+  }
+
   async listWorkspaces(profileId?: string): Promise<Workspace[]> {
     const rows = profileId
       ? await this.db.select<WorkspaceRow[]>(

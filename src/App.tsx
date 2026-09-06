@@ -326,7 +326,7 @@ export default function App() {
               initialView={aiCenterView}
               onProfileChange={(profileId) => { setActiveProfileId(profileId); setActiveWorkspaceId(workspaces.find((item) => item.profileId === profileId)?.id ?? null); }}
               monitorPanel={activeWorkspace && activeWorkspace.profileId === activeProfileId
-                ? <MonitorPanel copy={copy} settings={settings} profile={profiles.find((item) => item.id === activeProfileId) ?? null} workspace={activeWorkspace} repository={repository} />
+                ? <MonitorPanel copy={copy} settings={settings} profile={profiles.find((item) => item.id === activeProfileId) ?? null} workspace={activeWorkspace} repository={repository} onProfileChanged={refreshProfiles} />
                 : <EmptyCard>{settings.interfaceLanguage === "pl" ? "Utwórz lub wybierz Workspace tego Profilu, aby otworzyć historię AI Monitora." : "Create or select a Workspace for this Profile to open AI Monitor history."}</EmptyCard>}
             />
           ) : page === "settings" ? (

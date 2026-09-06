@@ -6,6 +6,8 @@ import type { TargetRecord } from "../../targets/types";
 import type { TrainingRunRecord } from "../../training/types";
 import type { Profile } from "../../types";
 import { executeTrainingRun, firstPendingTrainingTargetIndex, type ExecuteTrainingRunInput } from "./trainingExecution";
+import { automaticPostRevealReviewRequest } from "../../sessions/postReveal";
+import { serializePostRevealTurn } from "../../sessions/postRevealTranscript";
 
 const profile: Profile = { id: "profile", name: "Viewer", humanName: "Human", credentialId: "credential", createdAt: "now", updatedAt: "now" };
 const provider: ProviderConfig = { id: "provider", provider: "openrouter", label: "Provider", credentialId: "credential", enabled: true, lastStatus: "ok", createdAt: "now", updatedAt: "now" };
@@ -61,6 +63,8 @@ function harness(sessionFailureAt?: string) {
   const repository = {
     updateTrainingRun: vi.fn(async (_id: string, update: Record<string, unknown>) => { updates.push(update); }),
     updateRvSessionState: vi.fn(async () => undefined),
+    listRvSessions: vi.fn(async () => []),
+    listJudgeScores: vi.fn(async () => []),
   } as unknown as AppRepository;
   const reflect = vi.fn(async () => null);
   const runSession = vi.fn(async (input: { automaticTarget?: TargetRecord; signal?: AbortSignal }) => {
@@ -187,5 +191,42 @@ describe("Training execution", () => {
     expect(testHarness.dependencies!.runAutomaticPostRevealReview).toHaveBeenCalledTimes(1);
     expect(testHarness.reflect).toHaveBeenCalledTimes(1);
     expect(judge).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not call a Judge again when frozen scores exist before the Training checkpoint", async () => {
+    const testHarness = harness();
+    testHarness.repository.listJudgeScores = vi.fn(async () => [{ modelRoute: model.route }] as never);
+    const judge = testHarness.dependencies!.runBlindJudging as ReturnType<typeof vi.fn>;
+    const initial = run({
+      targetIds: ["t1"],
+      judgeModelRoutes: [model.route],
+      status: "Interrupted",
+      activeTargetCheckpoint: { targetId: "t1", sessionId: "session_t1", stage: "review_completed" },
+    });
+
+    const outcome = await executeTrainingRun(input(initial, testHarness, { judges: [{ providerConfig: provider, model }] }));
+
+    expect(outcome.run.status).toBe("Completed");
+    expect(judge).not.toHaveBeenCalled();
+    expect(outcome.run.sessionIds).toEqual(["session_t1"]);
+  });
+
+  it("reuses a stored automatic Viewer Review instead of calling the Viewer again", async () => {
+    const testHarness = harness();
+    const request = automaticPostRevealReviewRequest("en");
+    const transcript = `${serializePostRevealTurn("user", request)}${serializePostRevealTurn("assistant", "Stored review")}`;
+    testHarness.repository.listRvSessions = vi.fn(async () => [{ id: "session_t1", postRevealTranscript: transcript }] as never);
+    const initial = run({
+      targetIds: ["t1"],
+      status: "Interrupted",
+      activeTargetCheckpoint: { targetId: "t1", sessionId: "session_t1", stage: "session_revealed" },
+    });
+
+    const outcome = await executeTrainingRun(input(initial, testHarness));
+
+    expect(outcome.run.status).toBe("Completed");
+    expect(testHarness.dependencies!.runAutomaticPostRevealReview).not.toHaveBeenCalled();
+    expect(testHarness.reflect).toHaveBeenCalledOnce();
+    expect(testHarness.reflect).toHaveBeenCalledWith(expect.objectContaining({ viewerReview: "Stored review" }));
   });
 });

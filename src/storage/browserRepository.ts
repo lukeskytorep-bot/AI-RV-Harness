@@ -305,6 +305,15 @@ export class BrowserRepository implements AppRepository {
     );
   }
 
+  async setProfileMonitorSystemPrompt(profileId: string, prompt: string): Promise<void> {
+    const profiles = read<Profile[]>(PROFILES_KEY, []);
+    if (!profiles.some((profile) => profile.id === profileId)) throw new Error("Profile not found.");
+    const updatedAt = nowIso();
+    write(PROFILES_KEY, profiles.map((profile) => profile.id === profileId
+      ? { ...profile, defaultMonitorSystemPrompt: prompt.trim() || undefined, updatedAt }
+      : profile));
+  }
+
   async listWorkspaces(profileId?: string): Promise<Workspace[]> {
     const all = read<Workspace[]>(WORKSPACES_KEY, []);
     return all

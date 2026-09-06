@@ -1,11 +1,11 @@
 import { prepareViewerNotesForSession, runViewerNoteReflection } from "../../aiCenter/viewerNotes";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "../../domain/isBeIdentity";
-import { runBlindJudging, type JudgeSelection } from "../../judge/engine";
+import { runBlindJudging, selectMissingJudgeSelections, type JudgeSelection } from "../../judge/engine";
 import { profileGenerationDefaults } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
 import { getRvLite } from "../../resources/protocolRegistry";
 import type { SessionProgress } from "../../sessions/controller";
-import { runAutomaticPostRevealReview } from "../../sessions/postReveal";
+import { findCompletedAutomaticViewerReview, runAutomaticPostRevealReview } from "../../sessions/postReveal";
 import { runAutomaticRvLiteSession } from "../../sessions/rvLiteController";
 import type { AppRepository } from "../../storage/repository";
 import type { TargetRecord } from "../../targets/types";
@@ -135,15 +135,9 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
       }
 
       if (checkpoint.stage === "session_revealed") {
-        await dependencies.runAutomaticPostRevealReview({
-          repository: input.repository,
-          sessionId: checkpoint.sessionId,
-          viewer: { providerConfig: input.providerConfig, model: input.model },
-          timeoutMs: execution.transport.requestTimeoutMs,
-          maxRetries: execution.transport.maxRetries,
-          signal: input.signal,
-          afterViewerReview: async ({ content }) => {
-            await dependencies.runViewerNoteReflection({
+        const storedSession = (await input.repository.listRvSessions(working.workspaceId)).find((session) => session.id === checkpoint!.sessionId);
+        const storedReview = findCompletedAutomaticViewerReview(storedSession?.postRevealTranscript ?? "", execution.language);
+        const reflect = async (content: string) => dependencies.runViewerNoteReflection({
               repository: input.repository,
               sessionId: checkpoint!.sessionId,
               viewerReview: content,
@@ -153,8 +147,19 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
               maxRetries: execution.transport.maxRetries,
               signal: input.signal,
             });
-          },
-        });
+        if (storedReview) {
+          await reflect(storedReview);
+        } else {
+          await dependencies.runAutomaticPostRevealReview({
+            repository: input.repository,
+            sessionId: checkpoint.sessionId,
+            viewer: { providerConfig: input.providerConfig, model: input.model },
+            timeoutMs: execution.transport.requestTimeoutMs,
+            maxRetries: execution.transport.maxRetries,
+            signal: input.signal,
+            afterViewerReview: async ({ content }) => { await reflect(content); },
+          });
+        }
         checkpoint = { ...checkpoint, stage: "review_completed" };
         working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
         await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
@@ -162,15 +167,19 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
       }
       if (input.signal?.aborted) throw new DOMException("Training cancelled", "AbortError");
       if (input.judges.length && checkpoint.stage === "review_completed") {
-        await dependencies.runBlindJudging({
-          repository: input.repository,
-          sessionId: checkpoint.sessionId,
-          language: execution.language,
-          judges: input.judges,
-          maxRetries: execution.transport.maxRetries,
-          timeoutMs: execution.transport.requestTimeoutMs,
-          signal: input.signal,
-        });
+        const existingScores = await input.repository.listJudgeScores(checkpoint.sessionId);
+        const missingJudges = selectMissingJudgeSelections(existingScores, input.judges);
+        if (missingJudges.length) {
+          await dependencies.runBlindJudging({
+            repository: input.repository,
+            sessionId: checkpoint.sessionId,
+            language: execution.language,
+            judges: missingJudges,
+            maxRetries: execution.transport.maxRetries,
+            timeoutMs: execution.transport.requestTimeoutMs,
+            signal: input.signal,
+          });
+        }
         checkpoint = { ...checkpoint, stage: "judging_completed" };
         working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
         await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });

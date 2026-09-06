@@ -18,6 +18,7 @@ export interface AppRepository {
   archiveProfile(id: string): Promise<void>;
   restoreProfile(id: string): Promise<void>;
   setProfileAiConfiguration(profileId: string, input: ProfileAiConfigurationInput): Promise<void>;
+  setProfileMonitorSystemPrompt(profileId: string, prompt: string): Promise<void>;
   listWorkspaces(profileId?: string): Promise<Workspace[]>;
   listArchivedWorkspaces(): Promise<Workspace[]>;
   createWorkspace(input: CreateWorkspaceInput): Promise<Workspace>;
