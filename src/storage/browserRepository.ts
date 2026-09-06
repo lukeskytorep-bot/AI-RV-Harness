@@ -16,6 +16,7 @@ import { applyReasoningRegistryToProviderModel } from "../providers/modelReasoni
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteSettings, ViewerNoteVersion } from "../aiCenter/types";
 import { assertViewerNoteBasePair } from "../aiCenter/baseVersion";
+import { BrowserProfilesRepository } from "./browser/profilesRepository";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
@@ -69,6 +70,8 @@ function isLegacyStarterTrainingTarget(target: TargetRecord): boolean {
 }
 
 export class BrowserRepository implements AppRepository {
+  private readonly profilesRepository = new BrowserProfilesRepository();
+
   async ensureAiIdentity(input: EnsureAiIdentityInput): Promise<AiIdentity> {
     const identities = read<AiIdentity[]>(AI_IDENTITIES_KEY, []);
     const normalizedBaseUrl = input.baseUrl?.trim().replace(/\/+$/, "").toLowerCase();
@@ -224,42 +227,19 @@ export class BrowserRepository implements AppRepository {
   }
 
   async listProfiles(): Promise<Profile[]> {
-    return read<Profile[]>(PROFILES_KEY, []).filter((profile) => !profile.archivedAt).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return this.profilesRepository.listProfiles();
   }
 
   async listArchivedProfiles(): Promise<Profile[]> {
-    return read<Profile[]>(PROFILES_KEY, []).filter((profile) => Boolean(profile.archivedAt)).sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
+    return this.profilesRepository.listArchivedProfiles();
   }
 
   async createProfile(input: CreateProfileInput): Promise<Profile> {
-    const profiles = read<Profile[]>(PROFILES_KEY, []);
-    const timestamp = nowIso();
-    const profile: Profile = {
-      id: createId("profile"),
-      name: input.name.trim(),
-      humanName: input.humanName?.trim() || undefined,
-      note: input.note?.trim() || undefined,
-      credentialId: input.aiConfiguration?.credentialId,
-      credentialProvider: input.aiConfiguration?.credentialProvider,
-      defaultViewerModelId: input.aiConfiguration?.defaultViewerModelId,
-      defaultViewerReasoningEffort: input.aiConfiguration?.defaultViewerReasoningEffort,
-      defaultViewerTemperature: input.aiConfiguration?.defaultViewerTemperature,
-      defaultViewerSystemPrompt: input.aiConfiguration?.defaultViewerSystemPrompt?.trim() || undefined,
-      defaultMonitorSystemPrompt: input.aiConfiguration?.defaultMonitorSystemPrompt?.trim() || undefined,
-      defaultMonitorProviderConfigId: input.aiConfiguration?.defaultMonitorProviderConfigId,
-      defaultMonitorModelId: input.aiConfiguration?.defaultMonitorModelId,
-      defaultJudgeProviderConfigId: input.aiConfiguration?.defaultJudgeProviderConfigId,
-      defaultJudgeModelId: input.aiConfiguration?.defaultJudgeModelId,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    write(PROFILES_KEY, [profile, ...profiles]);
-    return profile;
+    return this.profilesRepository.createProfile(input);
   }
 
   async updateProfile(id: string, input: UpdateProfileInput): Promise<void> {
-    const name = input.name.trim();
-    write(PROFILES_KEY, read<Profile[]>(PROFILES_KEY, []).map((profile) => profile.id === id ? { ...profile, name, humanName: input.humanName?.trim() || undefined, note: input.note?.trim() || undefined, updatedAt: nowIso() } : profile));
+    await this.profilesRepository.updateProfile(id, input);
   }
 
   async archiveProfile(id: string): Promise<void> {
@@ -280,38 +260,11 @@ export class BrowserRepository implements AppRepository {
   }
 
   async setProfileAiConfiguration(profileId: string, input: ProfileAiConfigurationInput): Promise<void> {
-    const timestamp = nowIso();
-    write(
-      PROFILES_KEY,
-      read<Profile[]>(PROFILES_KEY, []).map((profile) =>
-        profile.id === profileId
-          ? {
-              ...profile,
-              credentialId: input.credentialId,
-              credentialProvider: input.credentialProvider,
-              defaultViewerModelId: input.defaultViewerModelId,
-              defaultViewerReasoningEffort: input.defaultViewerReasoningEffort,
-              defaultViewerTemperature: input.defaultViewerTemperature,
-              defaultViewerSystemPrompt: input.defaultViewerSystemPrompt?.trim() || undefined,
-              defaultMonitorSystemPrompt: input.defaultMonitorSystemPrompt?.trim() || undefined,
-              defaultMonitorProviderConfigId: input.defaultMonitorProviderConfigId,
-              defaultMonitorModelId: input.defaultMonitorModelId,
-              defaultJudgeProviderConfigId: input.defaultJudgeProviderConfigId,
-              defaultJudgeModelId: input.defaultJudgeModelId,
-              updatedAt: timestamp,
-            }
-          : profile,
-      ),
-    );
+    await this.profilesRepository.setProfileAiConfiguration(profileId, input);
   }
 
   async setProfileMonitorSystemPrompt(profileId: string, prompt: string): Promise<void> {
-    const profiles = read<Profile[]>(PROFILES_KEY, []);
-    if (!profiles.some((profile) => profile.id === profileId)) throw new Error("Profile not found.");
-    const updatedAt = nowIso();
-    write(PROFILES_KEY, profiles.map((profile) => profile.id === profileId
-      ? { ...profile, defaultMonitorSystemPrompt: prompt.trim() || undefined, updatedAt }
-      : profile));
+    await this.profilesRepository.setProfileMonitorSystemPrompt(profileId, prompt);
   }
 
   async listWorkspaces(profileId?: string): Promise<Workspace[]> {
@@ -384,15 +337,7 @@ export class BrowserRepository implements AppRepository {
   }
 
   async setProfileCredential(profileId: string, credentialId?: string, provider?: string): Promise<void> {
-    const timestamp = nowIso();
-    write(
-      PROFILES_KEY,
-      read<Profile[]>(PROFILES_KEY, []).map((profile) =>
-        profile.id === profileId
-          ? { ...profile, credentialId, credentialProvider: provider, defaultViewerModelId: undefined, defaultViewerReasoningEffort: undefined, defaultViewerTemperature: undefined, updatedAt: timestamp }
-          : profile,
-      ),
-    );
+    await this.profilesRepository.setProfileCredential(profileId, credentialId, provider);
   }
 
   async listChatThreadGroups(workspaceId: string, mode: ChatMode): Promise<ChatThreadGroup[]> {

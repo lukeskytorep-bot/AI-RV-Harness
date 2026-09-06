@@ -28,7 +28,7 @@ The repository remains one application and one release process. Folder boundarie
 4. Output recovery, Judge JSON repair and Viewer Notes capacity recovery are separate logical operations. They must not be classified as transport retry.
 5. `src/domain/` must not import React, Tauri APIs, SQLite implementations or provider transport.
 6. A feature module may import its public application/domain contracts and shared UI. It must not reach into another feature's internal files.
-7. `src/storage/sqliteRepository.ts` and `src/storage/browserRepository.ts` remain compatibility facades until repository contract tests protect their split.
+7. `src/storage/sqliteRepository.ts` and `src/storage/browserRepository.ts` remain compatibility facades. Extracted domain repositories implement contracts under `src/storage/contracts/` and are protected by shared contract tests.
 8. Code that renders AI-authored Markdown must use the established safe renderer.
 9. Reveal and target material must not enter Viewer or Monitor messages before the recorded Reveal boundary.
 10. Judge receives only the allowlisted evidence packet; it does not read arbitrary session storage.
@@ -95,8 +95,19 @@ An operation spanning several domains must have one explicit application-level o
 | Complete a Training target and reflect Viewer Notes | training execution use case |
 | Archive or restore a Workspace | workspace management use case |
 | Export a complete Research record | research export use case |
+| Archive or restore a Profile together with its Workspaces | compatibility facade until a dedicated cross-domain transaction unit is extracted |
 
 UI components initiate these operations and render their state; they do not coordinate multi-step persistence themselves after the relevant use case has been extracted.
+
+## Internal persistence modules
+
+The first controlled Etap 5 split introduces `ProfilesRepository` without changing the public `AppRepository` contract:
+
+| Contract | Browser implementation | SQLite implementation | Explicit facade responsibility |
+| --- | --- | --- | --- |
+| `src/storage/contracts/profilesRepository.ts` | `src/storage/browser/profilesRepository.ts` | `src/storage/sqlite/profilesRepository.ts` | Profile archive/restore remains in both facades because it also archives/restores matching Workspaces. |
+
+Domain repositories must not silently mutate another storage area. A later extraction may move Profile lifecycle into a named cross-domain transaction unit, but it must preserve the exact timestamp-coupling and atomic SQLite transaction already used by the facades.
 
 ## Enforcement introduced in Step 1
 

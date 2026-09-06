@@ -7,6 +7,7 @@ The private v0.7.13 modularization work adds the following living architecture r
 - [Code map](CODE_MAP.md)
 - [Module boundaries](MODULE_BOUNDARIES.md)
 - [ADR-0001: Modular monolith](decisions/ADR-0001-MODULAR_MONOLITH.md)
+- [ADR-0003: Stable storage facade and domain repositories](decisions/ADR-0003-STORAGE_FACADE.md)
 - [Central provider retry architecture](PROVIDER_RETRY_ARCHITECTURE_FINAL_PL.md)
 
 ## Documents
