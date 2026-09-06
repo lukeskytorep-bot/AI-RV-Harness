@@ -16,7 +16,7 @@ This document maps responsibilities, not every source file. Historical release r
 | Targets screen, dialogs and target-library operations | `src/features/targets/` | Extracted feature; import through `src/features/targets/index.ts`. |
 | Workspace directory, switching and lifecycle presentation | `src/features/workspaces/` | Extracted feature; import through `src/features/workspaces/index.ts`. |
 | Conversation and Manual RV orchestration | `src/features/conversations/` | Extracted feature; import through `src/features/conversations/index.ts`; message rendering and chat use cases remain in `src/chat/`. |
-| RV Sessions screen | `src/App.tsx` | Later higher-risk extraction after protecting session transitions and Resume. |
+| RV Sessions screen and UI orchestration | `src/features/rvSessions/` | Extracted feature; import through `src/features/rvSessions/index.ts`; protocol controllers and protected transition rules remain in `src/sessions/`. |
 | Training screen and long-run orchestration | `src/features/training/` | Extracted feature; import through `src/features/training/index.ts`. |
 | Research screen and builder | `src/features/research/` | Extracted feature; import through `src/features/research/index.ts`. |
 | AI Center interface | `src/features/aiCenter/` | Extracted presentation feature; identity and Viewer Notes domain rules remain in `src/aiCenter/`. |
@@ -79,7 +79,9 @@ This document maps responsibilities, not every source file. Historical release r
 
 `JudgeEvaluation` and `BatchEvaluation` have been moved from `App.tsx` into `src/features/judge/`. The interactive feature keeps the existing evaluation engine, model-route recovery, score freezing and add-another-Judge behavior. `JudgeResults` is a genuinely shared presentation component used by the live RV flow, expanded batch results and by `SessionInspection`, which is shared by Training and Research. Complete-session Markdown is assembled by `src/exports/sessionDocument.ts`; ordinary RV, Training and Research retain their package/blinding adapters but no longer maintain competing Judge layouts.
 
-`MonitorPanel` has been moved from `App.tsx` into `src/features/monitor/` behind a public entry point. The feature owns Monitor history, prompt editing, saved-run inspection and export initiation. Monitor decisions, prompts, persistence, blinding rules and provider execution keep their existing owners. RV Sessions is now the remaining frontend candidate in this block.
+`MonitorPanel` has been moved from `App.tsx` into `src/features/monitor/` behind a public entry point. The feature owns Monitor history, prompt editing, saved-run inspection and export initiation. Monitor decisions, prompts, persistence, blinding rules and provider execution keep their existing owners.
+
+`RvSessionPanel` and its private Custom Protocol dialog have been moved from `App.tsx` into `src/features/rvSessions/` behind a public entry point. The feature owns session configuration, live progress, Reveal/Post-Reveal presentation, recovery controls, recent-session presentation and orchestration of the established use cases. Full RCP, RV Lite, Custom and Telepathic controllers, Monitor/Judge engines, persistence, exports, target rules and provider transport retain their existing owners. `App.tsx` now remains the Workspace shell and supplies only the active Profile, Workspace, settings and repository contract.
 
 ## Updating this map
 

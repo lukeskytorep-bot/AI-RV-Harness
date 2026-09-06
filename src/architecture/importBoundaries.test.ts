@@ -142,6 +142,7 @@ describe("architecture import boundaries", () => {
 
   it("uses the public Judge feature entry point and keeps Judge UI out of App", () => {
     const appSource = sourceFiles["../App.tsx"];
+    const rvSessionsSource = sourceFiles["../features/rvSessions/RvSessionPanel.tsx"];
     const deepImportOffenders = Object.entries(sourceFiles)
       .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
       .filter(({ projectPath }) => !/\.(?:test|spec)\.tsx?$/.test(projectPath))
@@ -149,7 +150,7 @@ describe("architecture import boundaries", () => {
       .filter(({ content }) => /from\s+["'][^"']*features\/judge\//.test(content))
       .map(({ projectPath }) => projectPath);
 
-    expect(appSource).toContain('from "./features/judge"');
+    expect(rvSessionsSource).toContain('from "../judge"');
     expect(appSource).not.toContain("function JudgeEvaluation(");
     expect(appSource).not.toContain("function BatchEvaluation(");
     expect(appSource).not.toContain("function JudgeNarrativeRow(");
@@ -169,6 +170,21 @@ describe("architecture import boundaries", () => {
     expect(appSource).toContain('from "./features/monitor"');
     expect(appSource).not.toContain("function MonitorPanel(");
     expect(deepImportOffenders, "Monitor consumers must import the public feature entry point").toEqual([]);
+  });
+
+  it("uses the public RV Sessions feature entry point and keeps session UI out of App", () => {
+    const appSource = sourceFiles["../App.tsx"];
+    const deepImportOffenders = Object.entries(sourceFiles)
+      .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
+      .filter(({ projectPath }) => !/\.(?:test|spec)\.tsx?$/.test(projectPath))
+      .filter(({ projectPath }) => !projectPath.startsWith("features/rvSessions/"))
+      .filter(({ content }) => /from\s+["'][^"']*features\/rvSessions\//.test(content))
+      .map(({ projectPath }) => projectPath);
+
+    expect(appSource).toContain('from "./features/rvSessions"');
+    expect(appSource).not.toContain("function RvSessionPanel(");
+    expect(appSource).not.toContain("function CustomProtocolDialog(");
+    expect(deepImportOffenders, "RV Sessions consumers must import the public feature entry point").toEqual([]);
   });
 
   it("keeps complete session and Judge Markdown formatting centralized", () => {
