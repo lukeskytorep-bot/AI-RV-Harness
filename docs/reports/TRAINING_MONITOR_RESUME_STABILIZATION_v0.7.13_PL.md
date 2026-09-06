@@ -29,7 +29,7 @@ Mały hotfix stabilizacyjny przed ekstrakcją RV Sessions usuwa dwa potwierdzone
 
 `npm run verify:source` został dodany po `npm ci` do głównego workflow CI oraz workflowów Windows i Linux Release.
 
-Po czerwonym przebiegu wcześniejszego commita Git potwierdzono dodatkowo rozjazd numeru wersji `0.7.12`/`0.7.13`. Kumulatywna nakładka zawiera teraz wszystkie pliki wersji wymagane do ustawienia `0.7.13`: `package.json`, `package-lock.json`, `src/version.ts`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` i `src-tauri/Cargo.lock`. Istniejące testy `version.test.ts` oraz `versionConsistency.test.ts` chronią ich zgodność.
+Po czerwonych przebiegach wcześniejszych commitów Git potwierdzono dodatkowo rozjazd numeru wersji `0.7.12`/`0.7.13`. Kumulatywna nakładka zawiera teraz wszystkie pliki wersji wymagane do ustawienia `0.7.13`: `package.json`, `package-lock.json`, `src/version.ts`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` i `src-tauri/Cargo.lock`. Zawiera też oba testy `src/version.test.ts` oraz `src/versionConsistency.test.ts`, ponieważ drugi czerwony przebieg (`1841fc5`) wykazał, że na gałęzi pozostała starsza kopia pierwszego testu, nadal oczekująca na sztywno `0.7.12`.
 
 ## Testy regresyjne
 
