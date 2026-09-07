@@ -4,7 +4,6 @@ import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, Sess
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
 import type { CreateJudgeRunInput, FrozenJudgeResultInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
 import { computeJudgeTotal } from "../domain/scoring";
-import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord, UpdateTargetInput } from "../targets/types";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
 import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchConditionRecord, ResearchConfig, ResearchLockPlan, ResearchProjectRecord, ResearchResults, ResearchState } from "../research/types";
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
@@ -17,6 +16,7 @@ import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput 
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteSettings, ViewerNoteVersion } from "../aiCenter/types";
 import { assertViewerNoteBasePair } from "../aiCenter/baseVersion";
 import { BrowserProfilesRepository } from "./browser/profilesRepository";
+import { BrowserTargetsRepository } from "./browser/targetsRepository";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
@@ -34,7 +34,6 @@ const MONITOR_RUNS_KEY = "rvh.dev.monitor_runs";
 const MONITOR_INTERVENTIONS_KEY = "rvh.dev.monitor_interventions";
 const JUDGE_RUNS_KEY = "rvh.dev.judge_runs";
 const JUDGE_SCORES_KEY = "rvh.dev.judge_scores";
-const TARGETS_KEY = "rvh.dev.targets";
 const TARGET_USAGE_KEY = "rvh.dev.target_usage";
 const CUSTOM_PROTOCOLS_KEY = "rvh.dev.custom_protocols";
 const RESEARCH_PROJECTS_KEY = "rvh.dev.research_projects";
@@ -65,12 +64,13 @@ function write<T>(key: string, value: T): void {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
-function isLegacyStarterTrainingTarget(target: TargetRecord): boolean {
-  return target.collection === "training" && /^training_(?:[1-9]|10)$/.test(target.id);
-}
-
 export class BrowserRepository implements AppRepository {
   private readonly profilesRepository = new BrowserProfilesRepository();
+  private readonly targetsRepository = new BrowserTargetsRepository({
+    hasRecordedUse: (id) => read<Array<{ targetId: string }>>(TARGET_USAGE_KEY, []).some((item) => item.targetId === id)
+      || read<RvSession[]>(RV_SESSIONS_KEY, []).some((item) => item.targetId === id)
+      || read<ResearchAssignmentRecord[]>(RESEARCH_ASSIGNMENTS_KEY, []).some((item) => item.targetId === id),
+  });
 
   async ensureAiIdentity(input: EnsureAiIdentityInput): Promise<AiIdentity> {
     const identities = read<AiIdentity[]>(AI_IDENTITIES_KEY, []);
@@ -590,63 +590,12 @@ export class BrowserRepository implements AppRepository {
     write(MODELS_KEY, []);
   }
 
-  async listTargets(collection?: TargetRecord["collection"]): Promise<TargetRecord[]> {
-    return read<TargetRecord[]>(TARGETS_KEY, [])
-      .filter((target) => !isLegacyStarterTrainingTarget(target))
-      .filter((target) => !collection || target.collection === collection)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  }
-
-  async createTarget(input: CreateTargetInput): Promise<TargetRecord> {
-    const timestamp = nowIso();
-    const target: TargetRecord = {
-      id: input.id,
-      collection: input.collection,
-      title: input.title.trim(),
-      revealText: input.revealText?.trim() || undefined,
-      revealArtifactPath: input.revealArtifactPath,
-      revealArtifacts: input.revealArtifacts ?? [],
-      tags: input.tags ?? [],
-      sourceMetadata: input.sourceMetadata ?? {},
-      contentHash: input.contentHash,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    write(TARGETS_KEY, [target, ...read<TargetRecord[]>(TARGETS_KEY, [])]);
-    return target;
-  }
-
-  async updateTarget(id: string, input: UpdateTargetInput): Promise<TargetRecord> {
-    const all = read<TargetRecord[]>(TARGETS_KEY, []);
-    const target = all.find((item) => item.id === id);
-    if (!target || target.collection !== "user") throw new Error("User target not found.");
-    if (this.targetHasRecordedUse(id)) throw new Error("Used targets are locked to preserve session and Research integrity.");
-    const updated: TargetRecord = { ...target, title: input.title.trim(), revealText: input.revealText?.trim() || undefined, tags: [...input.tags], contentHash: input.contentHash, updatedAt: nowIso() };
-    write(TARGETS_KEY, all.map((item) => item.id === id ? updated : item));
-    return updated;
-  }
-
-  async deleteTarget(id: string): Promise<void> {
-    const all = read<TargetRecord[]>(TARGETS_KEY, []);
-    const target = all.find((item) => item.id === id);
-    if (!target || target.collection !== "user") throw new Error("User target not found.");
-    if (this.targetHasRecordedUse(id)) throw new Error("Used targets are locked to preserve session and Research integrity.");
-    write(TARGETS_KEY, all.filter((item) => item.id !== id));
-  }
-
-  private targetHasRecordedUse(id: string): boolean {
-    return read<TargetUsageRecord[]>(TARGET_USAGE_KEY, []).some((item) => item.targetId === id)
-      || read<RvSession[]>(RV_SESSIONS_KEY, []).some((item) => item.targetId === id)
-      || read<ResearchAssignmentRecord[]>(RESEARCH_ASSIGNMENTS_KEY, []).some((item) => item.targetId === id);
-  }
-
-  async recordTargetUsage(input: TargetUsageInput): Promise<void> {
-    write(TARGET_USAGE_KEY, [...read<Array<TargetUsageInput & { id: string; usedAt: string }>>(TARGET_USAGE_KEY, []), { ...input, id: createId("target_usage"), usedAt: nowIso() }]);
-  }
-
-  async listTargetUsage(): Promise<TargetUsageRecord[]> {
-    return read<TargetUsageRecord[]>(TARGET_USAGE_KEY, []).sort((a, b) => b.usedAt.localeCompare(a.usedAt));
-  }
+  listTargets: AppRepository["listTargets"] = (collection) => this.targetsRepository.listTargets(collection);
+  createTarget: AppRepository["createTarget"] = (input) => this.targetsRepository.createTarget(input);
+  updateTarget: AppRepository["updateTarget"] = (id, input) => this.targetsRepository.updateTarget(id, input);
+  deleteTarget: AppRepository["deleteTarget"] = (id) => this.targetsRepository.deleteTarget(id);
+  recordTargetUsage: AppRepository["recordTargetUsage"] = (input) => this.targetsRepository.recordTargetUsage(input);
+  listTargetUsage: AppRepository["listTargetUsage"] = () => this.targetsRepository.listTargetUsage();
 
   async listCustomProtocols(language?: "pl" | "en"): Promise<CustomProtocolVersion[]> {
     return read<CustomProtocolVersion[]>(CUSTOM_PROTOCOLS_KEY, []).filter((protocol) => !language || protocol.language === language).sort((a, b) => b.createdAt.localeCompare(a.createdAt));

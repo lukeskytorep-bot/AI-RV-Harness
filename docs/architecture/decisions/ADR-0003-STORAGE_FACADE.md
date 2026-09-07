@@ -1,7 +1,8 @@
 # ADR-0003: Preserve a stable storage facade while extracting domain repositories
 
 **Status:** Accepted  
-**Date:** 6 September 2026
+**Date:** 6 September 2026  
+**Updated:** 7 September 2026 — Targets extraction
 
 ## Context
 
@@ -16,6 +17,8 @@ Some repository operations belong to one domain, while others deliberately cross
 Internal persistence is extracted one small domain at a time behind contracts in `src/storage/contracts/`. Each extracted contract has matching implementations under `src/storage/browser/` and `src/storage/sqlite/`, and a shared contract suite covers behavior intended to match.
 
 The first extraction is Profiles. Profile-only listing, creation, editing and configuration writes delegate to `ProfilesRepository`. `archiveProfile` and `restoreProfile` remain explicit facade operations for now because they also change Workspaces. This avoids hiding a cross-domain mutation inside the Profile-only repository.
+
+The second extraction is Targets. Listing, user-target CRUD and target-usage persistence delegate to `TargetsRepository`. In browser storage the compatibility facade supplies the predicate that checks usage recorded by target usage, RV Sessions and Research assignments. In SQLite, the existing database triggers remain the authority preventing mutation of factory or already-used targets. This keeps cross-domain knowledge visible without changing schema or behavior.
 
 No schema, migration, table, local-storage key or serialized record format changes as part of this decision.
 

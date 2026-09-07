@@ -52,8 +52,9 @@ This document maps responsibilities, not every source file. Historical release r
 | --- | --- | --- |
 | Public repository contract | `src/storage/repository.ts` and exports under `src/storage/` | Stable `AppRepository` facade; callers do not import domain implementations. |
 | Profiles persistence contract | `src/storage/contracts/profilesRepository.ts` | Shared internal contract for Profile-only reads and writes. Archive/restore remain facade-owned because they also change Workspaces. |
-| Desktop SQLite implementation | `src/storage/sqliteRepository.ts`, delegating Profile-only work to `src/storage/sqlite/profilesRepository.ts` | Continue one domain at a time without changing the facade or schema. |
-| Browser preview implementation | `src/storage/browserRepository.ts`, delegating Profile-only work to `src/storage/browser/profilesRepository.ts` | Preserve the same Profiles contract and local-storage keys. |
+| Targets persistence contract | `src/storage/contracts/targetsRepository.ts` | Shared internal contract for target listing, user CRUD and usage records. Cross-domain mutation guards remain explicit. |
+| Desktop SQLite implementation | `src/storage/sqliteRepository.ts`, delegating to `src/storage/sqlite/profilesRepository.ts` and `targetsRepository.ts` | Continue one domain at a time without changing the facade or schema. Existing database triggers protect used and factory targets. |
+| Browser preview implementation | `src/storage/browserRepository.ts`, delegating to `src/storage/browser/profilesRepository.ts` and `targetsRepository.ts` | Preserve contracts and local-storage keys; the facade supplies the cross-domain used-target predicate. |
 | Database migrations and native transactions | `src-tauri/src/database.rs` and storage migration code | Keep ordered, atomic and backwards compatible. |
 | Credentials | native credential commands and provider configuration modules | Secrets must never enter SQLite, exports or UI diagnostics. |
 | Human-readable and research exports | `src/exports/`, `src/artifacts/` | Preserve evidence-domain separation and existing formats. |
@@ -85,6 +86,8 @@ This document maps responsibilities, not every source file. Historical release r
 `RvSessionPanel` and its private Custom Protocol dialog have been moved from `App.tsx` into `src/features/rvSessions/` behind a public entry point. The feature owns session configuration, live progress, Reveal/Post-Reveal presentation, recovery controls, recent-session presentation and orchestration of the established use cases. Full RCP, RV Lite, Custom and Telepathic controllers, Monitor/Judge engines, persistence, exports, target rules and provider transport retain their existing owners. `App.tsx` now remains the Workspace shell and supplies only the active Profile, Workspace, settings and repository contract.
 
 The first Etap 5 persistence split keeps `AppRepository`, the SQLite schema and browser storage keys unchanged. Profile-only CRUD and configuration calls delegate to matching browser and SQLite implementations through `ProfilesRepository`. Profile archive/restore deliberately remain in the compatibility facades because each operation atomically changes both the Profile and its active Workspaces. A shared contract suite runs against both internal adapters.
+
+The second Etap 5 split delegates target listing, user-target CRUD and usage persistence through `TargetsRepository`. Browser storage receives its cross-domain used-target check from the compatibility facade; SQLite keeps the existing target-integrity triggers. No target record, storage key, query result or public caller contract changes.
 
 ## Updating this map
 

@@ -101,11 +101,12 @@ UI components initiate these operations and render their state; they do not coor
 
 ## Internal persistence modules
 
-The first controlled Etap 5 split introduces `ProfilesRepository` without changing the public `AppRepository` contract:
+The controlled Etap 5 split keeps the public `AppRepository` contract unchanged:
 
 | Contract | Browser implementation | SQLite implementation | Explicit facade responsibility |
 | --- | --- | --- | --- |
 | `src/storage/contracts/profilesRepository.ts` | `src/storage/browser/profilesRepository.ts` | `src/storage/sqlite/profilesRepository.ts` | Profile archive/restore remains in both facades because it also archives/restores matching Workspaces. |
+| `src/storage/contracts/targetsRepository.ts` | `src/storage/browser/targetsRepository.ts` | `src/storage/sqlite/targetsRepository.ts` | The browser facade owns the cross-domain used-target predicate; SQLite preserves the existing mutation-guard triggers. |
 
 Domain repositories must not silently mutate another storage area. A later extraction may move Profile lifecycle into a named cross-domain transaction unit, but it must preserve the exact timestamp-coupling and atomic SQLite transaction already used by the facades.
 
