@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 6 September 2026  
-**Updated:** 8 September 2026 — Settings and model-registry extraction
+**Updated:** 8 September 2026 — Workspaces and Conversations extraction
 
 ## Context
 
@@ -21,6 +21,8 @@ The first extraction is Profiles. Profile-only listing, creation, editing and co
 The second extraction is Targets. Listing, user-target CRUD and target-usage persistence delegate to `TargetsRepository`. In browser storage the compatibility facade supplies the predicate that checks usage recorded by target usage, RV Sessions and Research assignments. In SQLite, the existing database triggers remain the authority preventing mutation of factory or already-used targets. This keeps cross-domain knowledge visible without changing schema or behavior.
 
 The third extraction is Settings and model configuration. Application settings, provider-connection metadata and cached models delegate to `SettingsModelsRepository`. The browser implementation keeps credential creation and rotation unavailable and receives an explicit facade callback to clear Profile defaults when a provider is removed. The SQLite implementation preserves the existing atomic transactions for provider plus credential metadata, model replacement, and provider deletion together with Profile-reference cleanup. Native credential secrets remain outside this contract.
+
+The fourth extraction is Workspaces and Conversations. Workspace lifecycle, Thread-group lifecycle, Conversation/Manual RV records and messages delegate together to `WorkspacesConversationsRepository`, because their archive/restore guards and timestamp coupling form one existing consistency boundary. The public facade, schema, browser storage keys and historical lazy migration remain unchanged. Workspace Sources are not part of this extraction. The planned removal of the `ChatThreadGroup` product layer is a later data/UX migration and must not be mixed into this structural move.
 
 No schema, migration, table, local-storage key or serialized record format changes as part of this decision.
 

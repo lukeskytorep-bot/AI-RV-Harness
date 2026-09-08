@@ -54,6 +54,7 @@ This document maps responsibilities, not every source file. Historical release r
 | Profiles persistence contract | `src/storage/contracts/profilesRepository.ts` | Shared internal contract for Profile-only reads and writes. Archive/restore remain facade-owned because they also change Workspaces. |
 | Targets persistence contract | `src/storage/contracts/targetsRepository.ts` | Shared internal contract for target listing, user CRUD and usage records. Cross-domain mutation guards remain explicit. |
 | Settings and model-registry persistence contract | `src/storage/contracts/settingsModelsRepository.ts` | Shared internal contract for application settings, provider metadata and cached model registry. Native secrets remain outside repository storage. |
+| Workspaces and Conversations persistence contract | `src/storage/contracts/workspacesConversationsRepository.ts` | Shared internal contract for Workspace lifecycle, Thread groups, Conversation/Manual RV records and messages. Workspace Sources remain outside this focused split. |
 | Desktop SQLite implementation | `src/storage/sqliteRepository.ts`, delegating under `src/storage/sqlite/` | Continue one domain at a time without changing the facade or schema. Provider/credential metadata and Profile-reference cleanup remain one explicit transaction. |
 | Browser preview implementation | `src/storage/browserRepository.ts`, delegating under `src/storage/browser/` | Preserve contracts and local-storage keys; the facade supplies explicit cross-domain callbacks where required. |
 | Database migrations and native transactions | `src-tauri/src/database.rs` and storage migration code | Keep ordered, atomic and backwards compatible. |
@@ -91,6 +92,8 @@ The first Etap 5 persistence split keeps `AppRepository`, the SQLite schema and 
 The second Etap 5 split delegates target listing, user-target CRUD and usage persistence through `TargetsRepository`. Browser storage receives its cross-domain used-target check from the compatibility facade; SQLite keeps the existing target-integrity triggers. No target record, storage key, query result or public caller contract changes.
 
 The third Etap 5 split delegates application settings, provider-connection metadata and the cached model registry through `SettingsModelsRepository`. Browser preview retains its established inability to create or rotate credentials. SQLite keeps provider creation, credential-metadata updates, model replacement and provider deletion transactional; deletion still clears matching Profile defaults in the same transaction. Actual API secrets remain owned by native credential commands and never enter this repository contract.
+
+The fourth Etap 5 split delegates Workspace lifecycle plus the existing Thread group, Conversation/Manual RV and message persistence through `WorkspacesConversationsRepository`. The stable facade, SQLite schema, local-storage keys, lazy browser migration of legacy ungrouped conversations, archive timestamp coupling and restore guards remain unchanged. Workspace Sources are deliberately excluded because they form a separate persistence surface. The later UX plan may remove `ChatThreadGroup` as a product level, but this structural split preserves it exactly.
 
 ## Updating this map
 

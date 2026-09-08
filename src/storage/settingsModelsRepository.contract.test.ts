@@ -72,6 +72,21 @@ describe("browser Settings and models repository contract", () => {
     await expect(repository.createProviderConfig({ id: "p", provider: "openai", label: "P", credentialId: "c" })).rejects.toThrow("desktop runtime");
     await expect(repository.updateProviderCredentialMetadata("p", "…1234", "hash")).rejects.toThrow("desktop runtime");
   });
+
+  it("persists provider status, favorites and cache clearing with their existing browser semantics", async () => {
+    const storage = new MemoryStorage();
+    storage.setItem("rvh.dev.providers", JSON.stringify([provider("provider-a", "2026-09-07T00:00:00.000Z")]));
+    storage.setItem("rvh.dev.models", JSON.stringify([model("provider-a", "model-a", "Model A")]));
+    const repository = new BrowserSettingsModelsRepository({ storage, clearProfileReferences: () => undefined, now: () => timestamp });
+
+    await repository.updateProviderConnectionStatus("provider-a", "error", "offline");
+    expect((await repository.listProviderConfigs())[0]).toMatchObject({ lastTestedAt: timestamp, lastStatus: "error", lastError: "offline", updatedAt: timestamp });
+
+    await repository.setProviderModelFavorite("provider-a", "model-a", true);
+    expect((await repository.listProviderModels("provider-a"))[0]?.favorite).toBe(true);
+    await repository.clearProviderModelCache();
+    expect(await repository.listProviderModels()).toEqual([]);
+  });
 });
 
 describe("SQLite Settings and models repository contract", () => {
@@ -130,5 +145,42 @@ describe("SQLite Settings and models repository contract", () => {
     expect(statements[0].query).toContain("DELETE FROM model_registry");
     expect(statements[1].query).toContain("INSERT INTO model_registry");
     expect(statements[1].values![8]).toBe(1);
+  });
+
+  it("updates credential metadata atomically and resets the previous connection result", async () => {
+    const transactions: DatabaseTransactionStatement[][] = [];
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [{ credential_id: "credential-a" }] as T,
+      executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async (statements) => { transactions.push(statements); return []; },
+      now: () => timestamp,
+    });
+
+    await repository.updateProviderCredentialMetadata("provider-a", "…5678", "new-hash");
+    expect(transactions[0]).toHaveLength(2);
+    expect(transactions[0]?.[0].query).toContain("last_status = NULL");
+    expect(transactions[0]?.[0].values).toEqual(["…5678", timestamp, "provider-a"]);
+    expect(transactions[0]?.[1].query).toContain("UPDATE credentials_metadata");
+    expect(transactions[0]?.[1].values).toEqual(["new-hash", timestamp, "credential-a"]);
+  });
+
+  it("delegates status, favorite and cache mutations to their exact SQLite writes", async () => {
+    const writes: Array<{ query: string; values?: unknown[] }> = [];
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [] as T,
+      executeWrite: async (query, values) => { writes.push({ query, values }); return { rowsAffected: 1 }; },
+      executeTransaction: async () => [],
+      now: () => timestamp,
+    });
+
+    await repository.updateProviderConnectionStatus("provider-a", "ok");
+    await repository.setProviderModelFavorite("provider-a", "model-a", true);
+    await repository.clearProviderModelCache();
+
+    expect(writes[0]?.query).toContain("last_tested_at");
+    expect(writes[0]?.values).toEqual([timestamp, "ok", null, "provider-a"]);
+    expect(writes[1]?.query).toContain("UPDATE model_registry SET favorite");
+    expect(writes[1]?.values).toEqual([1, "provider-a", "model-a"]);
+    expect(writes[2]?.query).toBe("DELETE FROM model_registry");
   });
 });
