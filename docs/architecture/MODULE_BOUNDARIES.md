@@ -107,8 +107,9 @@ The controlled Etap 5 split keeps the public `AppRepository` contract unchanged:
 | --- | --- | --- | --- |
 | `src/storage/contracts/profilesRepository.ts` | `src/storage/browser/profilesRepository.ts` | `src/storage/sqlite/profilesRepository.ts` | Profile archive/restore remains in both facades because it also archives/restores matching Workspaces. |
 | `src/storage/contracts/targetsRepository.ts` | `src/storage/browser/targetsRepository.ts` | `src/storage/sqlite/targetsRepository.ts` | The browser facade owns the cross-domain used-target predicate; SQLite preserves the existing mutation-guard triggers. |
+| `src/storage/contracts/settingsModelsRepository.ts` | `src/storage/browser/settingsModelsRepository.ts` | `src/storage/sqlite/settingsModelsRepository.ts` | Browser Profile-reference cleanup is an explicit facade callback. SQLite owns the existing atomic provider/credential/Profile cleanup transaction. Native credential secrets remain outside repository storage. |
 
-Domain repositories must not silently mutate another storage area. A later extraction may move Profile lifecycle into a named cross-domain transaction unit, but it must preserve the exact timestamp-coupling and atomic SQLite transaction already used by the facades.
+Domain repositories must not silently mutate another storage area. Cross-domain effects are injected or documented as explicit transactions. A later extraction may move Profile lifecycle or provider deletion into named cross-domain transaction units, but it must preserve the exact timestamp-coupling and atomic SQLite transactions already used by the facades.
 
 ## Enforcement introduced in Step 1
 

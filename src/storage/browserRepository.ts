@@ -1,5 +1,4 @@
-import type { AppSettings, ChatMessage, ChatMode, ChatThread, ChatThreadGroup, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
-import type { CreateProviderConfigInput, ProviderConfig, ProviderModel } from "../providers/types";
+import type { ChatMessage, ChatMode, ChatThread, ChatThreadGroup, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionEventRecord, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
 import type { CreateJudgeRunInput, FrozenJudgeResultInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
@@ -11,18 +10,15 @@ import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
 import { serializePostRevealTurn } from "../sessions/postRevealTranscript";
 import { verifySealedViewerEvidence } from "../sessions/evidence";
-import { applyReasoningRegistryToProviderModel } from "../providers/modelReasoningRegistry";
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteSettings, ViewerNoteVersion } from "../aiCenter/types";
 import { assertViewerNoteBasePair } from "../aiCenter/baseVersion";
 import { BrowserProfilesRepository } from "./browser/profilesRepository";
 import { BrowserTargetsRepository } from "./browser/targetsRepository";
+import { BrowserSettingsModelsRepository } from "./browser/settingsModelsRepository";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
-const SETTINGS_KEY = "rvh.dev.settings";
-const PROVIDERS_KEY = "rvh.dev.providers";
-const MODELS_KEY = "rvh.dev.models";
 const RV_SESSIONS_KEY = "rvh.dev.rv_sessions";
 const SESSION_EVENTS_KEY = "rvh.dev.session_events";
 const SESSION_SNAPSHOTS_KEY = "rvh.dev.session_snapshots";
@@ -70,6 +66,29 @@ export class BrowserRepository implements AppRepository {
     hasRecordedUse: (id) => read<Array<{ targetId: string }>>(TARGET_USAGE_KEY, []).some((item) => item.targetId === id)
       || read<RvSession[]>(RV_SESSIONS_KEY, []).some((item) => item.targetId === id)
       || read<ResearchAssignmentRecord[]>(RESEARCH_ASSIGNMENTS_KEY, []).some((item) => item.targetId === id),
+  });
+  private readonly settingsModelsRepository = new BrowserSettingsModelsRepository({
+    clearProfileReferences: (removed, timestamp) => {
+      write(PROFILES_KEY, read<Profile[]>(PROFILES_KEY, []).map((profile) => {
+        const ownsRemovedCredential = profile.credentialId === removed.credentialId;
+        const usesRemovedMonitor = profile.defaultMonitorProviderConfigId === removed.id;
+        const usesRemovedJudge = profile.defaultJudgeProviderConfigId === removed.id;
+        if (!ownsRemovedCredential && !usesRemovedMonitor && !usesRemovedJudge) return profile;
+        return {
+          ...profile,
+          ...(ownsRemovedCredential ? {
+            credentialId: undefined,
+            credentialProvider: undefined,
+            defaultViewerModelId: undefined,
+            defaultViewerReasoningEffort: undefined,
+            defaultViewerTemperature: undefined,
+          } : {}),
+          ...(usesRemovedMonitor ? { defaultMonitorProviderConfigId: undefined, defaultMonitorModelId: undefined } : {}),
+          ...(usesRemovedJudge ? { defaultJudgeProviderConfigId: undefined, defaultJudgeModelId: undefined } : {}),
+          updatedAt: timestamp,
+        };
+      }));
+    },
   });
 
   async ensureAiIdentity(input: EnsureAiIdentityInput): Promise<AiIdentity> {
@@ -506,89 +525,17 @@ export class BrowserRepository implements AppRepository {
     write(CHAT_SOURCE_SELECTION_KEY, all);
   }
 
-  async loadSettings(): Promise<Partial<AppSettings>> {
-    return read<Partial<AppSettings>>(SETTINGS_KEY, {});
-  }
-
-  async saveSettings(settings: AppSettings): Promise<void> {
-    write(SETTINGS_KEY, settings);
-  }
-
-  async listProviderConfigs(): Promise<ProviderConfig[]> {
-    return read<ProviderConfig[]>(PROVIDERS_KEY, []).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  }
-
-  async createProviderConfig(_input: CreateProviderConfigInput): Promise<ProviderConfig> {
-    throw new Error("Provider connections and credential metadata require the desktop runtime.");
-  }
-
-  async updateProviderCredentialMetadata(_id: string, _credentialHint: string, _fingerprint: string): Promise<void> {
-    throw new Error("Provider connections and credential metadata require the desktop runtime.");
-  }
-
-  async deleteProviderConfig(id: string): Promise<void> {
-    const removed = (await this.listProviderConfigs()).find((item) => item.id === id);
-    write(PROVIDERS_KEY, (await this.listProviderConfigs()).filter((item) => item.id !== id));
-    write(MODELS_KEY, read<ProviderModel[]>(MODELS_KEY, []).filter((item) => item.providerConfigId !== id));
-    if (removed) {
-      const timestamp = nowIso();
-      write(PROFILES_KEY, read<Profile[]>(PROFILES_KEY, []).map((profile) => {
-        const ownsRemovedCredential = profile.credentialId === removed.credentialId;
-        const usesRemovedMonitor = profile.defaultMonitorProviderConfigId === id;
-        const usesRemovedJudge = profile.defaultJudgeProviderConfigId === id;
-        if (!ownsRemovedCredential && !usesRemovedMonitor && !usesRemovedJudge) return profile;
-        return {
-          ...profile,
-          ...(ownsRemovedCredential ? {
-            credentialId: undefined,
-            credentialProvider: undefined,
-            defaultViewerModelId: undefined,
-            defaultViewerReasoningEffort: undefined,
-            defaultViewerTemperature: undefined,
-          } : {}),
-          ...(usesRemovedMonitor ? { defaultMonitorProviderConfigId: undefined, defaultMonitorModelId: undefined } : {}),
-          ...(usesRemovedJudge ? { defaultJudgeProviderConfigId: undefined, defaultJudgeModelId: undefined } : {}),
-          updatedAt: timestamp,
-        };
-      }));
-    }
-  }
-
-  async updateProviderConnectionStatus(id: string, status: "ok" | "error", error?: string): Promise<void> {
-    const timestamp = nowIso();
-    write(
-      PROVIDERS_KEY,
-      (await this.listProviderConfigs()).map((item) =>
-        item.id === id
-          ? { ...item, lastTestedAt: timestamp, lastStatus: status, lastError: error, updatedAt: timestamp }
-          : item,
-      ),
-    );
-  }
-
-  async listProviderModels(providerConfigId?: string): Promise<ProviderModel[]> {
-    return read<ProviderModel[]>(MODELS_KEY, [])
-      .filter((item) => !providerConfigId || item.providerConfigId === providerConfigId)
-      .map(applyReasoningRegistryToProviderModel)
-      .sort((a, b) => a.displayName.localeCompare(b.displayName));
-  }
-
-  async replaceProviderModels(providerConfigId: string, models: ProviderModel[]): Promise<void> {
-    const current = read<ProviderModel[]>(MODELS_KEY, []);
-    const favorites = new Set(current.filter((item) => item.providerConfigId === providerConfigId && item.favorite).map((item) => item.modelId));
-    const existing = current.filter((item) => item.providerConfigId !== providerConfigId);
-    write(MODELS_KEY, [...existing, ...models.map((model) => ({ ...model, favorite: Boolean(model.favorite || favorites.has(model.modelId)) }))]);
-  }
-
-  async setProviderModelFavorite(providerConfigId: string, modelId: string, favorite: boolean): Promise<void> {
-    write(MODELS_KEY, read<ProviderModel[]>(MODELS_KEY, []).map((model) =>
-      model.providerConfigId === providerConfigId && model.modelId === modelId ? { ...model, favorite } : model,
-    ));
-  }
-
-  async clearProviderModelCache(): Promise<void> {
-    write(MODELS_KEY, []);
-  }
+  loadSettings: AppRepository["loadSettings"] = () => this.settingsModelsRepository.loadSettings();
+  saveSettings: AppRepository["saveSettings"] = (settings) => this.settingsModelsRepository.saveSettings(settings);
+  listProviderConfigs: AppRepository["listProviderConfigs"] = () => this.settingsModelsRepository.listProviderConfigs();
+  createProviderConfig: AppRepository["createProviderConfig"] = (input) => this.settingsModelsRepository.createProviderConfig(input);
+  updateProviderCredentialMetadata: AppRepository["updateProviderCredentialMetadata"] = (id, credentialHint, fingerprint) => this.settingsModelsRepository.updateProviderCredentialMetadata(id, credentialHint, fingerprint);
+  deleteProviderConfig: AppRepository["deleteProviderConfig"] = (id) => this.settingsModelsRepository.deleteProviderConfig(id);
+  updateProviderConnectionStatus: AppRepository["updateProviderConnectionStatus"] = (id, status, error) => this.settingsModelsRepository.updateProviderConnectionStatus(id, status, error);
+  listProviderModels: AppRepository["listProviderModels"] = (providerConfigId) => this.settingsModelsRepository.listProviderModels(providerConfigId);
+  replaceProviderModels: AppRepository["replaceProviderModels"] = (providerConfigId, models) => this.settingsModelsRepository.replaceProviderModels(providerConfigId, models);
+  setProviderModelFavorite: AppRepository["setProviderModelFavorite"] = (providerConfigId, modelId, favorite) => this.settingsModelsRepository.setProviderModelFavorite(providerConfigId, modelId, favorite);
+  clearProviderModelCache: AppRepository["clearProviderModelCache"] = () => this.settingsModelsRepository.clearProviderModelCache();
 
   listTargets: AppRepository["listTargets"] = (collection) => this.targetsRepository.listTargets(collection);
   createTarget: AppRepository["createTarget"] = (input) => this.targetsRepository.createTarget(input);
