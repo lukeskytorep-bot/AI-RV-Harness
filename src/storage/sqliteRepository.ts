@@ -11,7 +11,6 @@ import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
 import { executeDatabaseTransaction, type DatabaseTransactionStatement } from "./databaseNative";
 import { SqliteWriteCoordinator } from "./sqliteWriteCoordinator";
-import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteSettings, ViewerNoteVersion } from "../aiCenter/types";
 import { assertViewerNoteBasePair } from "../aiCenter/baseVersion";
 import { SqliteProfilesRepository } from "./sqlite/profilesRepository";
@@ -19,6 +18,7 @@ import { SqliteTargetsRepository } from "./sqlite/targetsRepository";
 import { SqliteSettingsModelsRepository } from "./sqlite/settingsModelsRepository";
 import { SqliteWorkspacesConversationsRepository } from "./sqlite/workspacesConversationsRepository";
 import { SqliteSessionsRepository } from "./sqlite/sessionsRepository";
+import { SqliteTrainingRepository } from "./sqlite/trainingRepository";
 
 type WorkspaceSourceRow = { id: string; workspace_id: string; source_type: "text" | "markdown" | "pdf" | "docx"; display_name: string; content_text: string | null; content_hash: string | null; metadata_json: string; created_at: string };
 type JudgeScoreRow = {
@@ -138,6 +138,7 @@ export class SqliteRepository implements AppRepository {
   private readonly settingsModelsRepository: SqliteSettingsModelsRepository;
   private readonly workspacesConversationsRepository: SqliteWorkspacesConversationsRepository;
   private readonly sessionsRepository: SqliteSessionsRepository;
+  private readonly trainingRepository: SqliteTrainingRepository;
 
   private constructor(private readonly db: Database) {
     this.profilesRepository = new SqliteProfilesRepository({
@@ -165,6 +166,10 @@ export class SqliteRepository implements AppRepository {
         "SELECT scores_frozen_at FROM research_projects WHERE id = $1",
         [projectId],
       ))[0]?.scores_frozen_at),
+    });
+    this.trainingRepository = new SqliteTrainingRepository({
+      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
+      executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
     });
   }
 
@@ -350,32 +355,9 @@ export class SqliteRepository implements AppRepository {
     ]);
   }
 
-  async createTrainingRun(input: CreateTrainingRunInput): Promise<TrainingRunRecord> {
-    const timestamp = nowIso();
-    const rows = await this.db.select<Array<{ next_number: number }>>("SELECT COALESCE(MAX(run_number), 0) + 1 AS next_number FROM training_runs");
-    const run: TrainingRunRecord = { ...input, id: createId("training"), runNumber: Number(rows[0]?.next_number ?? 1), completedTargetIds: [], sessionIds: [], currentIndex: 0, errors: [], createdAt: timestamp, updatedAt: timestamp };
-    await this.executeWrite(
-      `INSERT INTO training_runs (id, run_number, status, record_json, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-      [run.id, run.runNumber, run.status, JSON.stringify(run), timestamp],
-    );
-    return run;
-  }
-
-  async updateTrainingRun(id: string, input: UpdateTrainingRunInput): Promise<void> {
-    const rows = await this.db.select<Array<{ record_json: string }>>("SELECT record_json FROM training_runs WHERE id = $1", [id]);
-    if (!rows[0]) throw new Error("Training run not found.");
-    const current = JSON.parse(rows[0].record_json) as TrainingRunRecord;
-    const updated: TrainingRunRecord = { ...current, ...input, errors: input.error ? [...current.errors, input.error] : current.errors, updatedAt: nowIso() };
-    await this.executeWrite("UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4", [updated.status, JSON.stringify(updated), updated.updatedAt, id]);
-  }
-
-  async listTrainingRuns(): Promise<TrainingRunRecord[]> {
-    const rows = await this.db.select<Array<{ record_json: string }>>("SELECT record_json FROM training_runs ORDER BY run_number DESC");
-    return rows.map((row) => {
-      const run = JSON.parse(row.record_json) as TrainingRunRecord;
-      return { ...run, sessionIds: run.sessionIds ?? [] };
-    });
-  }
+  createTrainingRun: AppRepository["createTrainingRun"] = (input) => this.trainingRepository.createTrainingRun(input);
+  updateTrainingRun: AppRepository["updateTrainingRun"] = (id, input) => this.trainingRepository.updateTrainingRun(id, input);
+  listTrainingRuns: AppRepository["listTrainingRuns"] = () => this.trainingRepository.listTrainingRuns();
 
   async listProfiles(): Promise<Profile[]> {
     return this.profilesRepository.listProfiles();

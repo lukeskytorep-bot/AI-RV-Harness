@@ -98,6 +98,8 @@ The fourth Etap 5 split delegates Workspace lifecycle plus the existing Thread g
 
 The fifth Etap 5 split delegates the RV Session persistence surface through `SessionsRepository`: session creation/state, ordered events, pre-Reveal transcript, immutable snapshot, sealing, atomic Reveal, sealed-evidence reads, post-Reveal transcript, session listing and target clarifications. Browser storage keeps its existing explicit Research frozen-score guards; SQLite continues to rely on the existing database triggers for atomic Reveal, target-clarification protection and append-only post-Reveal enforcement, while the facade supplies the Research-score lookup used by the preflight check. Monitor, Judge, Research project persistence and custom protocols remain outside this focused split. No schema, migration, storage-key or serialized-record change is introduced.
 
+The sixth Etap 5 split delegates Training-run persistence through `TrainingRepository`: run creation and numbering, durable run updates, per-target checkpoints, frozen execution snapshots, ordered session-id linkage, error accumulation and run listing. The execution workflow remains owned by `src/features/training/trainingExecution.ts`; RV Sessions, Judge results and Viewer Notes persistence remain with their existing repositories. The existing `training_runs` table continues to store the canonical `TrainingRunRecord` in `record_json` with mirrored `status` and `run_number` columns. No schema, migration, browser key or serialized-record change is introduced.
+
 ## Updating this map
 
 Update this file when ownership changes. A moved capability must have one clear current owner and, when shared across modules, a documented public entry point.

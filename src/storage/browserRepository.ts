@@ -7,7 +7,6 @@ import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchCondition
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
-import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteSettings, ViewerNoteVersion } from "../aiCenter/types";
 import { assertViewerNoteBasePair } from "../aiCenter/baseVersion";
 import { BrowserProfilesRepository } from "./browser/profilesRepository";
@@ -15,6 +14,7 @@ import { BrowserTargetsRepository } from "./browser/targetsRepository";
 import { BrowserSettingsModelsRepository } from "./browser/settingsModelsRepository";
 import { BrowserWorkspacesConversationsRepository } from "./browser/workspacesConversationsRepository";
 import { BrowserSessionsRepository } from "./browser/sessionsRepository";
+import { BrowserTrainingRepository } from "./browser/trainingRepository";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
@@ -31,7 +31,6 @@ const BLINDING_MAPPINGS_KEY = "rvh.dev.blinding_mappings";
 const RESEARCH_RESULTS_KEY = "rvh.dev.research_results";
 const WORKSPACE_SOURCES_KEY = "rvh.dev.workspace_sources";
 const CHAT_SOURCE_SELECTION_KEY = "rvh.dev.chat_source_selection";
-const TRAINING_RUNS_KEY = "rvh.dev.training_runs";
 const AI_IDENTITIES_KEY = "rvh.dev.ai_identities";
 const AI_NOTE_SETTINGS_KEY = "rvh.dev.ai_note_settings";
 const AI_NOTE_VERSIONS_KEY = "rvh.dev.ai_note_versions";
@@ -57,6 +56,7 @@ export class BrowserRepository implements AppRepository {
   private readonly sessionsRepository = new BrowserSessionsRepository({
     isResearchScoresFrozen: (projectId) => Boolean(read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).find((item) => item.id === projectId)?.scoresFrozenAt),
   });
+  private readonly trainingRepository = new BrowserTrainingRepository();
   private readonly targetsRepository = new BrowserTargetsRepository({
     hasRecordedUse: (id) => read<Array<{ targetId: string }>>(TARGET_USAGE_KEY, []).some((item) => item.targetId === id)
       || this.sessionsRepository.hasRecordedTargetUse(id)
@@ -216,21 +216,9 @@ export class BrowserRepository implements AppRepository {
     write(AI_NOTE_ACTIVATION_EVENTS_KEY, [{ id: createId("ai_note_activation"), aiIdentityId, ...(current.activeVersionId ? { fromVersionId: current.activeVersionId } : {}), toVersionId: version.id, activationSource: "human_restore", ...(workspaceId ? { workspaceId } : {}), createdAt: timestamp }, ...read<ViewerNoteActivationEvent[]>(AI_NOTE_ACTIVATION_EVENTS_KEY, [])]);
   }
 
-  async createTrainingRun(input: CreateTrainingRunInput): Promise<TrainingRunRecord> {
-    const all = read<TrainingRunRecord[]>(TRAINING_RUNS_KEY, []);
-    const timestamp = nowIso();
-    const run: TrainingRunRecord = { ...input, id: createId("training"), runNumber: Math.max(0, ...all.map((item) => item.runNumber)) + 1, completedTargetIds: [], sessionIds: [], currentIndex: 0, errors: [], createdAt: timestamp, updatedAt: timestamp };
-    write(TRAINING_RUNS_KEY, [run, ...all]);
-    return run;
-  }
-
-  async updateTrainingRun(id: string, input: UpdateTrainingRunInput): Promise<void> {
-    write(TRAINING_RUNS_KEY, read<TrainingRunRecord[]>(TRAINING_RUNS_KEY, []).map((run) => run.id === id ? { ...run, ...input, errors: input.error ? [...run.errors, input.error] : run.errors, updatedAt: nowIso() } : run));
-  }
-
-  async listTrainingRuns(): Promise<TrainingRunRecord[]> {
-    return read<TrainingRunRecord[]>(TRAINING_RUNS_KEY, []).map((run) => ({ ...run, sessionIds: run.sessionIds ?? [] })).sort((a, b) => b.runNumber - a.runNumber);
-  }
+  createTrainingRun: AppRepository["createTrainingRun"] = (input) => this.trainingRepository.createTrainingRun(input);
+  updateTrainingRun: AppRepository["updateTrainingRun"] = (id, input) => this.trainingRepository.updateTrainingRun(id, input);
+  listTrainingRuns: AppRepository["listTrainingRuns"] = () => this.trainingRepository.listTrainingRuns();
 
   async createDatabaseSnapshot(_destinationPath: string): Promise<void> {
     throw new Error("Backup snapshots are available in the desktop app.");
