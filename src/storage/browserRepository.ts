@@ -1,5 +1,4 @@
 import type { CreateProfileInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
-import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionEventRecord, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
 import type { CreateJudgeRunInput, FrozenJudgeResultInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
 import { computeJudgeTotal } from "../domain/scoring";
@@ -8,8 +7,6 @@ import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchCondition
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
-import { serializePostRevealTurn } from "../sessions/postRevealTranscript";
-import { verifySealedViewerEvidence } from "../sessions/evidence";
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteSettings, ViewerNoteVersion } from "../aiCenter/types";
 import { assertViewerNoteBasePair } from "../aiCenter/baseVersion";
@@ -17,13 +14,10 @@ import { BrowserProfilesRepository } from "./browser/profilesRepository";
 import { BrowserTargetsRepository } from "./browser/targetsRepository";
 import { BrowserSettingsModelsRepository } from "./browser/settingsModelsRepository";
 import { BrowserWorkspacesConversationsRepository } from "./browser/workspacesConversationsRepository";
+import { BrowserSessionsRepository } from "./browser/sessionsRepository";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
-const RV_SESSIONS_KEY = "rvh.dev.rv_sessions";
-const SESSION_EVENTS_KEY = "rvh.dev.session_events";
-const SESSION_SNAPSHOTS_KEY = "rvh.dev.session_snapshots";
-const REVEALS_KEY = "rvh.dev.reveals";
 const MONITOR_RUNS_KEY = "rvh.dev.monitor_runs";
 const MONITOR_INTERVENTIONS_KEY = "rvh.dev.monitor_interventions";
 const JUDGE_RUNS_KEY = "rvh.dev.judge_runs";
@@ -37,7 +31,6 @@ const BLINDING_MAPPINGS_KEY = "rvh.dev.blinding_mappings";
 const RESEARCH_RESULTS_KEY = "rvh.dev.research_results";
 const WORKSPACE_SOURCES_KEY = "rvh.dev.workspace_sources";
 const CHAT_SOURCE_SELECTION_KEY = "rvh.dev.chat_source_selection";
-const TARGET_CLARIFICATIONS_KEY = "rvh.dev.target_clarifications";
 const TRAINING_RUNS_KEY = "rvh.dev.training_runs";
 const AI_IDENTITIES_KEY = "rvh.dev.ai_identities";
 const AI_NOTE_SETTINGS_KEY = "rvh.dev.ai_note_settings";
@@ -61,9 +54,12 @@ function write<T>(key: string, value: T): void {
 export class BrowserRepository implements AppRepository {
   private readonly profilesRepository = new BrowserProfilesRepository();
   private readonly workspacesConversationsRepository = new BrowserWorkspacesConversationsRepository();
+  private readonly sessionsRepository = new BrowserSessionsRepository({
+    isResearchScoresFrozen: (projectId) => Boolean(read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).find((item) => item.id === projectId)?.scoresFrozenAt),
+  });
   private readonly targetsRepository = new BrowserTargetsRepository({
     hasRecordedUse: (id) => read<Array<{ targetId: string }>>(TARGET_USAGE_KEY, []).some((item) => item.targetId === id)
-      || read<RvSession[]>(RV_SESSIONS_KEY, []).some((item) => item.targetId === id)
+      || this.sessionsRepository.hasRecordedTargetUse(id)
       || read<ResearchAssignmentRecord[]>(RESEARCH_ASSIGNMENTS_KEY, []).some((item) => item.targetId === id),
   });
   private readonly settingsModelsRepository = new BrowserSettingsModelsRepository({
@@ -373,124 +369,21 @@ export class BrowserRepository implements AppRepository {
     return record;
   }
 
-  async createRvSession(input: CreateRvSessionInput): Promise<RvSession> {
-    const timestamp = nowIso();
-    const session: RvSession = {
-      id: input.id,
-      workspaceId: input.workspaceId,
-      profileId: input.profileId,
-      sessionCode: input.sessionCode,
-      state: "Draft",
-      runType: input.runType,
-      preRevealTranscript: "",
-      postRevealTranscript: "",
-      targetId: input.targetId,
-      researchProjectId: input.researchProjectId,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    write(RV_SESSIONS_KEY, [session, ...read<RvSession[]>(RV_SESSIONS_KEY, [])]);
-    return session;
-  }
-
-  async updateRvSessionState(id: string, state: RvSessionState, stopReason?: string): Promise<void> {
-    const timestamp = nowIso();
-    write(
-      RV_SESSIONS_KEY,
-      read<RvSession[]>(RV_SESSIONS_KEY, []).map((session) =>
-        session.id === id ? { ...session, state, updatedAt: timestamp, ...(state === "Completed" ? { completedAt: timestamp } : {}) } : session,
-      ),
-    );
-    if (stopReason) await this.appendSessionEvent(id, { eventType: "SESSION_STOPPED", role: "controller", content: stopReason });
-  }
-
-  async appendPostRevealTurn(sessionId: string, role: "user" | "assistant" | "monitor", content: string): Promise<string> {
-    const sessions = read<RvSession[]>(RV_SESSIONS_KEY, []);
-    const session = sessions.find((item) => item.id === sessionId);
-    if (!session) throw new Error("RV session not found.");
-    if (session.state !== "Revealed" && session.state !== "Completed") throw new Error("Post-reveal discussion requires Reveal.");
-    if (session.researchProjectId) {
-      const project = read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).find((item) => item.id === session.researchProjectId);
-      if (!project?.scoresFrozenAt) throw new Error("Research post-reveal discussion requires frozen scores.");
-    }
-    const next = `${session.postRevealTranscript}${serializePostRevealTurn(role, content)}`;
-    const timestamp = nowIso();
-    write(RV_SESSIONS_KEY, sessions.map((item) => item.id === sessionId ? { ...item, postRevealTranscript: next, updatedAt: timestamp } : item));
-    await this.appendSessionEvent(sessionId, { eventType: `POST_REVEAL_${role.toUpperCase()}`, role, content: content.trim() });
-    return next;
-  }
-
-  async appendSessionEvent(sessionId: string, event: SessionEventInput): Promise<void> {
-    const all = read<SessionEventRecord[]>(SESSION_EVENTS_KEY, []);
-    const sequenceNumber = all.filter((item) => item.sessionId === sessionId).reduce((max, item) => Math.max(max, item.sequenceNumber), 0) + 1;
-    write(SESSION_EVENTS_KEY, [...all, { ...event, id: createId("event"), sessionId, sequenceNumber, createdAt: nowIso() }]);
-  }
-
-  async listSessionEvents(sessionId: string): Promise<SessionEventRecord[]> {
-    return read<SessionEventRecord[]>(SESSION_EVENTS_KEY, [])
-      .filter((event) => event.sessionId === sessionId)
-      .sort((left, right) => left.sequenceNumber - right.sequenceNumber)
-      .map((event) => structuredClone(event));
-  }
-
-  async updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void> {
-    write(RV_SESSIONS_KEY, read<RvSession[]>(RV_SESSIONS_KEY, []).map((session) => session.id === sessionId && !session.preRevealSealedAt ? { ...session, preRevealTranscript: transcript, updatedAt: nowIso() } : session));
-  }
-
-  async saveSessionSnapshot(sessionId: string, snapshot: SessionSnapshot, hash: string): Promise<void> {
-    const all = read<Array<{ sessionId: string; snapshot: SessionSnapshot; hash: string }>>(SESSION_SNAPSHOTS_KEY, []);
-    if (all.some((item) => item.sessionId === sessionId)) throw new Error("session snapshots are immutable");
-    write(SESSION_SNAPSHOTS_KEY, [...all, { sessionId, snapshot, hash }]);
-  }
-
-  async getSessionSnapshot(sessionId: string): Promise<SessionSnapshot | null> {
-    return read<Array<{ sessionId: string; snapshot: SessionSnapshot; hash: string }>>(SESSION_SNAPSHOTS_KEY, []).find((item) => item.sessionId === sessionId)?.snapshot ?? null;
-  }
-
-  async sealPreReveal(sessionId: string, transcript: string, hash: string): Promise<void> {
-    const timestamp = nowIso();
-    write(RV_SESSIONS_KEY, read<RvSession[]>(RV_SESSIONS_KEY, []).map((session) => session.id === sessionId ? { ...session, preRevealTranscript: transcript, preRevealHash: hash, preRevealSealedAt: timestamp, state: "AwaitingReveal", updatedAt: timestamp } : session));
-  }
-
-  async acceptReveal(sessionId: string, reveal: RevealInput): Promise<void> {
-    const reveals = read<Array<{ sessionId: string; reveal: RevealInput; acceptedAt: string }>>(REVEALS_KEY, []);
-    if (reveals.some((item) => item.sessionId === sessionId)) throw new Error("reveal already exists");
-    write(REVEALS_KEY, [...reveals, { sessionId, reveal, acceptedAt: nowIso() }]);
-    await this.updateRvSessionState(sessionId, "Revealed");
-  }
-
-  async getReveal(sessionId: string): Promise<RevealInput | null> {
-    const item = read<Array<{ sessionId: string; reveal: RevealInput; acceptedAt: string }>>(REVEALS_KEY, []).find((entry) => entry.sessionId === sessionId);
-    return item ? structuredClone(item.reveal) : null;
-  }
-
-  async getViewerEvidence(sessionId: string): Promise<string> {
-    const session = read<RvSession[]>(RV_SESSIONS_KEY, []).find((item) => item.id === sessionId);
-    if (!session?.preRevealSealedAt || !session.preRevealHash) return "";
-    return verifySealedViewerEvidence(session.preRevealTranscript, session.preRevealHash);
-  }
-
-  async listRvSessions(workspaceId: string): Promise<RvSession[]> {
-    return read<RvSession[]>(RV_SESSIONS_KEY, []).filter((session) => session.workspaceId === workspaceId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }
-
-  async addTargetClarification(sessionId: string, content: string): Promise<TargetClarificationRecord> {
-    const clean = content.trim();
-    if (!clean) throw new Error("Target clarification cannot be empty.");
-    const session = read<RvSession[]>(RV_SESSIONS_KEY, []).find((item) => item.id === sessionId);
-    if (!session || (session.state !== "Revealed" && session.state !== "Completed")) throw new Error("Target clarification is available only after Reveal.");
-    if (session.researchProjectId) {
-      const project = read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).find((item) => item.id === session.researchProjectId);
-      if (!project?.scoresFrozenAt) throw new Error("Research target clarification requires frozen Judge scores.");
-    }
-    const record: TargetClarificationRecord = { id: createId("clarification"), sessionId, content: clean, createdAt: nowIso() };
-    write(TARGET_CLARIFICATIONS_KEY, [...read<TargetClarificationRecord[]>(TARGET_CLARIFICATIONS_KEY, []), record]);
-    return record;
-  }
-
-  async listTargetClarifications(sessionId: string): Promise<TargetClarificationRecord[]> {
-    return read<TargetClarificationRecord[]>(TARGET_CLARIFICATIONS_KEY, []).filter((item) => item.sessionId === sessionId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  }
+  createRvSession: AppRepository["createRvSession"] = (input) => this.sessionsRepository.createRvSession(input);
+  updateRvSessionState: AppRepository["updateRvSessionState"] = (id, state, stopReason) => this.sessionsRepository.updateRvSessionState(id, state, stopReason);
+  appendSessionEvent: AppRepository["appendSessionEvent"] = (sessionId, event) => this.sessionsRepository.appendSessionEvent(sessionId, event);
+  listSessionEvents: AppRepository["listSessionEvents"] = (sessionId) => this.sessionsRepository.listSessionEvents(sessionId);
+  updatePreRevealTranscript: AppRepository["updatePreRevealTranscript"] = (sessionId, transcript) => this.sessionsRepository.updatePreRevealTranscript(sessionId, transcript);
+  appendPostRevealTurn: AppRepository["appendPostRevealTurn"] = (sessionId, role, content) => this.sessionsRepository.appendPostRevealTurn(sessionId, role, content);
+  saveSessionSnapshot: AppRepository["saveSessionSnapshot"] = (sessionId, snapshot, hash) => this.sessionsRepository.saveSessionSnapshot(sessionId, snapshot, hash);
+  getSessionSnapshot: AppRepository["getSessionSnapshot"] = (sessionId) => this.sessionsRepository.getSessionSnapshot(sessionId);
+  sealPreReveal: AppRepository["sealPreReveal"] = (sessionId, transcript, hash) => this.sessionsRepository.sealPreReveal(sessionId, transcript, hash);
+  acceptReveal: AppRepository["acceptReveal"] = (sessionId, reveal) => this.sessionsRepository.acceptReveal(sessionId, reveal);
+  getReveal: AppRepository["getReveal"] = (sessionId) => this.sessionsRepository.getReveal(sessionId);
+  getViewerEvidence: AppRepository["getViewerEvidence"] = (sessionId) => this.sessionsRepository.getViewerEvidence(sessionId);
+  listRvSessions: AppRepository["listRvSessions"] = (workspaceId) => this.sessionsRepository.listRvSessions(workspaceId);
+  addTargetClarification: AppRepository["addTargetClarification"] = (sessionId, content) => this.sessionsRepository.addTargetClarification(sessionId, content);
+  listTargetClarifications: AppRepository["listTargetClarifications"] = (sessionId) => this.sessionsRepository.listTargetClarifications(sessionId);
 
   async createMonitorRun(input: CreateMonitorRunInput): Promise<string> {
     const id = createId("monitor");
@@ -506,7 +399,7 @@ export class BrowserRepository implements AppRepository {
   }
 
   async listMonitorRuns(workspaceId: string): Promise<MonitorRunRecord[]> {
-    const sessions = read<RvSession[]>(RV_SESSIONS_KEY, []);
+    const sessions = await this.sessionsRepository.listRvSessions(workspaceId);
     const sessionMap = new Map(sessions.filter((session) => session.workspaceId === workspaceId).map((session) => [session.id, session]));
     const interventions = read<MonitorInterventionRecord[]>(MONITOR_INTERVENTIONS_KEY, []);
     return read<Array<CreateMonitorRunInput & { id: string; createdAt: string }>>(MONITOR_RUNS_KEY, []).filter((run) => sessionMap.has(run.sessionId)).map((run) => ({ ...run, sessionCode: sessionMap.get(run.sessionId)!.sessionCode, interventionCount: interventions.filter((item) => item.monitorRunId === run.id).length })).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
