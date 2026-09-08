@@ -29,8 +29,8 @@ describe("Training repository boundary", () => {
   it("keeps Sessions, Judge and AI Center persistence outside the Training repository", () => {
     expect(browserFacade).toContain("this.sessionsRepository.createRvSession");
     expect(sqliteFacade).toContain("this.sessionsRepository.createRvSession");
-    expect(browserFacade).toContain("async recordFrozenJudgeResults(");
-    expect(sqliteFacade).toContain("async recordFrozenJudgeResults(");
+    expect(browserFacade).toContain("recordFrozenJudgeResults: AppRepository[\"recordFrozenJudgeResults\"]");
+    expect(sqliteFacade).toContain("recordFrozenJudgeResults: AppRepository[\"recordFrozenJudgeResults\"]");
     expect(browserFacade).toContain("this.aiCenterRepository.beginViewerNoteReflection");
     expect(sqliteFacade).toContain("this.aiCenterRepository.beginViewerNoteReflection");
   });

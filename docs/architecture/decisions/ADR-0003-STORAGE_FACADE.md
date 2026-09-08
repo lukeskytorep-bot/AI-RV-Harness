@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 6 September 2026  
-**Updated:** 8 September 2026 — AI Center and Monitor persistence extraction
+**Updated:** 8 September 2026 — Judge, Research and export persistence extraction; Etap 5 domain split complete
 
 ## Context
 
@@ -29,6 +29,10 @@ The fifth extraction is RV Sessions. Session creation and state, ordered events,
 The sixth extraction is Training. Run creation, monotonic run numbering, durable updates, completed-target/session linkage, execution snapshots, per-target checkpoints, error accumulation and listing delegate to `TrainingRepository`. This is a persistence-only move: the Training execution workflow, RV Sessions, Judge results and Viewer Notes remain separate owners. The `training_runs` table and the browser key `rvh.dev.training_runs` keep their existing formats, including legacy normalization of a missing `sessionIds` field when runs are read.
 
 The seventh extraction closes AI Center and Monitor persistence while preserving separate internal boundaries. `AiCenterRepository` owns AI identities and Viewer Notes settings, versions, activation events and reflection runs. SQLite retains migration-020 identity, append-only and stale-base triggers, and the existing four-statement atomic UPDATE commit plus transactional human restore. `MonitorRepository` separately owns Monitor runs and ordered interventions; the browser adapter receives the Sessions lookup explicitly, while SQLite keeps the established `rv_sessions` join. Judge and Research persistence remain outside this extraction for the final Etap 5 step.
+
+The eighth and final numbered extraction separates `JudgeRepository`, `ResearchRepository` and the cross-domain `ExportRepository`. Judge preserves duplicate-index behavior in browser storage and the existing atomic SQLite batch of Judge run plus frozen score records; migration-003 remains the authority for immutability. Research preserves Project state, Experiment Lock, conditions, assignments, Blinding Key mappings and immutable results. The existing frozen-score dependency used by Sessions and the used-target dependency used by Targets are now explicit helper queries on `ResearchRepository`, rather than direct Research key/table knowledge in the broad facades. Export records receive their own repository because Training, Session, Monitor and Research all write the same audit ledger.
+
+The eight-step domain split does not claim that every auxiliary compatibility method has moved out of the facade. Workspace Sources/chat-source selection and Custom Protocol version persistence remain explicit facade-owned auxiliary areas, as do cross-domain Profile archive/restore transactions. Their presence does not reintroduce Judge/Research domain implementation into the facade.
 
 No schema, migration, table, local-storage key or serialized record format changes as part of this decision.
 

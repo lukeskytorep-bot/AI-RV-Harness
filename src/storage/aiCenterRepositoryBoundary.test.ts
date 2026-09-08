@@ -30,9 +30,9 @@ describe("AI Center repository boundary", () => {
   });
 
   it("keeps Judge and Research persistence outside this focused split", () => {
-    expect(browserFacade).toContain("async recordFrozenJudgeResults(");
-    expect(sqliteFacade).toContain("async recordFrozenJudgeResults(");
-    expect(browserFacade).toContain("async createResearchProject(");
-    expect(sqliteFacade).toContain("async createResearchProject(");
+    expect(browserFacade).toContain("recordFrozenJudgeResults: AppRepository[\"recordFrozenJudgeResults\"]");
+    expect(sqliteFacade).toContain("recordFrozenJudgeResults: AppRepository[\"recordFrozenJudgeResults\"]");
+    expect(browserFacade).toContain("createResearchProject: AppRepository[\"createResearchProject\"]");
+    expect(sqliteFacade).toContain("createResearchProject: AppRepository[\"createResearchProject\"]");
   });
 });

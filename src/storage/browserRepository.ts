@@ -1,8 +1,5 @@
 import type { CreateProfileInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
-import type { CreateJudgeRunInput, FrozenJudgeResultInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
-import { computeJudgeTotal } from "../domain/scoring";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
-import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchConditionRecord, ResearchConfig, ResearchLockPlan, ResearchProjectRecord, ResearchResults, ResearchState } from "../research/types";
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
@@ -14,18 +11,14 @@ import { BrowserSessionsRepository } from "./browser/sessionsRepository";
 import { BrowserTrainingRepository } from "./browser/trainingRepository";
 import { BrowserAiCenterRepository } from "./browser/aiCenterRepository";
 import { BrowserMonitorRepository } from "./browser/monitorRepository";
+import { BrowserJudgeRepository } from "./browser/judgeRepository";
+import { BrowserResearchRepository } from "./browser/researchRepository";
+import { BrowserExportRepository } from "./browser/exportRepository";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
-const JUDGE_RUNS_KEY = "rvh.dev.judge_runs";
-const JUDGE_SCORES_KEY = "rvh.dev.judge_scores";
 const TARGET_USAGE_KEY = "rvh.dev.target_usage";
 const CUSTOM_PROTOCOLS_KEY = "rvh.dev.custom_protocols";
-const RESEARCH_PROJECTS_KEY = "rvh.dev.research_projects";
-const RESEARCH_CONDITIONS_KEY = "rvh.dev.research_conditions";
-const RESEARCH_ASSIGNMENTS_KEY = "rvh.dev.research_assignments";
-const BLINDING_MAPPINGS_KEY = "rvh.dev.blinding_mappings";
-const RESEARCH_RESULTS_KEY = "rvh.dev.research_results";
 const WORKSPACE_SOURCES_KEY = "rvh.dev.workspace_sources";
 const CHAT_SOURCE_SELECTION_KEY = "rvh.dev.chat_source_selection";
 
@@ -45,18 +38,21 @@ function write<T>(key: string, value: T): void {
 export class BrowserRepository implements AppRepository {
   private readonly profilesRepository = new BrowserProfilesRepository();
   private readonly workspacesConversationsRepository = new BrowserWorkspacesConversationsRepository();
+  private readonly researchRepository = new BrowserResearchRepository();
   private readonly sessionsRepository = new BrowserSessionsRepository({
-    isResearchScoresFrozen: (projectId) => Boolean(read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).find((item) => item.id === projectId)?.scoresFrozenAt),
+    isResearchScoresFrozen: (projectId) => this.researchRepository.isScoresFrozen(projectId),
   });
   private readonly trainingRepository = new BrowserTrainingRepository();
   private readonly aiCenterRepository = new BrowserAiCenterRepository();
   private readonly monitorRepository = new BrowserMonitorRepository({
     listRvSessions: (workspaceId) => this.sessionsRepository.listRvSessions(workspaceId),
   });
+  private readonly judgeRepository = new BrowserJudgeRepository();
+  private readonly exportRepository = new BrowserExportRepository();
   private readonly targetsRepository = new BrowserTargetsRepository({
     hasRecordedUse: (id) => read<Array<{ targetId: string }>>(TARGET_USAGE_KEY, []).some((item) => item.targetId === id)
       || this.sessionsRepository.hasRecordedTargetUse(id)
-      || read<ResearchAssignmentRecord[]>(RESEARCH_ASSIGNMENTS_KEY, []).some((item) => item.targetId === id),
+      || this.researchRepository.hasRecordedTargetUse(id),
   });
   private readonly settingsModelsRepository = new BrowserSettingsModelsRepository({
     clearProfileReferences: (removed, timestamp) => {
@@ -257,102 +253,22 @@ export class BrowserRepository implements AppRepository {
   listMonitorRuns: AppRepository["listMonitorRuns"] = (workspaceId) => this.monitorRepository.listMonitorRuns(workspaceId);
   listMonitorInterventions: AppRepository["listMonitorInterventions"] = (monitorRunId) => this.monitorRepository.listMonitorInterventions(monitorRunId);
 
-  async recordFrozenJudgeResult(run: CreateJudgeRunInput, score: FrozenJudgeScoreInput): Promise<JudgeScoreRecord> {
-    return (await this.recordFrozenJudgeResults([{ run, score }]))[0];
-  }
+  recordFrozenJudgeResult: AppRepository["recordFrozenJudgeResult"] = (run, score) => this.judgeRepository.recordFrozenJudgeResult(run, score);
+  recordFrozenJudgeResults: AppRepository["recordFrozenJudgeResults"] = (results) => this.judgeRepository.recordFrozenJudgeResults(results);
+  listJudgeScores: AppRepository["listJudgeScores"] = (sessionId) => this.judgeRepository.listJudgeScores(sessionId);
 
-  async recordFrozenJudgeResults(results: FrozenJudgeResultInput[]): Promise<JudgeScoreRecord[]> {
-    if (!results.length) return [];
-    const runs = read<CreateJudgeRunInput[]>(JUDGE_RUNS_KEY, []);
-    const seen = new Set(runs.map((item) => `${item.sessionId}::${item.judgeIndex}`));
-    for (const { run } of results) {
-      const key = `${run.sessionId}::${run.judgeIndex}`;
-      if (seen.has(key)) throw new Error("Judge index is already recorded for this session.");
-      seen.add(key);
-    }
-    const timestamp = nowIso();
-    const records = results.map(({ run, score }) => ({
-      ...score,
-      judgeIndex: run.judgeIndex,
-      modelRoute: run.modelRoute,
-      total: computeJudgeTotal(score),
-      frozenAt: timestamp,
-      createdAt: timestamp,
-    }));
-    write(JUDGE_RUNS_KEY, [...runs, ...results.map(({ run }) => structuredClone(run))]);
-    write(JUDGE_SCORES_KEY, [...read<JudgeScoreRecord[]>(JUDGE_SCORES_KEY, []), ...structuredClone(records)]);
-    return records;
-  }
+  createResearchProject: AppRepository["createResearchProject"] = (config) => this.researchRepository.createResearchProject(config);
+  getResearchProject: AppRepository["getResearchProject"] = (id) => this.researchRepository.getResearchProject(id);
+  listResearchProjects: AppRepository["listResearchProjects"] = (workspaceId) => this.researchRepository.listResearchProjects(workspaceId);
+  setResearchProjectState: AppRepository["setResearchProjectState"] = (id, state) => this.researchRepository.setResearchProjectState(id, state);
+  lockResearchProject: AppRepository["lockResearchProject"] = (id, plan) => this.researchRepository.lockResearchProject(id, plan);
+  listResearchConditions: AppRepository["listResearchConditions"] = (projectId) => this.researchRepository.listResearchConditions(projectId);
+  listResearchAssignments: AppRepository["listResearchAssignments"] = (projectId) => this.researchRepository.listResearchAssignments(projectId);
+  listBlindingMappings: AppRepository["listBlindingMappings"] = (projectId) => this.researchRepository.listBlindingMappings(projectId);
+  updateResearchAssignment: AppRepository["updateResearchAssignment"] = (id, sessionId, status) => this.researchRepository.updateResearchAssignment(id, sessionId, status);
+  saveResearchResults: AppRepository["saveResearchResults"] = (projectId, results, hash) => this.researchRepository.saveResearchResults(projectId, results, hash);
+  getResearchResults: AppRepository["getResearchResults"] = (projectId) => this.researchRepository.getResearchResults(projectId);
 
-  async listJudgeScores(sessionId: string): Promise<JudgeScoreRecord[]> {
-    const runIds = new Set(read<CreateJudgeRunInput[]>(JUDGE_RUNS_KEY, []).filter((run) => run.sessionId === sessionId).map((run) => run.id));
-    return read<JudgeScoreRecord[]>(JUDGE_SCORES_KEY, []).filter((score) => runIds.has(score.judgeRunId)).sort((a, b) => a.judgeIndex - b.judgeIndex);
-  }
+  recordExport: AppRepository["recordExport"] = (workspaceId, researchProjectId, exportType, artifactPath, manifestHash) => this.exportRepository.recordExport(workspaceId, researchProjectId, exportType, artifactPath, manifestHash);
 
-  async createResearchProject(config: ResearchConfig): Promise<ResearchProjectRecord> {
-    const timestamp = nowIso();
-    const project: ResearchProjectRecord = { id: createId("research"), workspaceId: config.workspaceId, name: config.name.trim(), templateType: config.templateType, state: "Draft", config: structuredClone(config), createdAt: timestamp, updatedAt: timestamp };
-    write(RESEARCH_PROJECTS_KEY, [project, ...read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, [])]);
-    return project;
-  }
-
-  async getResearchProject(id: string): Promise<ResearchProjectRecord | null> {
-    return read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).find((project) => project.id === id) ?? null;
-  }
-
-  async listResearchProjects(workspaceId?: string): Promise<ResearchProjectRecord[]> {
-    return read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).filter((project) => !workspaceId || project.workspaceId === workspaceId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }
-
-  async setResearchProjectState(id: string, state: ResearchState): Promise<void> {
-    const timestamp = nowIso();
-    write(RESEARCH_PROJECTS_KEY, read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).map((project) => project.id === id ? {
-      ...project, state, updatedAt: timestamp,
-      ...(state === "ScoresFrozen" && !project.scoresFrozenAt ? { scoresFrozenAt: timestamp } : {}),
-      ...(state === "Unblinded" && !project.unblindedAt ? { unblindedAt: timestamp } : {}),
-    } : project));
-  }
-
-  async lockResearchProject(id: string, plan: ResearchLockPlan): Promise<void> {
-    const projects = read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []);
-    const project = projects.find((item) => item.id === id);
-    if (!project || !["Draft", "Preflight"].includes(project.state)) throw new Error("Research project cannot be locked from its current state.");
-    const timestamp = nowIso();
-    write(RESEARCH_CONDITIONS_KEY, [...read<ResearchConditionRecord[]>(RESEARCH_CONDITIONS_KEY, []), ...structuredClone(plan.conditions)]);
-    write(RESEARCH_ASSIGNMENTS_KEY, [...read<ResearchAssignmentRecord[]>(RESEARCH_ASSIGNMENTS_KEY, []), ...structuredClone(plan.assignments)]);
-    write(BLINDING_MAPPINGS_KEY, [...read<BlindingMappingRecord[]>(BLINDING_MAPPINGS_KEY, []), ...structuredClone(plan.mappings)]);
-    write(RESEARCH_PROJECTS_KEY, projects.map((item) => item.id === id ? { ...item, state: "Locked", configHash: plan.configHash, lockedAt: timestamp, updatedAt: timestamp } : item));
-  }
-
-  async listResearchConditions(projectId: string): Promise<ResearchConditionRecord[]> {
-    return read<ResearchConditionRecord[]>(RESEARCH_CONDITIONS_KEY, []).filter((item) => item.researchProjectId === projectId);
-  }
-
-  async listResearchAssignments(projectId: string): Promise<ResearchAssignmentRecord[]> {
-    return read<ResearchAssignmentRecord[]>(RESEARCH_ASSIGNMENTS_KEY, []).filter((item) => item.researchProjectId === projectId).sort((a, b) => a.executionOrder - b.executionOrder);
-  }
-
-  async listBlindingMappings(projectId: string): Promise<BlindingMappingRecord[]> {
-    return read<BlindingMappingRecord[]>(BLINDING_MAPPINGS_KEY, []).filter((item) => item.researchProjectId === projectId);
-  }
-
-  async updateResearchAssignment(id: string, sessionId: string | undefined, status: string): Promise<void> {
-    write(RESEARCH_ASSIGNMENTS_KEY, read<ResearchAssignmentRecord[]>(RESEARCH_ASSIGNMENTS_KEY, []).map((item) => item.id === id ? { ...item, sessionId, status } : item));
-  }
-
-  async saveResearchResults(projectId: string, results: ResearchResults, hash: string): Promise<void> {
-    const all = read<Array<{ id: string; projectId: string; results: ResearchResults; hash: string; createdAt: string }>>(RESEARCH_RESULTS_KEY, []);
-    if (all.some((item) => item.projectId === projectId)) throw new Error("Research results are immutable once written.");
-    write(RESEARCH_RESULTS_KEY, [...all, { id: createId("research_results"), projectId, results: structuredClone(results), hash, createdAt: nowIso() }]);
-  }
-
-  async getResearchResults(projectId: string): Promise<ResearchResults | null> {
-    return read<Array<{ projectId: string; results: ResearchResults }>>(RESEARCH_RESULTS_KEY, []).find((item) => item.projectId === projectId)?.results ?? null;
-  }
-
-  async recordExport(workspaceId: string, researchProjectId: string | undefined, exportType: string, artifactPath: string, manifestHash: string): Promise<void> {
-    const key = "rvh.dev.exports";
-    const all = read<Array<{ id: string; workspaceId: string; researchProjectId?: string; exportType: string; artifactPath: string; manifestHash: string; createdAt: string }>>(key, []);
-    write(key, [...all, { id: createId("export"), workspaceId, researchProjectId, exportType, artifactPath, manifestHash, createdAt: nowIso() }]);
-  }
 }

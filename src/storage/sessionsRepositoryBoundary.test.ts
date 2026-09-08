@@ -24,16 +24,17 @@ describe("Sessions repository boundary", () => {
   it("keeps Monitor, Judge, Research and custom protocols outside this focused split", () => {
     expect(browserFacade).toContain("this.monitorRepository.createMonitorRun");
     expect(sqliteFacade).toContain("this.monitorRepository.createMonitorRun");
-    expect(browserFacade).toContain("async recordFrozenJudgeResults(");
-    expect(sqliteFacade).toContain("async recordFrozenJudgeResults(");
-    expect(browserFacade).toContain("async createResearchProject(");
-    expect(sqliteFacade).toContain("async createResearchProject(");
+    expect(browserFacade).toContain("recordFrozenJudgeResults: AppRepository[\"recordFrozenJudgeResults\"]");
+    expect(sqliteFacade).toContain("recordFrozenJudgeResults: AppRepository[\"recordFrozenJudgeResults\"]");
+    expect(browserFacade).toContain("createResearchProject: AppRepository[\"createResearchProject\"]");
+    expect(sqliteFacade).toContain("createResearchProject: AppRepository[\"createResearchProject\"]");
     expect(browserFacade).toContain("async listCustomProtocols(");
     expect(sqliteFacade).toContain("async listCustomProtocols(");
   });
 
   it("keeps cross-domain Research frozen-score checks explicit at the facade boundary", () => {
-    expect(browserFacade).toContain("isResearchScoresFrozen: (projectId)");
-    expect(sqliteFacade).toContain("isResearchScoresFrozen: async (projectId)");
+    const researchDelegation = "isResearchScoresFrozen: (projectId) => this.researchRepository.isScoresFrozen(projectId)";
+    expect(browserFacade).toContain(researchDelegation);
+    expect(sqliteFacade).toContain(researchDelegation);
   });
 });
