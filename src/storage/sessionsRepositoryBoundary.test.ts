@@ -22,8 +22,8 @@ describe("Sessions repository boundary", () => {
   });
 
   it("keeps Monitor, Judge, Research and custom protocols outside this focused split", () => {
-    expect(browserFacade).toContain("async createMonitorRun(");
-    expect(sqliteFacade).toContain("async createMonitorRun(");
+    expect(browserFacade).toContain("this.monitorRepository.createMonitorRun");
+    expect(sqliteFacade).toContain("this.monitorRepository.createMonitorRun");
     expect(browserFacade).toContain("async recordFrozenJudgeResults(");
     expect(sqliteFacade).toContain("async recordFrozenJudgeResults(");
     expect(browserFacade).toContain("async createResearchProject(");

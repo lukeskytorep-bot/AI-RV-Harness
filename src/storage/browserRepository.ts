@@ -1,5 +1,4 @@
 import type { CreateProfileInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
-import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
 import type { CreateJudgeRunInput, FrozenJudgeResultInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
 import { computeJudgeTotal } from "../domain/scoring";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
@@ -7,19 +6,17 @@ import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchCondition
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
-import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteSettings, ViewerNoteVersion } from "../aiCenter/types";
-import { assertViewerNoteBasePair } from "../aiCenter/baseVersion";
 import { BrowserProfilesRepository } from "./browser/profilesRepository";
 import { BrowserTargetsRepository } from "./browser/targetsRepository";
 import { BrowserSettingsModelsRepository } from "./browser/settingsModelsRepository";
 import { BrowserWorkspacesConversationsRepository } from "./browser/workspacesConversationsRepository";
 import { BrowserSessionsRepository } from "./browser/sessionsRepository";
 import { BrowserTrainingRepository } from "./browser/trainingRepository";
+import { BrowserAiCenterRepository } from "./browser/aiCenterRepository";
+import { BrowserMonitorRepository } from "./browser/monitorRepository";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
-const MONITOR_RUNS_KEY = "rvh.dev.monitor_runs";
-const MONITOR_INTERVENTIONS_KEY = "rvh.dev.monitor_interventions";
 const JUDGE_RUNS_KEY = "rvh.dev.judge_runs";
 const JUDGE_SCORES_KEY = "rvh.dev.judge_scores";
 const TARGET_USAGE_KEY = "rvh.dev.target_usage";
@@ -31,11 +28,6 @@ const BLINDING_MAPPINGS_KEY = "rvh.dev.blinding_mappings";
 const RESEARCH_RESULTS_KEY = "rvh.dev.research_results";
 const WORKSPACE_SOURCES_KEY = "rvh.dev.workspace_sources";
 const CHAT_SOURCE_SELECTION_KEY = "rvh.dev.chat_source_selection";
-const AI_IDENTITIES_KEY = "rvh.dev.ai_identities";
-const AI_NOTE_SETTINGS_KEY = "rvh.dev.ai_note_settings";
-const AI_NOTE_VERSIONS_KEY = "rvh.dev.ai_note_versions";
-const AI_NOTE_REFLECTION_RUNS_KEY = "rvh.dev.ai_note_reflection_runs";
-const AI_NOTE_ACTIVATION_EVENTS_KEY = "rvh.dev.ai_note_activation_events";
 
 function read<T>(key: string, fallback: T): T {
   try {
@@ -57,6 +49,10 @@ export class BrowserRepository implements AppRepository {
     isResearchScoresFrozen: (projectId) => Boolean(read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).find((item) => item.id === projectId)?.scoresFrozenAt),
   });
   private readonly trainingRepository = new BrowserTrainingRepository();
+  private readonly aiCenterRepository = new BrowserAiCenterRepository();
+  private readonly monitorRepository = new BrowserMonitorRepository({
+    listRvSessions: (workspaceId) => this.sessionsRepository.listRvSessions(workspaceId),
+  });
   private readonly targetsRepository = new BrowserTargetsRepository({
     hasRecordedUse: (id) => read<Array<{ targetId: string }>>(TARGET_USAGE_KEY, []).some((item) => item.targetId === id)
       || this.sessionsRepository.hasRecordedTargetUse(id)
@@ -86,135 +82,18 @@ export class BrowserRepository implements AppRepository {
     },
   });
 
-  async ensureAiIdentity(input: EnsureAiIdentityInput): Promise<AiIdentity> {
-    const identities = read<AiIdentity[]>(AI_IDENTITIES_KEY, []);
-    const normalizedBaseUrl = input.baseUrl?.trim().replace(/\/+$/, "").toLowerCase();
-    const existing = identities.find((item) => item.profileId === input.profileId
-      && item.credentialFingerprint === input.credentialFingerprint
-      && item.provider === input.provider
-      && (item.normalizedBaseUrl ?? "") === (normalizedBaseUrl ?? "")
-      && item.modelRoute === input.modelRoute
-      && item.role === input.role);
-    const timestamp = nowIso();
-    if (existing) {
-      const updated: AiIdentity = { ...existing, providerConfigId: input.providerConfigId, modelId: input.modelId, modelDisplayName: input.modelDisplayName, credentialDisplay: input.credentialDisplay, routeStatus: "available", lastUsedAt: timestamp, updatedAt: timestamp };
-      write(AI_IDENTITIES_KEY, identities.map((item) => item.id === updated.id ? updated : item));
-      return updated;
-    }
-    const identity: AiIdentity = {
-      id: createId("ai_identity"), profileId: input.profileId, credentialFingerprint: input.credentialFingerprint,
-      credentialDisplay: input.credentialDisplay, providerConfigId: input.providerConfigId, provider: input.provider,
-      ...(normalizedBaseUrl ? { normalizedBaseUrl } : {}), modelId: input.modelId, modelRoute: input.modelRoute,
-      modelDisplayName: input.modelDisplayName, role: input.role, routeStatus: "available", firstUsedAt: timestamp,
-      lastUsedAt: timestamp, createdAt: timestamp, updatedAt: timestamp,
-    };
-    write(AI_IDENTITIES_KEY, [identity, ...identities]);
-    if (input.role === "viewer") {
-      const settings = read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []);
-      write(AI_NOTE_SETTINGS_KEY, [...settings, { aiIdentityId: identity.id, noteType: "viewer_self_notes", capacityTokens: 1024, defaultEnabled: true, experimentalStatus: "experimental", updatedAt: timestamp }]);
-    }
-    return identity;
-  }
-
-  async listAiIdentities(profileId: string): Promise<AiIdentity[]> {
-    return read<AiIdentity[]>(AI_IDENTITIES_KEY, []).filter((item) => item.profileId === profileId).sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt));
-  }
-
-  async getViewerNoteBundle(aiIdentityId: string): Promise<ViewerNoteBundle | null> {
-    const identity = read<AiIdentity[]>(AI_IDENTITIES_KEY, []).find((item) => item.id === aiIdentityId);
-    if (!identity) return null;
-    let settings = read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []).find((item) => item.aiIdentityId === aiIdentityId);
-    if (!settings) {
-      settings = { aiIdentityId, noteType: "viewer_self_notes", capacityTokens: 1024, defaultEnabled: true, experimentalStatus: "experimental", updatedAt: nowIso() };
-      write(AI_NOTE_SETTINGS_KEY, [...read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []), settings]);
-    }
-    const versions = await this.listViewerNoteVersions(aiIdentityId);
-    return { identity, settings, activeVersion: versions.find((item) => item.id === settings?.activeVersionId), versions, activationEvents: await this.listViewerNoteActivationEvents(aiIdentityId), reflectionRuns: await this.listViewerNoteReflectionRuns(aiIdentityId) };
-  }
-
-  async listViewerNoteVersions(aiIdentityId: string): Promise<ViewerNoteVersion[]> {
-    return read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []).filter((item) => item.aiIdentityId === aiIdentityId).sort((a, b) => b.versionNumber - a.versionNumber);
-  }
-
-  async listViewerNoteActivationEvents(aiIdentityId: string): Promise<ViewerNoteActivationEvent[]> {
-    return read<ViewerNoteActivationEvent[]>(AI_NOTE_ACTIVATION_EVENTS_KEY, []).filter((item) => item.aiIdentityId === aiIdentityId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }
-
-  async listViewerNoteReflectionRuns(aiIdentityId: string): Promise<ViewerNoteReflectionRun[]> {
-    return read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []).filter((item) => item.aiIdentityId === aiIdentityId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }
-
-  async setViewerNoteCapacity(aiIdentityId: string, capacityTokens: ViewerNoteCapacity): Promise<void> {
-    const settings = read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []);
-    const current = settings.find((item) => item.aiIdentityId === aiIdentityId);
-    if (!current) throw new Error("Viewer Notes settings not found.");
-    const active = current.activeVersionId ? read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []).find((item) => item.id === current.activeVersionId) : undefined;
-    if (active && active.estimatedTokens > capacityTokens) throw new Error(`Capacity cannot be reduced below the active notes size (${active.estimatedTokens} estimated tokens).`);
-    write(AI_NOTE_SETTINGS_KEY, settings.map((item) => item.aiIdentityId === aiIdentityId ? { ...item, capacityTokens, updatedAt: nowIso() } : item));
-  }
-
-  async setViewerNotesDefaultEnabled(aiIdentityId: string, enabled: boolean): Promise<void> {
-    const settings = read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []);
-    if (!settings.some((item) => item.aiIdentityId === aiIdentityId)) throw new Error("Viewer Notes settings not found.");
-    write(AI_NOTE_SETTINGS_KEY, settings.map((item) => item.aiIdentityId === aiIdentityId ? { ...item, defaultEnabled: enabled, updatedAt: nowIso() } : item));
-  }
-
-  async beginViewerNoteReflection(input: BeginViewerNoteReflectionInput): Promise<ViewerNoteReflectionRun> {
-    assertViewerNoteBasePair(input);
-    const all = read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []);
-    const existing = all.find((item) => item.id === input.id || (item.aiIdentityId === input.aiIdentityId && item.sourceSessionId === input.sourceSessionId));
-    if (existing) return existing;
-    const run: ViewerNoteReflectionRun = { ...input, noteType: "viewer_self_notes", attemptCount: 0, status: "PENDING", createdAt: nowIso() };
-    write(AI_NOTE_REFLECTION_RUNS_KEY, [run, ...all]);
-    return run;
-  }
-
-  async failViewerNoteReflection(runId: string, status: Exclude<ViewerNoteReflectionRun["status"], "PENDING" | "UPDATE" | "NO_CHANGE" | "STALE_BASE">, failureMessage: string, providerRequestId?: string, rawFinalResponseSha256?: string, attemptCount = 1): Promise<void> {
-    const all = read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []);
-    write(AI_NOTE_REFLECTION_RUNS_KEY, all.map((item) => item.id === runId ? { ...item, status, failureMessage, attemptCount: item.attemptCount + attemptCount, ...(providerRequestId ? { providerRequestId } : {}), ...(rawFinalResponseSha256 ? { rawFinalResponseSha256 } : {}), completedAt: nowIso() } : item));
-  }
-
-  async commitViewerNoteReflection(input: CommitViewerNoteReflectionInput): Promise<ViewerNoteReflectionResult> {
-    assertViewerNoteBasePair(input);
-    const runs = read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []);
-    const run = runs.find((item) => item.id === input.runId);
-    if (!run) throw new Error("Viewer Notes reflection run not found.");
-    if (run.status === "UPDATE") return { status: "UPDATE", version: read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []).find((item) => item.reflectionRunId === run.id) };
-    if (run.status === "NO_CHANGE") return { status: "NO_CHANGE" };
-    const settings = read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []);
-    const current = settings.find((item) => item.aiIdentityId === input.aiIdentityId);
-    if (!current) throw new Error("Viewer Notes settings not found.");
-    const versions = read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []);
-    const active = current.activeVersionId ? versions.find((item) => item.id === current.activeVersionId) : undefined;
-    if ((active?.id ?? undefined) !== input.baseVersionId || (active?.contentSha256 ?? undefined) !== input.baseContentSha256) {
-      write(AI_NOTE_REFLECTION_RUNS_KEY, runs.map((item) => item.id === run.id ? { ...item, status: "STALE_BASE", failureMessage: "Active Viewer Notes changed while reflection was running.", completedAt: nowIso() } : item));
-      return { status: "STALE_BASE" };
-    }
-    const completedAt = nowIso();
-    if (input.decision === "NO_CHANGE") {
-      write(AI_NOTE_REFLECTION_RUNS_KEY, runs.map((item) => item.id === run.id ? { ...item, status: "NO_CHANGE", attemptCount: item.attemptCount + (input.attemptCount ?? 1), changeSummary: input.changeSummary, providerRequestId: input.providerRequestId, rawFinalResponseSha256: input.rawFinalResponseSha256, completedAt } : item));
-      return { status: "NO_CHANGE" };
-    }
-    if (!input.notes || !input.contentSha256 || input.estimatedTokens === undefined) throw new Error("Complete Viewer Notes are required for UPDATE.");
-    const version: ViewerNoteVersion = { id: createId("ai_note_version"), aiIdentityId: input.aiIdentityId, versionNumber: Math.max(0, ...versions.filter((item) => item.aiIdentityId === input.aiIdentityId).map((item) => item.versionNumber)) + 1, content: input.notes, contentSha256: input.contentSha256, estimatedTokens: input.estimatedTokens, estimatorVersion: "conservative-char-v1", capacityTokensAtCreation: input.capacityTokens, sourceSessionId: input.sourceSessionId, sourceWorkspaceId: input.sourceWorkspaceId, protocolId: input.protocolId, sessionRunType: input.sessionRunType, changeSummary: input.changeSummary, ...(input.baseVersionId ? { baseVersionId: input.baseVersionId } : {}), ...(input.baseContentSha256 ? { baseContentSha256: input.baseContentSha256 } : {}), reflectionRunId: input.runId, reflectionPacketSha256: input.reflectionPacketSha256, modelRouteSnapshot: input.modelRouteSnapshot, generationSettingsSnapshot: input.generationSettingsSnapshot, createdAt: completedAt };
-    const activation: ViewerNoteActivationEvent = { id: createId("ai_note_activation"), aiIdentityId: input.aiIdentityId, ...(active ? { fromVersionId: active.id } : {}), toVersionId: version.id, activationSource: active ? "model_update" : "initial_version", workspaceId: input.sourceWorkspaceId, sourceSessionId: input.sourceSessionId, createdAt: completedAt };
-    write(AI_NOTE_VERSIONS_KEY, [version, ...versions]);
-    write(AI_NOTE_ACTIVATION_EVENTS_KEY, [activation, ...read<ViewerNoteActivationEvent[]>(AI_NOTE_ACTIVATION_EVENTS_KEY, [])]);
-    write(AI_NOTE_SETTINGS_KEY, settings.map((item) => item.aiIdentityId === input.aiIdentityId ? { ...item, activeVersionId: version.id, updatedAt: completedAt } : item));
-    write(AI_NOTE_REFLECTION_RUNS_KEY, runs.map((item) => item.id === run.id ? { ...item, status: "UPDATE", attemptCount: item.attemptCount + (input.attemptCount ?? 1), changeSummary: input.changeSummary, providerRequestId: input.providerRequestId, rawFinalResponseSha256: input.rawFinalResponseSha256, completedAt } : item));
-    return { status: "UPDATE", version };
-  }
-
-  async restoreViewerNoteVersion(aiIdentityId: string, versionId: string, workspaceId?: string): Promise<void> {
-    const settings = read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []);
-    const current = settings.find((item) => item.aiIdentityId === aiIdentityId);
-    const version = read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []).find((item) => item.id === versionId && item.aiIdentityId === aiIdentityId);
-    if (!current || !version) throw new Error("Viewer Notes version not found.");
-    if (version.estimatedTokens > current.capacityTokens) throw new Error("The selected version does not fit the current capacity.");
-    const timestamp = nowIso();
-    write(AI_NOTE_SETTINGS_KEY, settings.map((item) => item.aiIdentityId === aiIdentityId ? { ...item, activeVersionId: version.id, updatedAt: timestamp } : item));
-    write(AI_NOTE_ACTIVATION_EVENTS_KEY, [{ id: createId("ai_note_activation"), aiIdentityId, ...(current.activeVersionId ? { fromVersionId: current.activeVersionId } : {}), toVersionId: version.id, activationSource: "human_restore", ...(workspaceId ? { workspaceId } : {}), createdAt: timestamp }, ...read<ViewerNoteActivationEvent[]>(AI_NOTE_ACTIVATION_EVENTS_KEY, [])]);
-  }
+  ensureAiIdentity: AppRepository["ensureAiIdentity"] = (input) => this.aiCenterRepository.ensureAiIdentity(input);
+  listAiIdentities: AppRepository["listAiIdentities"] = (profileId) => this.aiCenterRepository.listAiIdentities(profileId);
+  getViewerNoteBundle: AppRepository["getViewerNoteBundle"] = (aiIdentityId) => this.aiCenterRepository.getViewerNoteBundle(aiIdentityId);
+  listViewerNoteVersions: AppRepository["listViewerNoteVersions"] = (aiIdentityId) => this.aiCenterRepository.listViewerNoteVersions(aiIdentityId);
+  listViewerNoteActivationEvents: AppRepository["listViewerNoteActivationEvents"] = (aiIdentityId) => this.aiCenterRepository.listViewerNoteActivationEvents(aiIdentityId);
+  listViewerNoteReflectionRuns: AppRepository["listViewerNoteReflectionRuns"] = (aiIdentityId) => this.aiCenterRepository.listViewerNoteReflectionRuns(aiIdentityId);
+  setViewerNoteCapacity: AppRepository["setViewerNoteCapacity"] = (aiIdentityId, capacityTokens) => this.aiCenterRepository.setViewerNoteCapacity(aiIdentityId, capacityTokens);
+  setViewerNotesDefaultEnabled: AppRepository["setViewerNotesDefaultEnabled"] = (aiIdentityId, enabled) => this.aiCenterRepository.setViewerNotesDefaultEnabled(aiIdentityId, enabled);
+  beginViewerNoteReflection: AppRepository["beginViewerNoteReflection"] = (input) => this.aiCenterRepository.beginViewerNoteReflection(input);
+  failViewerNoteReflection: AppRepository["failViewerNoteReflection"] = (runId, status, failureMessage, providerRequestId, rawFinalResponseSha256, attemptCount) => this.aiCenterRepository.failViewerNoteReflection(runId, status, failureMessage, providerRequestId, rawFinalResponseSha256, attemptCount);
+  commitViewerNoteReflection: AppRepository["commitViewerNoteReflection"] = (input) => this.aiCenterRepository.commitViewerNoteReflection(input);
+  restoreViewerNoteVersion: AppRepository["restoreViewerNoteVersion"] = (aiIdentityId, versionId, workspaceId) => this.aiCenterRepository.restoreViewerNoteVersion(aiIdentityId, versionId, workspaceId);
 
   createTrainingRun: AppRepository["createTrainingRun"] = (input) => this.trainingRepository.createTrainingRun(input);
   updateTrainingRun: AppRepository["updateTrainingRun"] = (id, input) => this.trainingRepository.updateTrainingRun(id, input);
@@ -373,29 +252,10 @@ export class BrowserRepository implements AppRepository {
   addTargetClarification: AppRepository["addTargetClarification"] = (sessionId, content) => this.sessionsRepository.addTargetClarification(sessionId, content);
   listTargetClarifications: AppRepository["listTargetClarifications"] = (sessionId) => this.sessionsRepository.listTargetClarifications(sessionId);
 
-  async createMonitorRun(input: CreateMonitorRunInput): Promise<string> {
-    const id = createId("monitor");
-    const all = read<Array<CreateMonitorRunInput & { id: string; createdAt: string }>>(MONITOR_RUNS_KEY, []);
-    write(MONITOR_RUNS_KEY, [...all, { ...input, id, createdAt: nowIso() }]);
-    return id;
-  }
-
-  async appendMonitorIntervention(monitorRunId: string, intervention: MonitorInterventionInput): Promise<void> {
-    const all = read<Array<MonitorInterventionInput & { id: string; monitorRunId: string; sequenceNumber: number; createdAt: string }>>(MONITOR_INTERVENTIONS_KEY, []);
-    const sequenceNumber = all.filter((item) => item.monitorRunId === monitorRunId).reduce((max, item) => Math.max(max, item.sequenceNumber), 0) + 1;
-    write(MONITOR_INTERVENTIONS_KEY, [...all, { ...intervention, id: createId("monitor_event"), monitorRunId, sequenceNumber, createdAt: nowIso() }]);
-  }
-
-  async listMonitorRuns(workspaceId: string): Promise<MonitorRunRecord[]> {
-    const sessions = await this.sessionsRepository.listRvSessions(workspaceId);
-    const sessionMap = new Map(sessions.filter((session) => session.workspaceId === workspaceId).map((session) => [session.id, session]));
-    const interventions = read<MonitorInterventionRecord[]>(MONITOR_INTERVENTIONS_KEY, []);
-    return read<Array<CreateMonitorRunInput & { id: string; createdAt: string }>>(MONITOR_RUNS_KEY, []).filter((run) => sessionMap.has(run.sessionId)).map((run) => ({ ...run, sessionCode: sessionMap.get(run.sessionId)!.sessionCode, interventionCount: interventions.filter((item) => item.monitorRunId === run.id).length })).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }
-
-  async listMonitorInterventions(monitorRunId: string): Promise<MonitorInterventionRecord[]> {
-    return read<MonitorInterventionRecord[]>(MONITOR_INTERVENTIONS_KEY, []).filter((item) => item.monitorRunId === monitorRunId).sort((a, b) => a.sequenceNumber - b.sequenceNumber);
-  }
+  createMonitorRun: AppRepository["createMonitorRun"] = (input) => this.monitorRepository.createMonitorRun(input);
+  appendMonitorIntervention: AppRepository["appendMonitorIntervention"] = (monitorRunId, intervention) => this.monitorRepository.appendMonitorIntervention(monitorRunId, intervention);
+  listMonitorRuns: AppRepository["listMonitorRuns"] = (workspaceId) => this.monitorRepository.listMonitorRuns(workspaceId);
+  listMonitorInterventions: AppRepository["listMonitorInterventions"] = (monitorRunId) => this.monitorRepository.listMonitorInterventions(monitorRunId);
 
   async recordFrozenJudgeResult(run: CreateJudgeRunInput, score: FrozenJudgeScoreInput): Promise<JudgeScoreRecord> {
     return (await this.recordFrozenJudgeResults([{ run, score }]))[0];

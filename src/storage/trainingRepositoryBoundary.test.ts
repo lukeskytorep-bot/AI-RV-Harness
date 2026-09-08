@@ -26,12 +26,12 @@ describe("Training repository boundary", () => {
     expect(sqliteFacade).not.toContain("SELECT record_json FROM training_runs");
   });
 
-  it("keeps Sessions, Judge and Viewer Notes persistence outside this focused split", () => {
+  it("keeps Sessions, Judge and AI Center persistence outside the Training repository", () => {
     expect(browserFacade).toContain("this.sessionsRepository.createRvSession");
     expect(sqliteFacade).toContain("this.sessionsRepository.createRvSession");
     expect(browserFacade).toContain("async recordFrozenJudgeResults(");
     expect(sqliteFacade).toContain("async recordFrozenJudgeResults(");
-    expect(browserFacade).toContain("async beginViewerNoteReflection(");
-    expect(sqliteFacade).toContain("async beginViewerNoteReflection(");
+    expect(browserFacade).toContain("this.aiCenterRepository.beginViewerNoteReflection");
+    expect(sqliteFacade).toContain("this.aiCenterRepository.beginViewerNoteReflection");
   });
 });

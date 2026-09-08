@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 6 September 2026  
-**Updated:** 8 September 2026 — Training persistence extraction
+**Updated:** 8 September 2026 — AI Center and Monitor persistence extraction
 
 ## Context
 
@@ -27,6 +27,8 @@ The fourth extraction is Workspaces and Conversations. Workspace lifecycle, Thre
 The fifth extraction is RV Sessions. Session creation and state, ordered events, pre-Reveal transcript, immutable session snapshot, sealing, Reveal, sealed-evidence reads, post-Reveal transcript, session listing and target clarifications delegate to `SessionsRepository`. Research remains a separate persistence domain: browser storage receives an explicit facade callback for the frozen-score guard, while SQLite preserves its existing trigger-enforced atomic Reveal, append-only post-Reveal and clarification rules. Monitor, Judge, Research project persistence and custom protocols are deliberately not moved with Sessions.
 
 The sixth extraction is Training. Run creation, monotonic run numbering, durable updates, completed-target/session linkage, execution snapshots, per-target checkpoints, error accumulation and listing delegate to `TrainingRepository`. This is a persistence-only move: the Training execution workflow, RV Sessions, Judge results and Viewer Notes remain separate owners. The `training_runs` table and the browser key `rvh.dev.training_runs` keep their existing formats, including legacy normalization of a missing `sessionIds` field when runs are read.
+
+The seventh extraction closes AI Center and Monitor persistence while preserving separate internal boundaries. `AiCenterRepository` owns AI identities and Viewer Notes settings, versions, activation events and reflection runs. SQLite retains migration-020 identity, append-only and stale-base triggers, and the existing four-statement atomic UPDATE commit plus transactional human restore. `MonitorRepository` separately owns Monitor runs and ordered interventions; the browser adapter receives the Sessions lookup explicitly, while SQLite keeps the established `rv_sessions` join. Judge and Research persistence remain outside this extraction for the final Etap 5 step.
 
 No schema, migration, table, local-storage key or serialized record format changes as part of this decision.
 
