@@ -65,3 +65,7 @@ Costs and constraints:
 - both facade and domain files coexist during Etap 5;
 - every next extraction must add or extend contract tests before delegation;
 - moving transaction ownership later requires a named transaction unit, not an implicit domain side effect.
+
+## Post-Etap-5 API extension: recent RV Sessions
+
+After the eight numbered persistence splits were completed, the first UX/data foundation patch intentionally extends the public facade with `listRecentRvSessions(limit)`. This is not a new persistence domain. The facade coordinates active Workspace scope and delegates the bounded session query to `SessionsRepository`, preserving the rule that repository domains do not silently own another domain's lifecycle state. The previous Workspace-local `listRvSessions(workspaceId)` contract remains unchanged for existing consumers.

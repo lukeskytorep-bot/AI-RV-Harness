@@ -153,6 +153,21 @@ export class BrowserSessionsRepository implements SessionsRepository {
     return this.read<RvSession[]>(RV_SESSIONS_KEY, []).filter((session) => session.workspaceId === workspaceId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
+  async listRecentRvSessions(workspaceIds: readonly string[], limit: number): Promise<RvSession[]> {
+    const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+    if (!safeLimit || workspaceIds.length === 0) return [];
+    const workspaceOrder = new Map(workspaceIds.map((workspaceId, index) => [workspaceId, index]));
+    return this.read<RvSession[]>(RV_SESSIONS_KEY, [])
+      .filter((session) => workspaceOrder.has(session.workspaceId))
+      .sort((left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt)
+        || (workspaceOrder.get(left.workspaceId) ?? Number.MAX_SAFE_INTEGER) - (workspaceOrder.get(right.workspaceId) ?? Number.MAX_SAFE_INTEGER)
+        || right.createdAt.localeCompare(left.createdAt)
+        || left.id.localeCompare(right.id),
+      )
+      .slice(0, safeLimit);
+  }
+
   async addTargetClarification(sessionId: string, content: string): Promise<TargetClarificationRecord> {
     const clean = content.trim();
     if (!clean) throw new Error("Target clarification cannot be empty.");

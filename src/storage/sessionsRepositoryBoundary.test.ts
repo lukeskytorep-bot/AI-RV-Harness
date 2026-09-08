@@ -5,13 +5,14 @@ import sqliteFacade from "./sqliteRepository.ts?raw";
 
 const methods = [
   "createRvSession", "updateRvSessionState", "appendSessionEvent", "listSessionEvents", "updatePreRevealTranscript", "appendPostRevealTurn",
-  "saveSessionSnapshot", "getSessionSnapshot", "sealPreReveal", "acceptReveal", "getReveal", "getViewerEvidence", "listRvSessions",
+  "saveSessionSnapshot", "getSessionSnapshot", "sealPreReveal", "acceptReveal", "getReveal", "getViewerEvidence", "listRvSessions", "listRecentRvSessions",
   "addTargetClarification", "listTargetClarifications",
 ] as const;
 
 describe("Sessions repository boundary", () => {
-  it("keeps AppRepository stable and delegates the complete RV session persistence surface", () => {
+  it("keeps the established session surface and delegates the new bounded recent-session query", () => {
     expect(contract).toContain("createRvSession(input");
+    expect(contract).toContain("listRecentRvSessions(limit: number)");
     expect(contract).toContain("listTargetClarifications(sessionId");
     expect(browserFacade).toContain("new BrowserSessionsRepository({");
     expect(sqliteFacade).toContain("new SqliteSessionsRepository({");
@@ -19,6 +20,8 @@ describe("Sessions repository boundary", () => {
       expect(browserFacade).toContain(`${method}: AppRepository["${method}"]`);
       expect(sqliteFacade).toContain(`${method}: AppRepository["${method}"]`);
     }
+    expect(browserFacade).toContain("this.workspacesConversationsRepository.listWorkspaces()");
+    expect(sqliteFacade).toContain("this.workspacesConversationsRepository.listWorkspaces()");
   });
 
   it("keeps Monitor, Judge, Research and custom protocols outside this focused split", () => {

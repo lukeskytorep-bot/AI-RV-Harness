@@ -96,6 +96,7 @@ export interface AppRepository {
   getReveal(sessionId: string): Promise<RevealInput | null>;
   getViewerEvidence(sessionId: string): Promise<string>;
   listRvSessions(workspaceId: string): Promise<RvSession[]>;
+  listRecentRvSessions(limit: number): Promise<RvSession[]>;
   addTargetClarification(sessionId: string, content: string): Promise<TargetClarificationRecord>;
   listTargetClarifications(sessionId: string): Promise<TargetClarificationRecord[]>;
   createMonitorRun(input: CreateMonitorRunInput): Promise<string>;

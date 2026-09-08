@@ -226,6 +226,27 @@ export class SqliteSessionsRepository implements SessionsRepository {
     return rows.map(mapRvSession);
   }
 
+  async listRecentRvSessions(workspaceIds: readonly string[], limit: number): Promise<RvSession[]> {
+    const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+    if (!safeLimit || workspaceIds.length === 0) return [];
+    const workspacePlaceholders = workspaceIds.map((_, index) => `$${index + 1}`);
+    const limitPlaceholder = `$${workspaceIds.length + 1}`;
+    const workspaceOrder = workspaceIds.map((_, index) => `WHEN $${index + 1} THEN ${index}`).join(" ");
+    const rows = await this.dependencies.select<RvSessionRow[]>(
+      `SELECT id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
+              pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id,
+              research_project_id, created_at, updated_at, completed_at
+         FROM rv_sessions
+        WHERE workspace_id IN (${workspacePlaceholders.join(", ")})
+        ORDER BY updated_at DESC,
+                 CASE workspace_id ${workspaceOrder} ELSE ${workspaceIds.length} END ASC,
+                 created_at DESC, id ASC
+        LIMIT ${limitPlaceholder}`,
+      [...workspaceIds, safeLimit],
+    );
+    return rows.map(mapRvSession);
+  }
+
   async addTargetClarification(sessionId: string, content: string): Promise<TargetClarificationRecord> {
     const clean = content.trim();
     if (!clean) throw new Error("Target clarification cannot be empty.");

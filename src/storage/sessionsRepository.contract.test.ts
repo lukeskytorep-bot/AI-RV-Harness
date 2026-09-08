@@ -84,6 +84,20 @@ describe("browser Sessions repository contract", () => {
     expect((await repository.listSessionEvents("session-a")).map((item) => [item.sequenceNumber, item.eventType])).toEqual([[1, "ONE"], [2, "TWO"]]);
   });
 
+
+  it("returns the same bounded recent-session order across active Workspace scope", async () => {
+    const storage = new MemoryStorage();
+    storage.setItem("rvh.dev.rv_sessions", JSON.stringify([
+      { ...sessionInput, id: "session-a1", sessionCode: "A1", state: "Draft", runType: "automatic", preRevealTranscript: "", postRevealTranscript: "", createdAt: "2026-09-08T10:00:00.000Z", updatedAt: "2026-09-08T12:00:00.000Z" },
+      { ...sessionInput, id: "session-b1", workspaceId: "workspace-b", sessionCode: "B1", state: "Draft", runType: "automatic", preRevealTranscript: "", postRevealTranscript: "", createdAt: "2026-09-08T11:00:00.000Z", updatedAt: "2026-09-08T12:00:00.000Z" },
+      { ...sessionInput, id: "session-a2", sessionCode: "A2", state: "Draft", runType: "automatic", preRevealTranscript: "", postRevealTranscript: "", createdAt: "2026-09-08T09:00:00.000Z", updatedAt: "2026-09-08T09:00:00.000Z" },
+      { ...sessionInput, id: "session-archived-scope", workspaceId: "workspace-c", sessionCode: "C1", state: "Draft", runType: "automatic", preRevealTranscript: "", postRevealTranscript: "", createdAt: "2026-09-08T13:00:00.000Z", updatedAt: "2026-09-08T13:00:00.000Z" },
+    ]));
+    const repository = new BrowserSessionsRepository({ storage, now: () => timestamp, isResearchScoresFrozen: () => true });
+    expect((await repository.listRecentRvSessions(["workspace-b", "workspace-a"], 2)).map((session) => session.id)).toEqual(["session-b1", "session-a1"]);
+    expect(await repository.listRecentRvSessions(["workspace-a"], 0)).toEqual([]);
+  });
+
   it("preserves Research frozen-score guards for post-Reveal turns and clarifications", async () => {
     let frozen = false;
     const storage = new MemoryStorage();
@@ -111,6 +125,27 @@ describe("SQLite Sessions repository contract", () => {
     expect(await repository.createRvSession(sessionInput)).toMatchObject({ id: "session-a", state: "Draft", targetId: "target-a" });
     expect(writes[0]?.query).toContain("INSERT INTO rv_sessions");
     expect((await repository.listRvSessions("workspace-a"))[0]).toMatchObject({ id: "session-a", targetId: "target-a" });
+  });
+
+
+  it("uses one bounded SQLite query for recent sessions across the supplied Workspace order", async () => {
+    const selects: Array<{ query: string; values?: unknown[] }> = [];
+    const repository = new SqliteSessionsRepository({
+      select: async <T>(query: string, values?: unknown[]) => {
+        selects.push({ query, values });
+        return [{ id: "session-b1", workspace_id: "workspace-b", profile_id: "profile-a", session_code: "B1", state: "Draft", run_type: "automatic", pre_reveal_transcript: "", pre_reveal_hash: null, pre_reveal_sealed_at: null, post_reveal_transcript: "", target_id: "target-a", research_project_id: null, created_at: "2026-09-08T11:00:00.000Z", updated_at: "2026-09-08T12:00:00.000Z", completed_at: null }] as T;
+      },
+      executeWrite: async () => ({ rowsAffected: 1 }),
+      isResearchScoresFrozen: async () => true,
+      now: () => timestamp,
+    });
+    expect((await repository.listRecentRvSessions(["workspace-b", "workspace-a"], 2)).map((session) => session.id)).toEqual(["session-b1"]);
+    expect(selects).toHaveLength(1);
+    expect(selects[0]?.query).toContain("WHERE workspace_id IN ($1, $2)");
+    expect(selects[0]?.query).toContain("ORDER BY updated_at DESC");
+    expect(selects[0]?.query).toContain("CASE workspace_id WHEN $1 THEN 0 WHEN $2 THEN 1");
+    expect(selects[0]?.query).toContain("LIMIT $3");
+    expect(selects[0]?.values).toEqual(["workspace-b", "workspace-a", 2]);
   });
 
   it("preserves atomic-Reveal ownership in SQLite as a single reveal insert", async () => {

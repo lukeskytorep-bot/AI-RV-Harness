@@ -24,6 +24,7 @@ export interface SessionsRepository {
   getReveal(sessionId: string): Promise<RevealInput | null>;
   getViewerEvidence(sessionId: string): Promise<string>;
   listRvSessions(workspaceId: string): Promise<RvSession[]>;
+  listRecentRvSessions(workspaceIds: readonly string[], limit: number): Promise<RvSession[]>;
   addTargetClarification(sessionId: string, content: string): Promise<TargetClarificationRecord>;
   listTargetClarifications(sessionId: string): Promise<TargetClarificationRecord[]>;
 }

@@ -118,8 +118,8 @@ export default function App() {
         setSettings(nextSettings);
         setProfiles(storedProfiles);
         setWorkspaces(storedWorkspaces);
-        const sessions = (await Promise.all(storedWorkspaces.map((workspace) => repo.listRvSessions(workspace.id)))).flat().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-        setRecentSessions(sessions.slice(0, 8));
+        const sessions = await repo.listRecentRvSessions(8);
+        setRecentSessions(sessions);
         setActiveProfileId(storedWorkspaces[0]?.profileId ?? storedProfiles[0]?.id ?? null);
         setActiveWorkspaceId(storedWorkspaces[0]?.id ?? null);
         setLoading(false);

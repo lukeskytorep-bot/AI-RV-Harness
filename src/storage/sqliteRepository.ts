@@ -335,6 +335,10 @@ export class SqliteRepository implements AppRepository {
   getReveal: AppRepository["getReveal"] = (sessionId) => this.sessionsRepository.getReveal(sessionId);
   getViewerEvidence: AppRepository["getViewerEvidence"] = (sessionId) => this.sessionsRepository.getViewerEvidence(sessionId);
   listRvSessions: AppRepository["listRvSessions"] = (workspaceId) => this.sessionsRepository.listRvSessions(workspaceId);
+  listRecentRvSessions: AppRepository["listRecentRvSessions"] = async (limit) => {
+    const workspaces = await this.workspacesConversationsRepository.listWorkspaces();
+    return this.sessionsRepository.listRecentRvSessions(workspaces.map((workspace) => workspace.id), limit);
+  };
   addTargetClarification: AppRepository["addTargetClarification"] = (sessionId, content) => this.sessionsRepository.addTargetClarification(sessionId, content);
   listTargetClarifications: AppRepository["listTargetClarifications"] = (sessionId) => this.sessionsRepository.listTargetClarifications(sessionId);
 
