@@ -3,6 +3,8 @@ import { BrainCircuit, Check, Clock3, Database, History, ShieldCheck, Sparkles, 
 import type { AiIdentity, ViewerNoteBundle, ViewerNoteCapacity } from "../../aiCenter/types";
 import { VIEWER_NOTES_CAPACITIES, currentViewerNotesLabel } from "../../aiCenter/viewerNotes";
 import { SafeMarkdown } from "../../components/SafeMarkdown";
+import { useAppDialogs } from "../../components/AppDialogProvider";
+import { getCopy } from "../../i18n";
 import type { AppRepository } from "../../storage/repository";
 import type { AppSettings, Profile, Workspace } from "../../types";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
@@ -22,6 +24,8 @@ export interface AiCenterScreenProps {
 }
 
 export function AiCenterScreen({ settings, profiles, workspaces, activeProfileId, workspaceFilterId, repository, initialView, monitorPanel, onProfileChange }: AiCenterScreenProps) {
+  const dialogs = useAppDialogs();
+  const copy = getCopy(settings.interfaceLanguage);
   const pl = settings.interfaceLanguage === "pl";
   const [view, setView] = useState<AiCenterView>(initialView);
   const [identities, setIdentities] = useState<AiIdentity[]>([]);
@@ -54,9 +58,18 @@ export function AiCenterScreen({ settings, profiles, workspaces, activeProfileId
 
   const changeCapacity = async (value: ViewerNoteCapacity) => {
     if (!selectedBundle) return;
-    if (value > selectedBundle.settings.capacityTokens && !window.confirm(pl
-      ? "Zwiększenie pojemności pozwala AI zapisać dłuższe notatki. Późniejsze zmniejszenie będzie możliwe tylko wtedy, gdy aktywna treść zmieści się w niższym limicie. Kontynuować?"
-      : "Increasing capacity lets the AI save longer notes. You can reduce it later only if the active content fits the lower limit. Continue?")) return;
+    if (value > selectedBundle.settings.capacityTokens) {
+      const confirmed = await dialogs.confirm({
+        title: copy.dialogWarningTitle,
+        description: pl
+          ? "Zwiększenie pojemności pozwala AI zapisać dłuższe notatki. Późniejsze zmniejszenie będzie możliwe tylko wtedy, gdy aktywna treść zmieści się w niższym limicie."
+          : "Increasing capacity lets the AI save longer notes. You can reduce it later only if the active content fits the lower limit.",
+        confirmLabel: copy.dialogContinue,
+        cancelLabel: copy.cancel,
+        severity: "warning",
+      });
+      if (!confirmed) return;
+    }
     setError(null);
     try { await repository.setViewerNoteCapacity(selectedBundle.identity.id, value); await refresh(); setNotice(pl ? "Pojemność zaktualizowana." : "Capacity updated."); }
     catch (cause) { setError(errorText(cause)); }
@@ -67,7 +80,8 @@ export function AiCenterScreen({ settings, profiles, workspaces, activeProfileId
     const warning = pl
       ? "Ta wersja została wcześniej utworzona przez to AI, ale jej ponowne aktywowanie jest decyzją człowieka, a nie aktualną decyzją modelu. Co do zasady nie należy zmieniać aktywnych notatek AI bez jego zgody. Użyj tej opcji tylko do odzyskania wcześniejszego stanu albo świadomie zaplanowanego testu. Operacja zostanie zapisana w historii."
       : "This version was previously created by this AI, but reactivating it is a human decision, not the model's current decision. As a rule, active AI notes should not be changed without its consent. Use this only to recover an earlier state or for a deliberate test. The action will be recorded.";
-    if (!window.confirm(warning)) return;
+    const confirmed = await dialogs.confirm({ title: copy.dialogWarningTitle, description: warning, confirmLabel: copy.dialogContinue, cancelLabel: copy.cancel, severity: "warning" });
+    if (!confirmed) return;
     setError(null);
     try { await repository.restoreViewerNoteVersion(selectedBundle.identity.id, versionId, workspaceFilterId ?? undefined); await refresh(); setNotice(pl ? "Przywrócono historyczną wersję." : "Historical version restored."); }
     catch (cause) { setError(errorText(cause)); }

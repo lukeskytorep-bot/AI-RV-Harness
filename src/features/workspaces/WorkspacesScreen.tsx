@@ -2,6 +2,7 @@ import { ArrowRight, Archive, EllipsisVertical, Pencil, Plus, RadioTower, X } fr
 import { useMemo, useState, type ReactNode } from "react";
 
 import { EmptyState } from "../../components/EmptyState";
+import { useAppDialogs } from "../../components/AppDialogProvider";
 import { PageHeader } from "../../components/PageHeader";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 import { filterWorkspaceDirectory } from "../../domain/workspaceDirectory";
@@ -24,19 +25,37 @@ export interface WorkspacesScreenProps {
 }
 
 export function WorkspacesScreen({ copy, profiles, workspaces, repository, activeWorkspaceId, onChanged, onActiveArchived, onOpenWorkspace, onCreateWorkspace, onCreateProfile }: WorkspacesScreenProps) {
+  const dialogs = useAppDialogs();
   const createAction = profiles.length ? <button className="primary-button" onClick={onCreateWorkspace}><Plus size={16} />{copy.createWorkspace}</button> : <button className="primary-button" onClick={onCreateProfile}><Plus size={16} />{copy.createProfile}</button>;
   const rename = async (workspace: Workspace) => {
     if (!repository) return;
-    const name = window.prompt(copy.home === "Home" ? "New Workspace name" : "Nowa nazwa Workspace", workspace.name)?.trim();
+    const requested = await dialogs.prompt({
+      title: copy.dialogRename,
+      description: copy.home === "Home" ? "Enter a new Workspace name." : "Podaj nową nazwę Workspace.",
+      initialValue: workspace.name,
+      inputLabel: copy.workspaceName,
+      inputRequired: true,
+      confirmLabel: copy.dialogRename,
+      cancelLabel: copy.cancel,
+    });
+    const name = requested?.trim();
     if (!name || name === workspace.name) return;
     try { await renameWorkspaceAndRefresh(repository, workspace.id, name, onChanged); }
-    catch (cause) { window.alert(cause instanceof Error ? cause.message : String(cause)); }
+    catch (cause) { await dialogs.information({ title: copy.dialogErrorTitle, description: cause instanceof Error ? cause.message : String(cause), confirmLabel: copy.dialogOk, severity: "warning" }); }
   };
   const archive = async (workspace: Workspace) => {
-    if (!repository || !window.confirm(copy.home === "Home" ? `Archive “${workspace.name}”? Its data will be preserved and can be restored in Settings > Data storage.` : `Zarchiwizować „${workspace.name}”? Dane zostaną zachowane i będzie można je przywrócić w Ustawienia > Pamięć danych.`)) return;
+    if (!repository) return;
+    const confirmed = await dialogs.confirm({
+      title: `${copy.dialogArchive}: ${workspace.name}`,
+      description: copy.home === "Home" ? "Its data will be preserved and can be restored in Settings > Data storage." : "Dane zostaną zachowane i będzie można je przywrócić w Ustawienia > Pamięć danych.",
+      confirmLabel: copy.dialogArchive,
+      cancelLabel: copy.cancel,
+      severity: "warning",
+    });
+    if (!confirmed) return;
     try {
       await archiveWorkspaceAndRefresh(repository, workspace, workspaces, activeWorkspaceId, onActiveArchived, onChanged);
-    } catch (cause) { window.alert(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) { await dialogs.information({ title: copy.dialogErrorTitle, description: cause instanceof Error ? cause.message : String(cause), confirmLabel: copy.dialogOk, severity: "warning" }); }
   };
   return <div className="page"><PageHeader title={copy.allWorkspaces} subtitle={copy.allWorkspacesLead} action={createAction} /><section className="panel workspace-directory-panel"><WorkspaceDirectoryList copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={onOpenWorkspace} onRename={rename} onArchive={archive} emptyAction={createAction} /></section></div>;
 }

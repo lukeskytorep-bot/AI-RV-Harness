@@ -22,6 +22,7 @@ import { sharedResearchCapabilities, type SharedResearchCapabilities } from "../
 import { reasoningOptions } from "../../providers/modelReasoningRegistry";
 import { chooseDirectory } from "../../storage/native";
 import { SessionInspection } from "../../components/SessionInspection";
+import { useAppDialogs } from "../../components/AppDialogProvider";
 import { estimateViewerNoteTokens, prepareViewerNotesForSession, VIEWER_NOTES_ESTIMATOR_VERSION } from "../../aiCenter/viewerNotes";
 import type { ViewerNoteVersion, ViewerNotesSessionSnapshot } from "../../aiCenter/types";
 import { ModelRouteSelect } from "../../components/ModelRouteSelect";
@@ -453,6 +454,7 @@ function PreflightPanel({ copy, preflight }: { copy: Copy; preflight: ResearchPr
 }
 
 function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: { copy: Copy; repository: AppRepository; project: ResearchProjectRecord; onRefresh: () => Promise<void>; onBack: () => void }) {
+  const dialogs = useAppDialogs();
   const [busy, setBusy] = useState<"sessions" | "judging" | "unblind" | "export" | null>(null);
   const [progress, setProgress] = useState(0);
   const [total, setTotal] = useState(0);
@@ -487,7 +489,9 @@ function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: {
     finally { setBusy(null); }
   };
   const recover = async () => {
-    if (!recoverableCount || !window.confirm(copy.researchRecoveryConfirm)) return;
+    if (!recoverableCount) return;
+    const confirmed = await dialogs.confirm({ title: copy.dialogWarningTitle, description: copy.researchRecoveryConfirm, confirmLabel: copy.dialogContinue, cancelLabel: copy.cancel, severity: "warning" });
+    if (!confirmed) return;
     setError(null);
     try { await prepareInterruptedResearchRetry(repository, project.id); setRecoverableCount(0); await onRefresh(); } catch (cause) { setError(message(cause)); }
   };

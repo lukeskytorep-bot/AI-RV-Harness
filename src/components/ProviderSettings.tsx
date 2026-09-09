@@ -1,6 +1,7 @@
 import { Check, KeyRound, Plus, RefreshCw, Server, ShieldCheck, Sparkles, Star, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { getCopy } from "../i18n";
+import { useAppDialogs } from "./AppDialogProvider";
 import { addProvider, refreshProviderModels, removeProvider } from "../providers/service";
 import { PROVIDER_KINDS, type ProviderConfig, type ProviderKind, type ProviderModel } from "../providers/types";
 import { isTauriRuntime } from "../storage";
@@ -27,6 +28,7 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const desktop = isTauriRuntime();
+  const dialogs = useAppDialogs();
 
   const reload = async () => {
     if (!repository) return;
@@ -57,7 +59,9 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
   };
 
   const remove = async (config: ProviderConfig) => {
-    if (!repository || !window.confirm(copy.removeProviderConfirm)) return;
+    if (!repository) return;
+    const confirmed = await dialogs.confirm({ title: copy.dialogWarningTitle, description: copy.removeProviderConfirm, confirmLabel: copy.dialogDelete, cancelLabel: copy.cancel, severity: "destructive" });
+    if (!confirmed) return;
     setBusyId(config.id);
     setError(null);
     try {

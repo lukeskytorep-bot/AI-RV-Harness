@@ -2,6 +2,7 @@ import { BrainCircuit, Crosshair, FileCheck2, LockKeyhole, Pencil, Plus, Trash2,
 import { useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "../../components/EmptyState";
+import { useAppDialogs } from "../../components/AppDialogProvider";
 import { PageHeader } from "../../components/PageHeader";
 import { getCopy } from "../../i18n";
 import type { AppRepository } from "../../storage/repository";
@@ -26,6 +27,7 @@ export function TargetsScreen({ copy, settings, repository }: TargetsScreenProps
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingTarget, setEditingTarget] = useState<TargetRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const dialogs = useAppDialogs();
 
   const reload = useCallback(async () => {
     if (!repository) return;
@@ -58,7 +60,16 @@ export function TargetsScreen({ copy, settings, repository }: TargetsScreenProps
   };
 
   const deleteTarget = async (target: TargetRecord) => {
-    if (!repository || !window.confirm(`${copy.deleteTargetConfirm}\n\n${localizedTargetTitle(target, settings.interfaceLanguage)}`)) return;
+    if (!repository) return;
+    const confirmed = await dialogs.confirm({
+      title: settings.interfaceLanguage === "pl" ? "Usunąć cel?" : "Delete target?",
+      description: copy.deleteTargetConfirm,
+      details: [localizedTargetTitle(target, settings.interfaceLanguage)],
+      confirmLabel: copy.dialogDelete,
+      cancelLabel: copy.cancel,
+      severity: "destructive",
+    });
+    if (!confirmed) return;
     setError(null);
     try {
       await deleteFeatureTarget(repository, target.id);

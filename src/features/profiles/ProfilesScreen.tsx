@@ -2,6 +2,7 @@ import { Archive, ChevronRight, KeyRound, Pencil, Plus, RadioTower, Users } from
 import { useEffect, useState } from "react";
 
 import { EmptyState } from "../../components/EmptyState";
+import { useAppDialogs } from "../../components/AppDialogProvider";
 import { PageHeader } from "../../components/PageHeader";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "../../domain/isBeIdentity";
 import type { getCopy } from "../../i18n";
@@ -38,6 +39,7 @@ export function ProfilesScreen({
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [calibrationHistory, setCalibrationHistory] = useState<CalibrationHistoryItem[]>([]);
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
+  const dialogs = useAppDialogs();
 
   useEffect(() => {
     let cancelled = false;
@@ -60,7 +62,15 @@ export function ProfilesScreen({
   }, [repository, profiles]);
 
   const archiveProfile = async (profile: Profile) => {
-    if (!repository || !window.confirm(`${copy.archiveProfileConfirm}\n\n${aiIsBeDisplayName(profile)}`)) return;
+    if (!repository) return;
+    const confirmed = await dialogs.confirm({
+      title: `${copy.archiveProfile}: ${aiIsBeDisplayName(profile)}`,
+      description: copy.archiveProfileConfirm,
+      confirmLabel: copy.dialogArchive,
+      cancelLabel: copy.cancel,
+      severity: "warning",
+    });
+    if (!confirmed) return;
     await archiveProfileAndRefresh(repository, profile.id, onProfilesChanged);
   };
 
@@ -71,7 +81,10 @@ export function ProfilesScreen({
     aiConfiguration?: ProfileAiConfigurationInput,
   ) => {
     if (!repository || !editingProfile) return;
-    if (aiConfiguration && editingProfile.credentialId && editingProfile.credentialId !== aiConfiguration.credentialId && !window.confirm(copy.calibrationBindingWarning)) return;
+    if (aiConfiguration && editingProfile.credentialId && editingProfile.credentialId !== aiConfiguration.credentialId) {
+      const confirmed = await dialogs.confirm({ title: copy.dialogWarningTitle, description: copy.calibrationBindingWarning, confirmLabel: copy.dialogContinue, cancelLabel: copy.cancel, severity: "warning" });
+      if (!confirmed) return;
+    }
     await saveProfileAndRefresh(
       repository,
       editingProfile.id,

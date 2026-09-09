@@ -21,6 +21,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { listBuiltinDocuments, readBuiltinDocument, saveBuiltinDocument, type BuiltinDocumentManifest } from "../../attachments/native";
 import { ProviderSettings } from "../../components/ProviderSettings";
+import { useAppDialogs } from "../../components/AppDialogProvider";
 import { ProtocolDialog } from "../../components/ProtocolDialog";
 import { getCopy } from "../../i18n";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
@@ -153,6 +154,7 @@ function TargetSettingsCard({ copy, settings, repository, onChange }: { copy: Re
 }
 
 function AdvancedSettingsCard({ copy, repository }: { copy: ReturnType<typeof getCopy>; repository: AppRepository | null }) {
+  const dialogs = useAppDialogs();
   const [modelCount, setModelCount] = useState(0);
   const [capabilitySummary, setCapabilitySummary] = useState({ vision: 0, reasoning: 0, compatibility: 0 });
   const [debugEntries, setDebugEntries] = useState(() => listProviderDebug());
@@ -161,21 +163,33 @@ function AdvancedSettingsCard({ copy, repository }: { copy: ReturnType<typeof ge
   const refresh = () => { if (repository) void repository.listProviderModels().then((models) => { setModelCount(models.length); setCapabilitySummary({ vision: models.filter((model) => model.capabilities.supportsVision).length, reasoning: models.filter((model) => model.capabilities.reasoning.supported).length, compatibility: models.filter((model) => model.capabilities.source === "compatibility").length }); }); };
   useEffect(refresh, [repository]);
   const reset = async () => {
-    if (!repository || !window.confirm(copy.resetCapabilityCacheConfirm)) return;
+    if (!repository) return;
+    const confirmed = await dialogs.confirm({ title: copy.dialogWarningTitle, description: copy.resetCapabilityCacheConfirm, confirmLabel: copy.dialogConfirm, cancelLabel: copy.cancel, severity: "warning" });
+    if (!confirmed) return;
     await repository.clearProviderModelCache();
     setModelCount(0); setCapabilitySummary({ vision: 0, reasoning: 0, compatibility: 0 }); setMessage(copy.resetCapabilityCache);
   };
   const clearDebug = () => { clearProviderDebug(); setDebugEntries([]); };
-  const toggleDetailedDiagnostics = () => {
+  const toggleDetailedDiagnostics = async () => {
     const next = !detailedDiagnostics;
-    if (next && !window.confirm(copy.home === "Home" ? "Detailed diagnostics can temporarily keep redacted request and response bodies in memory. They may still contain sensitive conversation text. Enable only while troubleshooting?" : "Szczegółowa diagnostyka może tymczasowo przechowywać w pamięci zanonimizowane treści żądań i odpowiedzi. Nadal mogą one zawierać poufny tekst rozmowy. Włączyć tylko na czas diagnozy?")) return;
+    if (next) {
+      const confirmed = await dialogs.confirm({
+        title: copy.dialogWarningTitle,
+        description: copy.home === "Home" ? "Detailed diagnostics can temporarily keep redacted request and response bodies in memory. They may still contain sensitive conversation text. Enable only while troubleshooting." : "Szczegółowa diagnostyka może tymczasowo przechowywać w pamięci zanonimizowane treści żądań i odpowiedzi. Nadal mogą one zawierać poufny tekst rozmowy. Włączaj ją tylko na czas diagnozy.",
+        confirmLabel: copy.dialogContinue,
+        cancelLabel: copy.cancel,
+        severity: "warning",
+      });
+      if (!confirmed) return;
+    }
     setDetailedProviderDiagnostics(next);
     setDetailedDiagnostics(next);
   };
-  return <section className="panel advanced-settings-card"><PanelHeader title={copy.advanced} icon={<Settings2 size={18} />} /><div className="advanced-settings-body"><div className="advanced-version"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.cachedModelCount}</small><strong>{modelCount}</strong></span><span><small>{copy.visionRoutes}</small><strong>{capabilitySummary.vision}</strong></span><span><small>{copy.reasoningRoutes}</small><strong>{capabilitySummary.reasoning}</strong></span><span><small>{copy.compatibilityRoutes}</small><strong>{capabilitySummary.compatibility}</strong></span></div><p>{copy.debugSecurity}</p><label className="detailed-diagnostics-toggle"><input type="checkbox" checked={detailedDiagnostics} onChange={toggleDetailedDiagnostics} /><span><strong>{copy.home === "Home" ? "Detailed request/response diagnostics" : "Szczegółowa diagnostyka żądań i odpowiedzi"}</strong><small>{copy.home === "Home" ? "Off by default and held only in volatile memory." : "Domyślnie wyłączona; dane są przechowywane wyłącznie w pamięci ulotnej."}</small></span></label><button className="secondary-button" disabled={!repository || !modelCount} onClick={() => void reset()}>{copy.resetCapabilityCache}</button>{message && <div className="storage-success"><Check size={14} />{message}</div>}<div className="debug-log-heading"><div><strong>{copy.apiDebugLog}</strong><small>{copy.debugVolatile}</small></div><span><button className="secondary-button" type="button" onClick={() => setDebugEntries(listProviderDebug())}>{copy.refreshDebugLog}</button><button className="secondary-button" type="button" disabled={!debugEntries.length} onClick={clearDebug}>{copy.clearDebugLog}</button></span></div><div className="debug-log-list">{debugEntries.length === 0 ? <p>{copy.noDebugCalls}</p> : debugEntries.map((entry) => <details key={entry.id}><summary><span className={`debug-status ${entry.status}`}>{entry.status.toUpperCase()}</span><strong>{entry.provider} · {entry.modelId}</strong><small>{new Date(entry.capturedAt).toLocaleString()}</small></summary><div className="debug-payload">{entry.endpoint && <code>{entry.endpoint}</code>}{entry.usage && <code>tokens: {entry.usage.inputTokens ?? "?"} + {entry.usage.outputTokens ?? "?"}</code>}{entry.error && <pre>{entry.error}</pre>}{entry.request !== undefined && <><h4>{copy.rawRequest}</h4><pre>{JSON.stringify(entry.request, null, 2)}</pre></>}{entry.response !== undefined && <><h4>{copy.rawResponse}</h4><pre>{JSON.stringify(entry.response, null, 2)}</pre></>}</div></details>)}</div></div></section>;
+  return <section className="panel advanced-settings-card"><PanelHeader title={copy.advanced} icon={<Settings2 size={18} />} /><div className="advanced-settings-body"><div className="advanced-version"><span><small>{copy.appVersion}</small><strong>v{APP_VERSION}</strong></span><span><small>{copy.cachedModelCount}</small><strong>{modelCount}</strong></span><span><small>{copy.visionRoutes}</small><strong>{capabilitySummary.vision}</strong></span><span><small>{copy.reasoningRoutes}</small><strong>{capabilitySummary.reasoning}</strong></span><span><small>{copy.compatibilityRoutes}</small><strong>{capabilitySummary.compatibility}</strong></span></div><p>{copy.debugSecurity}</p><label className="detailed-diagnostics-toggle"><input type="checkbox" checked={detailedDiagnostics} onChange={() => void toggleDetailedDiagnostics()} /><span><strong>{copy.home === "Home" ? "Detailed request/response diagnostics" : "Szczegółowa diagnostyka żądań i odpowiedzi"}</strong><small>{copy.home === "Home" ? "Off by default and held only in volatile memory." : "Domyślnie wyłączona; dane są przechowywane wyłącznie w pamięci ulotnej."}</small></span></label><button className="secondary-button" disabled={!repository || !modelCount} onClick={() => void reset()}>{copy.resetCapabilityCache}</button>{message && <div className="storage-success"><Check size={14} />{message}</div>}<div className="debug-log-heading"><div><strong>{copy.apiDebugLog}</strong><small>{copy.debugVolatile}</small></div><span><button className="secondary-button" type="button" onClick={() => setDebugEntries(listProviderDebug())}>{copy.refreshDebugLog}</button><button className="secondary-button" type="button" disabled={!debugEntries.length} onClick={clearDebug}>{copy.clearDebugLog}</button></span></div><div className="debug-log-list">{debugEntries.length === 0 ? <p>{copy.noDebugCalls}</p> : debugEntries.map((entry) => <details key={entry.id}><summary><span className={`debug-status ${entry.status}`}>{entry.status.toUpperCase()}</span><strong>{entry.provider} · {entry.modelId}</strong><small>{new Date(entry.capturedAt).toLocaleString()}</small></summary><div className="debug-payload">{entry.endpoint && <code>{entry.endpoint}</code>}{entry.usage && <code>tokens: {entry.usage.inputTokens ?? "?"} + {entry.usage.outputTokens ?? "?"}</code>}{entry.error && <pre>{entry.error}</pre>}{entry.request !== undefined && <><h4>{copy.rawRequest}</h4><pre>{JSON.stringify(entry.request, null, 2)}</pre></>}{entry.response !== undefined && <><h4>{copy.rawResponse}</h4><pre>{JSON.stringify(entry.response, null, 2)}</pre></>}</div></details>)}</div></div></section>;
 }
 
 function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { copy: ReturnType<typeof getCopy>; workspaces: Workspace[]; repository: AppRepository | null; onDataChanged: () => Promise<void> }) {
+  const dialogs = useAppDialogs();
   const [busy, setBusy] = useState<"backup" | "restore" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -207,13 +221,14 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
     if (!repository || busy || !isTauriRuntime()) return;
     const directory = await chooseDirectory(copy.restoreChooseFolder);
     if (!directory) return;
-    if (!window.confirm(`${copy.restoreConfirm}\n\n${directory}`)) return;
+    const confirmed = await dialogs.confirm({ title: copy.restoreBackup, description: copy.restoreConfirm, details: [directory], confirmLabel: copy.dialogContinue, cancelLabel: copy.cancel, severity: "destructive" });
+    if (!confirmed) return;
     setBusy("restore"); setError(null); setMessage(null);
     try {
       await restorePortableStorageBackup(repository, directory);
       window.location.reload();
     } catch (cause) {
-      window.alert(`${copy.restoreFailed}\n\n${cause instanceof Error ? cause.message : String(cause)}`);
+      await dialogs.information({ title: copy.restoreFailed, description: cause instanceof Error ? cause.message : String(cause), confirmLabel: copy.dialogOk, severity: "warning" });
       window.location.reload();
     }
   };
@@ -223,7 +238,15 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
     setError(null);
     try { await repository.restoreWorkspace(workspace.id); await onDataChanged(); await refresh(); }
     catch (cause) {
-      const replacement = window.prompt(copy.home === "Home" ? `The original name may conflict with an active Workspace. Enter a new name for “${workspace.name}”.` : `Pierwotna nazwa może kolidować z aktywnym Workspace. Podaj nową nazwę dla „${workspace.name}”.`, `${workspace.name} (restored)`)?.trim();
+      const replacement = (await dialogs.prompt({
+        title: copy.dialogRename,
+        description: copy.home === "Home" ? `The original name may conflict with an active Workspace. Enter a new name for “${workspace.name}”.` : `Pierwotna nazwa może kolidować z aktywnym Workspace. Podaj nową nazwę dla „${workspace.name}”.`,
+        initialValue: `${workspace.name} (restored)`,
+        inputLabel: copy.workspaceName,
+        inputRequired: true,
+        confirmLabel: copy.dialogContinue,
+        cancelLabel: copy.cancel,
+      }))?.trim();
       if (!replacement) { setError(cause instanceof Error ? cause.message : String(cause)); return; }
       await recover(() => repository.restoreWorkspace(workspace.id, replacement));
     }

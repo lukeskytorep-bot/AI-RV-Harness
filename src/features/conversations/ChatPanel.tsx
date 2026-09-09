@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { prepareViewerNotesForSession, viewerNotesSystemBlock } from "../../aiCenter/viewerNotes";
 import { chooseAndImportAttachments } from "../../attachments/native";
 import { ChatMessageList } from "../../chat/ChatMessageList";
+import { useAppDialogs } from "../../components/AppDialogProvider";
 import { estimateContextBudget } from "../../chat/contextBudget";
 import { buildChatProviderMessages, retryChatTurn, sendChatTurn } from "../../chat/engine";
 import { buildChatMarkdownExport } from "../../chat/export";
@@ -56,6 +57,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingRetry, setPendingRetry] = useState<PendingChatTurn | null>(null);
+  const dialogs = useAppDialogs();
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
   const activeProvider = providerConfigs.find((item) => item.credentialId === profile?.credentialId) ?? null;
   const selectedModel = models.find((item) => item.modelId === modelId) ?? null;
@@ -233,7 +235,15 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     if (!repository || sending) return;
     const baseTitle = mode === "conversation" ? copy.conversation : copy.manualRv;
     const suggestedTitle = `${baseTitle} ${threads.length + 1}`;
-    const requestedTitle = window.prompt(settings.interfaceLanguage === "pl" ? "Podaj nazwę nowej konwersacji:" : "Enter a name for the new conversation:", suggestedTitle);
+    const requestedTitle = await dialogs.prompt({
+      title: settings.interfaceLanguage === "pl" ? "Nowa rozmowa" : "New conversation",
+      description: settings.interfaceLanguage === "pl" ? "Podaj nazwę nowej konwersacji." : "Enter a name for the new conversation.",
+      initialValue: suggestedTitle,
+      inputLabel: settings.interfaceLanguage === "pl" ? "Nazwa rozmowy" : "Conversation name",
+      inputRequired: true,
+      confirmLabel: copy.create,
+      cancelLabel: copy.cancel,
+    });
     if (requestedTitle === null || !requestedTitle.trim()) return;
     setError(null);
     try {
@@ -251,7 +261,9 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
   };
 
   const archiveCurrentThread = async () => {
-    if (!repository || !threadId || sending || !window.confirm(`${copy.archiveChatConfirm}\n\n${savedThreadTitle}`)) return;
+    if (!repository || !threadId || sending) return;
+    const confirmed = await dialogs.confirm({ title: `${copy.dialogArchive}: ${savedThreadTitle}`, description: copy.archiveChatConfirm, confirmLabel: copy.dialogArchive, cancelLabel: copy.cancel, severity: "warning" });
+    if (!confirmed) return;
     setError(null);
     try {
       await repository.archiveChatThread(threadId);
@@ -322,7 +334,9 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
   };
 
   const removeSource = async (source: WorkspaceSource) => {
-    if (!repository || !window.confirm(`${copy.removeSource}: ${source.displayName}?`)) return;
+    if (!repository) return;
+    const confirmed = await dialogs.confirm({ title: copy.removeSource, description: source.displayName, confirmLabel: copy.dialogDelete, cancelLabel: copy.cancel, severity: "destructive" });
+    if (!confirmed) return;
     await repository.deleteWorkspaceSource(source.id);
     setSources((current) => current.filter((item) => item.id !== source.id));
     setActiveSourceIds((current) => current.filter((id) => id !== source.id));
@@ -470,7 +484,9 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
   };
 
   const archiveCurrentThreadGroup = async () => {
-    if (!repository || !threadGroupId || sending || !window.confirm(`${copy.archiveThreadConfirm}\n\n${savedThreadGroupTitle}`)) return;
+    if (!repository || !threadGroupId || sending) return;
+    const confirmed = await dialogs.confirm({ title: `${copy.dialogArchive}: ${savedThreadGroupTitle}`, description: copy.archiveThreadConfirm, confirmLabel: copy.dialogArchive, cancelLabel: copy.cancel, severity: "warning" });
+    if (!confirmed) return;
     setError(null);
     try {
       await repository.archiveChatThreadGroup(threadGroupId);
