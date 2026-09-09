@@ -23,6 +23,7 @@ This document maps responsibilities, not every source file. Historical release r
 | AI Monitor history, prompt editor and export UI | `src/features/monitor/` | Extracted feature; decisions and intervention rules remain in `src/monitor/`. |
 | Shared safe rendering | `src/components/SafeMarkdown.tsx` | Shared UI infrastructure; must remain the path for AI-authored Markdown. |
 | Shared role/model selector | `src/components/ModelRouteSelect.tsx`, `src/modelRoutes.ts` | Canonical Viewer/Monitor/Judge route-key, active-Profile credential scope, current-role defaults and shared route selection. Historical snapshots remain read-only consumers of stored routes. |
+| Shared application dialogs | `src/components/AppDialogProvider.tsx` | Canonical Confirm/TextInput/Information/Destructive modal host. Feature modules request dialogs through `useAppDialogs`; browser-native confirm/prompt/alert stay private fallback only. |
 
 ## AI execution and protected workflows
 
