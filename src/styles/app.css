@@ -1175,11 +1175,8 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 .hierarchy-workspace { min-width: 130px; display: flex; align-items: center; gap: 7px; }
 .hierarchy-workspace > svg { flex: 0 0 auto; color: var(--violet); }
 .hierarchy-workspace > span { min-width: 0; display: grid; gap: 1px; }
-.hierarchy-workspace small, .hierarchy-thread > span, .conversation-switcher label > span, .hierarchy-menu-popover label > span { color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .055em; }
+.hierarchy-workspace small, .conversation-switcher label > span, .hierarchy-menu-popover label > span { color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .055em; }
 .hierarchy-workspace strong { max-width: 220px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.hierarchy-thread { min-width: 190px; display: flex; align-items: center; gap: 7px; }
-.hierarchy-thread select { min-width: 140px; max-width: 310px; height: 32px; }
-.hierarchy-add { width: 31px; height: 31px; }
 .hierarchy-menu { position: relative; }
 .hierarchy-menu > summary { width: 31px; height: 31px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: var(--surface); cursor: pointer; list-style: none; font-size: 11px; font-weight: 900; letter-spacing: 1px; }
 .hierarchy-menu > summary::-webkit-details-marker { display: none; }

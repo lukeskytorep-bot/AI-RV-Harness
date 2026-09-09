@@ -43,8 +43,7 @@ describe("workspace directory persistence", () => {
     const profile = await repository.createProfile({ name: "Edward" });
     const workspace = await repository.createWorkspace({ profileId: profile.id, name: "Original" });
     const sibling = await repository.createWorkspace({ profileId: profile.id, name: "Keep active" });
-    const group = await repository.createChatThreadGroup(workspace.id, "conversation", "Long conversation");
-    const thread = await repository.createChatThread(workspace.id, "conversation", "Part 1", group.id);
+    const thread = await repository.createChatThread(workspace.id, "conversation", "Part 1");
     await repository.appendChatMessage(thread.id, "user", "Preserve me");
 
     await repository.renameWorkspace(workspace.id, "Renamed");
@@ -55,23 +54,20 @@ describe("workspace directory persistence", () => {
     await repository.restoreWorkspace(workspace.id);
 
     expect((await repository.listWorkspaces()).find((item) => item.id === workspace.id)?.name).toBe("Renamed");
-    expect((await repository.listChatThreadGroups(workspace.id, "conversation"))[0]?.id).toBe(group.id);
+    expect((await repository.listChatThreads(workspace.id, "conversation"))[0]?.id).toBe(thread.id);
     expect((await repository.listChatMessages(thread.id))[0]?.content).toBe("Preserve me");
   });
 
-  it("restores only descendants archived together with a conversation", async () => {
+  it("archives and restores Conversations independently under the Workspace", async () => {
     const repository = new BrowserRepository();
     const profile = await repository.createProfile({ name: "Edward" });
     const workspace = await repository.createWorkspace({ profileId: profile.id, name: "W" });
-    const group = await repository.createChatThreadGroup(workspace.id, "conversation", "Conversation");
-    const previouslyArchived = await repository.createChatThread(workspace.id, "conversation", "Old", group.id);
-    const active = await repository.createChatThread(workspace.id, "conversation", "Active", group.id);
-    await repository.archiveChatThread(previouslyArchived.id);
-    await repository.archiveChatThreadGroup(group.id);
-    await repository.restoreChatThreadGroup(group.id);
+    const first = await repository.createChatThread(workspace.id, "conversation", "First");
+    const second = await repository.createChatThread(workspace.id, "conversation", "Second");
+    await repository.archiveChatThread(first.id);
 
-    const restored = await repository.listChatThreads(workspace.id, "conversation");
-    expect(restored.map((item) => item.id)).toContain(active.id);
-    expect(restored.map((item) => item.id)).not.toContain(previouslyArchived.id);
+    expect((await repository.listChatThreads(workspace.id, "conversation")).map((item) => item.id)).toEqual([second.id]);
+    await repository.restoreChatThread(first.id);
+    expect(new Set((await repository.listChatThreads(workspace.id, "conversation")).map((item) => item.id))).toEqual(new Set([first.id, second.id]));
   });
 });

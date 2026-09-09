@@ -19,5 +19,7 @@ describe("Conversations feature", () => {
     expect(html).toContain(copy.conversation);
     expect(html).toContain(copy.manualRv);
     expect(html).toContain(copy.systemActive);
+    expect(html).toContain(copy.chatThreads);
+    expect(html).not.toContain("Thread");
   });
 });

@@ -1,4 +1,4 @@
-import { Archive, ArrowRight, ChevronRight, Crosshair, Download, FileCheck2, KeyRound, LockKeyhole, MessageCircle, Paperclip, Pencil, Plus, RadioTower, ShieldCheck, Sparkles, Waves, X } from "lucide-react";
+import { Archive, ArrowRight, Crosshair, Download, FileCheck2, KeyRound, LockKeyhole, MessageCircle, Paperclip, Pencil, Plus, RadioTower, ShieldCheck, Sparkles, Waves, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { prepareViewerNotesForSession, viewerNotesSystemBlock } from "../../aiCenter/viewerNotes";
@@ -21,7 +21,7 @@ import { createImportedWorkspaceSource, estimateTextTokens } from "../../sources
 import type { WorkspaceSource } from "../../sources/types";
 import { saveTextFile } from "../../storage/native";
 import type { AppRepository } from "../../storage/repository";
-import type { AppSettings, ChatMessage, ChatMode, ChatThread, ChatThreadGroup, Profile, Workspace } from "../../types";
+import type { AppSettings, ChatMessage, ChatMode, ChatThread, Profile, Workspace } from "../../types";
 
 export interface ChatPanelProps {
   copy: ReturnType<typeof getCopy>;
@@ -33,10 +33,6 @@ export interface ChatPanelProps {
 
 export function ChatPanel({ copy, settings, profile, workspace, repository }: ChatPanelProps) {
   const [mode, setMode] = useState<ChatMode>("conversation");
-  const [threadGroups, setThreadGroups] = useState<ChatThreadGroup[]>([]);
-  const [threadGroupId, setThreadGroupId] = useState<string | null>(null);
-  const [threadGroupTitle, setThreadGroupTitle] = useState("");
-  const [savedThreadGroupTitle, setSavedThreadGroupTitle] = useState("");
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [threadTitle, setThreadTitle] = useState("");
@@ -89,17 +85,15 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     let cancelled = false;
     setMessages([]);
     setActiveSourceIds([]);
-    setThreadGroups([]);
-    setThreadGroupId(null);
     setThreadId(null);
     void (async () => {
       if (!repository) return;
-      let groups = await repository.listChatThreadGroups(workspace.id, mode);
-      const group = groups[0] ?? await repository.createChatThreadGroup(workspace.id, mode, "Thread 1");
-      if (!groups.length) groups = [group];
-      const allThreads = await repository.listChatThreads(workspace.id, mode);
-      let available = allThreads.filter((item) => item.threadGroupId === group.id);
-      const thread = available[0] ?? await repository.createChatThread(workspace.id, mode, mode === "conversation" ? `${copy.conversation} 1` : `${copy.manualRv} 1`, group.id);
+      let available = await repository.listChatThreads(workspace.id, mode);
+      const thread = available[0] ?? await repository.createChatThread(
+        workspace.id,
+        mode,
+        mode === "conversation" ? `${copy.conversation} 1` : `${copy.manualRv} 1`,
+      );
       if (!available.length) available = [thread];
       const [nextMessages, nextActiveSources] = await Promise.all([
         repository.listChatMessages(thread.id),
@@ -107,10 +101,6 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
         repository.touchChatThread(thread.id),
       ]);
       if (cancelled) return;
-      setThreadGroups(groups);
-      setThreadGroupId(group.id);
-      setThreadGroupTitle(group.title);
-      setSavedThreadGroupTitle(group.title);
       setThreads(available);
       setThreadId(thread.id);
       setThreadTitle(thread.title);
@@ -178,56 +168,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
       setActiveSourceIds(nextActiveSources);
       setChatImages([]);
       setChatImageNames([]);
-      setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-  };
-
-  const openThreadGroup = async (nextGroupId: string) => {
-    if (!repository || sending || nextGroupId === threadGroupId) return;
-    const group = threadGroups.find((item) => item.id === nextGroupId);
-    if (!group) return;
-    setError(null);
-    try {
-      let available = (await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === group.id);
-      const next = available[0] ?? await repository.createChatThread(workspace.id, mode, mode === "conversation" ? `${copy.conversation} 1` : `${copy.manualRv} 1`, group.id);
-      if (!available.length) available = [next];
-      const [nextMessages, nextActiveSources] = await Promise.all([
-        repository.listChatMessages(next.id),
-        repository.listActiveChatSourceIds(next.id),
-        repository.touchChatThread(next.id),
-      ]);
-      setThreadGroupId(group.id);
-      setThreadGroupTitle(group.title);
-      setSavedThreadGroupTitle(group.title);
-      setThreads(available);
-      setThreadId(next.id);
-      setThreadTitle(next.title);
-      setSavedThreadTitle(next.title);
-      setMessages(nextMessages);
-      setActiveSourceIds(nextActiveSources);
-      setChatImages([]);
-      setChatImageNames([]);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-  };
-
-  const createNewThreadGroup = async () => {
-    if (!repository || sending) return;
-    setError(null);
-    try {
-      const group = await repository.createChatThreadGroup(workspace.id, mode, `Thread ${threadGroups.length + 1}`);
-      const conversation = await repository.createChatThread(workspace.id, mode, mode === "conversation" ? `${copy.conversation} 1` : `${copy.manualRv} 1`, group.id);
-      setThreadGroups(await repository.listChatThreadGroups(workspace.id, mode));
-      setThreadGroupId(group.id);
-      setThreadGroupTitle(group.title);
-      setSavedThreadGroupTitle(group.title);
-      setThreads([conversation]);
-      setThreadId(conversation.id);
-      setThreadTitle(conversation.title);
-      setSavedThreadTitle(conversation.title);
-      setMessages([]);
-      setActiveSourceIds([]);
-      setChatImages([]);
-      setChatImageNames([]);
+      setThreads(await repository.listChatThreads(workspace.id, mode));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
@@ -236,10 +177,10 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     const baseTitle = mode === "conversation" ? copy.conversation : copy.manualRv;
     const suggestedTitle = `${baseTitle} ${threads.length + 1}`;
     const requestedTitle = await dialogs.prompt({
-      title: settings.interfaceLanguage === "pl" ? "Nowa rozmowa" : "New conversation",
-      description: settings.interfaceLanguage === "pl" ? "Podaj nazwę nowej konwersacji." : "Enter a name for the new conversation.",
+      title: mode === "conversation" ? (settings.interfaceLanguage === "pl" ? "Nowa rozmowa" : "New conversation") : "Manual RV",
+      description: mode === "conversation" ? (settings.interfaceLanguage === "pl" ? "Podaj nazwę nowej rozmowy." : "Enter a name for the new conversation.") : (settings.interfaceLanguage === "pl" ? "Podaj nazwę nowej sesji Manual RV." : "Enter a name for the new Manual RV session."),
       initialValue: suggestedTitle,
-      inputLabel: settings.interfaceLanguage === "pl" ? "Nazwa rozmowy" : "Conversation name",
+      inputLabel: mode === "conversation" ? (settings.interfaceLanguage === "pl" ? "Nazwa rozmowy" : "Conversation name") : "Manual RV",
       inputRequired: true,
       confirmLabel: copy.create,
       cancelLabel: copy.cancel,
@@ -247,9 +188,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     if (requestedTitle === null || !requestedTitle.trim()) return;
     setError(null);
     try {
-      if (!threadGroupId) return;
-      const thread = await repository.createChatThread(workspace.id, mode, requestedTitle.trim(), threadGroupId);
-      setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
+      const thread = await repository.createChatThread(workspace.id, mode, requestedTitle.trim());
+      setThreads(await repository.listChatThreads(workspace.id, mode));
       setThreadId(thread.id);
       setThreadTitle(thread.title);
       setSavedThreadTitle(thread.title);
@@ -267,8 +207,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     setError(null);
     try {
       await repository.archiveChatThread(threadId);
-      let remaining = (await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId);
-      const next = remaining[0] ?? await repository.createChatThread(workspace.id, mode, mode === "conversation" ? `${copy.conversation} 1` : `${copy.manualRv} 1`, threadGroupId ?? undefined);
+      let remaining = await repository.listChatThreads(workspace.id, mode);
+      const next = remaining[0] ?? await repository.createChatThread(workspace.id, mode, mode === "conversation" ? `${copy.conversation} 1` : `${copy.manualRv} 1`);
       if (!remaining.length) remaining = [next];
       const [nextMessages, nextActiveSources] = await Promise.all([
         repository.listChatMessages(next.id),
@@ -421,7 +361,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
         setPendingRetry(null);
       }
       setMessages(storedMessages);
-      setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
+      setThreads(await repository.listChatThreads(workspace.id, mode));
       setSending(false);
     }
   };
@@ -458,7 +398,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setMessages(await repository.listChatMessages(pendingRetry.threadId));
-      setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
+      setThreads(await repository.listChatThreads(workspace.id, mode));
       setSending(false);
     }
   };
@@ -469,44 +409,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
       await repository.renameChatThread(threadId, threadTitle);
       setThreadTitle(threadTitle.trim());
       setSavedThreadTitle(threadTitle.trim());
-      setThreads((await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === threadGroupId));
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-  };
-
-  const renameThreadGroup = async () => {
-    if (!repository || !threadGroupId || !threadGroupTitle.trim() || threadGroupTitle.trim() === savedThreadGroupTitle) return;
-    try {
-      await repository.renameChatThreadGroup(threadGroupId, threadGroupTitle);
-      setThreadGroupTitle(threadGroupTitle.trim());
-      setSavedThreadGroupTitle(threadGroupTitle.trim());
-      setThreadGroups(await repository.listChatThreadGroups(workspace.id, mode));
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-  };
-
-  const archiveCurrentThreadGroup = async () => {
-    if (!repository || !threadGroupId || sending) return;
-    const confirmed = await dialogs.confirm({ title: `${copy.dialogArchive}: ${savedThreadGroupTitle}`, description: copy.archiveThreadConfirm, confirmLabel: copy.dialogArchive, cancelLabel: copy.cancel, severity: "warning" });
-    if (!confirmed) return;
-    setError(null);
-    try {
-      await repository.archiveChatThreadGroup(threadGroupId);
-      let groups = await repository.listChatThreadGroups(workspace.id, mode);
-      const nextGroup = groups[0] ?? await repository.createChatThreadGroup(workspace.id, mode, "Thread 1");
-      if (!groups.length) groups = [nextGroup];
-      let available = (await repository.listChatThreads(workspace.id, mode)).filter((item) => item.threadGroupId === nextGroup.id);
-      const next = available[0] ?? await repository.createChatThread(workspace.id, mode, mode === "conversation" ? `${copy.conversation} 1` : `${copy.manualRv} 1`, nextGroup.id);
-      if (!available.length) available = [next];
-      const [nextMessages, nextActiveSources] = await Promise.all([repository.listChatMessages(next.id), repository.listActiveChatSourceIds(next.id)]);
-      setThreadGroups(groups);
-      setThreadGroupId(nextGroup.id);
-      setThreadGroupTitle(nextGroup.title);
-      setSavedThreadGroupTitle(nextGroup.title);
-      setThreads(available);
-      setThreadId(next.id);
-      setThreadTitle(next.title);
-      setSavedThreadTitle(next.title);
-      setMessages(nextMessages);
-      setActiveSourceIds(nextActiveSources);
+      setThreads(await repository.listChatThreads(workspace.id, mode));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
@@ -532,17 +435,6 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     <section className="chat-surface">
       <div className="chat-hierarchy">
         <span className="hierarchy-workspace"><RadioTower size={15} /><span><small>{copy.workspace}</small><strong>{workspace.name}</strong></span></span>
-        <ChevronRight size={15} />
-        <label className="hierarchy-thread"><span>{copy.threadGroups}</span><select value={threadGroupId ?? ""} disabled={!threadGroupId || sending} onChange={(event) => void openThreadGroup(event.target.value)}>{threadGroups.map((group) => <option key={group.id} value={group.id}>{group.title}</option>)}</select></label>
-        <button className="icon-button hierarchy-add" type="button" title={copy.newThread} disabled={!repository || sending} onClick={() => void createNewThreadGroup()}><Plus size={15} /></button>
-        <details className="hierarchy-menu">
-          <summary aria-label={copy.renameThreadGroup} title={copy.renameThreadGroup}>•••</summary>
-          <div className="hierarchy-menu-popover">
-            <label><span>{copy.threadGroupTitle}</span><input value={threadGroupTitle} maxLength={160} onChange={(event) => setThreadGroupTitle(event.target.value)} /></label>
-            <button className="secondary-button" disabled={!threadGroupTitle.trim() || threadGroupTitle.trim() === savedThreadGroupTitle} onClick={() => void renameThreadGroup()}><Pencil size={13} />{copy.renameThreadGroup}</button>
-            <button className="secondary-button danger-action" disabled={!threadGroupId || sending} onClick={() => void archiveCurrentThreadGroup()}><Archive size={13} />{copy.archiveThreadGroup}</button>
-          </div>
-        </details>
       </div>
       <div className="chat-toolbar">
         <div className="segmented large-segmented">
@@ -550,7 +442,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
           <button disabled={sending} className={mode === "manual_rv" ? "active" : ""} onClick={() => setMode("manual_rv")}><Crosshair size={16} />{copy.manualRv}</button>
         </div>
         <div className="conversation-switcher">
-          <label><span>{copy.chatThreads}</span><select value={threadId ?? ""} disabled={!threadId || sending} onChange={(event) => void openThread(event.target.value)}>{threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}</select></label>
+          <label><span>{mode === "conversation" ? copy.chatThreads : copy.manualRv}</span><select value={threadId ?? ""} disabled={!threadId || sending} onChange={(event) => void openThread(event.target.value)}>{threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}</select></label>
           <button className="secondary-button" disabled={!repository || sending} onClick={() => void createNewThread()}><Plus size={13} />{copy.newChat}</button>
           <button className="secondary-button danger-action" disabled={!threadId || sending} title={copy.archiveChat} onClick={() => void archiveCurrentThread()}><Archive size={13} />{copy.archiveChat}</button>
           <details className="hierarchy-menu conversation-menu">

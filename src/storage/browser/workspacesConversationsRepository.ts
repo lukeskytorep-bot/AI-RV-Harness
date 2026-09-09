@@ -1,10 +1,9 @@
-import type { ChatMessage, ChatMode, ChatThread, ChatThreadGroup, CreateWorkspaceInput, Workspace } from "../../types";
+import type { ChatMessage, ChatMode, ChatThread, CreateWorkspaceInput, Workspace } from "../../types";
 import type { WorkspacesConversationsRepository } from "../contracts/workspacesConversationsRepository";
 import { createId, nowIso } from "../repository";
 
 const WORKSPACES_KEY = "rvh.dev.workspaces";
 const CHAT_THREADS_KEY = "rvh.dev.chat_threads";
-const CHAT_THREAD_GROUPS_KEY = "rvh.dev.chat_thread_groups";
 const CHAT_MESSAGES_KEY = "rvh.dev.chat_messages";
 
 export interface BrowserWorkspacesConversationsRepositoryDependencies {
@@ -97,70 +96,15 @@ export class BrowserWorkspacesConversationsRepository implements WorkspacesConve
       workspace.id === id ? { ...workspace, updatedAt: timestamp, lastOpenedAt: timestamp } : workspace));
   }
 
-  async listChatThreadGroups(workspaceId: string, mode: ChatMode): Promise<ChatThreadGroup[]> {
-    const allGroups = this.read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []);
-    let relevant = allGroups.filter((group) => group.workspaceId === workspaceId && group.mode === mode && !group.archivedAt)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.createdAt.localeCompare(a.createdAt));
-    const legacyThreads = this.read<ChatThread[]>(CHAT_THREADS_KEY, []).filter((thread) => thread.workspaceId === workspaceId && thread.mode === mode && !thread.archivedAt && !thread.threadGroupId);
-    if (!relevant.length && legacyThreads.length) {
-      const timestamp = this.now();
-      const legacyGroup: ChatThreadGroup = { id: `legacy_group_${workspaceId}_${mode}`, workspaceId, mode, title: "Thread 1", createdAt: legacyThreads.reduce((oldest, thread) => thread.createdAt < oldest ? thread.createdAt : oldest, legacyThreads[0].createdAt), updatedAt: timestamp };
-      this.write(CHAT_THREAD_GROUPS_KEY, [...allGroups, legacyGroup]);
-      this.write(CHAT_THREADS_KEY, this.read<ChatThread[]>(CHAT_THREADS_KEY, []).map((thread) => legacyThreads.some((legacy) => legacy.id === thread.id) ? { ...thread, threadGroupId: legacyGroup.id } : thread));
-      relevant = [legacyGroup];
-    }
-    return relevant;
-  }
-
-  async createChatThreadGroup(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThreadGroup> {
-    const all = this.read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []);
-    const timestamp = this.now();
-    const group: ChatThreadGroup = { id: createId("thread_group"), workspaceId, mode, title: title?.trim().slice(0, 160) || `Thread ${all.filter((item) => item.workspaceId === workspaceId && item.mode === mode).length + 1}`, createdAt: timestamp, updatedAt: timestamp };
-    this.write(CHAT_THREAD_GROUPS_KEY, [...all, group]);
-    return group;
-  }
-
-  async renameChatThreadGroup(groupId: string, title: string): Promise<void> {
-    const clean = title.trim();
-    if (!clean) throw new Error("Thread title is required.");
-    this.write(CHAT_THREAD_GROUPS_KEY, this.read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []).map((group) => group.id === groupId ? { ...group, title: clean.slice(0, 160), updatedAt: this.now() } : group));
-  }
-
-  async archiveChatThreadGroup(groupId: string): Promise<void> {
-    const groups = this.read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []);
-    const group = groups.find((item) => item.id === groupId && !item.archivedAt);
-    if (!group) throw new Error("Thread not found.");
-    const threads = this.read<ChatThread[]>(CHAT_THREADS_KEY, []);
-    const priorChildArchives = threads.filter((item) => item.threadGroupId === groupId && item.archivedAt).map((item) => Date.parse(item.archivedAt!)).filter(Number.isFinite);
-    const timestamp = new Date(Math.max(Date.now(), (priorChildArchives.length ? Math.max(...priorChildArchives) : 0) + 1)).toISOString();
-    this.write(CHAT_THREAD_GROUPS_KEY, groups.map((item) => item.id === groupId ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
-    this.write(CHAT_THREADS_KEY, threads.map((item) => item.threadGroupId === groupId && !item.archivedAt ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
-  }
-
-  async listArchivedChatThreadGroups(): Promise<ChatThreadGroup[]> {
-    return this.read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []).filter((group) => Boolean(group.archivedAt)).sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
-  }
-
-  async restoreChatThreadGroup(groupId: string): Promise<void> {
-    const groups = this.read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []);
-    const group = groups.find((item) => item.id === groupId && item.archivedAt);
-    if (!group) throw new Error("Archived Thread not found.");
-    if (this.read<Workspace[]>(WORKSPACES_KEY, []).find((item) => item.id === group.workspaceId)?.archivedAt) throw new Error("Restore the parent Workspace first.");
-    const archivedAt = group.archivedAt;
-    const timestamp = this.now();
-    this.write(CHAT_THREAD_GROUPS_KEY, groups.map((item) => item.id === groupId ? { ...item, archivedAt: undefined, updatedAt: timestamp } : item));
-    this.write(CHAT_THREADS_KEY, this.read<ChatThread[]>(CHAT_THREADS_KEY, []).map((item) => item.threadGroupId === groupId && item.archivedAt === archivedAt ? { ...item, archivedAt: undefined, updatedAt: timestamp } : item));
-  }
-
   async listChatThreads(workspaceId: string, mode: ChatMode): Promise<ChatThread[]> {
     return this.read<ChatThread[]>(CHAT_THREADS_KEY, []).filter((thread) => thread.workspaceId === workspaceId && thread.mode === mode && !thread.archivedAt)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.createdAt.localeCompare(a.createdAt));
   }
 
-  async createChatThread(workspaceId: string, mode: ChatMode, title?: string, threadGroupId?: string): Promise<ChatThread> {
+  async createChatThread(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThread> {
     const all = this.read<ChatThread[]>(CHAT_THREADS_KEY, []);
     const timestamp = this.now();
-    const thread: ChatThread = { id: createId("thread"), workspaceId, mode, threadGroupId, title: title?.trim().slice(0, 160) || (mode === "conversation" ? "Conversation" : "Manual RV Session"), createdAt: timestamp, updatedAt: timestamp };
+    const thread: ChatThread = { id: createId("thread"), workspaceId, mode, title: title?.trim().slice(0, 160) || (mode === "conversation" ? "Conversation" : "Manual RV Session"), createdAt: timestamp, updatedAt: timestamp };
     this.write(CHAT_THREADS_KEY, [...all, thread]);
     return thread;
   }
@@ -179,14 +123,14 @@ export class BrowserWorkspacesConversationsRepository implements WorkspacesConve
 
   async renameChatThread(threadId: string, title: string): Promise<void> {
     const clean = title.trim();
-    if (!clean) throw new Error("Thread title is required.");
+    if (!clean) throw new Error("Conversation / Manual RV title is required.");
     this.write(CHAT_THREADS_KEY, this.read<ChatThread[]>(CHAT_THREADS_KEY, []).map((thread) => thread.id === threadId ? { ...thread, title: clean.slice(0, 160), updatedAt: this.now() } : thread));
   }
 
   async archiveChatThread(threadId: string): Promise<void> {
     const threads = this.read<ChatThread[]>(CHAT_THREADS_KEY, []);
     const thread = threads.find((item) => item.id === threadId && !item.archivedAt);
-    if (!thread) throw new Error("Chat thread not found.");
+    if (!thread) throw new Error("Conversation / Manual RV not found.");
     const timestamp = this.now();
     this.write(CHAT_THREADS_KEY, threads.map((item) => item.id === threadId ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
   }
@@ -199,9 +143,8 @@ export class BrowserWorkspacesConversationsRepository implements WorkspacesConve
     const threads = this.read<ChatThread[]>(CHAT_THREADS_KEY, []);
     const thread = threads.find((item) => item.id === threadId && item.archivedAt);
     if (!thread) throw new Error("Archived Conversation not found.");
-    if (this.read<Workspace[]>(WORKSPACES_KEY, []).find((item) => item.id === thread.workspaceId)?.archivedAt) throw new Error("Restore the parent Workspace first.");
-    const group = thread.threadGroupId ? this.read<ChatThreadGroup[]>(CHAT_THREAD_GROUPS_KEY, []).find((item) => item.id === thread.threadGroupId) : undefined;
-    if (group?.archivedAt) throw new Error("Restore the parent Thread first.");
+    const workspace = this.read<Workspace[]>(WORKSPACES_KEY, []).find((item) => item.id === thread.workspaceId);
+    if (!workspace || workspace.archivedAt) throw new Error("Restore the parent Workspace first.");
     const timestamp = this.now();
     this.write(CHAT_THREADS_KEY, threads.map((item) => item.id === threadId ? { ...item, archivedAt: undefined, updatedAt: timestamp } : item));
   }

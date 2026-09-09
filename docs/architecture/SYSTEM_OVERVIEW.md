@@ -45,16 +45,15 @@ No prior knowledge of the internal codebase is required for normal use. Research
 
 The application organizes ordinary work as:
 
-**Profile → Workspace → Thread → Conversation or Session**
+**Profile → Workspace → Conversation / Manual RV / Session / Research**
 
 | Object | Purpose |
 | --- | --- |
 | **Profile** | Stores the human and AI IS-BE identity labels, preferred model routes, prompts, and default generation settings. |
 | **Workspace** | A project container for conversations, sessions, sources, and related records. |
-| **Thread** | Groups a continuing line of work inside a Workspace. |
-| **Conversation or Session** | Contains the actual messages, protocol events, evidence, and results. |
+| **Conversation / Manual RV / Session / Research** | Contains the actual messages, protocol events, evidence, research configuration, and results. |
 
-A Workspace can be created from the Workspaces screen or from a Profile. Existing records remain associated with their original owner and Workspace.
+A Workspace can be created from the Workspaces screen or from a Profile. Conversation and Manual RV records are direct Workspace children. Legacy `ChatThreadGroup` metadata may remain in older stored data for compatibility, but it is not a current product parent and new conversations do not create it. Existing records remain associated with their original owner and Workspace.
 
 ### AI roles
 

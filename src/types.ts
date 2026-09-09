@@ -5,6 +5,10 @@ export type SessionLanguageSetting = "same" | InterfaceLanguage;
 export type Theme = "blue" | "aurora" | "light" | "dark" | "green";
 export type ChatMode = "conversation" | "manual_rv";
 
+/**
+ * Legacy persisted grouping metadata retained for backward-compatible reads.
+ * UX-DATA-5 removed this as a product-level parent; new Conversations do not create or require it.
+ */
 export interface ChatThreadGroup {
   id: string;
   workspaceId: string;
@@ -19,6 +23,7 @@ export interface ChatThread {
   id: string;
   workspaceId: string;
   mode: ChatMode;
+  /** Legacy group reference from pre-UX-DATA-5 data. New records leave it undefined. */
   threadGroupId?: string;
   title: string;
   formalRvState?: "BLIND" | "REVEALED" | "INTERRUPTED" | "FAILED";

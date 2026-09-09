@@ -1,18 +1,15 @@
-import type { ChatMessage, ChatMode, ChatThread, ChatThreadGroup, CreateWorkspaceInput, Workspace } from "../../types";
-import type { DatabaseTransactionStatement } from "../databaseNative";
+import type { ChatMessage, ChatMode, ChatThread, CreateWorkspaceInput, Workspace } from "../../types";
 import type { WorkspacesConversationsRepository } from "../contracts/workspacesConversationsRepository";
 import { createId, nowIso } from "../repository";
 
 type WriteResult = { rowsAffected: number };
 type WorkspaceRow = { id: string; profile_id: string; name: string; description: string | null; created_at: string; updated_at: string; last_opened_at: string; archived_at: string | null };
-type ChatThreadGroupRow = { id: string; workspace_id: string; mode: ChatMode; title: string; created_at: string; updated_at: string; archived_at: string | null };
 type ChatThreadRow = { id: string; workspace_id: string; mode: ChatMode; thread_group_id: string | null; title: string; formal_rv_state: ChatThread["formalRvState"] | null; created_at: string; updated_at: string; archived_at: string | null };
 type ChatMessageRow = { id: string; thread_id: string; role: "user" | "assistant"; content: string; created_at: string };
 
 export interface SqliteWorkspacesConversationsRepositoryDependencies {
   select<T>(query: string, bindValues?: unknown[]): Promise<T>;
   executeWrite(query: string, bindValues?: unknown[]): Promise<WriteResult>;
-  executeTransaction(statements: DatabaseTransactionStatement[]): Promise<unknown>;
   now?: typeof nowIso;
 }
 
@@ -24,9 +21,6 @@ function mapChatThread(row: ChatThreadRow): ChatThread {
   return { id: row.id, workspaceId: row.workspace_id, mode: row.mode, threadGroupId: row.thread_group_id ?? undefined, title: row.title, formalRvState: row.formal_rv_state ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at, ...(row.archived_at ? { archivedAt: row.archived_at } : {}) };
 }
 
-function mapChatThreadGroup(row: ChatThreadGroupRow): ChatThreadGroup {
-  return { id: row.id, workspaceId: row.workspace_id, mode: row.mode, title: row.title, createdAt: row.created_at, updatedAt: row.updated_at, ...(row.archived_at ? { archivedAt: row.archived_at } : {}) };
-}
 
 export class SqliteWorkspacesConversationsRepository implements WorkspacesConversationsRepository {
   constructor(private readonly dependencies: SqliteWorkspacesConversationsRepositoryDependencies) {}
@@ -93,58 +87,14 @@ export class SqliteWorkspacesConversationsRepository implements WorkspacesConver
     await this.dependencies.executeWrite("UPDATE workspaces SET updated_at = $1, last_opened_at = $1 WHERE id = $2", [timestamp, id]);
   }
 
-  async listChatThreadGroups(workspaceId: string, mode: ChatMode): Promise<ChatThreadGroup[]> {
-    return (await this.dependencies.select<ChatThreadGroupRow[]>(`SELECT id, workspace_id, mode, title, created_at, updated_at, archived_at FROM chat_thread_groups WHERE workspace_id = $1 AND mode = $2 AND archived_at IS NULL ORDER BY updated_at DESC, created_at DESC`, [workspaceId, mode])).map(mapChatThreadGroup);
-  }
-
-  async createChatThreadGroup(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThreadGroup> {
-    const existing = await this.listChatThreadGroups(workspaceId, mode);
-    const timestamp = this.now();
-    const group: ChatThreadGroup = { id: createId("thread_group"), workspaceId, mode, title: title?.trim().slice(0, 160) || `Thread ${existing.length + 1}`, createdAt: timestamp, updatedAt: timestamp };
-    await this.dependencies.executeWrite(`INSERT INTO chat_thread_groups (id, workspace_id, mode, title, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`, [group.id, group.workspaceId, group.mode, group.title, timestamp]);
-    return group;
-  }
-
-  async renameChatThreadGroup(groupId: string, title: string): Promise<void> {
-    const clean = title.trim();
-    if (!clean) throw new Error("Thread title is required.");
-    await this.dependencies.executeWrite("UPDATE chat_thread_groups SET title = $1, updated_at = $2 WHERE id = $3", [clean.slice(0, 160), this.now(), groupId]);
-  }
-
-  async archiveChatThreadGroup(groupId: string): Promise<void> {
-    const prior = await this.dependencies.select<Array<{ latest: string | null }>>("SELECT MAX(archived_at) AS latest FROM chat_threads WHERE thread_group_id = $1", [groupId]);
-    const latest = prior[0]?.latest ? Date.parse(prior[0].latest) : 0;
-    const timestamp = new Date(Math.max(Date.now(), (Number.isFinite(latest) ? latest : 0) + 1)).toISOString();
-    await this.dependencies.executeTransaction([
-      { query: "UPDATE chat_thread_groups SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", values: [timestamp, groupId] },
-      { query: "UPDATE chat_threads SET archived_at = $1, updated_at = $1 WHERE thread_group_id = $2 AND archived_at IS NULL", values: [timestamp, groupId] },
-    ]);
-  }
-
-  async listArchivedChatThreadGroups(): Promise<ChatThreadGroup[]> {
-    return (await this.dependencies.select<ChatThreadGroupRow[]>(`SELECT id, workspace_id, mode, title, created_at, updated_at, archived_at FROM chat_thread_groups WHERE archived_at IS NOT NULL ORDER BY archived_at DESC`)).map(mapChatThreadGroup);
-  }
-
-  async restoreChatThreadGroup(groupId: string): Promise<void> {
-    const rows = await this.dependencies.select<Array<{ archived_at: string; workspace_id: string }>>("SELECT archived_at, workspace_id FROM chat_thread_groups WHERE id = $1 AND archived_at IS NOT NULL LIMIT 1", [groupId]);
-    if (!rows[0]) throw new Error("Archived Thread not found.");
-    const workspace = await this.dependencies.select<Array<{ archived_at: string | null }>>("SELECT archived_at FROM workspaces WHERE id = $1 LIMIT 1", [rows[0].workspace_id]);
-    if (workspace[0]?.archived_at) throw new Error("Restore the parent Workspace first.");
-    const timestamp = this.now();
-    await this.dependencies.executeTransaction([
-      { query: "UPDATE chat_thread_groups SET archived_at = NULL, updated_at = $1 WHERE id = $2", values: [timestamp, groupId] },
-      { query: "UPDATE chat_threads SET archived_at = NULL, updated_at = $1 WHERE thread_group_id = $2 AND archived_at = $3", values: [timestamp, groupId, rows[0].archived_at] },
-    ]);
-  }
-
   async listChatThreads(workspaceId: string, mode: ChatMode): Promise<ChatThread[]> {
     return (await this.dependencies.select<ChatThreadRow[]>(`SELECT id, workspace_id, mode, thread_group_id, title, formal_rv_state, created_at, updated_at, archived_at FROM chat_threads WHERE workspace_id = $1 AND mode = $2 AND archived_at IS NULL ORDER BY updated_at DESC, created_at DESC`, [workspaceId, mode])).map(mapChatThread);
   }
 
-  async createChatThread(workspaceId: string, mode: ChatMode, title?: string, threadGroupId?: string): Promise<ChatThread> {
+  async createChatThread(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThread> {
     const timestamp = this.now();
-    const thread: ChatThread = { id: createId("thread"), workspaceId, mode, threadGroupId, title: title?.trim().slice(0, 160) || (mode === "conversation" ? "Conversation" : "Manual RV Session"), createdAt: timestamp, updatedAt: timestamp };
-    await this.dependencies.executeWrite(`INSERT INTO chat_threads (id, workspace_id, mode, thread_group_id, title, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $6)`, [thread.id, thread.workspaceId, thread.mode, thread.threadGroupId ?? null, thread.title, timestamp]);
+    const thread: ChatThread = { id: createId("thread"), workspaceId, mode, title: title?.trim().slice(0, 160) || (mode === "conversation" ? "Conversation" : "Manual RV Session"), createdAt: timestamp, updatedAt: timestamp };
+    await this.dependencies.executeWrite(`INSERT INTO chat_threads (id, workspace_id, mode, thread_group_id, title, created_at, updated_at) VALUES ($1, $2, $3, NULL, $4, $5, $5)`, [thread.id, thread.workspaceId, thread.mode, thread.title, timestamp]);
     return thread;
   }
 
@@ -161,13 +111,13 @@ export class SqliteWorkspacesConversationsRepository implements WorkspacesConver
 
   async renameChatThread(threadId: string, title: string): Promise<void> {
     const clean = title.trim();
-    if (!clean) throw new Error("Thread title is required.");
+    if (!clean) throw new Error("Conversation / Manual RV title is required.");
     await this.dependencies.executeWrite("UPDATE chat_threads SET title = $1, updated_at = $2 WHERE id = $3", [clean.slice(0, 160), this.now(), threadId]);
   }
 
   async archiveChatThread(threadId: string): Promise<void> {
     const rows = await this.dependencies.select<Array<{ id: string }>>("SELECT id FROM chat_threads WHERE id = $1 AND archived_at IS NULL LIMIT 1", [threadId]);
-    if (!rows[0]) throw new Error("Chat thread not found.");
+    if (!rows[0]) throw new Error("Conversation / Manual RV not found.");
     const timestamp = this.now();
     await this.dependencies.executeWrite("UPDATE chat_threads SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", [timestamp, threadId]);
   }
@@ -177,14 +127,10 @@ export class SqliteWorkspacesConversationsRepository implements WorkspacesConver
   }
 
   async restoreChatThread(threadId: string): Promise<void> {
-    const rows = await this.dependencies.select<Array<{ thread_group_id: string | null; workspace_id: string }>>("SELECT thread_group_id, workspace_id FROM chat_threads WHERE id = $1 AND archived_at IS NOT NULL LIMIT 1", [threadId]);
+    const rows = await this.dependencies.select<Array<{ workspace_id: string }>>("SELECT workspace_id FROM chat_threads WHERE id = $1 AND archived_at IS NOT NULL LIMIT 1", [threadId]);
     if (!rows[0]) throw new Error("Archived Conversation not found.");
     const workspace = await this.dependencies.select<Array<{ archived_at: string | null }>>("SELECT archived_at FROM workspaces WHERE id = $1 LIMIT 1", [rows[0].workspace_id]);
-    if (workspace[0]?.archived_at) throw new Error("Restore the parent Workspace first.");
-    if (rows[0].thread_group_id) {
-      const group = await this.dependencies.select<Array<{ archived_at: string | null }>>("SELECT archived_at FROM chat_thread_groups WHERE id = $1 LIMIT 1", [rows[0].thread_group_id]);
-      if (group[0]?.archived_at) throw new Error("Restore the parent Thread first.");
-    }
+    if (!workspace[0] || workspace[0].archived_at) throw new Error("Restore the parent Workspace first.");
     await this.dependencies.executeWrite("UPDATE chat_threads SET archived_at = NULL, updated_at = $1 WHERE id = $2", [this.now(), threadId]);
   }
 

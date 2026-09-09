@@ -1,4 +1,4 @@
-import type { AppSettings, ChatMessage, ChatMode, ChatThread, ChatThreadGroup, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
+import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CreateProviderConfigInput, ProviderConfig, ProviderModel } from "../providers/types";
 import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionEventRecord, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
@@ -27,14 +27,8 @@ export interface AppRepository {
   restoreWorkspace(id: string, name?: string): Promise<void>;
   touchWorkspace(id: string): Promise<void>;
   setProfileCredential(profileId: string, credentialId?: string, provider?: string): Promise<void>;
-  listChatThreadGroups(workspaceId: string, mode: ChatMode): Promise<ChatThreadGroup[]>;
-  createChatThreadGroup(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThreadGroup>;
-  renameChatThreadGroup(groupId: string, title: string): Promise<void>;
-  archiveChatThreadGroup(groupId: string): Promise<void>;
-  listArchivedChatThreadGroups(): Promise<ChatThreadGroup[]>;
-  restoreChatThreadGroup(groupId: string): Promise<void>;
   listChatThreads(workspaceId: string, mode: ChatMode): Promise<ChatThread[]>;
-  createChatThread(workspaceId: string, mode: ChatMode, title?: string, threadGroupId?: string): Promise<ChatThread>;
+  createChatThread(workspaceId: string, mode: ChatMode, title?: string): Promise<ChatThread>;
   getOrCreateChatThread(workspaceId: string, mode: ChatMode): Promise<ChatThread>;
   touchChatThread(threadId: string): Promise<void>;
   renameChatThread(threadId: string, title: string): Promise<void>;

@@ -63,7 +63,6 @@ export class SqliteRepository implements AppRepository {
     this.workspacesConversationsRepository = new SqliteWorkspacesConversationsRepository({
       select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
-      executeTransaction: (statements) => this.executeTransaction(statements),
     });
     this.researchRepository = new SqliteResearchRepository({
       select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
@@ -196,14 +195,8 @@ export class SqliteRepository implements AppRepository {
     await this.profilesRepository.setProfileCredential(profileId, credentialId, _provider);
   }
 
-  listChatThreadGroups: AppRepository["listChatThreadGroups"] = (workspaceId, mode) => this.workspacesConversationsRepository.listChatThreadGroups(workspaceId, mode);
-  createChatThreadGroup: AppRepository["createChatThreadGroup"] = (workspaceId, mode, title) => this.workspacesConversationsRepository.createChatThreadGroup(workspaceId, mode, title);
-  renameChatThreadGroup: AppRepository["renameChatThreadGroup"] = (groupId, title) => this.workspacesConversationsRepository.renameChatThreadGroup(groupId, title);
-  archiveChatThreadGroup: AppRepository["archiveChatThreadGroup"] = (groupId) => this.workspacesConversationsRepository.archiveChatThreadGroup(groupId);
-  listArchivedChatThreadGroups: AppRepository["listArchivedChatThreadGroups"] = () => this.workspacesConversationsRepository.listArchivedChatThreadGroups();
-  restoreChatThreadGroup: AppRepository["restoreChatThreadGroup"] = (groupId) => this.workspacesConversationsRepository.restoreChatThreadGroup(groupId);
   listChatThreads: AppRepository["listChatThreads"] = (workspaceId, mode) => this.workspacesConversationsRepository.listChatThreads(workspaceId, mode);
-  createChatThread: AppRepository["createChatThread"] = (workspaceId, mode, title, threadGroupId) => this.workspacesConversationsRepository.createChatThread(workspaceId, mode, title, threadGroupId);
+  createChatThread: AppRepository["createChatThread"] = (workspaceId, mode, title) => this.workspacesConversationsRepository.createChatThread(workspaceId, mode, title);
   getOrCreateChatThread: AppRepository["getOrCreateChatThread"] = (workspaceId, mode) => this.workspacesConversationsRepository.getOrCreateChatThread(workspaceId, mode);
   touchChatThread: AppRepository["touchChatThread"] = (threadId) => this.workspacesConversationsRepository.touchChatThread(threadId);
   renameChatThread: AppRepository["renameChatThread"] = (threadId, title) => this.workspacesConversationsRepository.renameChatThread(threadId, title);
