@@ -34,6 +34,7 @@ The repository remains one application and one release process. Folder boundarie
 10. Judge receives only the allowlisted evidence packet; it does not read arbitrary session storage.
 11. Viewer Notes updates remain limited to the Training workflow unless a separate product decision changes that rule.
 12. Shared helpers must have more than one genuine consumer. `shared` and `utils` are not fallback directories.
+13. Current Viewer/Monitor/Judge route selection must use `src/modelRoutes.ts` for route keys and Profile/credential scoping; role/model UI that stores route keys uses the shared `ModelRouteSelect`. Historical persisted routes may still be resolved against their frozen snapshot/inventory for replay and display.
 
 ## Public entry points
 
@@ -83,6 +84,8 @@ Internal files may remain private even if TypeScript technically permits a deep 
 
 `src/components/JudgeResults.tsx` is intentionally shared because it has two independent presentation contexts: the live RV evaluation and stored-session inspection used by Training and Research. `src/exports/sessionDocument.ts` is the sole owner of the readable complete-session section order and Judge Markdown. Domain exporters may choose package paths and safe metadata, but must not recreate the Judge narrative layout.
 
+`src/components/ModelRouteSelect.tsx` is intentionally shared across Profile setup/edit, RV Sessions, Training, Research and Judge evaluation. It delegates route identity, sorting and credential scope to `src/modelRoutes.ts`. Feature modules may still keep role-specific controls such as reasoning/temperature, but they must not rebuild route keys or expose models from a credential outside the active Profile.
+
 ## Cross-domain operations
 
 An operation spanning several domains must have one explicit application-level owner:
@@ -130,3 +133,9 @@ Additional rules will be automated only after real module boundaries exist. This
 ### Post-Etap-5 bounded recent-session read
 
 `AppRepository.listRecentRvSessions(limit)` is an intentional post-Etap-5 API extension for Home. The broad compatibility facade remains the cross-domain coordinator: it obtains the current active Workspace order from `WorkspacesConversationsRepository` and passes only the Workspace IDs plus the requested limit to `SessionsRepository`. This keeps archived-Workspace knowledge out of Sessions persistence while eliminating the previous N-per-Workspace session reads in `App.tsx`. Workspace-local screens and exporters continue to use `listRvSessions(workspaceId)`.
+
+### Post-Etap-5 model-route and credential boundary
+
+`src/modelRoutes.ts` is the canonical owner of `providerConfigId::modelId` construction/parsing and of the current Profile/credential scope for role models. `ModelRouteSelect` is the shared route-key selector. New/current role selection is intentionally narrower than historical replay: a stale or foreign route is rejected for a current Profile, while an already stored Training/Session/Research/Judge snapshot keeps its exact route for history, display and safe Resume where the workflow requires the original frozen configuration.
+
+`src/modelRouteBoundary.test.ts` protects this boundary by rejecting local route-key builders in the migrated feature modules and by requiring the shared selector in every route-key role UI covered by UX-DATA-2.

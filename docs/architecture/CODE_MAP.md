@@ -22,6 +22,7 @@ This document maps responsibilities, not every source file. Historical release r
 | AI Center interface | `src/features/aiCenter/` | Extracted presentation feature; identity and Viewer Notes domain rules remain in `src/aiCenter/`. |
 | AI Monitor history, prompt editor and export UI | `src/features/monitor/` | Extracted feature; decisions and intervention rules remain in `src/monitor/`. |
 | Shared safe rendering | `src/components/SafeMarkdown.tsx` | Shared UI infrastructure; must remain the path for AI-authored Markdown. |
+| Shared role/model selector | `src/components/ModelRouteSelect.tsx`, `src/modelRoutes.ts` | Canonical Viewer/Monitor/Judge route-key, active-Profile credential scope, current-role defaults and shared route selection. Historical snapshots remain read-only consumers of stored routes. |
 
 ## AI execution and protected workflows
 
@@ -65,6 +66,7 @@ This document maps responsibilities, not every source file. Historical release r
 | Browser preview implementation | `src/storage/browserRepository.ts`, delegating under `src/storage/browser/` | Preserve contracts and local-storage keys; the facade supplies explicit cross-domain callbacks where required. |
 | Database migrations and native transactions | `src-tauri/src/database.rs` and storage migration code | Keep ordered, atomic and backwards compatible. |
 | Credentials | native credential commands and provider configuration modules | Secrets must never enter SQLite, exports or UI diagnostics. |
+| Profile/credential model-route resolution | `src/modelRoutes.ts` | New/current Viewer/Monitor/Judge choices are scoped through the active Profile credential. Feature modules must not reconstruct `providerConfigId::modelId` or independently widen the scope to the global model cache. |
 | Human-readable and research exports | `src/exports/`, `src/artifacts/` | Preserve evidence-domain separation and existing formats. |
 | Sources and attachments | `src/sources/`, `src/attachments/` | Never leak Reveal or target material into blind messages. |
 | PL/EN text | `src/i18n.ts`, versioned resources under `src/resources/` | Split later by domain; do not change wording during structural extraction. |

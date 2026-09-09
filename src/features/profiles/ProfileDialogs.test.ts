@@ -55,4 +55,12 @@ describe("profile AI configuration", () => {
     expect(() => buildProfileAiConfiguration(getCopy("en"), provider, model, "", "3", "", "", ""))
       .toThrow(getCopy("en").temperatureOutOfRange);
   });
+  it("rejects Monitor/Judge routes that belong to another credential", () => {
+    const foreignProvider: ProviderConfig = { ...provider, id: "provider-2", credentialId: "credential-2", label: "Foreign" };
+    const foreignModel: ProviderModel = { ...model, providerConfigId: foreignProvider.id, modelId: "foreign-model", displayName: "Foreign model" };
+    expect(() => buildProfileAiConfiguration(
+      getCopy("en"), provider, model, "", "", "", "provider-2::foreign-model", "", [provider, foreignProvider], [model, foreignModel],
+    )).toThrow(getCopy("en").selectModel);
+  });
+
 });

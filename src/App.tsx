@@ -56,7 +56,8 @@ import { PageHeader } from "./components/PageHeader";
 import { ensureBundledTrainingTargets } from "./targets/bundled";
 import { createDefaultSettings } from "./startupDefaults";
 import { SettingsSaveQueue } from "./storage/settingsSaveQueue";
-import { modelRouteKey, preferredModelOrder, profileNeedingInitialSetup, splitModelRouteKey } from "./profileModelDefaults";
+import { isRouteAllowedForCredential, preferredModelOrder, profileNeedingInitialSetup, splitModelRouteKey } from "./profileModelDefaults";
+import { ModelRouteSelect } from "./components/ModelRouteSelect";
 import { defaultTemperatureForModel, reasoningEffortForModel } from "./profileViewerDefaults";
 import { aiIsBeDisplayName } from "./domain/isBeIdentity";
 import { localizedMonitorEditablePrompt, localizedViewerEditablePrompt } from "./resources/systemPrompts";
@@ -367,7 +368,6 @@ function FirstRunSetup({
       : providerModels;
     return matching.slice(0, 250);
   }, [modelSearch, providerModels]);
-  const roleModels = useMemo(() => preferredModelOrder(models), [models]);
   const viewerModel = providerModels.find((model) => model.modelId === viewerModelId) ?? null;
   const cachedModelCount = models.filter((model) => model.providerConfigId === selectedProvider?.id).length;
 
@@ -416,6 +416,8 @@ function FirstRunSetup({
       setViewerReasoning("");
       setViewerTemperature("");
       setModelSearch("");
+      setJudgeModelKey("");
+      setMonitorModelKey("");
       setStep(2);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -444,8 +446,8 @@ function FirstRunSetup({
       : undefined;
     if (viewerReasoning && !reasoningEffortForModel(viewerModel, viewerReasoning)) { setError(copy.reasoningNotSupported); return; }
     if (viewerModel.capabilities.temperature.supported && (!Number.isFinite(temperature) || (viewerModel.capabilities.temperature.min !== undefined && temperature! < viewerModel.capabilities.temperature.min) || (viewerModel.capabilities.temperature.max !== undefined && temperature! > viewerModel.capabilities.temperature.max))) { setError(copy.temperatureOutOfRange); return; }
-    const judge = skipOptional ? null : splitModelRouteKey(judgeModelKey);
-    const monitor = skipOptional ? null : splitModelRouteKey(monitorModelKey);
+    const judge = skipOptional || !isRouteAllowedForCredential(judgeModelKey, provider.credentialId, providers, models) ? null : splitModelRouteKey(judgeModelKey);
+    const monitor = skipOptional || !isRouteAllowedForCredential(monitorModelKey, provider.credentialId, providers, models) ? null : splitModelRouteKey(monitorModelKey);
     setBusy(true);
     setError(null);
     try {
@@ -521,8 +523,8 @@ function FirstRunSetup({
         {step === 3 && <div className="first-run-body">
           <div className="setup-section-heading"><BrainCircuit size={20} /><div><h2>{copy.setupRoles}</h2><p>{copy.setupRolesLead}</p></div></div>
           <div className="optional-role-grid">
-            <label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><select value={judgeModelKey} onChange={(event) => setJudgeModelKey(event.target.value)}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const provider = providers.find((item) => item.id === model.providerConfigId); return <option key={`judge-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{provider?.label ?? model.provider} · {model.displayName}</option>; })}</select><small>{copy.judgeLead}</small></label>
-            <label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><select value={monitorModelKey} onChange={(event) => setMonitorModelKey(event.target.value)}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const provider = providers.find((item) => item.id === model.providerConfigId); return <option key={`monitor-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{provider?.label ?? model.provider} · {model.displayName}</option>; })}</select><small>{copy.monitorGuard}</small></label>
+            <label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><ModelRouteSelect role="judge" credentialId={selectedProvider?.credentialId} providers={providers} models={models} value={judgeModelKey} onChange={setJudgeModelKey} emptyLabel={copy.skipForNow} /><small>{copy.judgeLead}</small></label>
+            <label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><ModelRouteSelect role="monitor" credentialId={selectedProvider?.credentialId} providers={providers} models={models} value={monitorModelKey} onChange={setMonitorModelKey} emptyLabel={copy.skipForNow} /><small>{copy.monitorGuard}</small></label>
           </div>
           <small className="setup-security-note"><Settings2 size={13} />{copy.changeDefaultsLater}</small>
           <div className="first-run-actions"><button className="secondary-button" onClick={() => setStep(2)} disabled={busy}>{copy.back}</button><span><button className="secondary-button" disabled={busy} onClick={() => void finish(true)}>{copy.skipOptionalAndFinish}</button><button className="primary-button" disabled={busy} onClick={() => void finish()}>{busy ? copy.saving : copy.finishSetup}<Check size={15} /></button></span></div>

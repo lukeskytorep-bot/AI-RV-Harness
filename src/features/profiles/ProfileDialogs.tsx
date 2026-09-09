@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import { FormDialog } from "../../components/FormDialog";
 import type { getCopy } from "../../i18n";
-import { modelRouteKey, preferredModelOrder, resolveRoleDefault, splitModelRouteKey } from "../../profileModelDefaults";
+import { isRouteAllowedForCredential, preferredModelOrder, resolveRoleDefault, splitModelRouteKey } from "../../modelRoutes";
+import { ModelRouteSelect } from "../../components/ModelRouteSelect";
 import { defaultTemperatureForModel, reasoningEffortForModel } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
 import {
@@ -93,14 +94,13 @@ export function EditProfileDialog({ copy, profile, providers, models, onCancel, 
   const [temperature, setTemperature] = useState(profile.defaultViewerTemperature === undefined ? "" : String(profile.defaultViewerTemperature));
   const interfaceLanguage: InterfaceLanguage = copy.home === "Home" ? "en" : "pl";
   const [systemPrompt, setSystemPrompt] = useState(localizedViewerEditablePrompt(profile.defaultViewerSystemPrompt, interfaceLanguage));
-  const [monitorModelKey, setMonitorModelKey] = useState(resolveRoleDefault(profile, "monitor", models));
-  const [judgeModelKey, setJudgeModelKey] = useState(resolveRoleDefault(profile, "judge", models));
+  const [monitorModelKey, setMonitorModelKey] = useState(resolveRoleDefault(profile, "monitor", providers, models));
+  const [judgeModelKey, setJudgeModelKey] = useState(resolveRoleDefault(profile, "judge", providers, models));
   const [aiTouched, setAiTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const provider = providers.find((item) => item.id === providerConfigId) ?? null;
   const viewerModels = preferredModelOrder(models.filter((model) => model.providerConfigId === providerConfigId));
-  const roleModels = preferredModelOrder(models);
   const validViewerModelId = viewerModels.some((model) => model.modelId === viewerModelId) ? viewerModelId : "";
   const viewerModel = viewerModels.find((model) => model.modelId === validViewerModelId) ?? null;
   useEffect(() => {
@@ -113,8 +113,8 @@ export function EditProfileDialog({ copy, profile, providers, models, onCancel, 
     const storedTemperature = storedModel?.capabilities.temperature.supported ? profile.defaultViewerTemperature ?? defaultTemperatureForModel(storedModel) : undefined;
     setTemperature(storedTemperature === undefined ? "" : String(storedTemperature));
     setSystemPrompt(localizedViewerEditablePrompt(profile.defaultViewerSystemPrompt, interfaceLanguage));
-    setMonitorModelKey(resolveRoleDefault(profile, "monitor", models));
-    setJudgeModelKey(resolveRoleDefault(profile, "judge", models));
+    setMonitorModelKey(resolveRoleDefault(profile, "monitor", providers, models));
+    setJudgeModelKey(resolveRoleDefault(profile, "judge", providers, models));
   }, [aiTouched, interfaceLanguage, models, profile, providers]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -122,7 +122,7 @@ export function EditProfileDialog({ copy, profile, providers, models, onCancel, 
     if (aiTouched && (!provider || !validViewerModelId)) { setError(copy.selectViewerBeforeSaving); return; }
     setSaving(true); setError(null);
     try {
-      const aiConfiguration = aiTouched ? { ...buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey), defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, interfaceLanguage) } : undefined;
+      const aiConfiguration = aiTouched ? { ...buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey, providers, models), defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, interfaceLanguage) } : undefined;
       await onSave(name, humanName || undefined, note, aiConfiguration);
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -137,10 +137,10 @@ export function EditProfileDialog({ copy, profile, providers, models, onCancel, 
     setTemperature(nextTemperature === undefined ? "" : String(nextTemperature));
     setAiTouched(true);
   };
-  return <FormDialog title={copy.editProfile} onCancel={onCancel} modalClassName="profile-edit-modal"><form className="profile-edit-form" onSubmit={(event) => void submit(event)}><div className="identity-name-grid"><label>{copy.aiIsBeName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div><small className="form-hint">{copy.identityNamesLead}</small><label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label><fieldset className="profile-edit-ai"><legend>{copy.profileAiDefaults}</legend><p>{copy.aiDefaultsLead}</p>{providers.length ? <><label><span>{copy.profileCredential}</span><select value={providerConfigId} onChange={(event) => { setProviderConfigId(event.target.value); setViewerModelId(""); setReasoning(""); setTemperature(""); setAiTouched(true); }}><option value="">{copy.selectProviderConnection}</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.credentialHint ?? "••••••••"}</option>)}</select></label><label><span>{copy.defaultViewerModel}</span><select value={validViewerModelId} onChange={(event) => selectViewer(event.target.value)} disabled={!provider}><option value="">{viewerModels.length ? copy.selectModel : copy.noCachedModels}</option>{viewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label><ProfileViewerControls copy={copy} model={viewerModel} reasoning={reasoning} temperature={temperature} systemPrompt={systemPrompt} onReasoning={(value) => { setReasoning(value); setAiTouched(true); }} onTemperature={(value) => { setTemperature(value); setAiTouched(true); }} onSystemPrompt={(value) => { setSystemPrompt(value); setAiTouched(true); }} /><label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><select value={judgeModelKey} onChange={(event) => { setJudgeModelKey(event.target.value); setAiTouched(true); }}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`edit-judge-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label><label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><select value={monitorModelKey} onChange={(event) => { setMonitorModelKey(event.target.value); setAiTouched(true); }}><option value="">{copy.skipForNow}</option>{roleModels.map((model) => { const owner = providers.find((item) => item.id === model.providerConfigId); return <option key={`edit-monitor-${modelRouteKey(model.providerConfigId, model.modelId)}`} value={modelRouteKey(model.providerConfigId, model.modelId)}>{owner?.label ?? model.provider} · {model.displayName}</option>; })}</select></label></> : <small>{copy.configureProviderFirst}</small>}</fieldset>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving}>{saving ? copy.saving : copy.saveChanges}</button></div></form></FormDialog>;
+  return <FormDialog title={copy.editProfile} onCancel={onCancel} modalClassName="profile-edit-modal"><form className="profile-edit-form" onSubmit={(event) => void submit(event)}><div className="identity-name-grid"><label>{copy.aiIsBeName}<input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div><small className="form-hint">{copy.identityNamesLead}</small><label>{copy.profileNote}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label><fieldset className="profile-edit-ai"><legend>{copy.profileAiDefaults}</legend><p>{copy.aiDefaultsLead}</p>{providers.length ? <><label><span>{copy.profileCredential}</span><select value={providerConfigId} onChange={(event) => { setProviderConfigId(event.target.value); setViewerModelId(""); setReasoning(""); setTemperature(""); setJudgeModelKey(""); setMonitorModelKey(""); setAiTouched(true); }}><option value="">{copy.selectProviderConnection}</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.credentialHint ?? "••••••••"}</option>)}</select></label><label><span>{copy.defaultViewerModel}</span><select value={validViewerModelId} onChange={(event) => selectViewer(event.target.value)} disabled={!provider}><option value="">{viewerModels.length ? copy.selectModel : copy.noCachedModels}</option>{viewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label><ProfileViewerControls copy={copy} model={viewerModel} reasoning={reasoning} temperature={temperature} systemPrompt={systemPrompt} onReasoning={(value) => { setReasoning(value); setAiTouched(true); }} onTemperature={(value) => { setTemperature(value); setAiTouched(true); }} onSystemPrompt={(value) => { setSystemPrompt(value); setAiTouched(true); }} /><label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><ModelRouteSelect role="judge" credentialId={provider?.credentialId} providers={providers} models={models} value={judgeModelKey} onChange={(next) => { setJudgeModelKey(next); setAiTouched(true); }} emptyLabel={copy.skipForNow} /></label><label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><ModelRouteSelect role="monitor" credentialId={provider?.credentialId} providers={providers} models={models} value={monitorModelKey} onChange={(next) => { setMonitorModelKey(next); setAiTouched(true); }} emptyLabel={copy.skipForNow} /></label></> : <small>{copy.configureProviderFirst}</small>}</fieldset>{error && <div className="provider-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={saving}>{saving ? copy.saving : copy.saveChanges}</button></div></form></FormDialog>;
 }
 
-export function buildProfileAiConfiguration(copy: ReturnType<typeof getCopy>, provider: ProviderConfig | null, viewerModel: ProviderModel | null, reasoning: "" | ReasoningEffort, temperatureInput: string, systemPrompt: string, monitorModelKey: string, judgeModelKey: string): ProfileAiConfigurationInput {
+export function buildProfileAiConfiguration(copy: ReturnType<typeof getCopy>, provider: ProviderConfig | null, viewerModel: ProviderModel | null, reasoning: "" | ReasoningEffort, temperatureInput: string, systemPrompt: string, monitorModelKey: string, judgeModelKey: string, providers: ProviderConfig[] = provider ? [provider] : [], models: ProviderModel[] = viewerModel ? [viewerModel] : []): ProfileAiConfigurationInput {
   if (!provider || !viewerModel || viewerModel.providerConfigId !== provider.id) throw new Error(copy.selectViewerBeforeSaving);
   const normalizedReasoning = reasoning ? reasoningEffortForModel(viewerModel, reasoning) : undefined;
   if (reasoning && !normalizedReasoning) throw new Error(copy.reasoningNotSupported);
@@ -152,6 +152,8 @@ export function buildProfileAiConfiguration(copy: ReturnType<typeof getCopy>, pr
   }
   const monitor = splitModelRouteKey(monitorModelKey);
   const judge = splitModelRouteKey(judgeModelKey);
+  if (monitor && !isRouteAllowedForCredential(monitorModelKey, provider.credentialId, providers, models)) throw new Error(copy.selectModel);
+  if (judge && !isRouteAllowedForCredential(judgeModelKey, provider.credentialId, providers, models)) throw new Error(copy.selectModel);
   return {
     credentialId: provider.credentialId,
     credentialProvider: provider.provider,

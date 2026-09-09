@@ -24,6 +24,8 @@ import { chooseDirectory } from "../../storage/native";
 import { SessionInspection } from "../../components/SessionInspection";
 import { estimateViewerNoteTokens, prepareViewerNotesForSession, VIEWER_NOTES_ESTIMATOR_VERSION } from "../../aiCenter/viewerNotes";
 import type { ViewerNoteVersion, ViewerNotesSessionSnapshot } from "../../aiCenter/types";
+import { ModelRouteSelect } from "../../components/ModelRouteSelect";
+import { findModelByRouteKey, isRouteAllowedForCredential, modelRouteKeyFor, modelsForCredential, providerConfigsForCredential } from "../../modelRoutes";
 
 type Copy = ReturnType<typeof getCopy>;
 
@@ -123,17 +125,17 @@ function ResearchConfigBuilder({ copy, settings, repository, profiles, workspace
   const [error, setError] = useState<string | null>(null);
   const workspace = workspaces.find((item) => item.id === workspaceId) ?? null;
   const baseProfile = profiles.find((profile) => profile.id === workspace?.profileId) ?? null;
-  const baseProvider = providers.find((provider) => provider.credentialId === baseProfile?.credentialId) ?? null;
-  const baseModels = models.filter((model) => model.providerConfigId === baseProvider?.id);
-  const baseModel = baseModels.find((model) => modelKey(model) === baseModelKey) ?? null;
+  const baseProvider = providerConfigsForCredential(baseProfile?.credentialId, providers)[0] ?? null;
+  const baseModels = modelsForCredential(baseProfile?.credentialId, providers, models).filter((model) => model.providerConfigId === baseProvider?.id);
+  const baseModel = findModelByRouteKey(baseModelKey, baseModels);
   const profileComparisonModels = template === "profile" ? profileIds.flatMap((profileId) => {
     const profile = profiles.find((item) => item.id === profileId);
-    const provider = providers.find((item) => item.credentialId === profile?.credentialId);
+    const provider = providerConfigsForCredential(profile?.credentialId, providers)[0];
     const matched = models.find((item) => item.providerConfigId === provider?.id && item.modelId === baseModel?.modelId);
     return matched ? [matched] : [];
   }) : [];
   const modelComparisonModels = template === "model" ? modelKeys.flatMap((key) => {
-    const selected = models.find((item) => modelKey(item) === key && item.providerConfigId === baseProvider?.id);
+    const selected = findModelByRouteKey(key, baseModels);
     return selected ? [selected] : [];
   }) : [];
   const controlModels = template === "profile" && profileComparisonModels.length
@@ -156,9 +158,9 @@ function ResearchConfigBuilder({ copy, settings, repository, profiles, workspace
     : eligibleTargets;
 
   useEffect(() => {
-    if (!baseModels.some((model) => modelKey(model) === baseModelKey)) {
+    if (!baseModels.some((model) => modelRouteKeyFor(model) === baseModelKey)) {
       const preferred = baseModels.find((model) => model.modelId === baseProfile?.defaultViewerModelId) ?? baseModels[0];
-      setBaseModelKey(preferred ? modelKey(preferred) : "");
+      setBaseModelKey(preferred ? modelRouteKeyFor(preferred) : "");
     }
   }, [workspaceId, baseProvider?.id, baseProfile?.defaultViewerModelId, baseModels.length]);
   useEffect(() => {
@@ -216,8 +218,8 @@ function ResearchConfigBuilder({ copy, settings, repository, profiles, workspace
     if (!selectedTargetIds.length) throw new Error(copy.researchTargets);
     if (targetSelectionMode === "random" && selectedTargetIds !== targetIds) setTargetIds(selectedTargetIds);
     const judges = evaluationMode === "save_only" ? [] : judgeKeys.slice(0, judgeCount).map((key) => {
-      const model = models.find((item) => modelKey(item) === key);
-      if (!model) throw new Error(copy.judgeRequiresModels);
+      const model = findModelByRouteKey(key, models);
+      if (!model || !isRouteAllowedForCredential(key, baseProfile.credentialId, providers, models)) throw new Error(copy.judgeRequiresModels);
       return { providerConfigId: model.providerConfigId, modelId: model.modelId };
     });
     const usesFixedSystemPrompt = template !== "system_prompt";
@@ -252,14 +254,14 @@ function ResearchConfigBuilder({ copy, settings, repository, profiles, workspace
     } else if (template === "profile") {
       conditions = profileIds.flatMap((profileId) => {
         const profile = profiles.find((item) => item.id === profileId);
-        const provider = providers.find((item) => item.credentialId === profile?.credentialId);
+        const provider = providerConfigsForCredential(profile?.credentialId, providers)[0];
         const matchedModel = models.find((item) => item.providerConfigId === provider?.id && item.modelId === baseModel.modelId);
         if (!profile || !provider || !matchedModel) return [];
         return [base(`profile_${profile.id}`, profile.name || copy.unnamedProfile, { profileId: profile.id, providerConfigId: provider.id, modelId: matchedModel.modelId })];
       });
     } else if (template === "model") {
       conditions = modelKeys.flatMap((key) => {
-        const selected = models.find((item) => modelKey(item) === key && item.providerConfigId === baseProvider.id);
+        const selected = findModelByRouteKey(key, baseModels);
         return selected ? [base(`model_${safeKey(selected.modelId)}`, selected.displayName, { modelId: selected.modelId })] : [];
       });
     } else if (template === "practice") {
@@ -354,6 +356,8 @@ function ResearchConfigBuilder({ copy, settings, repository, profiles, workspace
         baseProfile={baseProfile}
         baseProvider={baseProvider}
         baseModels={baseModels}
+        providers={providers}
+        models={models}
         baseModelKey={baseModelKey}
         onBaseModelKey={(value) => { setBaseModelKey(value); setPreflight(null); setPreflightConfig(null); setDryRun(null); }}
         sharedCapabilities={sharedCapabilities}
@@ -371,7 +375,7 @@ function ResearchConfigBuilder({ copy, settings, repository, profiles, workspace
       <TemplateConditions copy={copy} template={template} baseModel={baseModel} baseProvider={baseProvider} models={models} providers={providers} profiles={profiles} reasoningLevels={reasoningLevels} setReasoningLevels={setReasoningLevels} temperatureValues={temperatureValues} setTemperatureValues={setTemperatureValues} profileIds={profileIds} setProfileIds={setProfileIds} modelKeys={modelKeys} setModelKeys={setModelKeys} variants={variants} setVariants={setVariants} viewerNoteVersions={viewerNoteVersions} viewerNoteVersionId={viewerNoteVersionId} setViewerNoteVersionId={(value) => { setViewerNoteVersionId(value); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} viewerNotesLoading={viewerNotesLoading} viewerNotesLoadError={viewerNotesLoadError} language={language} />
       <div className="research-form-section research-target-selector"><div className="research-section-head"><div><strong>{copy.researchTargets}</strong><small>{targetSelectionMode === "random" ? `${randomTargetCount} · ${copy.randomSelection}` : `${targetIds.length} ${copy.selectedOf} ${eligibleTargets.length}`}</small></div></div><div className="research-target-controls"><label><span>{copy.researchTargetSource}</span><select value={targetSource} onChange={(event) => setTargetSource(event.target.value as ResearchTargetSource)}><option value="training">{copy.trainingTargets}</option><option value="user">{copy.myTargets}</option><option value="all">{copy.bothTargetPools}</option></select></label><label><span>{copy.targetSelectionMethod}</span><select value={targetSelectionMode} onChange={(event) => setTargetSelectionMode(event.target.value as ResearchTargetSelectionMode)}><option value="random">{copy.randomSelection}</option><option value="manual">{copy.manualSelection}</option></select></label></div>{targetSelectionMode === "random" ? <div className="research-random-targets"><label><span>{copy.numberOfTargets}</span><input type="number" min={1} max={Math.max(1, eligibleTargets.length)} value={randomTargetCount} onChange={(event) => setRandomTargetCount(Math.max(1, Math.min(eligibleTargets.length || 1, Number(event.target.value) || 1)))} /></label><small>{copy.randomTargetsAtPreflight}</small></div> : <><div className="research-target-search"><Search size={14} /><input value={targetSearch} onChange={(event) => setTargetSearch(event.target.value)} placeholder={copy.searchTargets} /><button className="secondary-button" type="button" disabled={!visibleManualTargets.length} onClick={() => updateSelectedTargets([...new Set([...targetIds, ...visibleManualTargets.map((target) => target.id)])])}>{copy.selectVisible}</button><button className="secondary-button" type="button" disabled={!targetIds.length} onClick={() => updateSelectedTargets([])}>{copy.clearSelection}</button></div><div className="research-check-grid target-manual-grid">{visibleManualTargets.map((target) => <label key={target.id}><input type="checkbox" checked={targetIds.includes(target.id)} onChange={() => updateSelectedTargets(toggle(targetIds, target.id))} /><span>{target.collection === "training" ? copy.trainingTargets : copy.myTargets} · {localizedTargetTitle(target, settings.interfaceLanguage)}</span></label>)}</div></>}{!eligibleTargets.length && <small>{copy.noEligibleTargets}</small>}</div>
       <FormRow label={copy.repetitions}><input type="number" min={1} max={100} value={repetitions} onChange={(event) => setRepetitions(Math.max(1, Math.min(100, Number(event.target.value) || 1)))} /></FormRow><div className="research-inline-check"><label><input type="checkbox" checked={unusedOnly} onChange={(event) => setUnusedOnly(event.target.checked)} />{copy.unusedOnly}</label></div>
-      <div className="research-form-section research-evaluation-section"><div className="research-section-head"><div><strong>{copy.researchEvaluation}</strong><small>{copy.researchEvaluationLead}</small></div><select value={evaluationMode} onChange={(event) => setEvaluationMode(event.target.value as "save_only" | "ai_judges")}><option value="save_only">{copy.saveOnlyExternal}</option><option value="ai_judges">{copy.useAiJudges}</option></select></div>{evaluationMode === "save_only" ? <p className="research-evaluation-note">{copy.saveOnlyResearchLead}</p> : <><div className="research-section-head judge-count-row"><strong>{copy.judgeModels}</strong><select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></div>{Array.from({ length: judgeCount }, (_, index) => <select className="research-judge-select" key={index} value={judgeKeys[index]} onChange={(event) => setJudgeKeys((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))}><option value="">{copy.judgeModel} {index + 1}</option>{models.map((model) => <option key={modelKey(model)} value={modelKey(model)}>{providerLabel(providers, model.providerConfigId)} · {model.displayName}</option>)}</select>)}</>}</div>
+      <div className="research-form-section research-evaluation-section"><div className="research-section-head"><div><strong>{copy.researchEvaluation}</strong><small>{copy.researchEvaluationLead}</small></div><select value={evaluationMode} onChange={(event) => setEvaluationMode(event.target.value as "save_only" | "ai_judges")}><option value="save_only">{copy.saveOnlyExternal}</option><option value="ai_judges">{copy.useAiJudges}</option></select></div>{evaluationMode === "save_only" ? <p className="research-evaluation-note">{copy.saveOnlyResearchLead}</p> : <><div className="research-section-head judge-count-row"><strong>{copy.judgeModels}</strong><select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></div>{Array.from({ length: judgeCount }, (_, index) => <ModelRouteSelect className="research-judge-select" key={index} role="judge" profile={baseProfile} providers={providers} models={models} value={judgeKeys[index]} onChange={(next) => setJudgeKeys((current) => current.map((value, itemIndex) => itemIndex === index ? next : value))} emptyLabel={`${copy.judgeModel} ${index + 1}`} />)}</>}</div>
       <div className="research-builder-actions"><button className="secondary-button" onClick={() => void preview()}>{copy.previewDryRun}</button><button className="secondary-button" onClick={() => void check()}>{copy.runPreflight}</button><button className="primary-button" disabled={!preflight?.ok || busy} onClick={() => void lock()}><LockKeyhole size={15} />{copy.experimentLock}</button></div>{error && <div className="provider-error">{error}</div>}</section>
       <aside className="research-review-column">{dryRun && <DryRunPanel copy={copy} config={dryRun} />}{preflight && <PreflightPanel copy={copy} preflight={preflight} />}</aside></div>
   </div>;
@@ -383,6 +387,8 @@ function ResearchViewerSettings(props: {
   baseProfile: Profile | null;
   baseProvider: ProviderConfig | null;
   baseModels: ProviderModel[];
+  providers: ProviderConfig[];
+  models: ProviderModel[];
   baseModelKey: string;
   onBaseModelKey: (value: string) => void;
   sharedCapabilities: SharedResearchCapabilities;
@@ -402,13 +408,13 @@ function ResearchViewerSettings(props: {
   const temperatureIsVariable = template === "temperature";
   const modelIsVariable = template === "model";
   const promptIsVariable = template === "system_prompt";
-  const selectedBaseModel = props.baseModels.find((model) => modelKey(model) === props.baseModelKey) ?? null;
+  const selectedBaseModel = findModelByRouteKey(props.baseModelKey, props.baseModels);
   return <div className="research-form-section research-viewer-control">
     <div className="research-section-head"><div><strong>{copy.researchViewerSettings}</strong><small>{copy.researchViewerSettingsLead}</small></div><span className="status-chip ready"><LockKeyhole size={12} />{copy.fixedForResearch}</span></div>
     <div className="research-control-grid">
       <label><span>{copy.baseViewerModel}</span>{modelIsVariable
         ? <input value={copy.testedVariableBelow} disabled readOnly />
-        : <select value={props.baseModelKey} onChange={(event) => props.onBaseModelKey(event.target.value)} disabled={!baseProvider}><option value="">{copy.selectModel}</option>{props.baseModels.map((model) => <option key={modelKey(model)} value={modelKey(model)}>{model.displayName}</option>)}</select>}<small>{modelIsVariable ? copy.modelsToCompare : `${baseProvider?.label ?? copy.credentialPending} · ${copy.researchControlConstant}`}</small></label>
+        : <ModelRouteSelect role="viewer" profile={baseProfile} providerConfigId={baseProvider?.id} providers={props.providers} models={props.models} value={props.baseModelKey} onChange={props.onBaseModelKey} disabled={!baseProvider} emptyLabel={copy.selectModel} />}<small>{modelIsVariable ? copy.modelsToCompare : `${baseProvider?.label ?? copy.credentialPending} · ${copy.researchControlConstant}`}</small></label>
       <label><span>{copy.researchReasoning}</span>{reasoningIsVariable
         ? <input value={copy.testedVariableBelow} disabled readOnly />
         : <select value={props.fixedReasoning} onChange={(event) => props.onFixedReasoning(event.target.value as "" | ReasoningEffort)} disabled={!sharedCapabilities.reasoningEfforts.length}><option value="">{copy.autoProviderDefault}</option>{sharedCapabilities.reasoningEfforts.map((effort) => <option key={effort} value={effort}>{researchReasoningLabel(copy, selectedBaseModel, effort)}</option>)}</select>}<small>{reasoningIsVariable ? copy.reasoningLevels : selectedBaseModel?.capabilities.reasoning.mandatory ? copy.reasoningMandatory : sharedCapabilities.reasoningEfforts.length ? copy.researchControlConstant : selectedBaseModel?.capabilities.reasoning.registryStatus === "known" ? copy.reasoningAutoOnly : copy.researchReasoningUnavailable}</small></label>
@@ -429,7 +435,7 @@ function TemplateConditions(props: { copy: Copy; template: ResearchTemplateType;
   if (template === "reasoning") return <div className="research-form-section"><strong>{copy.reasoningLevels}</strong><div className="research-check-grid">{baseModel?.capabilities.reasoning.efforts.map((effort) => <label key={effort}><input type="checkbox" checked={props.reasoningLevels.includes(effort)} onChange={() => props.setReasoningLevels(toggle(props.reasoningLevels, effort))} /><span>{researchReasoningLabel(copy, baseModel, effort)}</span></label>)}</div>{baseModel?.capabilities.reasoning.mandatory && <small>{copy.reasoningMandatory}</small>}{!baseModel?.capabilities.reasoning.efforts.length && <small>{baseModel?.capabilities.reasoning.registryStatus === "known" ? copy.reasoningAutoOnly : copy.unknown}</small>}</div>;
   if (template === "temperature") return <FormRow label={copy.temperatureValues}><input value={props.temperatureValues} onChange={(event) => props.setTemperatureValues(event.target.value)} disabled={!baseModel?.capabilities.temperature.supported} /></FormRow>;
   if (template === "profile") return <div className="research-form-section"><strong>{copy.profilesToCompare}</strong><div className="research-check-grid">{props.profiles.map((profile) => { const provider = props.providers.find((item) => item.credentialId === profile.credentialId); const matched = props.models.some((model) => model.providerConfigId === provider?.id && model.modelId === baseModel?.modelId); return <label key={profile.id} className={!matched ? "disabled" : ""}><input type="checkbox" disabled={!matched} checked={props.profileIds.includes(profile.id)} onChange={() => props.setProfileIds(toggle(props.profileIds, profile.id))} /><span>{profile.name || copy.unnamedProfile}</span></label>; })}</div></div>;
-  if (template === "model") return <div className="research-form-section"><strong>{copy.modelsToCompare}</strong><div className="research-check-grid models">{props.models.filter((model) => model.providerConfigId === baseProvider?.id).map((model) => <label key={modelKey(model)}><input type="checkbox" checked={props.modelKeys.includes(modelKey(model))} onChange={() => props.setModelKeys(toggle(props.modelKeys, modelKey(model)))} /><span>{model.displayName}</span></label>)}</div></div>;
+  if (template === "model") return <div className="research-form-section"><strong>{copy.modelsToCompare}</strong><div className="research-check-grid models">{props.models.filter((model) => model.providerConfigId === baseProvider?.id).map((model) => <label key={modelRouteKeyFor(model)}><input type="checkbox" checked={props.modelKeys.includes(modelRouteKeyFor(model))} onChange={() => props.setModelKeys(toggle(props.modelKeys, modelRouteKeyFor(model)))} /><span>{model.displayName}</span></label>)}</div></div>;
   if (template === "viewer_notes") return <div className="research-form-section"><div className="research-section-head"><div><strong>{props.language === "pl" ? "Zamrożona wersja Viewer Notes" : "Frozen Viewer Notes version"}</strong><small>{props.language === "pl" ? "Jedna z pięciu ostatnich wersji; ta sama treść przez całe badanie." : "One of the five most recent versions; identical content for the entire study."}</small></div></div><select value={props.viewerNoteVersionId} disabled={props.viewerNotesLoading || !props.viewerNoteVersions.length} onChange={(event) => props.setViewerNoteVersionId(event.target.value)}><option value="">{props.viewerNotesLoading ? "…" : props.language === "pl" ? "Wybierz wersję" : "Select a version"}</option>{props.viewerNoteVersions.map((version) => <option key={version.id} value={version.id}>v{version.versionNumber} · {version.estimatedTokens}/{version.capacityTokensAtCreation} tokens · {new Date(version.createdAt).toLocaleString()}</option>)}</select>{props.viewerNotesLoadError && <small className="provider-error">{props.viewerNotesLoadError}</small>}{!props.viewerNotesLoading && !props.viewerNotesLoadError && !props.viewerNoteVersions.length && <small>{props.language === "pl" ? "Ten Viewer nie ma jeszcze notatek. Najpierw ukończ sesję z włączonymi Viewer Notes." : "This Viewer has no notes yet. First complete a session with Viewer Notes enabled."}</small>}<div className="condition-pills"><span>{props.language === "pl" ? "BEZ NOTATEK" : "NO NOTES"}</span><span>{props.language === "pl" ? "ZAMROŻONE NOTATKI" : "FROZEN NOTES"}</span></div></div>;
   const label = template === "system_prompt" ? copy.systemPromptVariants : copy.customConditionInstructions;
   return <div className="research-form-section"><div className="research-section-head"><strong>{label}</strong><button className="secondary-button" disabled={props.variants.length >= 4} onClick={() => props.setVariants([...props.variants, ""])}>{copy.addVariant}</button></div><div className="research-variants">{props.variants.map((variant, index) => <div key={index}><textarea className={template === "system_prompt" ? "system-prompt-variant-editor" : undefined} rows={template === "system_prompt" ? 8 : 3} maxLength={100000} value={variant} onChange={(event) => props.setVariants(props.variants.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} placeholder={`${copy.condition} ${index + 1}`} /><button className="icon-button danger" disabled={props.variants.length <= 2} onClick={() => props.setVariants(props.variants.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button></div>)}</div></div>;
@@ -523,8 +529,6 @@ function ResearchResultsView({ copy, results, repository }: { copy: Copy; result
 }
 
 function FormRow({ label, children }: { label: string; children: ReactNode }) { return <label className="research-form-row"><span>{label}</span>{children}</label>; }
-function modelKey(model: ProviderModel): string { return `${model.providerConfigId}::${model.modelId}`; }
-function providerLabel(providers: ProviderConfig[], id: string): string { return providers.find((provider) => provider.id === id)?.label ?? "API"; }
 function toggle<T>(values: T[], value: T): T[] { return values.includes(value) ? values.filter((item) => item !== value) : [...values, value]; }
 function safeKey(value: string): string { return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48); }
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }

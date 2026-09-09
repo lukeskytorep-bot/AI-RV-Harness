@@ -3,7 +3,8 @@ import { Check, CircleStop, Database, Download, FileCheck2, GraduationCap, Play,
 import type { getCopy } from "../../i18n";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 import { resolveSessionLanguage } from "../../domain/localization";
-import { resolveViewerDefault } from "../../profileModelDefaults";
+import { findCredentialScopedModelByRouteKey, findModelByRouteKey, modelRouteKeyFor, resolveViewerDefault } from "../../modelRoutes";
+import { ModelRouteSelect } from "../../components/ModelRouteSelect";
 import { profileGenerationDefaults, profileSystemPromptSnapshot } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
 import type { AppRepository } from "../../storage/repository";
@@ -101,7 +102,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
       return [];
     }
   }, [counts, mode, myTargetsCount, targets]);
-  const selectedJudges = judgeRoutes.slice(0, judgeCount).map((key) => models.find((model) => routeKey(model) === key) ?? null);
+  const selectedJudges = judgeRoutes.slice(0, judgeCount).map((key) => findCredentialScopedModelByRouteKey(key, profile?.credentialId, providers, models));
   const ready = Boolean(repository && profile && workspaceId && provider?.lastStatus === "ok" && viewerModel && plannedTargets.length && selectedJudges.every(Boolean) && isTauriRuntime() && (mode !== "full" || (pack.valid && plannedTargets.length === 84)));
 
   const startNew = async () => {
@@ -118,7 +119,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
       mode,
       profileId: profile.id,
       workspaceId,
-      modelRoute: routeKey(viewerModel),
+      modelRoute: modelRouteKeyFor(viewerModel),
       protocolVariant: variant,
       ...(mode === "full" ? { curriculumId: FACTORY_CURRICULUM_ID, curriculumVersion: FACTORY_CURRICULUM_VERSION } : {}),
       targetIds: plannedTargets.map((target) => target.id),
@@ -147,10 +148,10 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     if (!repository) return;
     const runProfile = profiles.find((item) => item.id === initial.profileId);
     const runProvider = providers.find((item) => item.credentialId === runProfile?.credentialId);
-    const runModel = models.find((item) => routeKey(item) === initial.modelRoute);
+    const runModel = findModelByRouteKey(initial.modelRoute, models);
     if (!runProfile || !runProvider || !runModel) { setError(text.routeMissing); return; }
     const judges = initial.judgeModelRoutes.map((key) => {
-      const model = models.find((item) => routeKey(item) === key);
+      const model = findModelByRouteKey(key, models);
       const providerConfig = providers.find((item) => item.id === model?.providerConfigId);
       if (!model || !providerConfig) throw new Error(text.judgeMissing);
       return { model, providerConfig };
@@ -210,7 +211,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
         <TrainingSection title={text.scope}><div className="training-choice-row"><button className={mode === "full" ? "active" : ""} onClick={() => setMode("full")}><Database size={18} /><span><strong>{text.full}</strong><small>{text.fullLead}</small></span></button><button className={mode === "partial" ? "active" : ""} onClick={() => setMode("partial")}><ShieldCheck size={18} /><span><strong>{text.partial}</strong><small>{text.partialLead}</small></span></button></div></TrainingSection>
         <TrainingSection title="Viewer Notes"><label className="training-check" title={pl ? "Notatki są używane w sesji i mogą zostać zaktualizowane po Revealu i własnej ocenie Viewera. Monitor i Judge są wykluczeni." : "Notes are used in the session and may be updated after Reveal and the Viewer's own review. Monitor and Judge are excluded."}><input type="checkbox" checked={viewerNotesEnabled} onChange={(event) => setViewerNotesEnabled(event.target.checked)} /><span><strong>{pl ? "Użyj Viewer Notes" : "Use Viewer Notes"}</strong><small>{pl ? "Eksperymentalne · domyślnie włączone" : "Experimental · enabled by default"}</small></span></label></TrainingSection>
         {mode === "partial" && <TrainingSection title={text.categories}><div className="training-category-grid">{TRAINING_CATEGORIES.map((category) => { const available = targets.filter((target) => target.collection === "training" && target.sourceMetadata.category === category).length; return <label key={category}><span>{TRAINING_CATEGORY_LABELS[category][settings.interfaceLanguage]}<small>{text.factory} · {text.available}: {available}</small></span><input type="number" min={0} max={available} value={counts[category] ?? 0} onChange={(event) => setCounts((current) => ({ ...current, [category]: Math.max(0, Number(event.target.value) || 0) }))} /></label>; })}<label className="training-my-targets"><span>{text.user}<small>{text.available}: {targets.filter((target) => target.collection === "user" && userTargetKind(target) === "general").length}</small></span><input type="number" min={0} max={targets.filter((target) => target.collection === "user" && userTargetKind(target) === "general").length} value={myTargetsCount} onChange={(event) => setMyTargetsCount(Math.max(0, Number(event.target.value) || 0))} /></label></div></TrainingSection>}
-        <TrainingSection title="AI Judge"><div className="training-grid two"><label>{text.judgeCount}<select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))}><option value={0}>0 · {text.none}</option><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>{Array.from({ length: judgeCount }, (_, index) => <label key={index}>Judge {index + 1}<select value={judgeRoutes[index]} onChange={(event) => setJudgeRoutes((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))}><option value="">{text.selectModel}</option>{models.map((model) => <option key={routeKey(model)} value={routeKey(model)}>{providers.find((item) => item.id === model.providerConfigId)?.label ?? model.provider} · {model.displayName}</option>)}</select></label>)}</div></TrainingSection>
+        <TrainingSection title="AI Judge"><div className="training-grid two"><label>{text.judgeCount}<select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))}><option value={0}>0 · {text.none}</option><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>{Array.from({ length: judgeCount }, (_, index) => <label key={index}>Judge {index + 1}<ModelRouteSelect role="judge" profile={profile} providers={providers} models={models} value={judgeRoutes[index]} onChange={(next) => setJudgeRoutes((current) => current.map((value, itemIndex) => itemIndex === index ? next : value))} emptyLabel={text.selectModel} /></label>)}</div></TrainingSection>
         <TrainingSection title={text.execution}><label className="training-check"><input type="checkbox" checked={pauseAfterBlock} onChange={(event) => setPauseAfterBlock(event.target.checked)} /><span><strong>{text.pauseBlocks}</strong><small>{text.pauseBlocksLead}</small></span></label><div className="training-preflight"><span><small>{text.sessions}</small><strong>{plannedTargets.length}</strong></span><span><small>{text.viewerCalls}</small><strong>{plannedTargets.length * 4}</strong></span><span><small>{text.judgeCalls}</small><strong>{plannedTargets.length * judgeCount}</strong></span><span><small>{text.curriculum}</small><strong>{mode === "full" ? `${FACTORY_CURRICULUM_ID}:${FACTORY_CURRICULUM_VERSION}` : text.partial}</strong></span><span><small>{text.costCeiling}</small><strong>{settings.maxSessionCostUsd > 0 ? `≤ $${(plannedTargets.length * settings.maxSessionCostUsd).toFixed(2)}` : text.notConfigured}</strong></span></div></TrainingSection>
         <div className="training-actions">{busy ? <><button className="secondary-button" onClick={() => { pauseRequested.current = true; }}><CircleStop size={15} />{text.pauseAfterSession}</button><span>{progressLine}</span></> : <span className="disabled-action-help" title={!workspaceId ? text.workspaceRequired : !plannedTargets.length ? text.targetsRequired : undefined}><button className="primary-button" disabled={!ready} onClick={() => void startNew()}><Play size={15} />{mode === "full" ? text.startFull : `${text.startPartial} · ${plannedTargets.length}`}</button></span>}</div>
         {!workspaceId && <div className="training-requirement-note"><ShieldCheck size={15} /><span>{text.workspaceRequired}</span></div>}
@@ -226,7 +227,6 @@ function TrainingSection({ title, children }: { title: string; children: ReactNo
   return <section className="training-section"><h3>{title}</h3>{children}</section>;
 }
 
-function routeKey(model: ProviderModel): string { return `${model.providerConfigId}::${model.modelId}`; }
 function errorText(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }
 
 function labels(pl: boolean) {

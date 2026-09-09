@@ -11,6 +11,7 @@ import { runResearchPreflight, type ResearchPreflightInventory } from "./preflig
 import { computeConditionStatistics, computePairwiseStatistics } from "./statistics";
 import type { ResearchConfig, ResearchPreflightResult, ResearchProjectRecord, ResearchResults, UnblindedSessionResult } from "./types";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "../domain/isBeIdentity";
+import { modelRouteKey } from "../modelRoutes";
 
 type ResearchRepository = AppRepository;
 
@@ -52,7 +53,7 @@ export async function executeResearchSessions(input: {
   const conditionById = new Map(conditions.map((condition) => [condition.id, condition]));
   const targetById = new Map(targets.map((target) => [target.id, target]));
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
-  const modelByKey = new Map(models.map((model) => [`${model.providerConfigId}::${model.modelId}`, model]));
+  const modelByKey = new Map(models.map((model) => [modelRouteKey(model.providerConfigId, model.modelId), model]));
   const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
   const run = input.sessionRunner ?? runAutomaticRcpSession;
   let completed = assignments.filter((assignment) => assignment.status === "SessionComplete" || assignment.status === "Judged").length;
@@ -74,7 +75,7 @@ export async function executeResearchSessions(input: {
     const target = targetById.get(assignment.targetId);
     if (!mapping || !condition || !target) throw new Error("Locked Research plan is incomplete.");
     const provider = providerById.get(condition.providerConfigId);
-    const model = modelByKey.get(`${condition.providerConfigId}::${condition.modelId}`);
+    const model = modelByKey.get(modelRouteKey(condition.providerConfigId, condition.modelId));
     const sessionProfile = profileById.get(condition.profileId);
     if (!provider || !model) throw new Error("A locked Viewer route is no longer present in the current model registry.");
     if (!condition.capabilitySnapshot || capabilityMethodSignature(condition.capabilitySnapshot) !== capabilityMethodSignature(model.capabilities)) {

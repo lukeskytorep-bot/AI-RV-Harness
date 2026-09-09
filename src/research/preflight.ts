@@ -5,6 +5,7 @@ import type { TargetRecord, TargetUsageRecord } from "../targets/types";
 import { targetHasSupportedReveal } from "../targets/service";
 import type { Profile } from "../types";
 import type { PreflightCheck, ResearchConfig, ResearchPreflightResult } from "./types";
+import { modelRouteKey } from "../modelRoutes";
 
 export interface ResearchPreflightInventory {
   profiles: Profile[];
@@ -19,8 +20,7 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   const targetMap = new Map(inventory.targets.map((target) => [target.id, target]));
   const providerMap = new Map(inventory.providerConfigs.map((provider) => [provider.id, provider]));
   const profileMap = new Map(inventory.profiles.map((profile) => [profile.id, profile]));
-  const modelKey = (providerConfigId: string, modelId: string) => `${providerConfigId}::${modelId}`;
-  const modelMap = new Map(inventory.models.map((model) => [modelKey(model.providerConfigId, model.modelId), model]));
+  const modelMap = new Map(inventory.models.map((model) => [modelRouteKey(model.providerConfigId, model.modelId), model]));
 
   if (config.sessionPolicy) {
     checks.push(config.sessionPolicy.requestTimeoutMs >= 1_000 && config.sessionPolicy.requestTimeoutMs <= 600_000 ? pass("session_timeout", "Request timeout is within the supported safety range") : fail("session_timeout", "Request timeout must be between 1 and 600 seconds"));
@@ -59,7 +59,7 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   for (const condition of config.conditions) {
     const profile = profileMap.get(condition.profileId);
     const provider = providerMap.get(condition.providerConfigId);
-    const model = modelMap.get(modelKey(condition.providerConfigId, condition.modelId));
+    const model = modelMap.get(modelRouteKey(condition.providerConfigId, condition.modelId));
     const prefix = `condition:${condition.key}`;
     checks.push(profile ? pass(`${prefix}:profile`, `${condition.label}: Profile found`) : fail(`${prefix}:profile`, `${condition.label}: Profile is missing`));
     checks.push(provider?.lastStatus === "ok" ? pass(`${prefix}:provider`, `${condition.label}: provider connection was tested successfully`) : fail(`${prefix}:provider`, `${condition.label}: provider connection must pass Test & refresh before Research`));
@@ -175,7 +175,7 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   for (let index = 0; index < config.judges.length; index += 1) {
     const judge = config.judges[index];
     const provider = providerMap.get(judge.providerConfigId);
-    const model = modelMap.get(modelKey(judge.providerConfigId, judge.modelId));
+    const model = modelMap.get(modelRouteKey(judge.providerConfigId, judge.modelId));
     checks.push(provider?.lastStatus === "ok" ? pass(`judge:${index}:provider`, `Judge ${index + 1}: provider connection tested`) : fail(`judge:${index}:provider`, `Judge ${index + 1}: provider connection must be tested`));
     checks.push(model ? pass(`judge:${index}:model`, `Judge ${index + 1}: model route found`) : fail(`judge:${index}:model`, `Judge ${index + 1}: model route missing`));
     if (requiresVision) checks.push(model?.capabilities.supportsVision && model.capabilities.inputModalities.includes("image") ? pass(`judge:${index}:vision`, `Judge ${index + 1}: target image input is supported`) : fail(`judge:${index}:vision`, `Judge ${index + 1}: selected targets require image input support`));
@@ -195,7 +195,7 @@ function estimateViewerCost(config: ResearchConfig, models: Map<string, Provider
   const protocol = getFullRcp(config.sessionLanguage);
   let total = 0;
   for (const condition of config.conditions) {
-    const model = models.get(`${condition.providerConfigId}::${condition.modelId}`);
+    const model = models.get(modelRouteKey(condition.providerConfigId, condition.modelId));
     if (model?.pricing.promptPerToken === undefined || model.pricing.completionPerToken === undefined) return undefined;
     const inputTokens = Math.ceil((protocol.content.length + (condition.systemPrompt?.content.length ?? 0)) / 3.5);
     const outputTokens = Math.min(condition.requestedSettings.maxOutputTokens ?? 2048, model.capabilities.maxOutputTokens ?? 2048);
