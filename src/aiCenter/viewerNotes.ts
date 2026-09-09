@@ -13,6 +13,7 @@ import type {
   ViewerNoteBundle,
   ViewerNoteCapacity,
   ViewerNoteReflectionResult,
+  ViewerNoteSourceSnapshot,
   ViewerNotesSessionSnapshot,
 } from "./types";
 import { loadRevealImageForJudge } from "../artifacts/native";
@@ -116,6 +117,28 @@ export function stableViewerNotePacket(packet: ViewerNoteReflectionPacket): stri
       ? Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stable(item)]))
       : value;
   return JSON.stringify(stable(packet));
+}
+
+export function buildViewerNoteSourceSnapshot(input: {
+  session: SessionSnapshot;
+  workspaceName?: string;
+  trainingRun?: { id: string; runNumber: number; name: string };
+  sessionRunType: string;
+  capturedAt?: string;
+}): ViewerNoteSourceSnapshot {
+  return {
+    schemaVersion: 1,
+    sessionId: input.session.sessionId,
+    sessionCode: input.session.sessionCode,
+    workspaceId: input.session.workspaceId,
+    ...(input.workspaceName ? { workspaceName: input.workspaceName } : {}),
+    profileId: input.session.profileId,
+    ...(input.trainingRun ? { trainingRunId: input.trainingRun.id, trainingRunNumber: input.trainingRun.runNumber, trainingRunName: input.trainingRun.name } : {}),
+    protocolId: input.session.protocol.id,
+    protocolVersion: input.session.protocol.version,
+    sessionRunType: input.sessionRunType,
+    capturedAt: input.capturedAt ?? new Date().toISOString(),
+  };
 }
 
 export function buildReflectionPrompt(language: InterfaceLanguage, packet: ViewerNoteReflectionPacket): string {
@@ -333,15 +356,28 @@ export async function runViewerNoteReflection(input: {
   };
   const packetJson = stableViewerNotePacket(packet);
   const packetHash = await sha256Text(packetJson);
-  const existing = (await input.repository.listViewerNoteReflectionRuns(bundle.identity.id)).find((run) => run.sourceSessionId === input.sessionId && run.reflectionPacketSha256 === packetHash);
+  const existing = (await input.repository.listViewerNoteReflectionRuns(bundle.identity.id)).find((run) => run.sourceSnapshot.sessionId === input.sessionId && run.reflectionPacketSha256 === packetHash);
   if (existing?.status === "UPDATE" || existing?.status === "NO_CHANGE") return { status: existing.status };
   const runId = existing?.id ?? `note_reflection_${crypto.randomUUID()}`;
   if (!existing) {
+    const [profileWorkspaces, activeTrainingRuns, archivedTrainingRuns] = await Promise.all([
+      input.repository.listWorkspaces(snapshot.profileId),
+      input.repository.listTrainingRuns(),
+      input.repository.listArchivedTrainingRuns(),
+    ]);
+    const trainingRun = [...activeTrainingRuns, ...archivedTrainingRuns].find((run) => (run.sessionIds ?? []).includes(snapshot.sessionId) || run.activeTargetCheckpoint?.sessionId === snapshot.sessionId);
+    const sourceSnapshot = buildViewerNoteSourceSnapshot({
+      session: snapshot,
+      workspaceName: profileWorkspaces.find((workspace) => workspace.id === snapshot.workspaceId)?.name,
+      ...(trainingRun ? { trainingRun: { id: trainingRun.id, runNumber: trainingRun.runNumber, name: trainingRun.name } } : {}),
+      sessionRunType: packet.sessionRunType,
+    });
     const begin: BeginViewerNoteReflectionInput = {
       id: runId,
       aiIdentityId: bundle.identity.id,
       sourceSessionId: snapshot.sessionId,
       sourceWorkspaceId: snapshot.workspaceId,
+      sourceSnapshot,
       ...(packet.baseVersionId ? { baseVersionId: packet.baseVersionId } : {}),
       ...(packet.baseContentSha256 ? { baseContentSha256: packet.baseContentSha256 } : {}),
       reflectionPacketSha256: packetHash,

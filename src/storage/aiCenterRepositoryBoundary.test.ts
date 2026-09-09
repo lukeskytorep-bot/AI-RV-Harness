@@ -6,7 +6,7 @@ import sqliteFacade from "./sqliteRepository.ts?raw";
 const methods = [
   "ensureAiIdentity", "listAiIdentities", "getViewerNoteBundle", "listViewerNoteVersions", "listViewerNoteActivationEvents",
   "listViewerNoteReflectionRuns", "setViewerNoteCapacity", "setViewerNotesDefaultEnabled", "beginViewerNoteReflection",
-  "failViewerNoteReflection", "commitViewerNoteReflection", "restoreViewerNoteVersion",
+  "failViewerNoteReflection", "commitViewerNoteReflection", "restoreViewerNoteVersion", "detachViewerNoteSourceReferences",
 ] as const;
 
 describe("AI Center repository boundary", () => {

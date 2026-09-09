@@ -167,7 +167,8 @@ The Viewer Notes module shows:
 - the current read-only notes;
 - capacity and current estimated use;
 - immutable version history and model-written change summaries;
-- the source session and Workspace for each version;
+- an immutable source snapshot for each version and reflection run, including the source session code, Workspace identity/name when available, Training identity when applicable, Profile, protocol and run type;
+- live source references while the underlying Session/Workspace still exists; when a future controlled purge removes the source, the live reference may detach while the immutable source snapshot remains readable;
 - sessions that used each snapshot;
 - frozen Research snapshots;
 - reflection outcomes such as `UPDATE`, `NO_CHANGE`, or a technical failure;
@@ -211,6 +212,15 @@ The implementation includes safeguards informed by open-source agent-memory syst
 - safe rendering, reserved-delimiter rejection, schema validation, capacity enforcement, and stale-base protection.
 
 These safeguards validate provenance and structure. They are not editorial censorship: multi-sentence, unconventional, or operator-disagreed advice remains valid when it belongs to the same Viewer, fits the capacity, and does not identify the specific target.
+
+### Source preservation boundary
+
+Viewer Notes history must not depend on the continued existence of its source records. Migration `022_viewer_notes_source_preservation` therefore separates two concepts:
+
+- **live references** to the current source Session and Workspace, which are nullable and may detach when the source is later removed by a dedicated purge use case;
+- an **immutable source snapshot**, stored with both reflection runs and note versions, which remains part of the append-only provenance record.
+
+The snapshot records stable source metadata captured at reflection time, including source identifiers, session code, Workspace context, Profile, Training identity when applicable, protocol identity/version, run type and capture time. Detaching a live reference is not allowed to rewrite note content, hashes, change summaries, activation history or the source snapshot. UX-DATA-7 introduces only this preservation capability; it does not itself delete Sessions, Workspaces, Training or Research records.
 
 ## Possible future extensions
 

@@ -3,6 +3,7 @@ import type {
   AiIdentity,
   BeginViewerNoteReflectionInput,
   CommitViewerNoteReflectionInput,
+  DetachViewerNoteSourceReferencesInput,
   EnsureAiIdentityInput,
   ViewerNoteActivationEvent,
   ViewerNoteBundle,
@@ -10,6 +11,7 @@ import type {
   ViewerNoteReflectionResult,
   ViewerNoteReflectionRun,
   ViewerNoteSettings,
+  ViewerNoteSourceSnapshot,
   ViewerNoteVersion,
 } from "../../aiCenter/types";
 import type { AiCenterRepository } from "../contracts/aiCenterRepository";
@@ -20,6 +22,58 @@ const AI_NOTE_SETTINGS_KEY = "rvh.dev.ai_note_settings";
 const AI_NOTE_VERSIONS_KEY = "rvh.dev.ai_note_versions";
 const AI_NOTE_REFLECTION_RUNS_KEY = "rvh.dev.ai_note_reflection_runs";
 const AI_NOTE_ACTIVATION_EVENTS_KEY = "rvh.dev.ai_note_activation_events";
+
+
+function legacySourceSnapshot(input: {
+  sourceSessionId?: string;
+  sourceWorkspaceId?: string;
+  createdAt: string;
+  protocolId?: string;
+  sessionRunType?: string;
+  packetJson?: string;
+}): ViewerNoteSourceSnapshot {
+  let packet: Record<string, unknown> = {};
+  if (input.packetJson) {
+    try { packet = JSON.parse(input.packetJson) as Record<string, unknown>; }
+    catch { packet = {}; }
+  }
+  return {
+    schemaVersion: 1,
+    sessionId: input.sourceSessionId ?? String(packet.sessionId ?? ""),
+    sessionCode: "",
+    workspaceId: input.sourceWorkspaceId ?? String(packet.workspaceId ?? ""),
+    profileId: "",
+    protocolId: input.protocolId ?? String(packet.protocolId ?? ""),
+    protocolVersion: "",
+    sessionRunType: input.sessionRunType ?? String(packet.sessionRunType ?? ""),
+    capturedAt: input.createdAt,
+  };
+}
+
+function normalizeVersion(item: ViewerNoteVersion): ViewerNoteVersion {
+  return item.sourceSnapshot ? item : {
+    ...item,
+    sourceSnapshot: legacySourceSnapshot({
+      sourceSessionId: item.sourceSessionId,
+      sourceWorkspaceId: item.sourceWorkspaceId,
+      protocolId: item.protocolId,
+      sessionRunType: item.sessionRunType,
+      createdAt: item.createdAt,
+    }),
+  };
+}
+
+function normalizeReflectionRun(item: ViewerNoteReflectionRun): ViewerNoteReflectionRun {
+  return item.sourceSnapshot ? item : {
+    ...item,
+    sourceSnapshot: legacySourceSnapshot({
+      sourceSessionId: item.sourceSessionId,
+      sourceWorkspaceId: item.sourceWorkspaceId,
+      packetJson: item.packetJson,
+      createdAt: item.createdAt,
+    }),
+  };
+}
 
 export interface BrowserAiCenterRepositoryDependencies {
   storage?: Storage;
@@ -102,7 +156,7 @@ export class BrowserAiCenterRepository implements AiCenterRepository {
   }
 
   async listViewerNoteVersions(aiIdentityId: string): Promise<ViewerNoteVersion[]> {
-    return this.read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []).filter((item) => item.aiIdentityId === aiIdentityId).sort((a, b) => b.versionNumber - a.versionNumber);
+    return this.read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []).filter((item) => item.aiIdentityId === aiIdentityId).map(normalizeVersion).sort((a, b) => b.versionNumber - a.versionNumber);
   }
 
   async listViewerNoteActivationEvents(aiIdentityId: string): Promise<ViewerNoteActivationEvent[]> {
@@ -110,7 +164,7 @@ export class BrowserAiCenterRepository implements AiCenterRepository {
   }
 
   async listViewerNoteReflectionRuns(aiIdentityId: string): Promise<ViewerNoteReflectionRun[]> {
-    return this.read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []).filter((item) => item.aiIdentityId === aiIdentityId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return this.read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []).filter((item) => item.aiIdentityId === aiIdentityId).map(normalizeReflectionRun).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   async setViewerNoteCapacity(aiIdentityId: string, capacityTokens: ViewerNoteCapacity): Promise<void> {
@@ -132,7 +186,7 @@ export class BrowserAiCenterRepository implements AiCenterRepository {
     assertViewerNoteBasePair(input);
     const all = this.read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []);
     const existing = all.find((item) => item.id === input.id || (item.aiIdentityId === input.aiIdentityId && item.sourceSessionId === input.sourceSessionId));
-    if (existing) return existing;
+    if (existing) return normalizeReflectionRun(existing);
     const run: ViewerNoteReflectionRun = { ...input, noteType: "viewer_self_notes", attemptCount: 0, status: "PENDING", createdAt: this.now() };
     this.write(AI_NOTE_REFLECTION_RUNS_KEY, [run, ...all]);
     return run;
@@ -146,7 +200,8 @@ export class BrowserAiCenterRepository implements AiCenterRepository {
   async commitViewerNoteReflection(input: CommitViewerNoteReflectionInput): Promise<ViewerNoteReflectionResult> {
     assertViewerNoteBasePair(input);
     const runs = this.read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []);
-    const run = runs.find((item) => item.id === input.runId);
+    const storedRun = runs.find((item) => item.id === input.runId);
+    const run = storedRun ? normalizeReflectionRun(storedRun) : undefined;
     if (!run) throw new Error("Viewer Notes reflection run not found.");
     if (run.status === "UPDATE") return { status: "UPDATE", version: this.read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []).find((item) => item.reflectionRunId === run.id) };
     if (run.status === "NO_CHANGE") return { status: "NO_CHANGE" };
@@ -165,7 +220,7 @@ export class BrowserAiCenterRepository implements AiCenterRepository {
       return { status: "NO_CHANGE" };
     }
     if (!input.notes || !input.contentSha256 || input.estimatedTokens === undefined) throw new Error("Complete Viewer Notes are required for UPDATE.");
-    const version: ViewerNoteVersion = { id: this.nextId("ai_note_version"), aiIdentityId: input.aiIdentityId, versionNumber: Math.max(0, ...versions.filter((item) => item.aiIdentityId === input.aiIdentityId).map((item) => item.versionNumber)) + 1, content: input.notes, contentSha256: input.contentSha256, estimatedTokens: input.estimatedTokens, estimatorVersion: "conservative-char-v1", capacityTokensAtCreation: input.capacityTokens, sourceSessionId: input.sourceSessionId, sourceWorkspaceId: input.sourceWorkspaceId, protocolId: input.protocolId, sessionRunType: input.sessionRunType, changeSummary: input.changeSummary, ...(input.baseVersionId ? { baseVersionId: input.baseVersionId } : {}), ...(input.baseContentSha256 ? { baseContentSha256: input.baseContentSha256 } : {}), reflectionRunId: input.runId, reflectionPacketSha256: input.reflectionPacketSha256, modelRouteSnapshot: input.modelRouteSnapshot, generationSettingsSnapshot: input.generationSettingsSnapshot, createdAt: completedAt };
+    const version: ViewerNoteVersion = { id: this.nextId("ai_note_version"), aiIdentityId: input.aiIdentityId, versionNumber: Math.max(0, ...versions.filter((item) => item.aiIdentityId === input.aiIdentityId).map((item) => item.versionNumber)) + 1, content: input.notes, contentSha256: input.contentSha256, estimatedTokens: input.estimatedTokens, estimatorVersion: "conservative-char-v1", capacityTokensAtCreation: input.capacityTokens, sourceSessionId: input.sourceSessionId, sourceWorkspaceId: input.sourceWorkspaceId, sourceSnapshot: run.sourceSnapshot, protocolId: input.protocolId, sessionRunType: input.sessionRunType, changeSummary: input.changeSummary, ...(input.baseVersionId ? { baseVersionId: input.baseVersionId } : {}), ...(input.baseContentSha256 ? { baseContentSha256: input.baseContentSha256 } : {}), reflectionRunId: input.runId, reflectionPacketSha256: input.reflectionPacketSha256, modelRouteSnapshot: input.modelRouteSnapshot, generationSettingsSnapshot: input.generationSettingsSnapshot, createdAt: completedAt };
     const activation: ViewerNoteActivationEvent = { id: this.nextId("ai_note_activation"), aiIdentityId: input.aiIdentityId, ...(active ? { fromVersionId: active.id } : {}), toVersionId: version.id, activationSource: active ? "model_update" : "initial_version", workspaceId: input.sourceWorkspaceId, sourceSessionId: input.sourceSessionId, createdAt: completedAt };
     this.write(AI_NOTE_VERSIONS_KEY, [version, ...versions]);
     this.write(AI_NOTE_ACTIVATION_EVENTS_KEY, [activation, ...this.read<ViewerNoteActivationEvent[]>(AI_NOTE_ACTIVATION_EVENTS_KEY, [])]);
@@ -184,4 +239,29 @@ export class BrowserAiCenterRepository implements AiCenterRepository {
     this.write(AI_NOTE_SETTINGS_KEY, settings.map((item) => item.aiIdentityId === aiIdentityId ? { ...item, activeVersionId: version.id, updatedAt: timestamp } : item));
     this.write(AI_NOTE_ACTIVATION_EVENTS_KEY, [{ id: this.nextId("ai_note_activation"), aiIdentityId, ...(current.activeVersionId ? { fromVersionId: current.activeVersionId } : {}), toVersionId: version.id, activationSource: "human_restore", ...(workspaceId ? { workspaceId } : {}), createdAt: timestamp }, ...this.read<ViewerNoteActivationEvent[]>(AI_NOTE_ACTIVATION_EVENTS_KEY, [])]);
   }
+
+  async detachViewerNoteSourceReferences(input: DetachViewerNoteSourceReferencesInput): Promise<void> {
+    if (!input.sourceSessionId && !input.sourceWorkspaceId) throw new Error("A Viewer Notes source Session or Workspace is required.");
+    const detach = <T extends { sourceSessionId?: string; sourceWorkspaceId?: string }>(item: T): T => {
+      const workspaceMatch = Boolean(input.sourceWorkspaceId && item.sourceWorkspaceId === input.sourceWorkspaceId);
+      const sessionMatch = Boolean(input.sourceSessionId && item.sourceSessionId === input.sourceSessionId);
+      if (!workspaceMatch && !sessionMatch) return item;
+      const next = { ...item };
+      if (workspaceMatch || sessionMatch) delete next.sourceSessionId;
+      if (workspaceMatch) delete next.sourceWorkspaceId;
+      return next;
+    };
+    this.write(AI_NOTE_VERSIONS_KEY, this.read<ViewerNoteVersion[]>(AI_NOTE_VERSIONS_KEY, []).map(normalizeVersion).map(detach));
+    this.write(AI_NOTE_REFLECTION_RUNS_KEY, this.read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []).map(normalizeReflectionRun).map(detach));
+    this.write(AI_NOTE_ACTIVATION_EVENTS_KEY, this.read<ViewerNoteActivationEvent[]>(AI_NOTE_ACTIVATION_EVENTS_KEY, []).map((item) => {
+      const workspaceMatch = Boolean(input.sourceWorkspaceId && item.workspaceId === input.sourceWorkspaceId);
+      const sessionMatch = Boolean(input.sourceSessionId && item.sourceSessionId === input.sourceSessionId);
+      if (!workspaceMatch && !sessionMatch) return item;
+      const next = { ...item };
+      if (workspaceMatch || sessionMatch) delete next.sourceSessionId;
+      if (workspaceMatch) delete next.workspaceId;
+      return next;
+    }));
+  }
+
 }

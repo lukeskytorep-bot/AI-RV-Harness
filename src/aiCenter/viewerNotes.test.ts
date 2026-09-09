@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildCapacityRetryPrompt, buildReflectionPrompt, buildReflectionRepairPrompt, estimateViewerNoteTokens, parseViewerNoteReflection, stableViewerNotePacket, validateViewerNoteContent, viewerNotesSystemBlock, type ViewerNoteReflectionPacket } from "./viewerNotes";
+import type { SessionSnapshot } from "../sessions/types";
+import { buildCapacityRetryPrompt, buildReflectionPrompt, buildViewerNoteSourceSnapshot, buildReflectionRepairPrompt, estimateViewerNoteTokens, parseViewerNoteReflection, stableViewerNotePacket, validateViewerNoteContent, viewerNotesSystemBlock, type ViewerNoteReflectionPacket } from "./viewerNotes";
 
 const packet: ViewerNoteReflectionPacket = {
   packetVersion: "viewer-notes-reflection-v1",
@@ -69,6 +70,17 @@ describe("Viewer Notes", () => {
     expect(prompt).toContain(`Maximum capacity: ${packet.capacityTokens} estimated tokens`);
     expect(prompt).toContain("second and final attempt");
     expect(prompt).toContain("merely as an editor or scribe");
+  });
+
+  it("captures immutable source metadata separately from live Session/Workspace references", () => {
+    const snapshot = buildViewerNoteSourceSnapshot({
+      session: { sessionId: "session_1", sessionCode: "RV-123", workspaceId: "workspace_1", profileId: "profile_1", protocol: { id: "full-rcp", version: "1.5a" } } as unknown as SessionSnapshot,
+      workspaceName: "Lab",
+      trainingRun: { id: "training_7", runNumber: 7, name: "Calibration" },
+      sessionRunType: "automatic",
+      capturedAt: "2026-09-09T20:00:00.000Z",
+    });
+    expect(snapshot).toMatchObject({ schemaVersion: 1, sessionId: "session_1", sessionCode: "RV-123", workspaceId: "workspace_1", workspaceName: "Lab", profileId: "profile_1", trainingRunId: "training_7", trainingRunNumber: 7, trainingRunName: "Calibration", protocolId: "full-rcp", protocolVersion: "1.5a", sessionRunType: "automatic" });
   });
 
   it("wraps notes in a separate read-only system data block", () => {

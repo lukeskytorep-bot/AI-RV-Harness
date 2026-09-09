@@ -133,6 +133,7 @@ export class SqliteRepository implements AppRepository {
   failViewerNoteReflection: AppRepository["failViewerNoteReflection"] = (runId, status, failureMessage, providerRequestId, rawFinalResponseSha256, attemptCount) => this.aiCenterRepository.failViewerNoteReflection(runId, status, failureMessage, providerRequestId, rawFinalResponseSha256, attemptCount);
   commitViewerNoteReflection: AppRepository["commitViewerNoteReflection"] = (input) => this.aiCenterRepository.commitViewerNoteReflection(input);
   restoreViewerNoteVersion: AppRepository["restoreViewerNoteVersion"] = (aiIdentityId, versionId, workspaceId) => this.aiCenterRepository.restoreViewerNoteVersion(aiIdentityId, versionId, workspaceId);
+  detachViewerNoteSourceReferences: AppRepository["detachViewerNoteSourceReferences"] = (input) => this.aiCenterRepository.detachViewerNoteSourceReferences(input);
 
   createTrainingRun: AppRepository["createTrainingRun"] = (input) => this.trainingRepository.createTrainingRun(input);
   updateTrainingRun: AppRepository["updateTrainingRun"] = (id, input) => this.trainingRepository.updateTrainingRun(id, input);

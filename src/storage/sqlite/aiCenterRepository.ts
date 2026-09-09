@@ -3,6 +3,7 @@ import type {
   AiIdentity,
   BeginViewerNoteReflectionInput,
   CommitViewerNoteReflectionInput,
+  DetachViewerNoteSourceReferencesInput,
   EnsureAiIdentityInput,
   ViewerNoteActivationEvent,
   ViewerNoteBundle,
@@ -10,6 +11,7 @@ import type {
   ViewerNoteReflectionResult,
   ViewerNoteReflectionRun,
   ViewerNoteSettings,
+  ViewerNoteSourceSnapshot,
   ViewerNoteVersion,
 } from "../../aiCenter/types";
 import type { ProviderKind } from "../../providers/types";
@@ -26,13 +28,13 @@ type AiIdentityRow = {
 type ViewerNoteSettingsRow = { ai_identity_id: string; note_type: "viewer_self_notes"; capacity_tokens: ViewerNoteCapacity; default_enabled: number; active_version_id: string | null; experimental_status: "experimental"; updated_at: string };
 type ViewerNoteVersionRow = {
   id: string; ai_identity_id: string; version_number: number; content: string; content_sha256: string; estimated_tokens: number;
-  estimator_version: "conservative-char-v1"; capacity_tokens_at_creation: ViewerNoteCapacity; source_session_id: string; source_workspace_id: string;
+  estimator_version: "conservative-char-v1"; capacity_tokens_at_creation: ViewerNoteCapacity; source_session_id: string | null; source_workspace_id: string | null; source_snapshot_json: string;
   protocol_id: string; session_run_type: string; change_summary: string; base_version_id: string | null; base_content_sha256: string | null;
   reflection_run_id: string; reflection_packet_sha256: string; model_route_snapshot: string; generation_settings_json: string;
   upstream_provider_snapshot: string | null; created_at: string;
 };
 type ViewerNoteReflectionRunRow = {
-  id: string; ai_identity_id: string; note_type: "viewer_self_notes"; source_session_id: string; source_workspace_id: string;
+  id: string; ai_identity_id: string; note_type: "viewer_self_notes"; source_session_id: string | null; source_workspace_id: string | null; source_snapshot_json: string;
   base_version_id: string | null; base_content_sha256: string | null; reflection_packet_sha256: string; packet_json: string;
   attempt_count: number; status: ViewerNoteReflectionRun["status"]; provider_request_id: string | null; raw_final_response_sha256: string | null;
   change_summary: string | null; failure_message: string | null; created_at: string; completed_at: string | null;
@@ -45,6 +47,12 @@ export interface SqliteAiCenterRepositoryDependencies {
   executeTransaction(statements: DatabaseTransactionStatement[]): Promise<unknown>;
   now?: typeof nowIso;
   createId?: typeof createId;
+}
+
+function parseSourceSnapshot(value: string): ViewerNoteSourceSnapshot {
+  const parsed = JSON.parse(value) as ViewerNoteSourceSnapshot;
+  if (parsed.schemaVersion !== 1) throw new Error("Unsupported Viewer Notes source snapshot version.");
+  return parsed;
 }
 
 function mapAiIdentity(row: AiIdentityRow): AiIdentity {
@@ -60,13 +68,13 @@ function mapViewerNoteSettings(row: ViewerNoteSettingsRow): ViewerNoteSettings {
 function mapViewerNoteVersion(row: ViewerNoteVersionRow): ViewerNoteVersion {
   return { id: row.id, aiIdentityId: row.ai_identity_id, versionNumber: Number(row.version_number), content: row.content, contentSha256: row.content_sha256,
     estimatedTokens: Number(row.estimated_tokens), estimatorVersion: row.estimator_version, capacityTokensAtCreation: Number(row.capacity_tokens_at_creation) as ViewerNoteCapacity,
-    sourceSessionId: row.source_session_id, sourceWorkspaceId: row.source_workspace_id, protocolId: row.protocol_id, sessionRunType: row.session_run_type,
+    ...(row.source_session_id ? { sourceSessionId: row.source_session_id } : {}), ...(row.source_workspace_id ? { sourceWorkspaceId: row.source_workspace_id } : {}), sourceSnapshot: parseSourceSnapshot(row.source_snapshot_json), protocolId: row.protocol_id, sessionRunType: row.session_run_type,
     changeSummary: row.change_summary, ...(row.base_version_id ? { baseVersionId: row.base_version_id } : {}), ...(row.base_content_sha256 ? { baseContentSha256: row.base_content_sha256 } : {}),
     reflectionRunId: row.reflection_run_id, reflectionPacketSha256: row.reflection_packet_sha256, modelRouteSnapshot: row.model_route_snapshot,
     generationSettingsSnapshot: JSON.parse(row.generation_settings_json), ...(row.upstream_provider_snapshot ? { upstreamProviderSnapshot: row.upstream_provider_snapshot } : {}), createdAt: row.created_at };
 }
 function mapViewerNoteReflectionRun(row: ViewerNoteReflectionRunRow): ViewerNoteReflectionRun {
-  return { id: row.id, aiIdentityId: row.ai_identity_id, noteType: row.note_type, sourceSessionId: row.source_session_id, sourceWorkspaceId: row.source_workspace_id,
+  return { id: row.id, aiIdentityId: row.ai_identity_id, noteType: row.note_type, ...(row.source_session_id ? { sourceSessionId: row.source_session_id } : {}), ...(row.source_workspace_id ? { sourceWorkspaceId: row.source_workspace_id } : {}), sourceSnapshot: parseSourceSnapshot(row.source_snapshot_json),
     ...(row.base_version_id ? { baseVersionId: row.base_version_id } : {}), ...(row.base_content_sha256 ? { baseContentSha256: row.base_content_sha256 } : {}),
     reflectionPacketSha256: row.reflection_packet_sha256, packetJson: row.packet_json, attemptCount: Number(row.attempt_count), status: row.status,
     ...(row.provider_request_id ? { providerRequestId: row.provider_request_id } : {}), ...(row.raw_final_response_sha256 ? { rawFinalResponseSha256: row.raw_final_response_sha256 } : {}),
@@ -169,10 +177,10 @@ export class SqliteAiCenterRepository implements AiCenterRepository {
     if (existing[0]) return mapViewerNoteReflectionRun(existing[0]);
     const createdAt = this.now();
     await this.dependencies.executeWrite(`INSERT INTO ai_note_reflection_runs
-      (id, ai_identity_id, note_type, source_session_id, source_workspace_id, base_version_id, base_content_sha256,
+      (id, ai_identity_id, note_type, source_session_id, source_workspace_id, source_snapshot_json, base_version_id, base_content_sha256,
        reflection_packet_sha256, packet_json, attempt_count, status, created_at)
-      VALUES ($1,$2,'viewer_self_notes',$3,$4,$5,$6,$7,$8,0,'PENDING',$9)`,
-    [input.id, input.aiIdentityId, input.sourceSessionId, input.sourceWorkspaceId, input.baseVersionId ?? null, input.baseContentSha256 ?? null, input.reflectionPacketSha256, input.packetJson, createdAt]);
+      VALUES ($1,$2,'viewer_self_notes',$3,$4,$5,$6,$7,$8,$9,0,'PENDING',$10)`,
+    [input.id, input.aiIdentityId, input.sourceSessionId, input.sourceWorkspaceId, JSON.stringify(input.sourceSnapshot), input.baseVersionId ?? null, input.baseContentSha256 ?? null, input.reflectionPacketSha256, input.packetJson, createdAt]);
     return { ...input, noteType: "viewer_self_notes", attemptCount: 0, status: "PENDING", createdAt };
   }
 
@@ -208,11 +216,11 @@ export class SqliteAiCenterRepository implements AiCenterRepository {
       await this.dependencies.executeTransaction([
         { query: `INSERT INTO ai_note_versions
           (id, ai_identity_id, version_number, content, content_sha256, estimated_tokens, estimator_version, capacity_tokens_at_creation,
-           source_session_id, source_workspace_id, protocol_id, session_run_type, change_summary, base_version_id, base_content_sha256,
+           source_session_id, source_workspace_id, source_snapshot_json, protocol_id, session_run_type, change_summary, base_version_id, base_content_sha256,
            reflection_run_id, reflection_packet_sha256, model_route_snapshot, generation_settings_json, created_at)
-          VALUES ($1,$2,$3,$4,$5,$6,'conservative-char-v1',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+          VALUES ($1,$2,$3,$4,$5,$6,'conservative-char-v1',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
           values: [versionId, input.aiIdentityId, Number(numberRows[0]?.next_number ?? 1), input.notes, input.contentSha256, input.estimatedTokens, input.capacityTokens,
-            input.sourceSessionId, input.sourceWorkspaceId, input.protocolId, input.sessionRunType, input.changeSummary, input.baseVersionId ?? null,
+            input.sourceSessionId, input.sourceWorkspaceId, run.source_snapshot_json, input.protocolId, input.sessionRunType, input.changeSummary, input.baseVersionId ?? null,
             input.baseContentSha256 ?? null, input.runId, input.reflectionPacketSha256, input.modelRouteSnapshot, JSON.stringify(input.generationSettingsSnapshot), completedAt] },
         { query: `INSERT INTO ai_note_activation_events
           (id, ai_identity_id, from_version_id, to_version_id, activation_source, workspace_id, source_session_id, created_at)
@@ -245,4 +253,25 @@ export class SqliteAiCenterRepository implements AiCenterRepository {
         VALUES ($1,$2,$3,$4,'human_restore',$5,$6)`, values: [this.nextId("ai_note_activation"), aiIdentityId, rows[0].active_version_id, versionId, workspaceId ?? null, timestamp] },
     ]);
   }
+
+  async detachViewerNoteSourceReferences(input: DetachViewerNoteSourceReferencesInput): Promise<void> {
+    if (!input.sourceSessionId && !input.sourceWorkspaceId) throw new Error("A Viewer Notes source Session or Workspace is required.");
+    const statements: DatabaseTransactionStatement[] = [];
+    if (input.sourceWorkspaceId) {
+      statements.push(
+        { query: "UPDATE ai_note_versions SET source_session_id = NULL, source_workspace_id = NULL WHERE source_workspace_id = $1", values: [input.sourceWorkspaceId] },
+        { query: "UPDATE ai_note_reflection_runs SET source_session_id = NULL, source_workspace_id = NULL WHERE source_workspace_id = $1", values: [input.sourceWorkspaceId] },
+        { query: "UPDATE ai_note_activation_events SET source_session_id = NULL, workspace_id = NULL WHERE workspace_id = $1", values: [input.sourceWorkspaceId] },
+      );
+    }
+    if (input.sourceSessionId) {
+      statements.push(
+        { query: "UPDATE ai_note_versions SET source_session_id = NULL WHERE source_session_id = $1", values: [input.sourceSessionId] },
+        { query: "UPDATE ai_note_reflection_runs SET source_session_id = NULL WHERE source_session_id = $1", values: [input.sourceSessionId] },
+        { query: "UPDATE ai_note_activation_events SET source_session_id = NULL WHERE source_session_id = $1", values: [input.sourceSessionId] },
+      );
+    }
+    await this.dependencies.executeTransaction(statements);
+  }
+
 }

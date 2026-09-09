@@ -8,7 +8,7 @@ import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../p
 import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchConditionRecord, ResearchConfig, ResearchLockPlan, ResearchProjectRecord, ResearchResults, ResearchState } from "../research/types";
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
-import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteVersion } from "../aiCenter/types";
+import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, DetachViewerNoteSourceReferencesInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteVersion } from "../aiCenter/types";
 
 export interface AppRepository {
   listProfiles(): Promise<Profile[]>;
@@ -80,6 +80,7 @@ export interface AppRepository {
   failViewerNoteReflection(runId: string, status: Exclude<ViewerNoteReflectionRun["status"], "PENDING" | "UPDATE" | "NO_CHANGE" | "STALE_BASE">, failureMessage: string, providerRequestId?: string, rawFinalResponseSha256?: string, attemptCount?: number): Promise<void>;
   commitViewerNoteReflection(input: CommitViewerNoteReflectionInput): Promise<ViewerNoteReflectionResult>;
   restoreViewerNoteVersion(aiIdentityId: string, versionId: string, workspaceId?: string): Promise<void>;
+  detachViewerNoteSourceReferences(input: DetachViewerNoteSourceReferencesInput): Promise<void>;
   listCustomProtocols(language?: "pl" | "en"): Promise<CustomProtocolVersion[]>;
   saveCustomProtocolVersion(input: SaveCustomProtocolVersionInput): Promise<CustomProtocolVersion>;
   createRvSession(input: CreateRvSessionInput): Promise<RvSession>;

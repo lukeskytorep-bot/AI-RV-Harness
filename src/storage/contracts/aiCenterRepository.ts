@@ -2,6 +2,7 @@ import type {
   AiIdentity,
   BeginViewerNoteReflectionInput,
   CommitViewerNoteReflectionInput,
+  DetachViewerNoteSourceReferencesInput,
   EnsureAiIdentityInput,
   ViewerNoteActivationEvent,
   ViewerNoteBundle,
@@ -32,4 +33,5 @@ export interface AiCenterRepository {
   ): Promise<void>;
   commitViewerNoteReflection(input: CommitViewerNoteReflectionInput): Promise<ViewerNoteReflectionResult>;
   restoreViewerNoteVersion(aiIdentityId: string, versionId: string, workspaceId?: string): Promise<void>;
+  detachViewerNoteSourceReferences(input: DetachViewerNoteSourceReferencesInput): Promise<void>;
 }

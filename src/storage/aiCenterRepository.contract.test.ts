@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteReflectionRun } from "../aiCenter/types";
+import type { CommitViewerNoteReflectionInput, EnsureAiIdentityInput, ViewerNoteReflectionRun, ViewerNoteSourceSnapshot } from "../aiCenter/types";
 import { BrowserAiCenterRepository } from "./browser/aiCenterRepository";
 import { SqliteAiCenterRepository } from "./sqlite/aiCenterRepository";
 
@@ -30,6 +30,15 @@ function identityInput(role: "viewer" | "monitor" | "judge" = "viewer"): EnsureA
     modelRoute: `openrouter:${role}-model`,
     modelDisplayName: `${role} model`,
     role,
+  };
+}
+
+
+function sourceSnapshot(sessionId = "session-a", workspaceId = "workspace-a"): ViewerNoteSourceSnapshot {
+  return {
+    schemaVersion: 1, sessionId, sessionCode: `CODE-${sessionId}`, workspaceId, workspaceName: "Workspace A", profileId: "profile-a",
+    trainingRunId: "training-a", trainingRunNumber: 1, trainingRunName: "Training A", protocolId: "full-rcp", protocolVersion: "1.5a", sessionRunType: "automatic",
+    capturedAt: "2026-09-08T12:00:00.000Z",
   };
 }
 
@@ -100,7 +109,7 @@ describe("Browser AI Center repository contract", () => {
   it("creates the first Viewer Notes version, activation and active pointer exactly once", async () => {
     const { repository } = browserHarness();
     const identity = await repository.ensureAiIdentity(identityInput());
-    await repository.beginViewerNoteReflection({ id: "reflection-a", aiIdentityId: identity.id, sourceSessionId: "session-a", sourceWorkspaceId: "workspace-a", reflectionPacketSha256: "packet-sha", packetJson: "{}" });
+    await repository.beginViewerNoteReflection({ id: "reflection-a", aiIdentityId: identity.id, sourceSessionId: "session-a", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot(), reflectionPacketSha256: "packet-sha", packetJson: "{}" });
     const first = await repository.commitViewerNoteReflection(updateInput(identity.id));
     const second = await repository.commitViewerNoteReflection(updateInput(identity.id));
     const bundle = await repository.getViewerNoteBundle(identity.id);
@@ -115,9 +124,9 @@ describe("Browser AI Center repository contract", () => {
   it("returns STALE_BASE without creating a second version when active notes changed", async () => {
     const { repository } = browserHarness();
     const identity = await repository.ensureAiIdentity(identityInput());
-    await repository.beginViewerNoteReflection({ id: "reflection-a", aiIdentityId: identity.id, sourceSessionId: "session-a", sourceWorkspaceId: "workspace-a", reflectionPacketSha256: "packet-sha", packetJson: "{}" });
+    await repository.beginViewerNoteReflection({ id: "reflection-a", aiIdentityId: identity.id, sourceSessionId: "session-a", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot(), reflectionPacketSha256: "packet-sha", packetJson: "{}" });
     const first = await repository.commitViewerNoteReflection(updateInput(identity.id));
-    await repository.beginViewerNoteReflection({ id: "reflection-b", aiIdentityId: identity.id, sourceSessionId: "session-b", sourceWorkspaceId: "workspace-a", baseVersionId: first.version!.id, baseContentSha256: first.version!.contentSha256, reflectionPacketSha256: "packet-b", packetJson: "{}" });
+    await repository.beginViewerNoteReflection({ id: "reflection-b", aiIdentityId: identity.id, sourceSessionId: "session-b", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot("session-b"), baseVersionId: first.version!.id, baseContentSha256: first.version!.contentSha256, reflectionPacketSha256: "packet-b", packetJson: "{}" });
     const stale = await repository.commitViewerNoteReflection({ ...updateInput(identity.id, "reflection-b", "wrong-version", "wrong-sha"), sourceSessionId: "session-b" });
     expect(stale).toEqual({ status: "STALE_BASE" });
     expect(await repository.listViewerNoteVersions(identity.id)).toHaveLength(1);
@@ -127,10 +136,10 @@ describe("Browser AI Center repository contract", () => {
   it("preserves NO_CHANGE and failed-reflection attempt accounting", async () => {
     const { repository } = browserHarness();
     const identity = await repository.ensureAiIdentity(identityInput());
-    await repository.beginViewerNoteReflection({ id: "no-change", aiIdentityId: identity.id, sourceSessionId: "session-nc", sourceWorkspaceId: "workspace-a", reflectionPacketSha256: "packet-nc", packetJson: "{}" });
+    await repository.beginViewerNoteReflection({ id: "no-change", aiIdentityId: identity.id, sourceSessionId: "session-nc", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot("session-nc"), reflectionPacketSha256: "packet-nc", packetJson: "{}" });
     const noChange = await repository.commitViewerNoteReflection({ ...updateInput(identity.id, "no-change"), sourceSessionId: "session-nc", decision: "NO_CHANGE", notes: undefined, contentSha256: undefined, estimatedTokens: undefined });
     expect(noChange).toEqual({ status: "NO_CHANGE" });
-    await repository.beginViewerNoteReflection({ id: "failed", aiIdentityId: identity.id, sourceSessionId: "session-f", sourceWorkspaceId: "workspace-a", reflectionPacketSha256: "packet-f", packetJson: "{}" });
+    await repository.beginViewerNoteReflection({ id: "failed", aiIdentityId: identity.id, sourceSessionId: "session-f", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot("session-f"), reflectionPacketSha256: "packet-f", packetJson: "{}" });
     await repository.failViewerNoteReflection("failed", "FAILED_PROVIDER", "network", "req-1", "raw-sha", 2);
     expect((await repository.listViewerNoteReflectionRuns(identity.id)).find((run) => run.id === "failed")).toMatchObject({ status: "FAILED_PROVIDER", attemptCount: 2, providerRequestId: "req-1", rawFinalResponseSha256: "raw-sha" });
   });
@@ -138,12 +147,24 @@ describe("Browser AI Center repository contract", () => {
   it("blocks capacity reductions below active notes and records human restores", async () => {
     const { repository } = browserHarness();
     const identity = await repository.ensureAiIdentity(identityInput());
-    await repository.beginViewerNoteReflection({ id: "reflection-a", aiIdentityId: identity.id, sourceSessionId: "session-a", sourceWorkspaceId: "workspace-a", reflectionPacketSha256: "packet-sha", packetJson: "{}" });
+    await repository.beginViewerNoteReflection({ id: "reflection-a", aiIdentityId: identity.id, sourceSessionId: "session-a", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot(), reflectionPacketSha256: "packet-sha", packetJson: "{}" });
     const first = await repository.commitViewerNoteReflection({ ...updateInput(identity.id), estimatedTokens: 1500, capacityTokens: 2048 });
     await repository.setViewerNoteCapacity(identity.id, 2048);
     await expect(repository.setViewerNoteCapacity(identity.id, 1024)).rejects.toThrow("Capacity cannot be reduced");
     await repository.restoreViewerNoteVersion(identity.id, first.version!.id, "workspace-restore");
     expect((await repository.listViewerNoteActivationEvents(identity.id))[0]).toMatchObject({ activationSource: "human_restore", workspaceId: "workspace-restore", toVersionId: first.version!.id });
+  });
+  it("preserves immutable source snapshots when live Browser references are detached", async () => {
+    const { repository } = browserHarness();
+    const identity = await repository.ensureAiIdentity(identityInput());
+    await repository.beginViewerNoteReflection({ id: "reflection-a", aiIdentityId: identity.id, sourceSessionId: "session-a", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot(), reflectionPacketSha256: "packet-sha", packetJson: "{}" });
+    await repository.commitViewerNoteReflection(updateInput(identity.id));
+    await repository.detachViewerNoteSourceReferences({ sourceSessionId: "session-a" });
+    const bundle = await repository.getViewerNoteBundle(identity.id);
+    expect(bundle?.versions[0].sourceSessionId).toBeUndefined();
+    expect(bundle?.versions[0].sourceSnapshot).toMatchObject({ sessionId: "session-a", sessionCode: "CODE-session-a", workspaceId: "workspace-a", trainingRunId: "training-a" });
+    expect(bundle?.reflectionRuns[0].sourceSessionId).toBeUndefined();
+    expect(bundle?.activationEvents[0].sourceSessionId).toBeUndefined();
   });
 });
 
@@ -156,11 +177,11 @@ function identityRow() {
 }
 
 function reflectionRow(status: ViewerNoteReflectionRun["status"] = "PENDING") {
-  return { id: "reflection-a", ai_identity_id: "ai-1", note_type: "viewer_self_notes", source_session_id: "session-a", source_workspace_id: "workspace-a", base_version_id: null, base_content_sha256: null, reflection_packet_sha256: "packet-sha", packet_json: "{}", attempt_count: 0, status, provider_request_id: null, raw_final_response_sha256: null, change_summary: null, failure_message: null, created_at: "2026-09-08T12:00:00.000Z", completed_at: null };
+  return { id: "reflection-a", ai_identity_id: "ai-1", note_type: "viewer_self_notes", source_session_id: "session-a", source_workspace_id: "workspace-a", source_snapshot_json: JSON.stringify(sourceSnapshot()), base_version_id: null, base_content_sha256: null, reflection_packet_sha256: "packet-sha", packet_json: "{}", attempt_count: 0, status, provider_request_id: null, raw_final_response_sha256: null, change_summary: null, failure_message: null, created_at: "2026-09-08T12:00:00.000Z", completed_at: null };
 }
 
 function versionRow() {
-  return { id: "ai_note_version-1", ai_identity_id: "ai-1", version_number: 1, content: "Prefer concrete sensory descriptions.", content_sha256: "notes-sha", estimated_tokens: 12, estimator_version: "conservative-char-v1", capacity_tokens_at_creation: 1024, source_session_id: "session-a", source_workspace_id: "workspace-a", protocol_id: "full-rcp", session_run_type: "automatic", change_summary: "Created notes.", base_version_id: null, base_content_sha256: null, reflection_run_id: "reflection-a", reflection_packet_sha256: "packet-sha", model_route_snapshot: "openrouter:viewer-model", generation_settings_json: JSON.stringify({ requested: { maxOutputTokens: 8192 }, effective: { maxOutputTokens: 8192 }, omitted: [] }), upstream_provider_snapshot: null, created_at: "2026-09-08T12:00:01.000Z" };
+  return { id: "ai_note_version-1", ai_identity_id: "ai-1", version_number: 1, content: "Prefer concrete sensory descriptions.", content_sha256: "notes-sha", estimated_tokens: 12, estimator_version: "conservative-char-v1", capacity_tokens_at_creation: 1024, source_session_id: "session-a", source_workspace_id: "workspace-a", source_snapshot_json: JSON.stringify(sourceSnapshot()), protocol_id: "full-rcp", session_run_type: "automatic", change_summary: "Created notes.", base_version_id: null, base_content_sha256: null, reflection_run_id: "reflection-a", reflection_packet_sha256: "packet-sha", model_route_snapshot: "openrouter:viewer-model", generation_settings_json: JSON.stringify({ requested: { maxOutputTokens: 8192 }, effective: { maxOutputTokens: 8192 }, omitted: [] }), upstream_provider_snapshot: null, created_at: "2026-09-08T12:00:01.000Z" };
 }
 
 describe("SQLite AI Center repository contract", () => {
@@ -199,7 +220,7 @@ describe("SQLite AI Center repository contract", () => {
       executeWrite: async (query) => { writes.push(query); return { rowsAffected: 1 }; },
       executeTransaction: async () => ({}),
     });
-    const run = await repository.beginViewerNoteReflection({ id: "another-id", aiIdentityId: "ai-1", sourceSessionId: "session-a", sourceWorkspaceId: "workspace-a", reflectionPacketSha256: "packet-sha", packetJson: "{}" });
+    const run = await repository.beginViewerNoteReflection({ id: "another-id", aiIdentityId: "ai-1", sourceSessionId: "session-a", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot(), reflectionPacketSha256: "packet-sha", packetJson: "{}" });
     expect(run.id).toBe("reflection-a");
     expect(writes).toEqual([]);
   });
@@ -264,4 +285,20 @@ describe("SQLite AI Center repository contract", () => {
     expect(transactions[0][0].query).toContain("UPDATE ai_note_settings SET active_version_id");
     expect(transactions[0][1].query).toContain("'human_restore'");
   });
+
+  it("detaches SQLite live references without deleting Viewer Notes history", async () => {
+    const transactions: Array<Array<{ query: string; values?: unknown[] }>> = [];
+    const repository = new SqliteAiCenterRepository({
+      select: async <T>() => [] as T,
+      executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async (statements) => { transactions.push(statements); return {}; },
+    });
+    await repository.detachViewerNoteSourceReferences({ sourceWorkspaceId: "workspace-a" });
+    expect(transactions).toHaveLength(1);
+    expect(transactions[0]).toHaveLength(3);
+    expect(transactions[0][0].query).toContain("UPDATE ai_note_versions SET source_session_id = NULL, source_workspace_id = NULL");
+    expect(transactions[0][1].query).toContain("UPDATE ai_note_reflection_runs");
+    expect(transactions[0][2].query).toContain("UPDATE ai_note_activation_events");
+  });
+
 });
