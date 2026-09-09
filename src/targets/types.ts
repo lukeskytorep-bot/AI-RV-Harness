@@ -15,6 +15,7 @@ export interface TargetRecord {
   contentHash?: string;
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
 }
 
 export interface CreateTargetInput {

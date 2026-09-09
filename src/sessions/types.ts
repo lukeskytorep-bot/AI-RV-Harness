@@ -28,6 +28,7 @@ export interface RvSession {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  archivedAt?: string;
 }
 
 export interface CreateRvSessionInput {

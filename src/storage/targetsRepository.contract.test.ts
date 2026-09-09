@@ -27,6 +27,7 @@ type TargetRow = {
   created_at: string;
   updated_at: string;
   retired_at: string | null;
+  archived_at: string | null;
 };
 
 interface ContractHarness {
@@ -54,6 +55,7 @@ function toRow(target: TargetRecord): TargetRow {
     created_at: target.createdAt,
     updated_at: target.updatedAt,
     retired_at: null,
+    archived_at: target.archivedAt ?? null,
   };
 }
 
@@ -87,24 +89,36 @@ function sqliteHarness(): ContractHarness {
     now: clock,
     select: async <T>(query: string, values: unknown[] = []) => {
       if (query.includes("FROM target_usage")) return [...usage].sort((a, b) => b.usedAt.localeCompare(a.usedAt)).map((item) => ({ id: item.id, target_id: item.targetId, profile_id: item.profileId ?? null, research_project_id: item.researchProjectId ?? null, session_id: item.sessionId ?? null, used_at: item.usedAt })) as T;
+      if (query.includes("archived_at IS NOT NULL")) {
+        return targets.filter((row) => row.collection === "user" && row.archived_at !== null)
+          .sort((a, b) => (b.archived_at ?? "").localeCompare(a.archived_at ?? "")) as T;
+      }
       const collection = query.includes("collection = $1") ? values[0] : undefined;
-      return targets.filter((row) => row.retired_at === null && (!collection || row.collection === collection)).sort((a, b) => query.includes("ORDER BY collection") ? a.collection.localeCompare(b.collection) || b.updated_at.localeCompare(a.updated_at) : b.updated_at.localeCompare(a.updated_at)) as T;
+      return targets.filter((row) => row.retired_at === null && row.archived_at === null && (!collection || row.collection === collection)).sort((a, b) => query.includes("ORDER BY collection") ? a.collection.localeCompare(b.collection) || b.updated_at.localeCompare(a.updated_at) : b.updated_at.localeCompare(a.updated_at)) as T;
     },
     executeWrite: async (query: string, values: unknown[] = []) => {
       if (query.startsWith("INSERT INTO targets")) {
-        targets.push({ id: String(values[0]), collection: values[1] as TargetRecord["collection"], title: String(values[2]), reveal_text: values[3] as string | null, reveal_artifact_path: values[4] as string | null, reveal_artifact_manifest_json: String(values[5]), tags_json: String(values[6]), source_metadata_json: String(values[7]), content_hash: values[8] as string | null, created_at: String(values[9]), updated_at: String(values[9]), retired_at: null });
+        targets.push({ id: String(values[0]), collection: values[1] as TargetRecord["collection"], title: String(values[2]), reveal_text: values[3] as string | null, reveal_artifact_path: values[4] as string | null, reveal_artifact_manifest_json: String(values[5]), tags_json: String(values[6]), source_metadata_json: String(values[7]), content_hash: values[8] as string | null, created_at: String(values[9]), updated_at: String(values[9]), retired_at: null, archived_at: null });
         return { rowsAffected: 1 };
       }
-      if (query.startsWith("UPDATE targets")) {
-        const row = targets.find((item) => item.id === values[5] && item.collection === "user");
+      if (query.startsWith("UPDATE targets") && query.includes("SET title")) {
+        const row = targets.find((item) => item.id === values[5] && item.collection === "user" && item.archived_at === null);
         if (!row) return { rowsAffected: 0 };
         Object.assign(row, { title: values[0], reveal_text: values[1], tags_json: values[2], content_hash: values[3], updated_at: values[4] });
         return { rowsAffected: 1 };
       }
-      if (query.startsWith("DELETE FROM targets")) {
-        const index = targets.findIndex((item) => item.id === values[0] && item.collection === "user");
-        if (index < 0) return { rowsAffected: 0 };
-        targets.splice(index, 1);
+      if (query.startsWith("UPDATE targets SET archived_at = $1")) {
+        const row = targets.find((item) => item.id === values[1] && item.collection === "user" && item.archived_at === null);
+        if (!row) return { rowsAffected: 0 };
+        row.archived_at = String(values[0]);
+        row.updated_at = String(values[0]);
+        return { rowsAffected: 1 };
+      }
+      if (query.startsWith("UPDATE targets SET archived_at = NULL")) {
+        const row = targets.find((item) => item.id === values[1] && item.collection === "user" && item.archived_at !== null);
+        if (!row) return { rowsAffected: 0 };
+        row.archived_at = null;
+        row.updated_at = String(values[0]);
         return { rowsAffected: 1 };
       }
       if (query.startsWith("INSERT INTO target_usage")) {
@@ -169,11 +183,15 @@ for (const [name, makeHarness] of [["browser", browserHarness], ["sqlite", sqlit
       expect((await harness.repository.listTargetUsage()).map((item) => item.targetId)).toEqual(["target-b", "target-a"]);
     });
 
-    it("deletes only user targets", async () => {
+    it("archives and restores only user targets", async () => {
       const harness = makeHarness();
       harness.seedTargets([target("user-a", "user"), target("training-a", "training")]);
-      await harness.repository.deleteTarget("user-a");
-      await expect(harness.repository.deleteTarget("training-a")).rejects.toThrow();
+      await harness.repository.archiveTarget("user-a");
+      expect((await harness.repository.listTargets("user")).map((item) => item.id)).toEqual([]);
+      expect((await harness.repository.listArchivedTargets()).map((item) => item.id)).toEqual(["user-a"]);
+      await expect(harness.repository.archiveTarget("training-a")).rejects.toThrow();
+      await harness.repository.restoreTarget("user-a");
+      expect((await harness.repository.listTargets("user")).map((item) => item.id)).toEqual(["user-a"]);
     });
   });
 }
@@ -184,6 +202,7 @@ describe("browser Targets cross-domain mutation guard", () => {
     harness.seedTargets([target("user-a", "user")]);
     harness.seedUsage([{ id: "usage-a", targetId: "user-a", usedAt: "2026-09-07T00:00:00.000Z" }]);
     await expect(harness.repository.updateTarget("user-a", { title: "Changed", tags: [], contentHash: "hash" })).rejects.toThrow("Used targets are locked");
-    await expect(harness.repository.deleteTarget("user-a")).rejects.toThrow("Used targets are locked");
+    await harness.repository.archiveTarget("user-a");
+    expect((await harness.repository.listArchivedTargets()).map((item) => item.id)).toEqual(["user-a"]);
   });
 });

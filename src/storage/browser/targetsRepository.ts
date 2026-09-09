@@ -47,10 +47,17 @@ export class BrowserTargetsRepository implements TargetsRepository {
   async listTargets(collection?: TargetRecord["collection"]): Promise<TargetRecord[]> {
     return this.read<TargetRecord[]>(TARGETS_KEY, [])
       .filter((target) => !isLegacyStarterTrainingTarget(target))
+      .filter((target) => !target.archivedAt)
       .filter((target) => !collection || target.collection === collection)
       .sort((a, b) => collection
         ? b.updatedAt.localeCompare(a.updatedAt)
         : a.collection.localeCompare(b.collection) || b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async listArchivedTargets(): Promise<TargetRecord[]> {
+    return this.read<TargetRecord[]>(TARGETS_KEY, [])
+      .filter((target) => target.collection === "user" && Boolean(target.archivedAt))
+      .sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
   }
 
   async createTarget(input: CreateTargetInput): Promise<TargetRecord> {
@@ -74,8 +81,8 @@ export class BrowserTargetsRepository implements TargetsRepository {
 
   async updateTarget(id: string, input: UpdateTargetInput): Promise<TargetRecord> {
     const all = this.read<TargetRecord[]>(TARGETS_KEY, []);
-    const target = all.find((item) => item.id === id);
-    if (!target || target.collection !== "user") throw new Error("User target not found.");
+    const target = all.find((item) => item.id === id && !item.archivedAt);
+    if (!target || target.collection !== "user") throw new Error("Active user target not found.");
     if (this.dependencies.hasRecordedUse?.(id)) throw new Error("Used targets are locked to preserve session and Research integrity.");
     const updated: TargetRecord = {
       ...target,
@@ -89,12 +96,20 @@ export class BrowserTargetsRepository implements TargetsRepository {
     return updated;
   }
 
-  async deleteTarget(id: string): Promise<void> {
+  async archiveTarget(id: string): Promise<void> {
     const all = this.read<TargetRecord[]>(TARGETS_KEY, []);
-    const target = all.find((item) => item.id === id);
-    if (!target || target.collection !== "user") throw new Error("User target not found.");
-    if (this.dependencies.hasRecordedUse?.(id)) throw new Error("Used targets are locked to preserve session and Research integrity.");
-    this.write(TARGETS_KEY, all.filter((item) => item.id !== id));
+    const target = all.find((item) => item.id === id && !item.archivedAt);
+    if (!target || target.collection !== "user") throw new Error("Active user target not found.");
+    const timestamp = (this.dependencies.now ?? nowIso)();
+    this.write(TARGETS_KEY, all.map((item) => item.id === id ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
+  }
+
+  async restoreTarget(id: string): Promise<void> {
+    const all = this.read<TargetRecord[]>(TARGETS_KEY, []);
+    const target = all.find((item) => item.id === id && item.archivedAt);
+    if (!target || target.collection !== "user") throw new Error("Archived user target not found.");
+    const timestamp = (this.dependencies.now ?? nowIso)();
+    this.write(TARGETS_KEY, all.map((item) => item.id === id ? { ...item, archivedAt: undefined, updatedAt: timestamp } : item));
   }
 
   async recordTargetUsage(input: TargetUsageInput): Promise<void> {

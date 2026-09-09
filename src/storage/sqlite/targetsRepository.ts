@@ -20,6 +20,7 @@ type TargetRow = {
   content_hash: string | null;
   created_at: string;
   updated_at: string;
+  archived_at: string | null;
 };
 
 type WriteResult = { rowsAffected: number };
@@ -44,8 +45,12 @@ function mapTarget(row: TargetRow): TargetRecord {
     contentHash: row.content_hash ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    archivedAt: row.archived_at ?? undefined,
   };
 }
+
+const TARGET_COLUMNS = `id, collection, title, reveal_text, reveal_artifact_path, reveal_artifact_manifest_json, tags_json, source_metadata_json,
+                  content_hash, created_at, updated_at, archived_at`;
 
 export class SqliteTargetsRepository implements TargetsRepository {
   constructor(private readonly dependencies: SqliteTargetsRepositoryDependencies) {}
@@ -53,14 +58,19 @@ export class SqliteTargetsRepository implements TargetsRepository {
   async listTargets(collection?: TargetRecord["collection"]): Promise<TargetRecord[]> {
     const rows = collection
       ? await this.dependencies.select<TargetRow[]>(
-          `SELECT id, collection, title, reveal_text, reveal_artifact_path, reveal_artifact_manifest_json, tags_json, source_metadata_json,
-                  content_hash, created_at, updated_at FROM targets WHERE collection = $1 AND retired_at IS NULL ORDER BY updated_at DESC`,
+          `SELECT ${TARGET_COLUMNS} FROM targets WHERE collection = $1 AND retired_at IS NULL AND archived_at IS NULL ORDER BY updated_at DESC`,
           [collection],
         )
       : await this.dependencies.select<TargetRow[]>(
-          `SELECT id, collection, title, reveal_text, reveal_artifact_path, reveal_artifact_manifest_json, tags_json, source_metadata_json,
-                  content_hash, created_at, updated_at FROM targets WHERE retired_at IS NULL ORDER BY collection, updated_at DESC`,
+          `SELECT ${TARGET_COLUMNS} FROM targets WHERE retired_at IS NULL AND archived_at IS NULL ORDER BY collection, updated_at DESC`,
         );
+    return rows.map(mapTarget);
+  }
+
+  async listArchivedTargets(): Promise<TargetRecord[]> {
+    const rows = await this.dependencies.select<TargetRow[]>(
+      `SELECT ${TARGET_COLUMNS} FROM targets WHERE collection = 'user' AND archived_at IS NOT NULL ORDER BY archived_at DESC`,
+    );
     return rows.map(mapTarget);
   }
 
@@ -81,8 +91,8 @@ export class SqliteTargetsRepository implements TargetsRepository {
     };
     await this.dependencies.executeWrite(
       `INSERT INTO targets
-       (id, collection, title, reveal_text, reveal_artifact_path, reveal_artifact_manifest_json, tags_json, source_metadata_json, content_hash, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
+       (id, collection, title, reveal_text, reveal_artifact_path, reveal_artifact_manifest_json, tags_json, source_metadata_json, content_hash, created_at, updated_at, archived_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, NULL)`,
       [target.id, target.collection, target.title, target.revealText ?? null, target.revealArtifactPath ?? null, JSON.stringify(target.revealArtifacts ?? []), JSON.stringify(target.tags), JSON.stringify(target.sourceMetadata), target.contentHash ?? null, timestamp],
     );
     return target;
@@ -93,17 +103,30 @@ export class SqliteTargetsRepository implements TargetsRepository {
     await this.dependencies.executeWrite(
       `UPDATE targets
           SET title = $1, reveal_text = $2, tags_json = $3, content_hash = $4, updated_at = $5
-        WHERE id = $6 AND collection = 'user'`,
+        WHERE id = $6 AND collection = 'user' AND archived_at IS NULL`,
       [input.title.trim(), input.revealText?.trim() || null, JSON.stringify(input.tags), input.contentHash, timestamp, id],
     );
     const target = (await this.listTargets("user")).find((item) => item.id === id);
-    if (!target) throw new Error("User target not found.");
+    if (!target) throw new Error("Active user target not found.");
     return target;
   }
 
-  async deleteTarget(id: string): Promise<void> {
-    const result = await this.dependencies.executeWrite("DELETE FROM targets WHERE id = $1 AND collection = 'user'", [id]);
-    if (result.rowsAffected !== 1) throw new Error("User target not found or cannot be deleted.");
+  async archiveTarget(id: string): Promise<void> {
+    const timestamp = (this.dependencies.now ?? nowIso)();
+    const result = await this.dependencies.executeWrite(
+      "UPDATE targets SET archived_at = $1, updated_at = $1 WHERE id = $2 AND collection = 'user' AND archived_at IS NULL",
+      [timestamp, id],
+    );
+    if (result.rowsAffected !== 1) throw new Error("Active user target not found.");
+  }
+
+  async restoreTarget(id: string): Promise<void> {
+    const timestamp = (this.dependencies.now ?? nowIso)();
+    const result = await this.dependencies.executeWrite(
+      "UPDATE targets SET archived_at = NULL, updated_at = $1 WHERE id = $2 AND collection = 'user' AND archived_at IS NOT NULL",
+      [timestamp, id],
+    );
+    if (result.rowsAffected !== 1) throw new Error("Archived user target not found.");
   }
 
   async recordTargetUsage(input: TargetUsageInput): Promise<void> {

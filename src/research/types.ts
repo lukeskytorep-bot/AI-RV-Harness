@@ -98,6 +98,7 @@ export interface ResearchProjectRecord {
   unblindedAt?: string;
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
 }
 
 export interface ResearchConditionRecord {

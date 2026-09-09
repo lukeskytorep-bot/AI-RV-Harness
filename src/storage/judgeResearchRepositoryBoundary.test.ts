@@ -4,11 +4,14 @@ import contract from "./repository.ts?raw";
 import sqliteFacade from "./sqliteRepository.ts?raw";
 
 const judgeMethods = ["recordFrozenJudgeResult", "recordFrozenJudgeResults", "listJudgeScores"] as const;
-const researchMethods = ["createResearchProject", "getResearchProject", "listResearchProjects", "setResearchProjectState", "lockResearchProject", "listResearchConditions", "listResearchAssignments", "listBlindingMappings", "updateResearchAssignment", "saveResearchResults", "getResearchResults"] as const;
+const researchMethods = ["createResearchProject", "getResearchProject", "listResearchProjects", "listArchivedResearchProjects", "setResearchProjectState", "lockResearchProject", "listResearchConditions", "listResearchAssignments", "listBlindingMappings", "updateResearchAssignment", "saveResearchResults", "getResearchResults"] as const;
 
 describe("Judge + Research repository boundary", () => {
   it("keeps AppRepository stable and delegates Judge, Research and export persistence", () => {
     expect(contract).toContain("recordFrozenJudgeResults(results");
+    expect(contract).toContain("listArchivedResearchProjects()");
+    expect(contract).toContain("archiveResearchProject(id");
+    expect(contract).toContain("restoreResearchProject(id");
     expect(contract).toContain("lockResearchProject(id");
     expect(contract).toContain("recordExport(workspaceId");
     expect(browserFacade).toContain("new BrowserJudgeRepository()");
@@ -21,6 +24,10 @@ describe("Judge + Research repository boundary", () => {
       expect(browserFacade).toContain(`${method}: AppRepository["${method}"]`);
       expect(sqliteFacade).toContain(`${method}: AppRepository["${method}"]`);
     }
+    expect(browserFacade).toContain("async archiveResearchProject(id: string)");
+    expect(browserFacade).toContain("async restoreResearchProject(id: string)");
+    expect(sqliteFacade).toContain("async archiveResearchProject(id: string)");
+    expect(sqliteFacade).toContain("async restoreResearchProject(id: string)");
   });
 
   it("removes Judge/Research/export storage implementation from the broad facades", () => {

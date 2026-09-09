@@ -35,6 +35,10 @@ import { chooseDirectory, openDataFolder, saveTextFile } from "../../storage/nat
 import type { AppRepository } from "../../storage/repository";
 import { userTargetKind } from "../../targets/service";
 import type { AppSettings, ChatThread, InterfaceLanguage, Profile, SessionLanguageSetting, Theme, Workspace } from "../../types";
+import type { RvSession } from "../../sessions/types";
+import type { TrainingRunRecord } from "../../training/types";
+import type { ResearchProjectRecord } from "../../research/types";
+import type { TargetRecord } from "../../targets/types";
 import { APP_VERSION } from "../../version";
 import { CreditsCard } from "./CreditsCard";
 
@@ -197,13 +201,36 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
   const [archivedProfiles, setArchivedProfiles] = useState<Profile[]>([]);
   const [archivedWorkspaces, setArchivedWorkspaces] = useState<Workspace[]>([]);
   const [archivedThreads, setArchivedThreads] = useState<ChatThread[]>([]);
+  const [archivedSessions, setArchivedSessions] = useState<RvSession[]>([]);
+  const [archivedTrainingRuns, setArchivedTrainingRuns] = useState<TrainingRunRecord[]>([]);
+  const [archivedResearchProjects, setArchivedResearchProjects] = useState<ResearchProjectRecord[]>([]);
+  const [archivedTargets, setArchivedTargets] = useState<TargetRecord[]>([]);
+  const pl = copy.home !== "Home";
+
   const refresh = async () => {
     if (!repository) return;
-    const [cachedModels, archivedProfileRows, archivedWorkspaceRows, threadRows] = await Promise.all([repository.listProviderModels(), repository.listArchivedProfiles(), repository.listArchivedWorkspaces(), repository.listArchivedChatThreads()]);
+    const [cachedModels, profileRows, workspaceRows, threadRows, sessionRows, trainingRows, researchRows, targetRows] = await Promise.all([
+      repository.listProviderModels(),
+      repository.listArchivedProfiles(),
+      repository.listArchivedWorkspaces(),
+      repository.listArchivedChatThreads(),
+      repository.listArchivedRvSessions(),
+      repository.listArchivedTrainingRuns(),
+      repository.listArchivedResearchProjects(),
+      repository.listArchivedTargets(),
+    ]);
     setCacheInfo({ routes: cachedModels.length, approxBytes: new TextEncoder().encode(JSON.stringify(cachedModels)).byteLength });
-    setArchivedProfiles(archivedProfileRows); setArchivedWorkspaces(archivedWorkspaceRows); setArchivedThreads(threadRows);
+    setArchivedProfiles(profileRows);
+    setArchivedWorkspaces(workspaceRows);
+    setArchivedThreads(threadRows);
+    setArchivedSessions(sessionRows);
+    setArchivedTrainingRuns(trainingRows);
+    setArchivedResearchProjects(researchRows);
+    setArchivedTargets(targetRows);
   };
+
   useEffect(() => { if (repository) void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, [repository]);
+
   const backup = async () => {
     if (!repository || busy || !isTauriRuntime()) return;
     const destination = await chooseDirectory(copy.backupChooseFolder);
@@ -216,6 +243,7 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(null); }
   };
+
   const restore = async () => {
     if (!repository || busy || !isTauriRuntime()) return;
     const directory = await chooseDirectory(copy.restoreChooseFolder);
@@ -231,7 +259,13 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
       window.location.reload();
     }
   };
-  const recover = async (action: () => Promise<void>) => { setError(null); try { await action(); await onDataChanged(); await refresh(); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } };
+
+  const recover = async (action: () => Promise<void>) => {
+    setError(null);
+    try { await action(); await onDataChanged(); await refresh(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
   const restoreWorkspace = async (workspace: Workspace) => {
     if (!repository) return;
     setError(null);
@@ -250,9 +284,28 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
       await recover(() => repository.restoreWorkspace(workspace.id, replacement));
     }
   };
+
   const allWorkspaceNames = new Map([...workspaces, ...archivedWorkspaces].map((item) => [item.id, item.name]));
-  const archiveCount = archivedProfiles.length + archivedWorkspaces.length + archivedThreads.length;
-  const archiveList = <div className="archive-recovery"><div className="storage-backup-explainer"><Archive size={18} /><div><strong>{copy.home === "Home" ? "Archive and recovery" : "Archiwum i odzyskiwanie"}</strong><p>{copy.home === "Home" ? "Archived data remains in local storage. Restore it here; permanent deletion is not part of this update." : "Zarchiwizowane dane pozostają w pamięci lokalnej. Tutaj można je przywrócić; trwałe usuwanie nie jest częścią tej aktualizacji."}</p></div></div>{archiveCount === 0 ? <p className="muted">{copy.home === "Home" ? "The archive is empty." : "Archiwum jest puste."}</p> : <div className="archive-groups">{archivedProfiles.length > 0 && <details open><summary>{copy.home === "Home" ? "Profiles" : "Profile"} · {archivedProfiles.length}</summary>{archivedProfiles.map((profile) => <div className="archive-row" key={profile.id}><span><strong>{aiIsBeDisplayName(profile)}</strong><small>{profile.archivedAt ? new Date(profile.archivedAt).toLocaleString() : ""}</small></span><button className="secondary-button" onClick={() => void recover(() => repository!.restoreProfile(profile.id))}>{copy.home === "Home" ? "Restore" : "Przywróć"}</button></div>)}</details>}{archivedWorkspaces.length > 0 && <details open><summary>Workspace · {archivedWorkspaces.length}</summary>{archivedWorkspaces.map((workspace) => <div className="archive-row" key={workspace.id}><span><strong>{workspace.name}</strong><small>{workspace.archivedAt ? new Date(workspace.archivedAt).toLocaleString() : ""}</small></span><button className="secondary-button" disabled={archivedProfiles.some((profile) => profile.id === workspace.profileId)} title={archivedProfiles.some((profile) => profile.id === workspace.profileId) ? (copy.home === "Home" ? "Restore the Profile first." : "Najpierw przywróć Profil.") : undefined} onClick={() => void restoreWorkspace(workspace)}>{copy.home === "Home" ? "Restore" : "Przywróć"}</button></div>)}</details>}{archivedThreads.length > 0 && <details open><summary>{copy.home === "Home" ? "Conversations / Manual RV" : "Rozmowy / Manual RV"} · {archivedThreads.length}</summary>{archivedThreads.map((thread) => <div className="archive-row" key={thread.id}><span><strong>{thread.title}</strong><small>{thread.mode === "manual_rv" ? "Manual RV" : (copy.home === "Home" ? "Conversation" : "Rozmowa")} · {allWorkspaceNames.get(thread.workspaceId) ?? thread.workspaceId}</small></span><button className="secondary-button" disabled={archivedWorkspaces.some((workspace) => workspace.id === thread.workspaceId)} title={archivedWorkspaces.some((workspace) => workspace.id === thread.workspaceId) ? (copy.home === "Home" ? "Restore the Workspace first." : "Najpierw przywróć Workspace.") : undefined} onClick={() => void recover(() => repository!.restoreChatThread(thread.id))}>{copy.home === "Home" ? "Restore" : "Przywróć"}</button></div>)}</details>}</div>}</div>;
+  const archivedWorkspaceIds = new Set(archivedWorkspaces.map((item) => item.id));
+  const archivedProfileIds = new Set(archivedProfiles.map((item) => item.id));
+  const parentBlocked = (workspaceId: string, profileId?: string) => archivedWorkspaceIds.has(workspaceId) || Boolean(profileId && archivedProfileIds.has(profileId));
+  const archiveCount = archivedProfiles.length + archivedWorkspaces.length + archivedThreads.length + archivedSessions.length + archivedTrainingRuns.length + archivedResearchProjects.length + archivedTargets.length;
+  const restoreLabel = pl ? "Przywróć" : "Restore";
+  const parentTitle = pl ? "Najpierw przywróć nadrzędny Profil i Workspace." : "Restore the parent Profile and Workspace first.";
+
+  const archiveList = <div className="archive-recovery">
+    <div className="storage-backup-explainer"><Archive size={18} /><div><strong>{pl ? "Archiwum i odzyskiwanie" : "Archive and recovery"}</strong><p>{pl ? "Zarchiwizowane dane pozostają w pamięci lokalnej. Tutaj można je przywrócić; trwałe usuwanie nie jest częścią tej aktualizacji." : "Archived data remains in local storage. Restore it here; permanent deletion is not part of this update."}</p></div></div>
+    {archiveCount === 0 ? <p className="muted">{pl ? "Archiwum jest puste." : "The archive is empty."}</p> : <div className="archive-groups">
+      {archivedProfiles.length > 0 && <details open><summary>{pl ? "Profile" : "Profiles"} · {archivedProfiles.length}</summary>{archivedProfiles.map((profile) => <div className="archive-row" key={profile.id}><span><strong>{aiIsBeDisplayName(profile)}</strong><small>{profile.archivedAt ? new Date(profile.archivedAt).toLocaleString() : ""}</small></span><button className="secondary-button" onClick={() => void recover(() => repository!.restoreProfile(profile.id))}>{restoreLabel}</button></div>)}</details>}
+      {archivedWorkspaces.length > 0 && <details open><summary>Workspace · {archivedWorkspaces.length}</summary>{archivedWorkspaces.map((workspace) => <div className="archive-row" key={workspace.id}><span><strong>{workspace.name}</strong><small>{workspace.archivedAt ? new Date(workspace.archivedAt).toLocaleString() : ""}</small></span><button className="secondary-button" disabled={archivedProfileIds.has(workspace.profileId)} title={archivedProfileIds.has(workspace.profileId) ? parentTitle : undefined} onClick={() => void restoreWorkspace(workspace)}>{restoreLabel}</button></div>)}</details>}
+      {archivedThreads.length > 0 && <details open><summary>{pl ? "Rozmowy / Manual RV" : "Conversations / Manual RV"} · {archivedThreads.length}</summary>{archivedThreads.map((thread) => <div className="archive-row" key={thread.id}><span><strong>{thread.title}</strong><small>{thread.mode === "manual_rv" ? "Manual RV" : (pl ? "Rozmowa" : "Conversation")} · {allWorkspaceNames.get(thread.workspaceId) ?? thread.workspaceId}</small></span><button className="secondary-button" disabled={archivedWorkspaceIds.has(thread.workspaceId)} title={archivedWorkspaceIds.has(thread.workspaceId) ? parentTitle : undefined} onClick={() => void recover(() => repository!.restoreChatThread(thread.id))}>{restoreLabel}</button></div>)}</details>}
+      {archivedSessions.length > 0 && <details open><summary>{pl ? "Sesje RV" : "RV Sessions"} · {archivedSessions.length}</summary>{archivedSessions.map((session) => <div className="archive-row" key={session.id}><span><strong>{session.sessionCode}</strong><small>{session.state} · {allWorkspaceNames.get(session.workspaceId) ?? session.workspaceId}</small></span><button className="secondary-button" disabled={parentBlocked(session.workspaceId, session.profileId)} title={parentBlocked(session.workspaceId, session.profileId) ? parentTitle : undefined} onClick={() => void recover(() => repository!.restoreRvSession(session.id))}>{restoreLabel}</button></div>)}</details>}
+      {archivedTrainingRuns.length > 0 && <details open><summary>Training · {archivedTrainingRuns.length}</summary>{archivedTrainingRuns.map((run) => <div className="archive-row" key={run.id}><span><strong>#{run.runNumber} · {run.name}</strong><small>{run.status} · {run.sessionIds.length} {pl ? "sesji" : "sessions"} · {allWorkspaceNames.get(run.workspaceId) ?? run.workspaceId}</small></span><button className="secondary-button" disabled={parentBlocked(run.workspaceId, run.profileId)} title={parentBlocked(run.workspaceId, run.profileId) ? parentTitle : undefined} onClick={() => void recover(() => repository!.restoreTrainingRun(run.id))}>{restoreLabel}</button></div>)}</details>}
+      {archivedResearchProjects.length > 0 && <details open><summary>Research · {archivedResearchProjects.length}</summary>{archivedResearchProjects.map((project) => <div className="archive-row" key={project.id}><span><strong>{project.name}</strong><small>{project.state} · {allWorkspaceNames.get(project.workspaceId) ?? project.workspaceId}</small></span><button className="secondary-button" disabled={archivedWorkspaceIds.has(project.workspaceId)} title={archivedWorkspaceIds.has(project.workspaceId) ? parentTitle : undefined} onClick={() => void recover(() => repository!.restoreResearchProject(project.id))}>{restoreLabel}</button></div>)}</details>}
+      {archivedTargets.length > 0 && <details open><summary>{pl ? "Moje cele" : "My Targets"} · {archivedTargets.length}</summary>{archivedTargets.map((target) => <div className="archive-row" key={target.id}><span><strong>{target.title}</strong><small>{userTargetKind(target) === "telepathic" ? (pl ? "Telepatyczny" : "Telepathic") : (pl ? "Ogólny" : "General")} · {target.archivedAt ? new Date(target.archivedAt).toLocaleString() : ""}</small></span><button className="secondary-button" onClick={() => void recover(() => repository!.restoreTarget(target.id))}>{restoreLabel}</button></div>)}</details>}
+    </div>}
+  </div>;
+
   return <section className="panel storage-settings-card"><PanelHeader title={copy.storage} icon={<Database size={18} />} /><div className="storage-settings-body">{isTauriRuntime() ? <><p>{copy.backupSecurity}</p><div className="storage-backup-explainer"><ShieldCheck size={18} /><div><strong>{copy.portableBackup}</strong><p>{copy.portableBackupLead}</p></div></div><div className="storage-cache-info"><span><small>{copy.capabilityCacheStorage}</small><strong>{formatBytes(cacheInfo.approxBytes)} · {cacheInfo.routes} {copy.cachedModelCount.toLowerCase()}</strong></span><span><small>{copy.cacheRouteLimit}</small><strong>{PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER.toLocaleString()} / provider</strong></span></div><div className="storage-actions"><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void openDataFolder().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))}>{copy.openDataFolder}</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => void backup()}>{busy === "backup" ? copy.backingUp : copy.createBackup}</button><button className="danger-button restore-button" disabled={Boolean(busy)} onClick={() => void restore()}>{busy === "restore" ? copy.restoring : copy.restoreBackup}</button></div><div className="restore-warning"><CircleStop size={17} /><p>{copy.restoreDataWarning}</p></div></> : <div className="settings-info storage-runtime-info"><p>{copy.storageDesktop}</p></div>}{archiveList}{message && <div className="storage-success"><Check size={14} />{message}</div>}{error && <div className="provider-error">{error}</div>}</div></section>;
 }
 

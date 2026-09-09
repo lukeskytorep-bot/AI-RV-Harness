@@ -1,4 +1,5 @@
 import {
+  Archive,
   BrainCircuit,
   Check,
   ChevronRight,
@@ -47,6 +48,7 @@ import { exportSessionRecord } from "../../exports/session";
 import { AsyncRunGuard } from "../../sessions/runGuard";
 import { findCredentialScopedModelByRouteKey, resolveRoleDefault, resolveViewerDefault } from "../../modelRoutes";
 import { ModelRouteSelect } from "../../components/ModelRouteSelect";
+import { useAppDialogs } from "../../components/AppDialogProvider";
 import { profileGenerationDefaults, profileSystemPromptSnapshot } from "../../profileViewerDefaults";
 import { canSelectMonitor, canSelectProtocol, isRunModeCompatible } from "../../sessions/modeCompatibility";
 import { SafeMarkdown } from "../../components/SafeMarkdown";
@@ -67,6 +69,7 @@ import { reasoningCapabilityLead, reasoningOptionLabel } from "../../providers/r
 import { BatchEvaluation, JudgeEvaluation } from "../judge";
 
 export function RvSessionPanel({ copy, settings, profile, workspace, repository }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; repository: AppRepository | null }) {
+  const dialogs = useAppDialogs();
   const [executionScope, setExecutionScope] = useState<"single" | "batch">("single");
   const [runType, setRunType] = useState<"automatic" | "monitor">("automatic");
   const [viewerNotesEnabled, setViewerNotesEnabled] = useState(true);
@@ -636,6 +639,28 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
     }
   };
 
+  const archiveStoredSession = async (session: RvSession) => {
+    if (!repository) return;
+    const pl = settings.interfaceLanguage === "pl";
+    const confirmed = await dialogs.confirm({
+      title: pl ? "Archiwizować sesję RV?" : "Archive RV Session?",
+      description: pl
+        ? "Cały pakiet sesji pozostanie w lokalnej bazie i będzie można go przywrócić w Settings → Archive and recovery."
+        : "The complete session package remains in the local database and can be restored from Settings → Archive and recovery.",
+      details: [session.sessionCode, session.state],
+      confirmLabel: pl ? "Archiwizuj" : "Archive",
+      cancelLabel: copy.cancel,
+      severity: "warning",
+    });
+    if (!confirmed) return;
+    setRunError(null);
+    try {
+      await repository.archiveRvSession(session.id);
+      if (progress?.sessionId === session.id) { setProgress(null); setPostRevealTranscript(""); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); }
+      setRecentSessions((await repository.listRvSessions(workspace.id)).filter((item) => !item.researchProjectId));
+    } catch (cause) { setRunError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
   const preserveInterrupted = async (session: RvSession) => {
     if (!repository) return;
     await repository.updateRvSessionState(session.id, "Interrupted", "RECOVERY: incomplete blind run preserved after restart");
@@ -844,7 +869,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
                 ? (settings.interfaceLanguage === "pl" ? "Kontynuuj do Kroku 9" : "Continue to Step 9")
                 : (settings.interfaceLanguage === "pl" ? "Dokończ zapis i Reveal" : "Finish sealing and Reveal");
             return <div key={session.id}>
-              <button className="recent-session-open" disabled={incomplete} onClick={() => void loadStoredSession(session)}><span><strong>{session.sessionCode}</strong><small>{session.state}</small></span><ChevronRight size={13} /></button>
+              <div className="recent-session-row"><button className="recent-session-open" disabled={incomplete} onClick={() => void loadStoredSession(session)}><span><strong>{session.sessionCode}</strong><small>{session.state}</small></span><ChevronRight size={13} /></button><button className="icon-button" disabled={incomplete || sessionRunning || batchRunning} title={settings.interfaceLanguage === "pl" ? (incomplete ? "Najpierw zakończ albo oznacz sesję jako przerwaną." : "Archiwizuj sesję") : (incomplete ? "Complete or mark the session interrupted first." : "Archive session")} onClick={() => void archiveStoredSession(session)}><Archive size={14} /></button></div>
               {incomplete && <div className="session-recovery"><small>{recovery ? (settings.interfaceLanguage === "pl" ? "Znaleziono bezpieczny checkpoint Protokołu Telepatycznego." : "A safe Telepathic Protocol checkpoint was found.") : copy.recoveryRequired}</small>{recovery && <button disabled={sessionRunning || batchRunning} onClick={() => void resumeTelepathicSession(session)}>{recoveryLabel}</button>}<button disabled={sessionRunning || batchRunning} onClick={() => void preserveInterrupted(session)}>{copy.markInterrupted}</button></div>}
               {providerRecovery && <div className="session-recovery"><small>{settings.interfaceLanguage === "pl" ? "Sesja może zostać bezpiecznie wznowiona od nieudanego wywołania." : "The session can safely resume from the failed call."}</small><button disabled={sessionRunning || batchRunning} onClick={() => void runCapturedSession(session, true)}>{settings.interfaceLanguage === "pl" ? "Kontynuuj" : "Continue"}</button><button disabled={sessionRunning || batchRunning} onClick={() => void runCapturedSession(session, false)}>{settings.interfaceLanguage === "pl" ? "Od początku" : "Start again"}</button></div>}
             </div>;

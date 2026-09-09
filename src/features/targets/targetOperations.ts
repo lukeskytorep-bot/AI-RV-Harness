@@ -72,6 +72,6 @@ export async function updateFeatureTarget(
   await updateUserTarget(repository, target, values);
 }
 
-export async function deleteFeatureTarget(repository: AppRepository, targetId: string): Promise<void> {
-  await repository.deleteTarget(targetId);
+export async function archiveFeatureTarget(repository: AppRepository, targetId: string): Promise<void> {
+  await repository.archiveTarget(targetId);
 }

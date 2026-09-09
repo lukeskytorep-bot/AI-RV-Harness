@@ -1,4 +1,4 @@
-import { BrainCircuit, Crosshair, FileCheck2, LockKeyhole, Pencil, Plus, Trash2, type LucideIcon } from "lucide-react";
+import { Archive, BrainCircuit, Crosshair, FileCheck2, LockKeyhole, Pencil, Plus, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "../../components/EmptyState";
@@ -11,7 +11,7 @@ import { localizedTargetReveal, localizedTargetTitle } from "../../targets/local
 import type { TargetRecord, TargetUsageRecord } from "../../targets/types";
 import type { AppSettings, InterfaceLanguage } from "../../types";
 import { CreateTargetDialog, EditTargetDialog } from "./TargetDialogs";
-import { createFeatureTarget, deleteFeatureTarget, loadTargetLibrary, updateFeatureTarget } from "./targetOperations";
+import { archiveFeatureTarget, createFeatureTarget, loadTargetLibrary, updateFeatureTarget } from "./targetOperations";
 import { collectLockedTargetIds, groupTargets } from "./targetViewModel";
 
 export interface TargetsScreenProps {
@@ -59,20 +59,20 @@ export function TargetsScreen({ copy, settings, repository }: TargetsScreenProps
     await reload();
   };
 
-  const deleteTarget = async (target: TargetRecord) => {
+  const archiveTarget = async (target: TargetRecord) => {
     if (!repository) return;
     const confirmed = await dialogs.confirm({
-      title: settings.interfaceLanguage === "pl" ? "Usunąć cel?" : "Delete target?",
-      description: copy.deleteTargetConfirm,
+      title: copy.archiveTarget,
+      description: copy.archiveTargetConfirm,
       details: [localizedTargetTitle(target, settings.interfaceLanguage)],
-      confirmLabel: copy.dialogDelete,
+      confirmLabel: copy.dialogArchive,
       cancelLabel: copy.cancel,
-      severity: "destructive",
+      severity: "warning",
     });
     if (!confirmed) return;
     setError(null);
     try {
-      await deleteFeatureTarget(repository, target.id);
+      await archiveFeatureTarget(repository, target.id);
       await reload();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -92,11 +92,11 @@ export function TargetsScreen({ copy, settings, repository }: TargetsScreenProps
         </section>
         <section className="panel target-panel">
           <PanelHeader title={`${copy.myTargets} · ${groups.general.length}`} icon={LockKeyhole} />
-          {groups.general.length ? <TargetList copy={copy} language={settings.interfaceLanguage} targets={groups.general} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onDelete={(target) => void deleteTarget(target)} /> : <EmptyState icon={<Plus size={28} />} title={copy.noPrivateTargets} body={copy.secureLocal} action={<button className="secondary-button" onClick={() => setDialogOpen(true)}><Plus size={15} />{copy.addTarget}</button>} />}
+          {groups.general.length ? <TargetList copy={copy} language={settings.interfaceLanguage} targets={groups.general} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onArchive={(target) => void archiveTarget(target)} /> : <EmptyState icon={<Plus size={28} />} title={copy.noPrivateTargets} body={copy.secureLocal} action={<button className="secondary-button" onClick={() => setDialogOpen(true)}><Plus size={15} />{copy.addTarget}</button>} />}
         </section>
         <section className="panel target-panel">
           <PanelHeader title={`${settings.interfaceLanguage === "pl" ? "Moje cele telepatyczne" : "My Telepathic Targets"} · ${groups.telepathic.length}`} icon={BrainCircuit} />
-          {groups.telepathic.length ? <TargetList copy={copy} language={settings.interfaceLanguage} targets={groups.telepathic} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onDelete={(target) => void deleteTarget(target)} /> : <EmptyState icon={<BrainCircuit size={28} />} title={settings.interfaceLanguage === "pl" ? "Brak celów telepatycznych" : "No telepathic targets"} body={settings.interfaceLanguage === "pl" ? "Dodaj osobę, istotę lub grupę przeznaczoną dla Protokołu Telepatycznego." : "Add a person, being, or group intended for the Telepathic Protocol."} />}
+          {groups.telepathic.length ? <TargetList copy={copy} language={settings.interfaceLanguage} targets={groups.telepathic} usedTargetIds={usedTargetIds} onEdit={setEditingTarget} onArchive={(target) => void archiveTarget(target)} /> : <EmptyState icon={<BrainCircuit size={28} />} title={settings.interfaceLanguage === "pl" ? "Brak celów telepatycznych" : "No telepathic targets"} body={settings.interfaceLanguage === "pl" ? "Dodaj osobę, istotę lub grupę przeznaczoną dla Protokołu Telepatycznego." : "Add a person, being, or group intended for the Telepathic Protocol."} />}
         </section>
       </div>
       <section className="panel target-help-panel">
@@ -110,11 +110,11 @@ export function TargetsScreen({ copy, settings, repository }: TargetsScreenProps
   );
 }
 
-function TargetList({ copy, language, targets, usedTargetIds, onEdit, onDelete }: { copy: ReturnType<typeof getCopy>; language: InterfaceLanguage; targets: TargetRecord[]; usedTargetIds: Set<string>; onEdit?: (target: TargetRecord) => void; onDelete?: (target: TargetRecord) => void }) {
+function TargetList({ copy, language, targets, usedTargetIds, onEdit, onArchive }: { copy: ReturnType<typeof getCopy>; language: InterfaceLanguage; targets: TargetRecord[]; usedTargetIds: Set<string>; onEdit?: (target: TargetRecord) => void; onArchive?: (target: TargetRecord) => void }) {
   return <div className="target-list">{targets.map((target) => {
     const locked = usedTargetIds.has(target.id);
     const revealText = localizedTargetReveal(target, language);
-    return <article className="target-card" key={target.id}><div className="target-card-head"><div><strong>{localizedTargetTitle(target, language)}</strong><small>{target.tags.length ? target.tags.join(" · ") : target.collection}</small></div>{target.collection === "user" && <div className="target-card-actions"><button className="icon-button" disabled={locked} title={locked ? copy.usedTargetLocked : copy.editTarget} onClick={() => onEdit?.(target)}><Pencil size={14} /></button><button className="icon-button danger" disabled={locked} title={locked ? copy.usedTargetLocked : copy.deleteTarget} onClick={() => onDelete?.(target)}><Trash2 size={14} /></button></div>}</div>{revealText && <details className="target-reveal-preview"><summary>{copy.targetReveal}</summary><p>{revealText}</p></details>}{Boolean(target.revealArtifacts?.length) && <div className="target-image-list">{target.revealArtifacts!.map((artifact) => <span key={`${artifact.artifactId}-${artifact.sha256}`}>▣ {artifact.originalFileName}</span>)}</div>}{locked && <small className="target-locked-note"><LockKeyhole size={11} />{copy.usedTargetLocked}</small>}{target.contentHash && <code>sha256 {target.contentHash.slice(0, 16)}…</code>}</article>;
+    return <article className="target-card" key={target.id}><div className="target-card-head"><div><strong>{localizedTargetTitle(target, language)}</strong><small>{target.tags.length ? target.tags.join(" · ") : target.collection}</small></div>{target.collection === "user" && <div className="target-card-actions"><button className="icon-button" disabled={locked} title={locked ? copy.usedTargetLocked : copy.editTarget} onClick={() => onEdit?.(target)}><Pencil size={14} /></button><button className="icon-button" title={language === "pl" ? "Archiwizuj cel" : "Archive target"} onClick={() => onArchive?.(target)}><Archive size={14} /></button></div>}</div>{revealText && <details className="target-reveal-preview"><summary>{copy.targetReveal}</summary><p>{revealText}</p></details>}{Boolean(target.revealArtifacts?.length) && <div className="target-image-list">{target.revealArtifacts!.map((artifact) => <span key={`${artifact.artifactId}-${artifact.sha256}`}>▣ {artifact.originalFileName}</span>)}</div>}{locked && <small className="target-locked-note"><LockKeyhole size={11} />{copy.usedTargetLocked}</small>}{target.contentHash && <code>sha256 {target.contentHash.slice(0, 16)}…</code>}</article>;
   })}</div>;
 }
 

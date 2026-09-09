@@ -1470,3 +1470,7 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 .app-dialog-confirmation > span { color: #d8495a; }
 .app-dialog-error { margin: 0; }
 .app-dialog-actions { padding: 14px 22px 18px; border-top: 1px solid var(--border); }
+
+.recent-session-row { display: flex; align-items: stretch; gap: 0.35rem; }
+.recent-session-row .recent-session-open { flex: 1; }
+.recent-session-row .icon-button { flex: 0 0 auto; align-self: center; }

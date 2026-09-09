@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppRepository } from "../../storage/repository";
-import { deleteFeatureTarget, loadTargetLibrary, updateFeatureTarget } from "./targetOperations";
+import { archiveFeatureTarget, loadTargetLibrary, updateFeatureTarget } from "./targetOperations";
 
 describe("target operations", () => {
   it("loads target usage and every research assignment before exposing lock state", async () => {
@@ -20,7 +20,7 @@ describe("target operations", () => {
     expect(result.researchLockedTargetIds).toEqual(["target-a", "target-b"]);
   });
 
-  it("updates and deletes through the repository-owned target contracts", async () => {
+  it("updates and archives through the repository-owned target contracts", async () => {
     const base = {
       id: "target-1",
       collection: "user" as const,
@@ -33,13 +33,13 @@ describe("target operations", () => {
     };
     const repository = {
       updateTarget: vi.fn(async (_id, values) => ({ ...base, ...values })),
-      deleteTarget: vi.fn(async () => undefined),
+      archiveTarget: vi.fn(async () => undefined),
     } as unknown as AppRepository;
 
     await updateFeatureTarget(repository, base, { title: "New", revealText: "New reveal", tags: ["test"] });
-    await deleteFeatureTarget(repository, base.id);
+    await archiveFeatureTarget(repository, base.id);
 
     expect(repository.updateTarget).toHaveBeenCalledWith("target-1", expect.objectContaining({ title: "New", revealText: "New reveal", tags: ["test"] }));
-    expect(repository.deleteTarget).toHaveBeenCalledWith("target-1");
+    expect(repository.archiveTarget).toHaveBeenCalledWith("target-1");
   });
 });

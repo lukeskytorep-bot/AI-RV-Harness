@@ -12,16 +12,18 @@ This directory contains project documentation that is useful for development, re
 | [`specifications/`](specifications/) | As-built functional and technical specifications. |
 | [`requirements/`](requirements/) | Historical requirements, accepted correction sets and test-derived change lists. |
 | [`prompts/`](prompts/) | Design records for bundled prompt packages. Runtime prompt resources remain in source/resource directories. |
+| [`reports/`](reports/) | Current private-development implementation and audit reports, including the UX-DATA campaign. |
 | [`credits/`](credits/) | Credit history, attribution policy and technical-reference records supporting the root `CREDITS.md` and `CITATION.cff`. |
 
 ## Current release documentation
 
-The current development baseline is v0.7.12:
+The current private development baseline is v0.7.13, built on the public v0.7.12 release. The v0.7.12 records below remain the historical implementation and release documentation:
 
 - [Architecture documentation index](architecture/README.md)
 - [System overview](architecture/SYSTEM_OVERVIEW.md)
 - [Engineering design and integrity safeguards](architecture/ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md)
 - [AI Center and Viewer Notes architecture](architecture/AI_CENTER_AND_VIEWER_NOTES.md)
+- [UX-DATA-6 Soft Archive / Restore implementation report](reports/UX_DATA_SOFT_ARCHIVE_LIFECYCLE_v0.7.13_PL.md)
 
 - [AI Center implementation plan](releases/v0.7.12/AI_CENTER_IMPLEMENTATION_PLAN_PL.md)
 - [AI Center wiki documentation](releases/v0.7.12/AI_CENTER_VIEWER_NOTES_WIKI_EN.md)

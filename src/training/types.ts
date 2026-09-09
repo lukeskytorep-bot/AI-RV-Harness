@@ -56,6 +56,7 @@ export interface TrainingRunRecord {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  archivedAt?: string;
 }
 
 export type CreateTrainingRunInput = Omit<TrainingRunRecord, "id" | "runNumber" | "createdAt" | "updatedAt" | "completedTargetIds" | "sessionIds" | "currentIndex" | "errors">;

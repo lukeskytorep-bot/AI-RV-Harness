@@ -73,6 +73,23 @@ describe("browser Sessions repository contract", () => {
     expect(JSON.parse(storage.getItem("rvh.dev.reveals") ?? "[]")).toHaveLength(1);
   });
 
+  it("archives and restores an ordinary session only when its Profile and Workspace are active", async () => {
+    const storage = new MemoryStorage();
+    storage.setItem("rvh.dev.profiles", JSON.stringify([{ id: "profile-a", name: "Profile", createdAt: timestamp, updatedAt: timestamp }]));
+    storage.setItem("rvh.dev.workspaces", JSON.stringify([{ id: "workspace-a", profileId: "profile-a", name: "Workspace", createdAt: timestamp, updatedAt: timestamp, lastOpenedAt: timestamp }]));
+    const repository = new BrowserSessionsRepository({ storage, now: () => timestamp, isResearchScoresFrozen: () => true });
+    await repository.createRvSession(sessionInput);
+    await repository.archiveRvSession("session-a");
+    expect(await repository.listRvSessions("workspace-a")).toEqual([]);
+    expect((await repository.listArchivedRvSessions()).map((item) => item.id)).toEqual(["session-a"]);
+
+    storage.setItem("rvh.dev.workspaces", "[]");
+    await expect(repository.restoreRvSession("session-a")).rejects.toThrow("Restore the parent Profile and Workspace first.");
+    storage.setItem("rvh.dev.workspaces", JSON.stringify([{ id: "workspace-a", profileId: "profile-a", name: "Workspace", createdAt: timestamp, updatedAt: timestamp, lastOpenedAt: timestamp }]));
+    await repository.restoreRvSession("session-a");
+    expect((await repository.listRvSessions("workspace-a")).map((item) => item.id)).toEqual(["session-a"]);
+  });
+
   it("keeps snapshots immutable and event ordering stable", async () => {
     const storage = new MemoryStorage();
     const repository = new BrowserSessionsRepository({ storage, now: () => timestamp, isResearchScoresFrozen: () => true });
@@ -141,7 +158,7 @@ describe("SQLite Sessions repository contract", () => {
     });
     expect((await repository.listRecentRvSessions(["workspace-b", "workspace-a"], 2)).map((session) => session.id)).toEqual(["session-b1"]);
     expect(selects).toHaveLength(1);
-    expect(selects[0]?.query).toContain("WHERE workspace_id IN ($1, $2)");
+    expect(selects[0]?.query).toContain("WHERE archived_at IS NULL AND workspace_id IN ($1, $2)");
     expect(selects[0]?.query).toContain("ORDER BY updated_at DESC");
     expect(selects[0]?.query).toContain("CASE workspace_id WHEN $1 THEN 0 WHEN $2 THEN 1");
     expect(selects[0]?.query).toContain("LIMIT $3");

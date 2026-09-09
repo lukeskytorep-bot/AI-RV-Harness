@@ -14,6 +14,9 @@ export interface ResearchRepository {
   createResearchProject(config: ResearchConfig): Promise<ResearchProjectRecord>;
   getResearchProject(id: string): Promise<ResearchProjectRecord | null>;
   listResearchProjects(workspaceId?: string): Promise<ResearchProjectRecord[]>;
+  listArchivedResearchProjects(): Promise<ResearchProjectRecord[]>;
+  archiveResearchProject(id: string): Promise<void>;
+  restoreResearchProject(id: string): Promise<void>;
   setResearchProjectState(id: string, state: ResearchState): Promise<void>;
   lockResearchProject(id: string, plan: ResearchLockPlan): Promise<void>;
   listResearchConditions(projectId: string): Promise<ResearchConditionRecord[]>;

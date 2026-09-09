@@ -23,7 +23,11 @@ export interface SessionsRepository {
   acceptReveal(sessionId: string, reveal: RevealInput): Promise<void>;
   getReveal(sessionId: string): Promise<RevealInput | null>;
   getViewerEvidence(sessionId: string): Promise<string>;
+  getRvSession(id: string): Promise<RvSession | null>;
   listRvSessions(workspaceId: string): Promise<RvSession[]>;
+  listArchivedRvSessions(): Promise<RvSession[]>;
+  archiveRvSession(id: string): Promise<void>;
+  restoreRvSession(id: string): Promise<void>;
   listRecentRvSessions(workspaceIds: readonly string[], limit: number): Promise<RvSession[]>;
   addTargetClarification(sessionId: string, content: string): Promise<TargetClarificationRecord>;
   listTargetClarifications(sessionId: string): Promise<TargetClarificationRecord[]>;

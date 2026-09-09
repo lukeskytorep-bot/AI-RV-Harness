@@ -30,6 +30,7 @@ type RvSessionRow = {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  archived_at: string | null;
 };
 type RevealRow = { reveal_source: RevealInput["source"]; reveal_text: string | null; artifact_manifest_json: string; reveal_hash: string };
 type SessionEventRow = { id: string; session_id: string; sequence_number: number; event_type: string; role: SessionEventRecord["role"] | null; content: string | null; metadata_json: string; created_at: string };
@@ -58,6 +59,7 @@ function mapRvSession(row: RvSessionRow): RvSession {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at ?? undefined,
+    archivedAt: row.archived_at ?? undefined,
   };
 }
 
@@ -215,15 +217,64 @@ export class SqliteSessionsRepository implements SessionsRepository {
     return verifySealedViewerEvidence(row.pre_reveal_transcript, row.pre_reveal_hash);
   }
 
+  async getRvSession(id: string): Promise<RvSession | null> {
+    const rows = await this.dependencies.select<RvSessionRow[]>(
+      `SELECT id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
+              pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id,
+              research_project_id, created_at, updated_at, completed_at, archived_at
+         FROM rv_sessions WHERE id = $1 LIMIT 1`,
+      [id],
+    );
+    return rows[0] ? mapRvSession(rows[0]) : null;
+  }
+
   async listRvSessions(workspaceId: string): Promise<RvSession[]> {
     const rows = await this.dependencies.select<RvSessionRow[]>(
       `SELECT id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
               pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id,
-              research_project_id, created_at, updated_at, completed_at
-         FROM rv_sessions WHERE workspace_id = $1 ORDER BY created_at DESC`,
+              research_project_id, created_at, updated_at, completed_at, archived_at
+         FROM rv_sessions WHERE workspace_id = $1 AND archived_at IS NULL ORDER BY created_at DESC`,
       [workspaceId],
     );
     return rows.map(mapRvSession);
+  }
+
+  async listArchivedRvSessions(): Promise<RvSession[]> {
+    const rows = await this.dependencies.select<RvSessionRow[]>(
+      `SELECT id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
+              pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id,
+              research_project_id, created_at, updated_at, completed_at, archived_at
+         FROM rv_sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC`,
+    );
+    return rows.map(mapRvSession);
+  }
+
+  async archiveRvSession(id: string): Promise<void> {
+    const timestamp = this.now();
+    const result = await this.dependencies.executeWrite(
+      "UPDATE rv_sessions SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL",
+      [timestamp, id],
+    );
+    if (result.rowsAffected !== 1) throw new Error("Active RV Session not found.");
+  }
+
+  async restoreRvSession(id: string): Promise<void> {
+    const rows = await this.dependencies.select<Array<{ workspace_id: string; profile_id: string }>>(
+      "SELECT workspace_id, profile_id FROM rv_sessions WHERE id = $1 AND archived_at IS NOT NULL", [id],
+    );
+    const session = rows[0];
+    if (!session) throw new Error("Archived RV Session not found.");
+    const parents = await this.dependencies.select<Array<{ workspace_id: string }>>(
+      `SELECT w.id AS workspace_id FROM workspaces w JOIN profiles p ON p.id = w.profile_id
+        WHERE w.id = $1 AND w.profile_id = $2 AND w.archived_at IS NULL AND p.archived_at IS NULL`,
+      [session.workspace_id, session.profile_id],
+    );
+    if (!parents[0]) throw new Error("Restore the parent Profile and Workspace first.");
+    const timestamp = this.now();
+    await this.dependencies.executeWrite(
+      "UPDATE rv_sessions SET archived_at = NULL, updated_at = $1 WHERE id = $2 AND archived_at IS NOT NULL",
+      [timestamp, id],
+    );
   }
 
   async listRecentRvSessions(workspaceIds: readonly string[], limit: number): Promise<RvSession[]> {
@@ -235,9 +286,9 @@ export class SqliteSessionsRepository implements SessionsRepository {
     const rows = await this.dependencies.select<RvSessionRow[]>(
       `SELECT id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
               pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id,
-              research_project_id, created_at, updated_at, completed_at
+              research_project_id, created_at, updated_at, completed_at, archived_at
          FROM rv_sessions
-        WHERE workspace_id IN (${workspacePlaceholders.join(", ")})
+        WHERE archived_at IS NULL AND workspace_id IN (${workspacePlaceholders.join(", ")})
         ORDER BY updated_at DESC,
                  CASE workspace_id ${workspaceOrder} ELSE ${workspaceIds.length} END ASC,
                  created_at DESC, id ASC

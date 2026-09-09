@@ -94,6 +94,41 @@ export class BrowserRepository implements AppRepository {
   createTrainingRun: AppRepository["createTrainingRun"] = (input) => this.trainingRepository.createTrainingRun(input);
   updateTrainingRun: AppRepository["updateTrainingRun"] = (id, input) => this.trainingRepository.updateTrainingRun(id, input);
   listTrainingRuns: AppRepository["listTrainingRuns"] = () => this.trainingRepository.listTrainingRuns();
+  listArchivedTrainingRuns: AppRepository["listArchivedTrainingRuns"] = () => this.trainingRepository.listArchivedTrainingRuns();
+
+  async archiveTrainingRun(id: string): Promise<void> {
+    const run = (await this.trainingRepository.listTrainingRuns()).find((item) => item.id === id);
+    if (!run) throw new Error("Active Training run not found.");
+    const sessionIds = [...new Set([...(run.sessionIds ?? []), ...(run.activeTargetCheckpoint?.sessionId ? [run.activeTargetCheckpoint.sessionId] : [])])];
+    const changed: string[] = [];
+    try {
+      for (const sessionId of sessionIds) {
+        const session = await this.sessionsRepository.getRvSession(sessionId);
+        if (session && !session.archivedAt) { await this.sessionsRepository.archiveRvSession(sessionId); changed.push(sessionId); }
+      }
+      await this.trainingRepository.archiveTrainingRun(id);
+    } catch (cause) {
+      for (const sessionId of changed.reverse()) await this.sessionsRepository.restoreRvSession(sessionId).catch(() => undefined);
+      throw cause;
+    }
+  }
+
+  async restoreTrainingRun(id: string): Promise<void> {
+    const run = (await this.trainingRepository.listArchivedTrainingRuns()).find((item) => item.id === id);
+    if (!run) throw new Error("Archived Training run not found.");
+    const sessionIds = [...new Set([...(run.sessionIds ?? []), ...(run.activeTargetCheckpoint?.sessionId ? [run.activeTargetCheckpoint.sessionId] : [])])];
+    const changed: string[] = [];
+    try {
+      for (const sessionId of sessionIds) {
+        const session = await this.sessionsRepository.getRvSession(sessionId);
+        if (session?.archivedAt) { await this.sessionsRepository.restoreRvSession(sessionId); changed.push(sessionId); }
+      }
+      await this.trainingRepository.restoreTrainingRun(id);
+    } catch (cause) {
+      for (const sessionId of changed.reverse()) await this.sessionsRepository.archiveRvSession(sessionId).catch(() => undefined);
+      throw cause;
+    }
+  }
 
   async createDatabaseSnapshot(_destinationPath: string): Promise<void> {
     throw new Error("Backup snapshots are available in the desktop app.");
@@ -209,9 +244,11 @@ export class BrowserRepository implements AppRepository {
   clearProviderModelCache: AppRepository["clearProviderModelCache"] = () => this.settingsModelsRepository.clearProviderModelCache();
 
   listTargets: AppRepository["listTargets"] = (collection) => this.targetsRepository.listTargets(collection);
+  listArchivedTargets: AppRepository["listArchivedTargets"] = () => this.targetsRepository.listArchivedTargets();
   createTarget: AppRepository["createTarget"] = (input) => this.targetsRepository.createTarget(input);
   updateTarget: AppRepository["updateTarget"] = (id, input) => this.targetsRepository.updateTarget(id, input);
-  deleteTarget: AppRepository["deleteTarget"] = (id) => this.targetsRepository.deleteTarget(id);
+  archiveTarget: AppRepository["archiveTarget"] = (id) => this.targetsRepository.archiveTarget(id);
+  restoreTarget: AppRepository["restoreTarget"] = (id) => this.targetsRepository.restoreTarget(id);
   recordTargetUsage: AppRepository["recordTargetUsage"] = (input) => this.targetsRepository.recordTargetUsage(input);
   listTargetUsage: AppRepository["listTargetUsage"] = () => this.targetsRepository.listTargetUsage();
 
@@ -239,6 +276,26 @@ export class BrowserRepository implements AppRepository {
   getReveal: AppRepository["getReveal"] = (sessionId) => this.sessionsRepository.getReveal(sessionId);
   getViewerEvidence: AppRepository["getViewerEvidence"] = (sessionId) => this.sessionsRepository.getViewerEvidence(sessionId);
   listRvSessions: AppRepository["listRvSessions"] = (workspaceId) => this.sessionsRepository.listRvSessions(workspaceId);
+  listArchivedRvSessions: AppRepository["listArchivedRvSessions"] = async () => {
+    const trainingSessionIds = new Set([...(await this.trainingRepository.listTrainingRuns()), ...(await this.trainingRepository.listArchivedTrainingRuns())].flatMap((run) => [...(run.sessionIds ?? []), ...(run.activeTargetCheckpoint?.sessionId ? [run.activeTargetCheckpoint.sessionId] : [])]));
+    return (await this.sessionsRepository.listArchivedRvSessions()).filter((session) => !session.researchProjectId && !trainingSessionIds.has(session.id));
+  };
+  archiveRvSession: AppRepository["archiveRvSession"] = async (id) => {
+    const session = await this.sessionsRepository.getRvSession(id);
+    if (!session || session.archivedAt) throw new Error("Active RV Session not found.");
+    if (session.researchProjectId) throw new Error("Research-owned sessions are archived with their Research project.");
+    const trainingOwned = [...(await this.trainingRepository.listTrainingRuns()), ...(await this.trainingRepository.listArchivedTrainingRuns())].some((run) => (run.sessionIds ?? []).includes(id) || run.activeTargetCheckpoint?.sessionId === id);
+    if (trainingOwned) throw new Error("Training-owned sessions are archived with their Training run.");
+    await this.sessionsRepository.archiveRvSession(id);
+  };
+  restoreRvSession: AppRepository["restoreRvSession"] = async (id) => {
+    const session = await this.sessionsRepository.getRvSession(id);
+    if (!session?.archivedAt) throw new Error("Archived RV Session not found.");
+    if (session.researchProjectId) throw new Error("Research-owned sessions are restored with their Research project.");
+    const trainingOwned = [...(await this.trainingRepository.listTrainingRuns()), ...(await this.trainingRepository.listArchivedTrainingRuns())].some((run) => (run.sessionIds ?? []).includes(id) || run.activeTargetCheckpoint?.sessionId === id);
+    if (trainingOwned) throw new Error("Training-owned sessions are restored with their Training run.");
+    await this.sessionsRepository.restoreRvSession(id);
+  };
   listRecentRvSessions: AppRepository["listRecentRvSessions"] = async (limit) => {
     const workspaces = await this.workspacesConversationsRepository.listWorkspaces();
     return this.sessionsRepository.listRecentRvSessions(workspaces.map((workspace) => workspace.id), limit);
@@ -258,6 +315,36 @@ export class BrowserRepository implements AppRepository {
   createResearchProject: AppRepository["createResearchProject"] = (config) => this.researchRepository.createResearchProject(config);
   getResearchProject: AppRepository["getResearchProject"] = (id) => this.researchRepository.getResearchProject(id);
   listResearchProjects: AppRepository["listResearchProjects"] = (workspaceId) => this.researchRepository.listResearchProjects(workspaceId);
+  listArchivedResearchProjects: AppRepository["listArchivedResearchProjects"] = () => this.researchRepository.listArchivedResearchProjects();
+
+  async archiveResearchProject(id: string): Promise<void> {
+    const project = (await this.researchRepository.listResearchProjects()).find((item) => item.id === id);
+    if (!project) throw new Error("Active Research project not found.");
+    const sessionIds = (await this.sessionsRepository.listRvSessions(project.workspaceId)).filter((session) => session.researchProjectId === id).map((session) => session.id);
+    const changed: string[] = [];
+    try {
+      for (const sessionId of sessionIds) { await this.sessionsRepository.archiveRvSession(sessionId); changed.push(sessionId); }
+      await this.researchRepository.archiveResearchProject(id);
+    } catch (cause) {
+      for (const sessionId of changed.reverse()) await this.sessionsRepository.restoreRvSession(sessionId).catch(() => undefined);
+      throw cause;
+    }
+  }
+
+  async restoreResearchProject(id: string): Promise<void> {
+    const project = (await this.researchRepository.listArchivedResearchProjects()).find((item) => item.id === id);
+    if (!project) throw new Error("Archived Research project not found.");
+    const sessionIds = (await this.sessionsRepository.listArchivedRvSessions()).filter((session) => session.researchProjectId === id).map((session) => session.id);
+    const changed: string[] = [];
+    try {
+      for (const sessionId of sessionIds) { await this.sessionsRepository.restoreRvSession(sessionId); changed.push(sessionId); }
+      await this.researchRepository.restoreResearchProject(id);
+    } catch (cause) {
+      for (const sessionId of changed.reverse()) await this.sessionsRepository.archiveRvSession(sessionId).catch(() => undefined);
+      throw cause;
+    }
+  }
+
   setResearchProjectState: AppRepository["setResearchProjectState"] = (id, state) => this.researchRepository.setResearchProjectState(id, state);
   lockResearchProject: AppRepository["lockResearchProject"] = (id, plan) => this.researchRepository.lockResearchProject(id, plan);
   listResearchConditions: AppRepository["listResearchConditions"] = (projectId) => this.researchRepository.listResearchConditions(projectId);

@@ -9,6 +9,8 @@ export interface SqliteTrainingRepositoryDependencies {
   createId?: typeof createId;
 }
 
+type TrainingRow = { record_json: string; archived_at: string | null };
+
 export class SqliteTrainingRepository implements TrainingRepository {
   constructor(private readonly dependencies: SqliteTrainingRepositoryDependencies) {}
 
@@ -18,6 +20,11 @@ export class SqliteTrainingRepository implements TrainingRepository {
 
   private nextId(): string {
     return (this.dependencies.createId ?? createId)("training");
+  }
+
+  private mapRow(row: TrainingRow): TrainingRunRecord {
+    const run = JSON.parse(row.record_json) as TrainingRunRecord;
+    return { ...run, sessionIds: run.sessionIds ?? [], archivedAt: row.archived_at ?? run.archivedAt ?? undefined };
   }
 
   async createTrainingRun(input: CreateTrainingRunInput): Promise<TrainingRunRecord> {
@@ -37,19 +44,19 @@ export class SqliteTrainingRepository implements TrainingRepository {
       updatedAt: timestamp,
     };
     await this.dependencies.executeWrite(
-      `INSERT INTO training_runs (id, run_number, status, record_json, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
+      `INSERT INTO training_runs (id, run_number, status, record_json, created_at, updated_at, archived_at) VALUES ($1, $2, $3, $4, $5, $5, NULL)`,
       [run.id, run.runNumber, run.status, JSON.stringify(run), timestamp],
     );
     return run;
   }
 
   async updateTrainingRun(id: string, input: UpdateTrainingRunInput): Promise<void> {
-    const rows = await this.dependencies.select<Array<{ record_json: string }>>(
-      "SELECT record_json FROM training_runs WHERE id = $1",
+    const rows = await this.dependencies.select<TrainingRow[]>(
+      "SELECT record_json, archived_at FROM training_runs WHERE id = $1 AND archived_at IS NULL",
       [id],
     );
-    if (!rows[0]) throw new Error("Training run not found.");
-    const current = JSON.parse(rows[0].record_json) as TrainingRunRecord;
+    if (!rows[0]) throw new Error("Active Training run not found.");
+    const current = this.mapRow(rows[0]);
     const updated: TrainingRunRecord = {
       ...current,
       ...input,
@@ -57,18 +64,55 @@ export class SqliteTrainingRepository implements TrainingRepository {
       updatedAt: this.now(),
     };
     await this.dependencies.executeWrite(
-      "UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4",
+      "UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL",
       [updated.status, JSON.stringify(updated), updated.updatedAt, id],
     );
   }
 
   async listTrainingRuns(): Promise<TrainingRunRecord[]> {
-    const rows = await this.dependencies.select<Array<{ record_json: string }>>(
-      "SELECT record_json FROM training_runs ORDER BY run_number DESC",
+    const rows = await this.dependencies.select<TrainingRow[]>(
+      "SELECT record_json, archived_at FROM training_runs WHERE archived_at IS NULL ORDER BY run_number DESC",
     );
-    return rows.map((row) => {
-      const run = JSON.parse(row.record_json) as TrainingRunRecord;
-      return { ...run, sessionIds: run.sessionIds ?? [] };
-    });
+    return rows.map((row) => this.mapRow(row));
+  }
+
+  async listArchivedTrainingRuns(): Promise<TrainingRunRecord[]> {
+    const rows = await this.dependencies.select<TrainingRow[]>(
+      "SELECT record_json, archived_at FROM training_runs WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, run_number DESC",
+    );
+    return rows.map((row) => this.mapRow(row));
+  }
+
+  async archiveTrainingRun(id: string): Promise<void> {
+    const rows = await this.dependencies.select<TrainingRow[]>("SELECT record_json, archived_at FROM training_runs WHERE id = $1 AND archived_at IS NULL", [id]);
+    if (!rows[0]) throw new Error("Active Training run not found.");
+    const timestamp = this.now();
+    const run = { ...this.mapRow(rows[0]), archivedAt: timestamp, updatedAt: timestamp };
+    await this.dependencies.executeWrite(
+      "UPDATE training_runs SET record_json = $1, archived_at = $2, updated_at = $2 WHERE id = $3 AND archived_at IS NULL",
+      [JSON.stringify(run), timestamp, id],
+    );
+  }
+
+  async restoreTrainingRun(id: string): Promise<void> {
+    const rows = await this.dependencies.select<TrainingRow[]>(
+      "SELECT record_json, archived_at FROM training_runs WHERE id = $1 AND archived_at IS NOT NULL",
+      [id],
+    );
+    const row = rows[0];
+    if (!row) throw new Error("Archived Training run not found.");
+    const current = this.mapRow(row);
+    const parents = await this.dependencies.select<Array<{ workspace_id: string }>>(
+      `SELECT w.id AS workspace_id FROM workspaces w JOIN profiles p ON p.id = w.profile_id
+        WHERE w.id = $1 AND w.profile_id = $2 AND w.archived_at IS NULL AND p.archived_at IS NULL`,
+      [current.workspaceId, current.profileId],
+    );
+    if (!parents[0]) throw new Error("Restore the parent Profile and Workspace first.");
+    const timestamp = this.now();
+    const run = { ...current, archivedAt: undefined, updatedAt: timestamp };
+    await this.dependencies.executeWrite(
+      "UPDATE training_runs SET record_json = $1, archived_at = NULL, updated_at = $2 WHERE id = $3 AND archived_at IS NOT NULL",
+      [JSON.stringify(run), timestamp, id],
+    );
   }
 }

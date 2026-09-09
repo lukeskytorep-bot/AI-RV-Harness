@@ -27,6 +27,7 @@ type ResearchProjectRow = {
   unblinded_at: string | null;
   created_at: string;
   updated_at: string;
+  archived_at: string | null;
 };
 
 export interface SqliteResearchRepositoryDependencies {
@@ -51,6 +52,7 @@ function mapResearchProject(row: ResearchProjectRow): ResearchProjectRecord {
     unblindedAt: row.unblinded_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    archivedAt: row.archived_at ?? undefined,
   };
 }
 
@@ -79,8 +81,8 @@ export class SqliteResearchRepository implements ResearchRepository {
       state: "Draft", config: structuredClone(config), createdAt: timestamp, updatedAt: timestamp,
     };
     await this.dependencies.executeWrite(
-      `INSERT INTO research_projects (id, workspace_id, name, template_type, state, config_json, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, 'Draft', $5, $6, $6)`,
+      `INSERT INTO research_projects (id, workspace_id, name, template_type, state, config_json, created_at, updated_at, archived_at)
+       VALUES ($1, $2, $3, $4, 'Draft', $5, $6, $6, NULL)`,
       [project.id, project.workspaceId, project.name, project.templateType, JSON.stringify(project.config), timestamp],
     );
     return project;
@@ -89,16 +91,51 @@ export class SqliteResearchRepository implements ResearchRepository {
   async getResearchProject(id: string): Promise<ResearchProjectRecord | null> {
     const rows = await this.dependencies.select<ResearchProjectRow[]>(
       `SELECT id, workspace_id, name, template_type, state, config_json, config_hash, locked_at,
-              scores_frozen_at, unblinded_at, created_at, updated_at FROM research_projects WHERE id = $1 LIMIT 1`, [id],
+              scores_frozen_at, unblinded_at, created_at, updated_at, archived_at FROM research_projects WHERE id = $1 LIMIT 1`, [id],
     );
     return rows[0] ? mapResearchProject(rows[0]) : null;
   }
 
   async listResearchProjects(workspaceId?: string): Promise<ResearchProjectRecord[]> {
     const rows = workspaceId
-      ? await this.dependencies.select<ResearchProjectRow[]>(`SELECT id, workspace_id, name, template_type, state, config_json, config_hash, locked_at, scores_frozen_at, unblinded_at, created_at, updated_at FROM research_projects WHERE workspace_id = $1 ORDER BY created_at DESC`, [workspaceId])
-      : await this.dependencies.select<ResearchProjectRow[]>(`SELECT id, workspace_id, name, template_type, state, config_json, config_hash, locked_at, scores_frozen_at, unblinded_at, created_at, updated_at FROM research_projects ORDER BY created_at DESC`);
+      ? await this.dependencies.select<ResearchProjectRow[]>(`SELECT id, workspace_id, name, template_type, state, config_json, config_hash, locked_at, scores_frozen_at, unblinded_at, created_at, updated_at, archived_at FROM research_projects WHERE workspace_id = $1 AND archived_at IS NULL ORDER BY created_at DESC`, [workspaceId])
+      : await this.dependencies.select<ResearchProjectRow[]>(`SELECT id, workspace_id, name, template_type, state, config_json, config_hash, locked_at, scores_frozen_at, unblinded_at, created_at, updated_at, archived_at FROM research_projects WHERE archived_at IS NULL ORDER BY created_at DESC`);
     return rows.map(mapResearchProject);
+  }
+
+  async listArchivedResearchProjects(): Promise<ResearchProjectRecord[]> {
+    const rows = await this.dependencies.select<ResearchProjectRow[]>(
+      `SELECT id, workspace_id, name, template_type, state, config_json, config_hash, locked_at, scores_frozen_at, unblinded_at, created_at, updated_at, archived_at
+         FROM research_projects WHERE archived_at IS NOT NULL ORDER BY archived_at DESC`,
+    );
+    return rows.map(mapResearchProject);
+  }
+
+  async archiveResearchProject(id: string): Promise<void> {
+    const timestamp = this.now();
+    const result = await this.dependencies.executeWrite(
+      "UPDATE research_projects SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL",
+      [timestamp, id],
+    ) as { rowsAffected?: number };
+    if (result.rowsAffected === 0) throw new Error("Active Research project not found.");
+  }
+
+  async restoreResearchProject(id: string): Promise<void> {
+    const rows = await this.dependencies.select<Array<{ workspace_id: string }>>(
+      "SELECT workspace_id FROM research_projects WHERE id = $1 AND archived_at IS NOT NULL", [id],
+    );
+    const project = rows[0];
+    if (!project) throw new Error("Archived Research project not found.");
+    const parents = await this.dependencies.select<Array<{ workspace_id: string }>>(
+      `SELECT w.id AS workspace_id FROM workspaces w JOIN profiles p ON p.id = w.profile_id
+        WHERE w.id = $1 AND w.archived_at IS NULL AND p.archived_at IS NULL`, [project.workspace_id],
+    );
+    if (!parents[0]) throw new Error("Restore the parent Profile and Workspace first.");
+    const timestamp = this.now();
+    await this.dependencies.executeWrite(
+      "UPDATE research_projects SET archived_at = NULL, updated_at = $1 WHERE id = $2 AND archived_at IS NOT NULL",
+      [timestamp, id],
+    );
   }
 
   async setResearchProjectState(id: string, state: ResearchState): Promise<void> {
@@ -107,14 +144,14 @@ export class SqliteResearchRepository implements ResearchRepository {
       `UPDATE research_projects SET state = $1, updated_at = $2,
          scores_frozen_at = CASE WHEN $1 = 'ScoresFrozen' THEN COALESCE(scores_frozen_at, $2) ELSE scores_frozen_at END,
          unblinded_at = CASE WHEN $1 = 'Unblinded' THEN COALESCE(unblinded_at, $2) ELSE unblinded_at END
-       WHERE id = $3`,
+       WHERE id = $3 AND archived_at IS NULL`,
       [state, timestamp, id],
     );
   }
 
   async lockResearchProject(id: string, plan: ResearchLockPlan): Promise<void> {
     const timestamp = this.now();
-    const projectState = await this.dependencies.select<{ state: ResearchState }[]>("SELECT state FROM research_projects WHERE id = $1", [id]);
+    const projectState = await this.dependencies.select<{ state: ResearchState }[]>("SELECT state FROM research_projects WHERE id = $1 AND archived_at IS NULL", [id]);
     if (!projectState[0] || !["Draft", "Preflight"].includes(projectState[0].state)) throw new Error("Research project cannot be locked from its current state.");
     const statements: DatabaseTransactionStatement[] = plan.conditions.map((condition) => ({
       query: "INSERT INTO research_conditions (id, research_project_id, condition_key, condition_config_json) VALUES ($1, $2, $3, $4)",
@@ -131,7 +168,7 @@ export class SqliteResearchRepository implements ResearchRepository {
       values: [mapping.id, id, mapping.anonymousSessionId, mapping.conditionId, mapping.pairKey, mapping.pairOrder ?? null, mapping.mappingHash, mapping.createdAt],
     })));
     statements.push({
-      query: "UPDATE research_projects SET state = 'Locked', config_hash = $1, locked_at = $2, updated_at = $2 WHERE id = $3 AND state IN ('Draft','Preflight')",
+      query: "UPDATE research_projects SET state = 'Locked', config_hash = $1, locked_at = $2, updated_at = $2 WHERE id = $3 AND archived_at IS NULL AND state IN ('Draft','Preflight')",
       values: [plan.configHash, timestamp, id],
     });
     await this.dependencies.executeTransaction(statements);

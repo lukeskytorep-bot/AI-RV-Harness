@@ -196,6 +196,18 @@ describe("Training repository adapter details", () => {
     expect(harness.storage.getItem("rvh.dev.training_runs")).not.toBeNull();
   });
 
+  it("archives Training as one active-list unit and requires active parents for Restore", async () => {
+    const harness = browserHarness();
+    harness.seed([record("run-a", 1, { sessionIds: ["session-a"] })]);
+    harness.storage.setItem("rvh.dev.profiles", JSON.stringify([{ id: "profile-a", name: "Profile", createdAt: "t", updatedAt: "t" }]));
+    harness.storage.setItem("rvh.dev.workspaces", JSON.stringify([{ id: "workspace-a", profileId: "profile-a", name: "Workspace", createdAt: "t", updatedAt: "t", lastOpenedAt: "t" }]));
+    await harness.repository.archiveTrainingRun("run-a");
+    expect(await harness.repository.listTrainingRuns()).toEqual([]);
+    expect((await harness.repository.listArchivedTrainingRuns()).map((run) => run.id)).toEqual(["run-a"]);
+    harness.storage.setItem("rvh.dev.workspaces", "[]");
+    await expect(harness.repository.restoreTrainingRun("run-a")).rejects.toThrow("Restore the parent Profile and Workspace first.");
+  });
+
   it("keeps SQLite run-number allocation and record-json writes unchanged", async () => {
     const harness = sqliteHarness();
     harness.seed([record("old", 4)]);
@@ -213,6 +225,6 @@ describe("Training repository adapter details", () => {
 
   it("preserves the existing SQLite missing-run error", async () => {
     const harness = sqliteHarness();
-    await expect(harness.repository.updateTrainingRun("missing", { status: "Paused" })).rejects.toThrow("Training run not found.");
+    await expect(harness.repository.updateTrainingRun("missing", { status: "Paused" })).rejects.toThrow("Active Training run not found.");
   });
 });

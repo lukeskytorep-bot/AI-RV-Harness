@@ -45,6 +45,21 @@ describe("Browser Research repository", () => {
     expect((await repository.listResearchProjects("workspace-a"))).toHaveLength(1);
   });
 
+  it("archives Research without changing methodological state and blocks Restore without active parents", async () => {
+    const storage = new MemoryStorage();
+    const repository = new BrowserResearchRepository({ storage, now: () => "2026-09-08T20:00:00.000Z", createId: () => "research-1" });
+    const created = await repository.createResearchProject(config);
+    await repository.setResearchProjectState(created.id, "ScoresFrozen");
+    await repository.archiveResearchProject(created.id);
+    expect(await repository.listResearchProjects("workspace-a")).toEqual([]);
+    expect((await repository.listArchivedResearchProjects())[0]).toMatchObject({ id: "research-1", state: "ScoresFrozen" });
+    await expect(repository.restoreResearchProject(created.id)).rejects.toThrow("Restore the parent Profile and Workspace first.");
+    storage.setItem("rvh.dev.profiles", JSON.stringify([{ id: "profile-a", name: "Profile", createdAt: "t", updatedAt: "t" }]));
+    storage.setItem("rvh.dev.workspaces", JSON.stringify([{ id: "workspace-a", profileId: "profile-a", name: "Workspace", createdAt: "t", updatedAt: "t", lastOpenedAt: "t" }]));
+    await repository.restoreResearchProject(created.id);
+    expect((await repository.listResearchProjects("workspace-a"))[0]).toMatchObject({ id: "research-1", state: "ScoresFrozen" });
+  });
+
   it("locks methodology and keeps conditions/assignments/blinding mappings in their existing keys", async () => {
     const storage = new MemoryStorage();
     const repository = new BrowserResearchRepository({ storage, now: () => "2026-09-08T20:00:00.000Z", createId: () => "research-1" });

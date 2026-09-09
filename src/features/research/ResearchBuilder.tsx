@@ -1,4 +1,4 @@
-import { Check, ChevronRight, CircleStop, FlaskConical, LockKeyhole, Play, RotateCcw, Search, ShieldCheck, X } from "lucide-react";
+import { Archive, Check, ChevronRight, CircleStop, FlaskConical, LockKeyhole, Play, RotateCcw, Search, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { getCopy } from "../../i18n";
 import type { ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
@@ -495,6 +495,24 @@ function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: {
     setError(null);
     try { await prepareInterruptedResearchRetry(repository, project.id); setRecoverableCount(0); await onRefresh(); } catch (cause) { setError(message(cause)); }
   };
+  const archiveProject = async () => {
+    const pl = copy.home !== "Home";
+    const confirmed = await dialogs.confirm({
+      title: pl ? "Archiwizować Research?" : "Archive Research?",
+      description: pl
+        ? "Projekt Research i należące do niego sesje znikną z aktywnych widoków. Experiment Lock, blinding, frozen scores i wyniki pozostaną bez zmian i będzie można je później przywrócić."
+        : "The Research project and its sessions will leave active views. Experiment Lock, blinding, frozen scores and results remain unchanged and can be restored later.",
+      details: [project.name, `${project.state} · ${project.config.targetIds.length * project.config.repetitions * project.config.conditions.length} ${pl ? "planowanych sesji" : "planned sessions"}`],
+      confirmLabel: pl ? "Archiwizuj" : "Archive",
+      cancelLabel: copy.cancel,
+      severity: "warning",
+    });
+    if (!confirmed) return;
+    setError(null);
+    try { await repository.archiveResearchProject(project.id); await onRefresh(); onBack(); }
+    catch (cause) { setError(message(cause)); }
+  };
+
   const sessionsReady = ["Locked", "Running", "Interrupted"].includes(project.state);
   const saveOnly = project.config.judges.length === 0;
   const judgingReady = !saveOnly && ["SessionsComplete", "Judging"].includes(project.state);
@@ -509,7 +527,7 @@ function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: {
         <div className="research-state-head"><div><small>{copy.currentState}</small><strong>{project.state}</strong></div>{project.lockedAt && <span className="status-chip ready"><LockKeyhole size={12} />{copy.configLocked}</span>}</div>
         <div className="research-run-meta"><span>{copy.plannedSessions}<strong>{project.config.targetIds.length * project.config.repetitions * project.config.conditions.length}</strong></span><span>{copy.researchConditions}<strong>{project.config.conditions.length}</strong></span><span>{copy.researchEvaluation}<strong>{saveOnly ? copy.saveOnly : `${project.config.judges.length} AI Judge`}</strong></span></div>
         {busy && <div className="research-live-progress"><span className="loader-orb" /><div><strong>{busy === "export" ? (saveOnly ? copy.exportSavedSessions : copy.exportResearchPackage) : `${copy.researchProgress} · ${progress}/${total || "…"}`}</strong><small>{currentAnonymous}</small></div>{busy === "sessions" && <button className="stop-button" onClick={() => abortRef.current?.abort()}><CircleStop size={15} />STOP</button>}</div>}
-        {!busy && <div className="research-stage-actions">{recoverableCount > 0 && <button className="secondary-button recovery-button" onClick={() => void recover()}>{copy.preserveResearchRecovery} · {recoverableCount}</button>}{sessionsReady && <button className="primary-button" disabled={!isTauriRuntime() || recoverableCount > 0} onClick={() => void runSessions()}><Play size={15} />{project.state === "Locked" ? copy.startResearch : copy.resumeResearch}</button>}{saveOnlyExportReady && <button className="primary-button" disabled={!isTauriRuntime()} onClick={() => void exportPackage()}>{copy.exportSavedSessions}</button>}{judgingReady && <button className="primary-button" disabled={!isTauriRuntime()} onClick={() => void runJudging()}><ShieldCheck size={15} />{copy.runResearchJudging}</button>}{project.state === "ScoresFrozen" && <button className="primary-button unblind-button" onClick={() => void unblind()}><LockKeyhole size={15} />{copy.unblindCalculate}</button>}{project.state === "Complete" && <><button className="secondary-button" onClick={() => void repository.getResearchResults(project.id).then(setResults)}><RotateCcw size={14} />{copy.researchResults}</button><button className="primary-button" disabled={!isTauriRuntime()} onClick={() => void exportPackage()}>{copy.exportResearchPackage}</button></>}</div>}
+        {!busy && <div className="research-stage-actions">{recoverableCount > 0 && <button className="secondary-button recovery-button" onClick={() => void recover()}>{copy.preserveResearchRecovery} · {recoverableCount}</button>}{sessionsReady && <button className="primary-button" disabled={!isTauriRuntime() || recoverableCount > 0} onClick={() => void runSessions()}><Play size={15} />{project.state === "Locked" ? copy.startResearch : copy.resumeResearch}</button>}{saveOnlyExportReady && <button className="primary-button" disabled={!isTauriRuntime()} onClick={() => void exportPackage()}>{copy.exportSavedSessions}</button>}{judgingReady && <button className="primary-button" disabled={!isTauriRuntime()} onClick={() => void runJudging()}><ShieldCheck size={15} />{copy.runResearchJudging}</button>}{project.state === "ScoresFrozen" && <button className="primary-button unblind-button" onClick={() => void unblind()}><LockKeyhole size={15} />{copy.unblindCalculate}</button>}{project.state === "Complete" && <><button className="secondary-button" onClick={() => void repository.getResearchResults(project.id).then(setResults)}><RotateCcw size={14} />{copy.researchResults}</button><button className="primary-button" disabled={!isTauriRuntime()} onClick={() => void exportPackage()}>{copy.exportResearchPackage}</button></>}<button className="secondary-button" onClick={() => void archiveProject()}><Archive size={14} />{copy.home === "Home" ? "Archive" : "Archiwizuj"}</button></div>}
         {saveOnlyExportReady && <p className="research-recovery-note">{copy.saveOnlyReadyLead}</p>}{recoverableCount > 0 && <p className="research-recovery-note">{copy.researchRecoveryRequired}</p>}{exportPath && <div className="export-success"><Check size={14} /><span><strong>{copy.exportComplete}</strong><small>{exportPath}</small></span></div>}{!isTauriRuntime() && (sessionsReady || saveOnlyExportReady) && <p className="research-runtime-note">{copy.researchRequiresDesktop}</p>}{error && <div className="provider-error">{error}</div>}
       </section>
       <aside className="panel research-lock-summary"><strong>{copy.experimentLock}</strong><code>{project.configHash ?? "—"}</code><p>{copy.lockWarning}</p>{project.config.viewerControl && <div className="research-lock-controls"><span><small>{copy.baseViewerModel}</small><strong>{project.config.viewerControl.model.mode === "fixed" ? project.config.viewerControl.model.modelId : copy.testedVariableBelow}</strong></span><span><small>{copy.researchReasoning}</small><strong>{project.config.viewerControl.reasoning.mode === "fixed" ? project.config.viewerControl.reasoning.value?.toUpperCase() : project.config.viewerControl.reasoning.mode === "provider_default" ? copy.autoProviderDefault : copy.testedVariableBelow}</strong></span><span><small>{copy.researchTemperature}</small><strong>{project.config.viewerControl.temperature.mode === "fixed" ? project.config.viewerControl.temperature.value : project.config.viewerControl.temperature.mode === "provider_default" ? copy.autoProviderDefault : copy.testedVariableBelow}</strong></span></div>}<ul>{project.config.conditions.map((condition) => <li key={condition.key}>{condition.label}</li>)}</ul></aside>

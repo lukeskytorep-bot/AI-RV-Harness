@@ -5,13 +5,16 @@ import sqliteFacade from "./sqliteRepository.ts?raw";
 
 const methods = [
   "createRvSession", "updateRvSessionState", "appendSessionEvent", "listSessionEvents", "updatePreRevealTranscript", "appendPostRevealTurn",
-  "saveSessionSnapshot", "getSessionSnapshot", "sealPreReveal", "acceptReveal", "getReveal", "getViewerEvidence", "listRvSessions", "listRecentRvSessions",
+  "saveSessionSnapshot", "getSessionSnapshot", "sealPreReveal", "acceptReveal", "getReveal", "getViewerEvidence", "listRvSessions", "listArchivedRvSessions", "archiveRvSession", "restoreRvSession", "listRecentRvSessions",
   "addTargetClarification", "listTargetClarifications",
 ] as const;
 
 describe("Sessions repository boundary", () => {
   it("keeps the established session surface and delegates the new bounded recent-session query", () => {
     expect(contract).toContain("createRvSession(input");
+    expect(contract).toContain("listArchivedRvSessions()");
+    expect(contract).toContain("archiveRvSession(id");
+    expect(contract).toContain("restoreRvSession(id");
     expect(contract).toContain("listRecentRvSessions(limit: number)");
     expect(contract).toContain("listTargetClarifications(sessionId");
     expect(browserFacade).toContain("new BrowserSessionsRepository({");

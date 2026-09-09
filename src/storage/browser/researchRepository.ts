@@ -8,6 +8,7 @@ import type {
   ResearchResults,
   ResearchState,
 } from "../../research/types";
+import type { Profile, Workspace } from "../../types";
 import type { ResearchRepository } from "../contracts/researchRepository";
 import { createId, nowIso } from "../repository";
 
@@ -16,6 +17,8 @@ const RESEARCH_CONDITIONS_KEY = "rvh.dev.research_conditions";
 const RESEARCH_ASSIGNMENTS_KEY = "rvh.dev.research_assignments";
 const BLINDING_MAPPINGS_KEY = "rvh.dev.blinding_mappings";
 const RESEARCH_RESULTS_KEY = "rvh.dev.research_results";
+const PROFILES_KEY = "rvh.dev.profiles";
+const WORKSPACES_KEY = "rvh.dev.workspaces";
 
 type ResearchStorage = Pick<Storage, "getItem" | "setItem">;
 
@@ -73,12 +76,39 @@ export class BrowserResearchRepository implements ResearchRepository {
   }
 
   async listResearchProjects(workspaceId?: string): Promise<ResearchProjectRecord[]> {
-    return this.read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).filter((project) => !workspaceId || project.workspaceId === workspaceId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return this.read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, [])
+      .filter((project) => !project.archivedAt && (!workspaceId || project.workspaceId === workspaceId))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async listArchivedResearchProjects(): Promise<ResearchProjectRecord[]> {
+    return this.read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, [])
+      .filter((project) => Boolean(project.archivedAt))
+      .sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
+  }
+
+  async archiveResearchProject(id: string): Promise<void> {
+    const projects = this.read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []);
+    const project = projects.find((item) => item.id === id && !item.archivedAt);
+    if (!project) throw new Error("Active Research project not found.");
+    const timestamp = this.now();
+    this.write(RESEARCH_PROJECTS_KEY, projects.map((item) => item.id === id ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
+  }
+
+  async restoreResearchProject(id: string): Promise<void> {
+    const projects = this.read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []);
+    const project = projects.find((item) => item.id === id && item.archivedAt);
+    if (!project) throw new Error("Archived Research project not found.");
+    const workspace = this.read<Workspace[]>(WORKSPACES_KEY, []).find((item) => item.id === project.workspaceId && !item.archivedAt);
+    const profile = workspace ? this.read<Profile[]>(PROFILES_KEY, []).find((item) => item.id === workspace.profileId && !item.archivedAt) : undefined;
+    if (!workspace || !profile) throw new Error("Restore the parent Profile and Workspace first.");
+    const timestamp = this.now();
+    this.write(RESEARCH_PROJECTS_KEY, projects.map((item) => item.id === id ? { ...item, archivedAt: undefined, updatedAt: timestamp } : item));
   }
 
   async setResearchProjectState(id: string, state: ResearchState): Promise<void> {
     const timestamp = this.now();
-    this.write(RESEARCH_PROJECTS_KEY, this.read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).map((project) => project.id === id ? {
+    this.write(RESEARCH_PROJECTS_KEY, this.read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).map((project) => project.id === id && !project.archivedAt ? {
       ...project, state, updatedAt: timestamp,
       ...(state === "ScoresFrozen" && !project.scoresFrozenAt ? { scoresFrozenAt: timestamp } : {}),
       ...(state === "Unblinded" && !project.unblindedAt ? { unblindedAt: timestamp } : {}),
@@ -87,7 +117,7 @@ export class BrowserResearchRepository implements ResearchRepository {
 
   async lockResearchProject(id: string, plan: ResearchLockPlan): Promise<void> {
     const projects = this.read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []);
-    const project = projects.find((item) => item.id === id);
+    const project = projects.find((item) => item.id === id && !item.archivedAt);
     if (!project || !["Draft", "Preflight"].includes(project.state)) throw new Error("Research project cannot be locked from its current state.");
     const timestamp = this.now();
     this.write(RESEARCH_CONDITIONS_KEY, [...this.read<ResearchConditionRecord[]>(RESEARCH_CONDITIONS_KEY, []), ...structuredClone(plan.conditions)]);

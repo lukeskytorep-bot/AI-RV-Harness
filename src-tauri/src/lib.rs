@@ -131,6 +131,12 @@ pub fn run() {
             sql: include_str!("../migrations/020_ai_center_viewer_notes.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 21,
+            description: "soft_archive_lifecycle",
+            sql: include_str!("../migrations/021_soft_archive_lifecycle.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

@@ -6,10 +6,13 @@ import sqliteFacade from "./sqliteRepository.ts?raw";
 describe("Targets repository boundary", () => {
   it("keeps AppRepository stable and delegates the complete Targets persistence surface", () => {
     expect(contract).toContain("listTargets(collection?");
+    expect(contract).toContain("listArchivedTargets()");
+    expect(contract).toContain("archiveTarget(id");
+    expect(contract).toContain("restoreTarget(id");
     expect(contract).toContain("recordTargetUsage(input");
     expect(browserFacade).toContain("new BrowserTargetsRepository({");
     expect(sqliteFacade).toContain("new SqliteTargetsRepository({");
-    for (const method of ["listTargets", "createTarget", "updateTarget", "deleteTarget", "recordTargetUsage", "listTargetUsage"]) {
+    for (const method of ["listTargets", "listArchivedTargets", "createTarget", "updateTarget", "archiveTarget", "restoreTarget", "recordTargetUsage", "listTargetUsage"]) {
       expect(browserFacade).toContain(`${method}: AppRepository[\"${method}\"]`);
       expect(sqliteFacade).toContain(`${method}: AppRepository[\"${method}\"]`);
     }

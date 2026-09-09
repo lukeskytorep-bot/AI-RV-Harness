@@ -9,6 +9,7 @@ import type {
   TargetClarificationRecord,
 } from "../../sessions/types";
 import { serializePostRevealTurn } from "../../sessions/postRevealTranscript";
+import type { Profile, Workspace } from "../../types";
 import { verifySealedViewerEvidence } from "../../sessions/evidence";
 import type { SessionsRepository } from "../contracts/sessionsRepository";
 import { createId, nowIso } from "../repository";
@@ -18,6 +19,8 @@ const SESSION_EVENTS_KEY = "rvh.dev.session_events";
 const SESSION_SNAPSHOTS_KEY = "rvh.dev.session_snapshots";
 const REVEALS_KEY = "rvh.dev.reveals";
 const TARGET_CLARIFICATIONS_KEY = "rvh.dev.target_clarifications";
+const PROFILES_KEY = "rvh.dev.profiles";
+const WORKSPACES_KEY = "rvh.dev.workspaces";
 
 export interface BrowserSessionsRepositoryDependencies {
   storage?: Storage;
@@ -149,8 +152,36 @@ export class BrowserSessionsRepository implements SessionsRepository {
     return verifySealedViewerEvidence(session.preRevealTranscript, session.preRevealHash);
   }
 
+  async getRvSession(id: string): Promise<RvSession | null> {
+    const session = this.read<RvSession[]>(RV_SESSIONS_KEY, []).find((item) => item.id === id);
+    return session ? structuredClone(session) : null;
+  }
+
   async listRvSessions(workspaceId: string): Promise<RvSession[]> {
-    return this.read<RvSession[]>(RV_SESSIONS_KEY, []).filter((session) => session.workspaceId === workspaceId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return this.read<RvSession[]>(RV_SESSIONS_KEY, []).filter((session) => session.workspaceId === workspaceId && !session.archivedAt).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async listArchivedRvSessions(): Promise<RvSession[]> {
+    return this.read<RvSession[]>(RV_SESSIONS_KEY, []).filter((session) => Boolean(session.archivedAt)).sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
+  }
+
+  async archiveRvSession(id: string): Promise<void> {
+    const all = this.read<RvSession[]>(RV_SESSIONS_KEY, []);
+    const session = all.find((item) => item.id === id && !item.archivedAt);
+    if (!session) throw new Error("Active RV Session not found.");
+    const timestamp = this.now();
+    this.write(RV_SESSIONS_KEY, all.map((item) => item.id === id ? { ...item, archivedAt: timestamp, updatedAt: timestamp } : item));
+  }
+
+  async restoreRvSession(id: string): Promise<void> {
+    const all = this.read<RvSession[]>(RV_SESSIONS_KEY, []);
+    const session = all.find((item) => item.id === id && item.archivedAt);
+    if (!session) throw new Error("Archived RV Session not found.");
+    const workspace = this.read<Workspace[]>(WORKSPACES_KEY, []).find((item) => item.id === session.workspaceId && !item.archivedAt);
+    const profile = this.read<Profile[]>(PROFILES_KEY, []).find((item) => item.id === session.profileId && !item.archivedAt);
+    if (!workspace || workspace.profileId !== session.profileId || !profile) throw new Error("Restore the parent Profile and Workspace first.");
+    const timestamp = this.now();
+    this.write(RV_SESSIONS_KEY, all.map((item) => item.id === id ? { ...item, archivedAt: undefined, updatedAt: timestamp } : item));
   }
 
   async listRecentRvSessions(workspaceIds: readonly string[], limit: number): Promise<RvSession[]> {
@@ -158,7 +189,7 @@ export class BrowserSessionsRepository implements SessionsRepository {
     if (!safeLimit || workspaceIds.length === 0) return [];
     const workspaceOrder = new Map(workspaceIds.map((workspaceId, index) => [workspaceId, index]));
     return this.read<RvSession[]>(RV_SESSIONS_KEY, [])
-      .filter((session) => workspaceOrder.has(session.workspaceId))
+      .filter((session) => workspaceOrder.has(session.workspaceId) && !session.archivedAt)
       .sort((left, right) =>
         right.updatedAt.localeCompare(left.updatedAt)
         || (workspaceOrder.get(left.workspaceId) ?? Number.MAX_SAFE_INTEGER) - (workspaceOrder.get(right.workspaceId) ?? Number.MAX_SAFE_INTEGER)
