@@ -112,10 +112,10 @@ export function ProfilesScreen({
                   <div><h3>{aiIsBeDisplayName(profile)}</h3><p>{humanIsBeDisplayName(profile)} · {profile.note || copy.credentialPending}</p></div>
                   <span className={`status-chip ${viewerReady ? "ready" : "next"}`}><KeyRound size={13} />{viewerReady ? copy.aiDefaultsReady : copy.aiDefaultsIncomplete}</span>
                 </div>
-                <div className="workspace-list">
+                <div className="workspace-list workspace-tile-grid">
                   {owned.length === 0 ? <p className="muted">{copy.noWorkspace}</p> : owned.map((workspace) => (
-                    <button key={workspace.id} className="workspace-row" onClick={() => onOpenWorkspace(workspace)}>
-                      <span><RadioTower size={17} /><strong>{workspace.name}</strong></span><ChevronRight size={16} />
+                    <button key={workspace.id} className="workspace-tile" onClick={() => onOpenWorkspace(workspace)}>
+                      <span><RadioTower size={17} /><span><strong>{workspace.name}</strong><small>{workspace.description || new Date(workspace.lastOpenedAt).toLocaleString()}</small></span></span><ChevronRight size={16} />
                     </button>
                   ))}
                 </div>

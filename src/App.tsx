@@ -62,6 +62,7 @@ import { defaultTemperatureForModel, reasoningEffortForModel } from "./profileVi
 import { aiIsBeDisplayName } from "./domain/isBeIdentity";
 import { localizedMonitorEditablePrompt, localizedViewerEditablePrompt } from "./resources/systemPrompts";
 import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from "./targets/telepathicBundled";
+import { createProfileWithInitialWorkspace } from "./application/profileWorkspace";
 
 type Page = "home" | "profiles" | "workspaces" | "research" | "targets" | "training" | "ai-center" | "settings" | "workspace";
 type WorkspaceTab = "chat" | "rv";
@@ -182,9 +183,12 @@ export default function App() {
 
   const createProfile = async (name: string, humanName: string | undefined, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => {
     if (!repository) return;
-    const profile = await repository.createProfile({ name, humanName, note, aiConfiguration });
-    setProfiles(await repository.listProfiles());
+    const { profile, workspace } = await createProfileWithInitialWorkspace(repository, { name, humanName, note, aiConfiguration });
+    const [nextProfiles, nextWorkspaces] = await Promise.all([repository.listProfiles(), repository.listWorkspaces()]);
+    setProfiles(nextProfiles);
+    setWorkspaces(nextWorkspaces);
     setActiveProfileId(profile.id);
+    setActiveWorkspaceId(workspace.id);
     setProfileDialog(false);
   };
 
@@ -207,10 +211,13 @@ export default function App() {
 
   const updateSettings = (patch: Partial<AppSettings>) => setSettings((current) => ({ ...current, ...patch }));
 
-  const finishFirstRun = async (profile: Profile) => {
+  const finishFirstRun = async (profile: Profile, initialWorkspace?: Workspace) => {
     if (!repository) return;
-    setProfiles(await repository.listProfiles());
+    const [nextProfiles, nextWorkspaces] = await Promise.all([repository.listProfiles(), repository.listWorkspaces()]);
+    setProfiles(nextProfiles);
+    setWorkspaces(nextWorkspaces);
     setActiveProfileId(profile.id);
+    if (initialWorkspace) setActiveWorkspaceId(initialWorkspace.id);
     setPage("home");
   };
 
@@ -333,7 +340,7 @@ function FirstRunSetup({
   copy: ReturnType<typeof getCopy>;
   repository: AppRepository;
   existingProfile: Profile | null;
-  onComplete: (profile: Profile) => Promise<void>;
+  onComplete: (profile: Profile, initialWorkspace?: Workspace) => Promise<void>;
 }) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -462,14 +469,18 @@ function FirstRunSetup({
           ...(judge ? { defaultJudgeProviderConfigId: judge.providerConfigId, defaultJudgeModelId: judge.modelId } : {}),
           ...(monitor ? { defaultMonitorProviderConfigId: monitor.providerConfigId, defaultMonitorModelId: monitor.modelId } : {}),
       };
-      const profile = existingProfile
-        ? { ...existingProfile, name: profileName.trim(), humanName: humanName.trim() || undefined, ...aiConfiguration, updatedAt: new Date().toISOString() }
-        : await repository.createProfile({ name: profileName, humanName, aiConfiguration });
+      let profile: Profile;
+      let initialWorkspace: Workspace | undefined;
       if (existingProfile) {
+        profile = { ...existingProfile, name: profileName.trim(), humanName: humanName.trim() || undefined, ...aiConfiguration, updatedAt: new Date().toISOString() };
         await repository.updateProfile(existingProfile.id, { name: profileName, humanName, note: existingProfile.note });
         await repository.setProfileAiConfiguration(existingProfile.id, aiConfiguration);
+      } else {
+        const created = await createProfileWithInitialWorkspace(repository, { name: profileName, humanName, aiConfiguration });
+        profile = created.profile;
+        initialWorkspace = created.workspace;
       }
-      await onComplete(profile);
+      await onComplete(profile, initialWorkspace);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setBusy(false);

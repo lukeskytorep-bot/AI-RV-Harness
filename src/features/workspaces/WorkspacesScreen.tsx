@@ -73,7 +73,56 @@ interface WorkspaceDirectoryListProps {
 function WorkspaceDirectoryList({ copy, profiles, workspaces, onOpenWorkspace, onRename, onArchive, emptyAction }: WorkspaceDirectoryListProps) {
   const [query, setQuery] = useState("");
   const groups = useMemo(() => filterWorkspaceDirectory(workspaces, profiles, query), [workspaces, profiles, query]);
-  return <div className="workspace-directory"><label className="workspace-search"><RadioTower size={16} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy.searchWorkspaces} /></label>{groups.length ? <div className="workspace-directory-groups">{groups.map((group) => <section key={group.profile.id}><header><span className="avatar tiny">{initials(aiIsBeDisplayName(group.profile))}</span><div><strong>{aiIsBeDisplayName(group.profile)}</strong><small>{group.workspaces.length} {copy.workspacesCount}</small></div></header><div>{group.workspaces.map((workspace) => <div className="workspace-directory-row" key={workspace.id}><button className="workspace-open-button" onClick={() => onOpenWorkspace(workspace)}><span><RadioTower size={16} /><span><strong>{workspace.name}</strong><small>{workspace.description || new Date(workspace.lastOpenedAt).toLocaleString()}</small></span></span><ArrowRight size={15} /></button>{onRename && onArchive && <details className="workspace-actions"><summary aria-label={copy.home === "Home" ? "Workspace actions" : "Akcje Workspace"}><EllipsisVertical size={18} /></summary><div><button onClick={() => onRename(workspace)}><Pencil size={14} />{copy.home === "Home" ? "Rename" : "Zmień nazwę"}</button><button onClick={() => onArchive(workspace)}><Archive size={14} />{copy.home === "Home" ? "Archive" : "Archiwizuj"}</button></div></details>}</div>)}</div></section>)}</div> : <EmptyState icon={<RadioTower size={26} />} title={copy.noMatchingWorkspaces} body={copy.allWorkspacesLead} action={emptyAction} />}</div>;
+  const activeWorkspaceCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const workspace of workspaces) counts.set(workspace.profileId, (counts.get(workspace.profileId) ?? 0) + 1);
+    return counts;
+  }, [workspaces]);
+
+  return (
+    <div className="workspace-directory">
+      <label className="workspace-search">
+        <RadioTower size={16} />
+        <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy.searchWorkspaces} />
+      </label>
+      {groups.length ? (
+        <div className="workspace-directory-groups">
+          {groups.map((group) => (
+            <section key={group.profile.id}>
+              <header>
+                <span className="avatar tiny">{initials(aiIsBeDisplayName(group.profile))}</span>
+                <div><strong>{aiIsBeDisplayName(group.profile)}</strong><small>{group.workspaces.length} {copy.workspacesCount}</small></div>
+              </header>
+              <div>
+                {group.workspaces.map((workspace) => {
+                  const canArchive = (activeWorkspaceCounts.get(workspace.profileId) ?? 0) > 1;
+                  return (
+                    <div className="workspace-directory-tile" key={workspace.id}>
+                      <button className="workspace-open-button" onClick={() => onOpenWorkspace(workspace)}>
+                        <span><RadioTower size={16} /><span><strong>{workspace.name}</strong><small>{workspace.description || new Date(workspace.lastOpenedAt).toLocaleString()}</small></span></span>
+                        <ArrowRight size={15} />
+                      </button>
+                      {onRename && onArchive && (
+                        <details className="workspace-actions">
+                          <summary aria-label={copy.home === "Home" ? "Workspace actions" : "Akcje Workspace"}><EllipsisVertical size={18} /></summary>
+                          <div>
+                            <button onClick={() => onRename(workspace)}><Pencil size={14} />{copy.home === "Home" ? "Rename" : "Zmień nazwę"}</button>
+                            <button disabled={!canArchive} title={!canArchive ? copy.lastActiveWorkspaceRequired : undefined} onClick={() => onArchive(workspace)}><Archive size={14} />{copy.home === "Home" ? "Archive" : "Archiwizuj"}</button>
+                          </div>
+                        </details>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      ) : (
+        <EmptyState icon={<RadioTower size={26} />} title={copy.noMatchingWorkspaces} body={copy.allWorkspacesLead} action={emptyAction} />
+      )}
+    </div>
+  );
 }
 
 export interface WorkspaceSwitcherDialogProps {

@@ -67,7 +67,15 @@ export class SqliteWorkspacesConversationsRepository implements WorkspacesConver
     const active = await this.dependencies.select<Array<{ id: string }>>("SELECT id FROM workspaces WHERE id = $1 AND archived_at IS NULL LIMIT 1", [id]);
     if (!active[0]) throw new Error("Active Workspace not found.");
     const timestamp = this.now();
-    await this.dependencies.executeWrite("UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", [timestamp, id]);
+    const result = await this.dependencies.executeWrite(
+      `UPDATE workspaces
+          SET archived_at = $1, updated_at = $1
+        WHERE id = $2
+          AND archived_at IS NULL
+          AND (SELECT COUNT(*) FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.archived_at IS NULL) > 1`,
+      [timestamp, id],
+    );
+    if (result.rowsAffected === 0) throw new Error("A Profile must keep at least one active Workspace.");
   }
 
   async restoreWorkspace(id: string, name?: string): Promise<void> {

@@ -72,7 +72,10 @@ export class BrowserWorkspacesConversationsRepository implements WorkspacesConve
 
   async archiveWorkspace(id: string): Promise<void> {
     const all = this.read<Workspace[]>(WORKSPACES_KEY, []);
-    if (!all.some((workspace) => workspace.id === id && !workspace.archivedAt)) throw new Error("Active Workspace not found.");
+    const current = all.find((workspace) => workspace.id === id && !workspace.archivedAt);
+    if (!current) throw new Error("Active Workspace not found.");
+    const activeForProfile = all.filter((workspace) => workspace.profileId === current.profileId && !workspace.archivedAt);
+    if (activeForProfile.length <= 1) throw new Error("A Profile must keep at least one active Workspace.");
     const timestamp = this.now();
     this.write(WORKSPACES_KEY, all.map((workspace) => workspace.id === id ? { ...workspace, archivedAt: timestamp, updatedAt: timestamp } : workspace));
   }

@@ -28,6 +28,17 @@ describe("browser Workspaces and Conversations repository contract", () => {
     expect(JSON.parse(storage.getItem("rvh.dev.workspaces") ?? "[]")).toHaveLength(2);
   });
 
+  it("protects the last active Workspace of a Profile and allows archive when another remains", async () => {
+    const storage = new MemoryStorage();
+    const repository = new BrowserWorkspacesConversationsRepository({ storage, now: () => timestamp });
+    const first = await repository.createWorkspace({ profileId: "profile-a", name: "First" });
+
+    await expect(repository.archiveWorkspace(first.id)).rejects.toThrow("at least one active Workspace");
+    const second = await repository.createWorkspace({ profileId: "profile-a", name: "Second" });
+    await repository.archiveWorkspace(first.id);
+    expect((await repository.listWorkspaces("profile-a")).map((item) => item.id)).toEqual([second.id]);
+  });
+
   it("preserves group cascade archive/restore without restoring children archived earlier", async () => {
     const storage = new MemoryStorage();
     const repository = new BrowserWorkspacesConversationsRepository({ storage, now: () => timestamp });
@@ -72,6 +83,33 @@ describe("SQLite Workspaces and Conversations repository contract", () => {
     expect(await repository.listWorkspaces("profile-a")).toEqual([{ id: "workspace-a", profileId: "profile-a", name: "Workspace", description: undefined, createdAt: timestamp, updatedAt: timestamp, lastOpenedAt: timestamp }]);
     expect(queries[0]?.query).toContain("profile_id = $1 AND archived_at IS NULL");
     expect(queries[0]?.values).toEqual(["profile-a"]);
+  });
+
+  it("enforces the last-active-Workspace guard below the UI with an atomic conditional write", async () => {
+    const writes: string[] = [];
+    const repository = new SqliteWorkspacesConversationsRepository({
+      select: async <T>() => [{ id: "workspace-a" }] as T,
+      executeWrite: async (query) => { writes.push(query); return { rowsAffected: 0 }; },
+      executeTransaction: async () => [], now: () => timestamp,
+    });
+
+    await expect(repository.archiveWorkspace("workspace-a")).rejects.toThrow("at least one active Workspace");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("SELECT COUNT(*) FROM workspaces sibling");
+  });
+
+  it("allows SQLite Workspace archive when the atomic guard reports a remaining sibling", async () => {
+    const writes: string[] = [];
+    const repository = new SqliteWorkspacesConversationsRepository({
+      select: async <T>() => [{ id: "workspace-a" }] as T,
+      executeWrite: async (query) => { writes.push(query); return { rowsAffected: 1 }; },
+      executeTransaction: async () => [], now: () => timestamp,
+    });
+
+    await repository.archiveWorkspace("workspace-a");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("UPDATE workspaces");
+    expect(writes[0]).toContain(") > 1");
   });
 
   it("archives and restores a group and only its jointly archived children in transactions", async () => {

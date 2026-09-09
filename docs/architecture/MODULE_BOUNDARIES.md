@@ -35,6 +35,8 @@ The repository remains one application and one release process. Folder boundarie
 11. Viewer Notes updates remain limited to the Training workflow unless a separate product decision changes that rule.
 12. Shared helpers must have more than one genuine consumer. `shared` and `utils` are not fallback directories.
 13. Current Viewer/Monitor/Judge route selection must use `src/modelRoutes.ts` for route keys and Profile/credential scoping; role/model UI that stores route keys uses the shared `ModelRouteSelect`. Historical persisted routes may still be resolved against their frozen snapshot/inventory for replay and display.
+14. Product-level creation of a new Profile must use `src/application/profileWorkspace.ts` so the initial Workspace is created in the same application use case and a failed second write cannot leave an active Profile without a Workspace. Direct repository `createProfile()` remains an infrastructure primitive, not a feature-level workflow.
+15. `archiveWorkspace()` must preserve at least one active Workspace for an active Profile. This invariant is enforced in Browser/SQLite persistence, not only by button state.
 14. Product feature modules must request Confirm/TextInput/Information/Destructive interactions through `useAppDialogs` from `src/components/AppDialogProvider.tsx`. Direct `window.confirm`, `window.prompt` and `window.alert` are forbidden outside the shared provider fallback.
 
 ## Public entry points
@@ -86,6 +88,8 @@ Internal files may remain private even if TypeScript technically permits a deep 
 `src/components/JudgeResults.tsx` is intentionally shared because it has two independent presentation contexts: the live RV evaluation and stored-session inspection used by Training and Research. `src/exports/sessionDocument.ts` is the sole owner of the readable complete-session section order and Judge Markdown. Domain exporters may choose package paths and safe metadata, but must not recreate the Judge narrative layout.
 
 `src/components/ModelRouteSelect.tsx` is intentionally shared across Profile setup/edit, RV Sessions, Training, Research and Judge evaluation. It delegates route identity, sorting and credential scope to `src/modelRoutes.ts`. Feature modules may still keep role-specific controls such as reasoning/temperature, but they must not rebuild route keys or expose models from a credential outside the active Profile.
+
+`src/application/profileWorkspace.ts` is an intentional cross-domain application use case. It coordinates the existing Profile and Workspace repository operations without merging their persistence contracts. Normal creation produces one `Workspace 1`; if Workspace creation fails after the Profile write, the Profile is archived as a safe-recovery record. Existing Profiles are not backfilled by this use case.
 
 `src/components/AppDialogProvider.tsx` is intentionally shared application UI infrastructure. One provider is mounted around `App` in `src/main.tsx`; feature modules call `useAppDialogs()` rather than browser-native dialogs. The surface supports normal/warning/destructive severity, text input, exact confirmation phrases, queued requests, async busy/error state and information-only messages. `src/appDialogBoundary.test.ts` prevents direct native dialog calls from returning to production feature code.
 

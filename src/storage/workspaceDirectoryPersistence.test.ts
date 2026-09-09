@@ -42,18 +42,19 @@ describe("workspace directory persistence", () => {
     const repository = new BrowserRepository();
     const profile = await repository.createProfile({ name: "Edward" });
     const workspace = await repository.createWorkspace({ profileId: profile.id, name: "Original" });
+    const sibling = await repository.createWorkspace({ profileId: profile.id, name: "Keep active" });
     const group = await repository.createChatThreadGroup(workspace.id, "conversation", "Long conversation");
     const thread = await repository.createChatThread(workspace.id, "conversation", "Part 1", group.id);
     await repository.appendChatMessage(thread.id, "user", "Preserve me");
 
     await repository.renameWorkspace(workspace.id, "Renamed");
-    expect((await repository.listWorkspaces())[0]?.name).toBe("Renamed");
+    expect((await repository.listWorkspaces()).find((item) => item.id === workspace.id)?.name).toBe("Renamed");
     await repository.archiveWorkspace(workspace.id);
-    expect(await repository.listWorkspaces()).toHaveLength(0);
+    expect((await repository.listWorkspaces()).map((item) => item.id)).toEqual([sibling.id]);
     expect((await repository.listArchivedWorkspaces())[0]?.name).toBe("Renamed");
     await repository.restoreWorkspace(workspace.id);
 
-    expect((await repository.listWorkspaces())[0]?.name).toBe("Renamed");
+    expect((await repository.listWorkspaces()).find((item) => item.id === workspace.id)?.name).toBe("Renamed");
     expect((await repository.listChatThreadGroups(workspace.id, "conversation"))[0]?.id).toBe(group.id);
     expect((await repository.listChatMessages(thread.id))[0]?.content).toBe("Preserve me");
   });

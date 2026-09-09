@@ -17,6 +17,8 @@ describe("Workspaces feature", () => {
     expect(html).toContain(copy.allWorkspaces);
     expect(html).toContain("Research Lab");
     expect(html).toContain("Orion");
+    expect(html).toContain("workspace-directory-tile");
+    expect(html).toContain("disabled=\"\"");
   });
 
   it("renders the shared Workspace switcher without owning navigation", () => {

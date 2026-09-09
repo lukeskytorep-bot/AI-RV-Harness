@@ -39,5 +39,6 @@ describe("ProfilesScreen", () => {
     expect(html).toContain("Orion");
     expect(html).toContain("Luke");
     expect(html).toContain("Training Lab");
+    expect(html).toContain("workspace-tile");
   });
 });
