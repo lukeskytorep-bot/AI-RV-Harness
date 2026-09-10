@@ -3,9 +3,9 @@
 > **Project:** AI RV Harness  
 > **Document type:** Implemented engineering decisions and integrity safeguards  
 > **Implementation status:** Implemented  
-> **Current reference release:** AI RV Harness v0.7.12  
+> **Current reference:** public AI RV Harness v0.7.12 + private v0.7.13 development baseline  
 > **Repository:** [lukeskytorep-bot/AI-RV-Harness](https://github.com/lukeskytorep-bot/AI-RV-Harness)  
-> **Scope:** Foundational safeguards and decisions implemented through v0.7.12
+> **Scope:** Foundational safeguards through v0.7.12 plus explicitly documented v0.7.13 modularization and UX-DATA lifecycle safeguards
 
 ## Purpose
 
@@ -717,3 +717,7 @@ Used user targets preserve their historical identity through `target_id_snapshot
 ### Invariant
 
 > Archiving makes a record eligible for explicit deletion; it does not weaken evidence integrity. Outside a dedicated controlled-purge transaction, sealed, frozen, locked and append-only protections behave exactly as before.
+
+### Compatibility gate
+
+UX-DATA-9 turns the completed UX/data invariants into permanent build checks. `npm run verify:ux-data` verifies the contiguous migration chain through 023, flat Conversation product boundary, shared dialog/model-route boundaries, unified lifecycle surface and Viewer Notes/target preservation markers. A native Rust test creates a representative v20-era database, preserves a legacy Thread-group Conversation and message, upgrades through migrations 021–023, verifies target snapshot backfill and Viewer Notes source provenance, and requires a clean `PRAGMA foreign_key_check`. The gate protects compatibility without deleting dormant legacy schema solely for cosmetic cleanup.

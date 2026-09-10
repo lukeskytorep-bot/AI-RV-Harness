@@ -1,6 +1,6 @@
 # AI RV Harness architecture documentation
 
-These documents describe the implemented architecture and integrity model of AI RV Harness v0.7.12. Release-specific plans, reports, manifests, and verification records remain under [`docs/releases/`](../releases/).
+These documents describe the implemented architecture and integrity model of AI RV Harness. The latest public release remains v0.7.12; the private v0.7.13 development baseline extends it through the modularization and UX-DATA campaign. Release-specific plans, reports, manifests, and verification records remain under [`docs/releases/`](../releases/) or [`docs/reports/`](../reports/) for private-development work.
 
 The private v0.7.13 modularization work adds the following living architecture records:
 
@@ -9,6 +9,7 @@ The private v0.7.13 modularization work adds the following living architecture r
 - [ADR-0001: Modular monolith](decisions/ADR-0001-MODULAR_MONOLITH.md)
 - [ADR-0003: Stable storage facade and domain repositories](decisions/ADR-0003-STORAGE_FACADE.md)
 - [Central provider retry architecture](PROVIDER_RETRY_ARCHITECTURE_FINAL_PL.md)
+- [UX-DATA compatibility gate](UX_DATA_COMPATIBILITY_GATE.md)
 
 ## Documents
 
@@ -16,7 +17,7 @@ The private v0.7.13 modularization work adds the following living architecture r
 | --- | --- |
 | [System Overview](SYSTEM_OVERVIEW.md) | High-level product structure, roles, workflows, storage model, provider layer, and current capabilities. |
 | [Engineering Design and Integrity Safeguards](ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md) | Stable engineering decisions protecting blinding, evidence, judging, Research, provider normalization, recovery, and persistence. |
-| [AI Center and Viewer Notes](AI_CENTER_AND_VIEWER_NOTES.md) | Identity scope, note lifecycle, version history, session timing, Research controls, and UI behavior introduced in v0.7.12. |
+| [AI Center and Viewer Notes](AI_CENTER_AND_VIEWER_NOTES.md) | Identity scope, note lifecycle, immutable provenance, source-preservation behavior, Research controls, and controlled-purge integration. |
 
 ## Documentation policy
 
@@ -24,4 +25,4 @@ The private v0.7.13 modularization work adds the following living architecture r
 - Version-specific implementation evidence belongs in `docs/releases/vX.Y.Z/`.
 - Historical specifications and checkpoints remain historical records and are not silently rewritten.
 - Material changes to blinding, scoring, AI identity, provider normalization, persistence, or Research controls must update the relevant architecture document in the same change.
-- A future source-code modularization may add a code map here; it should complement these decision records rather than duplicate them.
+- The code map and module-boundary documents are living records and must be updated whenever ownership or a protected boundary changes.

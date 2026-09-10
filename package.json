@@ -9,6 +9,7 @@
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
     "verify:source": "node scripts/verify-source-integrity.mjs .",
+    "verify:ux-data": "node scripts/verify-ux-data-compatibility.mjs .",
     "test:watch": "vitest",
     "tauri": "tauri"
   },

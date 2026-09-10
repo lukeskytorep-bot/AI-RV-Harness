@@ -39,9 +39,10 @@ describe("UX-DATA-5 flat Conversation boundary", () => {
     expect(sqlite).not.toMatch(/(?:FROM|INSERT INTO|UPDATE|DELETE FROM) chat_thread_groups/i);
   });
 
-  it("removes Thread terminology from the active Conversation copy while retaining legacy types for compatibility", () => {
+  it("removes Thread terminology and keeps legacy grouping types local to compatibility fixtures", () => {
     const i18n = read("i18n.ts");
     const types = read("types.ts");
+    const legacyFixture = read("storage/fixtures/legacyThreadHierarchy.ts");
 
     expect(i18n).not.toContain("threadGroupTitle:");
     expect(i18n).not.toContain("threadGroups:");
@@ -50,6 +51,7 @@ describe("UX-DATA-5 flat Conversation boundary", () => {
     expect(i18n).not.toContain("renameThreadGroup:");
     expect(i18n).toContain('chatThreads: "Conversations"');
     expect(i18n).toContain('chatThreads: "Rozmowy"');
-    expect(types).toContain("Legacy persisted grouping metadata retained for backward-compatible reads");
+    expect(types).not.toContain("ChatThreadGroup");
+    expect(legacyFixture).toContain("interface LegacyThreadGroupRecord");
   });
 });

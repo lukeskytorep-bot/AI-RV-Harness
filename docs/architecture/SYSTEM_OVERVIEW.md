@@ -1,18 +1,19 @@
 # AI RV Harness
 
-> Current project documentation for AI RV Harness v0.7.12  
-> Last updated: August 2026
+> Current architecture reference: public v0.7.12 + private v0.7.13 development baseline  
+> Last updated: 10 September 2026
 
 AI RV Harness is a local-first desktop environment for AI-assisted Remote Viewing sessions, structured training, controlled research, and blinded evaluation. It combines repeatable protocols, multiple AI roles, evidence-preserving session flows, target management, and reproducible research tools in one application.
 
 The project is designed to make AI-assisted RV work easier to organize, inspect, repeat, and evaluate. It does not claim that Remote Viewing has been scientifically proven, that a particular model possesses anomalous perception, or that generated material is accurate. The Harness provides controlled procedures and records; interpretation of results remains the responsibility of the user and researcher.
 
 - **Source repository:** [lukeskytorep-bot/AI-RV-Harness](https://github.com/lukeskytorep-bot/AI-RV-Harness)
-- **Current release:** AI RV Harness v0.7.12
+- **Current public release:** AI RV Harness v0.7.12
+- **Current private development baseline:** AI RV Harness v0.7.13
 - **Platforms:** Windows and Linux
 - **Application source license:** MIT
 
-This page describes implemented behavior in v0.7.12. Release notes document version-specific changes; this page documents the project as a whole.
+This page describes the current implemented architecture. Public-release notes remain authoritative for shipped v0.7.12 behavior, while explicitly identified v0.7.13 sections document the private development baseline before the next public release.
 
 ## Project goals
 
@@ -291,9 +292,9 @@ Workspace Sources allow reference material to be reused within the relevant Work
 
 ## Data storage, backup, and export
 
-The application uses a local SQLite database in WAL mode. Profiles, Workspaces, threads, conversations, sessions, targets, training runs, research studies, AI identities, Viewer Notes versions and activations, reflection outcomes, audit events, and related metadata remain on the user's device unless the user exports or transmits them.
+The application uses a local SQLite database in WAL mode. Profiles, Workspaces, Conversation / Manual RV records, sessions, targets, training runs, research studies, AI identities, Viewer Notes versions and activations, reflection outcomes, audit events, and related metadata remain on the user's device unless the user exports or transmits them. Legacy Thread-group rows and `thread_group_id` values may remain in an upgraded database as compatibility metadata, but they are not active product parents.
 
-Database migrations create a protective backup and validate integrity before continuing. Settings provide backup and restore tools for local recovery.
+Database migrations create a protective backup and validate integrity before continuing. Settings provide backup and restore tools for local recovery. In the private v0.7.13 baseline, primary user records follow a unified lifecycle: **Active → Archived → Restore or Delete permanently**. Permanent Delete is available only from Archive and recovery, begins with a read-only Deletion Preview, and uses explicit controlled-purge use cases rather than ordinary CRUD. Sealed/frozen/locked guards remain active outside the dedicated purge transaction.
 
 Depending on the feature, exports can include readable Markdown, HTML, CSV, JSON, and research-oriented reproducibility material. Exported files may contain sensitive prompts, evidence, targets, or model output; users should review them before sharing.
 

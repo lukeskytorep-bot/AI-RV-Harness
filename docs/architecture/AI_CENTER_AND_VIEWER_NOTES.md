@@ -1,12 +1,12 @@
 # AI Center and Viewer Notes
 
-> **Status:** Implemented in AI RV Harness v0.7.12  
+> **Status:** Implemented in v0.7.12; source-preservation and controlled-purge integration extended in private v0.7.13  
 > **Design baseline:** AI RV Harness v0.7.11  
-> **Implementation release:** AI RV Harness v0.7.12
+> **Reference:** public v0.7.12 core + private v0.7.13 UX-DATA-7/8 lifecycle extensions
 
 AI Center is a top-level area of AI RV Harness for inspecting and managing AI roles, their histories, and carefully controlled experimental features. Its first experiment is **Viewer Notes**: private, versioned working guidance created and revised only by the same Viewer identity after qualifying completed RV sessions.
 
-This page describes the behavior implemented in v0.7.12 and identifies later extensions separately as future work.
+This page describes the implemented Viewer Notes architecture. The core was introduced in v0.7.12; source-preservation and controlled-purge integration are part of the private v0.7.13 development baseline.
 
 ## Why AI Center is a top-level section
 
@@ -168,7 +168,7 @@ The Viewer Notes module shows:
 - capacity and current estimated use;
 - immutable version history and model-written change summaries;
 - an immutable source snapshot for each version and reflection run, including the source session code, Workspace identity/name when available, Training identity when applicable, Profile, protocol and run type;
-- live source references while the underlying Session/Workspace still exists; when a future controlled purge removes the source, the live reference may detach while the immutable source snapshot remains readable;
+- live source references while the underlying Session/Workspace still exists; when controlled purge removes the source, the live reference may detach while the immutable source snapshot remains readable;
 - sessions that used each snapshot;
 - frozen Research snapshots;
 - reflection outcomes such as `UPDATE`, `NO_CHANGE`, or a technical failure;
@@ -244,7 +244,7 @@ Monitor Notes would require a separate identity, history, timing rule, and contr
 - **Project direction:** Edward
 - **Engineering design and documentation:** Orion via Active Model — GPT-5.6-Sol, OpenAI, ChatGPT web interface
 
-This design was implemented in AI RV Harness v0.7.12. It remains experimental and should continue to be evaluated through automated checks and practical sessions before its effect on RV performance is treated as established.
+The Viewer Notes core was implemented in AI RV Harness v0.7.12 and its source-preservation lifecycle was extended in private v0.7.13. It remains experimental and should continue to be evaluated through automated checks and practical sessions before its effect on RV performance is treated as established.
 
 ### Controlled purge integration (UX-DATA-8)
 

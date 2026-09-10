@@ -5,6 +5,8 @@ mod storage;
 mod database;
 mod dialogs;
 mod documents;
+#[cfg(test)]
+mod ux_data_compatibility;
 
 use tauri_plugin_sql::{Migration, MigrationKind};
 

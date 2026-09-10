@@ -26,6 +26,8 @@ The current private development baseline is v0.7.13, built on the public v0.7.12
 - [UX-DATA-6 Soft Archive / Restore implementation report](reports/UX_DATA_SOFT_ARCHIVE_LIFECYCLE_v0.7.13_PL.md)
 - [UX-DATA-7 Viewer Notes source preservation implementation report](reports/UX_DATA_VIEWER_NOTES_SOURCE_PRESERVATION_v0.7.13_PL.md)
 - [UX-DATA-8 Permanent Delete / controlled purge implementation report](reports/UX_DATA_CONTROLLED_PURGE_v0.7.13_PL.md)
+- [UX-DATA-9 final cleanup and compatibility gate report](reports/UX_DATA_FINAL_CLEANUP_COMPATIBILITY_GATE_v0.7.13_PL.md)
+- [UX-DATA compatibility gate architecture](architecture/UX_DATA_COMPATIBILITY_GATE.md)
 
 - [AI Center implementation plan](releases/v0.7.12/AI_CENTER_IMPLEMENTATION_PLAN_PL.md)
 - [AI Center wiki documentation](releases/v0.7.12/AI_CENTER_VIEWER_NOTES_WIKI_EN.md)

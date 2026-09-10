@@ -1,8 +1,18 @@
-import type { ChatMessage, ChatThread, ChatThreadGroup, Workspace } from "../../types";
+import type { ChatMessage, ChatMode, ChatThread, Workspace } from "../../types";
+
+interface LegacyThreadGroupRecord {
+  id: string;
+  workspaceId: string;
+  mode: ChatMode;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+}
 
 export const legacyThreadHierarchyFixture: {
   workspaces: Workspace[];
-  groups: ChatThreadGroup[];
+  groups: LegacyThreadGroupRecord[];
   threads: ChatThread[];
   messages: ChatMessage[];
 } = {

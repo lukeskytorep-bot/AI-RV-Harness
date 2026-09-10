@@ -38,6 +38,7 @@ jobs:
         run: test -f src-tauri/Cargo.lock
       - run: npm ci
       - run: npm run verify:source
+      - run: npm run verify:ux-data
       - run: npm run typecheck
       - run: npm test -- --run
       - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets --locked

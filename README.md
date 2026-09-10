@@ -4,7 +4,7 @@ AI RV Harness is a local-first desktop workspace for blind AI Remote Viewing ses
 
 ## Current development baseline — 0.7.13 (private test branch)
 
-Version 0.7.13 is the private development and test baseline built on the public v0.7.12 release. It retains AI Center and Viewer Notes while integrating the centralized provider transport/retry architecture. Version 0.7.12 remains the latest public release until the next tested release is published.
+Version 0.7.13 is the private development and test baseline built on the public v0.7.12 release. It retains AI Center and Viewer Notes, integrates the centralized provider transport/retry architecture, and includes the staged UX-DATA lifecycle work through controlled purge plus its final compatibility gate. Version 0.7.12 remains the latest public release until the next tested release is published.
 
 Viewer Notes belong to one exact Profile + credential identity + provider + model route + Viewer role. They are shared across that Profile's Workspaces but never transferred between models or roles. Notes are frozen before each supported session, supplied as a separate read-only system data block, and may be replaced only by the same Viewer after Reveal and its own post-Reveal review. Monitor opinions, Judge results and later operator discussion are excluded. Every version is immutable, capacity is enforced without truncation, stale concurrent updates are blocked, and a human restoration of an earlier version is explicitly audited.
 
@@ -22,6 +22,7 @@ Implemented end to end:
 - verified OS-native credential storage and native adapters for OpenRouter, Google, OpenAI, Anthropic, Z.AI, DeepSeek, Mistral and custom OpenAI-compatible endpoints;
 - dynamic model/capability discovery, a versioned exact-model reasoning registry, explicit AUTO/OFF/effort semantics, provider-specific reasoning payloads, Profile-level reasoning and temperature defaults, requested/effective generation settings, recommended seeds and persistent model Favorites;
 - strict Conversation / Manual RV context separation, a flat Workspace → Conversation / Manual RV hierarchy, optional `AI IS-BE` and `Human IS-BE` display names, a Profile-level Viewer System Prompt, and per-conversation Workspace Source selection with context-limit blocking;
+- unified Active → Archived → Restore / Delete permanently lifecycle for Profiles, Workspaces, Conversations, ordinary RV Sessions, Training, Research and My Targets, with Deletion Preview, protected Viewer Notes provenance and controlled purge instead of ordinary destructive CRUD;
 - Full RCP v1.5a and RV Lite v1.1.0 Core/Extended automatic execution, Custom Protocol versioning/Dry Run, ordinary randomized batch runs, STOP/retry/cost safeguards and response autosave;
 - approved RV Lite PL/EN resources with exactly four Viewer calls; Prompt 3 includes mandatory Deepening, Prompt 4 is Functional Sketches, and the Profile greeting omits the AI name cleanly when none is set;
 - 84 bundled project-provided, read-only Training Targets in seven categories, separate unlimited My Targets, a fixed 84-session curriculum, partial Training runs that can mix category counts with an explicit My Targets count, resumable checkpoints, exports and optional 1–3 AI Judges;

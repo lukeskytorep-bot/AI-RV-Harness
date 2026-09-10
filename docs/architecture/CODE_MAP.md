@@ -9,7 +9,7 @@ This document maps responsibilities, not every source file. Historical release r
 
 | Responsibility | Current primary location | Direction |
 | --- | --- | --- |
-| Application bootstrap, active profile, active Workspace and top-level navigation | `src/App.tsx` | Keep in the future `AppShell`. |
+| Application bootstrap, active profile, active Workspace and top-level navigation | `src/App.tsx` | Already acts as the top-level shell/composition root; a future filename change is optional, not an architectural requirement. |
 | Home screen | `src/features/home/` | First extracted feature; keep its public import through `src/features/home/index.ts`. |
 | Settings screen | `src/features/settings/` | Extracted feature; import through `src/features/settings/index.ts`. |
 | Profiles screen and profile-specific forms | `src/features/profiles/` | Extracted feature; import through `src/features/profiles/index.ts`. |
