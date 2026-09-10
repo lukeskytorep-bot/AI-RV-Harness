@@ -37,7 +37,27 @@ The repository remains one application and one release process. Folder boundarie
 13. Current Viewer/Monitor/Judge route selection must use `src/modelRoutes.ts` for route keys and Profile/credential scoping; role/model UI that stores route keys uses the shared `ModelRouteSelect`. Historical persisted routes may still be resolved against their frozen snapshot/inventory for replay and display.
 14. Product-level creation of a new Profile must use `src/application/profileWorkspace.ts` so the initial Workspace is created in the same application use case and a failed second write cannot leave an active Profile without a Workspace. Direct repository `createProfile()` remains an infrastructure primitive, not a feature-level workflow.
 15. `archiveWorkspace()` must preserve at least one active Workspace for an active Profile. This invariant is enforced in Browser/SQLite persistence, not only by button state.
-14. Product feature modules must request Confirm/TextInput/Information/Destructive interactions through `useAppDialogs` from `src/components/AppDialogProvider.tsx`. Direct `window.confirm`, `window.prompt` and `window.alert` are forbidden outside the shared provider fallback.
+16. Product feature modules must request Confirm/TextInput/Information/Destructive interactions through `useAppDialogs` from `src/components/AppDialogProvider.tsx`. Direct `window.confirm`, `window.prompt` and `window.alert` are forbidden outside the shared provider fallback.
+17. Native provider commands in `src-tauri/src/providers.rs` are a facade only. Request construction belongs to `src-tauri/src/providers/request_builders.rs`, response interpretation to `response_parsers.rs`, reasoning extraction/normalization to `reasoning.rs`, provider family/base URL/authentication routing to `adapters.rs`, shared error mapping to `errors.rs`, request validation to `validation.rs`, and the one physical HTTP attempt plus cancellation registry to `transport.rs`. Rust must not add its own transport retry loop.
+
+## Native Rust provider modules after Etap 6
+
+Etap 6 keeps the existing Tauri command names and TypeScript retry ownership while splitting the former monolithic `src-tauri/src/providers.rs` implementation into focused native modules:
+
+| Native module | Owns | Must not own |
+| --- | --- | --- |
+| `src-tauri/src/providers.rs` | public Tauri command facade, request/response DTOs, debug-payload redaction coordination | provider-specific wire-format implementations, retry loops |
+| `src-tauri/src/providers/adapters.rs` | provider family classification, fixed/custom base URL validation, authentication headers, OpenRouter attribution headers | request payload construction, response parsing |
+| `src-tauri/src/providers/request_builders.rs` | OpenAI-compatible, Google and Anthropic request payloads/endpoints | HTTP dispatch, response interpretation |
+| `src-tauri/src/providers/response_parsers.rs` | normalized `ProviderChatResponse` construction and provider response payload interpretation | HTTP transport, retry policy |
+| `src-tauri/src/providers/reasoning.rs` | native/tagged reasoning extraction and final-content normalization | provider authentication, HTTP dispatch |
+| `src-tauri/src/providers/errors.rs` | request error classification, safe/redacted HTTP error text and structured provider error metadata | response success parsing, retry policy |
+| `src-tauri/src/providers/validation.rs` | request-id and chat-input validation | HTTP dispatch, provider response parsing |
+| `src-tauri/src/providers/transport.rs` | shared reqwest client, one physical send, body/HTTP error handling and cancellation registry | transport retry/backoff, provider-specific request/response formats |
+
+Google and Anthropic remain explicit special wire-format families. OpenRouter, OpenAI, ZAI, DeepSeek, Mistral, Blackbox and Custom OpenAI share the OpenAI-compatible family instead of duplicating near-identical adapter modules. This is intentional: the architectural boundary follows protocol differences rather than brand count.
+
+`src/providerRustModuleBoundary.test.ts` protects the split structurally. Existing native provider contract tests remain in `src-tauri/src/providers/tests.rs` and continue to verify request payloads, parsing, reasoning separation, error redaction, OpenRouter attribution and local simulator behavior.
 
 ## Public entry points
 

@@ -9,6 +9,7 @@ The private v0.7.13 modularization work adds the following living architecture r
 - [ADR-0001: Modular monolith](decisions/ADR-0001-MODULAR_MONOLITH.md)
 - [ADR-0003: Stable storage facade and domain repositories](decisions/ADR-0003-STORAGE_FACADE.md)
 - [Central provider retry architecture](PROVIDER_RETRY_ARCHITECTURE_FINAL_PL.md)
+- [Native Rust provider module boundaries](MODULE_BOUNDARIES.md#native-rust-provider-modules-after-etap-6)
 - [UX-DATA compatibility gate](UX_DATA_COMPATIBILITY_GATE.md)
 
 ## Documents

@@ -30,7 +30,8 @@ This document maps responsibilities, not every source file. Historical release r
 
 | Capability | Primary owner | Important boundary |
 | --- | --- | --- |
-| One physical provider request | `src/providers/native.ts` and `src-tauri/src/providers.rs` | Domain code must not call it directly. |
+| One physical provider request | `src/providers/native.ts`, `src-tauri/src/providers.rs`, `src-tauri/src/providers/transport.rs` | TypeScript domain code must not call the native attempt directly. Rust `providers.rs` is the Tauri command facade; transport owns the single HTTP attempt/cancellation path. |
+| Rust provider wire-format routing | `src-tauri/src/providers/adapters.rs`, `request_builders.rs`, `response_parsers.rs`, `reasoning.rs`, `errors.rs`, `validation.rs` | `adapters.rs` maps provider kinds to OpenAI-compatible/Google/Anthropic families and authentication; builders/parsers own wire formats; `errors.rs` and `validation.rs` hold shared cross-cutting validation/error metadata without coupling builders to transport or transport to parsers; reasoning normalization is independent of transport retry. |
 | Transport retry and attempt accounting | `src/providers/requestExecutor.ts` | The only transport-retry owner. |
 | Error classification and retry policy | `src/providers/providerError.ts`, `src/providers/retry.ts` | Must not absorb output or domain recovery. |
 | Output-length recovery | `src/providers/outputRecovery.ts` | A new logical request, separate from transport retry. |

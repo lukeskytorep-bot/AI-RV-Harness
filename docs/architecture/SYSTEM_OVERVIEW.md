@@ -330,9 +330,9 @@ AI RV Harness is a Tauri 2 desktop application:
 | **Persistence** | SQLite with migrations, constraints, audit records, backups, and integrity checks. |
 | **Build system** | Vite, TypeScript, Cargo, GitHub Actions, Vitest, Rust tests, and Clippy. |
 
-The provider layer normalizes vendor-specific responses into one internal contract. Controllers for Conversation, RV protocols, Monitor, Judge, Training, and Research consume that contract instead of parsing provider payloads independently.
+The provider layer normalizes vendor-specific responses into one internal contract. Controllers for Conversation, RV protocols, Monitor, Judge, Training, and Research consume that contract instead of parsing provider payloads independently. On the native side, `src-tauri/src/providers.rs` is the thin Tauri command facade; `providers/adapters.rs` owns provider-family routing and authentication, `request_builders.rs` owns wire-format requests, `response_parsers.rs` owns normalized responses, `reasoning.rs` owns reasoning/final-content separation, `errors.rs` owns shared native error mapping, `validation.rs` owns request validation, and `transport.rs` owns the single physical HTTP attempt plus cancellation.
 
-This separation is especially important for reasoning models: internal thinking and final assistant content are classified once at the provider boundary and remain distinct throughout the application.
+This separation is especially important for reasoning models: internal thinking and final assistant content are classified once at the provider boundary and remain distinct throughout the application. Transport retry remains exclusively in the TypeScript request executor; the Rust transport performs one physical attempt per native call.
 
 ## Installation and updates
 
