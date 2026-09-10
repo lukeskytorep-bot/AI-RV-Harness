@@ -6,12 +6,12 @@ import contract from "./storage/repository.ts?raw";
 import sqliteFacade from "./storage/sqliteRepository.ts?raw";
 import sqlitePurge from "./storage/sqlite/controlledPurge.ts?raw";
 import migration from "../src-tauri/migrations/023_controlled_purge.sql?raw";
-import tauriLib from "../src-tauri/src/lib.rs?raw";
+import migrationRegistry from "../src-tauri/src/migrations.rs?raw";
 
 describe("UX-DATA-8 controlled purge boundary", () => {
   it("registers migration 023 after Viewer Notes source preservation", () => {
-    expect(tauriLib).toContain("version: 23");
-    expect(tauriLib).toContain('include_str!("../migrations/023_controlled_purge.sql")');
+    expect(migrationRegistry).toContain("version: 23");
+    expect(migrationRegistry).toContain('include_str!("../migrations/023_controlled_purge.sql")');
   });
 
   it("keeps normal immutable guards and opens them only inside an explicit purge context", () => {

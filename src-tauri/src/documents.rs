@@ -178,8 +178,20 @@ pub async fn save_builtin_document(
 }
 
 #[tauri::command]
-pub async fn import_attachment(path: String) -> Result<ParsedAttachment, String> {
-    let path = fs::canonicalize(PathBuf::from(path))
+pub async fn choose_and_import_attachments(
+    app: tauri::AppHandle,
+    title: String,
+) -> Result<Vec<ParsedAttachment>, String> {
+    let paths = dialogs::choose_attachment_paths(app, title).await?;
+    let mut attachments = Vec::with_capacity(paths.len().min(12));
+    for path in paths.into_iter().take(12) {
+        attachments.push(import_selected_attachment(path).await?);
+    }
+    Ok(attachments)
+}
+
+async fn import_selected_attachment(path: PathBuf) -> Result<ParsedAttachment, String> {
+    let path = fs::canonicalize(path)
         .map_err(|_| "selected attachment does not exist".to_string())?;
     if !path.is_file() {
         return Err("selected attachment is not a file".to_string());

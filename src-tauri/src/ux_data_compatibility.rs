@@ -1,34 +1,7 @@
 use serde_json::Value;
 use sqlx::{Connection, Row, SqliteConnection};
 
-const PRE_UX_DATA_MIGRATIONS: [&str; 20] = [
-    include_str!("../migrations/001_initial.sql"),
-    include_str!("../migrations/002_provider_registry.sql"),
-    include_str!("../migrations/003_judge_freeze.sql"),
-    include_str!("../migrations/004_research_lock.sql"),
-    include_str!("../migrations/005_workspace_sources.sql"),
-    include_str!("../migrations/006_target_clarifications.sql"),
-    include_str!("../migrations/007_target_image_artifacts.sql"),
-    include_str!("../migrations/008_model_favorites.sql"),
-    include_str!("../migrations/009_post_reveal_append_only.sql"),
-    include_str!("../migrations/010_atomic_reveal.sql"),
-    include_str!("../migrations/011_profile_ai_defaults.sql"),
-    include_str!("../migrations/012_target_mutation_guards.sql"),
-    include_str!("../migrations/013_profile_viewer_defaults.sql"),
-    include_str!("../migrations/014_chat_thread_archiving.sql"),
-    include_str!("../migrations/015_is_be_identity_and_monitor_prompt.sql"),
-    include_str!("../migrations/016_training_runs.sql"),
-    include_str!("../migrations/017_chat_thread_conversation_hierarchy.sql"),
-    include_str!("../migrations/018_retire_legacy_training_targets.sql"),
-    include_str!("../migrations/019_add_blackbox_provider.sql"),
-    include_str!("../migrations/020_ai_center_viewer_notes.sql"),
-];
-
-const UX_DATA_MIGRATIONS: [&str; 3] = [
-    include_str!("../migrations/021_soft_archive_lifecycle.sql"),
-    include_str!("../migrations/022_viewer_notes_source_preservation.sql"),
-    include_str!("../migrations/023_controlled_purge.sql"),
-];
+use crate::migrations::{CURRENT_MIGRATION_VERSION, MIGRATION_SPECS};
 
 const LEGACY_V20_FIXTURE: &str = r#"
 INSERT INTO profiles(id, display_name, created_at, updated_at)
@@ -91,14 +64,14 @@ async fn legacy_v20_database_upgrades_through_023_without_losing_data_or_provena
         .await
         .expect("foreign keys should be enabled");
 
-    for migration in PRE_UX_DATA_MIGRATIONS {
-        apply_sql(&mut connection, migration).await;
+    for migration in &MIGRATION_SPECS[..20] {
+        apply_sql(&mut connection, migration.sql).await;
     }
     apply_sql(&mut connection, LEGACY_V20_FIXTURE).await;
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
 
-    for migration in UX_DATA_MIGRATIONS {
-        apply_sql(&mut connection, migration).await;
+    for migration in &MIGRATION_SPECS[20..] {
+        apply_sql(&mut connection, migration.sql).await;
     }
 
     let conversation = sqlx::query("SELECT title, thread_group_id FROM chat_threads WHERE id = 'conversation-old'")
@@ -151,5 +124,7 @@ async fn legacy_v20_database_upgrades_through_023_without_losing_data_or_provena
         .await
         .expect("controlled purge context should exist after migration 023");
     assert_eq!(purge_context_count, 0);
+    assert_eq!(CURRENT_MIGRATION_VERSION, 23);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(23));
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
 }

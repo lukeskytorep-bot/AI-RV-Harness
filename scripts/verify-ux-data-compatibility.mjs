@@ -32,11 +32,14 @@ if (JSON.stringify(migrationNumbers) !== JSON.stringify(expectedNumbers)) {
 }
 
 const tauriLib = read("src-tauri/src/lib.rs");
+const migrationRegistry = read("src-tauri/src/migrations.rs");
+if (!tauriLib.includes("migrations::registered_migrations()")) failures.push("src-tauri/src/lib.rs must register migrations through the centralized registry");
 for (const name of migrationFiles) {
   const version = Number(name.slice(0, 3));
-  if (!tauriLib.includes(`version: ${version},`)) failures.push(`src-tauri/src/lib.rs does not register migration ${version}`);
-  if (!tauriLib.includes(`include_str!("../migrations/${name}")`)) failures.push(`src-tauri/src/lib.rs does not include ${name}`);
+  if (!migrationRegistry.includes(`version: ${version},`)) failures.push(`src-tauri/src/migrations.rs does not register migration ${version}`);
+  if (!migrationRegistry.includes(`include_str!("../migrations/${name}")`)) failures.push(`src-tauri/src/migrations.rs does not include ${name}`);
 }
+if (!migrationRegistry.includes("MIGRATION_SPECS[MIGRATION_SPECS.len() - 1].version")) failures.push("current migration version must derive from the centralized migration registry");
 
 const dialogProvider = resolve(root, "src", "components", "AppDialogProvider.tsx");
 for (const path of productionTypeScriptFiles()) {

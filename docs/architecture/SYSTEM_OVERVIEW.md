@@ -385,7 +385,7 @@ The release was validated with:
 - 74 Vitest files and 207 tests;
 - a production Vite build;
 - a dependency audit with no reported known vulnerabilities at release time;
-- 20 SQLite migrations and negative checks for the v0.7.12 integrity triggers.
+- 23 SQLite migrations, including the closed UX-DATA compatibility layer, plus negative checks for the integrity and lifecycle guards.
 
 Rust checks and platform packaging remain release-workflow gates. Practical AI Center sessions should complement automated validation before the experimental feature is treated as proven useful.
 

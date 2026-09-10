@@ -12,9 +12,10 @@ use sha2::{Digest, Sha256};
 use sqlx::{sqlite::{SqliteConnectOptions, SqliteConnection}, Connection, Row};
 use tauri::Manager;
 
+use crate::migrations::CURRENT_MIGRATION_VERSION;
+
 const BACKUP_SCHEMA_VERSION: u8 = 1;
 const DATABASE_FILE_NAME: &str = "rv_harness.db";
-const CURRENT_MIGRATION_VERSION: i64 = 20;
 const ALLOWED_PROJECT_URLS: [&str; 6] = [
     "https://github.com/lukeskytorep-bot",
     "https://github.com/lukeskytorep-bot/AI-RV-Harness/blob/main/CREDITS.md",
@@ -167,7 +168,11 @@ pub fn storage_paths(app: tauri::AppHandle) -> Result<StoragePaths, String> {
 #[tauri::command]
 pub async fn validate_live_database(app: tauri::AppHandle) -> Result<(), String> {
     let path = database_path(&app)?;
-    let migration_version = validate_sqlite_database(&path).await?;
+    validate_current_database(&path).await
+}
+
+async fn validate_current_database(path: &Path) -> Result<(), String> {
+    let migration_version = validate_sqlite_database(path).await?;
     if migration_version != CURRENT_MIGRATION_VERSION {
         return Err(format!(
             "database migration validation failed: expected version {CURRENT_MIGRATION_VERSION}, found {migration_version}"
@@ -725,7 +730,13 @@ fn preserve_sidecar(database: &Path, suffix: &str, safety_suffix: u64) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::validate_project_url;
+    use super::{
+        inspect_portable_backup, sha256_file, validate_current_database, validate_project_url,
+        validate_sqlite_database, BackupManifest, BACKUP_SCHEMA_VERSION, DATABASE_FILE_NAME,
+    };
+    use crate::migrations::{CURRENT_MIGRATION_VERSION, MIGRATION_SPECS};
+    use sqlx::{sqlite::SqliteConnectOptions, Connection, SqliteConnection};
+    use std::{fs, path::{Path, PathBuf}, process, time::{SystemTime, UNIX_EPOCH}};
 
     #[test]
     fn complete_project_credits_url_is_allowed() {
@@ -738,5 +749,155 @@ mod tests {
     #[test]
     fn arbitrary_external_url_is_rejected() {
         assert!(validate_project_url("https://example.com/").is_err());
+    }
+
+    fn temp_case(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "ai-rv-harness-{label}-{}-{nonce}",
+            process::id()
+        ));
+        fs::create_dir_all(&directory).expect("test directory should be created");
+        directory
+    }
+
+    async fn create_migration_ledger(connection: &mut SqliteConnection) {
+        sqlx::raw_sql(
+            r#"
+            CREATE TABLE _sqlx_migrations (
+              version BIGINT PRIMARY KEY NOT NULL,
+              description TEXT NOT NULL,
+              installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              success BOOLEAN NOT NULL,
+              checksum BLOB NOT NULL,
+              execution_time BIGINT NOT NULL
+            );
+            "#,
+        )
+        .execute(&mut *connection)
+        .await
+        .expect("migration ledger should be created");
+    }
+
+    async fn apply_migration_range(
+        connection: &mut SqliteConnection,
+        start_index: usize,
+        end_index: usize,
+    ) {
+        for migration in &MIGRATION_SPECS[start_index..end_index] {
+            sqlx::raw_sql(migration.sql)
+                .execute(&mut *connection)
+                .await
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "migration {:03} ({}) should apply: {error}",
+                        migration.version, migration.description
+                    )
+                });
+            sqlx::query(
+                "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (?, ?, 1, X'', 0)",
+            )
+            .bind(migration.version)
+            .bind(migration.description)
+            .execute(&mut *connection)
+            .await
+            .expect("migration ledger row should be recorded");
+        }
+    }
+
+    async fn create_database_through(path: &Path, migration_count: usize) {
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let mut connection = SqliteConnection::connect_with(&options)
+            .await
+            .expect("test database should open");
+        create_migration_ledger(&mut connection).await;
+        apply_migration_range(&mut connection, 0, migration_count).await;
+        connection.close().await.expect("test database should close");
+    }
+
+    #[tokio::test]
+    async fn database_after_migrations_001_through_023_passes_live_validation() {
+        let directory = temp_case("migration-023-live-validation");
+        let database = directory.join(DATABASE_FILE_NAME);
+        create_database_through(&database, MIGRATION_SPECS.len()).await;
+
+        assert_eq!(CURRENT_MIGRATION_VERSION, 23);
+        validate_current_database(&database)
+            .await
+            .expect("migration-023 database should pass live validation");
+
+        fs::remove_dir_all(directory).expect("test directory should be removed");
+    }
+
+    #[tokio::test]
+    async fn database_upgrade_from_020_through_023_passes_live_validation() {
+        let directory = temp_case("migration-020-to-023");
+        let database = directory.join(DATABASE_FILE_NAME);
+        create_database_through(&database, 20).await;
+
+        let options = SqliteConnectOptions::new()
+            .filename(&database)
+            .create_if_missing(false)
+            .foreign_keys(true);
+        let mut connection = SqliteConnection::connect_with(&options)
+            .await
+            .expect("migration-020 database should reopen");
+        apply_migration_range(&mut connection, 20, MIGRATION_SPECS.len()).await;
+        connection.close().await.expect("upgraded database should close");
+
+        validate_current_database(&database)
+            .await
+            .expect("database upgraded from 020 to 023 should pass live validation");
+
+        fs::remove_dir_all(directory).expect("test directory should be removed");
+    }
+
+    #[tokio::test]
+    async fn portable_backup_and_restore_preflight_accept_database_version_023() {
+        let root = temp_case("backup-version-023");
+        let backup_id = "backup_security_ipc_1a_v23";
+        let directory = root.join(format!("AI_RV_Harness_{backup_id}"));
+        fs::create_dir_all(&directory).expect("portable backup directory should be created");
+        let database = directory.join(DATABASE_FILE_NAME);
+        create_database_through(&database, MIGRATION_SPECS.len()).await;
+
+        let manifest = BackupManifest {
+            schema_version: BACKUP_SCHEMA_VERSION,
+            application_version: env!("CARGO_PKG_VERSION").to_string(),
+            backup_id: backup_id.to_string(),
+            created_at_unix_ms: 1,
+            database_sha256: sha256_file(&database).expect("database hash should be available"),
+            database_size_bytes: fs::metadata(&database)
+                .expect("database metadata should be available")
+                .len(),
+            artifacts: Vec::new(),
+            secrets_included: false,
+        };
+        fs::write(
+            directory.join("manifest.json"),
+            serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+
+        inspect_portable_backup(directory.to_string_lossy().to_string())
+            .await
+            .expect("portable backup with migration version 23 should be accepted");
+
+        let restore_copy = root.join("restore-preflight.db");
+        fs::copy(&database, &restore_copy).expect("restore candidate should copy");
+        assert_eq!(
+            validate_sqlite_database(&restore_copy)
+                .await
+                .expect("restore preflight should accept migration version 23"),
+            23
+        );
+
+        fs::remove_dir_all(root).expect("test directory should be removed");
     }
 }

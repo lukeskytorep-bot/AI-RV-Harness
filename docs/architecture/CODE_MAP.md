@@ -67,11 +67,11 @@ This document maps responsibilities, not every source file. Historical release r
 | Export audit persistence contract | `src/storage/contracts/exportRepository.ts` | Shared cross-domain ledger for exported Training, Session, Monitor and Research artifacts; it is not owned by Research execution. |
 | Desktop SQLite implementation | `src/storage/sqliteRepository.ts`, delegating under `src/storage/sqlite/` | Continue one domain at a time without changing the facade or schema. Provider/credential metadata and Profile-reference cleanup remain one explicit transaction. |
 | Browser preview implementation | `src/storage/browserRepository.ts`, delegating under `src/storage/browser/` | Preserve contracts and local-storage keys; the facade supplies explicit cross-domain callbacks where required. |
-| Database migrations and native transactions | `src-tauri/src/database.rs` and storage migration code | Keep ordered, atomic and backwards compatible. |
+| Database migrations and native transactions | `src-tauri/src/migrations.rs`, `src-tauri/src/database.rs` and `src-tauri/src/storage.rs` | `migrations.rs` is the single ordered 001–023 registry and current-version source; transactions and database validation remain with their focused native owners. |
 | Credentials | native credential commands and provider configuration modules | Secrets must never enter SQLite, exports or UI diagnostics. |
 | Profile/credential model-route resolution | `src/modelRoutes.ts` | New/current Viewer/Monitor/Judge choices are scoped through the active Profile credential. Feature modules must not reconstruct `providerConfigId::modelId` or independently widen the scope to the global model cache. |
 | Human-readable and research exports | `src/exports/`, `src/artifacts/` | Preserve evidence-domain separation and existing formats. |
-| Sources and attachments | `src/sources/`, `src/attachments/` | Never leak Reveal or target material into blind messages. |
+| Sources and attachments | `src/sources/`, `src/attachments/`, `src-tauri/src/documents.rs` and `src-tauri/src/dialogs.rs` | Never leak Reveal or target material into blind messages. Desktop attachment selection and import are one native operation so filesystem paths are not exposed back to the WebView. |
 | PL/EN text | `src/i18n.ts`, versioned resources under `src/resources/` | Split later by domain; do not change wording during structural extraction. |
 
 ## Frontend extractions completed

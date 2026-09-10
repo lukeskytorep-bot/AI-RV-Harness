@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import migration from "../../src-tauri/migrations/022_viewer_notes_source_preservation.sql?raw";
-import tauriLib from "../../src-tauri/src/lib.rs?raw";
+import migrationRegistry from "../../src-tauri/src/migrations.rs?raw";
 
 
 describe("Viewer Notes source preservation migration", () => {
   it("registers migration 022 after the soft-archive migration", () => {
-    expect(tauriLib).toContain('version: 22');
-    expect(tauriLib).toContain('include_str!("../migrations/022_viewer_notes_source_preservation.sql")');
+    expect(migrationRegistry).toContain('version: 22');
+    expect(migrationRegistry).toContain('include_str!("../migrations/022_viewer_notes_source_preservation.sql")');
   });
 
   it("rebuilds live source references as nullable SET NULL links and stores immutable source snapshots", () => {

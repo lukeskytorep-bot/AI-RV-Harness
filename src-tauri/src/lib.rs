@@ -1,4 +1,5 @@
 mod secrets;
+mod migrations;
 mod providers;
 mod artifacts;
 mod storage;
@@ -8,150 +9,10 @@ mod documents;
 #[cfg(test)]
 mod ux_data_compatibility;
 
-use tauri_plugin_sql::{Migration, MigrationKind};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let migrations = vec![
-        Migration {
-            version: 1,
-            description: "initial_rv_harness_schema",
-            sql: include_str!("../migrations/001_initial.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 2,
-            description: "provider_registry",
-            sql: include_str!("../migrations/002_provider_registry.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 3,
-            description: "judge_freeze_guards",
-            sql: include_str!("../migrations/003_judge_freeze.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 4,
-            description: "research_lock_guards",
-            sql: include_str!("../migrations/004_research_lock.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 5,
-            description: "workspace_source_content_and_thread_selection",
-            sql: include_str!("../migrations/005_workspace_sources.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 6,
-            description: "immutable_post_reveal_target_clarifications",
-            sql: include_str!("../migrations/006_target_clarifications.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 7,
-            description: "target_image_artifact_manifest",
-            sql: include_str!("../migrations/007_target_image_artifacts.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 8,
-            description: "persistent_model_favorites",
-            sql: include_str!("../migrations/008_model_favorites.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 9,
-            description: "append_only_post_reveal_transcript",
-            sql: include_str!("../migrations/009_post_reveal_append_only.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 10,
-            description: "atomic_reveal_state_transition",
-            sql: include_str!("../migrations/010_atomic_reveal.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 11,
-            description: "profile_ai_role_defaults",
-            sql: include_str!("../migrations/011_profile_ai_defaults.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 12,
-            description: "target_mutation_guards",
-            sql: include_str!("../migrations/012_target_mutation_guards.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 13,
-            description: "profile_viewer_generation_and_prompt_defaults",
-            sql: include_str!("../migrations/013_profile_viewer_defaults.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 14,
-            description: "chat_thread_archiving_and_recent_selection",
-            sql: include_str!("../migrations/014_chat_thread_archiving.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 15,
-            description: "is_be_identity_and_monitor_prompt",
-            sql: include_str!("../migrations/015_is_be_identity_and_monitor_prompt.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 16,
-            description: "training_run_checkpoints",
-            sql: include_str!("../migrations/016_training_runs.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 17,
-            description: "chat_thread_conversation_hierarchy",
-            sql: include_str!("../migrations/017_chat_thread_conversation_hierarchy.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 18,
-            description: "retire_legacy_training_target_pack",
-            sql: include_str!("../migrations/018_retire_legacy_training_targets.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 19,
-            description: "add_blackbox_provider",
-            sql: include_str!("../migrations/019_add_blackbox_provider.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 20,
-            description: "ai_center_viewer_notes",
-            sql: include_str!("../migrations/020_ai_center_viewer_notes.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 21,
-            description: "soft_archive_lifecycle",
-            sql: include_str!("../migrations/021_soft_archive_lifecycle.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 22,
-            description: "viewer_notes_source_preservation",
-            sql: include_str!("../migrations/022_viewer_notes_source_preservation.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 23,
-            description: "controlled_purge",
-            sql: include_str!("../migrations/023_controlled_purge.sql"),
-            kind: MigrationKind::Up,
-        },
-    ];
+    let migrations = migrations::registered_migrations();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -198,9 +59,8 @@ pub fn run() {
             storage::open_folder,
             storage::open_project_url,
             dialogs::choose_directory,
-            dialogs::choose_attachments,
             dialogs::save_text_file,
-            documents::import_attachment,
+            documents::choose_and_import_attachments,
             documents::list_builtin_documents,
             documents::read_builtin_document,
             documents::save_builtin_document,
