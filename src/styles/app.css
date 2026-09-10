@@ -1474,3 +1474,5 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 .recent-session-row { display: flex; align-items: stretch; gap: 0.35rem; }
 .recent-session-row .recent-session-open { flex: 1; }
 .recent-session-row .icon-button { flex: 0 0 auto; align-self: center; }
+.archive-row > .archive-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: max-content; }
+.archive-row-actions .danger-button { display: inline-flex; align-items: center; gap: 6px; }

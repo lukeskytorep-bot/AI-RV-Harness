@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -33,6 +34,7 @@ import { isTauriRuntime } from "../../storage";
 import { createPortableStorageBackup, restorePortableStorageBackup } from "../../storage/maintenance";
 import { chooseDirectory, openDataFolder, saveTextFile } from "../../storage/native";
 import type { AppRepository } from "../../storage/repository";
+import type { DeletionPreview, PurgeEntityKind } from "../../storage/controlledPurge";
 import { userTargetKind } from "../../targets/service";
 import type { AppSettings, ChatThread, InterfaceLanguage, Profile, SessionLanguageSetting, Theme, Workspace } from "../../types";
 import type { RvSession } from "../../sessions/types";
@@ -195,6 +197,7 @@ function AdvancedSettingsCard({ copy, repository }: { copy: ReturnType<typeof ge
 function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { copy: ReturnType<typeof getCopy>; workspaces: Workspace[]; repository: AppRepository | null; onDataChanged: () => Promise<void> }) {
   const dialogs = useAppDialogs();
   const [busy, setBusy] = useState<"backup" | "restore" | null>(null);
+  const [purgingId, setPurgingId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cacheInfo, setCacheInfo] = useState({ routes: 0, approxBytes: 0 });
@@ -285,6 +288,70 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
     }
   };
 
+  const executePurge = async (kind: PurgeEntityKind, id: string) => {
+    if (!repository) return;
+    if (kind === "profile") await repository.purgeProfile(id);
+    else if (kind === "workspace") await repository.purgeWorkspace(id);
+    else if (kind === "conversation") await repository.purgeChatThread(id);
+    else if (kind === "rv_session") await repository.purgeRvSession(id);
+    else if (kind === "training") await repository.purgeTrainingRun(id);
+    else if (kind === "research") await repository.purgeResearchProject(id);
+    else await repository.purgeTarget(id);
+  };
+
+  const permanentDelete = async (kind: PurgeEntityKind, id: string) => {
+    if (!repository || purgingId) return;
+    setError(null); setMessage(null);
+    try {
+      const preview = await repository.previewPermanentDelete(kind, id);
+      if (preview.blockedReason) {
+        await dialogs.information({ title: pl ? "Nie można usunąć trwale" : "Cannot delete permanently", description: preview.blockedReason, confirmLabel: copy.dialogOk, severity: "warning" });
+        return;
+      }
+      if (!preview.archived) throw new Error(pl ? "Trwałe usuwanie jest dostępne wyłącznie dla zarchiwizowanych rekordów." : "Permanent Delete is available only for archived records.");
+
+      if (preview.safetyBackupRecommended && isTauriRuntime()) {
+        const backupFirst = await dialogs.confirm({
+          title: pl ? "Kopia bezpieczeństwa przed usunięciem" : "Safety backup before deletion",
+          description: pl ? "Dla tego dużego pakietu zalecana jest kopia całej bazy. Możesz ją utworzyć teraz albo kontynuować bez niej." : "A full database backup is recommended for this large package. You can create it now or continue without one.",
+          details: [pl ? "Anulowanie tego okna oznacza: kontynuuj bez kopii." : "Canceling this prompt means: continue without a backup."],
+          confirmLabel: pl ? "Utwórz kopię" : "Create backup",
+          cancelLabel: pl ? "Bez kopii" : "Without backup",
+          severity: "warning",
+        });
+        if (backupFirst) {
+          const destination = await chooseDirectory(copy.backupChooseFolder);
+          if (!destination) return;
+          setBusy("backup");
+          try {
+            const created = await createPortableStorageBackup(repository, destination);
+            setMessage(`${copy.backupComplete} · ${created.directory}`);
+          } finally { setBusy(null); }
+        }
+      }
+
+      const confirmed = await dialogs.confirm({
+        title: pl ? `Usunąć trwale: ${preview.label}?` : `Delete permanently: ${preview.label}?`,
+        description: pl ? "Deletion Preview: poniższe dane zostaną fizycznie usunięte i nie będzie można ich przywrócić." : "Deletion Preview: the data below will be physically deleted and cannot be restored.",
+        details: deletionPreviewDetails(preview, pl),
+        confirmLabel: pl ? "Usuń trwale" : "Delete permanently",
+        cancelLabel: copy.cancel,
+        busyLabel: pl ? "Usuwanie…" : "Deleting…",
+        severity: "destructive",
+        ...(preview.requiresPhrase ? { requiredPhrase: preview.requiresPhrase, requiredPhraseLabel: pl ? `Wpisz ${preview.requiresPhrase}, aby potwierdzić` : `Type ${preview.requiresPhrase} to confirm` } : {}),
+        action: async () => {
+          setPurgingId(id);
+          try { await executePurge(kind, id); }
+          finally { setPurgingId(null); }
+        },
+      });
+      if (!confirmed) return;
+      await onDataChanged();
+      await refresh();
+      setMessage(pl ? "Rekord został trwale usunięty." : "The record was permanently deleted.");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setPurgingId(null); }
+  };
+
   const allWorkspaceNames = new Map([...workspaces, ...archivedWorkspaces].map((item) => [item.id, item.name]));
   const archivedWorkspaceIds = new Set(archivedWorkspaces.map((item) => item.id));
   const archivedProfileIds = new Set(archivedProfiles.map((item) => item.id));
@@ -293,16 +360,21 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
   const restoreLabel = pl ? "Przywróć" : "Restore";
   const parentTitle = pl ? "Najpierw przywróć nadrzędny Profil i Workspace." : "Restore the parent Profile and Workspace first.";
 
+  const archiveActions = (kind: PurgeEntityKind, id: string, restoreAction: () => Promise<void>, restoreDisabled = false, restoreTitle?: string) => <span className="archive-row-actions">
+    <button className="secondary-button" disabled={restoreDisabled || purgingId === id} title={restoreTitle} onClick={() => void recover(restoreAction)}>{restoreLabel}</button>
+    <button className="danger-button" disabled={purgingId === id || Boolean(busy)} onClick={() => void permanentDelete(kind, id)}><Trash2 size={14} />{pl ? "Usuń trwale" : "Delete permanently"}</button>
+  </span>;
+
   const archiveList = <div className="archive-recovery">
-    <div className="storage-backup-explainer"><Archive size={18} /><div><strong>{pl ? "Archiwum i odzyskiwanie" : "Archive and recovery"}</strong><p>{pl ? "Zarchiwizowane dane pozostają w pamięci lokalnej. Tutaj można je przywrócić; trwałe usuwanie nie jest częścią tej aktualizacji." : "Archived data remains in local storage. Restore it here; permanent deletion is not part of this update."}</p></div></div>
+    <div className="storage-backup-explainer"><Archive size={18} /><div><strong>{pl ? "Archiwum i odzyskiwanie" : "Archive and recovery"}</strong><p>{pl ? "Zarchiwizowane dane można przywrócić albo, po sprawdzeniu Deletion Preview, usunąć trwale. Permanent Delete nie jest dostępny z aktywnych widoków." : "Archived data can be restored or, after reviewing a Deletion Preview, deleted permanently. Permanent Delete is not available from active views."}</p></div></div>
     {archiveCount === 0 ? <p className="muted">{pl ? "Archiwum jest puste." : "The archive is empty."}</p> : <div className="archive-groups">
-      {archivedProfiles.length > 0 && <details open><summary>{pl ? "Profile" : "Profiles"} · {archivedProfiles.length}</summary>{archivedProfiles.map((profile) => <div className="archive-row" key={profile.id}><span><strong>{aiIsBeDisplayName(profile)}</strong><small>{profile.archivedAt ? new Date(profile.archivedAt).toLocaleString() : ""}</small></span><button className="secondary-button" onClick={() => void recover(() => repository!.restoreProfile(profile.id))}>{restoreLabel}</button></div>)}</details>}
-      {archivedWorkspaces.length > 0 && <details open><summary>Workspace · {archivedWorkspaces.length}</summary>{archivedWorkspaces.map((workspace) => <div className="archive-row" key={workspace.id}><span><strong>{workspace.name}</strong><small>{workspace.archivedAt ? new Date(workspace.archivedAt).toLocaleString() : ""}</small></span><button className="secondary-button" disabled={archivedProfileIds.has(workspace.profileId)} title={archivedProfileIds.has(workspace.profileId) ? parentTitle : undefined} onClick={() => void restoreWorkspace(workspace)}>{restoreLabel}</button></div>)}</details>}
-      {archivedThreads.length > 0 && <details open><summary>{pl ? "Rozmowy / Manual RV" : "Conversations / Manual RV"} · {archivedThreads.length}</summary>{archivedThreads.map((thread) => <div className="archive-row" key={thread.id}><span><strong>{thread.title}</strong><small>{thread.mode === "manual_rv" ? "Manual RV" : (pl ? "Rozmowa" : "Conversation")} · {allWorkspaceNames.get(thread.workspaceId) ?? thread.workspaceId}</small></span><button className="secondary-button" disabled={archivedWorkspaceIds.has(thread.workspaceId)} title={archivedWorkspaceIds.has(thread.workspaceId) ? parentTitle : undefined} onClick={() => void recover(() => repository!.restoreChatThread(thread.id))}>{restoreLabel}</button></div>)}</details>}
-      {archivedSessions.length > 0 && <details open><summary>{pl ? "Sesje RV" : "RV Sessions"} · {archivedSessions.length}</summary>{archivedSessions.map((session) => <div className="archive-row" key={session.id}><span><strong>{session.sessionCode}</strong><small>{session.state} · {allWorkspaceNames.get(session.workspaceId) ?? session.workspaceId}</small></span><button className="secondary-button" disabled={parentBlocked(session.workspaceId, session.profileId)} title={parentBlocked(session.workspaceId, session.profileId) ? parentTitle : undefined} onClick={() => void recover(() => repository!.restoreRvSession(session.id))}>{restoreLabel}</button></div>)}</details>}
-      {archivedTrainingRuns.length > 0 && <details open><summary>Training · {archivedTrainingRuns.length}</summary>{archivedTrainingRuns.map((run) => <div className="archive-row" key={run.id}><span><strong>#{run.runNumber} · {run.name}</strong><small>{run.status} · {run.sessionIds.length} {pl ? "sesji" : "sessions"} · {allWorkspaceNames.get(run.workspaceId) ?? run.workspaceId}</small></span><button className="secondary-button" disabled={parentBlocked(run.workspaceId, run.profileId)} title={parentBlocked(run.workspaceId, run.profileId) ? parentTitle : undefined} onClick={() => void recover(() => repository!.restoreTrainingRun(run.id))}>{restoreLabel}</button></div>)}</details>}
-      {archivedResearchProjects.length > 0 && <details open><summary>Research · {archivedResearchProjects.length}</summary>{archivedResearchProjects.map((project) => <div className="archive-row" key={project.id}><span><strong>{project.name}</strong><small>{project.state} · {allWorkspaceNames.get(project.workspaceId) ?? project.workspaceId}</small></span><button className="secondary-button" disabled={archivedWorkspaceIds.has(project.workspaceId)} title={archivedWorkspaceIds.has(project.workspaceId) ? parentTitle : undefined} onClick={() => void recover(() => repository!.restoreResearchProject(project.id))}>{restoreLabel}</button></div>)}</details>}
-      {archivedTargets.length > 0 && <details open><summary>{pl ? "Moje cele" : "My Targets"} · {archivedTargets.length}</summary>{archivedTargets.map((target) => <div className="archive-row" key={target.id}><span><strong>{target.title}</strong><small>{userTargetKind(target) === "telepathic" ? (pl ? "Telepatyczny" : "Telepathic") : (pl ? "Ogólny" : "General")} · {target.archivedAt ? new Date(target.archivedAt).toLocaleString() : ""}</small></span><button className="secondary-button" onClick={() => void recover(() => repository!.restoreTarget(target.id))}>{restoreLabel}</button></div>)}</details>}
+      {archivedProfiles.length > 0 && <details open><summary>{pl ? "Profile" : "Profiles"} · {archivedProfiles.length}</summary>{archivedProfiles.map((profile) => <div className="archive-row" key={profile.id}><span><strong>{aiIsBeDisplayName(profile)}</strong><small>{profile.archivedAt ? new Date(profile.archivedAt).toLocaleString() : ""}</small></span>{archiveActions("profile", profile.id, () => repository!.restoreProfile(profile.id))}</div>)}</details>}
+      {archivedWorkspaces.length > 0 && <details open><summary>Workspace · {archivedWorkspaces.length}</summary>{archivedWorkspaces.map((workspace) => <div className="archive-row" key={workspace.id}><span><strong>{workspace.name}</strong><small>{workspace.archivedAt ? new Date(workspace.archivedAt).toLocaleString() : ""}</small></span><span className="archive-row-actions"><button className="secondary-button" disabled={archivedProfileIds.has(workspace.profileId) || purgingId === workspace.id} title={archivedProfileIds.has(workspace.profileId) ? parentTitle : undefined} onClick={() => void restoreWorkspace(workspace)}>{restoreLabel}</button><button className="danger-button" disabled={purgingId === workspace.id || Boolean(busy)} onClick={() => void permanentDelete("workspace", workspace.id)}><Trash2 size={14} />{pl ? "Usuń trwale" : "Delete permanently"}</button></span></div>)}</details>}
+      {archivedThreads.length > 0 && <details open><summary>{pl ? "Rozmowy / Manual RV" : "Conversations / Manual RV"} · {archivedThreads.length}</summary>{archivedThreads.map((thread) => <div className="archive-row" key={thread.id}><span><strong>{thread.title}</strong><small>{thread.mode === "manual_rv" ? "Manual RV" : (pl ? "Rozmowa" : "Conversation")} · {allWorkspaceNames.get(thread.workspaceId) ?? thread.workspaceId}</small></span>{archiveActions("conversation", thread.id, () => repository!.restoreChatThread(thread.id), archivedWorkspaceIds.has(thread.workspaceId), archivedWorkspaceIds.has(thread.workspaceId) ? parentTitle : undefined)}</div>)}</details>}
+      {archivedSessions.length > 0 && <details open><summary>{pl ? "Sesje RV" : "RV Sessions"} · {archivedSessions.length}</summary>{archivedSessions.map((session) => <div className="archive-row" key={session.id}><span><strong>{session.sessionCode}</strong><small>{session.state} · {allWorkspaceNames.get(session.workspaceId) ?? session.workspaceId}</small></span>{archiveActions("rv_session", session.id, () => repository!.restoreRvSession(session.id), parentBlocked(session.workspaceId, session.profileId), parentBlocked(session.workspaceId, session.profileId) ? parentTitle : undefined)}</div>)}</details>}
+      {archivedTrainingRuns.length > 0 && <details open><summary>Training · {archivedTrainingRuns.length}</summary>{archivedTrainingRuns.map((run) => <div className="archive-row" key={run.id}><span><strong>#{run.runNumber} · {run.name}</strong><small>{run.status} · {run.sessionIds.length} {pl ? "sesji" : "sessions"} · {allWorkspaceNames.get(run.workspaceId) ?? run.workspaceId}</small></span>{archiveActions("training", run.id, () => repository!.restoreTrainingRun(run.id), parentBlocked(run.workspaceId, run.profileId), parentBlocked(run.workspaceId, run.profileId) ? parentTitle : undefined)}</div>)}</details>}
+      {archivedResearchProjects.length > 0 && <details open><summary>Research · {archivedResearchProjects.length}</summary>{archivedResearchProjects.map((project) => <div className="archive-row" key={project.id}><span><strong>{project.name}</strong><small>{project.state} · {allWorkspaceNames.get(project.workspaceId) ?? project.workspaceId}</small></span>{archiveActions("research", project.id, () => repository!.restoreResearchProject(project.id), archivedWorkspaceIds.has(project.workspaceId), archivedWorkspaceIds.has(project.workspaceId) ? parentTitle : undefined)}</div>)}</details>}
+      {archivedTargets.length > 0 && <details open><summary>{pl ? "Moje cele" : "My Targets"} · {archivedTargets.length}</summary>{archivedTargets.map((target) => <div className="archive-row" key={target.id}><span><strong>{target.title}</strong><small>{userTargetKind(target) === "telepathic" ? (pl ? "Telepatyczny" : "Telepathic") : (pl ? "Ogólny" : "General")} · {target.archivedAt ? new Date(target.archivedAt).toLocaleString() : ""}</small></span>{archiveActions("target", target.id, () => repository!.restoreTarget(target.id))}</div>)}</details>}
     </div>}
   </div>;
 
@@ -334,6 +406,26 @@ function PageHeader({ title, subtitle }: { title: string; subtitle?: string }) {
 
 function PanelHeader({ title, icon }: { title: string; icon: ReactNode }) {
   return <div className="panel-header"><span>{icon}</span><h2>{title}</h2></div>;
+}
+
+
+function deletionPreviewDetails(preview: DeletionPreview, pl: boolean): string[] {
+  const labels: Array<[keyof DeletionPreview["counts"], string, string]> = [
+    ["profiles", "Profile", "Profiles"], ["workspaces", "Workspace", "Workspaces"], ["conversations", "Rozmowy / Manual RV", "Conversations / Manual RV"],
+    ["messages", "Wiadomości", "Messages"], ["rvSessions", "Sesje RV", "RV Sessions"], ["sessionEvents", "Zdarzenia sesji", "Session events"],
+    ["snapshots", "Snapshoty", "Snapshots"], ["reveals", "Reveal", "Reveals"], ["targetClarifications", "Doprecyzowania celu", "Target clarifications"],
+    ["monitorRuns", "Monitor runs", "Monitor runs"], ["monitorInterventions", "Interwencje Monitora", "Monitor interventions"], ["judgeRuns", "Judge runs", "Judge runs"],
+    ["judgeScores", "Frozen Judge scores", "Frozen Judge scores"], ["trainingRuns", "Training Runs", "Training Runs"], ["researchProjects", "Research projects", "Research projects"],
+    ["researchConditions", "Research conditions", "Research conditions"], ["researchAssignments", "Research assignments", "Research assignments"], ["blindingMappings", "Blinding mappings", "Blinding mappings"],
+    ["researchResults", "Research results", "Research results"], ["exports", "Eksporty", "Exports"], ["workspaceSources", "Workspace Sources", "Workspace Sources"],
+    ["userTargets", "My Targets", "My Targets"], ["viewerNoteIdentities", "AI identities + Viewer Notes", "AI identities + Viewer Notes"], ["viewerNoteVersions", "Viewer Notes versions", "Viewer Notes versions"],
+    ["viewerNoteReflectionRuns", "Viewer Notes reflection runs", "Viewer Notes reflection runs"], ["viewerNoteActivationEvents", "Viewer Notes activation history", "Viewer Notes activation history"],
+  ];
+  const details = labels.filter(([key]) => preview.counts[key] > 0).map(([key, plLabel, enLabel]) => `${pl ? plLabel : enLabel}: ${preview.counts[key]}`);
+  if (preview.viewerNotesPreserved > 0) details.push(pl ? `Viewer Notes zachowane mimo usunięcia źródła: ${preview.viewerNotesPreserved}` : `Viewer Notes preserved after source deletion: ${preview.viewerNotesPreserved}`);
+  if (preview.viewerNotesDeleted > 0) details.push(pl ? `Viewer Notes usuwane razem z Profile: ${preview.viewerNotesDeleted}` : `Viewer Notes deleted with the Profile: ${preview.viewerNotesDeleted}`);
+  details.push(pl ? "Operacja jest nieodwracalna." : "This action cannot be undone.");
+  return details;
 }
 
 function wordCount(text: string): number {

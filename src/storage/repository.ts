@@ -9,6 +9,8 @@ import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchCondition
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, DetachViewerNoteSourceReferencesInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteVersion } from "../aiCenter/types";
+import type { DeletionPreview, PurgeEntityKind } from "./controlledPurge";
+
 
 export interface AppRepository {
   listProfiles(): Promise<Profile[]>;
@@ -60,6 +62,14 @@ export interface AppRepository {
   updateTarget(id: string, input: UpdateTargetInput): Promise<TargetRecord>;
   archiveTarget(id: string): Promise<void>;
   restoreTarget(id: string): Promise<void>;
+  previewPermanentDelete(kind: PurgeEntityKind, id: string): Promise<DeletionPreview>;
+  purgeProfile(id: string): Promise<void>;
+  purgeWorkspace(id: string): Promise<void>;
+  purgeChatThread(id: string): Promise<void>;
+  purgeRvSession(id: string): Promise<void>;
+  purgeTrainingRun(id: string): Promise<void>;
+  purgeResearchProject(id: string): Promise<void>;
+  purgeTarget(id: string): Promise<void>;
   recordTargetUsage(input: TargetUsageInput): Promise<void>;
   listTargetUsage(): Promise<TargetUsageRecord[]>;
   createTrainingRun(input: CreateTrainingRunInput): Promise<TrainingRunRecord>;

@@ -16,7 +16,7 @@ describe("UX-DATA-6 soft archive boundary", () => {
     expect(migration).not.toContain("viewer_notes");
   });
 
-  it("exposes Archive/Restore without introducing permanent-delete contracts", () => {
+  it("keeps the UX-DATA-6 Archive/Restore contracts intact after later lifecycle stages", () => {
     for (const fragment of [
       "listArchivedRvSessions()", "archiveRvSession(id", "restoreRvSession(id",
       "listArchivedTrainingRuns()", "archiveTrainingRun(id", "restoreTrainingRun(id",
@@ -24,9 +24,6 @@ describe("UX-DATA-6 soft archive boundary", () => {
       "listArchivedTargets()", "archiveTarget(id", "restoreTarget(id",
     ]) expect(contract).toContain(fragment);
     expect(contract).not.toContain("deleteTarget(");
-    expect(contract).not.toContain("purgeTraining");
-    expect(contract).not.toContain("purgeResearch");
-    expect(contract).not.toContain("purgeRvSession");
   });
 
   it("keeps Training and Research sessions owned by their parent lifecycle", () => {
@@ -45,7 +42,7 @@ describe("UX-DATA-6 soft archive boundary", () => {
       "listArchivedRvSessions", "listArchivedTrainingRuns", "listArchivedResearchProjects", "listArchivedTargets",
       "restoreRvSession", "restoreTrainingRun", "restoreResearchProject", "restoreTarget",
     ]) expect(settingsScreen).toContain(method);
-    expect(settingsScreen).toContain("permanent deletion is not part of this update");
+    expect(settingsScreen).toContain("Deletion Preview");
   });
 
   it("changes My Targets from direct deletion to soft archive and keeps factory targets outside it", () => {

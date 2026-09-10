@@ -158,8 +158,8 @@ export class SqliteResearchRepository implements ResearchRepository {
       values: [condition.id, id, condition.conditionKey, JSON.stringify(condition.config)],
     }));
     statements.push(...plan.assignments.map((assignment) => ({
-      query: `INSERT INTO research_assignments (id, research_project_id, anonymous_session_id, session_id, target_id, execution_order, judge_order, status)
-           VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)`,
+      query: `INSERT INTO research_assignments (id, research_project_id, anonymous_session_id, session_id, target_id, target_id_snapshot, execution_order, judge_order, status)
+           VALUES ($1, $2, $3, NULL, $4, $4, $5, $6, $7)`,
       values: [assignment.id, id, assignment.anonymousSessionId, assignment.targetId, assignment.executionOrder, assignment.judgeOrder, assignment.status],
     })));
     statements.push(...plan.mappings.map((mapping) => ({
@@ -182,12 +182,13 @@ export class SqliteResearchRepository implements ResearchRepository {
   }
 
   async listResearchAssignments(projectId: string): Promise<ResearchAssignmentRecord[]> {
-    const rows = await this.dependencies.select<Array<{ id: string; research_project_id: string; anonymous_session_id: string; session_id: string | null; target_id: string | null; execution_order: number; judge_order: number | null; status: string }>>(
-      `SELECT id, research_project_id, anonymous_session_id, session_id, target_id, execution_order, judge_order, status FROM research_assignments WHERE research_project_id = $1 ORDER BY execution_order`, [projectId],
+    const rows = await this.dependencies.select<Array<{ id: string; research_project_id: string; anonymous_session_id: string; session_id: string | null; target_id: string | null; target_id_snapshot: string | null; execution_order: number; judge_order: number | null; status: string }>>(
+      `SELECT id, research_project_id, anonymous_session_id, session_id, target_id, target_id_snapshot, execution_order, judge_order, status FROM research_assignments WHERE research_project_id = $1 ORDER BY execution_order`, [projectId],
     );
     return rows.map((row) => {
-      if (!row.target_id || row.judge_order === null) throw new Error("Locked Research assignment is incomplete.");
-      return { id: row.id, researchProjectId: row.research_project_id, anonymousSessionId: row.anonymous_session_id, sessionId: row.session_id ?? undefined, targetId: row.target_id, executionOrder: row.execution_order, judgeOrder: row.judge_order, status: row.status };
+      const targetId = row.target_id ?? row.target_id_snapshot;
+      if (!targetId || row.judge_order === null) throw new Error("Locked Research assignment is incomplete.");
+      return { id: row.id, researchProjectId: row.research_project_id, anonymousSessionId: row.anonymous_session_id, sessionId: row.session_id ?? undefined, targetId, executionOrder: row.execution_order, judgeOrder: row.judge_order, status: row.status };
     });
   }
 

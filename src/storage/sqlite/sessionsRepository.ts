@@ -26,6 +26,7 @@ type RvSessionRow = {
   pre_reveal_sealed_at: string | null;
   post_reveal_transcript: string;
   target_id: string | null;
+  target_id_snapshot: string | null;
   research_project_id: string | null;
   created_at: string;
   updated_at: string;
@@ -54,7 +55,7 @@ function mapRvSession(row: RvSessionRow): RvSession {
     preRevealHash: row.pre_reveal_hash ?? undefined,
     preRevealSealedAt: row.pre_reveal_sealed_at ?? undefined,
     postRevealTranscript: row.post_reveal_transcript,
-    targetId: row.target_id ?? undefined,
+    targetId: row.target_id ?? row.target_id_snapshot ?? undefined,
     researchProjectId: row.research_project_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -89,8 +90,8 @@ export class SqliteSessionsRepository implements SessionsRepository {
     await this.dependencies.executeWrite(
       `INSERT INTO rv_sessions
        (id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
-        post_reveal_transcript, target_id, research_project_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, 'Draft', $5, '', '', $6, $7, $8, $8)`,
+        post_reveal_transcript, target_id, target_id_snapshot, research_project_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'Draft', $5, '', '', $6, $6, $7, $8, $8)`,
       [session.id, session.workspaceId, session.profileId, session.sessionCode, session.runType, session.targetId ?? null, session.researchProjectId ?? null, timestamp],
     );
     return session;
@@ -220,7 +221,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
   async getRvSession(id: string): Promise<RvSession | null> {
     const rows = await this.dependencies.select<RvSessionRow[]>(
       `SELECT id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
-              pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id,
+              pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id, target_id_snapshot,
               research_project_id, created_at, updated_at, completed_at, archived_at
          FROM rv_sessions WHERE id = $1 LIMIT 1`,
       [id],
@@ -231,7 +232,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
   async listRvSessions(workspaceId: string): Promise<RvSession[]> {
     const rows = await this.dependencies.select<RvSessionRow[]>(
       `SELECT id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
-              pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id,
+              pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id, target_id_snapshot,
               research_project_id, created_at, updated_at, completed_at, archived_at
          FROM rv_sessions WHERE workspace_id = $1 AND archived_at IS NULL ORDER BY created_at DESC`,
       [workspaceId],
@@ -242,7 +243,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
   async listArchivedRvSessions(): Promise<RvSession[]> {
     const rows = await this.dependencies.select<RvSessionRow[]>(
       `SELECT id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
-              pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id,
+              pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id, target_id_snapshot,
               research_project_id, created_at, updated_at, completed_at, archived_at
          FROM rv_sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC`,
     );
@@ -285,7 +286,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
     const workspaceOrder = workspaceIds.map((_, index) => `WHEN $${index + 1} THEN ${index}`).join(" ");
     const rows = await this.dependencies.select<RvSessionRow[]>(
       `SELECT id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript,
-              pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id,
+              pre_reveal_hash, pre_reveal_sealed_at, post_reveal_transcript, target_id, target_id_snapshot,
               research_project_id, created_at, updated_at, completed_at, archived_at
          FROM rv_sessions
         WHERE archived_at IS NULL AND workspace_id IN (${workspacePlaceholders.join(", ")})

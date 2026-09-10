@@ -245,3 +245,7 @@ Monitor Notes would require a separate identity, history, timing rule, and contr
 - **Engineering design and documentation:** Orion via Active Model — GPT-5.6-Sol, OpenAI, ChatGPT web interface
 
 This design was implemented in AI RV Harness v0.7.12. It remains experimental and should continue to be evaluated through automated checks and practical sessions before its effect on RV performance is treated as established.
+
+### Controlled purge integration (UX-DATA-8)
+
+Viewer Notes source preservation is consumed by the permanent-delete lifecycle rather than bypassed by it. Purging a source Session or Workspace detaches nullable live references and leaves `source_snapshot_json`, versions, reflection runs and activation history intact. Purging an entire Profile is different: the Profile's own AI identities and Viewer Notes are part of that Profile subtree and are removed by the explicit controlled-purge use case. Viewer Notes belonging to other identities remain preserved even when their source record is deleted.

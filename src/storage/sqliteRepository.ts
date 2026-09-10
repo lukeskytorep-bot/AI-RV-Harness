@@ -17,6 +17,7 @@ import { SqliteMonitorRepository } from "./sqlite/monitorRepository";
 import { SqliteJudgeRepository } from "./sqlite/judgeRepository";
 import { SqliteResearchRepository } from "./sqlite/researchRepository";
 import { SqliteExportRepository } from "./sqlite/exportRepository";
+import { SqliteControlledPurge } from "./sqlite/controlledPurge";
 
 type WorkspaceSourceRow = { id: string; workspace_id: string; source_type: "text" | "markdown" | "pdf" | "docx"; display_name: string; content_text: string | null; content_hash: string | null; metadata_json: string; created_at: string };
 type CustomProtocolRow = {
@@ -45,6 +46,7 @@ export class SqliteRepository implements AppRepository {
   private readonly monitorRepository: SqliteMonitorRepository;
   private readonly judgeRepository: SqliteJudgeRepository;
   private readonly exportRepository: SqliteExportRepository;
+  private readonly controlledPurge: SqliteControlledPurge;
 
   private constructor(private readonly db: Database) {
     this.profilesRepository = new SqliteProfilesRepository({
@@ -93,6 +95,10 @@ export class SqliteRepository implements AppRepository {
     });
     this.exportRepository = new SqliteExportRepository({
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
+    });
+    this.controlledPurge = new SqliteControlledPurge({
+      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
+      executeTransaction: (statements) => this.executeTransaction(statements),
     });
   }
 
@@ -301,6 +307,14 @@ export class SqliteRepository implements AppRepository {
   updateTarget: AppRepository["updateTarget"] = (id, input) => this.targetsRepository.updateTarget(id, input);
   archiveTarget: AppRepository["archiveTarget"] = (id) => this.targetsRepository.archiveTarget(id);
   restoreTarget: AppRepository["restoreTarget"] = (id) => this.targetsRepository.restoreTarget(id);
+  previewPermanentDelete: AppRepository["previewPermanentDelete"] = (kind, id) => this.controlledPurge.preview(kind, id);
+  purgeProfile: AppRepository["purgeProfile"] = (id) => this.controlledPurge.purge("profile", id);
+  purgeWorkspace: AppRepository["purgeWorkspace"] = (id) => this.controlledPurge.purge("workspace", id);
+  purgeChatThread: AppRepository["purgeChatThread"] = (id) => this.controlledPurge.purge("conversation", id);
+  purgeRvSession: AppRepository["purgeRvSession"] = (id) => this.controlledPurge.purge("rv_session", id);
+  purgeTrainingRun: AppRepository["purgeTrainingRun"] = (id) => this.controlledPurge.purge("training", id);
+  purgeResearchProject: AppRepository["purgeResearchProject"] = (id) => this.controlledPurge.purge("research", id);
+  purgeTarget: AppRepository["purgeTarget"] = (id) => this.controlledPurge.purge("target", id);
   recordTargetUsage: AppRepository["recordTargetUsage"] = (input) => this.targetsRepository.recordTargetUsage(input);
   listTargetUsage: AppRepository["listTargetUsage"] = () => this.targetsRepository.listTargetUsage();
 

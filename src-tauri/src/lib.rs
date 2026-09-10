@@ -143,6 +143,12 @@ pub fn run() {
             sql: include_str!("../migrations/022_viewer_notes_source_preservation.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 23,
+            description: "controlled_purge",
+            sql: include_str!("../migrations/023_controlled_purge.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

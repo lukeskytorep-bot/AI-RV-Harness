@@ -699,3 +699,21 @@ Model and provider names identify the systems used and do not imply endorsement 
 ---
 
 This page documents implemented safeguards in the referenced release. If a later release changes an invariant or boundary, its release notes and updated source code take precedence.
+
+## Decision 20 — Permanent Delete is an explicit controlled purge, not ordinary CRUD
+
+### Problem
+
+The Harness intentionally protects sealed evidence, immutable Session Snapshots, frozen Judge results, locked Research structures, Research Results, supplementary target clarifications and append-only Viewer Notes. A naive permanent-delete feature would either fail on those guards or, worse, weaken them globally.
+
+### Decision
+
+Normal CRUD remains subject to every integrity guard. Permanent deletion is exposed only after Archive and is implemented through explicit repository `purge*` use cases preceded by a read-only Deletion Preview.
+
+SQLite uses a transaction-scoped `controlled_purge_context`. The context exists only while a dedicated purge transaction is executing and is removed before commit. Selected delete guards recognize that context; ordinary update/delete paths do not. Bundled Training Targets remain protected even in the controlled context. Browser storage stages all affected keys and restores their previous raw values if a write fails.
+
+Used user targets preserve their historical identity through `target_id_snapshot` fields when their live FK is intentionally detached. Viewer Notes preserve immutable source snapshots when Session/Workspace live references disappear. Profile purge is the one lifecycle operation that removes the Profile's own AI identities and Viewer Notes history.
+
+### Invariant
+
+> Archiving makes a record eligible for explicit deletion; it does not weaken evidence integrity. Outside a dedicated controlled-purge transaction, sealed, frozen, locked and append-only protections behave exactly as before.
