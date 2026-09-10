@@ -1,5 +1,6 @@
 const APP_COMMANDS: &[&str] = &[
     "store_credential",
+    "rebind_credential",
     "has_credential",
     "delete_credential",
     "credential_identity_fingerprint",

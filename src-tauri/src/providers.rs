@@ -13,7 +13,7 @@ mod response_parsers;
 mod transport;
 mod validation;
 
-use adapters::{authenticated, endpoint, provider_base_url};
+use adapters::{authenticated, endpoint, normalized_credential_endpoint, provider_base_url};
 use errors::provider_error_metadata;
 use request_builders::build_chat_request;
 use response_parsers::parse_chat_response;
@@ -33,6 +33,37 @@ enum ProviderKind {
     Mistral,
     Blackbox,
     CustomOpenai,
+}
+
+impl ProviderKind {
+    fn parse_binding_kind(value: &str) -> Result<Self, String> {
+        match value.trim() {
+            "openrouter" => Ok(Self::Openrouter),
+            "google" => Ok(Self::Google),
+            "openai" => Ok(Self::Openai),
+            "anthropic" => Ok(Self::Anthropic),
+            "zai" => Ok(Self::Zai),
+            "deepseek" => Ok(Self::Deepseek),
+            "mistral" => Ok(Self::Mistral),
+            "blackbox" => Ok(Self::Blackbox),
+            "custom_openai" => Ok(Self::CustomOpenai),
+            _ => Err("unsupported provider kind".to_string()),
+        }
+    }
+
+    fn binding_kind(self) -> &'static str {
+        match self {
+            Self::Openrouter => "openrouter",
+            Self::Google => "google",
+            Self::Openai => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Zai => "zai",
+            Self::Deepseek => "deepseek",
+            Self::Mistral => "mistral",
+            Self::Blackbox => "blackbox",
+            Self::CustomOpenai => "custom_openai",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,10 +211,54 @@ fn scrub_debug_value(value: &mut Value, secret: &str, parent_key: Option<&str>) 
 }
 
 
+fn binding_endpoint(provider: ProviderKind, base_url: Option<&str>) -> Result<String, String> {
+    let base = provider_base_url(provider, base_url)?;
+    normalized_credential_endpoint(&base)
+}
+
+#[tauri::command]
+pub fn store_credential(
+    credential_id: String,
+    secret: String,
+    provider: String,
+    base_url: Option<String>,
+) -> Result<(), String> {
+    let provider = ProviderKind::parse_binding_kind(&provider)?;
+    let endpoint = binding_endpoint(provider, base_url.as_deref())?;
+    secrets::store_new_bound_credential(
+        &credential_id,
+        &secret,
+        provider.binding_kind(),
+        &endpoint,
+    )
+}
+
+#[tauri::command]
+pub fn rebind_credential(
+    credential_id: String,
+    secret: String,
+    provider: String,
+    base_url: Option<String>,
+) -> Result<(), String> {
+    let provider = ProviderKind::parse_binding_kind(&provider)?;
+    let endpoint = binding_endpoint(provider, base_url.as_deref())?;
+    secrets::rebind_bound_credential(
+        &credential_id,
+        &secret,
+        provider.binding_kind(),
+        &endpoint,
+    )
+}
+
 #[tauri::command]
 pub async fn provider_discover_models(request: ProviderRequest) -> Result<Value, String> {
-    let secret = secrets::get_credential(&request.credential_id)?;
     let base = provider_base_url(request.provider, request.base_url.as_deref())?;
+    let binding = normalized_credential_endpoint(&base)?;
+    let secret = secrets::get_credential_for_binding(
+        &request.credential_id,
+        request.provider.binding_kind(),
+        &binding,
+    )?;
     let url = if matches!(request.provider, ProviderKind::Google) {
         format!("{}?pageSize=1000", endpoint(&base, "models"))
     } else {
@@ -201,8 +276,14 @@ pub async fn provider_discover_models(request: ProviderRequest) -> Result<Value,
 #[tauri::command]
 pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatResponse, ProviderCallError> {
     validate_chat_request(&request).map_err(ProviderCallError::configuration)?;
-    let secret = secrets::get_credential(&request.credential_id).map_err(ProviderCallError::configuration)?;
     let base = provider_base_url(request.provider, request.base_url.as_deref()).map_err(ProviderCallError::configuration)?;
+    let binding = normalized_credential_endpoint(&base).map_err(ProviderCallError::configuration)?;
+    let secret = secrets::get_credential_for_binding(
+        &request.credential_id,
+        request.provider.binding_kind(),
+        &binding,
+    )
+    .map_err(ProviderCallError::configuration)?;
     let (url, body) = build_chat_request(&request, &base).map_err(ProviderCallError::configuration)?;
     let debug_endpoint = url.clone();
     let debug_request = request.detailed_diagnostics.then(|| {

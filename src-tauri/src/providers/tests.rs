@@ -1,5 +1,5 @@
 use super::*;
-use super::adapters::{provider_family, validate_base_url, ProviderFamily, OPENROUTER_APP_REFERER, OPENROUTER_APP_TITLE};
+use super::adapters::{normalized_credential_endpoint, provider_family, validate_base_url, ProviderFamily, OPENROUTER_APP_REFERER, OPENROUTER_APP_TITLE};
 use super::reasoning::split_tagged_reasoning;
 use super::errors::safe_provider_error;
 use super::request_builders::{build_google_request, build_openai_compatible_request};
@@ -71,6 +71,16 @@ fn rejects_remote_plain_http_custom_endpoint() {
     assert!(validate_base_url("http://example.com/v1").is_err());
     assert!(validate_base_url("http://127.0.0.1:8080/v1").is_ok());
     assert!(validate_base_url("https://example.com/v1").is_ok());
+}
+
+#[test]
+fn credential_binding_uses_canonical_provider_and_endpoint_identity() {
+    assert_eq!(ProviderKind::parse_binding_kind("openrouter").unwrap().binding_kind(), "openrouter");
+    assert!(ProviderKind::parse_binding_kind("unknown-provider").is_err());
+    assert_eq!(
+        normalized_credential_endpoint("HTTPS://EXAMPLE.COM:443/v1///").unwrap(),
+        "https://example.com/v1",
+    );
 }
 
 #[test]

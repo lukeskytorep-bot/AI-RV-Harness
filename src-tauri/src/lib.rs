@@ -31,7 +31,8 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
-            secrets::store_credential,
+            providers::store_credential,
+            providers::rebind_credential,
             secrets::has_credential,
             secrets::delete_credential,
             secrets::credential_identity_fingerprint,

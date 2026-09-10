@@ -38,9 +38,24 @@ function requireDesktop(): void {
   if (!isTauriRuntime()) throw new Error("Provider operations require the desktop runtime.");
 }
 
-export async function storeCredentialSecret(credentialId: string, secret: string): Promise<void> {
+export async function storeCredentialSecret(
+  credentialId: string,
+  secret: string,
+  provider: ProviderKind,
+  baseUrl?: string,
+): Promise<void> {
   requireDesktop();
-  await invoke("store_credential", { credentialId, secret });
+  await invoke("store_credential", { credentialId, secret, provider, baseUrl });
+}
+
+export async function rebindCredentialSecret(
+  credentialId: string,
+  secret: string,
+  provider: ProviderKind,
+  baseUrl?: string,
+): Promise<void> {
+  requireDesktop();
+  await invoke("rebind_credential", { credentialId, secret, provider, baseUrl });
 }
 
 export async function deleteCredentialSecret(credentialId: string): Promise<void> {

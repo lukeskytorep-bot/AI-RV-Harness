@@ -1,6 +1,6 @@
 import type { AppRepository } from "../storage/repository";
 import { createId } from "../storage/repository";
-import { deleteCredentialSecret, discoverModels, hasCredentialSecret, storeCredentialSecret } from "./native";
+import { deleteCredentialSecret, discoverModels, hasCredentialSecret, rebindCredentialSecret, storeCredentialSecret } from "./native";
 import type { ProviderConfig, ProviderKind, ProviderModel } from "./types";
 
 export const PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER = 2000;
@@ -31,7 +31,7 @@ export async function addProvider(
 
   const credentialId = createId("credential");
   const providerId = createId("provider");
-  await storeCredentialSecret(credentialId, apiKey);
+  await storeCredentialSecret(credentialId, apiKey, input.provider, input.baseUrl?.trim() || undefined);
   try {
     return await repository.createProviderConfig({
       id: providerId,
@@ -62,6 +62,22 @@ export async function refreshProviderModels(repository: AppRepository, config: P
     await repository.updateProviderConnectionStatus(config.id, "error", message);
     throw error;
   }
+}
+
+export async function rebindProviderCredential(
+  repository: AppRepository,
+  config: ProviderConfig,
+  apiKeyInput: string,
+): Promise<void> {
+  const apiKey = apiKeyInput.trim();
+  if (!apiKey) throw new Error("API key is required.");
+  await rebindCredentialSecret(config.credentialId, apiKey, config.provider, config.baseUrl);
+  await repository.updateProviderCredentialMetadata(
+    config.id,
+    credentialHint(apiKey),
+    await credentialFingerprint(apiKey),
+  );
+  await refreshProviderModels(repository, config);
 }
 
 export async function removeProvider(repository: AppRepository, config: ProviderConfig): Promise<void> {

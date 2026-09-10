@@ -2,7 +2,7 @@ import { Check, KeyRound, Plus, RefreshCw, Server, ShieldCheck, Sparkles, Star, 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { getCopy } from "../i18n";
 import { useAppDialogs } from "./AppDialogProvider";
-import { addProvider, refreshProviderModels, removeProvider } from "../providers/service";
+import { addProvider, rebindProviderCredential, refreshProviderModels, removeProvider } from "../providers/service";
 import { PROVIDER_KINDS, type ProviderConfig, type ProviderKind, type ProviderModel } from "../providers/types";
 import { isTauriRuntime } from "../storage";
 import type { AppRepository } from "../storage/repository";
@@ -25,6 +25,7 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [rebindConfig, setRebindConfig] = useState<ProviderConfig | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const desktop = isTauriRuntime();
@@ -50,6 +51,21 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
     setError(null);
     try {
       await refreshProviderModels(repository, config);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      await reload();
+      setBusyId(null);
+    }
+  };
+
+  const rebind = async (config: ProviderConfig, apiKey: string) => {
+    if (!repository) return;
+    setBusyId(config.id);
+    setError(null);
+    try {
+      await rebindProviderCredential(repository, config, apiKey);
+      setRebindConfig(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -119,6 +135,9 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
                 <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => void refresh(config)} title={copy.testRefresh}>
                   <RefreshCw size={14} className={busyId === config.id ? "spin-icon" : ""} />{busyId === config.id ? copy.refreshing : copy.testRefresh}
                 </button>
+                <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => setRebindConfig(config)} title={copy.apiKey}>
+                  <KeyRound size={14} />{copy.apiKey}
+                </button>
                 <button className="icon-button danger" disabled={!desktop || busyId !== null} onClick={() => void remove(config)} title={copy.removeProvider}><Trash2 size={16} /></button>
               </div>
             </article>
@@ -127,6 +146,7 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
       </section>}
       {section !== "providers" && <ModelRegistry copy={copy} repository={repository} providers={providers} models={models} onChanged={reload} />}
       {dialogOpen && <AddProviderDialog copy={copy} busy={busyId === "new"} onClose={() => setDialogOpen(false)} onSubmit={add} />}
+      {rebindConfig && <RebindCredentialDialog copy={copy} config={rebindConfig} busy={busyId === rebindConfig.id} onClose={() => setRebindConfig(null)} onSubmit={(apiKey) => rebind(rebindConfig, apiKey)} />}
     </>
   );
 }
@@ -192,6 +212,28 @@ function AddProviderDialog({ copy, busy, onClose, onSubmit }: { copy: Copy; busy
           <label>{copy.provider}<select value={provider} onChange={(event) => changeProvider(event.target.value as ProviderKind)}>{PROVIDER_KINDS.map((kind) => <option key={kind} value={kind}>{PROVIDER_LABELS[kind]}</option>)}</select></label>
           <label>{copy.providerLabel}<input value={label} onChange={(event) => setLabel(event.target.value)} required /></label>
           {provider === "custom_openai" && <label>{copy.baseUrl}<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://example.com/v1" required /></label>}
+          <label>{copy.apiKey}<input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} required /></label>
+          <div className="modal-actions"><button className="secondary-button" type="button" disabled={busy} onClick={onClose}>{copy.cancel}</button><button className="primary-button" type="submit" disabled={busy}>{busy ? copy.refreshing : copy.saveAndTest}</button></div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function RebindCredentialDialog({ copy, config, busy, onClose, onSubmit }: { copy: Copy; config: ProviderConfig; busy: boolean; onClose: () => void; onSubmit: (apiKey: string) => Promise<void> }) {
+  const [apiKey, setApiKey] = useState("");
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const secret = apiKey;
+    setApiKey("");
+    void onSubmit(secret);
+  };
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
+      <section className="modal form-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-heading"><div><small>{PROVIDER_LABELS[config.provider]}</small><h2>{copy.apiKey}</h2><p>{config.label}</p></div><button className="icon-button" type="button" disabled={busy} onClick={onClose}><X size={19} /></button></div>
+        <form onSubmit={submit}>
+          {config.provider === "custom_openai" && config.baseUrl && <label>{copy.baseUrl}<input value={config.baseUrl} readOnly /></label>}
           <label>{copy.apiKey}<input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} required /></label>
           <div className="modal-actions"><button className="secondary-button" type="button" disabled={busy} onClick={onClose}>{copy.cancel}</button><button className="primary-button" type="submit" disabled={busy}>{busy ? copy.refreshing : copy.saveAndTest}</button></div>
         </form>

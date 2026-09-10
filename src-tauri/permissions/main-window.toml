@@ -3,6 +3,7 @@ identifier = "main-window-commands"
 description = "Allows the AI RV Harness main window to invoke the application commands explicitly registered for the desktop shell."
 commands.allow = [
   "store_credential",
+  "rebind_credential",
   "has_credential",
   "delete_credential",
   "credential_identity_fingerprint",

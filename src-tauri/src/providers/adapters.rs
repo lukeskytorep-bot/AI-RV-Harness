@@ -46,6 +46,11 @@ pub(super) fn validate_base_url(value: &str) -> Result<String, String> {
     Ok(value.trim().trim_end_matches('/').to_string())
 }
 
+pub(super) fn normalized_credential_endpoint(base: &str) -> Result<String, String> {
+    let url = Url::parse(base.trim()).map_err(|_| "invalid provider base URL".to_string())?;
+    Ok(url.as_str().trim_end_matches('/').to_string())
+}
+
 pub(super) const OPENROUTER_APP_REFERER: &str = "https://github.com/lukeskytorep-bot/AI-RV-Harness";
 pub(super) const OPENROUTER_APP_TITLE: &str = "AI RV Harness";
 

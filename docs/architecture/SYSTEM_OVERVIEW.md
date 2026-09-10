@@ -305,6 +305,8 @@ AI RV Harness is local-first, but it is not offline when a remote AI provider is
 Key safeguards include:
 
 - API credentials stored through the operating system's native credential store rather than in the project database;
+- native credential records bind the secret to the credential ID, provider kind and normalized endpoint before provider transport may retrieve it; legacy secret-only entries are recognized but require explicit API-key re-entry before provider use;
+- `provider_configs` remains UI/persistence metadata and is not sufficient to authorize native credential routing;
 - credentials excluded from ordinary logs and exports;
 - a local keyed credential fingerprint for identity scoping without storing the raw key in AI Center history;
 - bounded and redacted diagnostics;
@@ -330,7 +332,7 @@ AI RV Harness is a Tauri 2 desktop application:
 | **Persistence** | SQLite with migrations, constraints, audit records, backups, and integrity checks. |
 | **Build system** | Vite, TypeScript, Cargo, GitHub Actions, Vitest, Rust tests, and Clippy. |
 
-The provider layer normalizes vendor-specific responses into one internal contract. Controllers for Conversation, RV protocols, Monitor, Judge, Training, and Research consume that contract instead of parsing provider payloads independently. On the native side, `src-tauri/src/providers.rs` is the thin Tauri command facade; `providers/adapters.rs` owns provider-family routing and authentication, `request_builders.rs` owns wire-format requests, `response_parsers.rs` owns normalized responses, `reasoning.rs` owns reasoning/final-content separation, `errors.rs` owns shared native error mapping, `validation.rs` owns request validation, and `transport.rs` owns the single physical HTTP attempt plus cancellation.
+The provider layer normalizes vendor-specific responses into one internal contract. Controllers for Conversation, RV protocols, Monitor, Judge, Training, and Research consume that contract instead of parsing provider payloads independently. On the native side, `src-tauri/src/providers.rs` is the thin Tauri command facade; it also resolves the canonical provider endpoint used for credential binding before any secret is released from `secrets.rs`. `providers/adapters.rs` owns provider-family routing, endpoint validation/normalization and authentication, `request_builders.rs` owns wire-format requests, `response_parsers.rs` owns normalized responses, `reasoning.rs` owns reasoning/final-content separation, `errors.rs` owns shared native error mapping, `validation.rs` owns request validation, and `transport.rs` owns the single physical HTTP attempt plus cancellation.
 
 This separation is especially important for reasoning models: internal thinking and final assistant content are classified once at the provider boundary and remain distinct throughout the application. Transport retry remains exclusively in the TypeScript request executor; the Rust transport performs one physical attempt per native call.
 
