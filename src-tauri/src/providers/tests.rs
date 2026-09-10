@@ -6,6 +6,7 @@ use super::request_builders::{build_google_request, build_openai_compatible_requ
 use super::response_parsers::{parse_anthropic_response, parse_google_response, parse_openai_compatible_response};
 use super::validation::validate_request_id;
 
+use serde_json::json;
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
 
 async fn read_simulator_request(socket: &mut TcpStream) -> String {

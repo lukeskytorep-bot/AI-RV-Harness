@@ -123,6 +123,10 @@ Pierwotny kandydat nie został przyjęty. Pełny Vitest wykrył nieaktualny test
 
 Usunięto przypadkowy duplikat, przeniesiono oczekiwanie wersji do `providers/transport.rs`, a helpery builderów otrzymały wyłącznie widoczność `pub(super)` wraz z jawnym importem testowym. Nie zmienia to publicznego API Tauri ani zachowania wywołań providerów.
 
+## Korekta po pierwszym uruchomieniu GitHub Actions
+
+Pierwsze uruchomienie natywnej bramki dla wariantu `_AUDITED` wykryło brak jawnego importu makra `serde_json::json` po przeniesieniu testów do `providers/tests.rs` (22 użycia `json!`, exit code 101). Dodano wyłącznie `use serde_json::json;` w module testowym. Kod produkcyjny, publiczne API, transport, formaty request/response i retry pozostają bez zmian. Rust/Tauri tests oraz Clippy muszą zostać uruchomione ponownie dla nowej tożsamości pakietu.
+
 ## Walidacja
 
 W środowisku przygotowania wykonano:
