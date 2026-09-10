@@ -22,7 +22,18 @@ import {
   X,
 } from "lucide-react";
 import rosehipLogo from "./assets/rosehip-logo.png";
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  Component,
+  Suspense,
+  lazy,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ErrorInfo,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { getCopy } from "./i18n";
 import { PROVIDER_LABELS } from "./components/ProviderSettings";
 import { createRepository, isTauriRuntime } from "./storage";
@@ -38,18 +49,15 @@ import type {
 import { PROVIDER_KINDS, type ProviderConfig } from "./providers/types";
 import type { ProviderKind, ProviderModel, ReasoningEffort } from "./providers/types";
 import { TrainingScreen } from "./features/training";
-import { AiCenterScreen, type AiCenterView } from "./features/aiCenter";
-import { ResearchScreen } from "./features/research";
+import type { AiCenterView } from "./features/aiCenter";
 import type { RvSession } from "./sessions/types";
 import { APP_VERSION } from "./version";
 import { addProvider, refreshProviderModels } from "./providers/service";
 import { HomeScreen } from "./features/home";
 import { CreateProfileDialog, ProfilesScreen, ProfileViewerControls } from "./features/profiles";
-import { SettingsScreen } from "./features/settings";
 import { TargetsScreen } from "./features/targets";
 import { ChatPanel } from "./features/conversations";
 import { WorkspacesScreen, WorkspaceSwitcherDialog } from "./features/workspaces";
-import { MonitorPanel } from "./features/monitor";
 import { RvSessionPanel } from "./features/rvSessions";
 import { FormDialog } from "./components/FormDialog";
 import { PageHeader } from "./components/PageHeader";
@@ -63,6 +71,16 @@ import { aiIsBeDisplayName } from "./domain/isBeIdentity";
 import { localizedMonitorEditablePrompt, localizedViewerEditablePrompt } from "./resources/systemPrompts";
 import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from "./targets/telepathicBundled";
 import { createProfileWithInitialWorkspace } from "./application/profileWorkspace";
+
+const LazyResearchScreen = lazy(() =>
+  import("./features/research").then(({ ResearchScreen }) => ({ default: ResearchScreen })),
+);
+const LazySettingsScreen = lazy(() =>
+  import("./features/settings").then(({ SettingsScreen }) => ({ default: SettingsScreen })),
+);
+const LazyAiCenterRoute = lazy(() =>
+  import("./features/aiCenter").then(({ AiCenterRoute }) => ({ default: AiCenterRoute })),
+);
 
 type Page = "home" | "profiles" | "workspaces" | "research" | "targets" | "training" | "ai-center" | "settings" | "workspace";
 type WorkspaceTab = "chat" | "rv";
@@ -246,7 +264,10 @@ export default function App() {
               error={initializationError}
               onRetry={() => setInitializationAttempt((current) => current + 1)}
             />
-          ) : page === "home" ? (
+          ) : (
+            <LazyRouteErrorBoundary key={page} language={settings.interfaceLanguage}>
+              <Suspense fallback={<LazyRouteLoadingState language={settings.interfaceLanguage} />}>
+                {page === "home" ? (
             <HomeScreen
               copy={copy}
               profile={lastProfile}
@@ -273,27 +294,26 @@ export default function App() {
           ) : page === "workspaces" ? (
             <WorkspacesScreen copy={copy} profiles={profiles} workspaces={workspaces} repository={repository} onChanged={refreshProfiles} activeWorkspaceId={activeWorkspaceId} onActiveArchived={(nextId) => { setActiveWorkspaceId(nextId); navigate("workspaces"); }} onOpenWorkspace={openWorkspace} onCreateWorkspace={() => setWorkspaceDialogFor("__choose__")} onCreateProfile={() => setProfileDialog(true)} />
           ) : page === "research" ? (
-            <ResearchScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
+            <LazyResearchScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
           ) : page === "targets" ? (
             <TargetsScreen copy={copy} settings={settings} repository={repository} />
           ) : page === "training" ? (
             <TrainingScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
           ) : page === "ai-center" ? (
-            <AiCenterScreen
+            <LazyAiCenterRoute
+              copy={copy}
               settings={settings}
               profiles={profiles}
               workspaces={workspaces}
               activeProfileId={activeProfileId}
-              workspaceFilterId={activeWorkspace?.profileId === activeProfileId ? activeWorkspace.id : null}
+              activeWorkspace={activeWorkspace}
               repository={repository!}
               initialView={aiCenterView}
               onProfileChange={(profileId) => { setActiveProfileId(profileId); setActiveWorkspaceId(workspaces.find((item) => item.profileId === profileId)?.id ?? null); }}
-              monitorPanel={activeWorkspace && activeWorkspace.profileId === activeProfileId
-                ? <MonitorPanel copy={copy} settings={settings} profile={profiles.find((item) => item.id === activeProfileId) ?? null} workspace={activeWorkspace} repository={repository} onProfileChanged={refreshProfiles} />
-                : <EmptyCard>{settings.interfaceLanguage === "pl" ? "Utwórz lub wybierz Workspace tego Profilu, aby otworzyć historię AI Monitora." : "Create or select a Workspace for this Profile to open AI Monitor history."}</EmptyCard>}
+              onProfileChanged={refreshProfiles}
             />
           ) : page === "settings" ? (
-            <SettingsScreen copy={copy} settings={settings} workspaces={workspaces} repository={repository} onDataChanged={refreshProfiles} onChange={updateSettings} />
+            <LazySettingsScreen copy={copy} settings={settings} workspaces={workspaces} repository={repository} onDataChanged={refreshProfiles} onChange={updateSettings} />
           ) : activeWorkspace ? (
             <WorkspaceScreen
               copy={copy}
@@ -311,6 +331,9 @@ export default function App() {
             />
           ) : (
             <EmptyCard>{copy.noWorkspace}</EmptyCard>
+                )}
+              </Suspense>
+            </LazyRouteErrorBoundary>
           )}
         </div>
       </main>
@@ -646,6 +669,41 @@ function CreateWorkspaceDialog({ copy, profile, profiles, onCancel, onCreate }: 
 
 function EmptyCard({ children }: { children: ReactNode }) {
   return <div className="page"><section className="panel"><div className="empty-state">{children}</div></section></div>;
+}
+
+class LazyRouteErrorBoundary extends Component<{ language: InterfaceLanguage; children: ReactNode }, { message: string | null }> {
+  state: { message: string | null } = { message: null };
+
+  static getDerivedStateFromError(error: unknown) {
+    return { message: error instanceof Error ? error.message : String(error) };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    console.error("AI RV Harness lazy route failed to load", error, info);
+  }
+
+  render() {
+    if (!this.state.message) return this.props.children;
+    const pl = this.props.language === "pl";
+    return (
+      <div className="route-load-error" role="alert">
+        <span><CircleStop size={24} /></span>
+        <h2>{pl ? "Nie udało się załadować ekranu" : "This screen could not be loaded"}</h2>
+        <p>{pl ? "Nawigacja aplikacji nadal działa. Spróbuj ponownie uruchomić interfejs, aby pobrać moduł jeszcze raz." : "Application navigation is still available. Reload the interface to fetch the module again."}</p>
+        <button className="primary-button" onClick={() => window.location.reload()}>{pl ? "Uruchom ponownie interfejs" : "Reload interface"}</button>
+        <details><summary>{pl ? "Szczegóły techniczne" : "Technical details"}</summary><code>{this.state.message}</code></details>
+      </div>
+    );
+  }
+}
+
+function LazyRouteLoadingState({ language }: { language: InterfaceLanguage }) {
+  return (
+    <div className="route-loading-state" role="status" aria-live="polite">
+      <span className="loader-orb" />
+      <p>{language === "pl" ? "Ładowanie modułu…" : "Loading module…"}</p>
+    </div>
+  );
 }
 
 function LoadingState() {

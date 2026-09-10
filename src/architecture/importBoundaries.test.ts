@@ -31,7 +31,7 @@ describe("architecture import boundaries", () => {
       .filter(({ content }) => /from\s+["'][^"']*features\/settings\//.test(content))
       .map(({ projectPath }) => projectPath);
 
-    expect(appSource).toContain('from "./features/settings"');
+    expect(appSource).toContain('import("./features/settings")');
     expect(appSource).not.toContain("function SettingsScreen(");
     expect(deepImportOffenders, "Settings consumers must import the public feature entry point").toEqual([]);
   });
@@ -74,7 +74,7 @@ describe("architecture import boundaries", () => {
       .filter(({ content }) => /from\s+["'][^"']*features\/aiCenter\//.test(content))
       .map(({ projectPath }) => projectPath);
 
-    expect(appSource).toContain('from "./features/aiCenter"');
+    expect(appSource).toContain('import("./features/aiCenter")');
     expect(appSource).not.toContain('from "./components/AiCenterScreen"');
     expect(sourceFiles["../components/AiCenterScreen.tsx"]).toBeUndefined();
     expect(deepImportOffenders, "AI Center consumers must import the public feature entry point").toEqual([]);
@@ -88,7 +88,7 @@ describe("architecture import boundaries", () => {
       .filter(({ content }) => /from\s+["'][^"']*features\/research\//.test(content))
       .map(({ projectPath }) => projectPath);
 
-    expect(appSource).toContain('from "./features/research"');
+    expect(appSource).toContain('import("./features/research")');
     expect(appSource).not.toContain("function ResearchScreen(");
     expect(appSource).not.toContain('from "./components/ResearchBuilder"');
     expect(sourceFiles["../components/ResearchBuilder.tsx"]).toBeUndefined();
@@ -160,6 +160,7 @@ describe("architecture import boundaries", () => {
 
   it("uses the public Monitor feature entry point and keeps Monitor UI out of App", () => {
     const appSource = sourceFiles["../App.tsx"];
+    const aiCenterRouteSource = sourceFiles["../features/aiCenter/AiCenterRoute.tsx"];
     const deepImportOffenders = Object.entries(sourceFiles)
       .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
       .filter(({ projectPath }) => !/\.(?:test|spec)\.tsx?$/.test(projectPath))
@@ -167,7 +168,8 @@ describe("architecture import boundaries", () => {
       .filter(({ content }) => /from\s+["'][^"']*features\/monitor\//.test(content))
       .map(({ projectPath }) => projectPath);
 
-    expect(appSource).toContain('from "./features/monitor"');
+    expect(aiCenterRouteSource).toContain('from "../monitor"');
+    expect(appSource).not.toContain('from "./features/monitor"');
     expect(appSource).not.toContain("function MonitorPanel(");
     expect(deepImportOffenders, "Monitor consumers must import the public feature entry point").toEqual([]);
   });

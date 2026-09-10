@@ -9,9 +9,9 @@ This document maps responsibilities, not every source file. Historical release r
 
 | Responsibility | Current primary location | Direction |
 | --- | --- | --- |
-| Application bootstrap, active profile, active Workspace and top-level navigation | `src/App.tsx` | Already acts as the top-level shell/composition root; a future filename change is optional, not an architectural requirement. |
+| Application bootstrap, active profile, active Workspace and top-level navigation | `src/App.tsx` | Top-level shell/composition root. PERF-UI-1 keeps Home, Profiles, Workspaces, Training and RV Sessions eager while loading Research, Settings and AI Center through route-level `React.lazy` boundaries. |
 | Home screen | `src/features/home/` | First extracted feature; keep its public import through `src/features/home/index.ts`. |
-| Settings screen | `src/features/settings/` | Extracted feature; import through `src/features/settings/index.ts`. |
+| Settings screen | `src/features/settings/` | Extracted feature; import through `src/features/settings/index.ts`. Loaded lazily from the application shell in PERF-UI-1. |
 | Profiles screen and profile-specific forms | `src/features/profiles/` | Extracted feature; import through `src/features/profiles/index.ts`. |
 | Profile + initial Workspace creation | `src/application/profileWorkspace.ts` | Cross-domain application use case used by all product-level new-Profile flows. Creates exactly one initial `Workspace 1`; if that second write fails, the partial Profile is archived as recovery instead of remaining active without a Workspace. |
 | Targets screen, dialogs and target-library operations | `src/features/targets/` | Extracted feature; import through `src/features/targets/index.ts`. |
@@ -19,8 +19,8 @@ This document maps responsibilities, not every source file. Historical release r
 | Conversation and Manual RV orchestration | `src/features/conversations/` | Extracted feature; import through `src/features/conversations/index.ts`; message rendering and chat use cases remain in `src/chat/`. |
 | RV Sessions screen and UI orchestration | `src/features/rvSessions/` | Extracted feature; import through `src/features/rvSessions/index.ts`; protocol controllers and protected transition rules remain in `src/sessions/`. |
 | Training screen and long-run orchestration | `src/features/training/` | Extracted feature; import through `src/features/training/index.ts`. |
-| Research screen and builder | `src/features/research/` | Extracted feature; import through `src/features/research/index.ts`. |
-| AI Center interface | `src/features/aiCenter/` | Extracted presentation feature; identity and Viewer Notes domain rules remain in `src/aiCenter/`. |
+| Research screen and builder | `src/features/research/` | Extracted feature; import through `src/features/research/index.ts`. Loaded lazily from the application shell in PERF-UI-1. |
+| AI Center interface | `src/features/aiCenter/` | Extracted presentation feature. `AiCenterRoute` composes the Monitor through public feature entry points and is loaded lazily by the application shell; identity and Viewer Notes domain rules remain in `src/aiCenter/`. |
 | AI Monitor history, prompt editor and export UI | `src/features/monitor/` | Extracted feature; decisions and intervention rules remain in `src/monitor/`. |
 | Shared safe rendering | `src/components/SafeMarkdown.tsx` | Shared UI infrastructure; must remain the path for AI-authored Markdown. |
 | Shared role/model selector | `src/components/ModelRouteSelect.tsx`, `src/modelRoutes.ts` | Canonical Viewer/Monitor/Judge route-key, active-Profile credential scope, current-role defaults and shared route selection. Historical snapshots remain read-only consumers of stored routes. |
@@ -84,7 +84,7 @@ This document maps responsibilities, not every source file. Historical release r
 
 `TargetsScreen` has been moved into `src/features/targets/` together with its create/edit dialogs, pure grouping and lock-state view model, and repository-backed target-library operations. `App.tsx` retains top-level navigation and passes only settings plus the repository contract. The existing target domain service remains the owner of normalization, hashing and protocol eligibility, while the feature coordinates UI-specific loading and persistence.
 
-`AiCenterScreen` has been moved into `src/features/aiCenter/` behind a public entry point. The feature owns AI Center navigation, profile-scoped presentation, Viewer Notes capacity/restore controls and read-only history rendering. Viewer identity, versioning and Training-only update policy remain owned by `src/aiCenter/` and the repository contract; `App.tsx` still composes the Workspace-specific Monitor panel.
+`AiCenterScreen` has been moved into `src/features/aiCenter/` behind a public entry point. The feature owns AI Center navigation, profile-scoped presentation, Viewer Notes capacity/restore controls and read-only history rendering. Viewer identity, versioning and Training-only update policy remain owned by `src/aiCenter/` and the repository contract. PERF-UI-1 adds `AiCenterRoute`, which composes the Workspace-specific Monitor panel inside the lazy AI Center route so Monitor-only code is not pulled into the initial application path.
 
 `ResearchScreen` and its builder have been moved into `src/features/research/` behind a public entry point. The feature owns Research configuration, preflight/lock presentation, project execution controls, scoring/unblinding presentation and package-export coordination. Research planning, target sampling, study controls, execution, persistence contracts and export construction remain in their existing domain/application modules under `src/research/`, `src/storage/` and `src/exports/`.
 

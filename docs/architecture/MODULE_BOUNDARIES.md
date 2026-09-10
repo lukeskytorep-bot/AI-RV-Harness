@@ -166,3 +166,11 @@ Additional rules will be automated only after real module boundaries exist. This
 `src/modelRoutes.ts` is the canonical owner of `providerConfigId::modelId` construction/parsing and of the current Profile/credential scope for role models. `ModelRouteSelect` is the shared route-key selector. New/current role selection is intentionally narrower than historical replay: a stale or foreign route is rejected for a current Profile, while an already stored Training/Session/Research/Judge snapshot keeps its exact route for history, display and safe Resume where the workflow requires the original frozen configuration.
 
 `src/modelRouteBoundary.test.ts` protects this boundary by rejecting local route-key builders in the migrated feature modules and by requiring the shared selector in every route-key role UI covered by UX-DATA-2.
+
+### PERF-UI-1 route loading boundary
+
+The application shell owns when top-level feature code is loaded. `Home`, `Profiles`, `Workspaces`, `Training`, `Targets`, Conversations and RV Sessions remain eager because they are core or frequent navigation paths. `Research`, `Settings` and the composed `AI Center` route are loaded through `React.lazy` from their public feature entry points.
+
+The lazy boundary is a performance boundary only. It must not own feature state, persistence, provider calls or session logic. One shared `Suspense` fallback is rendered inside the content pane so Sidebar and TopBar remain mounted. A route-level error boundary converts a failed dynamic import into a visible recoverable state instead of a blank content area. No prefetch policy is introduced in PERF-UI-1.
+
+`src/features/aiCenter/AiCenterRoute.tsx` is a thin composition surface used to keep the existing AI Center + Monitor relationship inside the deferred route. It imports Monitor only through `src/features/monitor/index.ts`; AI Center domain and persistence ownership remain unchanged.
