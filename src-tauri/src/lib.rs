@@ -65,7 +65,12 @@ pub fn run() {
             documents::list_builtin_documents,
             documents::read_builtin_document,
             documents::save_builtin_document,
-            database::database_execute_transaction
+            database::database_initialize,
+            database::database_select_readonly,
+            database::database_execute_write,
+            database::database_execute_write_batch,
+            database::database_snapshot,
+            database::database_controlled_purge
         ])
         .run(tauri::generate_context!())
         .expect("error while running AI RV Harness");

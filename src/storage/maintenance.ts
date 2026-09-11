@@ -38,21 +38,20 @@ export async function createPortableStorageBackup(repository: AppRepository, des
 }
 
 export async function restoreStorageBackup(repository: AppRepository, backupId: string): Promise<{ safetyBackup: StorageBackupRecord; restored: RestoreResult }> {
-  // A fresh, verified backup is mandatory before the live database connection is closed.
-  const safetyBackup = await createStorageBackup(repository);
+  // The native restore command creates and finalizes the safety backup after the live
+  // SQLite connection has been closed and before replacing the database.
   await repository.closeForRestore();
   const restored = await restoreStorageBackupNative(backupId);
-  return { safetyBackup, restored };
+  return { safetyBackup: restored.safetyBackup, restored };
 }
 
 export async function restorePortableStorageBackup(repository: AppRepository, directory: string): Promise<{ safetyBackup: StorageBackupRecord; restored: RestoreResult }> {
-  // Validate the external package before touching the live connection.
+  // Validate the external package before touching the live connection. The native
+  // restore command validates it again and creates the safety backup before replacement.
   await inspectPortableStorageBackup(directory);
-  // The current state is snapshotted before the live connection is closed.
-  const safetyBackup = await createStorageBackup(repository);
   await repository.closeForRestore();
   const restored = await restorePortableStorageBackupNative(directory);
-  return { safetyBackup, restored };
+  return { safetyBackup: restored.safetyBackup, restored };
 }
 
 export async function createStorageExport(repository: AppRepository): Promise<StorageExportResult> {

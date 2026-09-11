@@ -1,11 +1,10 @@
 import type { ResearchProjectRecord } from "../../research/types";
 import type { TrainingRunRecord } from "../../training/types";
 import { emptyDeletionCounts, type DeletionPreview, type PurgeEntityKind } from "../controlledPurge";
-import type { DatabaseTransactionStatement } from "../databaseNative";
+import { executeControlledPurgeNative } from "../databaseNative";
 
 export interface SqliteControlledPurgeDependencies {
   select<T>(query: string, values?: unknown[]): Promise<T>;
-  executeTransaction(statements: DatabaseTransactionStatement[]): Promise<unknown>;
 }
 
 type ProfileRow = { id: string; display_name: string; archived_at: string | null };
@@ -285,79 +284,10 @@ export class SqliteControlledPurge {
     if (preview.blockedReason) throw new Error(preview.blockedReason);
   }
 
-  private context(statements: DatabaseTransactionStatement[]): DatabaseTransactionStatement[] {
-    return [
-      { query: "DELETE FROM controlled_purge_context" },
-      { query: "INSERT INTO controlled_purge_context (id, reason, started_at) VALUES (1, 'UX-DATA-8 controlled purge', datetime('now'))" },
-      ...statements,
-      { query: "DELETE FROM controlled_purge_context WHERE id = 1" },
-    ];
-  }
-
-  private deleteWhereIn(table: string, column: string, ids: Set<string>): DatabaseTransactionStatement | null {
-    if (!ids.size) return null;
-    const values = valuesOf(ids);
-    return { query: `DELETE FROM ${table} WHERE ${column} IN (${placeholders(values.length)})`, values };
-  }
-
   async purge(kind: PurgeEntityKind, id: string): Promise<void> {
     const preview = await this.preview(kind, id);
     this.assertDeletable(preview);
-
-    if (kind === "target") {
-      await this.dependencies.executeTransaction(this.context([
-        { query: "DELETE FROM targets WHERE id = $1 AND collection = 'user' AND archived_at IS NOT NULL", values: [id] },
-      ]));
-      return;
-    }
-
-    const scope = await this.collectScope(kind, id);
-    const statements: DatabaseTransactionStatement[] = [];
-    const deleteUsageBySession = this.deleteWhereIn("target_usage", "session_id", scope.sessionIds);
-    if (deleteUsageBySession) statements.push(deleteUsageBySession);
-    const deleteUsageByResearch = this.deleteWhereIn("target_usage", "research_project_id", scope.researchIds);
-    if (deleteUsageByResearch) statements.push(deleteUsageByResearch);
-    const deleteUsageByProfile = this.deleteWhereIn("target_usage", "profile_id", scope.profileIds);
-    if (deleteUsageByProfile) statements.push(deleteUsageByProfile);
-
-    if (kind === "profile") {
-      statements.push(
-        { query: "DELETE FROM ai_note_activation_events WHERE ai_identity_id IN (SELECT id FROM ai_identities WHERE profile_id = $1)", values: [id] },
-        { query: "UPDATE ai_note_settings SET active_version_id = NULL WHERE ai_identity_id IN (SELECT id FROM ai_identities WHERE profile_id = $1)", values: [id] },
-        { query: "UPDATE ai_note_versions SET base_version_id = NULL WHERE ai_identity_id IN (SELECT id FROM ai_identities WHERE profile_id = $1)", values: [id] },
-        { query: "DELETE FROM ai_note_versions WHERE ai_identity_id IN (SELECT id FROM ai_identities WHERE profile_id = $1)", values: [id] },
-        { query: "DELETE FROM ai_note_reflection_runs WHERE ai_identity_id IN (SELECT id FROM ai_identities WHERE profile_id = $1)", values: [id] },
-        { query: "DELETE FROM ai_note_settings WHERE ai_identity_id IN (SELECT id FROM ai_identities WHERE profile_id = $1)", values: [id] },
-        { query: "DELETE FROM ai_identities WHERE profile_id = $1", values: [id] },
-      );
-      // rv_sessions.profile_id deliberately uses ON DELETE RESTRICT. Workspace
-      // cascading therefore cannot remove sessions while their Profile is being
-      // purged; remove the already-previewed session scope explicitly first.
-      const deleteSessions = this.deleteWhereIn("rv_sessions", "id", scope.sessionIds);
-      if (deleteSessions) statements.push(deleteSessions);
-      const deleteTraining = this.deleteWhereIn("training_runs", "id", scope.trainingIds);
-      if (deleteTraining) statements.push(deleteTraining);
-      statements.push({ query: "DELETE FROM profiles WHERE id = $1 AND archived_at IS NOT NULL", values: [id] });
-    } else if (kind === "workspace") {
-      const deleteTraining = this.deleteWhereIn("training_runs", "id", scope.trainingIds);
-      if (deleteTraining) statements.push(deleteTraining);
-      statements.push({ query: "DELETE FROM workspaces WHERE id = $1 AND archived_at IS NOT NULL", values: [id] });
-    } else if (kind === "conversation") {
-      statements.push({ query: "DELETE FROM chat_threads WHERE id = $1 AND archived_at IS NOT NULL", values: [id] });
-    } else if (kind === "rv_session") {
-      statements.push({ query: "DELETE FROM rv_sessions WHERE id = $1 AND archived_at IS NOT NULL", values: [id] });
-    } else if (kind === "training") {
-      const deleteSessions = this.deleteWhereIn("rv_sessions", "id", scope.sessionIds);
-      if (deleteSessions) statements.push(deleteSessions);
-      statements.push({ query: "DELETE FROM training_runs WHERE id = $1 AND archived_at IS NOT NULL", values: [id] });
-    } else {
-      statements.push(
-        { query: "DELETE FROM exports WHERE research_project_id = $1", values: [id] },
-        { query: "DELETE FROM rv_sessions WHERE research_project_id = $1", values: [id] },
-        { query: "DELETE FROM research_projects WHERE id = $1 AND archived_at IS NOT NULL", values: [id] },
-      );
-    }
-
-    await this.dependencies.executeTransaction(this.context(statements));
+    await executeControlledPurgeNative(kind, id);
   }
+
 }

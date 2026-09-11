@@ -6,12 +6,13 @@ describe("SQLite transaction regression", () => {
   it("does not send transaction control statements as separate pooled frontend calls", () => {
     expect(repositorySource).not.toMatch(/executeWrite\s*\(\s*["'`]BEGIN\b/i);
     expect(repositorySource).not.toMatch(/executeWrite\s*\(\s*["'`](?:COMMIT|ROLLBACK)\b/i);
-    expect(repositorySource.match(/this\.db\.execute/g)).toHaveLength(1);
+    expect(repositorySource).not.toContain("this.db.execute");
+    expect(repositorySource).not.toContain("this.db.select");
   });
 
   it("runs grouped statements through one native SQLx transaction", () => {
     expect(nativeTransactionSource).toContain("pool.begin().await");
     expect(nativeTransactionSource).toContain("transaction.commit().await");
-    expect(nativeTransactionSource).toContain("execute(&mut *transaction)");
+    expect(nativeTransactionSource).toContain("execute(&mut **transaction)");
   });
 });

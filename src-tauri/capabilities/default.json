@@ -5,8 +5,8 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "sql:default",
-    "sql:allow-execute",
+    "sql:allow-load",
+    "sql:allow-close",
     "main-window-commands"
   ]
 }

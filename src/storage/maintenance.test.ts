@@ -30,18 +30,19 @@ describe("storage maintenance", () => {
     expect(result.databaseSha256).toBe("abc");
   });
 
-  it("takes a fresh safety backup before closing the database for restore", async () => {
-    vi.mocked(native.prepareStorageBackup).mockResolvedValue({ backupId: "backup_safety", directory: "/safety", databasePath: "/safety/rv_harness.db" });
-    vi.mocked(native.finalizeStorageBackup).mockResolvedValue({ backupId: "backup_safety", directory: "/safety", createdAtUnixMs: 2, databaseSha256: "safe", sizeBytes: 10 });
-    vi.mocked(native.restoreStorageBackupNative).mockResolvedValue({ backupId: "backup_target" });
+  it("delegates restore safety backup creation to the native restore command after closing SQLite", async () => {
     const order: string[] = [];
+    const safetyBackup = { backupId: "backup_safety", directory: "/safety", createdAtUnixMs: 2, databaseSha256: "safe", sizeBytes: 10 };
     const repository = {
-      createDatabaseSnapshot: vi.fn(async () => { order.push("snapshot"); }),
       closeForRestore: vi.fn(async () => { order.push("close"); }),
     } as unknown as AppRepository;
-    vi.mocked(native.restoreStorageBackupNative).mockImplementation(async () => { order.push("restore"); return { backupId: "backup_target" }; });
-    await restoreStorageBackup(repository, "backup_target");
-    expect(order).toEqual(["snapshot", "close", "restore"]);
+    vi.mocked(native.restoreStorageBackupNative).mockImplementation(async () => {
+      order.push("restore");
+      return { backupId: "backup_target", safetyBackup };
+    });
+    const result = await restoreStorageBackup(repository, "backup_target");
+    expect(order).toEqual(["close", "restore"]);
+    expect(result.safetyBackup).toEqual(safetyBackup);
   });
 
   it("validates a portable backup before snapshotting or closing the live database", async () => {
@@ -50,14 +51,16 @@ describe("storage maintenance", () => {
       order.push("validate");
       return { backupId: "backup_external", directory: "/external", createdAtUnixMs: 1, databaseSha256: "external", sizeBytes: 10 };
     });
-    vi.mocked(native.prepareStorageBackup).mockResolvedValue({ backupId: "backup_safety", directory: "/safety", databasePath: "/safety/rv_harness.db" });
-    vi.mocked(native.finalizeStorageBackup).mockResolvedValue({ backupId: "backup_safety", directory: "/safety", createdAtUnixMs: 2, databaseSha256: "safe", sizeBytes: 10 });
-    vi.mocked(native.restorePortableStorageBackupNative).mockImplementation(async () => { order.push("restore"); return { backupId: "backup_external" }; });
+    const safetyBackup = { backupId: "backup_safety", directory: "/safety", createdAtUnixMs: 2, databaseSha256: "safe", sizeBytes: 10 };
+    vi.mocked(native.restorePortableStorageBackupNative).mockImplementation(async () => {
+      order.push("restore");
+      return { backupId: "backup_external", safetyBackup };
+    });
     const repository = {
-      createDatabaseSnapshot: vi.fn(async () => { order.push("snapshot"); }),
       closeForRestore: vi.fn(async () => { order.push("close"); }),
     } as unknown as AppRepository;
-    await restorePortableStorageBackup(repository, "/external");
-    expect(order).toEqual(["validate", "snapshot", "close", "restore"]);
+    const result = await restorePortableStorageBackup(repository, "/external");
+    expect(order).toEqual(["validate", "close", "restore"]);
+    expect(result.safetyBackup).toEqual(safetyBackup);
   });
 });

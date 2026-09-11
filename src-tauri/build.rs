@@ -33,7 +33,12 @@ const APP_COMMANDS: &[&str] = &[
     "list_builtin_documents",
     "read_builtin_document",
     "save_builtin_document",
-    "database_execute_transaction",
+    "database_initialize",
+    "database_select_readonly",
+    "database_execute_write",
+    "database_execute_write_batch",
+    "database_snapshot",
+    "database_controlled_purge",
 ];
 
 fn main() {

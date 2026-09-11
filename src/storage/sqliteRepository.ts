@@ -4,7 +4,7 @@ import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../p
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
-import { executeDatabaseTransaction, type DatabaseTransactionStatement } from "./databaseNative";
+import { createDatabaseSnapshotNative, executeDatabaseTransaction, executeDatabaseWrite, initializeDatabaseNative, selectDatabaseReadonly, type DatabaseTransactionStatement } from "./databaseNative";
 import { SqliteWriteCoordinator } from "./sqliteWriteCoordinator";
 import { SqliteProfilesRepository } from "./sqlite/profilesRepository";
 import { SqliteTargetsRepository } from "./sqlite/targetsRepository";
@@ -50,55 +50,54 @@ export class SqliteRepository implements AppRepository {
 
   private constructor(private readonly db: Database) {
     this.profilesRepository = new SqliteProfilesRepository({
-      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
     });
     this.targetsRepository = new SqliteTargetsRepository({
-      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
     });
     this.settingsModelsRepository = new SqliteSettingsModelsRepository({
-      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
       executeTransaction: (statements) => this.executeTransaction(statements),
     });
     this.workspacesConversationsRepository = new SqliteWorkspacesConversationsRepository({
-      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
     });
     this.researchRepository = new SqliteResearchRepository({
-      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
       executeTransaction: (statements) => this.executeTransaction(statements),
     });
     this.sessionsRepository = new SqliteSessionsRepository({
-      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
       isResearchScoresFrozen: (projectId) => this.researchRepository.isScoresFrozen(projectId),
     });
     this.trainingRepository = new SqliteTrainingRepository({
-      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
     });
     this.aiCenterRepository = new SqliteAiCenterRepository({
-      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
       executeTransaction: (statements) => this.executeTransaction(statements),
     });
     this.monitorRepository = new SqliteMonitorRepository({
-      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
     });
     this.judgeRepository = new SqliteJudgeRepository({
-      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeTransaction: (statements) => this.executeTransaction(statements),
     });
     this.exportRepository = new SqliteExportRepository({
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
     });
     this.controlledPurge = new SqliteControlledPurge({
-      select: <T>(query: string, bindValues?: unknown[]) => this.db.select<T>(query, bindValues),
-      executeTransaction: (statements) => this.executeTransaction(statements),
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
     });
   }
 
@@ -106,12 +105,12 @@ export class SqliteRepository implements AppRepository {
     const db = await Database.load("sqlite:rv_harness.db");
     const repository = new SqliteRepository(db);
     // WAL keeps readers responsive while the single coordinated writer persists evidence.
-    await repository.writes.run(() => db.select("PRAGMA journal_mode = WAL"));
+    await repository.writes.run(() => initializeDatabaseNative());
     return repository;
   }
 
   private executeWrite(query: string, bindValues?: unknown[]) {
-    return this.writes.run(() => this.db.execute(query, bindValues));
+    return this.writes.run(() => executeDatabaseWrite(query, bindValues ?? []));
   }
 
   private executeTransaction(statements: DatabaseTransactionStatement[]) {
@@ -119,7 +118,7 @@ export class SqliteRepository implements AppRepository {
   }
 
   async createDatabaseSnapshot(destinationPath: string): Promise<void> {
-    await this.executeWrite("VACUUM INTO $1", [destinationPath]);
+    await this.writes.run(() => createDatabaseSnapshotNative(destinationPath));
   }
 
   async closeForRestore(): Promise<void> {
@@ -197,7 +196,7 @@ export class SqliteRepository implements AppRepository {
   }
 
   async archiveProfile(id: string): Promise<void> {
-    const prior = await this.db.select<Array<{ latest: string | null }>>("SELECT MAX(archived_at) AS latest FROM workspaces WHERE profile_id = $1", [id]);
+    const prior = await selectDatabaseReadonly<Array<{ latest: string | null }>>("SELECT MAX(archived_at) AS latest FROM workspaces WHERE profile_id = $1", [id]);
     const latest = prior[0]?.latest ? Date.parse(prior[0].latest) : 0;
     const timestamp = new Date(Math.max(Date.now(), (Number.isFinite(latest) ? latest : 0) + 1)).toISOString();
     await this.executeTransaction([
@@ -207,7 +206,7 @@ export class SqliteRepository implements AppRepository {
   }
 
   async restoreProfile(id: string): Promise<void> {
-    const rows = await this.db.select<Array<{ archived_at: string }>>("SELECT archived_at FROM profiles WHERE id = $1 AND archived_at IS NOT NULL", [id]);
+    const rows = await selectDatabaseReadonly<Array<{ archived_at: string }>>("SELECT archived_at FROM profiles WHERE id = $1 AND archived_at IS NOT NULL", [id]);
     const archivedAt = rows[0]?.archived_at;
     if (!archivedAt) throw new Error("Archived Profile not found.");
     const timestamp = nowIso();
@@ -250,7 +249,7 @@ export class SqliteRepository implements AppRepository {
   appendChatMessage: AppRepository["appendChatMessage"] = (threadId, role, content) => this.workspacesConversationsRepository.appendChatMessage(threadId, role, content);
 
   async listWorkspaceSources(workspaceId: string): Promise<WorkspaceSource[]> {
-    const rows = await this.db.select<WorkspaceSourceRow[]>(
+    const rows = await selectDatabaseReadonly<WorkspaceSourceRow[]>(
       `SELECT id, workspace_id, source_type, display_name, content_text, content_hash, metadata_json, created_at
          FROM workspace_sources WHERE workspace_id = $1 AND content_text IS NOT NULL ORDER BY created_at DESC`, [workspaceId],
     );
@@ -273,7 +272,7 @@ export class SqliteRepository implements AppRepository {
   }
 
   async listActiveChatSourceIds(threadId: string): Promise<string[]> {
-    const rows = await this.db.select<{ source_id: string }[]>("SELECT source_id FROM chat_thread_sources WHERE thread_id = $1 AND active = 1", [threadId]);
+    const rows = await selectDatabaseReadonly<{ source_id: string }[]>("SELECT source_id FROM chat_thread_sources WHERE thread_id = $1 AND active = 1", [threadId]);
     return rows.map((row) => row.source_id);
   }
 
@@ -320,14 +319,14 @@ export class SqliteRepository implements AppRepository {
 
   async listCustomProtocols(language?: "pl" | "en"): Promise<CustomProtocolVersion[]> {
     const rows = language
-      ? await this.db.select<CustomProtocolRow[]>(
+      ? await selectDatabaseReadonly<CustomProtocolRow[]>(
           `SELECT p.id AS protocol_id, pv.id AS version_id, p.display_name, pv.version, pv.language,
                   pv.content, pv.ordered_steps_json, pv.content_hash, pv.source_metadata_json, pv.created_at
              FROM protocols p JOIN protocol_versions pv ON pv.protocol_id = p.id
             WHERE p.family = 'custom' AND pv.language = $1 ORDER BY p.display_name, pv.created_at DESC`,
           [language],
         )
-      : await this.db.select<CustomProtocolRow[]>(
+      : await selectDatabaseReadonly<CustomProtocolRow[]>(
           `SELECT p.id AS protocol_id, pv.id AS version_id, p.display_name, pv.version, pv.language,
                   pv.content, pv.ordered_steps_json, pv.content_hash, pv.source_metadata_json, pv.created_at
              FROM protocols p JOIN protocol_versions pv ON pv.protocol_id = p.id
@@ -351,7 +350,7 @@ export class SqliteRepository implements AppRepository {
   }
 
   async saveCustomProtocolVersion(input: SaveCustomProtocolVersionInput): Promise<CustomProtocolVersion> {
-    const existing = await this.db.select<{ id: string }[]>("SELECT id FROM protocols WHERE id = $1", [input.protocolId]);
+    const existing = await selectDatabaseReadonly<{ id: string }[]>("SELECT id FROM protocols WHERE id = $1", [input.protocolId]);
     if (!existing.length) {
       await this.executeWrite(
         `INSERT INTO protocols (id, family, display_name, built_in, created_at) VALUES ($1, 'custom', $2, 0, $3)`,

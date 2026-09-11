@@ -82,7 +82,7 @@ pub struct BackupManifest {
     secrets_included: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupRecord {
     backup_id: String,
@@ -97,6 +97,7 @@ pub struct BackupRecord {
 pub struct RestoreResult {
     backup_id: String,
     previous_database_path: Option<String>,
+    safety_backup: BackupRecord,
 }
 
 #[derive(Debug, Serialize)]
@@ -151,6 +152,31 @@ pub fn backup_database_before_migrations(app: &tauri::AppHandle) -> Result<(), S
         .map_err(|error| error.to_string())?;
     fs::write(marker, directory.to_string_lossy().as_bytes()).map_err(|error| error.to_string())?;
     Ok(())
+}
+
+pub(crate) fn validate_database_snapshot_destination(app: &tauri::AppHandle, destination_path: &str) -> Result<PathBuf, String> {
+    let destination = PathBuf::from(destination_path);
+    if destination.file_name().and_then(|value| value.to_str()) != Some(DATABASE_FILE_NAME) {
+        return Err("database snapshot must target the managed database filename".to_string());
+    }
+    if destination.exists() {
+        return Err("database snapshot destination already exists".to_string());
+    }
+    let parent = destination.parent().ok_or_else(|| "database snapshot destination has no parent".to_string())?;
+    let parent = fs::canonicalize(parent).map_err(|_| "database snapshot directory does not exist".to_string())?;
+    let name = parent.file_name().and_then(|value| value.to_str()).ok_or_else(|| "database snapshot directory is invalid".to_string())?;
+    if name.starts_with("backup_") {
+        let root = fs::canonicalize(backup_root(app)?).map_err(|_| "backup root does not exist".to_string())?;
+        if parent.parent() != Some(root.as_path()) {
+            return Err("internal database snapshot must stay inside the managed backup root".to_string());
+        }
+    } else if !name.starts_with("AI_RV_Harness_backup_") {
+        return Err("database snapshot destination is not a prepared backup directory".to_string());
+    }
+    if parent.join("manifest.json").exists() {
+        return Err("completed backup directory cannot be overwritten".to_string());
+    }
+    Ok(parent.join(DATABASE_FILE_NAME))
 }
 
 #[tauri::command]
@@ -373,6 +399,24 @@ pub fn export_storage_backup(app: tauri::AppHandle, request: BackupIdRequest) ->
     Ok(StorageExportResult { directory: destination.to_string_lossy().to_string() })
 }
 
+async fn create_closed_database_safety_backup(app: &tauri::AppHandle) -> Result<BackupRecord, String> {
+    let prepared = prepare_backup(app.clone())?;
+    let source = database_path(app)?;
+    let destination = PathBuf::from(&prepared.database_path);
+    let result = async {
+        if !source.is_file() {
+            return Err("live database is missing before restore".to_string());
+        }
+        validate_current_database(&source).await?;
+        fs::copy(&source, &destination).map_err(|error| error.to_string())?;
+        finalize_backup(app.clone(), BackupIdRequest { backup_id: prepared.backup_id.clone() })
+    }.await;
+    if result.is_err() {
+        let _ = discard_backup(app.clone(), BackupIdRequest { backup_id: prepared.backup_id });
+    }
+    result
+}
+
 #[tauri::command]
 pub async fn restore_backup(app: tauri::AppHandle, request: BackupIdRequest) -> Result<RestoreResult, String> {
     validate_backup_id(&request.backup_id)?;
@@ -393,6 +437,8 @@ pub async fn restore_backup(app: tauri::AppHandle, request: BackupIdRequest) -> 
             return Err("backup artifact integrity check failed".to_string());
         }
     }
+
+    let safety_backup = create_closed_database_safety_backup(&app).await?;
 
     // Artifact restore is additive. Extra current artifacts are retained so restore remains recoverable.
     let destination_artifacts = app.path().app_data_dir().map_err(|error| error.to_string())?.join("artifacts");
@@ -436,7 +482,7 @@ pub async fn restore_backup(app: tauri::AppHandle, request: BackupIdRequest) -> 
     preserve_sidecar(&destination_database, "-wal", safety_suffix)?;
     preserve_sidecar(&destination_database, "-shm", safety_suffix)?;
 
-    Ok(RestoreResult { backup_id: request.backup_id, previous_database_path })
+    Ok(RestoreResult { backup_id: request.backup_id, previous_database_path, safety_backup })
 }
 
 #[tauri::command]
@@ -444,6 +490,7 @@ pub async fn restore_portable_backup(app: tauri::AppHandle, request: PortableRes
     let (directory, manifest) = validated_portable_backup(&request.directory)?;
     let source_database = directory.join(DATABASE_FILE_NAME);
     validate_sqlite_database(&source_database).await?;
+    let safety_backup = create_closed_database_safety_backup(&app).await?;
 
     let destination_artifacts = app.path().app_data_dir().map_err(|error| error.to_string())?.join("artifacts");
     for artifact in &manifest.artifacts {
@@ -486,7 +533,7 @@ pub async fn restore_portable_backup(app: tauri::AppHandle, request: PortableRes
     preserve_sidecar(&destination_database, "-wal", safety_suffix)?;
     preserve_sidecar(&destination_database, "-shm", safety_suffix)?;
 
-    Ok(RestoreResult { backup_id: manifest.backup_id, previous_database_path })
+    Ok(RestoreResult { backup_id: manifest.backup_id, previous_database_path, safety_backup })
 }
 
 #[tauri::command]
@@ -540,7 +587,7 @@ fn backup_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(app.path().app_data_dir().map_err(|error| error.to_string())?.join("backups"))
 }
 
-fn database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(app.path().app_config_dir().map_err(|error| error.to_string())?.join(DATABASE_FILE_NAME))
 }
 

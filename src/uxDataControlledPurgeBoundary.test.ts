@@ -5,6 +5,7 @@ import browserFacade from "./storage/browserRepository.ts?raw";
 import contract from "./storage/repository.ts?raw";
 import sqliteFacade from "./storage/sqliteRepository.ts?raw";
 import sqlitePurge from "./storage/sqlite/controlledPurge.ts?raw";
+import nativeDatabase from "../src-tauri/src/database.rs?raw";
 import migration from "../src-tauri/migrations/023_controlled_purge.sql?raw";
 import migrationRegistry from "../src-tauri/src/migrations.rs?raw";
 
@@ -22,7 +23,8 @@ describe("UX-DATA-8 controlled purge boundary", () => {
     expect(migration).toContain("locked Research assignments are immutable");
     expect(migration).toContain("target clarifications are immutable supplementary records");
     expect(migration).not.toContain("DROP TRIGGER IF EXISTS prevent_training_target_delete");
-    expect(sqlitePurge).toContain("DELETE FROM controlled_purge_context WHERE id = 1");
+    expect(nativeDatabase).toContain("DELETE FROM controlled_purge_context WHERE id = 1");
+    expect(nativeDatabase).toContain("SECURITY-IPC-1C controlled purge");
   });
 
   it("preserves target identity snapshots before used My Targets can be purged", () => {
@@ -53,14 +55,15 @@ describe("UX-DATA-8 controlled purge boundary", () => {
   });
 
   it("does not add an independent purge path for Training/Research-owned sessions", () => {
-    expect(sqlitePurge).toContain("Research-owned sessions are deleted with their Research project.");
-    expect(sqlitePurge).toContain("Training-owned sessions are deleted with their Training run.");
+    expect(nativeDatabase).toContain("Research-owned sessions are deleted with their Research project.");
+    expect(nativeDatabase).toContain("Training-owned sessions are deleted with their Training run.");
   });
 
-  it("deletes Profile sessions explicitly before the RESTRICTed Profile row", () => {
-    const profilePurge = sqlitePurge.slice(sqlitePurge.indexOf('if (kind === "profile")', sqlitePurge.indexOf("async purge")));
-    const sessionDelete = profilePurge.indexOf('this.deleteWhereIn("rv_sessions", "id", scope.sessionIds)');
-    const profileDelete = profilePurge.indexOf('DELETE FROM profiles WHERE id = $1');
+  it("delegates destructive deletion to one native controlled-purge command", () => {
+    expect(sqlitePurge).toContain("executeControlledPurgeNative(kind, id)");
+    expect(sqlitePurge).not.toContain("controlled_purge_context");
+    const sessionDelete = nativeDatabase.indexOf("DELETE FROM rv_sessions WHERE profile_id = $1");
+    const profileDelete = nativeDatabase.indexOf("DELETE FROM profiles WHERE id = $1 AND archived_at IS NOT NULL");
     expect(sessionDelete).toBeGreaterThan(-1);
     expect(profileDelete).toBeGreaterThan(sessionDelete);
   });

@@ -23,6 +23,7 @@ export interface StorageBackupRecord {
 export interface RestoreResult {
   backupId: string;
   previousDatabasePath?: string;
+  safetyBackup: StorageBackupRecord;
 }
 
 export interface StorageExportResult {
