@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { getCopy } from "./i18n";
 
 const root = path.resolve(process.cwd(), "src");
 const read = (relative: string) => fs.readFileSync(path.join(root, relative), "utf8");
@@ -40,17 +41,20 @@ describe("UX-DATA-5 flat Conversation boundary", () => {
   });
 
   it("removes Thread terminology and keeps legacy grouping types local to compatibility fixtures", () => {
-    const i18n = read("i18n.ts");
+    const en = getCopy("en");
+    const pl = getCopy("pl");
     const types = read("types.ts");
     const legacyFixture = read("storage/fixtures/legacyThreadHierarchy.ts");
 
-    expect(i18n).not.toContain("threadGroupTitle:");
-    expect(i18n).not.toContain("threadGroups:");
-    expect(i18n).not.toContain("newThread:");
-    expect(i18n).not.toContain("archiveThreadGroup:");
-    expect(i18n).not.toContain("renameThreadGroup:");
-    expect(i18n).toContain('chatThreads: "Conversations"');
-    expect(i18n).toContain('chatThreads: "Rozmowy"');
+    for (const copy of [en, pl]) {
+      expect(copy).not.toHaveProperty("threadGroupTitle");
+      expect(copy).not.toHaveProperty("threadGroups");
+      expect(copy).not.toHaveProperty("newThread");
+      expect(copy).not.toHaveProperty("archiveThreadGroup");
+      expect(copy).not.toHaveProperty("renameThreadGroup");
+    }
+    expect(en.chatThreads).toBe("Conversations");
+    expect(pl.chatThreads).toBe("Rozmowy");
     expect(types).not.toContain("ChatThreadGroup");
     expect(legacyFixture).toContain("interface LegacyThreadGroupRecord");
   });

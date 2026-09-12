@@ -27,7 +27,9 @@ describe("PERF-UI-1 route-level lazy loading", () => {
 
   it("keeps navigation mounted behind one shared fallback and a visible import-error boundary", () => {
     const app = read("App.tsx");
-    const css = read("styles/app.css");
+    const css = ["base.css", "shared.css", "conversations.css", "sessions.css", "settings.css", "monitor.css", "training-research.css", "ai-center.css"]
+      .map((file) => read(`styles/${file}`))
+      .join("\n");
 
     expect(app).toContain("<Sidebar");
     expect(app).toContain("<TopBar");

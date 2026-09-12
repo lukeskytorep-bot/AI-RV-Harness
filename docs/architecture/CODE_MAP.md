@@ -72,7 +72,7 @@ This document maps responsibilities, not every source file. Historical release r
 | Profile/credential model-route resolution | `src/modelRoutes.ts` | New/current Viewer/Monitor/Judge choices are scoped through the active Profile credential. Feature modules must not reconstruct `providerConfigId::modelId` or independently widen the scope to the global model cache. |
 | Human-readable and research exports | `src/exports/`, `src/artifacts/` | Preserve evidence-domain separation and existing formats. |
 | Sources and attachments | `src/sources/`, `src/attachments/`, `src-tauri/src/documents.rs` and `src-tauri/src/dialogs.rs` | Never leak Reveal or target material into blind messages. Desktop attachment selection and import are one native operation so filesystem paths are not exposed back to the WebView. |
-| PL/EN text | `src/i18n.ts`, versioned resources under `src/resources/` | Split later by domain; do not change wording during structural extraction. |
+| PL/EN text | `src/i18n.ts`, domain dictionaries under `src/i18n/`, versioned resources under `src/resources/` | `src/i18n.ts` is the stable facade; domain dictionaries own UI copy without changing wording or runtime translation behavior. |
 
 ## Frontend extractions completed
 

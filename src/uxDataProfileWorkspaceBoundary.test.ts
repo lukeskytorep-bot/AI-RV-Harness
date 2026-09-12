@@ -26,7 +26,9 @@ describe("UX-DATA-4 Profile + Workspace boundaries", () => {
   });
 
   it("keeps the Workspace and Training directories bounded/scrollable", () => {
-    const css = source("src/styles/app.css");
+    const css = ["base.css", "shared.css", "conversations.css", "sessions.css", "settings.css", "monitor.css", "training-research.css", "ai-center.css"]
+      .map((file) => source(`src/styles/${file}`))
+      .join("\n");
     expect(css).toMatch(/\.workspace-list\s*\{[^}]*max-height:[^}]*overflow:\s*auto/s);
     expect(css).toMatch(/\.training-run-list\s*\{[^}]*max-height:[^}]*overflow:\s*auto/s);
     expect(css).toContain("workspace-directory-tile");

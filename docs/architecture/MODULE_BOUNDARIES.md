@@ -113,6 +113,13 @@ Internal files may remain private even if TypeScript technically permits a deep 
 
 `src/components/AppDialogProvider.tsx` is intentionally shared application UI infrastructure. One provider is mounted around `App` in `src/main.tsx`; feature modules call `useAppDialogs()` rather than browser-native dialogs. The surface supports normal/warning/destructive severity, text input, exact confirmation phrases, queued requests, async busy/error state and information-only messages. `src/appDialogBoundary.test.ts` prevents direct native dialog calls from returning to production feature code.
 
+
+### Etap 7 i18n and style boundaries
+
+`src/i18n.ts` remains the single public translation facade. English and Polish copy is stored in paired domain dictionaries under `src/i18n/`: `core`, `workspace`, `sessions`, `research`, `targets` and `settings`. Feature code continues to call `getCopy(language)` and must not deep-import a domain dictionary. `src/i18nBoundary.test.ts` requires exact PL/EN key parity and the explicit domain set.
+
+`src/styles/app.css` remains the only stylesheet imported by `src/main.tsx`, but it is now an ordered entry point for focused style modules under `src/styles/`: base/shell, shared UI, conversations, sessions, settings, monitor, training/research and AI Center. The split preserves the previous rule order; it is organizational only and does not redefine the visual system. `src/styleModuleBoundary.test.ts` protects the ordered import list.
+
 ## Cross-domain operations
 
 An operation spanning several domains must have one explicit application-level owner:
