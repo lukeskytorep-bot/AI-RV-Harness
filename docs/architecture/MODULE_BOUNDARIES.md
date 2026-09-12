@@ -120,6 +120,8 @@ Internal files may remain private even if TypeScript technically permits a deep 
 
 `src/styles/app.css` remains the only stylesheet imported by `src/main.tsx`, but it is now an ordered entry point for focused style modules under `src/styles/`: base/shell, shared UI, conversations, sessions, settings, monitor, training/research and AI Center. The split preserves the previous rule order; it is organizational only and does not redefine the visual system. `src/styleModuleBoundary.test.ts` protects the ordered import list.
 
+STAGE-7B completes the deliberately narrow shared-component cleanup. Standard Settings and Training headers use the canonical `src/components/PageHeader.tsx`; AI Center retains its specialized `page-header ai-center-header` because its contract includes an eyebrow and active-Profile selector. Compatible read-only resource viewers may share `src/components/ResourceViewerDialogShell.tsx`, which owns only the backdrop, dialog semantics, heading/close affordance and content/action slots. Resource save behavior, hashes, filenames, document types and resource-specific data remain with their existing owners. `src/sharedComponentsBoundary.test.ts` protects these boundaries without prescribing whole-file JSX formatting.
+
 ## Cross-domain operations
 
 An operation spanning several domains must have one explicit application-level owner:

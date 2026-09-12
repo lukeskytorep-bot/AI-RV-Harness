@@ -5,6 +5,7 @@ import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 import { resolveSessionLanguage } from "../../domain/localization";
 import { findCredentialScopedModelByRouteKey, findModelByRouteKey, modelRouteKeyFor, resolveViewerDefault } from "../../modelRoutes";
 import { ModelRouteSelect } from "../../components/ModelRouteSelect";
+import { PageHeader } from "../../components/PageHeader";
 import { useAppDialogs } from "../../components/AppDialogProvider";
 import { profileGenerationDefaults, profileSystemPromptSnapshot } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
@@ -225,7 +226,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   };
 
   return <div className="page training-page">
-    <header className="page-header"><div><h1>{text.training}</h1><p>{text.lead}</p></div></header>
+    <PageHeader title={text.training} subtitle={text.lead} />
     <div className="training-pack-banner"><GraduationCap size={23} /><div><strong>{text.fixed84}</strong><p>{text.fixed84Lead}</p></div><span className={pack.valid ? "status-chip ready" : "status-chip next"}>{pack.total}/84</span></div>
     <div className="training-layout">
       <section className="panel training-config">

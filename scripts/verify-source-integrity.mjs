@@ -15,6 +15,14 @@ function filesBelow(directory) {
   });
 }
 
+function pathsBelow(directory) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    if (["node_modules", "dist", "target", ".git"].includes(entry.name)) return [];
+    const path = join(directory, entry.name);
+    return entry.isDirectory() ? [path, ...pathsBelow(path)] : [path];
+  });
+}
+
 for (const rustFile of filesBelow(join(root, "src-tauri", "src")).filter((path) => path.endsWith(".rs"))) {
   const source = readFileSync(rustFile, "utf8");
   for (const match of source.matchAll(/include_(?:bytes|str)!\(\s*"([^"]+)"\s*\)/g)) {
@@ -23,7 +31,7 @@ for (const rustFile of filesBelow(join(root, "src-tauri", "src")).filter((path) 
   }
 }
 
-const escapedUnicodeNames = filesBelow(join(root, "src-tauri", "resources"))
+const escapedUnicodeNames = pathsBelow(root)
   .map((path) => relative(root, path))
   .filter((path) => /#U[0-9A-Fa-f]{4,6}/.test(path));
 if (escapedUnicodeNames.length) {

@@ -25,6 +25,8 @@ This document maps responsibilities, not every source file. Historical release r
 | Shared safe rendering | `src/components/SafeMarkdown.tsx` | Shared UI infrastructure; must remain the path for AI-authored Markdown. |
 | Shared role/model selector | `src/components/ModelRouteSelect.tsx`, `src/modelRoutes.ts` | Canonical Viewer/Monitor/Judge route-key, active-Profile credential scope, current-role defaults and shared route selection. Historical snapshots remain read-only consumers of stored routes. |
 | Shared application dialogs | `src/components/AppDialogProvider.tsx` | Canonical Confirm/TextInput/Information/Destructive modal host. Feature modules request dialogs through `useAppDialogs`; browser-native confirm/prompt/alert stay private fallback only. |
+| Shared page headers | `src/components/PageHeader.tsx` | Canonical simple page title/subtitle/action header used by standard screens; AI Center keeps its specialized header because it adds an eyebrow, Profile selector and dedicated layout. |
+| Shared resource viewer shell | `src/components/ResourceViewerDialogShell.tsx` | Small visual/semantic shell for compatible read-only resource dialogs only. Resource data, save logic, hashes, filenames and types remain owned by their feature/component callers. |
 
 ## AI execution and protected workflows
 

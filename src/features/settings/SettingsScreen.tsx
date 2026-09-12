@@ -16,14 +16,15 @@ import {
   Sparkles,
   Sun,
   Trash2,
-  X,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { listBuiltinDocuments, readBuiltinDocument, saveBuiltinDocument, type BuiltinDocumentManifest } from "../../attachments/native";
 import { ProviderSettings } from "../../components/ProviderSettings";
 import { useAppDialogs } from "../../components/AppDialogProvider";
+import { PageHeader } from "../../components/PageHeader";
 import { ProtocolDialog } from "../../components/ProtocolDialog";
+import { ResourceViewerDialogShell } from "../../components/ResourceViewerDialogShell";
 import { getCopy } from "../../i18n";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 import { clearProviderDebug, detailedProviderDiagnosticsEnabled, listProviderDebug, setDetailedProviderDiagnostics } from "../../providers/debug";
@@ -138,7 +139,7 @@ export function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: Retur
 }
 
 function BuiltinDocumentDialog({ copy, document, busy, onSave, onClose }: { copy: ReturnType<typeof getCopy>; document: { manifest: BuiltinDocumentManifest; content: string }; busy: boolean; onSave: () => void; onClose: () => void }) {
-  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="modal protocol-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>DOCX · {document.manifest.language.toUpperCase()}</small><h2>{document.manifest.title}</h2><p>{document.manifest.fileName} · {formatBytes(document.manifest.sizeBytes)}</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><div className="hash-grid"><code>SHA-256<br />{document.manifest.sha256}</code><code>{copy.wordCount}<br />{wordCount(document.content).toLocaleString()}</code></div><pre className="protocol-text">{document.content}</pre><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={onSave}><Download size={14} />{copy.home === "Home" ? "Save original DOCX" : "Zapisz oryginalny DOCX"}</button><button className="primary-button" onClick={onClose}>{copy.close}</button></div></section></div>;
+  return <ResourceViewerDialogShell eyebrow={<>DOCX · {document.manifest.language.toUpperCase()}</>} title={document.manifest.title} meta={<>{document.manifest.fileName} · {formatBytes(document.manifest.sizeBytes)}</>} onClose={onClose} actions={<><button className="secondary-button" disabled={busy} onClick={onSave}><Download size={14} />{copy.home === "Home" ? "Save original DOCX" : "Zapisz oryginalny DOCX"}</button><button className="primary-button" onClick={onClose}>{copy.close}</button></>}><div className="hash-grid"><code>SHA-256<br />{document.manifest.sha256}</code><code>{copy.wordCount}<br />{wordCount(document.content).toLocaleString()}</code></div><pre className="protocol-text">{document.content}</pre></ResourceViewerDialogShell>;
 }
 
 function TargetSettingsCard({ copy, settings, repository, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; repository: AppRepository | null; onChange: (settings: Partial<AppSettings>) => void }) {
@@ -392,16 +393,12 @@ function PromptResourceDialog({ copy, resource, onClose }: { copy: ReturnType<ty
       ? "AI Monitor System Prompt"
       : "AI Judge System Prompt";
   const save = () => void saveTextFile(copy.home === "Home" ? "Save prompt resource" : "Zapisz zasób promptu", `${resource.id}_v${resource.version}_${resource.language}.md`, resource.content);
-  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="modal protocol-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>{copy.protocolResource}</small><h2>{name}</h2><p>v{resource.version} · {resource.language.toUpperCase()} · {resource.license}</p></div><button className="icon-button" onClick={onClose}><X size={19} /></button></div><div className="hash-grid"><code>Factory resource<br />{resource.id}</code><code>License<br />CC BY 4.0</code></div><pre className="protocol-text">{resource.content}</pre><div className="modal-actions"><button className="secondary-button" onClick={save}><Download size={14} />{copy.home === "Home" ? "Save" : "Zapisz"}</button><button className="primary-button" onClick={onClose}>{copy.close}</button></div></section></div>;
+  return <ResourceViewerDialogShell eyebrow={copy.protocolResource} title={name} meta={<>v{resource.version} · {resource.language.toUpperCase()} · {resource.license}</>} onClose={onClose} actions={<><button className="secondary-button" onClick={save}><Download size={14} />{copy.home === "Home" ? "Save" : "Zapisz"}</button><button className="primary-button" onClick={onClose}>{copy.close}</button></>}><div className="hash-grid"><code>Factory resource<br />{resource.id}</code><code>License<br />CC BY 4.0</code></div><pre className="protocol-text">{resource.content}</pre></ResourceViewerDialogShell>;
 }
 
 
 function SettingRow({ label, icon, children }: { label: string; icon: ReactNode; children: ReactNode }) {
   return <div className="setting-row"><span className="setting-label">{icon}<strong>{label}</strong></span>{children}</div>;
-}
-
-function PageHeader({ title, subtitle }: { title: string; subtitle?: string }) {
-  return <header className="page-header"><div><h1>{title}</h1>{subtitle && <p>{subtitle}</p>}</div></header>;
 }
 
 function PanelHeader({ title, icon }: { title: string; icon: ReactNode }) {
