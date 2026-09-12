@@ -275,9 +275,7 @@ if (requestedRules.has("rust")) {
   if (!fs.existsSync(facade)) {
     violations.push({ rule: "rust-provider-boundary", importer: "src-tauri/src/providers.rs", imported: "providers", detail: "Provider facade is missing." });
   } else {
-    const facadeText = fs.readFileSync(facade, "utf8").split(String.fromCharCode(13)).join("");   .readFileSync(facade, "utf8")   .replace(/
-/g, "
-");
+    const facadeText = fs.readFileSync(facade, "utf8").split(String.fromCharCode(13)).join("");
     for (const [moduleName, ownedSymbols] of Object.entries(modules)) {
       const moduleFile = path.join(rustRoot, "providers", `${moduleName}.rs`);
       if (!fs.existsSync(moduleFile)) {
