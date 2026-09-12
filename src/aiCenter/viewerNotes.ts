@@ -2,7 +2,7 @@ import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat } from "../providers/requestExecutor";
 import { credentialIdentityFingerprint } from "../providers/native";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
-import { sha256Text } from "../sessions/controller";
+import { sha256Text } from "../application/sha256";
 import type { SessionSnapshot } from "../sessions/types";
 import type { AppRepository } from "../storage/repository";
 import type { InterfaceLanguage } from "../types";

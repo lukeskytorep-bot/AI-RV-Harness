@@ -11,7 +11,8 @@
     "verify:source": "node scripts/verify-source-integrity.mjs .",
     "verify:ux-data": "node scripts/verify-ux-data-compatibility.mjs .",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "verify:architecture": "node scripts/verify-architecture-selftest.mjs && node scripts/verify-architecture.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
@@ -23,6 +24,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@babel/parser": "^7.28.4",
     "@tauri-apps/cli": "2.11.4",
     "@types/node": "26.2.0",
     "@types/react": "19.2.18",

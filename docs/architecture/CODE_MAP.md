@@ -119,3 +119,15 @@ The seventh Etap 5 split delegates AI identity and Viewer Notes persistence thro
 Update this file when ownership changes. A moved capability must have one clear current owner and, when shared across modules, a documented public entry point.
 
 The first post-Etap-5 UX/data foundation change adds one bounded recent-session query for Home. `App.tsx` now asks the public repository for `listRecentRvSessions(8)` instead of loading every active Workspace session list and merging them in memory. The compatibility facade resolves the currently active Workspace set and delegates one bounded read to `SessionsRepository`; Browser storage filters/sorts one shared session collection, while SQLite performs one `ORDER BY updated_at ... LIMIT` query. Session execution, Workspace-local history and Research/Training consumers continue to use `listRvSessions(workspaceId)` unchanged.
+
+## Etap 8 — architecture enforcement
+
+The achieved modular boundaries are now guarded by a small executable architecture verifier:
+
+- `scripts/verify-architecture.mjs` — production import-graph and structural checks;
+- `scripts/verify-architecture-selftest.mjs` — negative/positive fixtures for the verifier itself;
+- `scripts/architecture-boundaries.json` — exact exception configuration; empty in the Etap 8 candidate;
+- `src/architecture/architectureEnforcement.test.ts` — Vitest coverage for the required negative cases;
+- `src/application/sha256.ts` — small pure hashing helper introduced to remove the only runtime cycle found by the Etap 8 inventory while preserving the existing `sessions/controller.ts` re-export.
+
+The architecture gate is wired into the main CI, Windows Release and Linux Release workflows as `npm run verify:architecture`. It does not change runtime behavior, storage schema, migrations, provider retry ownership, protocol execution, Reveal/Resume, Viewer Notes, Research, Training or Judge behavior.

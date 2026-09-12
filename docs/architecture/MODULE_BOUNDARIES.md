@@ -185,3 +185,21 @@ The application shell owns when top-level feature code is loaded. `Home`, `Profi
 The lazy boundary is a performance boundary only. It must not own feature state, persistence, provider calls or session logic. One shared `Suspense` fallback is rendered inside the content pane so Sidebar and TopBar remain mounted. A route-level error boundary converts a failed dynamic import into a visible recoverable state instead of a blank content area. No prefetch policy is introduced in PERF-UI-1.
 
 `src/features/aiCenter/AiCenterRoute.tsx` is a thin composition surface used to keep the existing AI Center + Monitor relationship inside the deferred route. It imports Monitor only through `src/features/monitor/index.ts`; AI Center domain and persistence ownership remain unchanged.
+
+## Automated boundary enforcement after Etap 8
+
+Etap 8 adds `npm run verify:architecture` as a lightweight architectural gate. It uses the TypeScript parser already present in the project and does not add a new package dependency. The gate is intentionally narrower than a general linting framework and protects only boundaries that are already real in the codebase.
+
+The gate enforces:
+
+- no **runtime** import cycles in production `src/`; `import type` edges do not participate in the runtime graph, but domain-boundary rules still inspect type-only dependencies where architectural coupling matters;
+- `src/domain/` cannot depend on storage, feature/UI modules, React, Tauri or provider transport/infrastructure;
+- consumers outside a feature must import through that feature's `index.ts` public entry point;
+- code outside `src/storage/` cannot import Browser/SQLite implementation files or `@tauri-apps/plugin-sql` directly;
+- `providerChatAttempt` remains owned only by `src/providers/native.ts` and `src/providers/requestExecutor.ts`;
+- canonical shared components remain owned by `src/components/` and cannot be re-declared elsewhere under the same canonical symbol;
+- the Etap 6 Rust provider split remains structurally intact, including the thin `providers.rs` facade and tests in `providers/tests.rs`.
+
+Architecture exceptions, if ever required, live in `scripts/architecture-boundaries.json`. Every exception must name one exact rule, importer and import/target with a reason. Wildcards are rejected, and stale/unused allowlist entries fail the gate. The Etap 8 baseline requires **no exceptions**.
+
+`verify:architecture` runs its own negative fixture checks before checking the real source tree. The fixture suite proves that a runtime cycle, `domain -> storage`, a cross-feature private import and an unused allowlist entry fail, while an import through a feature public entry point succeeds. The same core negative scenarios are also represented in `src/architecture/architectureEnforcement.test.ts` for the ordinary Vitest suite.

@@ -1,4 +1,5 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
+import { sha256Text } from "../application/sha256";
 import { createProviderChatExecutor, providerChatOnce } from "../providers/requestExecutor";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { ProtocolResource } from "../resources/protocolRegistry";
@@ -693,7 +694,4 @@ export async function submitExternalReveal(repository: SessionRepository, sessio
   await repository.appendSessionEvent(sessionId, { eventType: "REVEAL_ACCEPTED", role: "controller", metadata: { source, artifactCount: artifactManifest.length } });
 }
 
-export async function sha256Text(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
-}
+export { sha256Text };
