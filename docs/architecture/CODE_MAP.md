@@ -60,7 +60,7 @@ This document maps responsibilities, not every source file. Historical release r
 | Profiles persistence contract | `src/storage/contracts/profilesRepository.ts` | Shared internal contract for Profile-only reads and writes. Archive/restore remain facade-owned because they also change Workspaces. |
 | Targets persistence contract | `src/storage/contracts/targetsRepository.ts` | Shared internal contract for target listing, user CRUD and usage records. Cross-domain mutation guards remain explicit. |
 | Settings and model-registry persistence contract | `src/storage/contracts/settingsModelsRepository.ts` | Shared internal contract for application settings, provider metadata and cached model registry. Native secrets remain outside repository storage. |
-| Workspaces and Conversations persistence contract | `src/storage/contracts/workspacesConversationsRepository.ts` | Shared internal contract for Workspace lifecycle plus flat Conversation/Manual RV records and messages. Legacy `thread_group_id` is read-only compatibility metadata; new records are direct Workspace children. Workspace Sources remain outside this focused split. |
+| Workspaces and Conversations persistence contract | `src/storage/contracts/workspacesConversationsRepository.ts` | Shared internal contract for Workspace lifecycle plus flat Conversation/Manual RV records and messages. Legacy `thread_group_id` is read-only compatibility metadata; new records are direct Workspace children. Workspace Sources remain intentionally facade-owned as an accepted compatibility/cross-domain boundary; no further split is required to complete v0.7.13 modularization. |
 | RV Sessions persistence contract | `src/storage/contracts/sessionsRepository.ts` | Shared internal contract for RV session records, events, immutable snapshots, sealed evidence, Reveal, post-Reveal transcript, target clarifications and the bounded cross-Workspace recent-session read used by Home. The Research frozen-score check is supplied explicitly through `ResearchRepository`. |
 | AI Center persistence contract | `src/storage/contracts/aiCenterRepository.ts` | Shared internal contract for AI identities plus Viewer Notes settings, append-only versions, activation history and reflection runs. |
 | AI Monitor persistence contract | `src/storage/contracts/monitorRepository.ts` | Shared internal contract for Monitor runs and ordered interventions. Browser session lookup is injected explicitly; SQLite preserves the existing session join. |
@@ -120,14 +120,25 @@ Update this file when ownership changes. A moved capability must have one clear 
 
 The first post-Etap-5 UX/data foundation change adds one bounded recent-session query for Home. `App.tsx` now asks the public repository for `listRecentRvSessions(8)` instead of loading every active Workspace session list and merging them in memory. The compatibility facade resolves the currently active Workspace set and delegates one bounded read to `SessionsRepository`; Browser storage filters/sorts one shared session collection, while SQLite performs one `ORDER BY updated_at ... LIMIT` query. Session execution, Workspace-local history and Research/Training consumers continue to use `listRvSessions(workspaceId)` unchanged.
 
-## Etap 8 — architecture enforcement
+## Etap 8 — architecture enforcement (completed)
 
 The achieved modular boundaries are now guarded by a small executable architecture verifier:
 
 - `scripts/verify-architecture.mjs` — production import-graph and structural checks;
 - `scripts/verify-architecture-selftest.mjs` — negative/positive fixtures for the verifier itself;
-- `scripts/architecture-boundaries.json` — exact exception configuration; empty in the Etap 8 candidate;
+- `scripts/architecture-boundaries.json` — exact exception configuration; empty in the accepted Etap 8 baseline;
 - `src/architecture/architectureEnforcement.test.ts` — Vitest coverage for the required negative cases;
 - `src/application/sha256.ts` — small pure hashing helper introduced to remove the only runtime cycle found by the Etap 8 inventory while preserving the existing `sessions/controller.ts` re-export.
 
 The architecture gate is wired into the main CI, Windows Release and Linux Release workflows as `npm run verify:architecture`. It does not change runtime behavior, storage schema, migrations, provider retry ownership, protocol execution, Reveal/Resume, Viewer Notes, Research, Training or Judge behavior.
+
+
+## Etap 9 — final validation
+
+The final modularization gate does not introduce a new product subsystem. Its owners are documentation and acceptance evidence:
+
+- `docs/reports/STAGE_9_FINAL_MODULARIZATION_VALIDATION_v0.7.13_PL.md` — final audit of Etapy 1–8, architecture boundaries, migration compatibility and acceptance state;
+- `docs/architecture/FINAL_RUNTIME_SMOKE_v0.7.13_PL.md` — canonical desktop runtime smoke checklist;
+- `docs/architecture/CODE_MAP.md` and `MODULE_BOUNDARIES.md` — living architecture records synchronized with the accepted Stage 8 baseline.
+
+Stage 9 treats legacy Thread-group metadata, Workspace Sources, Custom Protocol version persistence and explicit cross-domain lifecycle operations as documented compatibility/facade ownership, not temporary architecture exceptions. The architecture allowlist remains empty.

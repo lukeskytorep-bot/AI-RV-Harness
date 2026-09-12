@@ -147,7 +147,7 @@ The controlled Etap 5 split keeps the public `AppRepository` contract unchanged:
 | `src/storage/contracts/profilesRepository.ts` | `src/storage/browser/profilesRepository.ts` | `src/storage/sqlite/profilesRepository.ts` | Profile archive/restore remains in both facades because it also archives/restores matching Workspaces. |
 | `src/storage/contracts/targetsRepository.ts` | `src/storage/browser/targetsRepository.ts` | `src/storage/sqlite/targetsRepository.ts` | The browser facade owns the cross-domain used-target predicate; SQLite preserves the existing mutation-guard triggers. |
 | `src/storage/contracts/settingsModelsRepository.ts` | `src/storage/browser/settingsModelsRepository.ts` | `src/storage/sqlite/settingsModelsRepository.ts` | Browser Profile-reference cleanup is an explicit facade callback. SQLite owns the existing atomic provider/credential/Profile cleanup transaction. Native credential secrets remain outside repository storage. |
-| `src/storage/contracts/workspacesConversationsRepository.ts` | `src/storage/browser/workspacesConversationsRepository.ts` | `src/storage/sqlite/workspacesConversationsRepository.ts` | Workspace → Conversation/Manual RV is the active product hierarchy. Legacy group identifiers remain readable for old records, but group lifecycle is not exposed and new records use no group parent. Workspace Sources remain facade-owned for a later focused split. |
+| `src/storage/contracts/workspacesConversationsRepository.ts` | `src/storage/browser/workspacesConversationsRepository.ts` | `src/storage/sqlite/workspacesConversationsRepository.ts` | Workspace → Conversation/Manual RV is the active product hierarchy. Legacy group identifiers remain readable for old records, but group lifecycle is not exposed and new records use no group parent. Workspace Sources are intentionally facade-owned as an accepted cross-domain compatibility boundary for v0.7.13; no later split is required for modularization completion. |
 | `src/storage/contracts/sessionsRepository.ts` | `src/storage/browser/sessionsRepository.ts` | `src/storage/sqlite/sessionsRepository.ts` | RV Session records, ordered events, sealed evidence, immutable snapshots, Reveal, post-Reveal transcript, target clarifications and bounded recent-session reads delegate here. Research frozen-score knowledge is supplied explicitly by `ResearchRepository`; active Workspace scope for the Home recent query is supplied by the compatibility facade rather than hard-coded into Sessions storage. |
 | `src/storage/contracts/trainingRepository.ts` | `src/storage/browser/trainingRepository.ts` | `src/storage/sqlite/trainingRepository.ts` | Training run creation, numbering, checkpoints, execution snapshots, session-id linkage, error accumulation and listing delegate here. Training execution, Sessions, Judge and Viewer Notes persistence remain separate owners. |
 | `src/storage/contracts/aiCenterRepository.ts` | `src/storage/browser/aiCenterRepository.ts` | `src/storage/sqlite/aiCenterRepository.ts` | AI identities and Viewer Notes persistence delegate here. SQLite preserves the append-only/stale-base guards and atomic reflection commit; Monitor/Judge/Research remain separate contracts. |
@@ -160,7 +160,7 @@ SECURITY-IPC-1C-R1 narrows the desktop SQLite trust boundary without changing th
 
 The numbered Etap 5 domain split is complete after Judge/Research/Export extraction. Auxiliary Workspace Sources, chat-source activation and Custom Protocol version persistence intentionally remain compatibility-facade owned because they were not part of the eight numbered domain slices.
 
-Domain repositories must not silently mutate another storage area. Cross-domain effects are injected or documented as explicit transactions. A later extraction may move Profile lifecycle or provider deletion into named cross-domain transaction units, but it must preserve the exact timestamp-coupling and atomic SQLite transactions already used by the facades.
+Domain repositories must not silently mutate another storage area. Cross-domain effects are injected or documented as explicit transactions. Profile lifecycle and provider deletion remain intentionally owned by explicit cross-domain facade transactions in v0.7.13. A future redesign may move them only through a separate architectural decision while preserving the existing timestamp coupling and atomic SQLite behavior; this is not deferred modularization work.
 
 ## Enforcement introduced in Step 1
 
@@ -188,7 +188,7 @@ The lazy boundary is a performance boundary only. It must not own feature state,
 
 ## Automated boundary enforcement after Etap 8
 
-Etap 8 adds `npm run verify:architecture` as a lightweight architectural gate. It uses the TypeScript parser already present in the project and does not add a new package dependency. The gate is intentionally narrower than a general linting framework and protects only boundaries that are already real in the codebase.
+Etap 8 adds `npm run verify:architecture` as a lightweight architectural gate. Corrected STAGE-8-R1 uses the explicit development dependency `@babel/parser` with TypeScript/TSX plugins because the pinned TypeScript 7.0.2 main export does not expose the classic compiler AST API required by the first candidate. The gate is intentionally narrower than a general linting framework and protects only boundaries that are already real in the codebase.
 
 The gate enforces:
 
@@ -200,6 +200,16 @@ The gate enforces:
 - canonical shared components remain owned by `src/components/` and cannot be re-declared elsewhere under the same canonical symbol;
 - the Etap 6 Rust provider split remains structurally intact, including the thin `providers.rs` facade and tests in `providers/tests.rs`.
 
-Architecture exceptions, if ever required, live in `scripts/architecture-boundaries.json`. Every exception must name one exact rule, importer and import/target with a reason. Wildcards are rejected, and stale/unused allowlist entries fail the gate. The Etap 8 baseline requires **no exceptions**.
+Architecture exceptions, if ever required, live in `scripts/architecture-boundaries.json`. Every exception must name one exact rule, importer and import/target with a reason. Wildcards are rejected, and stale/unused allowlist entries fail the gate. The accepted Etap 8 baseline requires **no exceptions**.
 
 `verify:architecture` runs its own negative fixture checks before checking the real source tree. The fixture suite proves that a runtime cycle, `domain -> storage`, a cross-feature private import and an unused allowlist entry fail, while an import through a feature public entry point succeeds. The same core negative scenarios are also represented in `src/architecture/architectureEnforcement.test.ts` for the ordinary Vitest suite.
+
+
+## Final Stage 9 acceptance boundary
+
+Stage 9 closes the modularization only after two separate conditions are true:
+
+1. static/automated architecture and compatibility gates remain green with an empty architecture allowlist;
+2. the desktop runtime checklist in `FINAL_RUNTIME_SMOKE_v0.7.13_PL.md` passes on an actual Tauri build.
+
+Static evidence, CI and source inspection do not replace the final interactive runtime smoke. Conversely, documented compatibility surfaces such as legacy `chat_thread_groups/thread_group_id` are not architectural exceptions and do not require removal to close Stage 9.

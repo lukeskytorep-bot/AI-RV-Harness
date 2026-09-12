@@ -1,8 +1,8 @@
 # ETAP 8 — Egzekwowanie granic architektonicznych
 
-> **Korekta R1 po niezależnym audycie:** pierwotny kandydat zakładał klasyczny publiczny API kompilatora TypeScript, podczas gdy projekt używa TypeScript 7.0.2, którego główny eksport zawiera wyłącznie informacje o wersji. Na Node.js 24 powodowało to wyjątek przed analizą grafu oraz 5 niezaliczonych testów. R1 korzysta z jawnej zależności deweloperskiej `@babel/parser` z pluginami TypeScript/JSX. Zakres reguł, pusta allowlista i zmiana produkcyjna `sha256Text` pozostają bez zmian. Niezależnie potwierdzono: `verify:source`, `verify:ux-data`, `verify:architecture`, 145/145 plików i 519/519 testów, typecheck oraz Vite build — PASS. Rust/Clippy i GitHub Actions pozostają bramką odbioru.
+> **Korekta R1 po niezależnym audycie:** pierwotny kandydat zakładał klasyczny publiczny API kompilatora TypeScript, podczas gdy projekt używa TypeScript 7.0.2, którego główny eksport zawiera wyłącznie informacje o wersji. Na Node.js 24 powodowało to wyjątek przed analizą grafu oraz 5 niezaliczonych testów. R1 korzysta z jawnej zależności deweloperskiej `@babel/parser` z pluginami TypeScript/JSX. Zakres reguł, pusta allowlista i zmiana produkcyjna `sha256Text` pozostają bez zmian. Niezależnie potwierdzono: `verify:source`, `verify:ux-data`, `verify:architecture`, 145/145 plików i 519/519 testów, typecheck oraz Vite build — PASS. Po niezależnym audycie użytkownik potwierdził pełny zielony GitHub Actions dla dokładnego STAGE-8-R1, w tym Rust/Tauri i Clippy. Etap 8 jest zamknięty.
 
-**Status:** `STAGE 8 CANDIDATE — INDEPENDENT AUDIT AND FULL GITHUB ACTIONS REQUIRED`  
+**Status:** `COMPLETED — FULL GITHUB ACTIONS PASS`  
 **Data:** 12 września 2026  
 **Baza:** dokładny `STAGE-7B-R1 — Shared Components Cleanup`  
 **Bazowy source-tree:** `03d0fd8ae3c43ed4083540fd84fe2ca6aa1fae1d0b04ad09014163e5eabf8d21`  
@@ -125,10 +125,10 @@ Systemowe linuksowe `unzip` w środowisku audytu renderowało poprawne nazwy Uni
 
 ## 9. Status odbioru
 
-Kandydat pozostaje:
+Dokładny STAGE-8-R1 przeszedł niezależny audyt oraz pełny zielony GitHub Actions potwierdzony przez użytkownika, obejmujący wymagane bramki frontendowe i natywne.
 
-`STAGE 8 CANDIDATE — INDEPENDENT AUDIT AND FULL GITHUB ACTIONS REQUIRED`
+Status końcowy:
 
-Etap 8 nie może otrzymać `COMPLETED`, dopóki dokładne paczki kandydata nie przejdą niezależnego audytu i pełnego GitHub Actions, w tym rzeczywistego Vitest, typecheck, Vite, Rust/Tauri oraz Clippy.
+`COMPLETED — FULL GITHUB ACTIONS PASS`
 
-Końcowy runtime smoke całej modularizacji pozostaje odroczony do finalnej bramki i nie jest częścią Etapu 8.
+Końcowy runtime smoke całej modularizacji pozostaje celowo częścią Etapu 9 i nie jest warunkiem ponownego otwarcia Etapu 8.
