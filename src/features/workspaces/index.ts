@@ -1,2 +1,2 @@
-export { WorkspacesScreen, WorkspaceSwitcherDialog } from "./WorkspacesScreen";
-export type { WorkspacesScreenProps, WorkspaceSwitcherDialogProps } from "./WorkspacesScreen";
+export { WorkspaceSwitcherDialog } from "./WorkspaceSwitcherDialog";
+export type { WorkspaceSwitcherDialogProps } from "./WorkspaceSwitcherDialog";

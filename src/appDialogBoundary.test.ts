@@ -29,7 +29,6 @@ describe("application dialog architecture", () => {
     for (const path of [
       "./components/ProviderSettings.tsx",
       "./features/profiles/ProfilesScreen.tsx",
-      "./features/workspaces/WorkspacesScreen.tsx",
       "./features/conversations/ChatPanel.tsx",
       "./features/targets/TargetsScreen.tsx",
       "./features/settings/SettingsScreen.tsx",

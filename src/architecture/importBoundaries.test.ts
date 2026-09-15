@@ -110,7 +110,7 @@ describe("architecture import boundaries", () => {
     expect(deepImportOffenders, "Training consumers must import the public feature entry point").toEqual([]);
   });
 
-  it("uses the public Workspaces feature entry point and keeps its screens out of App", () => {
+  it("uses the public Workspaces feature entry point only for the switcher dialog", () => {
     const appSource = sourceFiles["../App.tsx"];
     const deepImportOffenders = Object.entries(sourceFiles)
       .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
@@ -120,9 +120,9 @@ describe("architecture import boundaries", () => {
       .map(({ projectPath }) => projectPath);
 
     expect(appSource).toContain('from "./features/workspaces"');
-    expect(appSource).not.toContain("function WorkspacesScreen(");
-    expect(appSource).not.toContain("function WorkspaceDirectoryList(");
-    expect(appSource).not.toContain("function WorkspaceSwitcherDialog(");
+    expect(appSource).not.toContain("WorkspacesScreen");
+    expect(sourceFiles["../features/workspaces/WorkspacesScreen.tsx"]).toBeUndefined();
+    expect(sourceFiles["../features/workspaces/WorkspaceSwitcherDialog.tsx"]).toContain("function WorkspaceSwitcherDialog(");
     expect(deepImportOffenders, "Workspaces consumers must import the public feature entry point").toEqual([]);
   });
 

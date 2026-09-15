@@ -17,6 +17,8 @@ function makeProps(overrides: Partial<ProfilesScreenProps> = {}): ProfilesScreen
     onCreateProfile: vi.fn(),
     onCreateWorkspace: vi.fn(),
     onOpenWorkspace: vi.fn(),
+    activeWorkspaceId: null,
+    onActiveWorkspaceArchived: vi.fn(),
     repository: null,
     onProfilesChanged: vi.fn(async () => undefined),
     ...overrides,
@@ -33,12 +35,33 @@ describe("ProfilesScreen", () => {
     expect(html).toContain(props.copy.createProfile);
   });
 
-  it("renders profile identity and owned Workspace through the public entry point", () => {
-    const html = renderToStaticMarkup(<ProfilesScreen {...makeProps({ profiles: [profile], workspaces: [workspace] })} />);
+  it("renders every active Workspace owned by the Profile and exposes its action menu", () => {
+    const second: Workspace = { ...workspace, id: "workspace-2", name: "Research Lab" };
+    const html = renderToStaticMarkup(<ProfilesScreen {...makeProps({ profiles: [profile], workspaces: [workspace, second] })} />);
 
     expect(html).toContain("Orion");
     expect(html).toContain("Luke");
     expect(html).toContain("Training Lab");
-    expect(html).toContain("workspace-tile");
+    expect(html).toContain("Research Lab");
+    expect(html.match(/Workspace actions:/g)).toHaveLength(2);
+    expect(html).toContain(">Rename<");
+    expect(html).toContain(">Archive<");
+  });
+
+  it("keeps a foreign Profile Workspace inside its own Profile card", () => {
+    const foreignProfile: Profile = { ...profile, id: "profile-2", name: "Nemo" };
+    const foreignWorkspace: Workspace = { ...workspace, id: "workspace-foreign", profileId: foreignProfile.id, name: "Foreign Lab" };
+    const html = renderToStaticMarkup(<ProfilesScreen {...makeProps({ profiles: [profile, foreignProfile], workspaces: [workspace, foreignWorkspace] })} />);
+
+    const orionCard = html.slice(html.indexOf("Orion"), html.indexOf("Nemo"));
+    expect(orionCard).toContain("Training Lab");
+    expect(orionCard).not.toContain("Foreign Lab");
+  });
+
+  it("disables Archive for the last active Workspace of a Profile", () => {
+    const html = renderToStaticMarkup(<ProfilesScreen {...makeProps({ profiles: [profile], workspaces: [workspace] })} />);
+
+    expect(html).toContain('title="Each Profile must keep at least one active Workspace."');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Archive/s);
   });
 });

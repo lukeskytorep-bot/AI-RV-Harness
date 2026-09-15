@@ -74,7 +74,7 @@ The active public feature entry points are:
 | AI Center | `src/features/aiCenter/index.ts` | AI Center tabs, profile-scoped presentation, Viewer Notes capacity/restore controls and history rendering | top-level navigation, Monitor execution, Viewer identity rules, Viewer Notes reflection/update policy, repository implementation |
 | Research | `src/features/research/index.ts` | Research screen, configuration builder, project controls, scoring/unblinding presentation and export initiation | top-level navigation, research methodology, experiment planning/execution rules, repository implementation, provider transport |
 | Training | `src/features/training/index.ts` | Training screen, long-run sequencing, durable checkpoint/Resume coordination, pause/cancellation propagation and orchestration of post-Reveal review, optional Judge and Viewer Notes reflection | top-level navigation, curriculum definitions, session protocol implementation, Judge rules, Viewer Notes versioning, repository implementation, provider transport |
-| Workspaces | `src/features/workspaces/index.ts` | Workspace directory, search/filter presentation, switcher dialog and ordered rename/archive coordination | top-level navigation, repository implementation, Profile lifecycle, RV Session execution |
+| Workspaces | `src/features/workspaces/index.ts` | Searchable Workspace switcher dialog only | top-level navigation, Workspace lifecycle management, repository implementation, Profile lifecycle, RV Session execution |
 | Conversations | `src/features/conversations/index.ts` | Conversation and Manual RV screen state, thread/group/source coordination, model selection, retry UI and export initiation | provider transport, repository implementation, chat message construction rules, persistence schema, top-level Workspace navigation |
 | Judge | `src/features/judge/index.ts` | single-session and ordinary-batch Judge configuration, execution state, stored-score recovery and evaluation presentation | Judge prompt/rubric, evidence-packet construction, score persistence implementation, provider transport, top-level RV Session navigation |
 | Monitor | `src/features/monitor/index.ts` | Monitor history, editable prompt presentation, intervention timeline and export initiation | Monitor decision engine, prompt construction rules, repository implementation, provider transport, RV Session execution |
@@ -90,7 +90,7 @@ import { TargetsScreen } from "./features/targets";
 import { AiCenterScreen } from "./features/aiCenter";
 import { ResearchScreen } from "./features/research";
 import { TrainingScreen } from "./features/training";
-import { WorkspacesScreen, WorkspaceSwitcherDialog } from "./features/workspaces";
+import { WorkspaceSwitcherDialog } from "./features/workspaces";
 import { ChatPanel } from "./features/conversations";
 import { BatchEvaluation, JudgeEvaluation } from "./features/judge";
 import { MonitorPanel } from "./features/monitor";

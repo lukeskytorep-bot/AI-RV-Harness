@@ -1,5 +1,5 @@
-import { Archive, ChevronRight, KeyRound, Pencil, Plus, RadioTower, Users } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Archive, ChevronRight, EllipsisVertical, KeyRound, Pencil, Plus, RadioTower, Users } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import { EmptyState } from "../../components/EmptyState";
 import { useAppDialogs } from "../../components/AppDialogProvider";
@@ -7,6 +7,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "../../domain/isBeIdentity";
 import type { getCopy } from "../../i18n";
 import { resolveViewerDefault } from "../../profileModelDefaults";
+import { archiveWorkspaceAndRefresh, renameWorkspaceAndRefresh } from "../../application/workspaceManagement";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
 import { buildCalibrationHistory, type CalibrationHistoryItem } from "../../research/calibration";
 import type { AppRepository } from "../../storage/repository";
@@ -21,6 +22,8 @@ export interface ProfilesScreenProps {
   onCreateProfile: () => void;
   onCreateWorkspace: (profileId: string) => void;
   onOpenWorkspace: (workspace: Workspace) => void;
+  activeWorkspaceId: string | null;
+  onActiveWorkspaceArchived: (nextId: string | null) => void;
   repository: AppRepository | null;
   onProfilesChanged: () => Promise<void>;
 }
@@ -32,6 +35,8 @@ export function ProfilesScreen({
   onCreateProfile,
   onCreateWorkspace,
   onOpenWorkspace,
+  activeWorkspaceId,
+  onActiveWorkspaceArchived,
   repository,
   onProfilesChanged,
 }: ProfilesScreenProps) {
@@ -94,6 +99,43 @@ export function ProfilesScreen({
     );
   };
 
+  const renameWorkspace = async (profile: Profile, workspace: Workspace) => {
+    if (!repository) return;
+    const requested = await dialogs.prompt({
+      title: copy.dialogRename,
+      description: copy.home === "Home" ? "Enter a new Workspace name." : "Podaj nową nazwę Workspace.",
+      initialValue: workspace.name,
+      inputLabel: copy.workspaceName,
+      inputRequired: true,
+      confirmLabel: copy.dialogRename,
+      cancelLabel: copy.cancel,
+    });
+    const name = requested?.trim();
+    if (!name || name === workspace.name) return;
+    try {
+      await renameWorkspaceAndRefresh(repository, workspace, profile.id, name, onProfilesChanged);
+    } catch (cause) {
+      await dialogs.information({ title: copy.dialogErrorTitle, description: cause instanceof Error ? cause.message : String(cause), confirmLabel: copy.dialogOk, severity: "warning" });
+    }
+  };
+
+  const archiveWorkspace = async (profile: Profile, workspace: Workspace) => {
+    if (!repository) return;
+    const confirmed = await dialogs.confirm({
+      title: `${copy.dialogArchive}: ${workspace.name}`,
+      description: copy.home === "Home" ? "Its data will be preserved and can be restored in Settings > Data storage." : "Dane zostaną zachowane i będzie można je przywrócić w Ustawienia > Pamięć danych.",
+      confirmLabel: copy.dialogArchive,
+      cancelLabel: copy.cancel,
+      severity: "warning",
+    });
+    if (!confirmed) return;
+    try {
+      await archiveWorkspaceAndRefresh(repository, workspace, profile.id, workspaces, activeWorkspaceId, onActiveWorkspaceArchived, onProfilesChanged);
+    } catch (cause) {
+      await dialogs.information({ title: copy.dialogErrorTitle, description: cause instanceof Error ? cause.message : String(cause), confirmLabel: copy.dialogOk, severity: "warning" });
+    }
+  };
+
   return (
     <div className="page">
       <PageHeader title={copy.profiles} subtitle={copy.profileMeaning} action={<button className="primary-button" onClick={onCreateProfile}><Plus size={16} />{copy.createProfile}</button>} />
@@ -114,9 +156,15 @@ export function ProfilesScreen({
                 </div>
                 <div className="workspace-list workspace-tile-grid">
                   {owned.length === 0 ? <p className="muted">{copy.noWorkspace}</p> : owned.map((workspace) => (
-                    <button key={workspace.id} className="workspace-tile" onClick={() => onOpenWorkspace(workspace)}>
-                      <span><RadioTower size={17} /><span><strong>{workspace.name}</strong><small>{workspace.description || new Date(workspace.lastOpenedAt).toLocaleString()}</small></span></span><ChevronRight size={16} />
-                    </button>
+                    <ProfileWorkspaceTile
+                      key={workspace.id}
+                      copy={copy}
+                      workspace={workspace}
+                      canArchive={owned.length > 1}
+                      onOpen={() => onOpenWorkspace(workspace)}
+                      onRename={() => renameWorkspace(profile, workspace)}
+                      onArchive={() => archiveWorkspace(profile, workspace)}
+                    />
                   ))}
                 </div>
                 <CalibrationHistory copy={copy} items={calibrationHistory.filter((item) => item.profileId === profile.id)} />
@@ -128,6 +176,44 @@ export function ProfilesScreen({
         </div>
       )}
       {editingProfile && <EditProfileDialog copy={copy} profile={editingProfile} providers={providerConfigs} models={models} onCancel={() => setEditingProfile(null)} onSave={saveProfile} />}
+    </div>
+  );
+}
+
+function ProfileWorkspaceTile({ copy, workspace, canArchive, onOpen, onRename, onArchive }: {
+  copy: ReturnType<typeof getCopy>;
+  workspace: Workspace;
+  canArchive: boolean;
+  onOpen: () => void;
+  onRename: () => Promise<void>;
+  onArchive: () => Promise<void>;
+}) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+
+  const closeMenu = () => {
+    const details = detailsRef.current;
+    if (!details) return;
+    details.open = false;
+    details.querySelector<HTMLElement>("summary")?.focus();
+  };
+
+  const runAction = async (action: () => Promise<void>) => {
+    await action();
+    closeMenu();
+  };
+
+  return (
+    <div className="profile-workspace-tile">
+      <button className="workspace-tile" onClick={onOpen}>
+        <span><RadioTower size={17} /><span><strong>{workspace.name}</strong><small>{workspace.description || new Date(workspace.lastOpenedAt).toLocaleString()}</small></span></span><ChevronRight size={16} />
+      </button>
+      <details ref={detailsRef} className="workspace-actions profile-workspace-actions" onClick={(event) => event.stopPropagation()}>
+        <summary aria-label={copy.home === "Home" ? `Workspace actions: ${workspace.name}` : `Akcje Workspace: ${workspace.name}`} onClick={(event) => event.stopPropagation()}><EllipsisVertical size={18} /></summary>
+        <div role="menu" onClick={(event) => event.stopPropagation()}>
+          <button role="menuitem" onClick={() => void runAction(onRename)}><Pencil size={14} />{copy.home === "Home" ? "Rename" : "Zmień nazwę"}</button>
+          <button role="menuitem" disabled={!canArchive} title={!canArchive ? copy.lastActiveWorkspaceRequired : undefined} onClick={() => void runAction(onArchive)}><Archive size={14} />{copy.home === "Home" ? "Archive" : "Archiwizuj"}</button>
+        </div>
+      </details>
     </div>
   );
 }

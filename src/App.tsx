@@ -57,7 +57,7 @@ import { HomeScreen } from "./features/home";
 import { CreateProfileDialog, ProfilesScreen, ProfileViewerControls } from "./features/profiles";
 import { TargetsScreen } from "./features/targets";
 import { ChatPanel } from "./features/conversations";
-import { WorkspacesScreen, WorkspaceSwitcherDialog } from "./features/workspaces";
+import { WorkspaceSwitcherDialog } from "./features/workspaces";
 import { RvSessionPanel } from "./features/rvSessions";
 import { FormDialog } from "./components/FormDialog";
 import { PageHeader } from "./components/PageHeader";
@@ -82,7 +82,12 @@ const LazyAiCenterRoute = lazy(() =>
   import("./features/aiCenter").then(({ AiCenterRoute }) => ({ default: AiCenterRoute })),
 );
 
-type Page = "home" | "profiles" | "workspaces" | "research" | "targets" | "training" | "ai-center" | "settings" | "workspace";
+export type Page = "home" | "profiles" | "research" | "targets" | "training" | "ai-center" | "settings" | "workspace";
+export type LegacyPage = Page | "workspaces";
+
+export function normalizePage(page: LegacyPage): Page {
+  return page === "workspaces" ? "profiles" : page;
+}
 type WorkspaceTab = "chat" | "rv";
 
 export default function App() {
@@ -183,9 +188,10 @@ export default function App() {
     settingsSaveQueueRef.current.queue.enqueue(settings);
   }, [repository, loading, settings]);
 
-  const navigate = (destination: Page) => {
-    if (destination === "ai-center") setAiCenterView("overview");
-    setPage(destination);
+  const navigate = (destination: LegacyPage) => {
+    const normalized = normalizePage(destination);
+    if (normalized === "ai-center") setAiCenterView("overview");
+    setPage(normalized);
   };
 
   const openWorkspace = async (workspace: Workspace) => {
@@ -288,11 +294,11 @@ export default function App() {
               onCreateProfile={() => setProfileDialog(true)}
               onCreateWorkspace={(profileId) => setWorkspaceDialogFor(profileId)}
               onOpenWorkspace={openWorkspace}
+              activeWorkspaceId={activeWorkspaceId}
+              onActiveWorkspaceArchived={setActiveWorkspaceId}
               repository={repository!}
               onProfilesChanged={refreshProfiles}
             />
-          ) : page === "workspaces" ? (
-            <WorkspacesScreen copy={copy} profiles={profiles} workspaces={workspaces} repository={repository} onChanged={refreshProfiles} activeWorkspaceId={activeWorkspaceId} onActiveArchived={(nextId) => { setActiveWorkspaceId(nextId); navigate("workspaces"); }} onOpenWorkspace={openWorkspace} onCreateWorkspace={() => setWorkspaceDialogFor("__choose__")} onCreateProfile={() => setProfileDialog(true)} />
           ) : page === "research" ? (
             <LazyResearchScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
           ) : page === "targets" ? (
@@ -577,7 +583,6 @@ function Sidebar({ page, copy, compact, onNavigate }: { page: Page; copy: Return
   const items: Array<{ id: Page; icon: typeof Home; label: string }> = [
     { id: "home", icon: Home, label: copy.home },
     { id: "profiles", icon: Users, label: copy.profiles },
-    { id: "workspaces", icon: RadioTower, label: copy.workspaces },
     { id: "research", icon: FlaskConical, label: copy.research },
     { id: "targets", icon: Crosshair, label: copy.targets },
     { id: "training", icon: GraduationCap, label: copy.training },
@@ -593,7 +598,7 @@ function Sidebar({ page, copy, compact, onNavigate }: { page: Page; copy: Return
       <nav className="side-nav">
         {items.map((item) => {
           const Icon = item.icon;
-          const active = page === item.id || (page === "workspace" && item.id === "workspaces");
+          const active = page === item.id || (page === "workspace" && item.id === "profiles");
           return (
             <button key={item.id} title={item.label} aria-label={item.label} className={active ? "nav-item active" : "nav-item"} onClick={() => onNavigate(item.id)}>
               <Icon size={18} />
