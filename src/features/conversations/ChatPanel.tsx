@@ -1,5 +1,5 @@
 import { Archive, ArrowRight, Crosshair, Download, FileCheck2, KeyRound, LockKeyhole, MessageCircle, Paperclip, Pencil, Plus, RadioTower, ShieldCheck, Sparkles, Waves, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { prepareViewerNotesForSession, viewerNotesSystemBlock } from "../../aiCenter/viewerNotes";
 import { chooseAndImportAttachments } from "../../attachments/native";
@@ -20,6 +20,7 @@ import { buildEffectiveViewerPrompt, localizedViewerEditablePrompt } from "../..
 import { createImportedWorkspaceSource, estimateTextTokens } from "../../sources/service";
 import type { WorkspaceSource } from "../../sources/types";
 import { saveTextFile } from "../../storage/native";
+import { autosizeConversationComposer } from "./composerSizing";
 import type { AppRepository } from "../../storage/repository";
 import type { AppSettings, ChatMessage, ChatMode, ChatThread, Profile, Workspace } from "../../types";
 
@@ -46,6 +47,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
   const [chatImageNames, setChatImageNames] = useState<string[]>([]);
   const [modelId, setModelId] = useState("");
   const [input, setInput] = useState("");
+  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [manualProtocol, setManualProtocol] = useState<"none" | "rcp" | "lite-core" | "lite-extended" | "telepathic">("none");
   const [manualViewerNotesEnabled, setManualViewerNotesEnabled] = useState(true);
   const [maxOutputTokens, setMaxOutputTokens] = useState(String(settings.defaultMaxOutputTokens));
@@ -149,6 +151,19 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
   const previewMessages = buildChatProviderMessages({ mode, language, history: messages, content: input.trim(), rvSystemPrompt, attachedProtocol, sources: selectedSources, images: chatImages });
   const contextBudget = estimateContextBudget(previewMessages, selectedModel?.capabilities.contextTokens, effectiveMaxOutputTokens);
   const contextExceeded = contextBudget.exceeded;
+
+  const resizeComposer = useCallback(() => {
+    if (composerTextareaRef.current) autosizeConversationComposer(composerTextareaRef.current);
+  }, []);
+
+  useLayoutEffect(() => {
+    resizeComposer();
+  }, [input, resizeComposer]);
+
+  useEffect(() => {
+    window.addEventListener("resize", resizeComposer);
+    return () => window.removeEventListener("resize", resizeComposer);
+  }, [resizeComposer]);
 
   const openThread = async (nextThreadId: string) => {
     if (!repository || sending || nextThreadId === threadId) return;
@@ -494,7 +509,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
       {pendingRetry && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Ostatnia wiadomość nie otrzymała odpowiedzi AI." : "The last message did not receive an AI response."}</span><button className="secondary-button" disabled={sending} onClick={() => void retryPendingResponse()}>{settings.interfaceLanguage === "pl" ? "Ponów odpowiedź" : "Retry response"}</button></div>}
       {(selectedSources.length > 0 || chatImageNames.length > 0) && <div className="attachment-chips">{selectedSources.map((source) => <button type="button" key={source.id} title={copy.removeSource} onClick={() => void toggleSource(source.id)}><FileCheck2 size={12} /><span>{source.displayName} · {source.sourceType.toUpperCase()} · {settings.interfaceLanguage === "pl" ? "aktywne" : "active"} · ~{estimateTextTokens(source.content).toLocaleString()} tokens</span><X size={11} /></button>)}{chatImageNames.map((name, index) => <button type="button" key={`${name}-${index}`} onClick={() => removeChatImage(index)}><span>{name} · IMAGE · {settings.interfaceLanguage === "pl" ? "następna tura" : "next turn"} · ~2,048 tokens</span><X size={11} /></button>)}</div>}
       <div className="composer">
-        <textarea rows={2} placeholder={copy.messagePlaceholder} value={input} onChange={(event) => setInput(event.target.value)} disabled={!selectedModel || sending || Boolean(pendingRetry)} />
+        <textarea ref={composerTextareaRef} rows={2} placeholder={copy.messagePlaceholder} value={input} onChange={(event) => setInput(event.target.value)} disabled={!selectedModel || sending || Boolean(pendingRetry)} />
         <div className="composer-actions"><button type="button" className="composer-attachment-button" title={settings.interfaceLanguage === "pl" ? "Dołącz dokumenty lub obrazy" : "Attach documents or images"} disabled={!repository || !threadId || sending || attachmentBusy || Boolean(pendingRetry)} onClick={() => void attachFiles()}><Paperclip size={17} /></button><button disabled={!selectedModel || !input.trim() || sending || contextExceeded || Boolean(pendingRetry)} onClick={() => void send()}>{sending ? copy.sending : copy.send}<ArrowRight size={15} /></button></div>
       </div>
     </section>

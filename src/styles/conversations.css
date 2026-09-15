@@ -89,8 +89,8 @@
 .chat-error { margin: 0 16px 10px; }
 .chat-retry-panel { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 16px 10px; padding: 10px 12px; border: 1px solid rgba(87, 171, 255, .22); border-radius: 10px; background: rgba(87, 171, 255, .08); }
 .chat-retry-panel span { font-size: 12px; line-height: 1.4; }
-.composer { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin: 0 16px 16px; padding: 9px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-strong); }
-.composer textarea { resize: none; padding: 7px 8px; border: 0; outline: none; color: var(--text); background: transparent; font-size: 12px; }
+.composer { flex: 0 0 auto; display: grid; grid-template-columns: 1fr auto; gap: 10px; margin: 0 16px 16px; padding: 9px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-strong); }
+.composer textarea { box-sizing: border-box; min-height: calc(3em + 14px); max-height: min(45vh, calc(27em + 14px)); overflow-y: hidden; resize: vertical; padding: 7px 8px; border: 0; outline: none; color: var(--text); background: transparent; font-size: 12px; line-height: 1.5; }
 .composer textarea::placeholder { color: var(--muted); }
 .composer button { align-self: end; min-height: 35px; display: inline-flex; align-items: center; gap: 6px; padding: 0 13px; border: 0; border-radius: 9px; color: #fff; background: linear-gradient(135deg, #7868e9, #499dcc); font-size: 11px; font-weight: 700; }
 .composer-actions { display: flex; align-items: flex-end; gap: 5px; }
