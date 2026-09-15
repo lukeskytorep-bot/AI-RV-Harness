@@ -30,6 +30,7 @@ describe("MonitorPanel", () => {
 
     expect(html).toContain("AI Monitor system prompt");
     expect(html).toContain("Show the complete effective prompt");
+    expect(html).not.toContain("Activity definition — locked");
     expect(repository.listMonitorRuns).not.toHaveBeenCalled();
   });
 

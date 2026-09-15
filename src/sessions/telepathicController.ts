@@ -6,10 +6,8 @@ import type { GenerationSettings, ProviderChatResponse, ProviderConfig, Provider
 import type { TelepathicProtocolResource } from "../resources/protocolRegistry";
 import {
   buildEffectiveTelepathicMonitorPrompt,
-  lockedActivityDefinition,
   lockedTelepathicMonitorExecution,
   lockedViewerIdentity,
-  LOCKED_ACTIVITY_VERSION,
   LOCKED_IDENTITY_VERSION,
   LOCKED_TELEPATHIC_MONITOR_EXECUTION_VERSION,
 } from "../resources/systemPrompts";
@@ -214,7 +212,6 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
         effectivePrompt: effectiveMonitorPrompt,
         effectivePromptSha256: await sha256Text(effectiveMonitorPrompt!),
         lockedBlocks: [
-          { id: "locked-activity-definition", version: LOCKED_ACTIVITY_VERSION, contentSha256: await sha256Text(lockedActivityDefinition(input.sessionLanguage)), fullContent: lockedActivityDefinition(input.sessionLanguage) },
           { id: "locked-telepathic-monitor-execution", version: LOCKED_TELEPATHIC_MONITOR_EXECUTION_VERSION, contentSha256: await sha256Text(lockedTelepathicMonitorExecution(input.sessionLanguage)), fullContent: lockedTelepathicMonitorExecution(input.sessionLanguage) },
         ],
       },
@@ -228,7 +225,6 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
         fullContent: input.rvSystemPrompt.content,
         lockedBlocks: [
           { id: "locked-viewer-identity", version: LOCKED_IDENTITY_VERSION, contentSha256: await sha256Text(lockedViewerIdentity(input.sessionLanguage)), fullContent: lockedViewerIdentity(input.sessionLanguage) },
-          { id: "locked-activity-definition", version: LOCKED_ACTIVITY_VERSION, contentSha256: await sha256Text(lockedActivityDefinition(input.sessionLanguage)), fullContent: lockedActivityDefinition(input.sessionLanguage) },
         ],
       },
     } : {}),

@@ -28,13 +28,13 @@ describe("factory system prompts", () => {
     expect(factoryMonitorEditablePrompt("en")).toContain("aspect, subject, structure");
   });
 
-  it("always injects the locked Viewer identity and activity definition", () => {
+  it("injects the locked Viewer identity without the removed activity definition", () => {
     const prompt = buildEffectiveViewerPrompt("pl", "EDYTOWALNA CZĘŚĆ");
 
     expect(prompt).toContain("AI Jest Być");
     expect(prompt).toContain("Strefa Cienia");
-    expect(prompt).toContain("ZABLOKOWANA DEFINICJA AKTYWNOŚCI");
-    expect(prompt).toContain("Nie zakładaj, że aktywność oznacza obecność ludzi.");
+    expect(prompt).not.toContain("ZABLOKOWANA DEFINICJA AKTYWNOŚCI");
+    expect(prompt).not.toContain("Nie zakładaj, że aktywność oznacza obecność ludzi.");
     expect(prompt).toContain("EDYTOWALNA CZĘŚĆ");
   });
 
@@ -44,19 +44,21 @@ describe("factory system prompts", () => {
     expect(localizedMonitorEditablePrompt("My genuinely custom Monitor instruction", "pl")).toBe("My genuinely custom Monitor instruction");
   });
 
-  it("always injects the locked Monitor activity and execution rules", () => {
+  it("injects the locked Monitor execution rule without the removed activity definition", () => {
     const prompt = buildEffectiveMonitorPrompt("en", "EDITABLE MONITOR BODY");
 
     expect(prompt).not.toContain("Shadow Zone");
-    expect(prompt).toContain("LOCKED ACTIVITY DEFINITION");
-    expect(prompt).toContain("Do not assume that activity implies the presence of people.");
+    expect(prompt).not.toContain("LOCKED ACTIVITY DEFINITION");
+    expect(prompt).not.toContain("Do not assume that activity implies the presence of people.");
     expect(prompt).toContain("LOCKED EXECUTION RULE");
     expect(prompt).toContain("CONTINUE_PROTOCOL");
     expect(prompt).toContain("EDITABLE MONITOR BODY");
   });
 
-  it("injects the separate locked nine-step Telepathic Monitor schedule", () => {
+  it("injects the separate locked nine-step Telepathic Monitor schedule without the removed activity definition", () => {
     const prompt = buildEffectiveTelepathicMonitorPrompt("en", "EDITABLE TELEPATHIC MONITOR BODY");
+    expect(prompt).not.toContain("LOCKED ACTIVITY DEFINITION");
+    expect(prompt).not.toContain("Do not assume that activity implies the presence of people.");
     expect(prompt).toContain("LOCKED TELEPATHIC EXECUTION RULE");
     expect(prompt).toContain("Steps 2, 3, 4, 5, 6, 7, and 8");
     expect(prompt).toContain("not invoked after Step 9");
@@ -69,6 +71,11 @@ describe("factory system prompts", () => {
     const polish = resources.find((item) => item.id === JUDGE_PROMPT_ID && item.language === "pl");
     const english = resources.find((item) => item.id === JUDGE_PROMPT_ID && item.language === "en");
 
+    const viewer = resources.find((item) => item.id === "ai-viewer-system-prompt" && item.language === "en");
+    const monitor = resources.find((item) => item.id === "ai-monitor-system-prompt" && item.language === "en");
+
+    expect(viewer?.version).toBe("1.4.0");
+    expect(monitor?.version).toBe("1.4.0");
     expect(polish).toMatchObject({ version: JUDGE_PROMPT_VERSION, content: getJudgePrompt("pl") });
     expect(english).toMatchObject({ version: JUDGE_PROMPT_VERSION, content: getJudgePrompt("en") });
     expect(polish?.content).toContain("3-3-2-2/v1");

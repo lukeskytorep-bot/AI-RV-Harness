@@ -3,9 +3,7 @@ import { createProviderChatExecutor } from "../providers/requestExecutor";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import { renderRvLiteSteps, type RvLiteProtocolResource } from "../resources/protocolRegistry";
 import {
-  lockedActivityDefinition,
   lockedViewerIdentity,
-  LOCKED_ACTIVITY_VERSION,
   LOCKED_IDENTITY_VERSION,
 } from "../resources/systemPrompts";
 import type { AppRepository } from "../storage/repository";
@@ -140,7 +138,6 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         fullContent: input.rvSystemPrompt.content,
         lockedBlocks: [
           { id: "locked-viewer-identity", version: LOCKED_IDENTITY_VERSION, contentSha256: await sha256Text(lockedViewerIdentity(input.sessionLanguage)), fullContent: lockedViewerIdentity(input.sessionLanguage) },
-          { id: "locked-activity-definition", version: LOCKED_ACTIVITY_VERSION, contentSha256: await sha256Text(lockedActivityDefinition(input.sessionLanguage)), fullContent: lockedActivityDefinition(input.sessionLanguage) },
         ],
       },
     } : {}),

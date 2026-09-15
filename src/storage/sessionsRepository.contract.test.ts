@@ -101,6 +101,23 @@ describe("browser Sessions repository contract", () => {
     expect((await repository.listSessionEvents("session-a")).map((item) => [item.sequenceNumber, item.eventType])).toEqual([[1, "ONE"], [2, "TWO"]]);
   });
 
+  it("still reads historical snapshots that contain the removed locked activity component", async () => {
+    const storage = new MemoryStorage();
+    const historical = minimalSnapshot();
+    historical.rvSystemPrompt = {
+      id: "profile_prompt",
+      version: "1.3.0:historical",
+      language: "en",
+      contentSha256: "historical-hash",
+      fullContent: "historical prompt",
+      lockedBlocks: [{ id: "locked-activity-definition", version: "1.0.0", contentSha256: "legacy-hash", fullContent: "historical component" }],
+    };
+    storage.setItem("rvh.dev.session_snapshots", JSON.stringify([{ sessionId: "session-a", snapshot: historical, hash: "snapshot-hash" }]));
+    const repository = new BrowserSessionsRepository({ storage, now: () => timestamp, isResearchScoresFrozen: () => true });
+
+    expect((await repository.getSessionSnapshot("session-a"))?.rvSystemPrompt?.lockedBlocks?.[0]?.id).toBe("locked-activity-definition");
+  });
+
 
   it("returns the same bounded recent-session order across active Workspace scope", async () => {
     const storage = new MemoryStorage();
@@ -142,6 +159,27 @@ describe("SQLite Sessions repository contract", () => {
     expect(await repository.createRvSession(sessionInput)).toMatchObject({ id: "session-a", state: "Draft", targetId: "target-a" });
     expect(writes[0]?.query).toContain("INSERT INTO rv_sessions");
     expect((await repository.listRvSessions("workspace-a"))[0]).toMatchObject({ id: "session-a", targetId: "target-a" });
+  });
+
+
+  it("parses historical SQLite snapshots with the removed locked activity component", async () => {
+    const historical = minimalSnapshot();
+    historical.rvSystemPrompt = {
+      id: "profile_prompt",
+      version: "1.3.0:historical",
+      language: "en",
+      contentSha256: "historical-hash",
+      fullContent: "historical prompt",
+      lockedBlocks: [{ id: "locked-activity-definition", version: "1.0.0", contentSha256: "legacy-hash", fullContent: "historical component" }],
+    };
+    const repository = new SqliteSessionsRepository({
+      select: async <T>() => [{ snapshot_json: JSON.stringify(historical) }] as T,
+      executeWrite: async () => ({ rowsAffected: 0 }),
+      isResearchScoresFrozen: async () => true,
+      now: () => timestamp,
+    });
+
+    expect((await repository.getSessionSnapshot("session-a"))?.rvSystemPrompt?.lockedBlocks?.[0]?.id).toBe("locked-activity-definition");
   });
 
 

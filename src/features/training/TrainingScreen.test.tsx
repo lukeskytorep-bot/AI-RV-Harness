@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -21,5 +23,18 @@ describe("TrainingScreen", () => {
     expect(html).toContain("84");
     expect(html).toContain("Viewer Notes");
     expect(html).toContain("Recent training runs");
+  });
+
+  it("keeps Show sessions, Save training and Archive in one non-wrapping desktop action container", () => {
+    const screenSource = fs.readFileSync(path.join(process.cwd(), "src/features/training/TrainingScreen.tsx"), "utf8");
+    const css = fs.readFileSync(path.join(process.cwd(), "src/styles/training-research.css"), "utf8");
+    const actionContainer = screenSource.match(/<div className="training-run-actions">([\s\S]*?)<\/div>/)?.[1] ?? "";
+
+    expect(actionContainer).toContain("{text.showSessions}");
+    expect(actionContainer).toContain("{text.saveTraining}");
+    expect(actionContainer).toContain("{text.archive}");
+    expect(actionContainer.indexOf("{text.saveTraining}")).toBeLessThan(actionContainer.indexOf("{text.archive}"));
+    expect(css).toMatch(/\.training-run-actions\s*\{[^}]*flex-wrap:\s*nowrap[^}]*\}/s);
+    expect(css).toMatch(/@media\s*\(max-width:\s*520px\)\s*\{[\s\S]*?\.training-run-actions\s*\{[^}]*flex-wrap:\s*wrap[^}]*\}/);
   });
 });

@@ -21,10 +21,8 @@ import { renderSpecialTask } from "./specialTask";
 import { politeRevealTransition, politeSessionGreeting } from "./courtesy";
 import {
   buildEffectiveMonitorPrompt,
-  lockedActivityDefinition,
   lockedMonitorExecution,
   lockedViewerIdentity,
-  LOCKED_ACTIVITY_VERSION,
   LOCKED_IDENTITY_VERSION,
   LOCKED_MONITOR_EXECUTION_VERSION,
 } from "../resources/systemPrompts";
@@ -206,7 +204,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         effectivePrompt: effectiveMonitorPrompt,
         effectivePromptSha256: await sha256Text(effectiveMonitorPrompt!),
         lockedBlocks: [
-          { id: "locked-activity-definition", version: LOCKED_ACTIVITY_VERSION, contentSha256: await sha256Text(lockedActivityDefinition(input.sessionLanguage)), fullContent: lockedActivityDefinition(input.sessionLanguage) },
           { id: "locked-monitor-execution", version: LOCKED_MONITOR_EXECUTION_VERSION, contentSha256: await sha256Text(lockedMonitorExecution(input.sessionLanguage)), fullContent: lockedMonitorExecution(input.sessionLanguage) },
         ],
       },
@@ -228,7 +225,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         fullContent: input.rvSystemPrompt.content,
         lockedBlocks: [
           { id: "locked-viewer-identity", version: LOCKED_IDENTITY_VERSION, contentSha256: await sha256Text(lockedViewerIdentity(input.sessionLanguage)), fullContent: lockedViewerIdentity(input.sessionLanguage) },
-          { id: "locked-activity-definition", version: LOCKED_ACTIVITY_VERSION, contentSha256: await sha256Text(lockedActivityDefinition(input.sessionLanguage)), fullContent: lockedActivityDefinition(input.sessionLanguage) },
         ],
       },
     } : {}),

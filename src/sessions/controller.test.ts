@@ -85,6 +85,7 @@ describe("automatic RCP controller", () => {
     expect(log.at(-1)).toBe("event:PRE_REVEAL_SEALED");
     expect(log).toContain("sealed");
     expect(snapshots[0].rvSystemPrompt).toEqual(expect.objectContaining({ contentSha256: "c".repeat(64), fullContent: "FIXED PROFILE VIEWER PROMPT" }));
+    expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity"]);
     expect(snapshots[0].researchConditionInstruction).toEqual(expect.objectContaining({ contentSha256: "d".repeat(64), fullContent: "CUSTOM VARIABLE A" }));
   });
 
@@ -153,10 +154,11 @@ describe("automatic RCP controller", () => {
 
   it("accepts natural-language Monitor instructions and stops the phase cycle on CONTINUE_PROTOCOL", async () => {
     const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
     let viewerCalls = 0;
     let monitorCalls = 0;
     const result = await runAutomaticRcpSession({
-      repository: fakeRepository(log),
+      repository: fakeRepository(log, snapshots),
       workspaceId: "w",
       profileId: "p",
       providerConfig: config,
@@ -182,6 +184,7 @@ describe("automatic RCP controller", () => {
     expect(log).toContain("event:MONITOR_INTERVENTION");
     expect(log).not.toContain("event:MONITOR_ATTEMPT_REJECTED");
     expect(log).toContain("sealed");
+    expect(snapshots[0].monitor?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-monitor-execution"]);
   });
 
   it("retries a transient empty Monitor response once without repeating Viewer work", async () => {
