@@ -275,7 +275,7 @@ if (requestedRules.has("rust")) {
   if (!fs.existsSync(facade)) {
     violations.push({ rule: "rust-provider-boundary", importer: "src-tauri/src/providers.rs", imported: "providers", detail: "Provider facade is missing." });
   } else {
-    const facadeText = fs.readFileSync(facade, "utf8");
+    const facadeText = fs.readFileSync(facade, "utf8").split(String.fromCharCode(13)).join("");
     for (const [moduleName, ownedSymbols] of Object.entries(modules)) {
       const moduleFile = path.join(rustRoot, "providers", `${moduleName}.rs`);
       if (!fs.existsSync(moduleFile)) {
@@ -305,7 +305,14 @@ if (requestedRules.has("rust")) {
     }
     const testsFile = path.join(rustRoot, "providers", "tests.rs");
     if (!fs.existsSync(testsFile)) violations.push({ rule: "rust-provider-boundary", importer: "src-tauri/src/providers.rs", imported: "providers/tests.rs", detail: "Provider tests must remain in providers/tests.rs." });
-    if (!facadeText.includes("#[cfg(test)]\nmod tests;")) violations.push({ rule: "rust-provider-boundary", importer: "src-tauri/src/providers.rs", imported: "mod tests", detail: "Provider facade must wire providers/tests.rs only under cfg(test)." });
+    if (!/#\[cfg\(test\)\]\s*\r?\n\s*mod\s+tests\s*;/.test(facadeText)) {
+  violations.push({
+    rule: "rust-provider-boundary",
+    importer: "src-tauri/src/providers.rs",
+    imported: "mod tests",
+    detail: "Provider facade must wire providers/tests.rs only under cfg(test).",
+  });
+}
   }
 }
 
