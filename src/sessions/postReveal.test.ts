@@ -1,12 +1,55 @@
 import { describe, expect, it, vi } from "vitest";
-import { runAutomaticPostRevealReview, sendPostRevealTurn } from "./postReveal";
+import { automaticPostRevealReviewRequest, findCompletedAutomaticViewerReview, runAutomaticPostRevealReview, sendPostRevealTurn, supportedAutomaticPostRevealReviewRequests } from "./postReveal";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { ProviderCallError } from "../providers/providerError";
+import { serializePostRevealTurn } from "./postRevealTranscript";
 
 const config: ProviderConfig = { id: "pc", provider: "openrouter", label: "P", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
 const model: ProviderModel = { providerConfigId: "pc", provider: "openrouter", modelId: "viewer", displayName: "Viewer", route: "openrouter:viewer", capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: [], contextTokens: 100_000, maxOutputTokens: 4096, source: "provider", capturedAt: "now" }, pricing: {}, recommended: false, rawMetadata: {}, refreshedAt: "now" };
 
 describe("post-reveal discussion", () => {
+  const expectedPolishRequest = `Dziękuję za wykonaną sesję — świetna robota. Część ślepa została zakończona i zapieczętowana. Teraz przechodzimy do ujawnienia celu.
+
+Porównaj zapieczętowany zapis części ślepej z ujawnionym celem. Wskaż konkretnie: co było trafne, częściowo trafne lub nietrafne, co warto poprawić w następnych sesjach oraz co już działa dobrze.
+
+Pamiętaj, że Reveal może nie opisywać wyczerpująco całego otoczenia celu. Szczegół zgodny z celem lub jego bezpośrednim otoczeniem, lecz niepotwierdzony w Revealu, oznacz jako prawdopodobną, ale niezweryfikowaną zgodność kontekstową — nie jako potwierdzone trafienie ani błąd. Największą wagę przypisuj opisowi głównego celu; trafne otoczenie traktuj jako mniej ważne wsparcie. Informacje sprzeczne z Revelem uznaj za nietrafne i nie zawyżaj oceny na podstawie samej wiedzy ogólnej.
+
+Wyraźnie oddziel analizę po Revealu od wcześniejszych danych blind i nie dopisuj nowych percepcji do zapieczętowanej części sesji.`;
+  const expectedEnglishRequest = `Thank you for completing the session — excellent work. The blind portion has ended and has been sealed. We will now proceed to the target Reveal.
+
+Compare the sealed blind-session record with the revealed target. Identify specifically what was accurate, partly accurate, or inaccurate, what should be improved in future sessions, and what already works well.
+
+Remember that the Reveal may not exhaustively describe the target’s entire surroundings. A detail consistent with the target or its immediate surroundings but not confirmed by the Reveal should be classified as plausible but unverified contextual correspondence—not as either a confirmed hit or an error. Give the greatest weight to the principal target and treat accurate surrounding context as lower-weight supporting evidence. Treat details contradicted by the Reveal as inaccurate, and do not inflate the assessment using general knowledge alone.
+
+Clearly separate this post-Reveal analysis from the earlier blind data and do not add new perceptions to the sealed session record.`;
+
+  it("returns the exact canonical Polish automatic Viewer review request", () => {
+    expect(automaticPostRevealReviewRequest("pl")).toBe(expectedPolishRequest);
+  });
+
+  it("returns the exact canonical English automatic Viewer review request", () => {
+    expect(automaticPostRevealReviewRequest("en")).toBe(expectedEnglishRequest);
+  });
+
+  it("adds the courtesy transition exactly once", () => {
+    expect(automaticPostRevealReviewRequest("pl").split("Dziękuję za wykonaną sesję — świetna robota.")).toHaveLength(2);
+    expect(automaticPostRevealReviewRequest("en").split("Thank you for completing the session — excellent work.")).toHaveLength(2);
+  });
+
+  it.each(["pl", "en"] as const)("recognizes both historical and current %s automatic Viewer review requests by exact match", (language) => {
+    const [currentRequest, historicalRequest] = supportedAutomaticPostRevealReviewRequests(language);
+    expect(currentRequest).toBe(automaticPostRevealReviewRequest(language));
+    expect(historicalRequest).toBeTruthy();
+    expect(supportedAutomaticPostRevealReviewRequests(language)).toHaveLength(2);
+
+    for (const request of [currentRequest, historicalRequest]) {
+      const transcript = `${serializePostRevealTurn("user", request)}${serializePostRevealTurn("assistant", `Stored ${language} review`)}`;
+      expect(findCompletedAutomaticViewerReview(transcript, language)).toBe(`Stored ${language} review`);
+    }
+
+    const incompleteNearMatch = `${serializePostRevealTurn("user", `${currentRequest.slice(0, -1)}?`)}${serializePostRevealTurn("assistant", "Must not match")}`;
+    expect(findCompletedAutomaticViewerReview(incompleteNearMatch, language)).toBeNull();
+  });
   it("persists after-feedback turns separately and labels sealed evidence read-only", async () => {
     let transcript = "";
     const repository = {
@@ -65,7 +108,7 @@ describe("post-reveal discussion", () => {
       afterViewerReview: async ({ content }) => { order.push(`reflection:${content}`); },
     });
 
-    expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(1, "s", "user", expect.stringContaining("co poszło dobrze"));
+    expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(1, "s", "user", automaticPostRevealReviewRequest("pl"));
     expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(2, "s", "assistant", "Ocena Viewera");
     expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(3, "s", "monitor", "Ocena Monitora");
     expect(order).toEqual(["user", "assistant", "reflection:Ocena Viewera", "monitor"]);

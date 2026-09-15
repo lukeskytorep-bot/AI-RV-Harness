@@ -6,7 +6,7 @@ import type { TargetRecord } from "../../targets/types";
 import type { TrainingRunRecord } from "../../training/types";
 import type { Profile } from "../../types";
 import { executeTrainingRun, firstPendingTrainingTargetIndex, type ExecuteTrainingRunInput } from "./trainingExecution";
-import { automaticPostRevealReviewRequest } from "../../sessions/postReveal";
+import { supportedAutomaticPostRevealReviewRequests } from "../../sessions/postReveal";
 import { serializePostRevealTurn } from "../../sessions/postRevealTranscript";
 
 const profile: Profile = { id: "profile", name: "Viewer", humanName: "Human", credentialId: "credential", createdAt: "now", updatedAt: "now" };
@@ -211,9 +211,14 @@ describe("Training execution", () => {
     expect(outcome.run.sessionIds).toEqual(["session_t1"]);
   });
 
-  it("reuses a stored automatic Viewer Review instead of calling the Viewer again", async () => {
+  it.each([
+    ["pl", "current", 0],
+    ["pl", "historical", 1],
+    ["en", "current", 0],
+    ["en", "historical", 1],
+  ] as const)("reuses a stored %s %s automatic Viewer Review without a paid rerun", async (language, _version, requestIndex) => {
     const testHarness = harness();
-    const request = automaticPostRevealReviewRequest("en");
+    const request = supportedAutomaticPostRevealReviewRequests(language)[requestIndex];
     const transcript = `${serializePostRevealTurn("user", request)}${serializePostRevealTurn("assistant", "Stored review")}`;
     testHarness.repository.listRvSessions = vi.fn(async () => [{ id: "session_t1", postRevealTranscript: transcript }] as never);
     const initial = run({
@@ -222,9 +227,11 @@ describe("Training execution", () => {
       activeTargetCheckpoint: { targetId: "t1", sessionId: "session_t1", stage: "session_revealed" },
     });
 
-    const outcome = await executeTrainingRun(input(initial, testHarness));
+    const outcome = await executeTrainingRun(input(initial, testHarness, { language }));
+    const repeated = await executeTrainingRun(input(outcome.run, testHarness, { language }));
 
     expect(outcome.run.status).toBe("Completed");
+    expect(repeated.run.status).toBe("Completed");
     expect(testHarness.dependencies!.runAutomaticPostRevealReview).not.toHaveBeenCalled();
     expect(testHarness.reflect).toHaveBeenCalledOnce();
     expect(testHarness.reflect).toHaveBeenCalledWith(expect.objectContaining({ viewerReview: "Stored review" }));
