@@ -12,6 +12,7 @@ import { computeConditionStatistics, computePairwiseStatistics } from "./statist
 import type { ResearchConfig, ResearchPreflightResult, ResearchProjectRecord, ResearchResults, UnblindedSessionResult } from "./types";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "../domain/isBeIdentity";
 import { modelRouteKey } from "../modelRoutes";
+import { viewerNotesSnapshotSignature } from "./viewerNotesPolicy";
 
 type ResearchRepository = AppRepository;
 
@@ -51,6 +52,18 @@ export async function executeResearchSessions(input: {
   ]);
   const mappingByAnonymous = new Map(mappings.map((mapping) => [mapping.anonymousSessionId, mapping]));
   const conditionById = new Map(conditions.map((condition) => [condition.id, condition]));
+  const lockedConditionByKey = new Map(project.config.conditions.map((condition) => [condition.key, condition]));
+  if (conditions.length !== project.config.conditions.length) {
+    await input.repository.setResearchProjectState(project.id, "Interrupted");
+    throw new Error("Locked Research condition set is incomplete; Research stopped before Resume could continue.");
+  }
+  for (const stored of conditions) {
+    const locked = lockedConditionByKey.get(stored.conditionKey);
+    if (!locked || viewerNotesSnapshotSignature(stored.config.viewerNotes) !== viewerNotesSnapshotSignature(locked.viewerNotes)) {
+      await input.repository.setResearchProjectState(project.id, "Interrupted");
+      throw new Error("Viewer Notes snapshot drift detected after Experiment Lock; Research stopped instead of loading current notes.");
+    }
+  }
   const targetById = new Map(targets.map((target) => [target.id, target]));
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const modelByKey = new Map(models.map((model) => [modelRouteKey(model.providerConfigId, model.modelId), model]));

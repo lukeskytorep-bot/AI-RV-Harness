@@ -37,4 +37,37 @@ describe("TrainingScreen", () => {
     expect(css).toMatch(/\.training-run-actions\s*\{[^}]*flex-wrap:\s*nowrap[^}]*\}/s);
     expect(css).toMatch(/@media\s*\(max-width:\s*520px\)\s*\{[\s\S]*?\.training-run-actions\s*\{[^}]*flex-wrap:\s*wrap[^}]*\}/);
   });
+  it("does not expose a Workspace selector when an AI Profile has a valid technical Workspace", () => {
+    const now = "2026-09-15T12:00:00.000Z";
+    const html = renderToStaticMarkup(
+      <TrainingScreen
+        copy={getCopy("en")}
+        settings={createDefaultSettings()}
+        profiles={[{ id: "profile-a", name: "Orion", createdAt: now, updatedAt: now }]}
+        workspaces={[{ id: "workspace-a", profileId: "profile-a", name: "Workspace 1", createdAt: now, updatedAt: now, lastOpenedAt: now }]}
+        repository={null}
+      />,
+    );
+
+    expect(html).toContain("AI IS-BE");
+    expect(html).not.toContain(">Workspace<");
+    expect(html).not.toContain("create and select a Workspace");
+  });
+
+  it("shows a controlled requirement instead of borrowing another Profile's Workspace", () => {
+    const now = "2026-09-15T12:00:00.000Z";
+    const html = renderToStaticMarkup(
+      <TrainingScreen
+        copy={getCopy("en")}
+        settings={createDefaultSettings()}
+        profiles={[{ id: "profile-a", name: "Orion", createdAt: now, updatedAt: now }]}
+        workspaces={[{ id: "workspace-b", profileId: "profile-b", name: "Workspace 1", createdAt: now, updatedAt: now, lastOpenedAt: now }]}
+        repository={null}
+      />,
+    );
+
+    expect(html).toContain("The selected Profile has no active Workspace");
+    expect(html).not.toContain(">Workspace<");
+  });
+
 });

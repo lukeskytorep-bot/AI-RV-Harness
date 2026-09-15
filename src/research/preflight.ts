@@ -6,6 +6,7 @@ import { targetHasSupportedReveal } from "../targets/service";
 import type { Profile } from "../types";
 import type { PreflightCheck, ResearchConfig, ResearchPreflightResult } from "./types";
 import { modelRouteKey } from "../modelRoutes";
+import { activeViewerNotesControlSignature, sameFrozenViewerNotesVersion, viewerNotesSnapshotSignature } from "./viewerNotesPolicy";
 
 export interface ResearchPreflightInventory {
   profiles: Profile[];
@@ -56,6 +57,7 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   const reasoningValues = new Set(config.conditions.map((condition) => condition.requestedSettings.reasoningEffort ?? "__provider_default__"));
   const temperatureValues = new Set(config.conditions.map((condition) => condition.requestedSettings.temperature ?? "__provider_default__"));
   const outputValues = new Set(config.conditions.map((condition) => condition.requestedSettings.maxOutputTokens ?? "__provider_default__"));
+  const viewerNotesControls = new Set(config.conditions.map((condition) => activeViewerNotesControlSignature(condition.viewerNotes)));
   for (const condition of config.conditions) {
     const profile = profileMap.get(condition.profileId);
     const provider = providerMap.get(condition.providerConfigId);
@@ -104,6 +106,7 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   if (config.templateType !== "reasoning" && reasoningValues.size !== 1) confoundedControls.push("reasoning");
   if (config.templateType !== "temperature" && temperatureValues.size !== 1) confoundedControls.push("temperature");
   if (outputValues.size !== 1) confoundedControls.push("maximum output tokens");
+  if (config.templateType !== "viewer_notes" && viewerNotesControls.size !== 1) confoundedControls.push("Viewer Notes");
   checks.push(confoundedControls.length
     ? fail("controlled_variables", `More than one research variable changes: ${confoundedControls.join(", ")}`)
     : pass("controlled_variables", "All non-tested Viewer controls are identical across conditions"));
@@ -152,20 +155,45 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     const designIsValid = config.conditions.length === 2
       && without?.viewerNotes?.enabled === false
       && without.viewerNotes.content === ""
+      && without.viewerNotes.estimatedTokens === 0
       && frozen?.viewerNotes?.enabled === true
       && Boolean(frozen.viewerNotes.versionId)
+      && frozen.viewerNotes.versionNumber !== undefined
       && Boolean(frozen.viewerNotes.content.trim())
-      && frozen.viewerNotes.aiIdentityId === without.viewerNotes.aiIdentityId
-      && frozen.viewerNotes.versionId === without.viewerNotes.versionId;
+      && Boolean(frozen.viewerNotes.contentSha256)
+      && sameFrozenViewerNotesVersion(frozen.viewerNotes, without.viewerNotes);
     checks.push(designIsValid
-      ? pass("viewer_notes_design", "No Notes and one immutable Frozen Notes snapshot are locked for the exact same Viewer identity")
-      : fail("viewer_notes_design", "Viewer Notes Impact requires exactly No Notes and one non-empty Frozen Notes version for the same Viewer identity"));
-    checks.push(pass("viewer_notes_feedback", "Viewer Notes updates are disabled during Research; the frozen version cannot drift between sessions"));
+      ? pass("viewer_notes_design", "No Notes and the same immutable current Viewer Notes snapshot are locked for one exact Viewer identity")
+      : fail("viewer_notes_design", "Viewer Notes Impact requires exactly No Notes versus one non-empty frozen current snapshot for the same Viewer identity"));
   } else {
-    checks.push(config.conditions.every((condition) => !condition.viewerNotes?.enabled)
-      ? pass("viewer_notes_control", "Viewer Notes are excluded from this Research template")
-      : fail("viewer_notes_control", "Viewer Notes may vary only in the dedicated Viewer Notes Impact template"));
+    const activeSnapshots = config.conditions.map((condition) => condition.viewerNotes).filter((snapshot) => snapshot?.enabled);
+    if (!activeSnapshots.length) {
+      checks.push(config.conditions.every((condition) => !condition.viewerNotes?.enabled)
+        ? pass("viewer_notes_control", "Viewer Notes are disabled consistently across every condition")
+        : fail("viewer_notes_control", "Viewer Notes disabled mode must not contain an active snapshot"));
+    } else {
+      const signatures = new Set(activeSnapshots.map((snapshot) => viewerNotesSnapshotSignature(snapshot)));
+      const snapshotsAreComplete = activeSnapshots.length === config.conditions.length
+        && activeSnapshots.every((snapshot) => Boolean(snapshot?.versionId) && snapshot?.versionNumber !== undefined && Boolean(snapshot?.content.trim()) && Boolean(snapshot?.contentSha256));
+      const comparedViewerIdentities = new Set(config.conditions.map((condition) => `${condition.profileId}\u0000${condition.providerConfigId}\u0000${condition.modelId}`));
+      const identityVariesByDesign = (config.templateType === "profile" || config.templateType === "model")
+        && comparedViewerIdentities.size === config.conditions.length;
+      const snapshotsMatchRoutes = config.conditions.every((condition) => {
+        const route = modelMap.get(modelRouteKey(condition.providerConfigId, condition.modelId))?.route;
+        return Boolean(route && condition.viewerNotes?.modelRoute === route);
+      });
+      const validViewerNotesControl = snapshotsAreComplete
+        && (identityVariesByDesign ? snapshotsMatchRoutes : signatures.size === 1);
+      checks.push(validViewerNotesControl
+        ? pass("viewer_notes_control", identityVariesByDesign
+          ? "Each compared Viewer identity uses its own non-empty current Viewer Notes snapshot"
+          : "One identical non-empty Viewer Notes snapshot is frozen across every condition")
+        : fail("viewer_notes_control", identityVariesByDesign
+          ? "Every compared Viewer identity must use its own non-empty current Viewer Notes snapshot"
+          : "Viewer Notes must be either disabled everywhere or use one identical non-empty frozen snapshot in every condition"));
+    }
   }
+  checks.push(pass("viewer_notes_feedback", "Research uses Viewer Notes read-only; Research sessions never update Viewer Notes"));
 
   if (config.judges.length === 0) {
     checks.push(config.evaluationMode === "save_only"
@@ -197,7 +225,7 @@ function estimateViewerCost(config: ResearchConfig, models: Map<string, Provider
   for (const condition of config.conditions) {
     const model = models.get(modelRouteKey(condition.providerConfigId, condition.modelId));
     if (model?.pricing.promptPerToken === undefined || model.pricing.completionPerToken === undefined) return undefined;
-    const inputTokens = Math.ceil((protocol.content.length + (condition.systemPrompt?.content.length ?? 0)) / 3.5);
+    const inputTokens = Math.ceil((protocol.content.length + (condition.systemPrompt?.content.length ?? 0) + (condition.viewerNotes?.content.length ?? 0)) / 3.5);
     const outputTokens = Math.min(condition.requestedSettings.maxOutputTokens ?? 2048, model.capabilities.maxOutputTokens ?? 2048);
     const sessions = config.targetIds.length * config.repetitions;
     total += sessions * 6 * ((inputTokens * model.pricing.promptPerToken) + (outputTokens * model.pricing.completionPerToken));

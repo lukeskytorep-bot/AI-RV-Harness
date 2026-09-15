@@ -33,7 +33,7 @@ export interface ResearchConditionDefinition {
   conditionInstruction?: ResearchSystemPromptSnapshot;
   practiceOrder?: "FIRST" | "SECOND";
   customValue?: string;
-  /** Immutable notes snapshot captured before Experiment Lock. */
+  /** Immutable Viewer Notes snapshot captured for and frozen by Experiment Lock. */
   viewerNotes?: ViewerNotesSessionSnapshot;
 }
 
