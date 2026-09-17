@@ -338,7 +338,7 @@ async fn inspect_database_compatibility_path(path: &Path) -> DatabaseCompatibili
             migration_version: Some(migration_version),
             data_epoch: Some(CURRENT_DATA_EPOCH.to_string()),
             interface_language: identity.interface_language,
-            detail: marker.map(|_| "fresh v0.7.13 initialization reached schema 23 and awaits final live validation".to_string()),
+            detail: marker.map(|_| format!("fresh v0.7.13 initialization reached schema {migration_version} and awaits final live validation")),
         };
     }
     incompatible_status(
@@ -371,7 +371,9 @@ fn initialization_marker_path(database: &Path) -> Result<PathBuf, String> {
 }
 
 fn validate_initialization_marker(marker: &InitializationMarker) -> Result<(), String> {
-    if marker.data_epoch != CURRENT_DATA_EPOCH || marker.target_migration_version != CURRENT_MIGRATION_VERSION {
+    if marker.data_epoch != CURRENT_DATA_EPOCH
+        || !(V0713_MIN_MIGRATION_VERSION..=CURRENT_MIGRATION_VERSION).contains(&marker.target_migration_version)
+    {
         return Err("v0.7.13 initialization marker is invalid or belongs to an unsupported schema epoch".to_string());
     }
     Ok(())
@@ -558,6 +560,25 @@ async fn inspect_database_identity(path: &Path) -> Result<DatabaseIdentity, Stri
             || !column_exists(&mut connection, "research_assignments", "target_id_snapshot").await?
         {
             return Err("database migration 023 structural markers are incomplete".to_string());
+        }
+    }
+    if migration_version >= 24 {
+        for table in [
+            "field_guide_settings",
+            "field_guide_versions",
+            "field_guide_activation_events",
+            "field_guide_legacy_baselines",
+        ] {
+            let exists = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+            )
+            .bind(table)
+            .fetch_one(&mut connection)
+            .await
+            .map_err(|error| format!("database migration 024 marker check failed: {error}"))?;
+            if exists != 1 {
+                return Err(format!("database migration 024 marker is missing: {table}"));
+            }
         }
     }
 
@@ -1405,7 +1426,7 @@ mod tests {
         validate_and_finalize_current_database, validate_current_database, validate_project_url,
         validate_sqlite_database, BackupManifest, DatabaseCompatibilityKind, BACKUP_SCHEMA_VERSION,
         CURRENT_DATA_EPOCH, DATABASE_FILE_NAME, DATABASE_PRESERVATION_COLLISION_LIMIT,
-        INCOMPLETE_DATA_EPOCH, LEGACY_DATA_EPOCH,
+        INCOMPLETE_DATA_EPOCH, InitializationMarker, LEGACY_DATA_EPOCH,
     };
     use crate::migrations::{CURRENT_MIGRATION_VERSION, MIGRATION_SPECS};
     use sha2::{Digest, Sha384};
@@ -1498,24 +1519,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn database_after_migrations_001_through_023_passes_live_validation() {
-        let directory = temp_case("migration-023-live-validation");
+    async fn database_after_migrations_001_through_024_passes_live_validation() {
+        let directory = temp_case("migration-024-live-validation");
         let database = directory.join(DATABASE_FILE_NAME);
         create_database_through(&database, MIGRATION_SPECS.len()).await;
 
-        assert_eq!(CURRENT_MIGRATION_VERSION, 23);
+        assert_eq!(CURRENT_MIGRATION_VERSION, 24);
         validate_current_database(&database)
             .await
-            .expect("migration-023 database should pass live validation");
+            .expect("migration-024 database should pass live validation");
 
         fs::remove_dir_all(directory).expect("test directory should be removed");
     }
 
     #[tokio::test]
-    async fn database_upgrade_from_020_through_023_passes_live_validation() {
-        let directory = temp_case("migration-020-to-023");
+    async fn database_upgrade_from_exact_green_023_to_024_preserves_custom_profile_prompt_as_unresolved_baseline() {
+        let directory = temp_case("migration-023-to-024");
         let database = directory.join(DATABASE_FILE_NAME);
-        create_database_through(&database, 20).await;
+        create_database_through(&database, 23).await;
 
         let options = SqliteConnectOptions::new()
             .filename(&database)
@@ -1523,20 +1544,46 @@ mod tests {
             .foreign_keys(true);
         let mut connection = SqliteConnection::connect_with(&options)
             .await
-            .expect("migration-020 database should reopen");
-        apply_migration_range(&mut connection, 20, MIGRATION_SPECS.len()).await;
+            .expect("migration-023 database should reopen");
+        let custom_prompt = "CUSTOM VIEWER FIELD MEMORY\nDo not guess my identity.";
+        sqlx::query("INSERT INTO profiles (id, display_name, default_viewer_system_prompt, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+            .bind("profile_field_guide_bootstrap")
+            .bind("Viewer")
+            .bind(custom_prompt)
+            .bind("2026-09-17T12:00:00.000Z")
+            .bind("2026-09-17T12:00:00.000Z")
+            .execute(&mut connection)
+            .await
+            .expect("green-v23 profile fixture should insert");
+
+        apply_migration_range(&mut connection, 23, MIGRATION_SPECS.len()).await;
+
+        let baseline = sqlx::query("SELECT original_content, resolution_status, resolved_ai_identity_id, resolved_language, resolved_version_id FROM field_guide_legacy_baselines WHERE profile_id = ?")
+            .bind("profile_field_guide_bootstrap")
+            .fetch_one(&mut connection)
+            .await
+            .expect("migration 024 should preserve the Profile Viewer prompt");
+        assert_eq!(baseline.try_get::<String, _>("original_content").unwrap(), custom_prompt);
+        assert_eq!(baseline.try_get::<String, _>("resolution_status").unwrap(), "unresolved");
+        assert!(baseline.try_get::<Option<String>, _>("resolved_ai_identity_id").unwrap().is_none());
+        assert!(baseline.try_get::<Option<String>, _>("resolved_language").unwrap().is_none());
+        assert!(baseline.try_get::<Option<String>, _>("resolved_version_id").unwrap().is_none());
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check").fetch_one(&mut connection).await.unwrap();
+        let foreign_key_violations = sqlx::query("PRAGMA foreign_key_check").fetch_all(&mut connection).await.unwrap();
+        assert_eq!(integrity, "ok");
+        assert!(foreign_key_violations.is_empty());
         connection.close().await.expect("upgraded database should close");
 
         validate_current_database(&database)
             .await
-            .expect("database upgraded from 020 to 023 should pass live validation");
+            .expect("database upgraded from exact green 023 to 024 should pass live validation");
 
         fs::remove_dir_all(directory).expect("test directory should be removed");
     }
 
     #[tokio::test]
-    async fn portable_backup_and_restore_preflight_accept_database_version_023() {
-        let root = temp_case("backup-version-023");
+    async fn portable_backup_and_restore_preflight_accept_database_version_024() {
+        let root = temp_case("backup-version-024");
         let backup_id = "backup_security_ipc_1a_v23";
         let directory = root.join(format!("AI_RV_Harness_{backup_id}"));
         fs::create_dir_all(&directory).expect("portable backup directory should be created");
@@ -1578,7 +1625,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fresh_initialization_marker_is_created_only_without_database_and_finalized_after_v23_validation() {
+    async fn fresh_initialization_marker_is_created_only_without_database_and_finalized_after_current_validation() {
         let directory = temp_case("epoch-r1-marker-lifecycle");
         let database = directory.join(DATABASE_FILE_NAME);
         let marker = initialization_marker_path(&database).expect("marker path should resolve");
@@ -1597,8 +1644,29 @@ mod tests {
 
         validate_and_finalize_current_database(&database)
             .await
-            .expect("validated v23 database should finalize the initialization marker");
+            .expect("validated current database should finalize the initialization marker");
         assert!(!marker.exists());
+
+        fs::remove_dir_all(directory).expect("test directory should be removed");
+    }
+
+    #[tokio::test]
+    async fn initialization_marker_from_green_schema_23_remains_valid_inside_the_same_v0713_epoch() {
+        let directory = temp_case("epoch-marker-v23-forward-compatible");
+        let database = directory.join(DATABASE_FILE_NAME);
+        let marker_path = initialization_marker_path(&database).expect("marker path should resolve");
+        let marker = InitializationMarker {
+            data_epoch: CURRENT_DATA_EPOCH.to_string(),
+            target_migration_version: 23,
+            created_at_unix_ms: 1,
+        };
+        fs::write(&marker_path, serde_json::to_vec_pretty(&marker).unwrap()).expect("green-v23 marker should be written");
+        create_database_through(&database, 23).await;
+
+        let status = inspect_database_compatibility_path(&database).await;
+        assert_eq!(status.kind, DatabaseCompatibilityKind::IncompleteCurrentInitialization);
+        assert_eq!(status.migration_version, Some(23));
+        assert_eq!(status.data_epoch.as_deref(), Some(INCOMPLETE_DATA_EPOCH));
 
         fs::remove_dir_all(directory).expect("test directory should be removed");
     }
@@ -1787,7 +1855,7 @@ mod tests {
         let directory = temp_case("epoch-r1-fresh-v23");
         let database = directory.join(DATABASE_FILE_NAME);
         create_database_through(&database, MIGRATION_SPECS.len()).await;
-        assert_eq!(validate_sqlite_database(&database).await.expect("fresh database should validate"), 23);
+        assert_eq!(validate_sqlite_database(&database).await.expect("fresh database should validate"), 24);
         let options = SqliteConnectOptions::new().filename(&database).read_only(true).create_if_missing(false);
         let mut connection = SqliteConnection::connect_with(&options).await.expect("fresh database should reopen");
         let integrity: String = sqlx::query_scalar("PRAGMA integrity_check").fetch_one(&mut connection).await.unwrap();

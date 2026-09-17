@@ -123,6 +123,11 @@ pub(crate) const MIGRATION_SPECS: &[MigrationSpec] = &[
         description: "controlled_purge",
         sql: include_str!("../migrations/023_controlled_purge.sql"),
     },
+    MigrationSpec {
+        version: 24,
+        description: "viewer_learning_field_guide_foundation",
+        sql: include_str!("../migrations/024_viewer_learning_field_guide.sql"),
+    },
 ];
 
 pub(crate) const CURRENT_MIGRATION_VERSION: i64 =
@@ -145,13 +150,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_is_contiguous_and_current_version_is_023() {
+    fn registry_is_contiguous_and_current_version_is_024() {
         let versions = MIGRATION_SPECS
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>();
-        assert_eq!(versions, (1_i64..=23).collect::<Vec<_>>());
-        assert_eq!(CURRENT_MIGRATION_VERSION, 23);
+        assert_eq!(versions, (1_i64..=24).collect::<Vec<_>>());
+        assert_eq!(CURRENT_MIGRATION_VERSION, 24);
         assert_eq!(registered_migrations().len(), MIGRATION_SPECS.len());
     }
 }

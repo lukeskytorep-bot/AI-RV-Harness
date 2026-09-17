@@ -10,6 +10,7 @@ import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/typ
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, DetachViewerNoteSourceReferencesInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteVersion } from "../aiCenter/types";
 import type { DeletionPreview, PurgeEntityKind } from "./controlledPurge";
+import type { CreateFieldGuideVersionInput, FieldGuideActivationEvent, FieldGuideBundle, FieldGuideCapacity, FieldGuideLegacyBaseline, FieldGuideVersion, ResolveLegacyFieldGuideBaselineInput } from "../aiCenter/fieldGuideTypes";
 
 
 export interface AppRepository {
@@ -91,6 +92,14 @@ export interface AppRepository {
   commitViewerNoteReflection(input: CommitViewerNoteReflectionInput): Promise<ViewerNoteReflectionResult>;
   restoreViewerNoteVersion(aiIdentityId: string, versionId: string, workspaceId?: string): Promise<void>;
   detachViewerNoteSourceReferences(input: DetachViewerNoteSourceReferencesInput): Promise<void>;
+  getFieldGuideBundle(aiIdentityId: string, language: "pl" | "en"): Promise<FieldGuideBundle | null>;
+  listFieldGuideVersions(aiIdentityId: string, language: "pl" | "en"): Promise<FieldGuideVersion[]>;
+  listFieldGuideActivationEvents(aiIdentityId: string, language: "pl" | "en"): Promise<FieldGuideActivationEvent[]>;
+  listFieldGuideLegacyBaselines(profileId: string): Promise<FieldGuideLegacyBaseline[]>;
+  createFieldGuideVersion(input: CreateFieldGuideVersionInput): Promise<FieldGuideVersion>;
+  resolveLegacyFieldGuideBaseline(input: ResolveLegacyFieldGuideBaselineInput): Promise<FieldGuideVersion>;
+  setFieldGuideCapacity(aiIdentityId: string, language: "pl" | "en", capacityTokens: FieldGuideCapacity): Promise<void>;
+  restoreFieldGuideVersion(aiIdentityId: string, language: "pl" | "en", versionId: string): Promise<FieldGuideVersion>;
   listCustomProtocols(language?: "pl" | "en"): Promise<CustomProtocolVersion[]>;
   saveCustomProtocolVersion(input: SaveCustomProtocolVersionInput): Promise<CustomProtocolVersion>;
   createRvSession(input: CreateRvSessionInput): Promise<RvSession>;

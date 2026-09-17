@@ -85,7 +85,7 @@ describe("automatic RCP controller", () => {
     expect(log.at(-1)).toBe("event:PRE_REVEAL_SEALED");
     expect(log).toContain("sealed");
     expect(snapshots[0].rvSystemPrompt).toEqual(expect.objectContaining({ contentSha256: "c".repeat(64), fullContent: "FIXED PROFILE VIEWER PROMPT" }));
-    expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity"]);
+    expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity", "locked-viewer-base-vocabulary"]);
     expect(snapshots[0].researchConditionInstruction).toEqual(expect.objectContaining({ contentSha256: "d".repeat(64), fullContent: "CUSTOM VARIABLE A" }));
   });
 

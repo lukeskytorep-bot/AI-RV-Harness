@@ -13,6 +13,7 @@ import { SqliteWorkspacesConversationsRepository } from "./sqlite/workspacesConv
 import { SqliteSessionsRepository } from "./sqlite/sessionsRepository";
 import { SqliteTrainingRepository } from "./sqlite/trainingRepository";
 import { SqliteAiCenterRepository } from "./sqlite/aiCenterRepository";
+import { SqliteFieldGuideRepository } from "./sqlite/fieldGuideRepository";
 import { SqliteMonitorRepository } from "./sqlite/monitorRepository";
 import { SqliteJudgeRepository } from "./sqlite/judgeRepository";
 import { SqliteResearchRepository } from "./sqlite/researchRepository";
@@ -43,6 +44,7 @@ export class SqliteRepository implements AppRepository {
   private readonly sessionsRepository: SqliteSessionsRepository;
   private readonly trainingRepository: SqliteTrainingRepository;
   private readonly aiCenterRepository: SqliteAiCenterRepository;
+  private readonly fieldGuideRepository: SqliteFieldGuideRepository;
   private readonly monitorRepository: SqliteMonitorRepository;
   private readonly judgeRepository: SqliteJudgeRepository;
   private readonly exportRepository: SqliteExportRepository;
@@ -81,6 +83,11 @@ export class SqliteRepository implements AppRepository {
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
     });
     this.aiCenterRepository = new SqliteAiCenterRepository({
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
+      executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
+      executeTransaction: (statements) => this.executeTransaction(statements),
+    });
+    this.fieldGuideRepository = new SqliteFieldGuideRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
       executeTransaction: (statements) => this.executeTransaction(statements),
@@ -139,6 +146,14 @@ export class SqliteRepository implements AppRepository {
   commitViewerNoteReflection: AppRepository["commitViewerNoteReflection"] = (input) => this.aiCenterRepository.commitViewerNoteReflection(input);
   restoreViewerNoteVersion: AppRepository["restoreViewerNoteVersion"] = (aiIdentityId, versionId, workspaceId) => this.aiCenterRepository.restoreViewerNoteVersion(aiIdentityId, versionId, workspaceId);
   detachViewerNoteSourceReferences: AppRepository["detachViewerNoteSourceReferences"] = (input) => this.aiCenterRepository.detachViewerNoteSourceReferences(input);
+  getFieldGuideBundle: AppRepository["getFieldGuideBundle"] = (aiIdentityId, language) => this.fieldGuideRepository.getFieldGuideBundle(aiIdentityId, language);
+  listFieldGuideVersions: AppRepository["listFieldGuideVersions"] = (aiIdentityId, language) => this.fieldGuideRepository.listFieldGuideVersions(aiIdentityId, language);
+  listFieldGuideActivationEvents: AppRepository["listFieldGuideActivationEvents"] = (aiIdentityId, language) => this.fieldGuideRepository.listFieldGuideActivationEvents(aiIdentityId, language);
+  listFieldGuideLegacyBaselines: AppRepository["listFieldGuideLegacyBaselines"] = (profileId) => this.fieldGuideRepository.listFieldGuideLegacyBaselines(profileId);
+  createFieldGuideVersion: AppRepository["createFieldGuideVersion"] = (input) => this.fieldGuideRepository.createFieldGuideVersion(input);
+  resolveLegacyFieldGuideBaseline: AppRepository["resolveLegacyFieldGuideBaseline"] = (input) => this.fieldGuideRepository.resolveLegacyFieldGuideBaseline(input);
+  setFieldGuideCapacity: AppRepository["setFieldGuideCapacity"] = (aiIdentityId, language, capacityTokens) => this.fieldGuideRepository.setFieldGuideCapacity(aiIdentityId, language, capacityTokens);
+  restoreFieldGuideVersion: AppRepository["restoreFieldGuideVersion"] = (aiIdentityId, language, versionId) => this.fieldGuideRepository.restoreFieldGuideVersion(aiIdentityId, language, versionId);
 
   createTrainingRun: AppRepository["createTrainingRun"] = (input) => this.trainingRepository.createTrainingRun(input);
   updateTrainingRun: AppRepository["updateTrainingRun"] = (id, input) => this.trainingRepository.updateTrainingRun(id, input);

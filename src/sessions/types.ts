@@ -1,6 +1,7 @@
 import type { InterfaceLanguage } from "../types";
 import type { EffectiveGenerationSettings, ProviderKind } from "../providers/types";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
+import type { FieldGuideSessionSnapshot } from "../aiCenter/fieldGuideTypes";
 
 export type RvSessionState =
   | "Draft"
@@ -121,6 +122,7 @@ export interface SessionSnapshot {
     contentSha256: string;
     fullContent: string;
     lockedBlocks?: LockedPromptBlockSnapshot[];
+    fieldGuide?: FieldGuideSessionSnapshot;
   };
   viewerNotes?: ViewerNotesSessionSnapshot;
   researchConditionInstruction?: {

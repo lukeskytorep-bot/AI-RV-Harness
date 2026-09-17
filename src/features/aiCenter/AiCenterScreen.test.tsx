@@ -28,4 +28,22 @@ describe("AiCenterScreen", () => {
     expect(html).toContain("Viewer Notes are experimental");
     expect(html).toContain("How AI Center works");
   });
+  it("presents Viewer Learning as separate Field Guide and Viewer Notes tabs", () => {
+    const html = renderToStaticMarkup(<AiCenterScreen
+      settings={createDefaultSettings()}
+      profiles={[profile]}
+      workspaces={[workspace]}
+      activeProfileId={profile.id}
+      workspaceFilterId={workspace.id}
+      repository={{} as AppRepository}
+      initialView="viewer-learning"
+      monitorPanel={<div>Monitor panel</div>}
+      onProfileChange={vi.fn()}
+    />);
+
+    expect(html).toContain("Viewer Learning");
+    expect(html).toContain("Field Guide");
+    expect(html).toContain("Viewer Notes");
+  });
+
 });

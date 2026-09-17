@@ -10,6 +10,7 @@ import { BrowserWorkspacesConversationsRepository } from "./browser/workspacesCo
 import { BrowserSessionsRepository } from "./browser/sessionsRepository";
 import { BrowserTrainingRepository } from "./browser/trainingRepository";
 import { BrowserAiCenterRepository } from "./browser/aiCenterRepository";
+import { BrowserFieldGuideRepository } from "./browser/fieldGuideRepository";
 import { BrowserMonitorRepository } from "./browser/monitorRepository";
 import { BrowserJudgeRepository } from "./browser/judgeRepository";
 import { BrowserResearchRepository } from "./browser/researchRepository";
@@ -45,6 +46,7 @@ export class BrowserRepository implements AppRepository {
   });
   private readonly trainingRepository = new BrowserTrainingRepository();
   private readonly aiCenterRepository = new BrowserAiCenterRepository();
+  private readonly fieldGuideRepository = new BrowserFieldGuideRepository();
   private readonly monitorRepository = new BrowserMonitorRepository({
     listRvSessions: (workspaceId) => this.sessionsRepository.listRvSessions(workspaceId),
   });
@@ -92,6 +94,14 @@ export class BrowserRepository implements AppRepository {
   commitViewerNoteReflection: AppRepository["commitViewerNoteReflection"] = (input) => this.aiCenterRepository.commitViewerNoteReflection(input);
   restoreViewerNoteVersion: AppRepository["restoreViewerNoteVersion"] = (aiIdentityId, versionId, workspaceId) => this.aiCenterRepository.restoreViewerNoteVersion(aiIdentityId, versionId, workspaceId);
   detachViewerNoteSourceReferences: AppRepository["detachViewerNoteSourceReferences"] = (input) => this.aiCenterRepository.detachViewerNoteSourceReferences(input);
+  getFieldGuideBundle: AppRepository["getFieldGuideBundle"] = (aiIdentityId, language) => this.fieldGuideRepository.getFieldGuideBundle(aiIdentityId, language);
+  listFieldGuideVersions: AppRepository["listFieldGuideVersions"] = (aiIdentityId, language) => this.fieldGuideRepository.listFieldGuideVersions(aiIdentityId, language);
+  listFieldGuideActivationEvents: AppRepository["listFieldGuideActivationEvents"] = (aiIdentityId, language) => this.fieldGuideRepository.listFieldGuideActivationEvents(aiIdentityId, language);
+  listFieldGuideLegacyBaselines: AppRepository["listFieldGuideLegacyBaselines"] = (profileId) => this.fieldGuideRepository.listFieldGuideLegacyBaselines(profileId);
+  createFieldGuideVersion: AppRepository["createFieldGuideVersion"] = (input) => this.fieldGuideRepository.createFieldGuideVersion(input);
+  resolveLegacyFieldGuideBaseline: AppRepository["resolveLegacyFieldGuideBaseline"] = (input) => this.fieldGuideRepository.resolveLegacyFieldGuideBaseline(input);
+  setFieldGuideCapacity: AppRepository["setFieldGuideCapacity"] = (aiIdentityId, language, capacityTokens) => this.fieldGuideRepository.setFieldGuideCapacity(aiIdentityId, language, capacityTokens);
+  restoreFieldGuideVersion: AppRepository["restoreFieldGuideVersion"] = (aiIdentityId, language, versionId) => this.fieldGuideRepository.restoreFieldGuideVersion(aiIdentityId, language, versionId);
 
   createTrainingRun: AppRepository["createTrainingRun"] = (input) => this.trainingRepository.createTrainingRun(input);
   updateTrainingRun: AppRepository["updateTrainingRun"] = (id, input) => this.trainingRepository.updateTrainingRun(id, input);

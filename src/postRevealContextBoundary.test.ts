@@ -2,6 +2,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  buildEffectiveMonitorPrompt,
+  buildEffectiveTelepathicMonitorPrompt,
+  factoryMonitorEditablePrompt,
+  lockedMonitorExecution,
+  lockedTelepathicMonitorExecution,
+} from "./resources/systemPrompts";
 
 function source(relativePath: string): string {
   return fs.readFileSync(path.join(process.cwd(), relativePath), "utf8");
@@ -63,9 +70,23 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     expect(postReveal).not.toContain("appendSessionEvent");
   });
 
-  it("leaves Monitor prompts and telepathic Monitor controller byte-identical to the accepted base", () => {
-    expect(sha256("src/resources/systemPrompts.ts")).toBe("bcfe6d43d8700a6c43ae58f33849b2c13a4c4550fb05ae56843be694bcd73ddc");
-    expect(sha256("src/sessions/telepathicController.ts")).toBe("66abdc5a23016803c32422ed9bd1d68666da1f1147fee5819c89cf158c99d248");
+  it("leaves Monitor prompt behavior unchanged while allowing Viewer-only Field Guide wiring", () => {
+    const monitorContract = JSON.stringify((["pl", "en"] as const).map((language) => ({
+      language,
+      editable: factoryMonitorEditablePrompt(language),
+      monitorExecution: lockedMonitorExecution(language),
+      telepathicExecution: lockedTelepathicMonitorExecution(language),
+      monitorPrompt: buildEffectiveMonitorPrompt(language),
+      telepathicPrompt: buildEffectiveTelepathicMonitorPrompt(language),
+    })));
+    expect(createHash("sha256").update(monitorContract).digest("hex")).toBe("40388dc3bc9b21f9105d94c5f77b8db4bf9d3eff8375ec877e92252e441b32c2");
+
+    const telepathicWithoutFieldGuideWiring = source("src/sessions/telepathicController.ts")
+      .replace("  lockedViewerBaseVocabulary,\n", "")
+      .replace("  LOCKED_BASE_VOCABULARY_VERSION,\n", "")
+      .replace(/^\s*\{ id: "locked-viewer-base-vocabulary"[^\n]*\n/m, "")
+      .replace(/^\s*\.\.\.\(input\.rvSystemPrompt\.fieldGuide[^\n]*\n/m, "");
+    expect(createHash("sha256").update(telepathicWithoutFieldGuideWiring).digest("hex")).toBe("66abdc5a23016803c32422ed9bd1d68666da1f1147fee5819c89cf158c99d248");
   });
 
   it("leaves AI Judge prompt, rubric, scoring, packet and frozen-score engine byte-identical to the accepted base", () => {

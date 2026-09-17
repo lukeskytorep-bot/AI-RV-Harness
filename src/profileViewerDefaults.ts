@@ -1,7 +1,7 @@
 import { resolveGenerationSettings } from "./providers/capabilities";
 import type { GenerationSettings, ProviderModel, ReasoningEffort } from "./providers/types";
 import type { InterfaceLanguage, Profile, ViewerSystemPromptSnapshot } from "./types";
-import { buildEffectiveViewerPrompt, FACTORY_PROMPT_VERSION, factoryViewerEditablePrompt } from "./resources/systemPrompts";
+import { buildLegacyEffectiveViewerPrompt, FACTORY_PROMPT_VERSION, factoryViewerEditablePrompt } from "./resources/systemPrompts";
 
 export const DEFAULT_VIEWER_TEMPERATURE = 0.9;
 export const MAX_PROFILE_SYSTEM_PROMPT_LENGTH = 100_000;
@@ -63,7 +63,7 @@ export async function profileSystemPromptSnapshot(
   const editable = !storedEditable || isBundledFactoryEditable
     ? factoryViewerEditablePrompt(language)
     : storedEditable;
-  const content = buildEffectiveViewerPrompt(language, editable);
+  const content = buildLegacyEffectiveViewerPrompt(language, editable);
   return {
     id: `profile_viewer_prompt_${profile.id}`,
     version: `${FACTORY_PROMPT_VERSION}:${profile.updatedAt}`,
@@ -79,7 +79,7 @@ export async function customSystemPromptSnapshot(
 ): Promise<ViewerSystemPromptSnapshot | undefined> {
   const editable = normalizeProfileSystemPrompt(editableInput);
   if (!editable) return undefined;
-  const content = buildEffectiveViewerPrompt(language, editable);
+  const content = buildLegacyEffectiveViewerPrompt(language, editable);
   return { id, version: "1", content, contentSha256: await sha256Text(content) };
 }
 

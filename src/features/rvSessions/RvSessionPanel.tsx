@@ -49,7 +49,7 @@ import { AsyncRunGuard } from "../../sessions/runGuard";
 import { findCredentialScopedModelByRouteKey, resolveRoleDefault, resolveViewerDefault } from "../../modelRoutes";
 import { ModelRouteSelect } from "../../components/ModelRouteSelect";
 import { useAppDialogs } from "../../components/AppDialogProvider";
-import { profileGenerationDefaults, profileSystemPromptSnapshot } from "../../profileViewerDefaults";
+import { profileGenerationDefaults } from "../../profileViewerDefaults";
 import { canSelectMonitor, canSelectProtocol, isRunModeCompatible } from "../../sessions/modeCompatibility";
 import { SafeMarkdown } from "../../components/SafeMarkdown";
 import { reasoningOptions } from "../../providers/modelReasoningRegistry";
@@ -65,6 +65,7 @@ import {
   type TelepathicQuestionMode,
 } from "../../sessions/telepathicController";
 import { prepareViewerNotesForSession } from "../../aiCenter/viewerNotes";
+import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
 import { reasoningCapabilityLead, reasoningOptionLabel } from "../../providers/reasoningPresentation";
 import { BatchEvaluation, JudgeEvaluation } from "../judge";
 
@@ -315,9 +316,11 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
     if (executionScope === "single" && revealSource === "automatic" && !automaticTarget) return;
     if (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature)) return;
     const batchTargets = executionScope === "batch" ? selectBatchTargets(batchPool, batchCount) : [];
-    let rvSystemPrompt: Awaited<ReturnType<typeof profileSystemPromptSnapshot>>;
-    try { rvSystemPrompt = await profileSystemPromptSnapshot(profile, resolvedLanguage); }
-    catch (cause) { setRunError(cause instanceof Error ? cause.message : String(cause)); return; }
+    let rvSystemPrompt;
+    try {
+      const fieldGuide = await prepareFieldGuideForSession({ repository, profile, providerConfig: activeProvider, model: selectedModel, language: resolvedLanguage });
+      rvSystemPrompt = await viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
+    } catch (cause) { setRunError(cause instanceof Error ? cause.message : String(cause)); return; }
     if (!runGuardRef.current.tryAcquire()) return;
     setSessionRunning(true);
     setActiveTargetId(executionScope === "single" ? automaticTarget?.id ?? null : null);
@@ -592,7 +595,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
       const replay = resume ? createSessionReplay({ repository, session, events, ...(monitorRun ? { monitorRun } : {}) }) : null;
       const runRepository = replay?.repository ?? repository;
       const runChat = replay?.chat;
-      const viewerPrompt = snapshot.rvSystemPrompt ? { id: snapshot.rvSystemPrompt.id, version: snapshot.rvSystemPrompt.version, content: snapshot.rvSystemPrompt.fullContent, contentSha256: snapshot.rvSystemPrompt.contentSha256 } : undefined;
+      const viewerPrompt = snapshot.rvSystemPrompt ? { id: snapshot.rvSystemPrompt.id, version: snapshot.rvSystemPrompt.version, content: snapshot.rvSystemPrompt.fullContent, contentSha256: snapshot.rvSystemPrompt.contentSha256, ...(snapshot.rvSystemPrompt.fieldGuide ? { fieldGuide: snapshot.rvSystemPrompt.fieldGuide } : {}) } : undefined;
       const capturedSpecialTask: SpecialTaskInput | undefined = snapshot.specialTask ? { selectedOptions: snapshot.specialTask.selectedOptions as SpecialTaskOption[], ...(snapshot.specialTask.customText ? { customText: snapshot.specialTask.customText } : {}) } : undefined;
       const monitor = snapshot.monitor && capturedMonitorProvider && capturedMonitorModel ? { providerConfig: capturedMonitorProvider, model: capturedMonitorModel, effectivePrompt: snapshot.monitor.effectivePrompt } : undefined;
       setSessionLanguage(snapshot.sessionLanguage);

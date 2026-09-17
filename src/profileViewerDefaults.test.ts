@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ProviderModel } from "./providers/types";
 import type { Profile } from "./types";
 import { defaultTemperatureForModel, profileGenerationDefaults, profileSystemPromptSnapshot, reasoningEffortForModel } from "./profileViewerDefaults";
+import { factoryViewerEditablePrompt, lockedViewerBaseVocabulary } from "./resources/systemPrompts";
 
 function model(overrides: Partial<ProviderModel["capabilities"]> = {}): ProviderModel {
   return {
@@ -48,4 +49,16 @@ describe("Profile Viewer defaults", () => {
     expect(snapshot?.version).toBe("1.4.0:now");
     expect(snapshot?.contentSha256).toMatch(/^[a-f0-9]{64}$/);
   });
+
+  it("preserves a custom legacy prompt while exact factory prompts are normalized without duplicating Locked Base Vocabulary", async () => {
+    const factoryProfile = { ...profile, defaultViewerSystemPrompt: factoryViewerEditablePrompt("en") };
+    const factorySnapshot = await profileSystemPromptSnapshot(factoryProfile, "en");
+    expect(factorySnapshot?.content.split(lockedViewerBaseVocabulary("en"))).toHaveLength(2);
+
+    const customProfile = { ...profile, defaultViewerSystemPrompt: `Custom retained baseline\n\n${lockedViewerBaseVocabulary("en").replace("smells.", "smells!")}` };
+    const customSnapshot = await profileSystemPromptSnapshot(customProfile, "en");
+    expect(customSnapshot?.content).toContain("Custom retained baseline");
+    expect(customSnapshot?.content).toContain("smells!");
+  });
+
 });

@@ -2,6 +2,7 @@ import { Archive, ArrowRight, Crosshair, Download, FileCheck2, KeyRound, LockKey
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { prepareViewerNotesForSession, viewerNotesSystemBlock } from "../../aiCenter/viewerNotes";
+import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
 import { chooseAndImportAttachments } from "../../attachments/native";
 import { ChatMessageList } from "../../chat/ChatMessageList";
 import { useAppDialogs } from "../../components/AppDialogProvider";
@@ -16,7 +17,7 @@ import { resolveViewerDefault } from "../../profileModelDefaults";
 import { profileGenerationDefaults } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderImageInput, ProviderModel } from "../../providers/types";
 import { getFullRcp, getRvLite, getTelepathicProtocol } from "../../resources/protocolRegistry";
-import { buildEffectiveViewerPrompt, localizedViewerEditablePrompt } from "../../resources/systemPrompts";
+import { buildEffectiveViewerPrompt, localizedViewerEditablePrompt, stripKnownLockedBaseVocabulary } from "../../resources/systemPrompts";
 import { createImportedWorkspaceSource, estimateTextTokens } from "../../sources/service";
 import type { WorkspaceSource } from "../../sources/types";
 import { saveTextFile } from "../../storage/native";
@@ -147,7 +148,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
         ? getTelepathicProtocol(language).content
         : getRvLite(language, manualProtocol === "lite-core" ? "core" : "extended").content
     : undefined;
-  const rvSystemPrompt = mode === "manual_rv" ? buildEffectiveViewerPrompt(language, localizedViewerEditablePrompt(profile?.defaultViewerSystemPrompt, language)) : undefined;
+  const rvSystemPrompt = mode === "manual_rv" ? buildEffectiveViewerPrompt(language, stripKnownLockedBaseVocabulary(localizedViewerEditablePrompt(profile?.defaultViewerSystemPrompt, language))) : undefined;
   const previewMessages = buildChatProviderMessages({ mode, language, history: messages, content: input.trim(), rvSystemPrompt, attachedProtocol, sources: selectedSources, images: chatImages });
   const contextBudget = estimateContextBudget(previewMessages, selectedModel?.capabilities.contextTokens, effectiveMaxOutputTokens);
   const contextExceeded = contextBudget.exceeded;
@@ -317,10 +318,15 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     setError(null);
     let effectiveRvSystemPrompt = rvSystemPrompt;
     try {
-      if (mode === "manual_rv" && manualViewerNotesEnabled && profile) {
-        const snapshot = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: true });
-        const notesBlock = viewerNotesSystemBlock(snapshot, language);
-        if (notesBlock) effectiveRvSystemPrompt = [rvSystemPrompt, notesBlock].filter(Boolean).join("\n\n");
+      if (mode === "manual_rv" && profile) {
+        const fieldGuide = await prepareFieldGuideForSession({ repository, profile, providerConfig: activeProvider, model: selectedModel, language });
+        const promptSnapshot = await viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
+        effectiveRvSystemPrompt = promptSnapshot.content;
+        if (manualViewerNotesEnabled) {
+          const snapshot = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: true });
+          const notesBlock = viewerNotesSystemBlock(snapshot, language);
+          if (notesBlock) effectiveRvSystemPrompt = [effectiveRvSystemPrompt, notesBlock].filter(Boolean).join("\n\n");
+        }
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

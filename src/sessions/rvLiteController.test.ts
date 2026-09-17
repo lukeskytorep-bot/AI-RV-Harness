@@ -35,7 +35,10 @@ describe("automatic RV Lite controller", () => {
     const result = await runAutomaticRvLiteSession({
       repository: repository(log, snapshots), workspaceId: "w", profileId: "profile", profileName: "Leo", providerConfig: config, model,
       protocol: getRvLite("pl"), sessionLanguage: "pl", requestedSettings: { maxOutputTokens: 1024 }, automaticTarget: target,
-      rvSystemPrompt: { id: "profile_prompt", version: "1", content: "FIXED PROFILE VIEWER PROMPT", contentSha256: "a".repeat(64) },
+      rvSystemPrompt: {
+        id: "viewer_prompt_identity_en", version: "1.5.0:field-guide:fg-v1", content: "FIXED PROFILE VIEWER PROMPT", contentSha256: "a".repeat(64),
+        fieldGuide: { aiIdentityId: "identity", language: "en", versionId: "fg-v1", versionNumber: 1, content: "FIELD GUIDE", contentSha256: "f".repeat(64), estimatedTokens: 10, estimatorVersion: "conservative-char-v1", capacityTokens: 2048, modelRoute: model.route, capturedAt: "now", sourceKind: "factory-baseline" },
+      },
       chat: async ({ messages }) => {
         calls += 1;
         if (calls > 1) expect(log.filter((item) => item === "saved")).toHaveLength(calls - 1);
@@ -54,7 +57,8 @@ describe("automatic RV Lite controller", () => {
     expect(log.indexOf("sealed")).toBeLessThan(log.indexOf("reveal"));
     expect(result.state).toBe("Revealed");
     expect(snapshots[0].rvSystemPrompt).toEqual(expect.objectContaining({ contentSha256: "a".repeat(64), fullContent: "FIXED PROFILE VIEWER PROMPT" }));
-    expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity"]);
+    expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity", "locked-viewer-base-vocabulary"]);
+    expect(snapshots[0].rvSystemPrompt?.fieldGuide).toMatchObject({ versionId: "fg-v1", content: "FIELD GUIDE", capacityTokens: 2048 });
   });
 
   it("runs the Special Viewer Task in a separate call after Step 3 and appends the visible response", async () => {

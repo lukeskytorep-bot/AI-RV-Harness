@@ -1,3 +1,4 @@
+import type { FieldGuideSessionSnapshot } from "./aiCenter/fieldGuideTypes";
 import type { ReasoningEffort } from "./providers/types";
 
 export type InterfaceLanguage = "pl" | "en";
@@ -83,6 +84,7 @@ export interface ViewerSystemPromptSnapshot {
   version: string;
   content: string;
   contentSha256: string;
+  fieldGuide?: FieldGuideSessionSnapshot;
 }
 
 export interface Workspace {

@@ -76,7 +76,7 @@ import { isRouteAllowedForCredential, preferredModelOrder, profileNeedingInitial
 import { ModelRouteSelect } from "./components/ModelRouteSelect";
 import { defaultTemperatureForModel, reasoningEffortForModel } from "./profileViewerDefaults";
 import { aiIsBeDisplayName } from "./domain/isBeIdentity";
-import { localizedMonitorEditablePrompt, localizedViewerEditablePrompt } from "./resources/systemPrompts";
+import { factoryViewerEditablePrompt, localizedMonitorEditablePrompt } from "./resources/systemPrompts";
 import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from "./targets/telepathicBundled";
 import { createProfileWithInitialWorkspace } from "./application/profileWorkspace";
 
@@ -434,7 +434,7 @@ function FirstRunSetup({
   const [viewerReasoning, setViewerReasoning] = useState<"" | ReasoningEffort>("");
   const [viewerTemperature, setViewerTemperature] = useState("");
   const setupLanguage: InterfaceLanguage = copy.home === "Home" ? "en" : "pl";
-  const [viewerSystemPrompt, setViewerSystemPrompt] = useState(localizedViewerEditablePrompt(existingProfile?.defaultViewerSystemPrompt, setupLanguage));
+  const [viewerSystemPrompt] = useState(existingProfile?.defaultViewerSystemPrompt ?? factoryViewerEditablePrompt(setupLanguage));
   const [modelSearch, setModelSearch] = useState("");
   const [profileName, setProfileName] = useState(existingProfile?.name ?? "");
   const [humanName, setHumanName] = useState(existingProfile?.humanName ?? "");
@@ -544,7 +544,7 @@ function FirstRunSetup({
           defaultViewerModelId: viewerModel.modelId,
           ...(viewerReasoning ? { defaultViewerReasoningEffort: viewerReasoning } : {}),
           ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
-          ...(viewerSystemPrompt.trim() ? { defaultViewerSystemPrompt: viewerSystemPrompt.trim() } : {}),
+          ...(existingProfile?.defaultViewerSystemPrompt?.trim() ? { defaultViewerSystemPrompt: existingProfile.defaultViewerSystemPrompt.trim() } : {}),
           defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(existingProfile?.defaultMonitorSystemPrompt, setupLanguage),
           ...(judge ? { defaultJudgeProviderConfigId: judge.providerConfigId, defaultJudgeModelId: judge.modelId } : {}),
           ...(monitor ? { defaultMonitorProviderConfigId: monitor.providerConfigId, defaultMonitorModelId: monitor.modelId } : {}),
@@ -605,7 +605,7 @@ function FirstRunSetup({
           <label>{copy.modelSearch}<input value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder={copy.modelSearchPlaceholder} /></label>
           <label>{copy.defaultViewerModel}<select size={Math.min(8, Math.max(3, visibleViewerModels.length))} value={viewerModelId} onChange={(event) => selectViewerModel(event.target.value)}>{visibleViewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label>
           {!visibleViewerModels.length && <p className="provider-empty">{copy.noMatchingModels}</p>}
-          <ProfileViewerControls copy={copy} model={viewerModel} reasoning={viewerReasoning} temperature={viewerTemperature} systemPrompt={viewerSystemPrompt} onReasoning={setViewerReasoning} onTemperature={setViewerTemperature} onSystemPrompt={setViewerSystemPrompt} />
+          <ProfileViewerControls copy={copy} model={viewerModel} reasoning={viewerReasoning} temperature={viewerTemperature} systemPrompt={viewerSystemPrompt} onReasoning={setViewerReasoning} onTemperature={setViewerTemperature} />
           <div className="identity-name-grid"><label>{copy.aiIsBeName}<input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div>
           <small className="setup-security-note"><Users size={13} />{copy.identityNamesLead}</small>
           <div className="first-run-actions"><button className="secondary-button" onClick={() => setStep(1)} disabled={busy}>{copy.back}</button><button className="primary-button" disabled={!viewerModelId || busy} onClick={() => setStep(3)}>{copy.continue}<ArrowRight size={15} /></button></div>

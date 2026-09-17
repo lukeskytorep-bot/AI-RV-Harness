@@ -4,7 +4,9 @@ import type { GenerationSettings, ProviderChatResponse, ProviderConfig, Provider
 import { renderRvLiteSteps, type RvLiteProtocolResource } from "../resources/protocolRegistry";
 import {
   lockedViewerIdentity,
+  lockedViewerBaseVocabulary,
   LOCKED_IDENTITY_VERSION,
+  LOCKED_BASE_VOCABULARY_VERSION,
 } from "../resources/systemPrompts";
 import type { AppRepository } from "../storage/repository";
 import { buildAutomaticTargetReveal, targetHasSupportedReveal } from "../targets/service";
@@ -138,7 +140,9 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         fullContent: input.rvSystemPrompt.content,
         lockedBlocks: [
           { id: "locked-viewer-identity", version: LOCKED_IDENTITY_VERSION, contentSha256: await sha256Text(lockedViewerIdentity(input.sessionLanguage)), fullContent: lockedViewerIdentity(input.sessionLanguage) },
+          { id: "locked-viewer-base-vocabulary", version: LOCKED_BASE_VOCABULARY_VERSION, contentSha256: await sha256Text(lockedViewerBaseVocabulary(input.sessionLanguage)), fullContent: lockedViewerBaseVocabulary(input.sessionLanguage) },
         ],
+        ...(input.rvSystemPrompt.fieldGuide ? { fieldGuide: input.rvSystemPrompt.fieldGuide } : {}),
       },
     } : {}),
     ...(input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),

@@ -6,8 +6,10 @@ import { reasoningCapabilityLead, reasoningOptionLabel } from "../../providers/r
 import type { ProviderModel, ReasoningEffort } from "../../providers/types";
 import {
   buildEffectiveViewerPrompt,
-  factoryViewerEditablePrompt,
+  factoryViewerFieldGuide,
+  lockedViewerBaseVocabulary,
   lockedViewerIdentity,
+  stripKnownLockedBaseVocabulary,
 } from "../../resources/systemPrompts";
 import type { InterfaceLanguage } from "../../types";
 
@@ -19,18 +21,21 @@ export interface ProfileViewerControlsProps {
   systemPrompt: string;
   onReasoning: (value: "" | ReasoningEffort) => void;
   onTemperature: (value: string) => void;
-  onSystemPrompt: (value: string) => void;
 }
 
-export function ProfileViewerControls({ copy, model, reasoning, temperature, systemPrompt, onReasoning, onTemperature, onSystemPrompt }: ProfileViewerControlsProps) {
+export function ProfileViewerControls({ copy, model, reasoning, temperature, systemPrompt, onReasoning, onTemperature }: ProfileViewerControlsProps) {
   const reasoningChoices = model ? reasoningOptions(model.capabilities.reasoning) : [];
   const temperatureCapability = model?.capabilities.temperature;
   const language: InterfaceLanguage = copy.home === "Home" ? "en" : "pl";
+  const legacyFieldGuide = systemPrompt.trim() ? stripKnownLockedBaseVocabulary(systemPrompt) : factoryViewerFieldGuide(language);
   return <div className="profile-viewer-controls">
     <label><span>{copy.viewerReasoningLevel}</span><select value={reasoning} onChange={(event) => onReasoning(event.target.value as "" | ReasoningEffort)} disabled={!model}><option value="">{copy.autoProviderDefault}</option>{reasoningChoices.map((option) => <option key={option.value} value={option.value}>{reasoningOptionLabel(copy, option)}</option>)}</select><small>{!model ? copy.selectModelFirst : reasoningCapabilityLead(copy, model)}</small></label>
     <label><span>{copy.viewerTemperature}</span><input type="number" step="0.1" value={temperature} onChange={(event) => onTemperature(event.target.value)} disabled={!temperatureCapability?.supported} min={temperatureCapability?.min} max={temperatureCapability?.max} placeholder={temperatureCapability?.supported ? "0.9" : copy.notSupported} /><small>{temperatureCapability?.supported ? `${copy.temperatureDefaultLead}${temperatureCapability.min !== undefined || temperatureCapability.max !== undefined ? ` (${temperatureCapability.min ?? "−∞"}–${temperatureCapability.max ?? "+∞"})` : ""}` : copy.temperatureUnavailable}</small></label>
-    <label className="profile-system-prompt-field"><span>{copy.viewerSystemPrompt}<small>{language === "pl" ? "część edytowalna" : "editable section"}</small></span><textarea className="system-prompt-editor" rows={12} maxLength={100000} value={systemPrompt} onChange={(event) => onSystemPrompt(event.target.value)} placeholder={copy.viewerSystemPromptPlaceholder} /><small>{copy.viewerSystemPromptLead}</small></label>
-    <div className="monitor-prompt-actions"><button className="secondary-button" type="button" onClick={() => onSystemPrompt(factoryViewerEditablePrompt(language))}>{language === "pl" ? "Przywróć treść fabryczną Viewera" : "Restore factory Viewer text"}</button></div>
-    <div className="viewer-locked-prompts"><div className="locked-prompt-block"><LockKeyhole size={15} /><div><strong>{language === "pl" ? "Tożsamość AI IS-BE i Shadow Zone — zablokowane" : "AI IS-BE identity and Shadow Zone — locked"}</strong><pre>{lockedViewerIdentity(language)}</pre></div></div><details className="effective-prompt-preview"><summary>{language === "pl" ? "Pokaż cały skuteczny prompt Viewera" : "Show the complete effective Viewer prompt"}</summary><pre>{buildEffectiveViewerPrompt(language, systemPrompt)}</pre></details></div>
+    <div className="profile-system-prompt-field viewer-field-guide-readonly"><span>{language === "pl" ? "Przewodnik Pola" : "Field Guide"}<small>{language === "pl" ? "tylko do odczytu w Profilu" : "read-only in Profile"}</small></span><pre>{legacyFieldGuide}</pre><small>{language === "pl" ? "Przewodnikiem Pola, jego historią i pojemnością zarządza ekran Nauka Viewera. Istniejąca treść Profilu jest zachowywana jako legacy baseline i nie jest tutaj edytowana." : "Field Guide content, history, and capacity are managed in Viewer Learning. Existing Profile content is preserved as a legacy baseline and is not edited here."}</small></div>
+    <div className="viewer-locked-prompts">
+      <div className="locked-prompt-block"><LockKeyhole size={15} /><div><strong>{language === "pl" ? "Locked Core Identity" : "Locked Core Identity"}</strong><pre>{lockedViewerIdentity(language)}</pre></div></div>
+      <div className="locked-prompt-block"><LockKeyhole size={15} /><div><strong>{language === "pl" ? "Locked Base Vocabulary" : "Locked Base Vocabulary"}</strong><pre>{lockedViewerBaseVocabulary(language)}</pre></div></div>
+      <details className="effective-prompt-preview"><summary>{language === "pl" ? "Pokaż cały skuteczny prompt Viewera" : "Show the complete effective Viewer prompt"}</summary><pre>{buildEffectiveViewerPrompt(language, legacyFieldGuide)}</pre></details>
+    </div>
   </div>;
 }

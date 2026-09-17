@@ -26,9 +26,9 @@ const migrationFiles = readdirSync(migrationDir)
   .filter((name) => /^\d{3}_.+\.sql$/.test(name))
   .sort();
 const migrationNumbers = migrationFiles.map((name) => Number(name.slice(0, 3)));
-const expectedNumbers = Array.from({ length: 23 }, (_, index) => index + 1);
+const expectedNumbers = Array.from({ length: 24 }, (_, index) => index + 1);
 if (JSON.stringify(migrationNumbers) !== JSON.stringify(expectedNumbers)) {
-  failures.push(`SQLite migrations must be contiguous 001-023; found: ${migrationFiles.join(", ")}`);
+  failures.push(`SQLite migrations must be contiguous 001-024; found: ${migrationFiles.join(", ")}`);
 }
 
 const tauriLib = read("src-tauri/src/lib.rs");
@@ -107,14 +107,21 @@ const migration023 = read("src-tauri/migrations/023_controlled_purge.sql");
 for (const marker of ["controlled_purge_context", "target_id_snapshot", "capture_rv_session_target_snapshot", "capture_research_assignment_target_snapshot"]) {
   if (!migration023.includes(marker)) failures.push(`controlled-purge migration missing marker: ${marker}`);
 }
+const migration024 = read("src-tauri/migrations/024_viewer_learning_field_guide.sql");
+for (const marker of ["field_guide_settings", "field_guide_versions", "field_guide_activation_events", "field_guide_legacy_baselines", "legacy Field Guide baselines are preserved"]) {
+  if (!migration024.includes(marker)) failures.push(`Field Guide migration missing marker: ${marker}`);
+}
 
 const nativeCompatibility = join(root, "src-tauri", "src", "ux_data_compatibility.rs");
 if (!existsSync(nativeCompatibility)) failures.push("native UX-DATA compatibility test module is missing");
 if (!tauriLib.includes("mod ux_data_compatibility;")) failures.push("native UX-DATA compatibility test module is not registered in lib.rs");
+const nativeCompatibilitySource = read("src-tauri/src/ux_data_compatibility.rs");
+if (!nativeCompatibilitySource.includes("exact_green_v23_to_v24_preserves_existing_data_and_provenance")) failures.push("native compatibility gate must test exact green v23 -> v24 upgrade");
+if (nativeCompatibilitySource.includes("legacy_fixture_manual_chain_through_024")) failures.push("native compatibility gate must not reintroduce a public-v0.7.12 -> v0.7.13 migration chain");
 
 if (failures.length) {
   console.error(["UX-DATA compatibility verification failed:", ...failures.map((failure) => `- ${failure}`)].join("\n"));
   process.exit(1);
 }
 
-console.log(`UX-DATA compatibility verification passed: ${migrationFiles.length} migrations, flat Conversations, shared dialogs/model routes, unified lifecycle, Viewer Notes provenance and native legacy-upgrade gate are present.`);
+console.log(`UX-DATA compatibility verification passed: ${migrationFiles.length} migrations, flat Conversations, shared dialogs/model routes, unified lifecycle, Viewer Notes provenance, Field Guide schema 024, and the native green-v23 upgrade gate are present.`);

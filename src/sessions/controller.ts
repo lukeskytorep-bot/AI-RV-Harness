@@ -23,7 +23,9 @@ import {
   buildEffectiveMonitorPrompt,
   lockedMonitorExecution,
   lockedViewerIdentity,
+  lockedViewerBaseVocabulary,
   LOCKED_IDENTITY_VERSION,
+  LOCKED_BASE_VOCABULARY_VERSION,
   LOCKED_MONITOR_EXECUTION_VERSION,
 } from "../resources/systemPrompts";
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
@@ -225,7 +227,9 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         fullContent: input.rvSystemPrompt.content,
         lockedBlocks: [
           { id: "locked-viewer-identity", version: LOCKED_IDENTITY_VERSION, contentSha256: await sha256Text(lockedViewerIdentity(input.sessionLanguage)), fullContent: lockedViewerIdentity(input.sessionLanguage) },
+          { id: "locked-viewer-base-vocabulary", version: LOCKED_BASE_VOCABULARY_VERSION, contentSha256: await sha256Text(lockedViewerBaseVocabulary(input.sessionLanguage)), fullContent: lockedViewerBaseVocabulary(input.sessionLanguage) },
         ],
+        ...(input.rvSystemPrompt.fieldGuide ? { fieldGuide: input.rvSystemPrompt.fieldGuide } : {}),
       },
     } : {}),
     ...(input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),

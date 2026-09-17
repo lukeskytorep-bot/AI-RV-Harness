@@ -22,6 +22,12 @@ export type DatabaseWriteOperation =
   | "ai_center_update_ai_note_versions_02"
   | "ai_center_update_ai_note_reflection_runs_06"
   | "ai_center_update_ai_note_activation_events_02"
+  | "field_guide_insert_settings_01"
+  | "field_guide_insert_versions_01"
+  | "field_guide_insert_activation_events_01"
+  | "field_guide_update_settings_01"
+  | "field_guide_update_legacy_baselines_01"
+  | "field_guide_update_settings_02"
   | "export_insert_exports_01"
   | "judge_insert_judge_runs_01"
   | "judge_insert_judge_scores_01"
@@ -119,6 +125,12 @@ const WRITE_OPERATIONS = new Map<string, DatabaseWriteOperation>([
   ["UPDATE ai_note_versions SET source_session_id = NULL WHERE source_session_id = $1", "ai_center_update_ai_note_versions_02"],
   ["UPDATE ai_note_reflection_runs SET source_session_id = NULL WHERE source_session_id = $1", "ai_center_update_ai_note_reflection_runs_06"],
   ["UPDATE ai_note_activation_events SET source_session_id = NULL WHERE source_session_id = $1", "ai_center_update_ai_note_activation_events_02"],
+  ["INSERT INTO field_guide_settings (ai_identity_id, language, capacity_tokens, updated_at) VALUES ($1,$2,$3,$4)", "field_guide_insert_settings_01"],
+  ["INSERT INTO field_guide_versions (id, ai_identity_id, language, version_number, content, content_sha256, estimated_tokens, estimator_version, capacity_tokens_at_creation, source_training_run_id, source_session_id, source_snapshot_json, lexicon_id, lexicon_version, previous_version_id, restored_from_version_id, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'conservative-char-v1',$8,$9,$10,$11,$12,$13,$14,$15,$16)", "field_guide_insert_versions_01"],
+  ["INSERT INTO field_guide_activation_events (id, ai_identity_id, language, from_version_id, to_version_id, activation_source, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)", "field_guide_insert_activation_events_01"],
+  ["UPDATE field_guide_settings SET active_version_id = $1, updated_at = $2 WHERE ai_identity_id = $3 AND language = $4", "field_guide_update_settings_01"],
+  ["UPDATE field_guide_legacy_baselines SET resolution_status = 'resolved', resolved_ai_identity_id = $1, resolved_language = $2, resolved_version_id = $3, resolved_at = $4 WHERE id = $5 AND resolution_status = 'unresolved'", "field_guide_update_legacy_baselines_01"],
+  ["UPDATE field_guide_settings SET capacity_tokens = $1, updated_at = $2 WHERE ai_identity_id = $3 AND language = $4", "field_guide_update_settings_02"],
   ["INSERT INTO exports (id, workspace_id, research_project_id, export_type, artifact_path, manifest_hash, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)", "export_insert_exports_01"],
   ["INSERT INTO judge_runs (id, session_id, judge_index, model_route, rubric_version, anonymous_session_id, packet_hash, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", "judge_insert_judge_runs_01"],
   ["INSERT INTO judge_scores (id, judge_run_id, gestalt, verifiable_features, activity_function_event, confabulation_control, total, rationale_json, frozen_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)", "judge_insert_judge_scores_01"],
