@@ -1430,7 +1430,7 @@ mod tests {
     };
     use crate::migrations::{CURRENT_MIGRATION_VERSION, MIGRATION_SPECS};
     use sha2::{Digest, Sha384};
-    use sqlx::{sqlite::SqliteConnectOptions, Connection, SqliteConnection};
+    use sqlx::{sqlite::SqliteConnectOptions, Connection, Row, SqliteConnection};
     use std::{fs, path::{Path, PathBuf}, process, time::{SystemTime, UNIX_EPOCH}};
 
     #[test]
