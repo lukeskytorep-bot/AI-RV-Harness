@@ -30,8 +30,43 @@ export interface StorageExportResult {
   directory: string;
 }
 
+export type DatabaseCompatibilityKind = "missing" | "compatible" | "legacy" | "incomplete_current_initialization" | "corrupt_or_unknown";
+
+export interface DatabaseCompatibilityStatus {
+  kind: DatabaseCompatibilityKind;
+  databasePath: string;
+  migrationVersion: number | null;
+  dataEpoch: string | null;
+  interfaceLanguage: "pl" | "en" | null;
+  detail: string | null;
+}
+
+export interface DatabasePreservation {
+  backupPath: string;
+  migrationVersion: number | null;
+  dataEpoch: string;
+  preservedKind: DatabaseCompatibilityKind;
+}
+
 export async function getStoragePaths(): Promise<StoragePaths> {
   return invoke<StoragePaths>("storage_paths");
+}
+
+
+export async function inspectDatabaseCompatibility(): Promise<DatabaseCompatibilityStatus> {
+  return invoke<DatabaseCompatibilityStatus>("inspect_database_compatibility");
+}
+
+export async function prepareDatabaseForLoad(): Promise<DatabaseCompatibilityStatus> {
+  return invoke<DatabaseCompatibilityStatus>("prepare_database_for_load");
+}
+
+export async function startFreshDatabase(interfaceLanguage: "pl" | "en"): Promise<DatabasePreservation> {
+  return invoke<DatabasePreservation>("start_fresh_database", { interfaceLanguage });
+}
+
+export async function closeApplication(): Promise<void> {
+  await invoke("close_application");
 }
 
 export async function validateLiveDatabase(): Promise<void> {

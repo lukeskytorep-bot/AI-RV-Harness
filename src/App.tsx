@@ -36,7 +36,15 @@ import {
 } from "react";
 import { getCopy } from "./i18n";
 import { PROVIDER_LABELS } from "./components/ProviderSettings";
-import { createRepository, isTauriRuntime } from "./storage";
+import {
+  closeApplication,
+  createRepository,
+  DatabaseCompatibilityError,
+  isTauriRuntime,
+  openDataFolder,
+  startFreshDatabase,
+  type DatabaseCompatibilityStatus,
+} from "./storage";
 import type { AppRepository } from "./storage/repository";
 import type {
   AppSettings,
@@ -106,6 +114,9 @@ export default function App() {
   const [recentSessions, setRecentSessions] = useState<RvSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [initializationError, setInitializationError] = useState<string | null>(null);
+  const [databaseCompatibility, setDatabaseCompatibility] = useState<DatabaseCompatibilityStatus | null>(null);
+  const [databaseCompatibilityBusy, setDatabaseCompatibilityBusy] = useState(false);
+  const [databaseCompatibilityActionError, setDatabaseCompatibilityActionError] = useState<string | null>(null);
   const [initializationAttempt, setInitializationAttempt] = useState(0);
   const settingsSaveQueueRef = useRef<{ repository: AppRepository; queue: SettingsSaveQueue } | null>(null);
 
@@ -120,6 +131,8 @@ export default function App() {
     let stage = "repository.connect";
     setLoading(true);
     setInitializationError(null);
+    setDatabaseCompatibility(null);
+    setDatabaseCompatibilityActionError(null);
     void (async () => {
       try {
         const repo = await createRepository();
@@ -150,9 +163,15 @@ export default function App() {
         setLoading(false);
       } catch (error) {
         if (cancelled) return;
+        setRepository(null);
+        if (error instanceof DatabaseCompatibilityError) {
+          setDatabaseCompatibility(error.status);
+          setInitializationError(null);
+          setLoading(false);
+          return;
+        }
         const message = error instanceof Error ? error.message : String(error);
         console.error(`AI RV Harness initialization failed at ${stage}`, error);
-        setRepository(null);
         setInitializationError(`${stage}: ${message}`);
         setLoading(false);
       }
@@ -244,6 +263,38 @@ export default function App() {
     if (initialWorkspace) setActiveWorkspaceId(initialWorkspace.id);
     setPage("home");
   };
+
+  const compatibilityLanguage: InterfaceLanguage = databaseCompatibility?.interfaceLanguage
+    ?? (typeof navigator !== "undefined" && navigator.language.toLowerCase().startsWith("pl") ? "pl" : "en");
+
+  const startFreshFromBlockedDatabase = async () => {
+    if (!databaseCompatibility || databaseCompatibilityBusy) return;
+    if (databaseCompatibility.kind !== "legacy" && databaseCompatibility.kind !== "incomplete_current_initialization") return;
+    setDatabaseCompatibilityBusy(true);
+    setDatabaseCompatibilityActionError(null);
+    try {
+      await startFreshDatabase(compatibilityLanguage);
+      setDatabaseCompatibility(null);
+      setInitializationAttempt((current) => current + 1);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("cancelled by the user")) setDatabaseCompatibilityActionError(message);
+    } finally {
+      setDatabaseCompatibilityBusy(false);
+    }
+  };
+
+  if (!loading && databaseCompatibility) {
+    return <DatabaseCompatibilityScreen
+      status={databaseCompatibility}
+      language={compatibilityLanguage}
+      busy={databaseCompatibilityBusy}
+      actionError={databaseCompatibilityActionError}
+      onClose={() => void closeApplication()}
+      onOpenFolder={() => void openDataFolder()}
+      onStartFresh={() => void startFreshFromBlockedDatabase()}
+    />;
+  }
 
   const initialSetupProfile = profileNeedingInitialSetup(profiles);
   if (!loading && !initializationError && repository && (profiles.length === 0 || initialSetupProfile)) {
@@ -708,6 +759,122 @@ function LazyRouteLoadingState({ language }: { language: InterfaceLanguage }) {
       <span className="loader-orb" />
       <p>{language === "pl" ? "Ładowanie modułu…" : "Loading module…"}</p>
     </div>
+  );
+}
+
+function DatabaseCompatibilityScreen({
+  status,
+  language,
+  busy,
+  actionError,
+  onClose,
+  onOpenFolder,
+  onStartFresh,
+}: {
+  status: DatabaseCompatibilityStatus;
+  language: InterfaceLanguage;
+  busy: boolean;
+  actionError: string | null;
+  onClose: () => void;
+  onOpenFolder: () => void;
+  onStartFresh: () => void;
+}) {
+  const legacy = status.kind === "legacy";
+  const incomplete = status.kind === "incomplete_current_initialization";
+  const canStartFresh = legacy || incomplete;
+  const copy = language === "pl"
+    ? legacy
+      ? {
+          title: "Wykryto dane z wcześniejszej wersji",
+          paragraphs: [
+            "AI RV Harness v0.7.13 korzysta z nowego modelu danych. Automatyczna migracja danych z v0.7.12 i wcześniejszych wersji nie jest obsługiwana, ponieważ mogłaby doprowadzić do częściowej lub błędnej konwersji.",
+            "Aby nadal korzystać z dotychczasowych danych, uruchom AI RV Harness v0.7.12.",
+            "Aby rozpocząć pracę w v0.7.13, możesz utworzyć nową bazę danych. Dotychczasowa baza zostanie zachowana jako kopia i nie zostanie usunięta.",
+          ],
+          close: "Zamknij aplikację",
+          open: "Otwórz folder starej bazy",
+          fresh: "Rozpocznij od nowa w v0.7.13",
+          busy: "Zabezpieczanie starej bazy…",
+        }
+      : incomplete
+        ? {
+            title: "Wykryto niedokończone tworzenie bazy v0.7.13",
+            paragraphs: [
+              "Poprzednie tworzenie świeżej bazy AI RV Harness v0.7.13 zostało przerwane przed zakończeniem schematu. Ta częściowa baza nie będzie automatycznie migrowana ani kontynuowana.",
+              "Możesz zachować ją jako kopię diagnostyczną i bezpiecznie utworzyć nową bazę v0.7.13. Częściowy plik nie zostanie usunięty.",
+            ],
+            close: "Zamknij aplikację",
+            open: "Otwórz folder bazy",
+            fresh: "Zachowaj kopię i rozpocznij od nowa",
+            busy: "Zabezpieczanie częściowej bazy…",
+          }
+        : {
+            title: "Nie można bezpiecznie otworzyć bazy danych",
+            paragraphs: [
+              "Baza danych jest uszkodzona albo ma nierozpoznany schemat. AI RV Harness nie uruchomi migracji i nie nadpisze tego pliku.",
+              "Otwórz folder bazy, aby zachować lub ręcznie skopiować dane, a następnie zamknij aplikację.",
+            ],
+            close: "Zamknij aplikację",
+            open: "Otwórz folder bazy",
+            fresh: "",
+            busy: "",
+          }
+    : legacy
+      ? {
+          title: "Data from an earlier version was detected",
+          paragraphs: [
+            "AI RV Harness v0.7.13 uses a new data model. Automatic migration from v0.7.12 and earlier versions is not supported because it could result in partial or incorrect conversion.",
+            "To continue using your existing data, run AI RV Harness v0.7.12.",
+            "To start using v0.7.13, you may create a new database. Your existing database will be preserved as a backup and will not be deleted.",
+          ],
+          close: "Close application",
+          open: "Open legacy database folder",
+          fresh: "Start fresh in v0.7.13",
+          busy: "Preserving legacy database…",
+        }
+      : incomplete
+        ? {
+            title: "An incomplete v0.7.13 database initialization was detected",
+            paragraphs: [
+              "A previous attempt to create a fresh AI RV Harness v0.7.13 database was interrupted before the schema was complete. This partial database will not be migrated or resumed automatically.",
+              "You may preserve it as a diagnostic backup and safely create a new v0.7.13 database. The partial file will not be deleted.",
+            ],
+            close: "Close application",
+            open: "Open database folder",
+            fresh: "Preserve backup and start fresh",
+            busy: "Preserving incomplete database…",
+          }
+        : {
+            title: "The database cannot be opened safely",
+            paragraphs: [
+              "The database is corrupted or uses an unrecognized schema. AI RV Harness will not run migrations or overwrite this file.",
+              "Open the database folder to preserve or manually copy the data, then close the application.",
+            ],
+            close: "Close application",
+            open: "Open database folder",
+            fresh: "",
+            busy: "",
+          };
+
+  return (
+    <main className="first-run-shell">
+      <section className="first-run-card">
+        <header className="first-run-header">
+          <span className="first-run-logo"><Database size={28} /></span>
+          <div><small>AI RV Harness v0.7.13</small><h1>{copy.title}</h1></div>
+        </header>
+        <div className="first-run-body">
+          {copy.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
+          {status.migrationVersion != null && <small>SQLite schema: {status.migrationVersion} · dataEpoch: {status.dataEpoch ?? "unknown"}</small>}
+          {actionError && <div className="provider-error" role="alert">{actionError}</div>}
+          {!legacy && status.detail && <details><summary>{language === "pl" ? "Szczegóły techniczne" : "Technical details"}</summary><code>{status.detail}</code></details>}
+          <div className="first-run-actions">
+            <span><button className="secondary-button" disabled={busy} onClick={onClose}>{copy.close}</button><button className="secondary-button" disabled={busy} onClick={onOpenFolder}>{copy.open}</button></span>
+            {canStartFresh && <button className="primary-button" disabled={busy} onClick={onStartFresh}>{busy ? copy.busy : copy.fresh}</button>}
+          </div>
+        </div>
+      </section>
+    </main>
   );
 }
 

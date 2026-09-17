@@ -17,15 +17,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(
-            tauri::plugin::Builder::<_, ()>::new("pre-migration-backup")
-                .setup(|app, _api| {
-                    storage::backup_database_before_migrations(app)
-                        .map_err(|error| Box::<dyn std::error::Error>::from(std::io::Error::other(error)))?;
-                    Ok(())
-                })
-                .build(),
-        )
-        .plugin(
             tauri_plugin_sql::Builder::default()
                 .add_migrations("sqlite:rv_harness.db", migrations)
                 .build(),
@@ -44,6 +35,10 @@ pub fn run() {
             artifacts::read_reveal_image_for_judge,
             artifacts::write_export_package,
             storage::storage_paths,
+            storage::inspect_database_compatibility,
+            storage::prepare_database_for_load,
+            storage::start_fresh_database,
+            storage::close_application,
             storage::validate_live_database,
             storage::prepare_backup,
             storage::prepare_portable_backup,
