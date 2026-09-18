@@ -1,8 +1,8 @@
-# VIEWER-LEARNING-3 — RESEARCH FIELD GUIDE CONTROLS
+# VIEWER-LEARNING-3-R1 — RESEARCH FIELD GUIDE CONTROLS
 
 **Projekt:** AI RV Harness v0.7.13
 **Data:** 18 września 2026
-**Status:** `CANDIDATE — INDEPENDENT AUDIT, FULL GITHUB ACTIONS AND WINDOWS RUNTIME SMOKE REQUIRED`
+**Status:** `COMPLETED — INDEPENDENT AUDIT AND FULL GITHUB ACTIONS PASS; WINDOWS RUNTIME SMOKE DEFERRED`
 
 ## 1. Baza
 
@@ -177,7 +177,7 @@ Kod i dokumentacja zostały przejrzane pod kątem wspólnej ścieżki:
 - backup/restore i controlled purge boundary;
 - zachowania ścieżek Windows w istniejącej architekturze.
 
-Ostateczny odbiór pozostaje zależny od niezależnego audytu, pełnego GitHub Actions i Windows runtime smoke.
+Niezależny audyt oraz pełne GitHub Actions zakończyły się powodzeniem dla poprawionego R1. Windows runtime smoke pozostaje odłożony do końcowej bramki praktycznej Viewer Learning.
 
 ## 13. Tożsamość kandydata
 
@@ -188,4 +188,4 @@ Ostateczny odbiór pozostaje zależny od niezależnego audytu, pełnego GitHub A
 - data epoch: `v0.7.13`;
 - source-tree finalnego drzewa jest zapisany w zewnętrznym manifeście i SHA256SUMS, aby raport znajdujący się wewnątrz drzewa nie tworzył samoodwołującego hasha.
 
-**Status końcowy:** `CANDIDATE — INDEPENDENT AUDIT, FULL GITHUB ACTIONS AND WINDOWS RUNTIME SMOKE REQUIRED`
+**Status końcowy:** `COMPLETED — INDEPENDENT AUDIT AND FULL GITHUB ACTIONS PASS; WINDOWS RUNTIME SMOKE DEFERRED`

@@ -1,18 +1,52 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 
 const root = resolve(process.argv[2] ?? ".");
 const failures = [];
-
-for (const compilerArtifact of ["tsconfig.app.tsbuildinfo", "tsconfig.node.tsbuildinfo"]) {
-  if (existsSync(join(root, compilerArtifact))) failures.push(`compiler artifact must not be packaged: ${compilerArtifact}`);
-}
 
 function filesBelow(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
     return entry.isDirectory() ? filesBelow(path) : [path];
   });
+}
+
+const forbiddenFileName = (path) => path.includes(".openai-download-")
+  || path.endsWith(".tsbuildinfo")
+  || /(?:^|\/)[^/]+\.db(?:-shm|-wal)?$/.test(path)
+  || path.endsWith(".log");
+
+const forbiddenDirectory = (path) => path === "node_modules"
+  || path.startsWith("node_modules/")
+  || path === "dist"
+  || path.startsWith("dist/")
+  || path === "src-tauri/target"
+  || path.startsWith("src-tauri/target/");
+
+function packagePaths(directory) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name === ".git") return [];
+    const path = join(directory, entry.name);
+    const rel = relative(root, path).replaceAll("\\", "/");
+    if (!entry.isDirectory()) return [rel];
+    return forbiddenDirectory(rel) ? [rel] : [rel, ...packagePaths(path)];
+  });
+}
+
+function sourcePaths() {
+  if (!existsSync(join(root, ".git"))) return packagePaths(root);
+  const result = spawnSync("git", ["-C", root, "ls-files", "-z"], { encoding: "utf8" });
+  if (result.status !== 0) {
+    failures.push(`cannot inspect tracked source paths: ${result.stderr.trim() || `git exited ${result.status}`}`);
+    return [];
+  }
+  return result.stdout.split("\0").filter(Boolean).map((path) => path.replaceAll("\\", "/"));
+}
+
+for (const path of sourcePaths()) {
+  if (forbiddenFileName(path)) failures.push(`forbidden generated or transfer file: ${path}`);
+  if (forbiddenDirectory(path)) failures.push(`forbidden packaged directory: ${path}`);
 }
 
 function pathsBelow(directory) {
@@ -43,4 +77,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log("Source integrity verification passed: every Rust include path exists and filenames contain no escaped Unicode markers.");
+console.log("Source integrity verification passed: Rust includes, Unicode filenames and package hygiene are valid.");

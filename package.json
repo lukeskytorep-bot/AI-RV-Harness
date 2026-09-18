@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build && node scripts/report-vite-bundle.mjs",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
-    "verify:source": "node scripts/verify-source-integrity.mjs .",
+    "verify:source": "node scripts/verify-source-integrity-selftest.mjs && node scripts/verify-source-integrity.mjs .",
     "verify:ux-data": "node scripts/verify-ux-data-compatibility.mjs .",
     "test:watch": "vitest",
     "tauri": "tauri",

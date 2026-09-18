@@ -46,7 +46,17 @@ They are not:
 - fine-tuning, LoRA, or a change to model weights;
 - a place to preserve the identity of a specific target.
 
-Only the same Viewer identity may create or revise its notes. A person cannot edit the text of an individual version. Human-authored guidance belongs in the System Prompt. The owner of the local data may still disable notes, export them, or restore an older immutable version with a warning. Permanent deletion is reserved for a later data-management update.
+Only the same Viewer identity may create or revise its notes. A person cannot edit the text of an individual version. Human-authored guidance belongs in the System Prompt. The owner of the local data may still disable notes, export them, restore an older immutable version with a warning, or use the dedicated controlled-purge lifecycle where deletion is permitted.
+
+## Legacy Field Guide baseline statuses
+
+Migration 024 preserves an existing custom Profile Viewer prompt as a legacy baseline without guessing its Viewer identity or language. Its status values are intentional:
+
+- `unresolved` — preserved content still awaits an explicit identity and language decision;
+- `resolved` — the user explicitly linked the content and it became a versioned Field Guide;
+- `factory-equivalent` — terminal reserved compatibility state for a preserved legacy value that was verified as equivalent to the historical factory default and therefore must not be offered for linking.
+
+The current production flow creates `unresolved` records and can transition them only to `resolved`. `factory-equivalent` is retained for compatibility with already classified records and is deliberately treated as non-actionable. It is not a pending feature and must not be converted automatically into a trained Field Guide.
 
 ## Simple session control
 
