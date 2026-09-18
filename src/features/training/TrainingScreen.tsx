@@ -2,13 +2,12 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Archive, Check, CircleStop, Database, Download, FileCheck2, GraduationCap, Play, ShieldCheck } from "lucide-react";
 import type { getCopy } from "../../i18n";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
-import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
 import { resolveSessionLanguage } from "../../domain/localization";
 import { findCredentialScopedModelByRouteKey, findModelByRouteKey, modelRouteKeyFor, resolveViewerDefault } from "../../modelRoutes";
 import { ModelRouteSelect } from "../../components/ModelRouteSelect";
 import { PageHeader } from "../../components/PageHeader";
 import { useAppDialogs } from "../../components/AppDialogProvider";
-import { profileGenerationDefaults, profileSystemPromptSnapshot } from "../../profileViewerDefaults";
+import { profileGenerationDefaults } from "../../profileViewerDefaults";
 import { resolveTechnicalWorkspaceForProfile } from "../../application/technicalWorkspace";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
 import type { AppRepository } from "../../storage/repository";
@@ -112,8 +111,6 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
       return;
     }
     const now = new Date();
-    const fieldGuide = await prepareFieldGuideForSession({ repository, profile, providerConfig: provider, model: viewerModel, language });
-    const rvSystemPrompt = await viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
     const run = await repository.createTrainingRun({
       name: `${text.trainingRun} ${runs.length + 1} · ${now.toLocaleDateString()}`,
       status: "Running",
@@ -137,7 +134,6 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
           sessionCodePrefix: settings.sessionCodePrefix,
           maxSessionCostUsd: settings.maxSessionCostUsd,
         },
-        ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
       },
     });
     setActiveRun(run);
@@ -157,8 +153,6 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
       if (!model || !providerConfig) throw new Error(text.judgeMissing);
       return { model, providerConfig };
     });
-    const rvSystemPrompt = initial.executionSnapshot?.rvSystemPrompt
-      ?? await profileSystemPromptSnapshot(runProfile, initial.executionSnapshot?.language ?? language);
     pauseRequested.current = false;
     const controller = new AbortController();
     executionAbort.current = controller;
@@ -174,7 +168,6 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
         targets,
         language,
         settings,
-        ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
         signal: controller.signal,
         shouldPause: () => pauseRequested.current,
         onRunChange: setActiveRun,

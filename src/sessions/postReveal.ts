@@ -134,17 +134,19 @@ export async function runAutomaticPostRevealReview(input: {
 
 const HISTORICAL_AUTOMATIC_POST_REVEAL_REVIEW_REQUESTS: Record<InterfaceLanguage, readonly string[]> = {
   pl: [
+    "Dziękuję za wykonaną sesję — świetna robota. Część ślepa została zakończona i zapieczętowana. Teraz przechodzimy do ujawnienia celu.\n\nPorównaj zapieczętowany zapis części ślepej z ujawnionym celem. Wskaż konkretnie: co było trafne, częściowo trafne lub nietrafne, co warto poprawić w następnych sesjach oraz co już działa dobrze.\n\nPamiętaj, że Reveal może nie opisywać wyczerpująco całego otoczenia celu. Szczegół zgodny z celem lub jego bezpośrednim otoczeniem, lecz niepotwierdzony w Revealu, oznacz jako prawdopodobną, ale niezweryfikowaną zgodność kontekstową — nie jako potwierdzone trafienie ani błąd. Największą wagę przypisuj opisowi głównego celu; trafne otoczenie traktuj jako mniej ważne wsparcie. Informacje sprzeczne z Revelem uznaj za nietrafne i nie zawyżaj oceny na podstawie samej wiedzy ogólnej.\n\nWyraźnie oddziel analizę po Revealu od wcześniejszych danych blind i nie dopisuj nowych percepcji do zapieczętowanej części sesji.",
     "Dziękuję za wykonaną sesję — świetna robota. Część ślepa została zakończona i zapieczętowana. Teraz przechodzimy do ujawnienia celu.\n\nPorównaj teraz zapieczętowany zapis części ślepej z ujawnionym celem. Opisz konkretnie: co poszło dobrze, co poszło źle lub było nietrafne, co było częściowo trafne, co warto poprawić w następnych sesjach oraz co już działa dobrze. Wyraźnie oddziel analizę po Revealu od wcześniejszych danych blind i nie dopisuj nowych percepcji do zapieczętowanej części sesji.",
   ],
   en: [
+    "Thank you for completing the session — excellent work. The blind portion has ended and has been sealed. We will now proceed to the target Reveal.\n\nCompare the sealed blind-session record with the revealed target. Identify specifically what was accurate, partly accurate, or inaccurate, what should be improved in future sessions, and what already works well.\n\nRemember that the Reveal may not exhaustively describe the target’s entire surroundings. A detail consistent with the target or its immediate surroundings but not confirmed by the Reveal should be classified as plausible but unverified contextual correspondence—not as either a confirmed hit or an error. Give the greatest weight to the principal target and treat accurate surrounding context as lower-weight supporting evidence. Treat details contradicted by the Reveal as inaccurate, and do not inflate the assessment using general knowledge alone.\n\nClearly separate this post-Reveal analysis from the earlier blind data and do not add new perceptions to the sealed session record.",
     "Thank you for completing the session — excellent work. The blind portion has been completed and sealed. We will now proceed to the Target Reveal.\n\nNow compare the sealed blind-session record with the revealed target. Describe specifically: what went well, what was wrong or inaccurate, what was partly accurate, what should be improved in future sessions, and what already works well. Clearly separate this post-Reveal analysis from the earlier blind data and do not add new perceptions to the sealed session record.",
   ],
 };
 
 export function automaticPostRevealReviewRequest(language: InterfaceLanguage): string {
   const reviewInstruction = language === "pl"
-    ? "Porównaj zapieczętowany zapis części ślepej z ujawnionym celem. Wskaż konkretnie: co było trafne, częściowo trafne lub nietrafne, co warto poprawić w następnych sesjach oraz co już działa dobrze.\n\nPamiętaj, że Reveal może nie opisywać wyczerpująco całego otoczenia celu. Szczegół zgodny z celem lub jego bezpośrednim otoczeniem, lecz niepotwierdzony w Revealu, oznacz jako prawdopodobną, ale niezweryfikowaną zgodność kontekstową — nie jako potwierdzone trafienie ani błąd. Największą wagę przypisuj opisowi głównego celu; trafne otoczenie traktuj jako mniej ważne wsparcie. Informacje sprzeczne z Revelem uznaj za nietrafne i nie zawyżaj oceny na podstawie samej wiedzy ogólnej.\n\nWyraźnie oddziel analizę po Revealu od wcześniejszych danych blind i nie dopisuj nowych percepcji do zapieczętowanej części sesji."
-    : "Compare the sealed blind-session record with the revealed target. Identify specifically what was accurate, partly accurate, or inaccurate, what should be improved in future sessions, and what already works well.\n\nRemember that the Reveal may not exhaustively describe the target’s entire surroundings. A detail consistent with the target or its immediate surroundings but not confirmed by the Reveal should be classified as plausible but unverified contextual correspondence—not as either a confirmed hit or an error. Give the greatest weight to the principal target and treat accurate surrounding context as lower-weight supporting evidence. Treat details contradicted by the Reveal as inaccurate, and do not inflate the assessment using general knowledge alone.\n\nClearly separate this post-Reveal analysis from the earlier blind data and do not add new perceptions to the sealed session record.";
+    ? "Porównaj zapieczętowany zapis części ślepej z ujawnionym celem. Wskaż konkretnie: co było trafne, częściowo trafne lub nietrafne, co warto poprawić w następnych sesjach oraz co już działa dobrze.\n\nPamiętaj, że Reveal może nie opisywać wyczerpująco całego otoczenia celu. Szczegół zgodny z celem lub jego bezpośrednim otoczeniem, lecz niepotwierdzony w Revealu, oznacz jako prawdopodobną, ale niezweryfikowaną zgodność kontekstową — nie jako potwierdzone trafienie ani błąd. Największą wagę przypisuj opisowi głównego celu; trafne otoczenie traktuj jako mniej ważne wsparcie. Informacje sprzeczne z Revelem uznaj za nietrafne i nie zawyżaj oceny na podstawie samej wiedzy ogólnej.\n\nOpisz również własne doświadczenie percepcyjne z tej sesji. Wskaż, jakie wrażenia, odczucia i cechy pola towarzyszyły elementom, które po Revealu okazały się trafnie, częściowo trafnie lub nietrafnie rozpoznane. Zaznacz, które sygnały pomogły Ci rozróżnić elementy celu, które były niejasne albo mylące oraz czy zauważyłeś cechy percepcyjne niewystępujące wcześniej w Twoich wskazówkach. Na tym etapie przedstaw wyłącznie obserwacje wynikające z własnego doświadczenia w tej sesji.\n\nWyraźnie oddziel analizę po Revealu od wcześniejszych danych blind i nie dopisuj nowych percepcji do zapieczętowanej części sesji."
+    : "Compare the sealed blind-session record with the revealed target. Identify specifically what was accurate, partly accurate, or inaccurate, what should be improved in future sessions, and what already works well.\n\nRemember that the Reveal may not exhaustively describe the target’s entire surroundings. A detail consistent with the target or its immediate surroundings but not confirmed by the Reveal should be classified as plausible but unverified contextual correspondence—not as either a confirmed hit or an error. Give the greatest weight to the principal target and treat accurate surrounding context as lower-weight supporting evidence. Treat details contradicted by the Reveal as inaccurate, and do not inflate the assessment using general knowledge alone.\n\nAlso describe your own perceptual experience during this session. Identify what impressions, sensations, and field characteristics accompanied elements that, after the Reveal, proved accurately, partly accurately, or inaccurately recognized. Indicate which signals helped you distinguish target elements, which were unclear or misleading, and whether you noticed perceptual characteristics not previously represented in your guidance. At this stage, provide only observations grounded in your own experience during this session.\n\nClearly separate this post-Reveal analysis from the earlier blind data and do not add new perceptions to the sealed session record.";
   return `${politeRevealTransition(language, "automatic_review")}\n\n${reviewInstruction}`;
 }
 
@@ -152,15 +154,24 @@ export function supportedAutomaticPostRevealReviewRequests(language: InterfaceLa
   return [automaticPostRevealReviewRequest(language), ...HISTORICAL_AUTOMATIC_POST_REVEAL_REVIEW_REQUESTS[language]];
 }
 
-export function findCompletedAutomaticViewerReview(transcript: string, language: InterfaceLanguage): string | null {
+export interface CompletedAutomaticViewerReview {
+  request: string;
+  content: string;
+}
+
+export function findCompletedAutomaticViewerReviewRecord(transcript: string, language: InterfaceLanguage): CompletedAutomaticViewerReview | null {
   const turns = parsePostRevealTranscript(transcript);
   const supportedRequests = new Set(supportedAutomaticPostRevealReviewRequests(language));
   for (let index = 0; index < turns.length - 1; index += 1) {
     if (turns[index].role === "user" && supportedRequests.has(turns[index].content) && turns[index + 1].role === "assistant") {
-      return turns[index + 1].content;
+      return { request: turns[index].content, content: turns[index + 1].content };
     }
   }
   return null;
+}
+
+export function findCompletedAutomaticViewerReview(transcript: string, language: InterfaceLanguage): string | null {
+  return findCompletedAutomaticViewerReviewRecord(transcript, language)?.content ?? null;
 }
 
 export async function sendMonitorPostRevealReview(input: {

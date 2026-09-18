@@ -26,3 +26,6 @@
 *.exe binary
 *.msi binary
 *.db binary
+
+# Canonical Field Perception Lexicons: preserve uploaded UTF-8 bytes and CRLF exactly.
+src/resources/field-lexicon/*.txt -text

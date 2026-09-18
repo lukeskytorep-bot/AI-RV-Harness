@@ -60,30 +60,72 @@ function run(overrides: Partial<TrainingRunRecord> = {}): TrainingRunRecord {
 
 function harness(sessionFailureAt?: string) {
   const updates: Array<Record<string, unknown>> = [];
+  const transcripts = new Map<string, string>();
   const repository = {
     updateTrainingRun: vi.fn(async (_id: string, update: Record<string, unknown>) => { updates.push(update); }),
     updateRvSessionState: vi.fn(async () => undefined),
-    listRvSessions: vi.fn(async () => []),
+    listRvSessions: vi.fn(async () => [...transcripts].map(([id, postRevealTranscript]) => ({ id, postRevealTranscript })) as never),
+    listTrainingRuns: vi.fn(async () => []),
+    listArchivedTrainingRuns: vi.fn(async () => []),
+    getSessionSnapshot: vi.fn(async (sessionId: string) => ({
+      sessionId,
+      providerConfigId: provider.id,
+      provider: provider.provider,
+      modelId: model.modelId,
+      modelRoute: model.route,
+      viewerNotes: { enabled: false },
+    }) as never),
+    getReveal: vi.fn(async () => ({ hash: "reveal-hash", text: "Reveal", artifactManifest: [] }) as never),
+    getViewerEvidence: vi.fn(async () => "sealed blind evidence"),
+    listViewerNoteReflectionRuns: vi.fn(async () => []),
     listJudgeScores: vi.fn(async () => []),
   } as unknown as AppRepository;
   const reflect = vi.fn(async () => null);
-  const runSession = vi.fn(async (input: { automaticTarget?: TargetRecord; signal?: AbortSignal }) => {
+  const fieldGuideUpdate = vi.fn(async () => null);
+  let fieldGuideVersion = 0;
+  const prepareFieldGuide = vi.fn(async () => ({
+    versionId: `field-guide-${++fieldGuideVersion}`,
+    version: fieldGuideVersion,
+    language: "en" as const,
+    content: `guide-${fieldGuideVersion}`,
+    contentSha256: `hash-${fieldGuideVersion}`,
+    estimatedTokens: 10,
+    capacityTokens: 2048 as const,
+    sourceKind: "factory-baseline" as const,
+    activationId: `activation-${fieldGuideVersion}`,
+    activatedAt: "now",
+    aiIdentityId: "identity",
+    modelRoute: model.route,
+  }));
+  const promptFromFieldGuide = vi.fn(async (fieldGuide: Awaited<ReturnType<typeof prepareFieldGuide>>) => ({
+    id: "viewer-prompt",
+    version: "1.5.0",
+    language: "en" as const,
+    content: `prompt-${fieldGuide.versionId}`,
+    contentSha256: `prompt-hash-${fieldGuide.versionId}`,
+    fieldGuide,
+  }));
+  const runSession = vi.fn(async (input: { automaticTarget?: TargetRecord; signal?: AbortSignal; rvSystemPrompt?: { fieldGuide?: { versionId: string } } }) => {
     const id = input.automaticTarget!.id;
     if (id === sessionFailureAt) throw new Error("provider unavailable");
     return { sessionId: `session_${id}`, sessionCode: id, state: "Revealed" as const, transcript: id };
   });
-  const postReview = vi.fn(async (input: { afterViewerReview?: (review: { content: string; transcript: string; response: { content: string; usage: {} } }) => Promise<void> }) => {
-    await input.afterViewerReview?.({ content: "review", transcript: "review", response: { content: "review", usage: {} } });
-    return "review";
+  const postReview = vi.fn(async (request: { sessionId: string }) => {
+    const transcript = `${serializePostRevealTurn("user", supportedAutomaticPostRevealReviewRequests("en")[0])}${serializePostRevealTurn("assistant", "review")}`;
+    transcripts.set(request.sessionId, transcript);
+    return transcript;
   });
   const dependencies = {
+    prepareFieldGuideForSession: prepareFieldGuide,
+    viewerSystemPromptSnapshotFromFieldGuide: promptFromFieldGuide,
     prepareViewerNotesForSession: vi.fn(async () => ({ enabled: true })),
     runAutomaticRvLiteSession: runSession,
     runAutomaticPostRevealReview: postReview,
+    runFieldGuideUpdate: fieldGuideUpdate,
     runViewerNoteReflection: reflect,
     runBlindJudging: vi.fn(async () => ({ scores: [], aggregate: null })),
   } as unknown as NonNullable<ExecuteTrainingRunInput["dependencies"]>;
-  return { repository, updates, reflect, runSession, dependencies };
+  return { repository, updates, transcripts, reflect, fieldGuideUpdate, prepareFieldGuide, promptFromFieldGuide, runSession, dependencies };
 }
 
 function input(initial: TrainingRunRecord, testHarness: ReturnType<typeof harness>, extra: Partial<ExecuteTrainingRunInput> = {}): ExecuteTrainingRunInput {
@@ -110,6 +152,13 @@ describe("Training execution", () => {
     expect(outcome.run.status).toBe("Completed");
     expect(outcome.run.completedTargetIds).toEqual(["t1", "t2", "t3"]);
     expect(outcome.run.sessionIds).toEqual(["session_t1", "session_t2", "session_t3"]);
+    expect(testHarness.fieldGuideUpdate).toHaveBeenCalledTimes(3);
+    expect(testHarness.prepareFieldGuide).toHaveBeenCalledTimes(3);
+    expect(testHarness.runSession.mock.calls.map((call) => call[0].rvSystemPrompt?.fieldGuide?.versionId)).toEqual([
+      "field-guide-1",
+      "field-guide-2",
+      "field-guide-3",
+    ]);
     expect(testHarness.reflect).toHaveBeenCalledTimes(3);
     expect(testHarness.updates.filter((update) => Array.isArray(update.completedTargetIds)).map((update) => (update.completedTargetIds as string[]).length)).toEqual([1, 2, 3]);
   });
@@ -161,10 +210,11 @@ describe("Training execution", () => {
     const testHarness = harness();
     const controller = new AbortController();
     const postReview = testHarness.dependencies!.runAutomaticPostRevealReview as ReturnType<typeof vi.fn>;
-    postReview.mockImplementationOnce(async (request: { afterViewerReview?: (review: { content: string; transcript: string; response: { content: string; usage: {} } }) => Promise<void> }) => {
-      await request.afterViewerReview?.({ content: "review", transcript: "review", response: { content: "review", usage: {} } });
+    postReview.mockImplementationOnce(async (request: { sessionId: string }) => {
+      const transcript = `${serializePostRevealTurn("user", supportedAutomaticPostRevealReviewRequests("en")[0])}${serializePostRevealTurn("assistant", "review")}`;
+      testHarness.transcripts.set(request.sessionId, transcript);
       controller.abort();
-      return "review";
+      return transcript;
     });
     const outcome = await executeTrainingRun(input(run(), testHarness, { signal: controller.signal }));
     expect(outcome.run.status).toBe("Interrupted");
@@ -180,7 +230,8 @@ describe("Training execution", () => {
 
     const interrupted = await executeTrainingRun(input(run({ targetIds: ["t1"], judgeModelRoutes: [model.route] }), testHarness, { judges }));
     expect(interrupted.run.status).toBe("Interrupted");
-    expect(interrupted.run.activeTargetCheckpoint).toEqual({ targetId: "t1", sessionId: "session_t1", stage: "review_completed" });
+    expect(interrupted.run.activeTargetCheckpoint).toMatchObject({ targetId: "t1", sessionId: "session_t1", stage: "viewer_notes_reflection_completed" });
+    expect(interrupted.run.activeTargetCheckpoint?.postRevealReviewPacketSha256).toMatch(/^[a-f0-9]{64}$/);
 
     judge.mockResolvedValueOnce({ scores: [], aggregate: null });
     const resumed = await executeTrainingRun(input(interrupted.run, testHarness, { judges }));
@@ -189,6 +240,7 @@ describe("Training execution", () => {
     expect(resumed.run.sessionIds).toEqual(["session_t1"]);
     expect(testHarness.runSession).toHaveBeenCalledTimes(1);
     expect(testHarness.dependencies!.runAutomaticPostRevealReview).toHaveBeenCalledTimes(1);
+    expect(testHarness.fieldGuideUpdate).toHaveBeenCalledTimes(1);
     expect(testHarness.reflect).toHaveBeenCalledTimes(1);
     expect(judge).toHaveBeenCalledTimes(2);
   });
@@ -201,7 +253,7 @@ describe("Training execution", () => {
       targetIds: ["t1"],
       judgeModelRoutes: [model.route],
       status: "Interrupted",
-      activeTargetCheckpoint: { targetId: "t1", sessionId: "session_t1", stage: "review_completed" },
+      activeTargetCheckpoint: { targetId: "t1", sessionId: "session_t1", stage: "viewer_notes_reflection_completed" },
     });
 
     const outcome = await executeTrainingRun(input(initial, testHarness, { judges: [{ providerConfig: provider, model }] }));
@@ -211,11 +263,103 @@ describe("Training execution", () => {
     expect(outcome.run.sessionIds).toEqual(["session_t1"]);
   });
 
+  it("runs Review, Field Guide Update, then Viewer Notes Reflection in that order", async () => {
+    const testHarness = harness();
+    const order: string[] = [];
+    (testHarness.dependencies!.runAutomaticPostRevealReview as ReturnType<typeof vi.fn>).mockImplementationOnce(async (request: { sessionId: string }) => {
+      order.push("review");
+      const transcript = `${serializePostRevealTurn("user", supportedAutomaticPostRevealReviewRequests("en")[0])}${serializePostRevealTurn("assistant", "review")}`;
+      testHarness.transcripts.set(request.sessionId, transcript);
+      return transcript;
+    });
+    testHarness.fieldGuideUpdate.mockImplementationOnce(async () => { order.push("field-guide"); return null; });
+    testHarness.reflect.mockImplementationOnce(async () => { order.push("viewer-notes"); return null; });
+
+    const outcome = await executeTrainingRun(input(run({ targetIds: ["t1"] }), testHarness));
+    expect(outcome.run.status).toBe("Completed");
+    expect(order).toEqual(["review", "field-guide", "viewer-notes"]);
+  });
+
+  it("resumes at Field Guide Update without repeating a completed Review", async () => {
+    const testHarness = harness();
+    const transcript = `${serializePostRevealTurn("user", supportedAutomaticPostRevealReviewRequests("en")[0])}${serializePostRevealTurn("assistant", "Stored review")}`;
+    testHarness.transcripts.set("session_t1", transcript);
+    testHarness.fieldGuideUpdate.mockRejectedValueOnce(new Error("Field Guide provider unavailable"));
+    const initial = run({ targetIds: ["t1"], status: "Interrupted", activeTargetCheckpoint: { targetId: "t1", sessionId: "session_t1", stage: "review_completed" } });
+
+    const interrupted = await executeTrainingRun(input(initial, testHarness));
+    expect(interrupted.run.status).toBe("Interrupted");
+    expect(testHarness.dependencies!.runAutomaticPostRevealReview).not.toHaveBeenCalled();
+    expect(testHarness.reflect).not.toHaveBeenCalled();
+
+    testHarness.fieldGuideUpdate.mockResolvedValueOnce(null);
+    const resumed = await executeTrainingRun(input(interrupted.run, testHarness));
+    expect(resumed.run.status).toBe("Completed");
+    expect(testHarness.dependencies!.runAutomaticPostRevealReview).not.toHaveBeenCalled();
+    expect(testHarness.fieldGuideUpdate).toHaveBeenCalledTimes(2);
+    expect(testHarness.reflect).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Field Guide Update unfinished after a provider failure and resumes from that stage", async () => {
+    const testHarness = harness();
+    const transcript = `${serializePostRevealTurn("user", supportedAutomaticPostRevealReviewRequests("en")[0])}${serializePostRevealTurn("assistant", "Stored review")}`;
+    testHarness.transcripts.set("session_t1", transcript);
+    testHarness.fieldGuideUpdate.mockResolvedValueOnce({
+      status: "FAILED_PROVIDER",
+      audit: { status: "FAILED_PROVIDER", failureMessage: "temporary provider outage" },
+    } as never);
+    const initial = run({ targetIds: ["t1"], status: "Interrupted", activeTargetCheckpoint: { targetId: "t1", sessionId: "session_t1", stage: "review_completed" } });
+
+    const interrupted = await executeTrainingRun(input(initial, testHarness));
+    expect(interrupted.run.status).toBe("Interrupted");
+    expect(interrupted.run.activeTargetCheckpoint?.stage).toBe("review_completed");
+    expect(testHarness.reflect).not.toHaveBeenCalled();
+
+    testHarness.fieldGuideUpdate.mockResolvedValueOnce(null);
+    const resumed = await executeTrainingRun(input(interrupted.run, testHarness));
+    expect(resumed.run.status).toBe("Completed");
+    expect(testHarness.fieldGuideUpdate).toHaveBeenCalledTimes(2);
+    expect(testHarness.reflect).toHaveBeenCalledOnce();
+  });
+
+  it("treats FAILED_CAPACITY as a completed Field Guide decision and still continues Viewer Notes", async () => {
+    const testHarness = harness();
+    testHarness.fieldGuideUpdate.mockResolvedValueOnce({
+      status: "FAILED_CAPACITY",
+      audit: { status: "FAILED_CAPACITY", packetSha256: "a".repeat(64) },
+    } as never);
+    const outcome = await executeTrainingRun(input(run({ targetIds: ["t1"] }), testHarness));
+    expect(outcome.run.status).toBe("Completed");
+    expect(testHarness.reflect).toHaveBeenCalledOnce();
+  });
+
+  it("does not repeat completed Review or Field Guide Update when Viewer Notes Reflection resumes", async () => {
+    const testHarness = harness();
+    const transcript = `${serializePostRevealTurn("user", supportedAutomaticPostRevealReviewRequests("en")[0])}${serializePostRevealTurn("assistant", "Stored review")}`;
+    testHarness.transcripts.set("session_t1", transcript);
+    testHarness.reflect.mockRejectedValueOnce(new Error("Viewer Notes provider unavailable"));
+    const initial = run({ targetIds: ["t1"], status: "Interrupted", activeTargetCheckpoint: { targetId: "t1", sessionId: "session_t1", stage: "field_guide_update_completed" } });
+
+    const interrupted = await executeTrainingRun(input(initial, testHarness));
+    expect(interrupted.run.status).toBe("Interrupted");
+    expect(testHarness.dependencies!.runAutomaticPostRevealReview).not.toHaveBeenCalled();
+    expect(testHarness.fieldGuideUpdate).not.toHaveBeenCalled();
+
+    testHarness.reflect.mockResolvedValueOnce(null);
+    const resumed = await executeTrainingRun(input(interrupted.run, testHarness));
+    expect(resumed.run.status).toBe("Completed");
+    expect(testHarness.dependencies!.runAutomaticPostRevealReview).not.toHaveBeenCalled();
+    expect(testHarness.fieldGuideUpdate).not.toHaveBeenCalled();
+    expect(testHarness.reflect).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ["pl", "current", 0],
-    ["pl", "historical", 1],
+    ["pl", "historical-context", 1],
+    ["pl", "historical-original", 2],
     ["en", "current", 0],
-    ["en", "historical", 1],
+    ["en", "historical-context", 1],
+    ["en", "historical-original", 2],
   ] as const)("reuses a stored %s %s automatic Viewer Review without a paid rerun", async (language, _version, requestIndex) => {
     const testHarness = harness();
     const request = supportedAutomaticPostRevealReviewRequests(language)[requestIndex];
@@ -233,6 +377,7 @@ describe("Training execution", () => {
     expect(outcome.run.status).toBe("Completed");
     expect(repeated.run.status).toBe("Completed");
     expect(testHarness.dependencies!.runAutomaticPostRevealReview).not.toHaveBeenCalled();
+    expect(testHarness.fieldGuideUpdate).toHaveBeenCalledOnce();
     expect(testHarness.reflect).toHaveBeenCalledOnce();
     expect(testHarness.reflect).toHaveBeenCalledWith(expect.objectContaining({ viewerReview: "Stored review" }));
   });

@@ -1,11 +1,14 @@
 import { prepareViewerNotesForSession, runViewerNoteReflection } from "../../aiCenter/viewerNotes";
+import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
+import { sha256Text } from "../../application/sha256";
+import { fieldGuideUpdateCompletesStage, runFieldGuideUpdate } from "../../aiCenter/fieldGuideUpdate";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "../../domain/isBeIdentity";
 import { runBlindJudging, selectMissingJudgeSelections, type JudgeSelection } from "../../judge/engine";
 import { profileGenerationDefaults } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
 import { getRvLite } from "../../resources/protocolRegistry";
 import type { SessionProgress } from "../../sessions/controller";
-import { findCompletedAutomaticViewerReview, runAutomaticPostRevealReview } from "../../sessions/postReveal";
+import { findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview } from "../../sessions/postReveal";
 import { runAutomaticRvLiteSession } from "../../sessions/rvLiteController";
 import type { AppRepository } from "../../storage/repository";
 import type { TargetRecord } from "../../targets/types";
@@ -15,9 +18,12 @@ import type { AppSettings, InterfaceLanguage, Profile, ViewerSystemPromptSnapsho
 type ExecutionSettings = Pick<AppSettings, "maxRetries" | "requestTimeoutMs" | "sessionCodePrefix" | "maxSessionCostUsd">;
 
 const defaultDependencies = {
+  prepareFieldGuideForSession,
+  viewerSystemPromptSnapshotFromFieldGuide,
   prepareViewerNotesForSession,
   runAutomaticRvLiteSession,
   runAutomaticPostRevealReview,
+  runFieldGuideUpdate,
   runViewerNoteReflection,
   runBlindJudging,
 };
@@ -67,6 +73,37 @@ export function isTrainingBlockBoundary(run: TrainingRunRecord, zeroBasedIndex: 
   return !next || current.split("_").slice(0, 3).join("_") !== next.split("_").slice(0, 3).join("_");
 }
 
+async function currentTrainingRecord(repository: AppRepository, id: string, fallback: TrainingRunRecord): Promise<TrainingRunRecord> {
+  return (await repository.listTrainingRuns()).find((run) => run.id === id) ?? fallback;
+}
+
+
+async function trainingPostRevealReviewPacketSha256(repository: AppRepository, sessionId: string, language: InterfaceLanguage, request: string): Promise<string> {
+  const [snapshot, reveal, evidence] = await Promise.all([
+    repository.getSessionSnapshot(sessionId),
+    repository.getReveal(sessionId),
+    repository.getViewerEvidence(sessionId),
+  ]);
+  if (!snapshot || !reveal) throw new Error("Cannot hash the Training post-Reveal Review packet without the immutable Session Snapshot and Reveal.");
+  const artifacts = [...(reveal.artifactManifest ?? [])]
+    .map((artifact) => ({ artifactId: artifact.artifactId, originalFileName: artifact.originalFileName, mimeType: artifact.mimeType, sha256: artifact.sha256 }))
+    .sort((a, b) => a.artifactId.localeCompare(b.artifactId));
+  return sha256Text(JSON.stringify({
+    packetVersion: "training-post-reveal-review-v1",
+    sessionId,
+    language,
+    viewerRoute: {
+      providerConfigId: snapshot.providerConfigId,
+      provider: snapshot.provider,
+      modelId: snapshot.modelId,
+      modelRoute: snapshot.modelRoute,
+    },
+    sealedBlindEvidence: evidence,
+    reveal: { hash: reveal.hash, text: reveal.text?.trim() ?? "", artifacts },
+    request,
+  }));
+}
+
 export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promise<TrainingExecutionOutcome> {
   const dependencies = { ...defaultDependencies, ...input.dependencies };
   const targetById = new Map(input.targets.map((target) => [target.id, target]));
@@ -99,6 +136,18 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
 
       let checkpoint = working.activeTargetCheckpoint?.targetId === targetId ? working.activeTargetCheckpoint : undefined;
       if (!checkpoint) {
+        // Freeze the currently active Field Guide for this session, not for the
+        // whole multi-target Training run. A successful update after target N
+        // must therefore be visible to target N+1, while Resume continues from
+        // the immutable snapshot already stored by the session controller.
+        const fieldGuide = await dependencies.prepareFieldGuideForSession({
+          repository: input.repository,
+          profile: input.profile,
+          providerConfig: input.providerConfig,
+          model: input.model,
+          language: execution.language,
+        });
+        const rvSystemPrompt = await dependencies.viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
         const viewerNotes = await dependencies.prepareViewerNotesForSession({
           repository: input.repository,
           profileId: input.profile.id,
@@ -118,7 +167,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
           sessionLanguage: execution.language,
           requestedSettings: execution.generationSettings,
           viewerNotes,
-          ...(execution.rvSystemPrompt ? { rvSystemPrompt: execution.rvSystemPrompt } : {}),
+          rvSystemPrompt,
           automaticTarget: target,
           signal: input.signal,
           maxRetries: execution.transport.maxRetries,
@@ -134,39 +183,106 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
         input.onRunChange?.(working);
       }
 
-      if (checkpoint.stage === "session_revealed") {
+      let viewerReview: string | null = null;
+      let viewerReviewRequest: string | null = null;
+      const loadStoredViewerReview = async () => {
         const storedSession = (await input.repository.listRvSessions(working.workspaceId)).find((session) => session.id === checkpoint!.sessionId);
-        const storedReview = findCompletedAutomaticViewerReview(storedSession?.postRevealTranscript ?? "", execution.language);
-        const reflect = async (content: string) => dependencies.runViewerNoteReflection({
-              repository: input.repository,
-              sessionId: checkpoint!.sessionId,
-              viewerReview: content,
-              providerConfig: input.providerConfig,
-              model: input.model,
-              timeoutMs: execution.transport.requestTimeoutMs,
-              maxRetries: execution.transport.maxRetries,
-              signal: input.signal,
-            });
-        if (storedReview) {
-          await reflect(storedReview);
-        } else {
-          await dependencies.runAutomaticPostRevealReview({
+        return findCompletedAutomaticViewerReviewRecord(storedSession?.postRevealTranscript ?? "", execution.language);
+      };
+      const reviewPacketSha256 = async (request: string) => trainingPostRevealReviewPacketSha256(
+        input.repository,
+        checkpoint!.sessionId,
+        execution.language,
+        request,
+      );
+
+      if (checkpoint.stage === "session_revealed") {
+        const storedReview = await loadStoredViewerReview();
+        viewerReview = storedReview?.content ?? null;
+        viewerReviewRequest = storedReview?.request ?? null;
+        if (!viewerReview) {
+          const transcript = await dependencies.runAutomaticPostRevealReview({
             repository: input.repository,
             sessionId: checkpoint.sessionId,
             viewer: { providerConfig: input.providerConfig, model: input.model },
             timeoutMs: execution.transport.requestTimeoutMs,
             maxRetries: execution.transport.maxRetries,
             signal: input.signal,
-            afterViewerReview: async ({ content }) => { await reflect(content); },
           });
+          const completedReview = findCompletedAutomaticViewerReviewRecord(transcript, execution.language);
+          viewerReview = completedReview?.content ?? null;
+          viewerReviewRequest = completedReview?.request ?? null;
         }
-        checkpoint = { ...checkpoint, stage: "review_completed" };
+        if (!viewerReview || !viewerReviewRequest) throw new Error("Completed automatic Viewer Review could not be recovered after post-Reveal execution.");
+        checkpoint = { ...checkpoint, stage: "review_completed", postRevealReviewPacketSha256: await reviewPacketSha256(viewerReviewRequest) };
         working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
         await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
         input.onRunChange?.(working);
       }
+
+      if (checkpoint.stage === "review_completed") {
+        if (!viewerReview) {
+          const storedReview = await loadStoredViewerReview();
+          viewerReview = storedReview?.content ?? null;
+          viewerReviewRequest = storedReview?.request ?? null;
+        }
+        if (!viewerReview) throw new Error("Completed automatic Viewer Review is required before Field Guide Update.");
+        const fieldGuideResult = await dependencies.runFieldGuideUpdate({
+          repository: input.repository,
+          trainingRun: working,
+          sessionId: checkpoint.sessionId,
+          postRevealReview: viewerReview,
+          providerConfig: input.providerConfig,
+          model: input.model,
+          timeoutMs: execution.transport.requestTimeoutMs,
+          maxRetries: execution.transport.maxRetries,
+          signal: input.signal,
+        });
+        if (fieldGuideResult && !fieldGuideUpdateCompletesStage(fieldGuideResult.status)) {
+          throw new Error(`Field Guide Update did not complete (${fieldGuideResult.status}).${fieldGuideResult.audit.failureMessage ? ` ${fieldGuideResult.audit.failureMessage}` : ""}`);
+        }
+        const refreshed = await currentTrainingRecord(input.repository, working.id, working);
+        working = { ...refreshed, activeTargetCheckpoint: {
+          ...checkpoint,
+          stage: "field_guide_update_completed",
+          ...(fieldGuideResult?.audit.packetSha256 ? { fieldGuideUpdatePacketSha256: fieldGuideResult.audit.packetSha256 } : {}),
+        }, updatedAt: now() };
+        checkpoint = working.activeTargetCheckpoint!;
+        await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
+        input.onRunChange?.(working);
+      }
+
+      if (checkpoint.stage === "field_guide_update_completed") {
+        if (!viewerReview) viewerReview = (await loadStoredViewerReview())?.content ?? null;
+        if (!viewerReview) throw new Error("Completed automatic Viewer Review is required before Viewer Notes Reflection.");
+        await dependencies.runViewerNoteReflection({
+          repository: input.repository,
+          sessionId: checkpoint.sessionId,
+          viewerReview,
+          providerConfig: input.providerConfig,
+          model: input.model,
+          timeoutMs: execution.transport.requestTimeoutMs,
+          maxRetries: execution.transport.maxRetries,
+          signal: input.signal,
+        });
+        const sessionSnapshot = await input.repository.getSessionSnapshot(checkpoint.sessionId);
+        const reflectionPacketSha256 = sessionSnapshot?.viewerNotes?.enabled
+          ? (await input.repository.listViewerNoteReflectionRuns(sessionSnapshot.viewerNotes.aiIdentityId))
+              .filter((run) => run.sourceSessionId === checkpoint!.sessionId && run.status !== "PENDING")
+              .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.reflectionPacketSha256
+          : undefined;
+        checkpoint = {
+          ...checkpoint,
+          stage: "viewer_notes_reflection_completed",
+          ...(reflectionPacketSha256 ? { viewerNotesReflectionPacketSha256: reflectionPacketSha256 } : {}),
+        };
+        working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
+        await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
+        input.onRunChange?.(working);
+      }
+
       if (input.signal?.aborted) throw new DOMException("Training cancelled", "AbortError");
-      if (input.judges.length && checkpoint.stage === "review_completed") {
+      if (input.judges.length && checkpoint.stage === "viewer_notes_reflection_completed") {
         const existingScores = await input.repository.listJudgeScores(checkpoint.sessionId);
         const missingJudges = selectMissingJudgeSelections(existingScores, input.judges);
         if (missingJudges.length) {

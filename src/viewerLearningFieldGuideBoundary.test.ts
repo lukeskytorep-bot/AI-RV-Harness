@@ -29,7 +29,7 @@ const sha256 = (value: string) => createHash("sha256").update(value).digest("hex
 
 describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
   it("keeps protected Post-Reveal, Viewer Notes, Judge, Monitor, Research, retry and controlled-purge sources byte-identical", () => {
-    expect(sha256(postReveal)).toBe("5386dfbf512c691dffb66a57b88fb023075aacee452de86daaf4aba89b405e6d");
+    expect(sha256(postReveal)).toBe("412456ee59f47ef01a11bce5999bfe318c6ef8b418c7396e8aa9c1fb59676a8a");
     expect(sha256(viewerNotes)).toBe("4ef47c1c22e44f8299d0404e88ec2779f33505d358d0fb6434bd0edf94f0b120");
     expect(sha256(judgePrompt)).toBe("dc2af6fe6b478360cab414c4e4d9bc3f3a4d9fae95819f8420f116c8652df492");
     expect(sha256(judgeEngine)).toBe("df0f40bb7747f36f184f89211c170b2edef2484a8b07b0920390c1dd8dfa8b7d");
@@ -56,7 +56,7 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(chatPanel).toContain("pendingRetry.rvSystemPrompt");
   });
 
-  it("freezes Field Guide in new RV and Training snapshots and reuses the stored snapshot on RV Resume", () => {
+  it("freezes Field Guide in new RV and per-target Training snapshots and reuses the stored snapshot on RV Resume", () => {
     expect(rvSessions).toContain("prepareFieldGuideForSession");
     expect(rvSessions).toContain("viewerSystemPromptSnapshotFromFieldGuide");
     expect(rvSessions).toContain("snapshot.rvSystemPrompt.fullContent");
@@ -66,11 +66,10 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(resumePrompt).toBeGreaterThan(-1);
     expect(protocolDispatch).toBeGreaterThan(resumePrompt);
 
-    expect(training).toContain("prepareFieldGuideForSession");
-    expect(training).toContain("viewerSystemPromptSnapshotFromFieldGuide");
     expect(training).toContain("executionSnapshot:");
-    expect(training).toContain("...(rvSystemPrompt ? { rvSystemPrompt } : {})");
-    expect(training).toContain("initial.executionSnapshot?.rvSystemPrompt");
+    expect(trainingExecution).toContain("prepareFieldGuideForSession");
+    expect(trainingExecution).toContain("viewerSystemPromptSnapshotFromFieldGuide");
+    expect(trainingExecution).toContain("rvSystemPrompt,");
   });
 
   it("treats the Profile prompt column as legacy-only after schema 024", () => {

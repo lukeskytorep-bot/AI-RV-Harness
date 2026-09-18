@@ -1,15 +1,22 @@
 import type { TrainingCategory } from "../targets/bundled";
 import type { GenerationSettings } from "../providers/types";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
+import type { FieldGuideUpdateAuditRecord } from "../aiCenter/fieldGuideTypes";
 
 export type TrainingRunStatus = "Planned" | "Running" | "Paused" | "Interrupted" | "Completed";
 
-export type TrainingTargetStage = "session_revealed" | "review_completed" | "judging_completed";
+export type TrainingTargetStage = "session_revealed" | "review_completed" | "field_guide_update_completed" | "viewer_notes_reflection_completed" | "judging_completed";
 
 export interface TrainingTargetCheckpoint {
   targetId: string;
   sessionId: string;
   stage: TrainingTargetStage;
+  /** Stable input packet hash for the completed shared post-Reveal Review. */
+  postRevealReviewPacketSha256?: string;
+  /** Stable Field Guide Update packet hash when the stage is applicable. */
+  fieldGuideUpdatePacketSha256?: string;
+  /** Existing Viewer Notes reflection packet hash when Viewer Notes are enabled. */
+  viewerNotesReflectionPacketSha256?: string;
 }
 
 export interface TrainingExecutionSnapshot {
@@ -49,6 +56,8 @@ export interface TrainingRunRecord {
   executionSnapshot?: TrainingExecutionSnapshot;
   /** Durable sub-target checkpoint used to resume without repeating completed AI work. */
   activeTargetCheckpoint?: TrainingTargetCheckpoint | null;
+  /** Durable audit trail for per-session Field Guide Update decisions. */
+  fieldGuideUpdates?: FieldGuideUpdateAuditRecord[];
   directoryPath?: string;
   estimatedCostUsd?: number;
   actualCostUsd?: number;
@@ -68,6 +77,7 @@ export interface UpdateTrainingRunInput {
   currentIndex?: number;
   executionSnapshot?: TrainingExecutionSnapshot;
   activeTargetCheckpoint?: TrainingTargetCheckpoint | null;
+  fieldGuideUpdates?: FieldGuideUpdateAuditRecord[];
   directoryPath?: string;
   actualCostUsd?: number;
   error?: string;

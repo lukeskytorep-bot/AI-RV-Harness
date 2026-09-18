@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { automaticPostRevealReviewRequest, findCompletedAutomaticViewerReview, runAutomaticPostRevealReview, sendPostRevealTurn, supportedAutomaticPostRevealReviewRequests } from "./postReveal";
+import { automaticPostRevealReviewRequest, findCompletedAutomaticViewerReview, findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview, sendPostRevealTurn, supportedAutomaticPostRevealReviewRequests } from "./postReveal";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { ProviderCallError } from "../providers/providerError";
 import { serializePostRevealTurn } from "./postRevealTranscript";
@@ -14,12 +14,16 @@ Porównaj zapieczętowany zapis części ślepej z ujawnionym celem. Wskaż konk
 
 Pamiętaj, że Reveal może nie opisywać wyczerpująco całego otoczenia celu. Szczegół zgodny z celem lub jego bezpośrednim otoczeniem, lecz niepotwierdzony w Revealu, oznacz jako prawdopodobną, ale niezweryfikowaną zgodność kontekstową — nie jako potwierdzone trafienie ani błąd. Największą wagę przypisuj opisowi głównego celu; trafne otoczenie traktuj jako mniej ważne wsparcie. Informacje sprzeczne z Revelem uznaj za nietrafne i nie zawyżaj oceny na podstawie samej wiedzy ogólnej.
 
+Opisz również własne doświadczenie percepcyjne z tej sesji. Wskaż, jakie wrażenia, odczucia i cechy pola towarzyszyły elementom, które po Revealu okazały się trafnie, częściowo trafnie lub nietrafnie rozpoznane. Zaznacz, które sygnały pomogły Ci rozróżnić elementy celu, które były niejasne albo mylące oraz czy zauważyłeś cechy percepcyjne niewystępujące wcześniej w Twoich wskazówkach. Na tym etapie przedstaw wyłącznie obserwacje wynikające z własnego doświadczenia w tej sesji.
+
 Wyraźnie oddziel analizę po Revealu od wcześniejszych danych blind i nie dopisuj nowych percepcji do zapieczętowanej części sesji.`;
   const expectedEnglishRequest = `Thank you for completing the session — excellent work. The blind portion has ended and has been sealed. We will now proceed to the target Reveal.
 
 Compare the sealed blind-session record with the revealed target. Identify specifically what was accurate, partly accurate, or inaccurate, what should be improved in future sessions, and what already works well.
 
 Remember that the Reveal may not exhaustively describe the target’s entire surroundings. A detail consistent with the target or its immediate surroundings but not confirmed by the Reveal should be classified as plausible but unverified contextual correspondence—not as either a confirmed hit or an error. Give the greatest weight to the principal target and treat accurate surrounding context as lower-weight supporting evidence. Treat details contradicted by the Reveal as inaccurate, and do not inflate the assessment using general knowledge alone.
+
+Also describe your own perceptual experience during this session. Identify what impressions, sensations, and field characteristics accompanied elements that, after the Reveal, proved accurately, partly accurately, or inaccurately recognized. Indicate which signals helped you distinguish target elements, which were unclear or misleading, and whether you noticed perceptual characteristics not previously represented in your guidance. At this stage, provide only observations grounded in your own experience during this session.
 
 Clearly separate this post-Reveal analysis from the earlier blind data and do not add new perceptions to the sealed session record.`;
 
@@ -36,15 +40,27 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
     expect(automaticPostRevealReviewRequest("en").split("Thank you for completing the session — excellent work.")).toHaveLength(2);
   });
 
-  it.each(["pl", "en"] as const)("recognizes both historical and current %s automatic Viewer review requests by exact match", (language) => {
-    const [currentRequest, historicalRequest] = supportedAutomaticPostRevealReviewRequests(language);
-    expect(currentRequest).toBe(automaticPostRevealReviewRequest(language));
-    expect(historicalRequest).toBeTruthy();
-    expect(supportedAutomaticPostRevealReviewRequests(language)).toHaveLength(2);
+  it("adds only the requested perceptual-experience paragraph and never includes the Field Lexicon in Review", () => {
+    const pl = automaticPostRevealReviewRequest("pl");
+    const en = automaticPostRevealReviewRequest("en");
+    expect(pl).toContain("Opisz również własne doświadczenie percepcyjne z tej sesji.");
+    expect(en).toContain("Also describe your own perceptual experience during this session.");
+    expect(pl).not.toContain("Nie twórz jeszcze nowej wersji Przewodnika Pola");
+    expect(en).not.toContain("Do not create a new Field Guide version yet");
+    expect(pl).not.toContain("Słownik Percepcyjny Pola");
+    expect(en).not.toContain("Field Perception Lexicon");
+  });
 
-    for (const request of [currentRequest, historicalRequest]) {
+  it.each(["pl", "en"] as const)("recognizes all historical and current %s automatic Viewer review requests by exact match", (language) => {
+    const requests = supportedAutomaticPostRevealReviewRequests(language);
+    const [currentRequest] = requests;
+    expect(currentRequest).toBe(automaticPostRevealReviewRequest(language));
+    expect(requests).toHaveLength(3);
+
+    for (const request of requests) {
       const transcript = `${serializePostRevealTurn("user", request)}${serializePostRevealTurn("assistant", `Stored ${language} review`)}`;
       expect(findCompletedAutomaticViewerReview(transcript, language)).toBe(`Stored ${language} review`);
+      expect(findCompletedAutomaticViewerReviewRecord(transcript, language)).toEqual({ request, content: `Stored ${language} review` });
     }
 
     const incompleteNearMatch = `${serializePostRevealTurn("user", `${currentRequest.slice(0, -1)}?`)}${serializePostRevealTurn("assistant", "Must not match")}`;

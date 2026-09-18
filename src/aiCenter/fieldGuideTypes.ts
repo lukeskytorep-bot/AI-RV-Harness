@@ -36,6 +36,8 @@ export interface FieldGuideSourceSnapshot {
   restoredFromVersionId?: string;
   lexiconId?: string;
   lexiconVersion?: string;
+  lexiconSha256?: string;
+  fieldGuideUpdatePacketSha256?: string;
 }
 
 export interface FieldGuideVersion {
@@ -133,4 +135,40 @@ export interface ResolveLegacyFieldGuideBaselineInput {
   contentSha256: string;
   estimatedTokens: number;
   sourceSnapshot: FieldGuideSourceSnapshot;
+}
+
+
+export type FieldGuideUpdateStatus =
+  | "PENDING"
+  | "UPDATE"
+  | "NO_CHANGE"
+  | "FAILED_PROVIDER"
+  | "FAILED_PARSE"
+  | "FAILED_SCHEMA"
+  | "FAILED_CAPACITY"
+  | "FAILED_OUTPUT_PREFLIGHT"
+  | "STALE_BASE";
+
+export interface FieldGuideUpdateAuditRecord {
+  id: string;
+  sourceTrainingRunId: string;
+  sourceSessionId: string;
+  aiIdentityId: string;
+  language: FieldGuideLanguage;
+  baseVersionId: string;
+  baseContentSha256: string;
+  packetSha256: string;
+  lexiconId: string;
+  lexiconVersion: string;
+  lexiconSha256: string;
+  capacityTokens: FieldGuideCapacity;
+  attemptCount: number;
+  status: FieldGuideUpdateStatus;
+  resultVersionId?: string;
+  providerRequestId?: string;
+  rawFinalResponseSha256?: string;
+  changeSummary?: string;
+  failureMessage?: string;
+  createdAt: string;
+  completedAt?: string;
 }
