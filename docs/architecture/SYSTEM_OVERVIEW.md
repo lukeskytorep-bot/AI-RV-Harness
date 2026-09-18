@@ -107,7 +107,7 @@ An automatic session can run:
 - without a Monitor, advancing according to its protocol controller; or
 - with an AI Monitor, which reviews blind responses and may allow the protocol to continue or provide an intervention.
 
-When Viewer Notes are ON, the session freezes the current notes version before the first Viewer call. After the blind evidence is sealed, Reveal is shown, and the Viewer completes its own post-Reveal review, the same Viewer may keep or replace its notes. In monitored sessions this reflection occurs before the Monitor's post-Reveal review.
+When Viewer Notes are ON, an ordinary automatic session freezes the current notes version before the first Viewer call and uses it read-only. After blind evidence is sealed and Reveal is shown, the Viewer completes its post-Reveal review, but ordinary RV never creates or replaces Viewer Notes. Only the deliberate Training workflow may update Viewer learning records.
 
 Interrupted sessions preserve their records. When a safe checkpoint exists, **Continue session** reconstructs the completed portion and resumes at the first missing provider call. **Start again** preserves the interrupted record and creates a new session from the beginning.
 
@@ -172,7 +172,7 @@ A Viewer Notes identity is defined by **Profile + credential fingerprint + provi
 
 Viewer Notes are the model's own general working guidance. The current version is read-only to the operator; every model-approved update creates a complete immutable version with provenance, capacity, source session, and a model-written change summary. An older version may be restored as a new auditable activation, while direct human text editing is intentionally unavailable.
 
-The session control is deliberately simple and defaults to ON. The selected snapshot is frozen before the session begins. A qualifying automatic or Training session may ask the same Viewer to reflect only after Reveal and its own post-Reveal assessment, but before any Monitor review. Monitor opinions, Judge output, later discussion, and other models' notes are excluded. Manual RV can use a snapshot but does not perform an automatic notes update.
+The session control is deliberately simple and defaults to ON. The selected snapshot is frozen before the session begins. Ordinary automatic, monitored and Manual RV may use the snapshot only as read-only context and never create a notes version. Only a completed Training target may ask the same Viewer to update its learning records after Reveal and its own post-Reveal assessment. The durable order is **Viewer Review → Field Guide Update → Viewer Notes Reflection**. Monitor opinions, Judge output, later discussion, and other models' notes are excluded.
 
 Capacity uses a conservative shared estimate and selectable limits from 1,024 to 8,192 tokens. A limit may be reduced only when the current notes already fit; the Harness never truncates notes to satisfy a lower setting.
 

@@ -1,23 +1,25 @@
-# AI RV Harness v0.7.13 — finalny runtime smoke modularizacji
+# AI RV Harness v0.7.13 — desktop runtime i release smoke
 
-**Cel:** ostatnia ręczna bramka Etapu 9 po zakończeniu Etapów 1–8.  
-**Wymagana baza:** dokładny kandydat Etapu 9 zbudowany na zaakceptowanym STAGE-8-R1.  
+**Status modularizacji:** Etapy 1–9 `COMPLETED — AUTOMATED GATES PASS`.  
+**Cel:** bieżąca ręczna bramka desktopowa przed akceptacją/release v0.7.13; zachowuje scenariusze modularizacji i obejmuje późniejsze zmiany schema 24 oraz Viewer Learning.  
+**Wymagana baza:** dokładny aktualny zielony kandydat v0.7.13, nie historyczny ZIP Etapu 9.  
 **Zasada:** wykonywać na desktopowym buildzie Tauri z kopią danych testowych. Nie używać jedynej kopii realnej bazy użytkownika.
 
 ## Warunki wejścia
 
-- pełny GitHub Actions dla dokładnego kandydata Etapu 9 jest zielony;
+- pełny GitHub Actions dla dokładnego aktualnego kandydata jest zielony;
 - `verify:source`, `verify:ux-data`, `verify:architecture`, pełny Vitest, typecheck, Vite, Rust/Tauri i Clippy przechodzą;
 - build uruchamia się z nowym, pustym profilem aplikacji;
-- dostępna jest osobna kopia reprezentatywnej starszej bazy do testu upgrade/restore;
+- dostępna jest osobna kopia dokładnej zielonej bazy schema 23 do kontrolowanego testu upgrade 23 → 24;
+- osobna baza legacy służy do sprawdzenia ekranu compatibility epoch; nie wolno pozwalać pluginowi SQL migrować jej automatycznie;
 - dla provider smoke używany jest testowy credential należący do użytkownika.
 
 ## Checklista
 
 | # | Scenariusz | Procedura minimalna | Wynik wymagany |
 | --- | --- | --- | --- |
-| 1 | Start po migracji 23 | Uruchom aplikację na bazie po migracji 23, zamknij i uruchom ponownie. | Start bez błędu, dane widoczne, brak ponownej/niekończącej się migracji. |
-| 2 | Upgrade starszej bazy | Uruchom kopię starszej bazy, pozwól wykonać migracje do 23. | Dane legacy pozostają dostępne; aplikacja pracuje na schema version 23. |
+| 1 | Start na schema 24 | Uruchom aplikację na aktualnej bazie 24, zamknij i uruchom ponownie. | Start bez błędu, dane widoczne, brak ponownej/niekończącej się migracji. |
+| 2 | Kontrolowany upgrade i legacy epoch | Uruchom kopię dokładnej zielonej bazy 23, a osobno kopię legacy v1–20. | Zielona v23 przechodzi do v24 z zachowaniem danych. Legacy jest zatrzymana przed `Database.load()` i oferuje bezpieczne zachowanie/start fresh; nie jest automatycznie migrowana. |
 | 3 | Lazy routes | Otwórz kolejno Research, Settings i AI Center/Monitor, wróć na Home i otwórz je ponownie. | Każda trasa renderuje się, fallback znika, brak pustego ekranu i błędu dynamic import. |
 | 4 | Zwykłe odczyty/zapisy | Utwórz/zmień nazwę Workspace lub Conversation, zapisz wiadomość/ustawienie i uruchom ponownie aplikację. | Odczyt i zapis działają; dane pozostają po restarcie. |
 | 5 | Training | Uruchom krótki testowy Training, doprowadź co najmniej jeden target do trwałego checkpointu; jeśli możliwe przerwij i użyj Resume. | Brak duplikatu ukończonego kroku; checkpoint i Resume zachowują się zgodnie z rekordem. |
@@ -27,16 +29,13 @@
 | 9 | Backup | Utwórz backup aktualnej bazy i sprawdź manifest/listę backupów. | Backup kończy się sukcesem, ma poprawny manifest i przechodzi kontrolę integralności. |
 | 10 | Restore + safety backup | Zmień dane po backupie, wykonaj Restore. | Przed Restore tworzony jest safety backup; przywrócone dane odpowiadają backupowi; aplikacja otwiera bazę po operacji. |
 | 11 | Controlled purge | Na danych testowych zarchiwizuj wspierany obiekt, sprawdź preview, wykonaj permanent delete. | Preview odpowiada skutkom; purge usuwa właściwy zakres, nie zostawia FK violations ani otwartego purge context. |
-| 12 | Viewer Notes | Wykonaj scenariusz Training, który czyta/aktualizuje Viewer Notes, następnie otwórz historię w AI Center. | Wersja jest przypisana do właściwej AI identity i zachowuje provenance/source snapshot; zwykła RV Session nie tworzy nowej wersji Notes. |
-| 13 | Research/Judge sanity | Otwórz zapisany Research/Judge record lub wykonaj minimalny dozwolony test. | Frozen score/blinding state nie ulegają zmianie od samego otwarcia/odczytu. |
-| 14 | Restart końcowy | Zamknij aplikację po wszystkich operacjach i uruchom ponownie. | Brak startup error; ostatnie poprawne dane i archiwa są dostępne. |
+| 12 | Training Viewer Learning | Wykonaj Training do zakończenia jednego targetu i otwórz Viewer Learning w AI Center. | Kolejność to Viewer Review → Field Guide Update → Viewer Notes Reflection; wersje są przypisane do exact identity/language i zachowują provenance. Zwykła RV Session nie tworzy nowych wersji. |
+| 13 | Field Guide capacity/Resume | Przetestuj `NO_CHANGE` lub poprawny update, a w kontrolowanym przypadku odpowiedź ponad limitem i Resume. | Limit nie powoduje obcięcia; działa jedna poprawa pojemności; ukończone etapy nie są płatnie powtarzane po Resume. |
+| 14 | Research/Judge sanity | Zablokuj minimalny Research z Notes OFF/CURRENT i Field Guide OFF/CURRENT; sprawdź także historię Field Guide, jeśli dostępna. | Lock zamraża dokładne snapshoty, Resume ich nie podmienia, Research nie tworzy wersji Notes ani Field Guide, a frozen Judge score/blinding nie zmienia się od odczytu. |
+| 15 | Restart końcowy | Zamknij aplikację po wszystkich operacjach i uruchom ponownie. | Brak startup error; ostatnie poprawne dane i archiwa są dostępne. |
 
 ## Kryterium zaliczenia
 
-Etap 9 można zamknąć wyłącznie wtedy, gdy wszystkie scenariusze mają wynik `PASS` albo scenariusz został jawnie oznaczony `N/A` z technicznym uzasadnieniem, które nie omija wymagania produktu. Brak credentialu lub brak interaktywnego desktop runtime nie jest `PASS`; oznacza, że smoke pozostaje niewykonany.
+Aktualny kandydat v0.7.13 można zaakceptować do wydania wyłącznie wtedy, gdy wszystkie scenariusze mają wynik `PASS` albo scenariusz został jawnie oznaczony `N/A` z technicznym uzasadnieniem, które nie omija wymagania produktu. Brak credentialu lub brak interaktywnego desktop runtime nie jest `PASS`; oznacza, że release smoke pozostaje niewykonany.
 
-Po pełnym zaliczeniu zaktualizować:
-
-- `STAGE_9_FINAL_MODULARIZATION_VALIDATION_v0.7.13_PL.md` → `COMPLETED — FINAL RUNTIME SMOKE PASS`;
-- główny plan modularizacji → wszystkie Etapy 1–9 `COMPLETED`;
-- `README_LIBRARY_INDEX.md` → kandydat Etapu 9 staje się `CURRENT VERIFIED BASELINE`.
+Historycznego raportu kandydata Stage 9 nie należy przepisywać. Wynik każdego aktualnego smoke należy zapisać jako osobny, datowany raport odbioru wskazujący dokładny commit/source-tree i build Windows.

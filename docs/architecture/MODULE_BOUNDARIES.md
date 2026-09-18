@@ -205,11 +205,11 @@ Architecture exceptions, if ever required, live in `scripts/architecture-boundar
 `verify:architecture` runs its own negative fixture checks before checking the real source tree. The fixture suite proves that a runtime cycle, `domain -> storage`, a cross-feature private import and an unused allowlist entry fail, while an import through a feature public entry point succeeds. The same core negative scenarios are also represented in `src/architecture/architectureEnforcement.test.ts` for the ordinary Vitest suite.
 
 
-## Final Stage 9 acceptance boundary
+## Stage 9 closeout and continuing runtime boundary
 
-Stage 9 closes the modularization only after two separate conditions are true:
+The accepted Stage 9 candidate closed the modularization after the automated architecture and compatibility gates passed with an empty architecture allowlist. The desktop checklist remains a mandatory release/runtime regression gate for v0.7.13:
 
-1. static/automated architecture and compatibility gates remain green with an empty architecture allowlist;
-2. the desktop runtime checklist in `FINAL_RUNTIME_SMOKE_v0.7.13_PL.md` passes on an actual Tauri build.
+1. static/automated architecture and compatibility gates must remain green with an empty architecture allowlist;
+2. the current desktop runtime checklist in `FINAL_RUNTIME_SMOKE_v0.7.13_PL.md` must pass on an actual Tauri build before release acceptance.
 
-Static evidence, CI and source inspection do not replace the final interactive runtime smoke. Conversely, documented compatibility surfaces such as legacy `chat_thread_groups/thread_group_id` are not architectural exceptions and do not require removal to close Stage 9.
+Static evidence, CI and source inspection do not replace interactive runtime validation. Conversely, documented compatibility surfaces such as legacy `chat_thread_groups/thread_group_id` are not architectural exceptions and did not require removal to close Stage 9.

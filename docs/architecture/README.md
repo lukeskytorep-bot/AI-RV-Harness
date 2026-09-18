@@ -2,7 +2,7 @@
 
 These documents describe the implemented architecture and integrity model of AI RV Harness. The latest public release remains v0.7.12; the private v0.7.13 development baseline extends it through the modularization and UX-DATA campaign. Release-specific plans, reports, manifests, and verification records remain under [`docs/releases/`](../releases/) or [`docs/reports/`](../reports/) for private-development work.
 
-The private v0.7.13 modularization work adds the following living architecture records. Stage 8 is accepted after full GitHub Actions; Stage 9 is the final validation/documentation gate and remains open until the desktop runtime smoke passes:
+The private v0.7.13 modularization work adds the following living architecture records. Stages 1–9 and the modularization campaign are closed after their accepted automated gates. The desktop checklist remains active as the v0.7.13 release/runtime regression gate; it no longer changes the historical modularization status:
 
 - [Code map](CODE_MAP.md)
 - [Module boundaries](MODULE_BOUNDARIES.md)
@@ -12,6 +12,7 @@ The private v0.7.13 modularization work adds the following living architecture r
 - [Native Rust provider module boundaries](MODULE_BOUNDARIES.md#native-rust-provider-modules-after-etap-6)
 - [UX-DATA compatibility gate](UX_DATA_COMPATIBILITY_GATE.md)
 - [Final modularization runtime smoke](FINAL_RUNTIME_SMOKE_v0.7.13_PL.md)
+- [Stage 9 modularization closeout](../reports/MODULARIZATION_STAGE_9_CLOSEOUT_v0.7.13_PL.md)
 
 ## Documents
 

@@ -13,7 +13,7 @@ The gate is intentionally conservative. It does **not** remove dormant legacy sc
 
 `npm run verify:ux-data` runs `scripts/verify-ux-data-compatibility.mjs` and checks that:
 
-- migrations remain contiguous and registered through `023_controlled_purge.sql`;
+- migrations remain contiguous and registered through `024_viewer_learning_field_guide.sql`;
 - browser-native Confirm/Prompt/Alert calls remain private to the shared `AppDialogProvider` fallback;
 - `ChatThreadGroup` lifecycle does not return to production code;
 - the SQLite Conversation adapter still reads legacy `thread_group_id` while new rows store `NULL` and do not operate on `chat_thread_groups`;
@@ -21,13 +21,16 @@ The gate is intentionally conservative. It does **not** remove dormant legacy sc
 - Archive/Restore and Permanent Delete use cases remain exposed for the primary lifecycle domains;
 - Archive and recovery keeps Deletion Preview and strong destructive confirmation;
 - Viewer Notes source-preservation markers from migration 022 and target-history snapshots from migration 023 remain present;
-- the native legacy-upgrade test module remains wired into the Rust test build.
+- the Field Guide schema markers and native exact-green-v23 → v24 upgrade test remain wired into the Rust test build;
+- the compatibility gate does not reintroduce an automatic public-v0.7.12/legacy → v0.7.13 migration chain.
 
 The main CI and both release workflows execute this gate immediately after `verify:source`.
 
 ## Native legacy-database gate
 
-`src-tauri/src/ux_data_compatibility.rs` is compiled only for tests. It creates an in-memory SQLite database and applies migrations 001–020 to reproduce the pre-UX-DATA schema. It then inserts a representative historical data set containing:
+`src-tauri/src/ux_data_compatibility.rs` is compiled only for tests. Its current fixture builds the exact accepted green v23 boundary, inserts a representative data set, and then applies migration 024. Public v0.7.12/legacy databases at schema 1–20 are classified by the database compatibility epoch gate and are not silently migrated into v0.7.13.
+
+The exact-green-v23 fixture contains:
 
 - Profile and Workspace;
 - legacy `ChatThreadGroup` + Conversation + message;
@@ -36,14 +39,14 @@ The main CI and both release workflows execute this gate immediately after `veri
 - Locked Research assignment using the same target;
 - AI identity, Viewer Notes reflection, version, settings and activation linked to the Session/Workspace.
 
-The test then applies migrations 021–023 and requires all of the following:
+The test then applies migration 024 and requires all of the following:
 
 1. the legacy Conversation and message still exist;
 2. its historical `thread_group_id` remains readable;
-3. the Session and Research assignment receive `target_id_snapshot` backfill;
-4. Viewer Notes receive immutable source provenance including Training ID, number and name;
-5. live Viewer Notes source references still point to retained source records;
-6. `controlled_purge_context` is empty outside a purge transaction;
+3. Session and Research target snapshots and Viewer Notes provenance remain intact;
+4. a preserved custom Profile Viewer prompt becomes an unresolved legacy Field Guide baseline without guessing identity or language;
+5. no trained Field Guide version is invented by migration;
+6. `controlled_purge_context` remains available and empty outside a purge transaction;
 7. `PRAGMA foreign_key_check` reports no violations.
 
 This complements the domain tests for Archive/Restore and controlled purge. It is not a substitute for them.
