@@ -158,3 +158,41 @@ describe("SQLite Research repository", () => {
     await expect(repository.saveResearchResults("research-1", results, "hash-2")).rejects.toThrow("Research results are immutable once written.");
   });
 });
+
+describe("VIEWER-LEARNING-3 Research frozen config persistence", () => {
+  const fieldGuideConfig: ResearchConfig = {
+    ...config,
+    fieldGuideControl: { mode: "current", source: "active", language: "en", lockedCoreIdentityVersion: "1.1.0", lockedBaseVocabularyVersion: "1.0.0" },
+    viewerNotesControl: { mode: "off" },
+    conditions: [{
+      ...config.conditions[0],
+      promptSource: "active_field_guide",
+      fieldGuide: {
+        aiIdentityId: "identity-a", language: "en", versionId: "fg-v4", versionNumber: 4, versionCreatedAt: "2026-09-18T00:00:00Z", content: "frozen guide", contentSha256: "f".repeat(64), estimatedTokens: 3,
+        estimatorVersion: "conservative-char-v1", capacityTokens: 4096, capacityTokensAtCreation: 4096, modelRoute: "openrouter:model-a", capturedAt: "lock", sourceKind: "training-reflection", sourceTrainingRunId: "training-4", sourceSessionId: "session-4",
+        sourceSnapshot: { schemaVersion: 1, sourceKind: "training-reflection", profileId: "profile-a", capturedAt: "source", sourceTrainingRunId: "training-4", sourceSessionId: "session-4" },
+        identity: { aiIdentityId: "identity-a", profileId: "profile-a", credentialFingerprint: "fp", providerConfigId: "provider-a", provider: "openrouter", modelId: "model-a", modelRoute: "openrouter:model-a" },
+      },
+    }],
+  };
+
+  it("round-trips the frozen Field Guide snapshot in Browser storage without a new storage key", async () => {
+    const storage = new MemoryStorage();
+    const repository = new BrowserResearchRepository({ storage, now: () => "now", createId: () => "research-1" });
+    await repository.createResearchProject(fieldGuideConfig);
+    expect((await repository.getResearchProject("research-1"))?.config.conditions[0].fieldGuide).toEqual(fieldGuideConfig.conditions[0].fieldGuide);
+    expect(storage.getItem("rvh.dev.research_projects")).toContain('"fieldGuideControl"');
+  });
+
+  it("persists the same frozen config through the existing SQLite project JSON column", async () => {
+    const writes: Array<{ query: string; values?: unknown[] }> = [];
+    const repository = new SqliteResearchRepository({
+      now: () => "now", createId: () => "research-1", select: async <T>() => [] as T,
+      executeWrite: async (query, values) => { writes.push({ query, values }); return { rowsAffected: 1 }; }, executeTransaction: async () => ({}),
+    });
+    await repository.createResearchProject(fieldGuideConfig);
+    expect(writes[0].query).toContain("INSERT INTO research_projects");
+    expect(writes[0].values?.some((value) => typeof value === "string" && value.includes('"fieldGuideControl"'))).toBe(true);
+    expect(writes[0].values?.some((value) => typeof value === "string" && value.includes('"fg-v4"'))).toBe(true);
+  });
+});

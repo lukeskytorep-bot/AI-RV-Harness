@@ -133,6 +133,21 @@ The achieved modular boundaries are now guarded by a small executable architectu
 The architecture gate is wired into the main CI, Windows Release and Linux Release workflows as `npm run verify:architecture`. It does not change runtime behavior, storage schema, migrations, provider retry ownership, protocol execution, Reveal/Resume, Viewer Notes, Research, Training or Judge behavior.
 
 
+## Viewer Learning 3 — Research Field Guide controls
+
+The private v0.7.13 Research integration for Viewer Learning is owned by:
+
+- `src/research/fieldGuidePolicy.ts` — exact Viewer-identity lookup, read-only active/history Field Guide capture, 6-version history limit, 2–4 manual selection validation, locked-only prompt construction and frozen snapshot signatures;
+- `src/research/types.ts` — frozen Research Field Guide mode/source/snapshot contracts and Prompt Research source metadata;
+- `src/research/preflight.ts` — lock-time invariants for independent Viewer Notes/Field Guide controls, locked Core Identity/Base Vocabulary versions, history-only variable control and legacy Research compatibility;
+- `src/research/engine.ts` — execution/Resume consumption of the frozen prompt/Field Guide snapshot and exact result provenance;
+- `src/features/research/ResearchBuilder.tsx` — ordinary Notes/Field Guide controls plus Prompt Research `MANUAL` / `HISTORY` selection UI and frozen-status presentation;
+- `src/storage/contracts/fieldGuideRepository.ts` with Browser/SQLite implementations — explicit read-only `getExistingFieldGuideBundle` path used by Research so reads never bootstrap settings or create versions;
+- `src/exports/research.ts` — exact Field Guide version/hash columns in Research result exports.
+
+Research does not call Field Guide Update or Viewer Notes Reflection. It cannot create new learning versions. The existing Research lifecycle, Judge scoring/frozen scores, target ownership, provider retry, credential routing and controlled purge remain outside this change except for storing the necessary immutable snapshot inside the existing frozen Research JSON. SQLite schema therefore remains 24.
+
+
 ## Etap 9 — final validation
 
 The final modularization gate does not introduce a new product subsystem. Its owners are documentation and acceptance evidence:

@@ -89,6 +89,45 @@ describe("Research evidence boundaries", () => {
     expect(driftRepo.setResearchProjectState).toHaveBeenCalledWith("r", "Interrupted");
   });
 
+  it("resumes from the frozen Field Guide prompt snapshot and ignores later active-guide drift", async () => {
+    const fieldGuide = {
+      aiIdentityId: "identity", language: "en" as const, versionId: "fg-v3", versionNumber: 3, versionCreatedAt: "lock-time", content: "frozen guide", contentSha256: "f".repeat(64), estimatedTokens: 4, estimatorVersion: "conservative-char-v1" as const, capacityTokens: 4096 as const, capacityTokensAtCreation: 4096 as const, modelRoute: "openrouter:m", capturedAt: "lock-time", sourceKind: "training-reflection" as const, sourceTrainingRunId: "training-3", sourceSessionId: "source-session",
+      sourceSnapshot: { schemaVersion: 1 as const, sourceKind: "training-reflection" as const, profileId: "p", capturedAt: "lock-time", sourceTrainingRunId: "training-3", sourceSessionId: "source-session" },
+      identity: { aiIdentityId: "identity", profileId: "p", credentialFingerprint: "fp", providerConfigId: "pc", provider: "openrouter" as const, modelId: "m", modelRoute: "openrouter:m" },
+    };
+    const prompt = { id: "research_field_guide_identity_en", version: "1.5.0:field-guide:fg-v3", content: "LOCKED CORE\nLOCKED BASE\nfrozen guide", contentSha256: "p".repeat(64), fieldGuide };
+    const condition = {
+      key: "a", label: "A", profileId: "p", providerConfigId: "pc", modelId: "m", requestedSettings: {},
+      capabilitySnapshot: model.capabilities, effectiveSettings: { requested: {}, effective: {}, omitted: [] }, fieldGuide, systemPrompt: prompt,
+    };
+    const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "Interrupted", config: { ...config, conditions: [condition] }, createdAt: "now", updatedAt: "now" };
+    const stored = { id: "condition", researchProjectId: "r", conditionKey: "a", config: structuredClone(condition) };
+    const sessionRunner = vi.fn(async (input) => {
+      expect(input.rvSystemPrompt).toEqual(prompt);
+      await input.onSessionCreated?.("session", "RV-TEST");
+      return { sessionId: "session", sessionCode: "RV-TEST", state: "Revealed" as const, transcript: "evidence" };
+    });
+    const getFieldGuideBundle = vi.fn().mockRejectedValue(new Error("active guide must not be read during Resume"));
+    const baseRepo = {
+      getResearchProject: vi.fn().mockResolvedValue(project),
+      listResearchAssignments: vi.fn().mockResolvedValue([{ id: "assignment", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "RetryApproved" }]),
+      listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: "hash", createdAt: "now" }]),
+      listTargets: vi.fn().mockResolvedValue([{ id: "t", collection: "user", title: "T", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }]),
+      listProviderConfigs: vi.fn().mockResolvedValue([provider]), listProviderModels: vi.fn().mockResolvedValue([model]), listProfiles: vi.fn().mockResolvedValue([{ id: "p", name: "P", credentialId: "c", createdAt: "now", updatedAt: "now" }]),
+      setResearchProjectState: vi.fn(), updateResearchAssignment: vi.fn(), getFieldGuideBundle,
+    };
+    const repo = { ...baseRepo, listResearchConditions: vi.fn().mockResolvedValue([stored]) } as unknown as AppRepository;
+    await executeResearchSessions({ repository: repo, projectId: "r", sessionRunner });
+    expect(sessionRunner).toHaveBeenCalledTimes(1);
+    expect(getFieldGuideBundle).not.toHaveBeenCalled();
+
+    const drifted = structuredClone(stored);
+    drifted.config.fieldGuide.versionId = "fg-v4";
+    const driftRepo = { ...baseRepo, listResearchConditions: vi.fn().mockResolvedValue([drifted]), setResearchProjectState: vi.fn() } as unknown as AppRepository;
+    await expect(executeResearchSessions({ repository: driftRepo, projectId: "r", sessionRunner: vi.fn() })).rejects.toThrow("Field Guide snapshot drift");
+    expect(driftRepo.setResearchProjectState).toHaveBeenCalledWith("r", "Interrupted");
+  });
+
   it("requires an explicit recovery action before an interrupted assignment can be retried", async () => {
     const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "Interrupted", config, createdAt: "now", updatedAt: "now" };
     const updateRvSessionState = vi.fn();

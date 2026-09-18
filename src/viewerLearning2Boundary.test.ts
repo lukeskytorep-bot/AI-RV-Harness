@@ -47,12 +47,21 @@ describe("VIEWER-LEARNING-2 boundaries", () => {
     expect(research).not.toContain("fieldGuideUpdate");
   });
 
+  it("allows frozen Field Guide snapshots in Research without any learning write path", () => {
+    const builder = source("src/features/research/ResearchBuilder.tsx");
+    const policy = source("src/research/fieldGuidePolicy.ts");
+    expect(builder).toContain("captureCurrentResearchFieldGuide");
+    expect(builder).toContain("listResearchFieldGuideHistory");
+    expect(policy).toContain("getExistingFieldGuideBundle");
+    expect(`${builder}\n${policy}`).not.toContain("createFieldGuideVersion(");
+    expect(`${builder}\n${policy}`).not.toContain("runFieldGuideUpdate(");
+  });
+
   it("keeps Viewer Notes production mechanics byte-identical to the accepted VIEWER-LEARNING-1 base", () => {
     expect(aggregateHash(["src/aiCenter/viewerNotes.ts", "src/aiCenter/baseVersion.ts"])).toBe("06d794dbde551af4ad48984f3019f1a91607a6282f5ffdffe9d6a390381787a6");
   });
 
   it.each([
-    ["Research", ["src/research", "src/features/research"], "5ccc466e38b820af7d0afa861d228d68075cffc1dc4b1cc33ecd34293f90fce0"],
     ["Monitor", ["src/monitor", "src/features/monitor", "src/resources/systemPrompts.ts"], "87097f8e0db0e4b4da63a382bcb5f73656a50535a854c12d8c5c09c8e33e3f47"],
     ["Judge", ["src/judge", "src/features/judge"], "520459819dda5f6451accdcab803be5cf9190d58b345d975d8cb51a8f3ba9bb4"],
     ["protocols", ["src/protocols", "src/resources/protocolRegistry.ts", "src/resources/protocols"], "2a324ad15de07985c968622be28174daa6e74ce4edd1442c03e86c4109211263"],

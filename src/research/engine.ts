@@ -13,6 +13,7 @@ import type { ResearchConfig, ResearchPreflightResult, ResearchProjectRecord, Re
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "../domain/isBeIdentity";
 import { modelRouteKey } from "../modelRoutes";
 import { viewerNotesSnapshotSignature } from "./viewerNotesPolicy";
+import { fieldGuideSnapshotSignature } from "./fieldGuidePolicy";
 
 type ResearchRepository = AppRepository;
 
@@ -62,6 +63,14 @@ export async function executeResearchSessions(input: {
     if (!locked || viewerNotesSnapshotSignature(stored.config.viewerNotes) !== viewerNotesSnapshotSignature(locked.viewerNotes)) {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       throw new Error("Viewer Notes snapshot drift detected after Experiment Lock; Research stopped instead of loading current notes.");
+    }
+    if (fieldGuideSnapshotSignature(stored.config.fieldGuide) !== fieldGuideSnapshotSignature(locked.fieldGuide)) {
+      await input.repository.setResearchProjectState(project.id, "Interrupted");
+      throw new Error("Field Guide snapshot drift detected inside the frozen Research records; Research stopped instead of loading the active guide.");
+    }
+    if (stableStringify(stored.config.systemPrompt ?? null) !== stableStringify(locked.systemPrompt ?? null)) {
+      await input.repository.setResearchProjectState(project.id, "Interrupted");
+      throw new Error("Frozen Viewer prompt composition drift detected after Experiment Lock.");
     }
   }
   const targetById = new Map(targets.map((target) => [target.id, target]));
@@ -261,6 +270,11 @@ export async function unblindAndComputeResearch(repository: ResearchRepository, 
       judgeCount: aggregate.judgeCount,
       judgeTotalRange: aggregate.totalRange,
       judgeTotalStdDev: aggregate.totalStdDev,
+      ...(condition.config.fieldGuide ? {
+        fieldGuideVersionId: condition.config.fieldGuide.versionId,
+        fieldGuideVersionNumber: condition.config.fieldGuide.versionNumber,
+        fieldGuideContentSha256: condition.config.fieldGuide.contentSha256,
+      } : {}),
     });
   }
   const results: ResearchResults = {

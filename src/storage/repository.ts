@@ -93,6 +93,7 @@ export interface AppRepository {
   restoreViewerNoteVersion(aiIdentityId: string, versionId: string, workspaceId?: string): Promise<void>;
   detachViewerNoteSourceReferences(input: DetachViewerNoteSourceReferencesInput): Promise<void>;
   getFieldGuideBundle(aiIdentityId: string, language: "pl" | "en"): Promise<FieldGuideBundle | null>;
+  getExistingFieldGuideBundle(aiIdentityId: string, language: "pl" | "en"): Promise<FieldGuideBundle | null>;
   listFieldGuideVersions(aiIdentityId: string, language: "pl" | "en"): Promise<FieldGuideVersion[]>;
   listFieldGuideActivationEvents(aiIdentityId: string, language: "pl" | "en"): Promise<FieldGuideActivationEvent[]>;
   listFieldGuideLegacyBaselines(profileId: string): Promise<FieldGuideLegacyBaseline[]>;

@@ -134,8 +134,8 @@ function resultsCsv(results: ResearchResults): string {
 }
 
 function sessionResultsCsv(results: ResearchResults): string {
-  const header = ["anonymous_session_id", "session_id", "target_id", "pair_key", "condition_key", "condition_label", "mean_total", "judge_count", "judge_total_range", "judge_total_stddev", "gestalt", "verifiable_features", "activity_function_event", "confabulation_control"];
-  const rows = results.sessions.map((session) => [session.anonymousSessionId, session.sessionId, session.targetId, session.pairKey, session.conditionKey, session.conditionLabel, session.total, session.judgeCount, session.judgeTotalRange, session.judgeTotalStdDev, session.gestalt, session.verifiableFeatures, session.activityFunctionEvent, session.confabulationControl]);
+  const header = ["anonymous_session_id", "session_id", "target_id", "pair_key", "condition_key", "condition_label", "field_guide_version_id", "field_guide_version_number", "field_guide_content_sha256", "mean_total", "judge_count", "judge_total_range", "judge_total_stddev", "gestalt", "verifiable_features", "activity_function_event", "confabulation_control"];
+  const rows = results.sessions.map((session) => [session.anonymousSessionId, session.sessionId, session.targetId, session.pairKey, session.conditionKey, session.conditionLabel, session.fieldGuideVersionId ?? "", session.fieldGuideVersionNumber ?? "", session.fieldGuideContentSha256 ?? "", session.total, session.judgeCount, session.judgeTotalRange, session.judgeTotalStdDev, session.gestalt, session.verifiableFeatures, session.activityFunctionEvent, session.confabulationControl]);
   return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
 

@@ -1,12 +1,14 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getFullRcp } from "../resources/protocolRegistry";
+import { buildEffectiveViewerPrompt, LOCKED_BASE_VOCABULARY_VERSION, LOCKED_IDENTITY_VERSION } from "../resources/systemPrompts";
 import type { TargetRecord, TargetUsageRecord } from "../targets/types";
 import { targetHasSupportedReveal } from "../targets/service";
 import type { Profile } from "../types";
 import type { PreflightCheck, ResearchConfig, ResearchPreflightResult } from "./types";
 import { modelRouteKey } from "../modelRoutes";
 import { activeViewerNotesControlSignature, sameFrozenViewerNotesVersion, viewerNotesSnapshotSignature } from "./viewerNotesPolicy";
+import { fieldGuideSnapshotSignature } from "./fieldGuidePolicy";
 
 export interface ResearchPreflightInventory {
   profiles: Profile[];
@@ -58,6 +60,10 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   const temperatureValues = new Set(config.conditions.map((condition) => condition.requestedSettings.temperature ?? "__provider_default__"));
   const outputValues = new Set(config.conditions.map((condition) => condition.requestedSettings.maxOutputTokens ?? "__provider_default__"));
   const viewerNotesControls = new Set(config.conditions.map((condition) => activeViewerNotesControlSignature(condition.viewerNotes)));
+  const fieldGuideControls = new Set(config.conditions.map((condition) => fieldGuideSnapshotSignature(condition.fieldGuide)));
+  const comparedViewerIdentities = new Set(config.conditions.map((condition) => `${condition.profileId}\u0000${condition.providerConfigId}\u0000${condition.modelId}`));
+  const identityVariesByDesign = (config.templateType === "profile" || config.templateType === "model")
+    && comparedViewerIdentities.size === config.conditions.length;
   for (const condition of config.conditions) {
     const profile = profileMap.get(condition.profileId);
     const provider = providerMap.get(condition.providerConfigId);
@@ -107,6 +113,8 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   if (config.templateType !== "temperature" && temperatureValues.size !== 1) confoundedControls.push("temperature");
   if (outputValues.size !== 1) confoundedControls.push("maximum output tokens");
   if (config.templateType !== "viewer_notes" && viewerNotesControls.size !== 1) confoundedControls.push("Viewer Notes");
+  const fieldGuideIsTestedVariable = config.templateType === "system_prompt" && config.promptResearchSource === "field_guide_history";
+  if (!fieldGuideIsTestedVariable && !identityVariesByDesign && fieldGuideControls.size !== 1) confoundedControls.push("Field Guide");
   checks.push(confoundedControls.length
     ? fail("controlled_variables", `More than one research variable changes: ${confoundedControls.join(", ")}`)
     : pass("controlled_variables", "All non-tested Viewer controls are identical across conditions"));
@@ -122,7 +130,10 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     if (config.viewerControl.reasoning.mode !== expectedReasoningMode) lockIssues.push("reasoning mode");
     if (config.viewerControl.temperature.mode !== expectedTemperatureMode) lockIssues.push("temperature mode");
     if (config.viewerControl.model.mode === "fixed" && (modelIds.size !== 1 || !modelIds.has(config.viewerControl.model.modelId ?? ""))) lockIssues.push("fixed model");
-    if (config.viewerControl.systemPrompt.mode === "fixed" && (systemPromptHashes.size !== 1 || !systemPromptHashes.has(config.viewerControl.systemPrompt.contentSha256 ?? ""))) lockIssues.push("fixed System Prompt hash");
+    if (config.viewerControl.systemPrompt.mode === "fixed") {
+      const perIdentityFieldGuidePrompt = identityVariesByDesign && config.viewerControl.systemPrompt.source === "field_guide_current";
+      if (!perIdentityFieldGuidePrompt && (systemPromptHashes.size !== 1 || !systemPromptHashes.has(config.viewerControl.systemPrompt.contentSha256 ?? ""))) lockIssues.push("fixed Viewer prompt hash");
+    }
     if (config.viewerControl.reasoning.mode === "fixed" && (!config.viewerControl.reasoning.value || reasoningValues.size !== 1 || !reasoningValues.has(config.viewerControl.reasoning.value))) lockIssues.push("fixed reasoning");
     if (config.viewerControl.reasoning.mode === "provider_default" && !reasoningValues.has("__provider_default__")) lockIssues.push("provider-default reasoning");
     if (config.viewerControl.temperature.mode === "fixed" && (temperatureValues.size !== 1 || !temperatureValues.has(config.viewerControl.temperature.value ?? Number.NaN))) lockIssues.push("fixed temperature");
@@ -135,13 +146,22 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     checks.push(warn("viewer_control_lock", "Legacy Research configuration has no explicit study-wide Viewer-control record"));
   }
   if (config.templateType === "system_prompt") {
+    const isFieldGuideHistory = config.promptResearchSource === "field_guide_history";
     checks.push(systemPromptHashes.size === config.conditions.length && systemPromptContents.size === config.conditions.length && config.conditions.every((condition) => Boolean(condition.systemPrompt?.content.trim()))
-      ? pass("system_prompt_design", "Every tested System Prompt condition has a distinct frozen content hash")
-      : fail("system_prompt_design", "System Prompt Comparison requires a distinct frozen prompt for every condition"));
+      ? pass("system_prompt_design", isFieldGuideHistory
+        ? "Every selected Field Guide version produces a distinct frozen Viewer prompt composition while locked blocks remain fixed"
+        : "Every tested manual Research prompt has a distinct frozen content hash")
+      : fail("system_prompt_design", isFieldGuideHistory
+        ? "Field Guide history comparison requires a distinct frozen Viewer prompt composition for every selected version"
+        : "Manual Prompt Research requires a distinct frozen prompt for every condition"));
   } else {
-    checks.push(systemPromptHashes.size === 1 && systemPromptContents.size === 1 && config.conditions.every((condition) => Boolean(condition.systemPrompt?.content.trim()))
-      ? pass("system_prompt_constant", "One identical Viewer System Prompt is frozen across all conditions")
-      : fail("system_prompt_constant", "A single fixed Viewer System Prompt is required across every Research condition"));
+    const perIdentityFieldGuidePrompt = identityVariesByDesign && config.fieldGuideControl?.mode === "current";
+    const promptControlValid = perIdentityFieldGuidePrompt
+      ? config.conditions.every((condition) => Boolean(condition.systemPrompt?.content.trim()) && Boolean(condition.fieldGuide))
+      : systemPromptHashes.size === 1 && systemPromptContents.size === 1 && config.conditions.every((condition) => Boolean(condition.systemPrompt?.content.trim()));
+    checks.push(promptControlValid
+      ? pass("system_prompt_constant", perIdentityFieldGuidePrompt ? "Each compared Viewer identity uses its own frozen current Field Guide with the same locked Core Identity and Base Vocabulary versions" : "One identical Viewer prompt composition is frozen across all conditions")
+      : fail("system_prompt_constant", "A controlled frozen Viewer prompt composition is required across every Research condition"));
     if (config.templateType === "custom") {
       checks.push(conditionInstructionHashes.size === config.conditions.length && conditionInstructionContents.size === config.conditions.length && config.conditions.every((condition) => Boolean(condition.conditionInstruction?.content.trim()))
         ? pass("custom_condition_design", "Every Custom Variable condition has a distinct frozen instruction")
@@ -175,9 +195,6 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
       const signatures = new Set(activeSnapshots.map((snapshot) => viewerNotesSnapshotSignature(snapshot)));
       const snapshotsAreComplete = activeSnapshots.length === config.conditions.length
         && activeSnapshots.every((snapshot) => Boolean(snapshot?.versionId) && snapshot?.versionNumber !== undefined && Boolean(snapshot?.content.trim()) && Boolean(snapshot?.contentSha256));
-      const comparedViewerIdentities = new Set(config.conditions.map((condition) => `${condition.profileId}\u0000${condition.providerConfigId}\u0000${condition.modelId}`));
-      const identityVariesByDesign = (config.templateType === "profile" || config.templateType === "model")
-        && comparedViewerIdentities.size === config.conditions.length;
       const snapshotsMatchRoutes = config.conditions.every((condition) => {
         const route = modelMap.get(modelRouteKey(condition.providerConfigId, condition.modelId))?.route;
         return Boolean(route && condition.viewerNotes?.modelRoute === route);
@@ -193,6 +210,93 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
           : "Viewer Notes must be either disabled everywhere or use one identical non-empty frozen snapshot in every condition"));
     }
   }
+  if (config.viewerNotesControl) {
+    const expectedViewerNotesMode = config.templateType === "viewer_notes"
+      ? "experiment"
+      : config.conditions.some((condition) => condition.viewerNotes?.enabled) ? "current" : "off";
+    checks.push(config.viewerNotesControl.mode === expectedViewerNotesMode
+      ? pass("viewer_notes_mode_lock", `Viewer Notes mode ${config.viewerNotesControl.mode.toUpperCase()} is frozen consistently with the Research conditions`)
+      : fail("viewer_notes_mode_lock", "Frozen Viewer Notes mode does not match the Research condition snapshots"));
+  } else {
+    checks.push(warn("viewer_notes_mode_lock", "Legacy Research configuration has no explicit Viewer Notes mode record"));
+  }
+
+  if (config.fieldGuideControl) {
+    const sourceMatchesMode = (config.fieldGuideControl.mode === "off" && config.fieldGuideControl.source === "none")
+      || (config.fieldGuideControl.mode === "current" && config.fieldGuideControl.source === "active")
+      || (config.fieldGuideControl.mode === "history" && config.fieldGuideControl.source === "history");
+    const lockedVersionsValid = config.fieldGuideControl.lockedCoreIdentityVersion === LOCKED_IDENTITY_VERSION
+      && config.fieldGuideControl.lockedBaseVocabularyVersion === LOCKED_BASE_VOCABULARY_VERSION
+      && config.fieldGuideControl.language === config.sessionLanguage
+      && sourceMatchesMode;
+    checks.push(lockedVersionsValid
+      ? pass("field_guide_locked_blocks", "Locked Core Identity and Locked Base Vocabulary versions are frozen with the Research config")
+      : fail("field_guide_locked_blocks", "Research Field Guide control must freeze the current locked Core Identity, Base Vocabulary and session language"));
+
+    const lockedPrefix = buildEffectiveViewerPrompt(config.sessionLanguage, "");
+    const promptsKeepLockedBlocks = config.conditions.every((condition) => condition.systemPrompt?.content.startsWith(lockedPrefix));
+    const manualPromptExperiment = config.templateType === "system_prompt" && config.promptResearchSource === "manual";
+    if (config.fieldGuideControl.mode === "off") {
+      const validOff = config.conditions.every((condition) => !condition.fieldGuide) && (manualPromptExperiment || promptsKeepLockedBlocks);
+      checks.push(validOff
+        ? pass("field_guide_control", manualPromptExperiment
+          ? "Manual Prompt Research remains a standalone experimental prompt source and does not create a Field Guide version"
+          : "Trained Field Guide is OFF while locked Viewer blocks remain present")
+        : fail("field_guide_control", "Field Guide OFF must remove only the trainable Field Guide and preserve locked Viewer blocks outside standalone Manual Prompt Research"));
+    } else {
+      const snapshots = config.conditions.map((condition) => condition.fieldGuide);
+      const complete = config.conditions.every((condition) => {
+        const snapshot = condition.fieldGuide;
+        const route = modelMap.get(modelRouteKey(condition.providerConfigId, condition.modelId))?.route;
+        return Boolean(snapshot?.versionId
+          && snapshot.contentSha256
+          && snapshot.content.trim()
+          && snapshot.language === config.sessionLanguage
+          && snapshot.identity.aiIdentityId === snapshot.aiIdentityId
+          && snapshot.identity.profileId === condition.profileId
+          && snapshot.identity.providerConfigId === condition.providerConfigId
+          && snapshot.identity.modelId === condition.modelId
+          && snapshot.identity.modelRoute === snapshot.modelRoute
+          && snapshot.modelRoute === route
+          && [2048, 4096, 8192].includes(snapshot.capacityTokens)
+          && [2048, 4096, 8192].includes(snapshot.capacityTokensAtCreation)
+          && snapshot.sourceSnapshot.schemaVersion === 1);
+      });
+      const promptsMatchSnapshots = config.conditions.every((condition) => condition.fieldGuide
+        && condition.systemPrompt?.fieldGuide?.versionId === condition.fieldGuide.versionId
+        && condition.systemPrompt.fieldGuide.contentSha256 === condition.fieldGuide.contentSha256
+        && condition.systemPrompt.content === buildEffectiveViewerPrompt(config.sessionLanguage, condition.fieldGuide.content)
+        && (condition.promptSource === "active_field_guide" || condition.promptSource === "historical_field_guide"));
+      if (config.fieldGuideControl.mode === "history") {
+        const selected = config.fieldGuideControl.selectedVersionIds ?? [];
+        const identities = new Set(snapshots.map((snapshot) => snapshot?.aiIdentityId));
+        const languages = new Set(snapshots.map((snapshot) => snapshot?.language));
+        const versionIds = new Set(snapshots.map((snapshot) => snapshot?.versionId));
+        const historyValid = config.templateType === "system_prompt"
+          && config.promptResearchSource === "field_guide_history"
+          && config.conditions.length >= 2 && config.conditions.length <= 4
+          && selected.length === config.conditions.length && new Set(selected).size === selected.length
+          && versionIds.size === config.conditions.length
+          && selected.every((id) => versionIds.has(id))
+          && identities.size === 1 && identities.has(config.fieldGuideControl.identityId)
+          && languages.size === 1 && languages.has(config.sessionLanguage)
+          && complete && promptsMatchSnapshots && promptsKeepLockedBlocks;
+        checks.push(historyValid
+          ? pass("field_guide_history_design", "2–4 manually selected historical Field Guide snapshots are frozen; only the trainable Field Guide version changes")
+          : fail("field_guide_history_design", "Field Guide history comparison requires 2–4 selected versions from one exact Viewer identity/language with matching frozen snapshots"));
+      } else {
+        const validCurrent = complete && promptsMatchSnapshots && promptsKeepLockedBlocks
+          && (identityVariesByDesign ? config.conditions.every((condition) => condition.fieldGuide?.modelRoute === modelMap.get(modelRouteKey(condition.providerConfigId, condition.modelId))?.route) : fieldGuideControls.size === 1);
+        checks.push(validCurrent
+          ? pass("field_guide_control", identityVariesByDesign ? "Each compared Viewer identity has its own frozen active Field Guide snapshot" : "One exact active Field Guide snapshot is frozen across every condition")
+          : fail("field_guide_control", "Current Field Guide mode requires complete frozen snapshots that match the locked Viewer route"));
+      }
+    }
+    checks.push(pass("field_guide_feedback", "Research uses Field Guide snapshots read-only and never creates or updates a Field Guide version"));
+  } else {
+    checks.push(warn("field_guide_control", "Legacy Research configuration has no explicit Field Guide control; historical behavior is preserved"));
+  }
+
   checks.push(pass("viewer_notes_feedback", "Research uses Viewer Notes read-only; Research sessions never update Viewer Notes"));
 
   if (config.judges.length === 0) {

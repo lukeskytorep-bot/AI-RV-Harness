@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AiIdentity } from "../aiCenter/types";
 import { BrowserFieldGuideRepository } from "./browser/fieldGuideRepository";
+import { SqliteFieldGuideRepository } from "./sqlite/fieldGuideRepository";
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
@@ -29,6 +30,33 @@ function repository() {
 }
 
 describe("Field Guide repository foundation", () => {
+  it("provides a truly read-only existing-bundle lookup for Research", async () => {
+    const { repo, storage } = repository();
+    const before = storage.getItem("rvh.dev.field_guide_settings");
+    expect(await repo.getExistingFieldGuideBundle("ai-a", "en")).toBeNull();
+    expect(storage.getItem("rvh.dev.field_guide_settings")).toBe(before);
+
+    await repo.createFieldGuideVersion({ aiIdentityId: "ai-a", language: "en", content: "existing", contentSha256: "r".repeat(64), estimatedTokens: 3, sourceSnapshot: source(), activationSource: "initial_version" });
+    const frozen = storage.getItem("rvh.dev.field_guide_settings");
+    expect((await repo.getExistingFieldGuideBundle("ai-a", "en"))?.activeVersion?.content).toBe("existing");
+    expect(storage.getItem("rvh.dev.field_guide_settings")).toBe(frozen);
+  });
+
+  it("keeps the SQLite Research lookup read-only when Field Guide settings do not exist", async () => {
+    const executeWrite = vi.fn();
+    const repository = new SqliteFieldGuideRepository({
+      select: async <T>(query: string) => {
+        if (query.includes("FROM ai_identities")) return [{ id: "ai-a", profile_id: "profile", role: "viewer" }] as T;
+        if (query.includes("FROM field_guide_settings")) return [] as T;
+        return [] as T;
+      },
+      executeWrite: async (query, values) => { executeWrite(query, values); return { rowsAffected: 1 }; },
+      executeTransaction: async () => ({}),
+    });
+    expect(await repository.getExistingFieldGuideBundle("ai-a", "en")).toBeNull();
+    expect(executeWrite).not.toHaveBeenCalled();
+  });
+
   it("separates exact AI identities and Polish/English state with 2048-token defaults", async () => {
     const { repo } = repository();
     const en = await repo.getFieldGuideBundle("ai-a", "en");

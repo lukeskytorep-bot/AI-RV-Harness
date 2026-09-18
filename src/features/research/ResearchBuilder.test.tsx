@@ -21,7 +21,7 @@ const model: ProviderModel = {
 const repository = {} as AppRepository;
 const noop = vi.fn(async () => undefined);
 
-function renderBuilder(template: "model" | "viewer_notes") {
+function renderBuilder(template: "model" | "viewer_notes" | "system_prompt") {
   return renderToStaticMarkup(<ResearchConfigBuilder
     copy={getCopy("en")}
     settings={createDefaultSettings()}
@@ -63,6 +63,30 @@ describe("Research Builder Training/Research UX step", () => {
     expect(html).toContain("Historical versions are not selected manually");
     expect(html).not.toContain("Select a version");
     expect(html).not.toContain("Use current Viewer Notes");
+  });
+
+  it("shows independent current/off Field Guide controls in ordinary Research", () => {
+    const html = renderBuilder("model");
+    expect(html).toContain("Do not use trained Field Guide");
+    expect(html).toContain("Use current Field Guide");
+    expect(html).toContain("Locked Core Identity");
+    expect(html).toContain("Locked Base Vocabulary");
+  });
+
+  it("keeps one common Field Guide control around the Viewer Notes Impact experiment", () => {
+    const html = renderBuilder("viewer_notes");
+    expect(html).toContain("Do not use trained Field Guide");
+    expect(html).toContain("Use current Field Guide");
+    expect(html).toContain("NO NOTES");
+    expect(html).toContain("FROZEN CURRENT NOTES");
+  });
+
+  it("keeps manual Prompt Research and exposes explicit Field Guide history as a separate source", () => {
+    const html = renderBuilder("system_prompt");
+    expect(html).toContain("Manual prompt variants");
+    expect(html).toContain("Trained Field Guide history");
+    expect(html).toContain("standalone experimental prompt");
+    expect(html).not.toContain("latest three");
   });
 
   it("captures the currently active Viewer Notes version for the exact base Viewer identity", async () => {

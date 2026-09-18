@@ -12,6 +12,8 @@ import type { FieldGuideLanguage } from "../../aiCenter/fieldGuideTypes";
 /** Persistence contract for immutable Viewer Field Guide versions. Viewer Notes are intentionally separate. */
 export interface FieldGuideRepository {
   getFieldGuideBundle(aiIdentityId: string, language: FieldGuideLanguage): Promise<FieldGuideBundle | null>;
+  /** Read-only bundle lookup. Never initializes settings or other Viewer Learning state. */
+  getExistingFieldGuideBundle(aiIdentityId: string, language: FieldGuideLanguage): Promise<FieldGuideBundle | null>;
   listFieldGuideVersions(aiIdentityId: string, language: FieldGuideLanguage): Promise<FieldGuideVersion[]>;
   listFieldGuideActivationEvents(aiIdentityId: string, language: FieldGuideLanguage): Promise<FieldGuideActivationEvent[]>;
   listFieldGuideLegacyBaselines(profileId: string): Promise<FieldGuideLegacyBaseline[]>;

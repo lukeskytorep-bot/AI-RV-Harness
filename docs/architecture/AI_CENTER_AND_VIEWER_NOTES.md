@@ -1,12 +1,12 @@
 # AI Center and Viewer Notes
 
-> **Status:** Implemented in v0.7.12; source-preservation and controlled-purge integration extended in private v0.7.13  
-> **Design baseline:** AI RV Harness v0.7.11  
-> **Reference:** public v0.7.12 core + private v0.7.13 UX-DATA-7/8 lifecycle extensions
+> **Status:** Implemented in v0.7.12; Viewer Learning and Research Field Guide controls extended in private v0.7.13
+> **Design baseline:** AI RV Harness v0.7.11
+> **Reference:** public v0.7.12 core + private v0.7.13 UX-DATA and VIEWER-LEARNING lifecycle extensions
 
 AI Center is a top-level area of AI RV Harness for inspecting and managing AI roles, their histories, and carefully controlled experimental features. Its first experiment is **Viewer Notes**: private, versioned working guidance created and revised only by the same Viewer identity after qualifying completed RV sessions.
 
-This page describes the implemented Viewer Notes architecture. The core was introduced in v0.7.12; source-preservation and controlled-purge integration are part of the private v0.7.13 development baseline.
+This page describes the implemented Viewer Notes architecture and the private v0.7.13 Viewer Learning extension. The core Viewer Notes capability was introduced in v0.7.12; source preservation, controlled purge, the versioned trainable Field Guide, and frozen Research controls are private v0.7.13 development features.
 
 ## Why AI Center is a top-level section
 
@@ -177,18 +177,43 @@ The Viewer Notes module shows:
 
 The Overview guide explains Profile-wide ownership, the role boundary between Viewer, Monitor, and Judge, the ON/OFF behavior, Training-only updates, the post-Reveal update order, immutable versions, Research snapshots, and the difference between Viewer Notes and the System Prompt.
 
+## Viewer Learning: Viewer Notes and Field Guide
+
+Private v0.7.13 separates two trainable Viewer layers:
+
+- **Viewer Notes** — the Viewer-owned reflective notes introduced in v0.7.12;
+- **Field Guide** — a versioned trainable guidance layer owned by one exact Viewer identity and one language.
+
+The Field Guide never replaces the Viewer protocol foundation. Effective normal Viewer prompts are composed from three conceptual layers: **Locked Core Identity**, **Locked Base Vocabulary**, and the optional trainable **Field Guide**. Disabling the trained Field Guide removes only that third layer. The locked identity, base vocabulary, and protocol rules remain present.
+
+Field Guide versions are immutable and carry an exact content hash, identity, language, capacity, source Training/session provenance, and creation time. Training may update the Field Guide according to its dedicated post-Training update flow. Ordinary Research is read-only and cannot create either Field Guide versions or Viewer Notes versions.
+
 ## Research design
 
-The first controlled experiment compares:
+Ordinary Research exposes two independent controls:
+
+- **Viewer Notes:** `OFF` or `CURRENT`;
+- **Field Guide:** `OFF` or `CURRENT`.
+
+The four combinations are valid independently. At **Experiment Lock**, every enabled current layer is frozen as an exact snapshot. Later Training may change the active Profile state, but it cannot replace the snapshot of a locked, running, resumed, or completed Research project. Drift may be shown informationally; Resume uses only the frozen configuration.
+
+The existing Viewer Notes Impact experiment remains a two-condition comparison:
 
 - **Condition A — No Notes**;
 - **Condition B — Frozen Viewer Notes**.
 
-Both conditions keep the same Profile, API identity, provider, exact model route, System Prompt, protocol, reasoning settings, temperature, output limits, target design, and session rules.
+One common Field Guide setting is frozen for both conditions so that the Field Guide cannot become an unintended second variable. No historical Viewer Notes selector is added.
 
-Condition B normally uses the latest active version. An advanced control may select one of the five most recent valid immutable versions. Experiment Lock stores the complete selected text, version, hash, and whether selection was `latest` or `manual_recent`. Manual selection is disclosed in exports to prevent hidden cherry-picking.
+Prompt Research retains two explicitly different sources:
 
-Notes cannot update during the locked experiment, and no catch-up update runs afterward. The AI Judge receives an anonymous allowlisted evidence packet and does not learn which condition was used. Scores are frozen before unblinding.
+1. **Manual prompt variants** — the existing free-form experimental prompt variants. They remain standalone prompt material and are never written into Field Guide history.
+2. **Trained Field Guide history** — the most recent six Field Guide versions for the exact Viewer identity and language are shown; the operator manually selects two to four versions. Each selected trainable Field Guide snapshot is frozen at Experiment Lock and composed at execution with the same frozen Locked Core Identity and Locked Base Vocabulary.
+
+A Field Guide history comparison therefore changes only the selected trainable Field Guide version. Viewer/model, provider route, generation settings, protocol, compatible targets/randomization, locked identity/base-vocabulary blocks, and one common Viewer Notes setting remain controlled. Historical whole prompts with different Core Identity versions are not compared.
+
+The frozen Research config records Field Guide mode/source, exact version ID, content SHA-256, complete content snapshot, exact identity, language, capacity/provenance, Locked Core Identity version, Locked Base Vocabulary version, Viewer Notes mode, and the existing generation settings. Research results and reproducibility exports identify the exact Field Guide version/hash used for each condition.
+
+The AI Judge receives an anonymous allowlisted evidence packet and does not learn which condition was used. Scores are frozen before unblinding.
 
 The standard `3 + 3 + 2 + 2` rubric remains unchanged:
 

@@ -253,7 +253,11 @@ Core safeguards include:
 - recorded unblinding and reproducibility exports;
 - an in-application guide explaining the research workflow.
 
-The Viewer Notes Impact design compares **No Notes** with a locked **Frozen Viewer Notes** snapshot. Notes cannot update during the experiment. The exact version, text hash, identity, and selection method are frozen at Experiment Lock, while AI Judge remains unaware of the condition.
+The Viewer Notes Impact design compares **No Notes** with a locked **Frozen Viewer Notes** snapshot. Notes cannot update during the experiment. One common Field Guide setting is frozen across both conditions so that the trainable Field Guide cannot become an unintended second variable.
+
+Private v0.7.13 Research also has independent **Viewer Notes OFF/CURRENT** and **Field Guide OFF/CURRENT** controls for ordinary studies. `Field Guide OFF` removes only the trainable Field Guide; Locked Core Identity, Locked Base Vocabulary and protocol rules remain in force. Enabled current Viewer Notes and Field Guide content are captured as immutable Research snapshots at Experiment Lock. Active Profile drift after Lock never replaces those snapshots and does not block Resume.
+
+Prompt Research keeps the existing **Manual prompt variants** source and adds **Trained Field Guide history** as a separate source. History mode lists the six most recent versions for the exact Viewer identity and language and requires the operator to select two to four. The comparison freezes each selected trainable Field Guide and composes it with the same frozen locked Viewer blocks, so the selected Field Guide version is the intended experimental variable. Manual prompts are not saved as Field Guide versions. Research itself remains read-only for both Field Guide and Viewer Notes.
 
 Research preserves the distinction between exploratory choices made during design and results examined after the lock. The quality of a study still depends on target construction, sample size, controls, independence assumptions, and the operator's analysis plan.
 

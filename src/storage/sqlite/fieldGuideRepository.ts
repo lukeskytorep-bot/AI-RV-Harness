@@ -85,6 +85,16 @@ export class SqliteFieldGuideRepository implements FieldGuideRepository {
     return { identityId: aiIdentityId, language, settings, activeVersion: withStatus.find((item) => item.activationStatus === "active"), versions: withStatus, activationEvents: await this.listFieldGuideActivationEvents(aiIdentityId, language) };
   }
 
+  async getExistingFieldGuideBundle(aiIdentityId: string, language: "pl" | "en"): Promise<FieldGuideBundle | null> {
+    const identities = await this.dependencies.select<IdentityRow[]>("SELECT id, profile_id, role FROM ai_identities WHERE id = $1 LIMIT 1", [aiIdentityId]);
+    if (!identities[0] || identities[0].role !== "viewer") return null;
+    const settingsRows = await this.dependencies.select<SettingsRow[]>("SELECT * FROM field_guide_settings WHERE ai_identity_id = $1 AND language = $2 LIMIT 1", [aiIdentityId, language]);
+    if (!settingsRows[0]) return null;
+    const settings = mapSettings(settingsRows[0]);
+    const versions = (await this.listFieldGuideVersions(aiIdentityId, language)).map((version) => ({ ...version, activationStatus: version.id === settings.activeVersionId ? "active" as const : "historical" as const }));
+    return { identityId: aiIdentityId, language, settings, activeVersion: versions.find((item) => item.activationStatus === "active"), versions, activationEvents: await this.listFieldGuideActivationEvents(aiIdentityId, language) };
+  }
+
   async listFieldGuideVersions(aiIdentityId: string, language: "pl" | "en"): Promise<FieldGuideVersion[]> {
     const settingsRows = await this.dependencies.select<SettingsRow[]>("SELECT * FROM field_guide_settings WHERE ai_identity_id = $1 AND language = $2 LIMIT 1", [aiIdentityId, language]);
     const rows = await this.dependencies.select<VersionRow[]>("SELECT * FROM field_guide_versions WHERE ai_identity_id = $1 AND language = $2 ORDER BY version_number DESC", [aiIdentityId, language]);

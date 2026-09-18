@@ -61,6 +61,19 @@ export class BrowserFieldGuideRepository implements FieldGuideRepository {
     return { identityId: aiIdentityId, language, settings, activeVersion: versions.find((item) => item.activationStatus === "active"), versions, activationEvents };
   }
 
+  async getExistingFieldGuideBundle(aiIdentityId: string, language: "pl" | "en"): Promise<FieldGuideBundle | null> {
+    const identity = this.read<AiIdentity[]>(AI_IDENTITIES_KEY, []).find((item) => item.id === aiIdentityId);
+    if (!identity || identity.role !== "viewer") return null;
+    const settings = this.read<FieldGuideSettings[]>(FIELD_GUIDE_SETTINGS_KEY, []).find((item) => item.aiIdentityId === aiIdentityId && item.language === language);
+    if (!settings) return null;
+    const rawVersions = this.read<FieldGuideVersion[]>(FIELD_GUIDE_VERSIONS_KEY, [])
+      .filter((item) => item.aiIdentityId === aiIdentityId && item.language === language)
+      .sort((a, b) => b.versionNumber - a.versionNumber);
+    const versions = rawVersions.map((item) => ({ ...item, activationStatus: item.id === settings.activeVersionId ? "active" as const : "historical" as const }));
+    const activationEvents = await this.listFieldGuideActivationEvents(aiIdentityId, language);
+    return { identityId: aiIdentityId, language, settings, activeVersion: versions.find((item) => item.activationStatus === "active"), versions, activationEvents };
+  }
+
   async listFieldGuideVersions(aiIdentityId: string, language: "pl" | "en") {
     return (await this.getFieldGuideBundle(aiIdentityId, language))?.versions ?? [];
   }

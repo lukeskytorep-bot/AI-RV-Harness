@@ -14,6 +14,7 @@ import training from "./features/training/TrainingScreen.tsx?raw";
 import trainingExecution from "./features/training/trainingExecution.ts?raw";
 import researchBuilder from "./features/research/ResearchBuilder.tsx?raw";
 import researchEngine from "./research/engine.ts?raw";
+import researchFieldGuidePolicy from "./research/fieldGuidePolicy.ts?raw";
 import postReveal from "./sessions/postReveal.ts?raw";
 import viewerNotes from "./aiCenter/viewerNotes.ts?raw";
 import judgePrompt from "./judge/prompt.ts?raw";
@@ -23,6 +24,8 @@ import monitorEngine from "./monitor/engine.ts?raw";
 import providerRetry from "./providers/retry.ts?raw";
 import migration023 from "../src-tauri/migrations/023_controlled_purge.sql?raw";
 import migration024 from "../src-tauri/migrations/024_viewer_learning_field_guide.sql?raw";
+import browserControlledPurge from "./storage/browser/controlledPurge.ts?raw";
+import sqliteControlledPurge from "./storage/sqlite/controlledPurge.ts?raw";
 import nativeCompatibility from "../src-tauri/src/ux_data_compatibility.rs?raw";
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -35,15 +38,21 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(sha256(judgeEngine)).toBe("df0f40bb7747f36f184f89211c170b2edef2484a8b07b0920390c1dd8dfa8b7d");
     expect(sha256(monitorPrompt)).toBe("3eda515707b2a6e356e49b3b04d191397a760de248a0ba0c46391e950609dc85");
     expect(sha256(monitorEngine)).toBe("73d2f461bca2a2ef7e07e0013c742f86f5bc5d14f4aec77510977c70e8b86065");
-    expect(sha256(researchEngine)).toBe("df9b6394fc9945a5a9cb71f543f5c2a3e54f7a751a3e32d4466a2b0f27d14fa2");
-    expect(sha256(researchBuilder)).toBe("2aa976813a81b9b0190a8bbfa05b135d3d20963144e8f03bc638be491f4bbf0e");
     expect(sha256(providerRetry)).toBe("1af935d6d31e52f39e0b9595d291e58711c5002c973e4a9293d756e0db83c7cd");
+    expect(sha256(browserControlledPurge)).toBe("502b94e42f6707537fe7f38309fa253a95f088c5e64223b28ea5ccf8375f1b6a");
+    expect(sha256(sqliteControlledPurge)).toBe("5ed7115da8cc2bc36ddc06170c766783f19186bf4cd8672396c291ae26cfcfc4");
     expect(sha256(migration023)).toBe("1a9d300daa180a4507c01497b52deaf84722bd710ed4617f84058932dc7838a4");
   });
 
-  it("does not add Field Guide learning or mutation to Research or Training Reflection", () => {
+  it("keeps Research Field Guide usage read-only and Training Reflection free of direct repository mutation", () => {
     expect(researchBuilder).not.toContain("prepareFieldGuideForSession");
-    expect(researchEngine).not.toContain("FieldGuide");
+    expect(researchBuilder).not.toContain("createFieldGuideVersion");
+    expect(researchBuilder).toContain("captureCurrentResearchFieldGuide");
+    expect(researchFieldGuidePolicy).toContain("getExistingFieldGuideBundle");
+    expect(researchFieldGuidePolicy).not.toContain("createFieldGuideVersion");
+    expect(researchFieldGuidePolicy).not.toContain("restoreFieldGuideVersion");
+    expect(researchEngine).toContain("fieldGuideSnapshotSignature");
+    expect(researchEngine).not.toContain("runFieldGuideUpdate");
     expect(trainingExecution).not.toContain("FieldGuideReflection");
     expect(trainingExecution).not.toContain("createFieldGuideVersion");
     expect(trainingExecution).not.toContain("restoreFieldGuideVersion");

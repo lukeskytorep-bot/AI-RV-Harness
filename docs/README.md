@@ -29,6 +29,9 @@ The current private development baseline is v0.7.13, built on the public v0.7.12
 - [UX-DATA-9 final cleanup and compatibility gate report](reports/UX_DATA_FINAL_CLEANUP_COMPATIBILITY_GATE_v0.7.13_PL.md)
 - [UX-DATA compatibility gate architecture](architecture/UX_DATA_COMPATIBILITY_GATE.md)
 - [Etap 6 Rust provider modularization report](reports/MODULARIZATION_RUST_PROVIDERS_SPLIT_v0.7.13_PL.md)
+- [Viewer Learning 1 Field Guide foundation report](reports/VIEWER_LEARNING_1_FIELD_GUIDE_FOUNDATION_R1_v0.7.13_PL.md)
+- [Viewer Learning 2 Training Field Guide update report](reports/VIEWER_LEARNING_2_TRAINING_FIELD_GUIDE_UPDATE_v0.7.13_PL.md)
+- [Viewer Learning 3 Research Field Guide controls report](reports/VIEWER_LEARNING_3_RESEARCH_FIELD_GUIDE_CONTROLS_v0.7.13_PL.md)
 
 - [AI Center implementation plan](releases/v0.7.12/AI_CENTER_IMPLEMENTATION_PLAN_PL.md)
 - [AI Center wiki documentation](releases/v0.7.12/AI_CENTER_VIEWER_NOTES_WIKI_EN.md)

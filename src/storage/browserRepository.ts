@@ -95,6 +95,7 @@ export class BrowserRepository implements AppRepository {
   restoreViewerNoteVersion: AppRepository["restoreViewerNoteVersion"] = (aiIdentityId, versionId, workspaceId) => this.aiCenterRepository.restoreViewerNoteVersion(aiIdentityId, versionId, workspaceId);
   detachViewerNoteSourceReferences: AppRepository["detachViewerNoteSourceReferences"] = (input) => this.aiCenterRepository.detachViewerNoteSourceReferences(input);
   getFieldGuideBundle: AppRepository["getFieldGuideBundle"] = (aiIdentityId, language) => this.fieldGuideRepository.getFieldGuideBundle(aiIdentityId, language);
+  getExistingFieldGuideBundle: AppRepository["getExistingFieldGuideBundle"] = (aiIdentityId, language) => this.fieldGuideRepository.getExistingFieldGuideBundle(aiIdentityId, language);
   listFieldGuideVersions: AppRepository["listFieldGuideVersions"] = (aiIdentityId, language) => this.fieldGuideRepository.listFieldGuideVersions(aiIdentityId, language);
   listFieldGuideActivationEvents: AppRepository["listFieldGuideActivationEvents"] = (aiIdentityId, language) => this.fieldGuideRepository.listFieldGuideActivationEvents(aiIdentityId, language);
   listFieldGuideLegacyBaselines: AppRepository["listFieldGuideLegacyBaselines"] = (profileId) => this.fieldGuideRepository.listFieldGuideLegacyBaselines(profileId);
