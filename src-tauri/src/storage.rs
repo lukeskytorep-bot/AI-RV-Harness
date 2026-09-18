@@ -1584,7 +1584,7 @@ mod tests {
     #[tokio::test]
     async fn portable_backup_and_restore_preflight_accept_database_version_024() {
         let root = temp_case("backup-version-024");
-        let backup_id = "backup_security_ipc_1a_v23";
+        let backup_id = "backup_viewer_learning_1_v24";
         let directory = root.join(format!("AI_RV_Harness_{backup_id}"));
         fs::create_dir_all(&directory).expect("portable backup directory should be created");
         let database = directory.join(DATABASE_FILE_NAME);
@@ -1610,15 +1610,15 @@ mod tests {
 
         inspect_portable_backup(directory.to_string_lossy().to_string())
             .await
-            .expect("portable backup with migration version 23 should be accepted");
+            .expect("portable backup with the current migration version should be accepted");
 
         let restore_copy = root.join("restore-preflight.db");
         fs::copy(&database, &restore_copy).expect("restore candidate should copy");
         assert_eq!(
             validate_sqlite_database(&restore_copy)
                 .await
-                .expect("restore preflight should accept migration version 23"),
-            23
+                .expect("restore preflight should accept the current migration version"),
+            CURRENT_MIGRATION_VERSION
         );
 
         fs::remove_dir_all(root).expect("test directory should be removed");
