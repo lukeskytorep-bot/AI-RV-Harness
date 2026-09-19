@@ -37,6 +37,17 @@ export interface UpdateTargetInput {
   contentHash: string;
 }
 
+export interface BundledTargetLocalizationInput {
+  titleEn: string;
+  titlePl: string;
+  revealTextEn: string;
+  revealTextPl: string;
+  languages: ["en", "pl"];
+  polishTranslationStatus: "accepted";
+  localizationPackId: string;
+  localizationPackVersion: string;
+}
+
 export interface TargetUsageInput {
   targetId: string;
   profileId?: string;

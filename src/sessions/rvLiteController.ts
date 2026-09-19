@@ -17,7 +17,7 @@ import { APP_VERSION } from "../version";
 import { sha256Text, type SessionProgress } from "./controller";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics } from "./metrics";
 import { createSessionCode } from "./sessionCode";
-import type { RvSession, RvSessionState, SessionSnapshot } from "./types";
+import type { RevealInput, RvSession, RvSessionState, SessionSnapshot } from "./types";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
 import type { SpecialTaskInput } from "./specialTask";
@@ -53,6 +53,7 @@ export interface AutomaticRvLiteRunInput {
   viewerNotes?: ViewerNotesSessionSnapshot;
   resumeSession?: RvSession;
   automaticTarget?: TargetRecord;
+  capturedAutomaticReveal?: RevealInput;
   specialTask?: SpecialTaskInput;
   signal?: AbortSignal;
   maxRetries?: number;
@@ -76,6 +77,9 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   if (effectiveSettings.omitted.length) throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
   const costGuard = new SessionCostGuard(input.maxSessionCostUsd);
   costGuard.validateModel(input.model);
+  const automaticReveal = input.automaticTarget
+    ? input.capturedAutomaticReveal ?? await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage)
+    : undefined;
 
   const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
@@ -156,6 +160,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     } : {}),
     revealSource: input.automaticTarget ? "automatic" : "external",
     ...(input.automaticTarget ? { targetId: input.automaticTarget.id } : {}),
+    ...(automaticReveal ? { automaticRevealHash: automaticReveal.hash } : {}),
     applicationVersion: APP_VERSION,
     createdAt: new Date().toISOString(),
   };
@@ -294,8 +299,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   if (!input.automaticTarget) return { sessionId, sessionCode, state: "AwaitingReveal", transcript };
 
   await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_TRANSITION", role: "controller", content: politeRevealTransition(input.sessionLanguage) });
-  const reveal = await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage);
-  await input.repository.acceptReveal(sessionId, reveal);
+  await input.repository.acceptReveal(sessionId, automaticReveal!);
   await input.repository.recordTargetUsage({ targetId: input.automaticTarget.id, profileId: input.profileId, sessionId });
   await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_ACCEPTED", role: "controller", metadata: { source: "automatic_target", targetId: input.automaticTarget.id } });
   notify(input, sessionId, sessionCode, "Revealed", transcript, undefined, undefined, metrics, startedAtMs);

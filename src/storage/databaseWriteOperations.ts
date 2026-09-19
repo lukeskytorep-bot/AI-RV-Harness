@@ -76,6 +76,7 @@ export type DatabaseWriteOperation =
   | "targets_update_targets_01"
   | "targets_update_targets_02"
   | "targets_update_targets_03"
+  | "targets_update_targets_04"
   | "targets_insert_target_usage_01"
   | "training_insert_training_runs_01"
   | "training_update_training_runs_01"
@@ -179,6 +180,7 @@ const WRITE_OPERATIONS = new Map<string, DatabaseWriteOperation>([
   ["UPDATE targets SET title = $1, reveal_text = $2, tags_json = $3, content_hash = $4, updated_at = $5 WHERE id = $6 AND collection = 'user' AND archived_at IS NULL", "targets_update_targets_01"],
   ["UPDATE targets SET archived_at = $1, updated_at = $1 WHERE id = $2 AND collection = 'user' AND archived_at IS NULL", "targets_update_targets_02"],
   ["UPDATE targets SET archived_at = NULL, updated_at = $1 WHERE id = $2 AND collection = 'user' AND archived_at IS NOT NULL", "targets_update_targets_03"],
+  ["UPDATE targets SET source_metadata_json = $1 WHERE id = $2 AND collection = 'training' AND archived_at IS NULL", "targets_update_targets_04"],
   ["INSERT INTO target_usage (id, target_id, profile_id, research_project_id, session_id, used_at) VALUES ($1, $2, $3, $4, $5, $6)", "targets_insert_target_usage_01"],
   ["INSERT INTO training_runs (id, run_number, status, record_json, created_at, updated_at, archived_at) VALUES ($1, $2, $3, $4, $5, $5, NULL)", "training_insert_training_runs_01"],
   ["UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL", "training_update_training_runs_01"],

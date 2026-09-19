@@ -1,5 +1,7 @@
 import type { AppRepository } from "../storage/repository";
+import type { TargetRecord } from "./types";
 import type { InterfaceLanguage } from "../types";
+import { FACTORY_TARGET_LOCALIZATION_PACK_ID, FACTORY_TARGET_LOCALIZATION_PACK_VERSION, getBundledTrainingLocalizationPl, validateBundledTrainingLocalizationsPl } from "./bundledLocalization";
 
 export const FACTORY_TARGET_PACK_ID = "factory-training-targets-84";
 export const FACTORY_TARGET_PACK_VERSION = "1.0.0";
@@ -54,9 +56,9 @@ export interface BundledTrainingTarget {
   categoryOrder: number;
   subtype?: "mountain" | "structure";
   title: string;
-  titlePl?: string;
+  titlePl: string;
   revealText: string;
-  revealTextPl?: string;
+  revealTextPl: string;
 }
 
 const categoryIndex = new Map(TRAINING_CATEGORIES.map((category, index) => [category, index]));
@@ -74,16 +76,20 @@ export const BUNDLED_TRAINING_TARGETS: readonly BundledTrainingTarget[] = Object
     const categoryOrder = all.slice(0, targetIndex).filter((item) => item.category === source.category).length + 1;
     const stableCategory = String(categoryIndex.get(source.category)! + 1).padStart(2, "0");
     const stableOrder = String(categoryOrder).padStart(2, "0");
+    const id = `factory_training_${stableCategory}_${stableOrder}`;
+    const localization = getBundledTrainingLocalizationPl(id);
     const title = extractTargetTitle(source.revealText) || `${TRAINING_CATEGORY_LABELS[source.category].en} ${stableOrder}`;
     return {
-      id: `factory_training_${stableCategory}_${stableOrder}`,
+      id,
       targetId: targetIndex + 1,
       sourceFile: source.sourceFile,
       category: source.category,
       categoryOrder,
       ...(source.category === "mountain_structure_contrast" ? { subtype: categoryOrder % 2 === 1 ? "mountain" as const : "structure" as const } : {}),
       title,
+      titlePl: localization.titlePl,
       revealText: normalizeSource(source.revealText),
+      revealTextPl: localization.revealTextPl,
     };
   });
 
@@ -104,45 +110,88 @@ export function validateFactoryTrainingPack(targets = BUNDLED_TRAINING_TARGETS):
     if (counts[category] < minimum) errors.push(`${category}: ${counts[category]}/${minimum}`);
   }
   if (targets.length !== 84) errors.push(`total: ${targets.length}/84`);
+  const localizationValidation = validateBundledTrainingLocalizationsPl(targets.map((target) => target.id));
+  errors.push(...localizationValidation.errors.map((error) => `pl: ${error}`));
   return { valid: errors.length === 0, total: targets.length, expectedTotal: 84, counts, errors };
 }
 
-export async function ensureBundledTrainingTargets(repository: Pick<AppRepository, "listTargets" | "createTarget">): Promise<number> {
+export async function ensureBundledTrainingTargets(repository: Pick<AppRepository, "listTargets" | "createTarget" | "updateBundledTargetLocalization">): Promise<number> {
   const validation = validateFactoryTrainingPack();
   if (!validation.valid) throw new Error(`Factory Training Target pack is incomplete: ${validation.errors.join(", ")}`);
-  const existingIds = new Set((await repository.listTargets()).map((target) => target.id));
+  const existingTargets = await repository.listTargets();
+  const existingById = new Map(existingTargets.map((target) => [target.id, target]));
   let created = 0;
   for (const target of BUNDLED_TRAINING_TARGETS) {
-    if (existingIds.has(target.id)) continue;
-    await repository.createTarget({
-      id: target.id,
-      collection: "training",
-      title: target.title,
-      revealText: target.revealText,
-      tags: ["factory-training", target.category, ...(target.subtype ? [target.subtype] : [])],
-      sourceMetadata: {
-        origin: "bundled_factory_training_pack",
-        packId: FACTORY_TARGET_PACK_ID,
-        packVersion: FACTORY_TARGET_PACK_VERSION,
-        category: target.category,
-        categoryOrder: target.categoryOrder,
-        curriculumOrder: target.targetId,
-        subtype: target.subtype,
-        sourceLegacyId: target.sourceFile,
-        ...(target.titlePl ? { titlePl: target.titlePl } : {}),
-        ...(target.revealTextPl ? { revealTextPl: target.revealTextPl } : {}),
-        languages: ["en"],
-        polishTranslationStatus: "not_supplied",
-        license: "CC-BY-4.0",
-        attribution: "AI RV Harness contributors — see CREDITS.md",
-        provenance: "project_author_supplied",
-      },
-      contentHash: await sha256Text(target.revealText),
-    });
-    existingIds.add(target.id);
-    created += 1;
+    const localizationMetadata = bundledLocalizationMetadata(target);
+    const existing = existingById.get(target.id);
+    if (!existing) {
+      const createdTarget = await repository.createTarget({
+        id: target.id,
+        collection: "training",
+        title: target.title,
+        revealText: target.revealText,
+        tags: ["factory-training", target.category, ...(target.subtype ? [target.subtype] : [])],
+        sourceMetadata: {
+          origin: "bundled_factory_training_pack",
+          packId: FACTORY_TARGET_PACK_ID,
+          packVersion: FACTORY_TARGET_PACK_VERSION,
+          category: target.category,
+          categoryOrder: target.categoryOrder,
+          curriculumOrder: target.targetId,
+          subtype: target.subtype,
+          sourceLegacyId: target.sourceFile,
+          ...localizationMetadata,
+          license: "CC-BY-4.0",
+          attribution: "AI RV Harness contributors — see CREDITS.md",
+          provenance: "project_author_supplied",
+        },
+        contentHash: await sha256Text(target.revealText),
+      });
+      existingById.set(target.id, createdTarget);
+      created += 1;
+      continue;
+    }
+    if (!isBundledFactoryTarget(existing, target.id)) continue;
+    if (!localizationMetadataMatches(existing.sourceMetadata, localizationMetadata)) {
+      const updated = await repository.updateBundledTargetLocalization(target.id, localizationMetadata);
+      existingById.set(target.id, updated);
+    }
   }
   return created;
+}
+
+function bundledLocalizationMetadata(target: BundledTrainingTarget) {
+  return {
+    titleEn: target.title,
+    titlePl: target.titlePl,
+    revealTextEn: target.revealText,
+    revealTextPl: target.revealTextPl,
+    languages: ["en", "pl"] as ["en", "pl"],
+    polishTranslationStatus: "accepted" as const,
+    localizationPackId: FACTORY_TARGET_LOCALIZATION_PACK_ID,
+    localizationPackVersion: FACTORY_TARGET_LOCALIZATION_PACK_VERSION,
+  };
+}
+
+function isBundledFactoryTarget(target: TargetRecord, id: string): boolean {
+  return target.id === id
+    && target.collection === "training"
+    && target.sourceMetadata.origin === "bundled_factory_training_pack"
+    && target.sourceMetadata.packId === FACTORY_TARGET_PACK_ID;
+}
+
+function localizationMetadataMatches(sourceMetadata: Record<string, unknown>, expected: ReturnType<typeof bundledLocalizationMetadata>): boolean {
+  return sourceMetadata.titleEn === expected.titleEn
+    && sourceMetadata.titlePl === expected.titlePl
+    && sourceMetadata.revealTextEn === expected.revealTextEn
+    && sourceMetadata.revealTextPl === expected.revealTextPl
+    && Array.isArray(sourceMetadata.languages)
+    && sourceMetadata.languages.length === 2
+    && sourceMetadata.languages[0] === "en"
+    && sourceMetadata.languages[1] === "pl"
+    && sourceMetadata.polishTranslationStatus === "accepted"
+    && sourceMetadata.localizationPackId === expected.localizationPackId
+    && sourceMetadata.localizationPackVersion === expected.localizationPackVersion;
 }
 
 export function isFactoryTrainingTargetId(id: string): boolean {

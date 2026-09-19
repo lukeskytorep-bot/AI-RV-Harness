@@ -59,6 +59,7 @@ describe("automatic RV Lite controller", () => {
     expect(snapshots[0].rvSystemPrompt).toEqual(expect.objectContaining({ contentSha256: "a".repeat(64), fullContent: "FIXED PROFILE VIEWER PROMPT" }));
     expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity", "locked-viewer-base-vocabulary"]);
     expect(snapshots[0].rvSystemPrompt?.fieldGuide).toMatchObject({ versionId: "fg-v1", content: "FIELD GUIDE", capacityTokens: 2048 });
+    expect(snapshots[0].automaticRevealHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("runs the Special Viewer Task in a separate call after Step 3 and appends the visible response", async () => {

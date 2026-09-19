@@ -1,4 +1,5 @@
 import type {
+  BundledTargetLocalizationInput,
   CreateTargetInput,
   TargetRecord,
   TargetUsageInput,
@@ -91,6 +92,20 @@ export class BrowserTargetsRepository implements TargetsRepository {
       tags: [...input.tags],
       contentHash: input.contentHash,
       updatedAt: (this.dependencies.now ?? nowIso)(),
+    };
+    this.write(TARGETS_KEY, all.map((item) => item.id === id ? updated : item));
+    return updated;
+  }
+
+  async updateBundledTargetLocalization(id: string, input: BundledTargetLocalizationInput): Promise<TargetRecord> {
+    const all = this.read<TargetRecord[]>(TARGETS_KEY, []);
+    const target = all.find((item) => item.id === id && !item.archivedAt);
+    if (!target || target.collection !== "training" || target.sourceMetadata.origin !== "bundled_factory_training_pack" || target.sourceMetadata.packId !== "factory-training-targets-84") {
+      throw new Error("Bundled Training Target not found.");
+    }
+    const updated: TargetRecord = {
+      ...target,
+      sourceMetadata: { ...target.sourceMetadata, ...input },
     };
     this.write(TARGETS_KEY, all.map((item) => item.id === id ? updated : item));
     return updated;

@@ -320,6 +320,7 @@ export class SqliteRepository implements AppRepository {
   listArchivedTargets: AppRepository["listArchivedTargets"] = () => this.targetsRepository.listArchivedTargets();
   createTarget: AppRepository["createTarget"] = (input) => this.targetsRepository.createTarget(input);
   updateTarget: AppRepository["updateTarget"] = (id, input) => this.targetsRepository.updateTarget(id, input);
+  updateBundledTargetLocalization: AppRepository["updateBundledTargetLocalization"] = (id, input) => this.targetsRepository.updateBundledTargetLocalization(id, input);
   archiveTarget: AppRepository["archiveTarget"] = (id) => this.targetsRepository.archiveTarget(id);
   restoreTarget: AppRepository["restoreTarget"] = (id) => this.targetsRepository.restoreTarget(id);
   previewPermanentDelete: AppRepository["previewPermanentDelete"] = (kind, id) => this.controlledPurge.preview(kind, id);

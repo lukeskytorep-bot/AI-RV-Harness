@@ -10,7 +10,7 @@ import { evaluateMonitor, isIncompleteMonitorResponse, type MonitorDecision } fr
 import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
 import { RCP_CONTROLLER_PROMPT_ID, RCP_CONTROLLER_PROMPT_VERSION, rcpPhasePrompt } from "./controllerPrompts";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics, type SessionRunMetrics } from "./metrics";
-import type { RevealArtifactRecord, RvSession, RvSessionState, SessionSnapshot } from "./types";
+import type { RevealArtifactRecord, RevealInput, RvSession, RvSessionState, SessionSnapshot } from "./types";
 import { buildAutomaticTargetReveal, targetHasSupportedReveal } from "../targets/service";
 import { APP_VERSION } from "../version";
 import { createSessionCode } from "./sessionCode";
@@ -62,6 +62,7 @@ export interface AutomaticRcpRunInput {
   maxSessionCostUsd?: number;
   sessionCodePrefix?: string;
   automaticTarget?: TargetRecord;
+  capturedAutomaticReveal?: RevealInput;
   researchProjectId?: string;
   aiIsBeDisplayName?: string;
   humanIsBeDisplayName?: string;
@@ -118,6 +119,9 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   const costGuard = new SessionCostGuard(input.maxSessionCostUsd);
   costGuard.validateModel(input.model);
   if (input.monitor) costGuard.validateModel(input.monitor.model);
+  const automaticReveal = input.automaticTarget
+    ? input.capturedAutomaticReveal ?? await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage)
+    : undefined;
 
   const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
@@ -244,6 +248,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     } : {}),
     revealSource: input.automaticTarget ? "automatic" : "external",
     ...(input.automaticTarget ? { targetId: input.automaticTarget.id } : {}),
+    ...(automaticReveal ? { automaticRevealHash: automaticReveal.hash } : {}),
     ...(input.researchProjectId ? { researchProjectId: input.researchProjectId } : {}),
     applicationVersion: APP_VERSION,
     createdAt,
@@ -604,8 +609,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   if (input.signal?.aborted) return stop("USER STOP");
   if (input.automaticTarget) {
     await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_TRANSITION", role: "controller", content: politeRevealTransition(input.sessionLanguage) });
-    const reveal = await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage);
-    await input.repository.acceptReveal(sessionId, reveal);
+    await input.repository.acceptReveal(sessionId, automaticReveal!);
     await input.repository.recordTargetUsage({ targetId: input.automaticTarget.id, profileId: input.profileId, researchProjectId: input.researchProjectId, sessionId });
     await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_ACCEPTED", role: "controller", metadata: { source: "automatic_target", targetId: input.automaticTarget.id } });
     notify(input, sessionId, sessionCode, "Revealed", transcript, undefined, undefined, metrics, startedAtMs);

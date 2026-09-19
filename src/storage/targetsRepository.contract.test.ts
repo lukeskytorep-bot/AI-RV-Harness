@@ -107,6 +107,12 @@ function sqliteHarness(): ContractHarness {
         Object.assign(row, { title: values[0], reveal_text: values[1], tags_json: values[2], content_hash: values[3], updated_at: values[4] });
         return { rowsAffected: 1 };
       }
+      if (query.startsWith("UPDATE targets SET source_metadata_json")) {
+        const row = targets.find((item) => item.id === values[1] && item.collection === "training" && item.archived_at === null);
+        if (!row) return { rowsAffected: 0 };
+        row.source_metadata_json = String(values[0]);
+        return { rowsAffected: 1 };
+      }
       if (query.startsWith("UPDATE targets SET archived_at = $1")) {
         const row = targets.find((item) => item.id === values[1] && item.collection === "user" && item.archived_at === null);
         if (!row) return { rowsAffected: 0 };
@@ -173,6 +179,21 @@ for (const [name, makeHarness] of [["browser", browserHarness], ["sqlite", sqlit
       expect(created).toMatchObject({ id: "user-a", title: "Title", revealText: "Reveal", tags: ["one"] });
       const updated = await harness.repository.updateTarget("user-a", { title: "  New  ", revealText: "  Text  ", tags: ["two"], contentHash: "hash-2" });
       expect(updated).toMatchObject({ id: "user-a", collection: "user", title: "New", revealText: "Text", tags: ["two"], contentHash: "hash-2", createdAt: created.createdAt });
+    });
+
+    it("updates only localization metadata for an active bundled factory Training target", async () => {
+      const harness = makeHarness();
+      const originalUpdatedAt = "2026-09-06T00:00:00.000Z";
+      harness.seedTargets([
+        { ...target("factory_training_01_01", "training", originalUpdatedAt), revealText: "Canonical EN", sourceMetadata: { origin: "bundled_factory_training_pack", packId: "factory-training-targets-84", category: "mountain_structure_contrast" } },
+        { ...target("user-a", "user", originalUpdatedAt), sourceMetadata: { origin: "user_created" } },
+      ]);
+      const input = { titleEn: "English", titlePl: "Polski", revealTextEn: "English reveal", revealTextPl: "Polski reveal", languages: ["en", "pl"] as ["en", "pl"], polishTranslationStatus: "accepted" as const, localizationPackId: "factory-training-target-localization-pl", localizationPackVersion: "1.0.0-r1" };
+      const updated = await harness.repository.updateBundledTargetLocalization("factory_training_01_01", input);
+      expect(updated).toMatchObject({ title: "factory_training_01_01", revealText: "Canonical EN", updatedAt: originalUpdatedAt });
+      expect(updated.sourceMetadata).toMatchObject(input);
+      await expect(harness.repository.updateBundledTargetLocalization("user-a", input)).rejects.toThrow("Bundled Training Target not found");
+      expect((await harness.repository.listTargets("user"))[0]?.sourceMetadata).toEqual({ origin: "user_created" });
     });
 
     it("records and returns usage newest first", async () => {

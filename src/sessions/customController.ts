@@ -10,7 +10,7 @@ import type { TargetRecord } from "../targets/types";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
 import { sha256Text, type SessionProgress } from "./controller";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics } from "./metrics";
-import type { RvSession, RvSessionState, SessionSnapshot } from "./types";
+import type { RevealInput, RvSession, RvSessionState, SessionSnapshot } from "./types";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
 import {
@@ -49,6 +49,7 @@ export interface AutomaticCustomRunInput {
   viewerNotes?: ViewerNotesSessionSnapshot;
   resumeSession?: RvSession;
   automaticTarget?: TargetRecord;
+  capturedAutomaticReveal?: RevealInput;
   signal?: AbortSignal;
   maxRetries?: number;
   requestTimeoutMs?: number;
@@ -71,6 +72,9 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   if (effectiveSettings.omitted.length) throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
   const costGuard = new SessionCostGuard(input.maxSessionCostUsd);
   costGuard.validateModel(input.model);
+  const automaticReveal = input.automaticTarget
+    ? input.capturedAutomaticReveal ?? await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage)
+    : undefined;
   const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
@@ -142,6 +146,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
     ...(input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),
     revealSource: input.automaticTarget ? "automatic" : "external",
     ...(input.automaticTarget ? { targetId: input.automaticTarget.id } : {}),
+    ...(automaticReveal ? { automaticRevealHash: automaticReveal.hash } : {}),
     applicationVersion: APP_VERSION,
     createdAt: new Date().toISOString(),
   };
@@ -217,8 +222,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   if (input.signal?.aborted) return stopRun("USER STOP");
   if (!input.automaticTarget) return { sessionId, sessionCode, state: "AwaitingReveal", transcript };
 
-  const reveal = await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage);
-  await input.repository.acceptReveal(sessionId, reveal);
+  await input.repository.acceptReveal(sessionId, automaticReveal!);
   await input.repository.recordTargetUsage({ targetId: input.automaticTarget.id, profileId: input.profileId, sessionId });
   await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_ACCEPTED", role: "controller", metadata: { source: "automatic_target", targetId: input.automaticTarget.id } });
   notify(input, sessionId, sessionCode, "Revealed", transcript, undefined, undefined, metrics, startedAtMs);

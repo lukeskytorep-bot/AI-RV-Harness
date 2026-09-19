@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppRepository } from "../storage/repository";
-import { BUNDLED_TRAINING_TARGETS, ensureBundledTrainingTargets, TRAINING_CATEGORIES, validateFactoryTrainingPack } from "./bundled";
+import { BUNDLED_TRAINING_TARGETS, ensureBundledTrainingTargets, FACTORY_TARGET_PACK_ID, TRAINING_CATEGORIES, validateFactoryTrainingPack } from "./bundled";
 
 describe("bundled Training Targets", () => {
   it("ships the validated 84-target factory curriculum without legacy target identifiers", () => {
@@ -12,6 +12,9 @@ describe("bundled Training Targets", () => {
     for (const target of BUNDLED_TRAINING_TARGETS) {
       expect(target.title).not.toMatch(/^(?:Target|Training Target|TARGET_)/i);
       expect(target.revealText).not.toMatch(/Target ID|TRN \(Identifier\)|Target coordinates|Target Date and Time|Coordinates \(GPS\)|Date of the target|# Target 00|Training Target 0/i);
+      expect(target.titlePl.trim()).not.toBe("");
+      expect(target.revealTextPl.trim()).not.toBe("");
+      expect(target.revealTextPl).not.toMatch(/^(?:#\s*Cel\s+\d|\*\*ID celu:)/im);
     }
   });
 
@@ -20,11 +23,46 @@ describe("bundled Training Targets", () => {
     const repository = {
       listTargets: vi.fn(async () => [{ id: BUNDLED_TRAINING_TARGETS[0].id }]),
       createTarget: vi.fn(async (input: Record<string, unknown>) => { created.push(input); return input; }),
-    } as unknown as Pick<AppRepository, "listTargets" | "createTarget">;
+      updateBundledTargetLocalization: vi.fn(),
+    } as unknown as Pick<AppRepository, "listTargets" | "createTarget" | "updateBundledTargetLocalization">;
     expect(await ensureBundledTrainingTargets(repository)).toBe(83);
     expect(created).toHaveLength(83);
     expect(created[0]?.id).toBe(BUNDLED_TRAINING_TARGETS[1].id);
     expect(created.at(-1)?.id).toBe(BUNDLED_TRAINING_TARGETS.at(-1)?.id);
     expect(created.every((target) => target.collection === "training")).toBe(true);
+    expect(created.every((target) => {
+      const metadata = target.sourceMetadata as Record<string, unknown>;
+      return metadata.polishTranslationStatus === "accepted" && Array.isArray(metadata.languages) && metadata.languages.join(",") === "en,pl";
+    })).toBe(true);
+  });
+
+  it("idempotently synchronizes accepted localization metadata for an existing factory target only", async () => {
+    const first = BUNDLED_TRAINING_TARGETS[0];
+    const existingFactory = {
+      id: first.id, collection: "training" as const, title: "legacy EN", revealText: "legacy reveal", tags: ["factory-training"],
+      sourceMetadata: { origin: "bundled_factory_training_pack", packId: FACTORY_TARGET_PACK_ID, languages: ["en"], polishTranslationStatus: "not_supplied" },
+      createdAt: "old", updatedAt: "old",
+    };
+    const user = { id: "user-a", collection: "user" as const, title: "User", revealText: "User reveal", tags: [], sourceMetadata: { origin: "user_created" }, createdAt: "old", updatedAt: "old" };
+    const state = new Map([[existingFactory.id, existingFactory as any], [user.id, user as any]]);
+    const updateBundledTargetLocalization = vi.fn(async (id: string, input: Record<string, unknown>) => {
+      const current = state.get(id)!;
+      const updated = { ...current, sourceMetadata: { ...current.sourceMetadata, ...input } };
+      state.set(id, updated);
+      return updated;
+    });
+    const repository = {
+      listTargets: vi.fn(async () => [...state.values()]),
+      createTarget: vi.fn(async (input: Record<string, unknown>) => { const created = { ...input, tags: input.tags ?? [], sourceMetadata: input.sourceMetadata ?? {}, createdAt: "new", updatedAt: "new" }; state.set(String(input.id), created); return created; }),
+      updateBundledTargetLocalization,
+    } as unknown as Pick<AppRepository, "listTargets" | "createTarget" | "updateBundledTargetLocalization">;
+
+    expect(await ensureBundledTrainingTargets(repository)).toBe(83);
+    expect(updateBundledTargetLocalization).toHaveBeenCalledTimes(1);
+    expect(updateBundledTargetLocalization).toHaveBeenCalledWith(first.id, expect.objectContaining({ titlePl: first.titlePl, revealTextPl: first.revealTextPl, polishTranslationStatus: "accepted", languages: ["en", "pl"] }));
+    expect(state.get(user.id)?.sourceMetadata).toEqual({ origin: "user_created" });
+
+    expect(await ensureBundledTrainingTargets(repository)).toBe(0);
+    expect(updateBundledTargetLocalization).toHaveBeenCalledTimes(1);
   });
 });

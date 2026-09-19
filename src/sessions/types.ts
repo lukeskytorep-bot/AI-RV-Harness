@@ -143,6 +143,7 @@ export interface SessionSnapshot {
   };
   revealSource: "external" | "automatic";
   targetId?: string;
+  automaticRevealHash?: string;
   researchProjectId?: string;
   applicationVersion: string;
   createdAt: string;
