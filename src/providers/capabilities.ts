@@ -67,9 +67,11 @@ function normalizeOpenRouter(raw: Record<string, unknown>, capturedAt: string): 
   const reasoning = asRecord(raw.reasoning);
   const pricingRaw = asRecord(raw.pricing);
   const supportedParameters = stringArray(raw.supported_parameters);
-  const unrestrictedEfforts = Object.prototype.hasOwnProperty.call(reasoning, "supported_efforts") && reasoning.supported_efforts === null;
   const reasoningMandatory = boolValue(reasoning.mandatory);
-  const reasoningEfforts = (unrestrictedEfforts ? [...REASONING_EFFORTS] : effortArray(reasoning.supported_efforts))
+  // Only expose exact effort levels published by the provider. `null`/missing is not
+  // treated as "all levels": for an unknown model it means provider-default/AUTO
+  // until a verified registry entry supplies an exact contract.
+  const reasoningEfforts = effortArray(reasoning.supported_efforts)
     .filter((effort) => !(reasoningMandatory && effort === "none"));
   const reasoningAdvertised = supportedParameters.includes("reasoning") || supportedParameters.includes("reasoning_effort");
   const inputModalities = stringArray(architecture.input_modalities);

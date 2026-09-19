@@ -19,13 +19,13 @@ describe("dynamic provider capabilities", () => {
       {
         data: [
           {
-            id: "qwen/qwen3.8-max",
-            name: "Qwen 3.8 Max",
+            id: "qwen/qwen3.8-max-0902",
+            name: "Qwen 3.8 Max (0902)",
             context_length: 1_000_000,
             architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] },
             top_provider: { max_completion_tokens: 131_072 },
             supported_parameters: ["temperature", "reasoning_effort", "max_tokens"],
-            reasoning: { mandatory: true, supported_efforts: ["low", "medium", "high", "xhigh"], default_effort: "xhigh" },
+            reasoning: { mandatory: true, default_enabled: true, supported_efforts: ["xhigh", "high", "medium", "low", "minimal"], default_effort: "xhigh" },
             pricing: { prompt: "0.000002", completion: "0.000006" },
           },
         ],
@@ -42,44 +42,81 @@ describe("dynamic provider capabilities", () => {
     expect(model.pricing.completionPerToken).toBe(0.000006);
   });
 
-  it("offers the explicit standard fallback for an unknown Google model", () => {
+  it("keeps an unknown Google thinking model on provider-default reasoning until exact levels are known", () => {
     const google = { ...config, id: "google_1", provider: "google" as const };
     const [model] = normalizeModelDiscovery(google, {
       models: [{ baseModelId: "gemini-3.1-pro", displayName: "Gemini 3.1 Pro", inputTokenLimit: 1_000_000, outputTokenLimit: 65_536, thinking: true, maxTemperature: 2, temperature: 1 }],
     });
     expect(model.capabilities.reasoning.supported).toBe(true);
-    expect(model.capabilities.reasoning.efforts).toEqual(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    expect(model.capabilities.reasoning.efforts).toEqual([]);
+    expect(model.capabilities.reasoning.options).toEqual([]);
     expect(model.capabilities.reasoning.registryStatus).toBe("unknown");
-    expect(model.capabilities.reasoning.options?.every((option) => option.verification === "unverified")).toBe(true);
     expect(model.capabilities.temperature.max).toBe(2);
   });
 
-  it("uses the full OpenRouter gateway effort list when supported_efforts is null and removes NONE for mandatory reasoning", () => {
+  it("keeps unknown OpenRouter models on provider default when supported_efforts is null", () => {
     const [model] = normalizeModelDiscovery(config, {
       data: [{
-        id: "openai/reasoner",
+        id: "vendor/reasoner-with-unspecified-levels",
         supported_parameters: ["reasoning", "temperature"],
         reasoning: { supported_efforts: null, mandatory: true, default_effort: "medium" },
       }],
     });
-    expect(model.capabilities.reasoning.efforts).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+    expect(model.capabilities.reasoning.supported).toBe(true);
+    expect(model.capabilities.reasoning.efforts).toEqual([]);
+    expect(model.capabilities.reasoning.options).toEqual([]);
     expect(model.capabilities.reasoning.mandatory).toBe(true);
+    expect(model.capabilities.reasoning.registryStatus).toBe("unknown");
+
+    const resolved = resolveGenerationSettings(model.capabilities, { reasoningEffort: "high" });
+    expect(resolved.effective.reasoningEffort).toBeUndefined();
+    expect(resolved.omitted).toContain("reasoningEffort");
+    expect(resolved.reasoningResolution).toBeUndefined();
+  });
+
+  it("keeps moving OpenRouter latest aliases on live provider metadata instead of static registry bindings", () => {
+    const [model] = normalizeModelDiscovery(config, {
+      data: [{
+        id: "~deepseek/deepseek-pro-latest",
+        supported_parameters: ["reasoning", "reasoning_effort", "max_tokens"],
+        reasoning: { mandatory: false, supported_efforts: ["max", "high", "low"], default_effort: "high" },
+      }],
+    });
+    expect(model.capabilities.reasoning.registryStatus).toBe("unknown");
+    expect(model.capabilities.reasoning.registryModelId).toBeUndefined();
+    expect(model.capabilities.reasoning.efforts).toEqual(["max", "high", "low"]);
     expect(model.capabilities.reasoning.options?.every((option) => option.verification === "provider_metadata")).toBe(true);
   });
 
-  it("allows explicit unverified reasoning for unknown models while omitting unsupported temperature", () => {
+  it("does not invent reasoning for an unknown model that does not advertise it", () => {
     const [model] = normalizeModelDiscovery(config, {
       data: [{ id: "plain/model", supported_parameters: ["max_tokens"], architecture: { input_modalities: ["text"] } }],
     });
     const resolved = resolveGenerationSettings(model.capabilities, { reasoningEffort: "high", temperature: 1.5, maxOutputTokens: 1000 });
-    expect(resolved.effective).toEqual({ reasoningEffort: "high", maxOutputTokens: 1000 });
-    expect(resolved.omitted).toEqual(["temperature"]);
-    expect(resolved.reasoningResolution).toEqual({
-      selected: "high",
-      label: "HIGH",
-      verification: "unverified",
-      transport: { kind: "effort", value: "high" },
+    expect(model.capabilities.reasoning.supported).toBe(false);
+    expect(model.capabilities.reasoning.efforts).toEqual([]);
+    expect(resolved.effective).toEqual({ maxOutputTokens: 1000 });
+    expect(resolved.omitted).toEqual(["reasoningEffort", "temperature"]);
+    expect(resolved.reasoningResolution).toBeUndefined();
+  });
+
+  it("keeps max-tokens-only reasoning models on provider default and rejects fabricated effort requests", () => {
+    const [model] = normalizeModelDiscovery(config, {
+      data: [{
+        id: "qwen/qwen3.8-flash",
+        supported_parameters: ["reasoning", "max_tokens", "temperature"],
+        reasoning: { mandatory: false, default_enabled: true, supports_max_tokens: true },
+      }],
     });
+    expect(model.capabilities.reasoning.supported).toBe(true);
+    expect(model.capabilities.reasoning.efforts).toEqual([]);
+    expect(model.capabilities.reasoning.options).toEqual([]);
+    expect(model.capabilities.reasoning.registryStatus).toBe("unknown");
+
+    const resolved = resolveGenerationSettings(model.capabilities, { reasoningEffort: "high" });
+    expect(resolved.effective.reasoningEffort).toBeUndefined();
+    expect(resolved.omitted).toContain("reasoningEffort");
+    expect(resolved.reasoningResolution).toBeUndefined();
   });
 
   it("never recommends GPT-OSS 120B", () => {
