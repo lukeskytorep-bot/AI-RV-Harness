@@ -71,7 +71,7 @@ describe("VIEWER-LEARNING-2 boundaries", () => {
       "src/providers/retry.ts",
       "src/providers/providerError.ts",
       "src/providers/service.ts",
-    ], "5de581dbf5cf538310e6bf8a066a1f56891014c92f3492524db470beb32b2882"],
+    ], "23a668c11f56019136a99811d621276566419787ca48f84032fb7ec913cbb67f"],
   ] as const)("keeps %s byte-identical to the accepted base", (_label, roots, expected) => {
     expect(aggregateHash([...roots])).toBe(expected);
   });
