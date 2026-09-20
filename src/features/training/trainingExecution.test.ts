@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
 import type { AppRepository } from "../../storage/repository";
 import type { TargetRecord } from "../../targets/types";
-import type { TrainingRunRecord } from "../../training/types";
+import type { TrainingFieldGuidePostUpdateCheckpoint, TrainingRunRecord } from "../../training/types";
 import type { Profile } from "../../types";
 import { executeTrainingRun, firstPendingTrainingTargetIndex, type ExecuteTrainingRunInput } from "./trainingExecution";
 import { supportedAutomaticPostRevealReviewRequests } from "../../sessions/postReveal";
@@ -61,39 +61,90 @@ function run(overrides: Partial<TrainingRunRecord> = {}): TrainingRunRecord {
 function harness(sessionFailureAt?: string) {
   const updates: Array<Record<string, unknown>> = [];
   const transcripts = new Map<string, string>();
+  const sessionPrompts = new Map<string, { id: string; version: string; language: "en"; content: string; contentSha256: string; fieldGuide?: Record<string, unknown> }>();
+  const fieldGuideVersions: Array<Record<string, unknown>> = [];
+  const legacyFieldGuide = {
+    aiIdentityId: "identity",
+    language: "en" as const,
+    versionId: "field-guide-legacy",
+    versionNumber: 1,
+    content: "legacy frozen guide",
+    contentSha256: "legacy-guide-hash",
+    estimatedTokens: 10,
+    estimatorVersion: "conservative-char-v1" as const,
+    capacityTokens: 2048 as const,
+    modelRoute: model.route,
+    capturedAt: "now",
+    sourceKind: "factory-baseline" as const,
+  };
   const repository = {
     updateTrainingRun: vi.fn(async (_id: string, update: Record<string, unknown>) => { updates.push(update); }),
     updateRvSessionState: vi.fn(async () => undefined),
     listRvSessions: vi.fn(async () => [...transcripts].map(([id, postRevealTranscript]) => ({ id, postRevealTranscript })) as never),
     listTrainingRuns: vi.fn(async () => []),
     listArchivedTrainingRuns: vi.fn(async () => []),
-    getSessionSnapshot: vi.fn(async (sessionId: string) => ({
-      sessionId,
-      providerConfigId: provider.id,
-      provider: provider.provider,
-      modelId: model.modelId,
-      modelRoute: model.route,
-      viewerNotes: { enabled: false },
-    }) as never),
+    getSessionSnapshot: vi.fn(async (sessionId: string) => {
+      const rvSystemPrompt = sessionPrompts.get(sessionId);
+      return {
+        schemaVersion: 3,
+        sessionId,
+        sessionCode: sessionId,
+        profileId: profile.id,
+        workspaceId: "workspace",
+        providerConfigId: provider.id,
+        credentialId: provider.credentialId,
+        provider: provider.provider,
+        modelId: model.modelId,
+        modelRoute: model.route,
+        capabilitySnapshot: {},
+        capabilityCapturedAt: "now",
+        generationSettings: { requested: {}, effective: {}, omitted: [] },
+        sessionLanguage: "en",
+        protocol: { id: "rv-lite", version: "1", language: "en", contentSha256: "protocol-hash", fullContent: "protocol" },
+        controllerPrompt: { id: "controller", version: "1", language: "en" },
+        rvSystemPrompt: rvSystemPrompt
+          ? { id: rvSystemPrompt.id, version: rvSystemPrompt.version, language: rvSystemPrompt.language, contentSha256: rvSystemPrompt.contentSha256, fullContent: rvSystemPrompt.content, fieldGuide: rvSystemPrompt.fieldGuide }
+          : { id: "viewer-prompt", version: "1.5.0", language: "en", contentSha256: "legacy-prompt-hash", fullContent: "legacy prompt", fieldGuide: legacyFieldGuide },
+        viewerNotes: { enabled: false },
+        revealSource: "automatic",
+        applicationVersion: "0.7.13",
+        createdAt: "now",
+      } as never;
+    }),
     getReveal: vi.fn(async () => ({ hash: "reveal-hash", text: "Reveal", artifactManifest: [] }) as never),
     getViewerEvidence: vi.fn(async () => "sealed blind evidence"),
     listViewerNoteReflectionRuns: vi.fn(async () => []),
     listJudgeScores: vi.fn(async () => []),
+    listFieldGuideVersions: vi.fn(async () => fieldGuideVersions as never),
   } as unknown as AppRepository;
-  const reflect = vi.fn(async () => null);
-  const fieldGuideUpdate = vi.fn(async () => null);
+  const reflect = vi.fn(async (_request: { fieldGuideAfterTrainingUpdate: TrainingFieldGuidePostUpdateCheckpoint; [key: string]: unknown }) => null);
+  const fieldGuideUpdate = vi.fn(async (request: { sessionId: string }) => {
+    const snapshot = await repository.getSessionSnapshot(request.sessionId);
+    const frozen = snapshot?.rvSystemPrompt?.fieldGuide;
+    if (!frozen) throw new Error("missing frozen Field Guide in test harness");
+    return {
+      status: "NO_CHANGE",
+      audit: {
+        status: "NO_CHANGE",
+        sourceSessionId: request.sessionId,
+        baseVersionId: frozen.versionId,
+        baseContentSha256: frozen.contentSha256,
+        packetSha256: `packet-${request.sessionId}`,
+      },
+    } as never;
+  });
   let fieldGuideVersion = 0;
   const prepareFieldGuide = vi.fn(async () => ({
     versionId: `field-guide-${++fieldGuideVersion}`,
-    version: fieldGuideVersion,
+    versionNumber: fieldGuideVersion,
     language: "en" as const,
     content: `guide-${fieldGuideVersion}`,
     contentSha256: `hash-${fieldGuideVersion}`,
     estimatedTokens: 10,
+    estimatorVersion: "conservative-char-v1" as const,
     capacityTokens: 2048 as const,
     sourceKind: "factory-baseline" as const,
-    activationId: `activation-${fieldGuideVersion}`,
-    activatedAt: "now",
+    capturedAt: "now",
     aiIdentityId: "identity",
     modelRoute: model.route,
   }));
@@ -105,9 +156,10 @@ function harness(sessionFailureAt?: string) {
     contentSha256: `prompt-hash-${fieldGuide.versionId}`,
     fieldGuide,
   }));
-  const runSession = vi.fn(async (input: { automaticTarget?: TargetRecord; signal?: AbortSignal; rvSystemPrompt?: { fieldGuide?: { versionId: string } } }) => {
-    const id = input.automaticTarget!.id;
+  const runSession = vi.fn(async (request: { automaticTarget?: TargetRecord; signal?: AbortSignal; rvSystemPrompt?: { id: string; version: string; language: "en"; content: string; contentSha256: string; fieldGuide?: Record<string, unknown> } }) => {
+    const id = request.automaticTarget!.id;
     if (id === sessionFailureAt) throw new Error("provider unavailable");
+    if (request.rvSystemPrompt) sessionPrompts.set(`session_${id}`, request.rvSystemPrompt);
     return { sessionId: `session_${id}`, sessionCode: id, state: "Revealed" as const, transcript: id };
   });
   const postReview = vi.fn(async (request: { sessionId: string }) => {
@@ -125,7 +177,7 @@ function harness(sessionFailureAt?: string) {
     runViewerNoteReflection: reflect,
     runBlindJudging: vi.fn(async () => ({ scores: [], aggregate: null })),
   } as unknown as NonNullable<ExecuteTrainingRunInput["dependencies"]>;
-  return { repository, updates, transcripts, reflect, fieldGuideUpdate, prepareFieldGuide, promptFromFieldGuide, runSession, dependencies };
+  return { repository, updates, transcripts, sessionPrompts, fieldGuideVersions, reflect, fieldGuideUpdate, prepareFieldGuide, promptFromFieldGuide, runSession, dependencies };
 }
 
 function input(initial: TrainingRunRecord, testHarness: ReturnType<typeof harness>, extra: Partial<ExecuteTrainingRunInput> = {}): ExecuteTrainingRunInput {
@@ -160,6 +212,11 @@ describe("Training execution", () => {
       "field-guide-3",
     ]);
     expect(testHarness.reflect).toHaveBeenCalledTimes(3);
+    expect(testHarness.reflect.mock.calls.map((call) => call[0].fieldGuideAfterTrainingUpdate)).toEqual([
+      { updateStatus: "NO_CHANGE", versionId: "field-guide-1", versionNumber: 1, contentSha256: "hash-1" },
+      { updateStatus: "NO_CHANGE", versionId: "field-guide-2", versionNumber: 2, contentSha256: "hash-2" },
+      { updateStatus: "NO_CHANGE", versionId: "field-guide-3", versionNumber: 3, contentSha256: "hash-3" },
+    ]);
     expect(testHarness.updates.filter((update) => Array.isArray(update.completedTargetIds)).map((update) => (update.completedTargetIds as string[]).length)).toEqual([1, 2, 3]);
   });
 
@@ -280,6 +337,100 @@ describe("Training execution", () => {
     expect(order).toEqual(["review", "field-guide", "viewer-notes"]);
   });
 
+  it("checkpoints the exact Field Guide version created by this training update and passes that provenance to Viewer Notes", async () => {
+    const testHarness = harness();
+    testHarness.fieldGuideVersions.push({
+      id: "field-guide-after-t1",
+      aiIdentityId: "identity",
+      language: "en",
+      versionNumber: 2,
+      content: "new guide from t1",
+      contentSha256: "new-guide-hash",
+      estimatedTokens: 11,
+      estimatorVersion: "conservative-char-v1",
+      capacityTokensAtCreation: 2048,
+      activationStatus: "active",
+      sourceTrainingRunId: "training",
+      sourceSessionId: "session_t1",
+      sourceSnapshot: { schemaVersion: 1, sourceKind: "training-reflection", profileId: profile.id, capturedAt: "now", sourceSessionId: "session_t1", fieldGuideUpdatePacketSha256: "update-packet-t1" },
+      createdAt: "now",
+    });
+    testHarness.fieldGuideUpdate.mockResolvedValueOnce({
+      status: "UPDATE",
+      audit: {
+        status: "UPDATE",
+        sourceSessionId: "session_t1",
+        baseVersionId: "field-guide-1",
+        baseContentSha256: "hash-1",
+        packetSha256: "update-packet-t1",
+        resultVersionId: "field-guide-after-t1",
+      },
+    } as never);
+
+    const outcome = await executeTrainingRun(input(run({ targetIds: ["t1"] }), testHarness));
+
+    expect(outcome.run.status).toBe("Completed");
+    expect(testHarness.reflect).toHaveBeenCalledWith(expect.objectContaining({
+      fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "field-guide-after-t1", versionNumber: 2, contentSha256: "new-guide-hash" },
+    }));
+    const fieldGuideCheckpoint = testHarness.updates
+      .map((update) => update.activeTargetCheckpoint as TrainingRunRecord["activeTargetCheckpoint"] | undefined)
+      .find((checkpoint) => checkpoint?.stage === "field_guide_update_completed");
+    expect(fieldGuideCheckpoint?.fieldGuideAfterUpdate).toEqual({ updateStatus: "UPDATE", versionId: "field-guide-after-t1", versionNumber: 2, contentSha256: "new-guide-hash" });
+  });
+
+  it("legacy Resume recovers the exact Field Guide by session provenance and never switches to a newer unrelated version", async () => {
+    const testHarness = harness();
+    const transcript = `${serializePostRevealTurn("user", supportedAutomaticPostRevealReviewRequests("en")[0])}${serializePostRevealTurn("assistant", "Stored review")}`;
+    testHarness.transcripts.set("session_t1", transcript);
+    testHarness.fieldGuideVersions.push(
+      {
+        id: "field-guide-from-this-training",
+        aiIdentityId: "identity",
+        language: "en",
+        versionNumber: 2,
+        content: "guide created by this training",
+        contentSha256: "this-training-hash",
+        estimatedTokens: 12,
+        estimatorVersion: "conservative-char-v1",
+        capacityTokensAtCreation: 2048,
+        activationStatus: "historical",
+        sourceSessionId: "session_t1",
+        sourceSnapshot: { schemaVersion: 1, sourceKind: "training-reflection", profileId: profile.id, capturedAt: "then", sourceSessionId: "session_t1", fieldGuideUpdatePacketSha256: "packet-this-training" },
+        createdAt: "then",
+      },
+      {
+        id: "field-guide-newer-unrelated",
+        aiIdentityId: "identity",
+        language: "en",
+        versionNumber: 99,
+        content: "newer unrelated guide",
+        contentSha256: "newer-unrelated-hash",
+        estimatedTokens: 13,
+        estimatorVersion: "conservative-char-v1",
+        capacityTokensAtCreation: 2048,
+        activationStatus: "active",
+        sourceSessionId: "session_other",
+        sourceSnapshot: { schemaVersion: 1, sourceKind: "training-reflection", profileId: profile.id, capturedAt: "later", sourceSessionId: "session_other", fieldGuideUpdatePacketSha256: "other-packet" },
+        createdAt: "later",
+      },
+    );
+    const initial = run({
+      targetIds: ["t1"],
+      status: "Interrupted",
+      activeTargetCheckpoint: { targetId: "t1", sessionId: "session_t1", stage: "field_guide_update_completed", fieldGuideUpdatePacketSha256: "packet-this-training" },
+    });
+
+    const outcome = await executeTrainingRun(input(initial, testHarness));
+
+    expect(outcome.run.status).toBe("Completed");
+    expect(testHarness.fieldGuideUpdate).not.toHaveBeenCalled();
+    expect(testHarness.reflect).toHaveBeenCalledWith(expect.objectContaining({
+      fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "field-guide-from-this-training", versionNumber: 2, contentSha256: "this-training-hash" },
+    }));
+    expect(testHarness.reflect).not.toHaveBeenCalledWith(expect.objectContaining({ fieldGuideAfterTrainingUpdate: expect.objectContaining({ versionId: "field-guide-newer-unrelated" }) }));
+  });
+
   it("resumes at Field Guide Update without repeating a completed Review", async () => {
     const testHarness = harness();
     const transcript = `${serializePostRevealTurn("user", supportedAutomaticPostRevealReviewRequests("en")[0])}${serializePostRevealTurn("assistant", "Stored review")}`;
@@ -326,7 +477,7 @@ describe("Training execution", () => {
     const testHarness = harness();
     testHarness.fieldGuideUpdate.mockResolvedValueOnce({
       status: "FAILED_CAPACITY",
-      audit: { status: "FAILED_CAPACITY", packetSha256: "a".repeat(64) },
+      audit: { status: "FAILED_CAPACITY", baseVersionId: "field-guide-1", baseContentSha256: "hash-1", packetSha256: "a".repeat(64) },
     } as never);
     const outcome = await executeTrainingRun(input(run({ targetIds: ["t1"] }), testHarness));
     expect(outcome.run.status).toBe("Completed");

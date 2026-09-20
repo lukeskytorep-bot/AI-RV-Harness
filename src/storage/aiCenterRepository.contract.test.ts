@@ -144,6 +144,21 @@ describe("Browser AI Center repository contract", () => {
     expect((await repository.listViewerNoteReflectionRuns(identity.id)).find((run) => run.id === "failed")).toMatchObject({ status: "FAILED_PROVIDER", attemptCount: 2, providerRequestId: "req-1", rawFinalResponseSha256: "raw-sha" });
   });
 
+  it("upgrades a non-terminal historical Reflection packet in place but never rewrites a completed Reflection", async () => {
+    const { repository } = browserHarness();
+    const identity = await repository.ensureAiIdentity(identityInput());
+    const first = await repository.beginViewerNoteReflection({ id: "reflection-upgrade", aiIdentityId: identity.id, sourceSessionId: "session-upgrade", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot("session-upgrade"), reflectionPacketSha256: "packet-v1", packetJson: "{\"packetVersion\":\"viewer-notes-reflection-v1\"}" });
+    await repository.failViewerNoteReflection(first.id, "FAILED_PROVIDER", "network", undefined, undefined, 1);
+
+    const upgraded = await repository.beginViewerNoteReflection({ id: "ignored-new-id", aiIdentityId: identity.id, sourceSessionId: "session-upgrade", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot("session-upgrade"), reflectionPacketSha256: "packet-v2", packetJson: "{\"packetVersion\":\"viewer-notes-reflection-v2\"}" });
+    expect(upgraded).toMatchObject({ id: first.id, status: "PENDING", reflectionPacketSha256: "packet-v2", attemptCount: 1 });
+
+    const terminalRun = await repository.beginViewerNoteReflection({ id: "terminal", aiIdentityId: identity.id, sourceSessionId: "session-terminal", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot("session-terminal"), reflectionPacketSha256: "terminal-v1", packetJson: "{}" });
+    await repository.commitViewerNoteReflection({ ...updateInput(identity.id, terminalRun.id), sourceSessionId: "session-terminal", decision: "NO_CHANGE", notes: undefined, contentSha256: undefined, estimatedTokens: undefined, reflectionPacketSha256: "terminal-v1" });
+    const completed = await repository.beginViewerNoteReflection({ id: "new-terminal-id", aiIdentityId: identity.id, sourceSessionId: "session-terminal", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot("session-terminal"), reflectionPacketSha256: "terminal-v2", packetJson: "{\"packetVersion\":\"viewer-notes-reflection-v2\"}" });
+    expect(completed).toMatchObject({ id: terminalRun.id, status: "NO_CHANGE", reflectionPacketSha256: "terminal-v1" });
+  });
+
   it("blocks capacity reductions below active notes and records human restores", async () => {
     const { repository } = browserHarness();
     const identity = await repository.ensureAiIdentity(identityInput());
@@ -222,6 +237,30 @@ describe("SQLite AI Center repository contract", () => {
     });
     const run = await repository.beginViewerNoteReflection({ id: "another-id", aiIdentityId: "ai-1", sourceSessionId: "session-a", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot(), reflectionPacketSha256: "packet-sha", packetJson: "{}" });
     expect(run.id).toBe("reflection-a");
+    expect(writes).toEqual([]);
+  });
+
+  it("upgrades only a non-terminal SQLite Reflection packet in place and preserves terminal history", async () => {
+    const writes: Array<{ query: string; values?: unknown[] }> = [];
+    const failedRow = { ...reflectionRow("FAILED_PROVIDER"), reflection_packet_sha256: "packet-v1", packet_json: "{\"packetVersion\":\"viewer-notes-reflection-v1\"}", attempt_count: 1, failure_message: "network", completed_at: "2026-09-08T12:00:01.000Z" };
+    const repository = new SqliteAiCenterRepository({
+      select: async <T>() => [failedRow] as T,
+      executeWrite: async (query, values) => { writes.push({ query, values }); return { rowsAffected: 1 }; },
+      executeTransaction: async () => ({}),
+    });
+    const upgraded = await repository.beginViewerNoteReflection({ id: "new-id", aiIdentityId: "ai-1", sourceSessionId: "session-a", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot(), reflectionPacketSha256: "packet-v2", packetJson: "{\"packetVersion\":\"viewer-notes-reflection-v2\"}" });
+    expect(upgraded).toMatchObject({ id: "reflection-a", status: "PENDING", reflectionPacketSha256: "packet-v2", attemptCount: 1 });
+    expect(writes).toHaveLength(1);
+    expect(writes[0].query).toContain("status NOT IN ('UPDATE','NO_CHANGE','STALE_BASE')");
+
+    writes.length = 0;
+    const completedRepository = new SqliteAiCenterRepository({
+      select: async <T>() => [{ ...failedRow, status: "NO_CHANGE", reflection_packet_sha256: "terminal-v1" }] as T,
+      executeWrite: async (query, values) => { writes.push({ query, values }); return { rowsAffected: 1 }; },
+      executeTransaction: async () => ({}),
+    });
+    const completed = await completedRepository.beginViewerNoteReflection({ id: "new-terminal-id", aiIdentityId: "ai-1", sourceSessionId: "session-a", sourceWorkspaceId: "workspace-a", sourceSnapshot: sourceSnapshot(), reflectionPacketSha256: "terminal-v2", packetJson: "{}" });
+    expect(completed).toMatchObject({ id: "reflection-a", status: "NO_CHANGE", reflectionPacketSha256: "terminal-v1" });
     expect(writes).toEqual([]);
   });
 

@@ -12,7 +12,7 @@ import { findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview 
 import { runAutomaticRvLiteSession } from "../../sessions/rvLiteController";
 import type { AppRepository } from "../../storage/repository";
 import type { TargetRecord } from "../../targets/types";
-import type { TrainingRunRecord } from "../../training/types";
+import type { TrainingFieldGuidePostUpdateCheckpoint, TrainingRunRecord, TrainingTargetCheckpoint } from "../../training/types";
 import type { AppSettings, InterfaceLanguage, Profile, ViewerSystemPromptSnapshot } from "../../types";
 
 type ExecutionSettings = Pick<AppSettings, "maxRetries" | "requestTimeoutMs" | "sessionCodePrefix" | "maxSessionCostUsd">;
@@ -102,6 +102,45 @@ async function trainingPostRevealReviewPacketSha256(repository: AppRepository, s
     reveal: { hash: reveal.hash, text: reveal.text?.trim() ?? "", artifacts },
     request,
   }));
+}
+
+async function resolveTrainingFieldGuideAfterUpdate(input: {
+  repository: AppRepository;
+  trainingRun: TrainingRunRecord;
+  checkpoint: TrainingTargetCheckpoint;
+  explicitResult?: Awaited<ReturnType<typeof runFieldGuideUpdate>>;
+}): Promise<TrainingFieldGuidePostUpdateCheckpoint> {
+  if (input.checkpoint.fieldGuideAfterUpdate) return input.checkpoint.fieldGuideAfterUpdate;
+  const snapshot = await input.repository.getSessionSnapshot(input.checkpoint.sessionId);
+  const frozen = snapshot?.rvSystemPrompt?.fieldGuide;
+  if (!snapshot || !frozen) throw new Error("Training Viewer Notes Reflection cannot resolve the frozen Field Guide snapshot.");
+
+  const audit = input.explicitResult?.audit
+    ?? [...(input.trainingRun.fieldGuideUpdates ?? [])].reverse().find((item) => item.sourceSessionId === input.checkpoint.sessionId && fieldGuideUpdateCompletesStage(item.status));
+  const status = input.explicitResult?.status ?? audit?.status;
+
+  if (status === "UPDATE") {
+    const versions = await input.repository.listFieldGuideVersions(frozen.aiIdentityId, frozen.language);
+    const exact = (audit?.resultVersionId ? versions.find((version) => version.id === audit.resultVersionId) : undefined)
+      ?? versions.find((version) => version.sourceSessionId === input.checkpoint.sessionId && (!audit?.packetSha256 || version.sourceSnapshot.fieldGuideUpdatePacketSha256 === audit.packetSha256));
+    if (!exact) throw new Error("Training checkpoint cannot recover the exact Field Guide version created by this training update.");
+    return { updateStatus: "UPDATE", versionId: exact.id, versionNumber: exact.versionNumber, contentSha256: exact.contentSha256 };
+  }
+
+  if (status === "NO_CHANGE" || status === "FAILED_CAPACITY" || status === "STALE_BASE") {
+    if (audit && (audit.baseVersionId !== frozen.versionId || audit.baseContentSha256 !== frozen.contentSha256)) {
+      throw new Error("Training Field Guide audit base does not match the frozen session Field Guide.");
+    }
+    return { updateStatus: status, versionId: frozen.versionId, versionNumber: frozen.versionNumber, contentSha256: frozen.contentSha256 };
+  }
+
+  // Compatibility for a historical checkpoint created before this contract existed.
+  // Recover only from durable session/version provenance; never consult the current active Field Guide.
+  const versions = await input.repository.listFieldGuideVersions(frozen.aiIdentityId, frozen.language);
+  const recovered = versions.find((version) => version.sourceSessionId === input.checkpoint.sessionId
+    && (!input.checkpoint.fieldGuideUpdatePacketSha256 || version.sourceSnapshot.fieldGuideUpdatePacketSha256 === input.checkpoint.fieldGuideUpdatePacketSha256));
+  if (recovered) return { updateStatus: "UPDATE", versionId: recovered.id, versionNumber: recovered.versionNumber, contentSha256: recovered.contentSha256 };
+  return { updateStatus: "LEGACY_UNRECORDED", versionId: frozen.versionId, versionNumber: frozen.versionNumber, contentSha256: frozen.contentSha256 };
 }
 
 export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promise<TrainingExecutionOutcome> {
@@ -242,17 +281,33 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
           throw new Error(`Field Guide Update did not complete (${fieldGuideResult.status}).${fieldGuideResult.audit.failureMessage ? ` ${fieldGuideResult.audit.failureMessage}` : ""}`);
         }
         const refreshed = await currentTrainingRecord(input.repository, working.id, working);
-        working = { ...refreshed, activeTargetCheckpoint: {
+        const checkpointWithPacket: TrainingTargetCheckpoint = {
           ...checkpoint,
           stage: "field_guide_update_completed",
           ...(fieldGuideResult?.audit.packetSha256 ? { fieldGuideUpdatePacketSha256: fieldGuideResult.audit.packetSha256 } : {}),
-        }, updatedAt: now() };
+        };
+        const fieldGuideAfterUpdate = await resolveTrainingFieldGuideAfterUpdate({
+          repository: input.repository,
+          trainingRun: refreshed,
+          checkpoint: checkpointWithPacket,
+          explicitResult: fieldGuideResult,
+        });
+        working = { ...refreshed, activeTargetCheckpoint: { ...checkpointWithPacket, fieldGuideAfterUpdate }, updatedAt: now() };
         checkpoint = working.activeTargetCheckpoint!;
         await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
         input.onRunChange?.(working);
       }
 
       if (checkpoint.stage === "field_guide_update_completed") {
+        if (!checkpoint.fieldGuideAfterUpdate) {
+          const fieldGuideAfterUpdate = await resolveTrainingFieldGuideAfterUpdate({ repository: input.repository, trainingRun: working, checkpoint });
+          checkpoint = { ...checkpoint, fieldGuideAfterUpdate };
+          working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
+          await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
+          input.onRunChange?.(working);
+        }
+        const fieldGuideAfterTrainingUpdate = checkpoint.fieldGuideAfterUpdate;
+        if (!fieldGuideAfterTrainingUpdate) throw new Error("Training checkpoint is missing the exact Field Guide version required by Viewer Notes Reflection.");
         if (!viewerReview) viewerReview = (await loadStoredViewerReview())?.content ?? null;
         if (!viewerReview) throw new Error("Completed automatic Viewer Review is required before Viewer Notes Reflection.");
         await dependencies.runViewerNoteReflection({
@@ -261,6 +316,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
           viewerReview,
           providerConfig: input.providerConfig,
           model: input.model,
+          fieldGuideAfterTrainingUpdate,
           timeoutMs: execution.transport.requestTimeoutMs,
           maxRetries: execution.transport.maxRetries,
           signal: input.signal,

@@ -174,7 +174,12 @@ export class SqliteAiCenterRepository implements AiCenterRepository {
   async beginViewerNoteReflection(input: BeginViewerNoteReflectionInput): Promise<ViewerNoteReflectionRun> {
     assertViewerNoteBasePair(input);
     const existing = await this.dependencies.select<ViewerNoteReflectionRunRow[]>("SELECT * FROM ai_note_reflection_runs WHERE id = $1 OR (ai_identity_id = $2 AND source_session_id = $3) LIMIT 1", [input.id, input.aiIdentityId, input.sourceSessionId]);
-    if (existing[0]) return mapViewerNoteReflectionRun(existing[0]);
+    if (existing[0]) {
+      const mapped = mapViewerNoteReflectionRun(existing[0]);
+      if (mapped.status === "UPDATE" || mapped.status === "NO_CHANGE" || mapped.status === "STALE_BASE" || mapped.reflectionPacketSha256 === input.reflectionPacketSha256) return mapped;
+      await this.dependencies.executeWrite("UPDATE ai_note_reflection_runs SET source_snapshot_json = $1, base_version_id = $2, base_content_sha256 = $3, reflection_packet_sha256 = $4, packet_json = $5, status = 'PENDING', failure_message = NULL, provider_request_id = NULL, raw_final_response_sha256 = NULL, change_summary = NULL, completed_at = NULL WHERE id = $6 AND status NOT IN ('UPDATE','NO_CHANGE','STALE_BASE')", [JSON.stringify(input.sourceSnapshot), input.baseVersionId ?? null, input.baseContentSha256 ?? null, input.reflectionPacketSha256, input.packetJson, mapped.id]);
+      return { ...mapped, sourceSnapshot: input.sourceSnapshot, ...(input.baseVersionId ? { baseVersionId: input.baseVersionId } : { baseVersionId: undefined }), ...(input.baseContentSha256 ? { baseContentSha256: input.baseContentSha256 } : { baseContentSha256: undefined }), reflectionPacketSha256: input.reflectionPacketSha256, packetJson: input.packetJson, status: "PENDING", failureMessage: undefined, providerRequestId: undefined, rawFinalResponseSha256: undefined, changeSummary: undefined, completedAt: undefined };
+    }
     const createdAt = this.now();
     await this.dependencies.executeWrite(`INSERT INTO ai_note_reflection_runs
       (id, ai_identity_id, note_type, source_session_id, source_workspace_id, source_snapshot_json, base_version_id, base_content_sha256,

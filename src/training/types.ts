@@ -7,6 +7,15 @@ export type TrainingRunStatus = "Planned" | "Running" | "Paused" | "Interrupted"
 
 export type TrainingTargetStage = "session_revealed" | "review_completed" | "field_guide_update_completed" | "viewer_notes_reflection_completed" | "judging_completed";
 
+export type TrainingFieldGuidePostUpdateStatus = "UPDATE" | "NO_CHANGE" | "FAILED_CAPACITY" | "STALE_BASE" | "LEGACY_UNRECORDED";
+
+export interface TrainingFieldGuidePostUpdateCheckpoint {
+  updateStatus: TrainingFieldGuidePostUpdateStatus;
+  versionId: string;
+  versionNumber: number;
+  contentSha256: string;
+}
+
 export interface TrainingTargetCheckpoint {
   targetId: string;
   sessionId: string;
@@ -15,6 +24,8 @@ export interface TrainingTargetCheckpoint {
   postRevealReviewPacketSha256?: string;
   /** Stable Field Guide Update packet hash when the stage is applicable. */
   fieldGuideUpdatePacketSha256?: string;
+  /** Exact Field Guide version in effect after this target's Training update. */
+  fieldGuideAfterUpdate?: TrainingFieldGuidePostUpdateCheckpoint;
   /** Existing Viewer Notes reflection packet hash when Viewer Notes are enabled. */
   viewerNotesReflectionPacketSha256?: string;
 }

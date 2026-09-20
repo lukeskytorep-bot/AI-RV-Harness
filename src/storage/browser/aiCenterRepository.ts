@@ -186,7 +186,26 @@ export class BrowserAiCenterRepository implements AiCenterRepository {
     assertViewerNoteBasePair(input);
     const all = this.read<ViewerNoteReflectionRun[]>(AI_NOTE_REFLECTION_RUNS_KEY, []);
     const existing = all.find((item) => item.id === input.id || (item.aiIdentityId === input.aiIdentityId && item.sourceSessionId === input.sourceSessionId));
-    if (existing) return normalizeReflectionRun(existing);
+    if (existing) {
+      const normalized = normalizeReflectionRun(existing);
+      if (normalized.status === "UPDATE" || normalized.status === "NO_CHANGE" || normalized.status === "STALE_BASE" || normalized.reflectionPacketSha256 === input.reflectionPacketSha256) return normalized;
+      const upgraded: ViewerNoteReflectionRun = {
+        ...normalized,
+        sourceSnapshot: input.sourceSnapshot,
+        ...(input.baseVersionId ? { baseVersionId: input.baseVersionId } : { baseVersionId: undefined }),
+        ...(input.baseContentSha256 ? { baseContentSha256: input.baseContentSha256 } : { baseContentSha256: undefined }),
+        reflectionPacketSha256: input.reflectionPacketSha256,
+        packetJson: input.packetJson,
+        status: "PENDING",
+        failureMessage: undefined,
+        providerRequestId: undefined,
+        rawFinalResponseSha256: undefined,
+        changeSummary: undefined,
+        completedAt: undefined,
+      };
+      this.write(AI_NOTE_REFLECTION_RUNS_KEY, all.map((item) => item.id === normalized.id ? upgraded : item));
+      return upgraded;
+    }
     const run: ViewerNoteReflectionRun = { ...input, noteType: "viewer_self_notes", attemptCount: 0, status: "PENDING", createdAt: this.now() };
     this.write(AI_NOTE_REFLECTION_RUNS_KEY, [run, ...all]);
     return run;
