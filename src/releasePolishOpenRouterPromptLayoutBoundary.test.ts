@@ -40,8 +40,12 @@ describe("release polish: OpenRouter attribution and Profile prompt containment"
     expect(monitorCss).toContain(".profile-viewer-controls .locked-prompt-block p, .profile-viewer-controls .locked-prompt-block pre {");
     expect(monitorCss).toContain(".profile-viewer-controls .effective-prompt-preview {");
     expect(monitorCss).toContain(".profile-viewer-controls .effective-prompt-preview pre {");
-    expect(monitorCss).not.toContain(".locked-prompt-block { min-width: 0");
-    expect(monitorCss).not.toContain(".effective-prompt-preview { min-width: 0");
+    expect(monitorCss).not.toMatch(
+      /(^|\n)\.locked-prompt-block\s*\{[^}]*\bmin-width\s*:\s*0(?:px)?\s*;/,
+    );
+    expect(monitorCss).not.toMatch(
+      /(^|\n)\.effective-prompt-preview\s*\{[^}]*\bmin-width\s*:\s*0(?:px)?\s*;/,
+    );
     expect(monitorCss).not.toMatch(/(^|\n)pre\s*\{/);
   });
 });
