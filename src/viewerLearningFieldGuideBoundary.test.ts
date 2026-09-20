@@ -16,7 +16,6 @@ import researchBuilder from "./features/research/ResearchBuilder.tsx?raw";
 import researchEngine from "./research/engine.ts?raw";
 import researchFieldGuidePolicy from "./research/fieldGuidePolicy.ts?raw";
 import postReveal from "./sessions/postReveal.ts?raw";
-import viewerNotes from "./aiCenter/viewerNotes.ts?raw";
 import judgePrompt from "./judge/prompt.ts?raw";
 import judgeEngine from "./judge/engine.ts?raw";
 import monitorPrompt from "./monitor/prompt.ts?raw";
@@ -31,9 +30,8 @@ import nativeCompatibility from "../src-tauri/src/ux_data_compatibility.rs?raw";
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
 describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
-  it("keeps protected Post-Reveal, Viewer Notes, Judge, Monitor, Research, retry and controlled-purge sources byte-identical", () => {
+  it("keeps protected Post-Reveal, Judge, Monitor, retry and controlled-purge sources byte-identical", () => {
     expect(sha256(postReveal)).toBe("412456ee59f47ef01a11bce5999bfe318c6ef8b418c7396e8aa9c1fb59676a8a");
-    expect(sha256(viewerNotes)).toBe("4ef47c1c22e44f8299d0404e88ec2779f33505d358d0fb6434bd0edf94f0b120");
     expect(sha256(judgePrompt)).toBe("dc2af6fe6b478360cab414c4e4d9bc3f3a4d9fae95819f8420f116c8652df492");
     expect(sha256(judgeEngine)).toBe("df0f40bb7747f36f184f89211c170b2edef2484a8b07b0920390c1dd8dfa8b7d");
     expect(sha256(monitorPrompt)).toBe("3eda515707b2a6e356e49b3b04d191397a760de248a0ba0c46391e950609dc85");

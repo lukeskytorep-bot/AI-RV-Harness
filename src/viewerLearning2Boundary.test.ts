@@ -57,8 +57,10 @@ describe("VIEWER-LEARNING-2 boundaries", () => {
     expect(`${builder}\n${policy}`).not.toContain("runFieldGuideUpdate(");
   });
 
-  it("keeps Viewer Notes production mechanics byte-identical to the accepted VIEWER-LEARNING-1 base", () => {
-    expect(aggregateHash(["src/aiCenter/viewerNotes.ts", "src/aiCenter/baseVersion.ts"])).toBe("06d794dbde551af4ad48984f3019f1a91607a6282f5ffdffe9d6a390381787a6");
+  it("keeps Viewer Notes base-version mechanics byte-identical to the accepted VIEWER-LEARNING-1 base", () => {
+    // viewerNotes.ts is intentionally superseded by VIEWER-NOTES-FIELD-GUIDE-SEPARATION-1.
+    // Keep the independent base-version mechanics frozen instead of pinning the whole Reflection implementation.
+    expect(aggregateHash(["src/aiCenter/baseVersion.ts"])).toBe("442f8507a98b004a616c3327209b7317e2c0e9f057d984565c2ddef77aaee9aa");
   });
 
   it.each([
