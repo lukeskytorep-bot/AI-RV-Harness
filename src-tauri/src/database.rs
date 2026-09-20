@@ -350,6 +350,7 @@ impl DatabaseWriteOperation {
             Self::AiCenterUpdateAiNoteActivationEvents01 => 1,
             Self::AiCenterUpdateAiNoteVersions02 => 1,
             Self::AiCenterUpdateAiNoteReflectionRuns06 => 1,
+            Self::AiCenterUpdateAiNoteReflectionRuns07 => 6,
             Self::AiCenterUpdateAiNoteActivationEvents02 => 1,
             Self::FieldGuideInsertSettings01 => 4,
             Self::FieldGuideInsertVersions01 => 16,
