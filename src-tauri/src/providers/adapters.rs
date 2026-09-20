@@ -51,7 +51,7 @@ pub(super) fn normalized_credential_endpoint(base: &str) -> Result<String, Strin
     Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
-pub(super) const OPENROUTER_APP_REFERER: &str = "https://github.com/lukeskytorep-bot/AI-RV-Harness";
+pub(super) const OPENROUTER_APP_REFERER: &str = "https://lukeskytorep-bot.github.io/AI-RV-Harness/";
 pub(super) const OPENROUTER_APP_TITLE: &str = "AI RV Harness";
 
 pub(super) fn authenticated(builder: RequestBuilder, provider: ProviderKind, secret: &str) -> RequestBuilder {

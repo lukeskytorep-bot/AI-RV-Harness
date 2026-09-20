@@ -1,5 +1,14 @@
 use super::*;
 use super::adapters::{normalized_credential_endpoint, provider_family, validate_base_url, ProviderFamily, OPENROUTER_APP_REFERER, OPENROUTER_APP_TITLE};
+
+#[test]
+fn openrouter_app_attribution_uses_public_project_page() {
+    assert_eq!(
+        OPENROUTER_APP_REFERER,
+        "https://lukeskytorep-bot.github.io/AI-RV-Harness/"
+    );
+    assert_eq!(OPENROUTER_APP_TITLE, "AI RV Harness");
+}
 use super::reasoning::split_tagged_reasoning;
 use super::errors::safe_provider_error;
 use super::request_builders::{build_google_request, build_openai_compatible_request};
