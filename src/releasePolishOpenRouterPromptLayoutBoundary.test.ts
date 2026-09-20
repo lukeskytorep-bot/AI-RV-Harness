@@ -1,10 +1,13 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import appSource from "./App.tsx?raw";
 import profileControls from "./features/profiles/ProfileViewerControls.tsx?raw";
 import profileDialogs from "./features/profiles/ProfileDialogs.tsx?raw";
-import monitorCss from "./styles/monitor.css?raw";
 import openRouterAdapter from "../src-tauri/src/providers/adapters.rs?raw";
+
+const monitorCss = readFileSync(new URL("./styles/monitor.css", import.meta.url), "utf8");
 
 describe("release polish: OpenRouter attribution and Profile prompt containment", () => {
   it("attributes OpenRouter traffic to the public AI RV Harness project page without changing the title", () => {
