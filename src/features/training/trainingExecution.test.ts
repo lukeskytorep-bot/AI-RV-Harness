@@ -9,6 +9,9 @@ import { executeTrainingRun, firstPendingTrainingTargetIndex, type ExecuteTraini
 import { supportedAutomaticPostRevealReviewRequests } from "../../sessions/postReveal";
 import { serializePostRevealTurn } from "../../sessions/postRevealTranscript";
 
+type TrainingDependencies = NonNullable<ExecuteTrainingRunInput["dependencies"]>;
+type RunFieldGuideUpdateDependency = NonNullable<TrainingDependencies["runFieldGuideUpdate"]>;
+
 const profile: Profile = { id: "profile", name: "Viewer", humanName: "Human", credentialId: "credential", createdAt: "now", updatedAt: "now" };
 const provider: ProviderConfig = { id: "provider", provider: "openrouter", label: "Provider", credentialId: "credential", enabled: true, lastStatus: "ok", createdAt: "now", updatedAt: "now" };
 const model: ProviderModel = {
@@ -118,7 +121,7 @@ function harness(sessionFailureAt?: string) {
     listFieldGuideVersions: vi.fn(async () => fieldGuideVersions as never),
   } as unknown as AppRepository;
   const reflect = vi.fn(async (_request: { fieldGuideAfterTrainingUpdate: TrainingFieldGuidePostUpdateCheckpoint; [key: string]: unknown }) => null);
-  const fieldGuideUpdate = vi.fn(async (request: { sessionId: string }) => {
+  const fieldGuideUpdate = vi.fn(async (request: Parameters<RunFieldGuideUpdateDependency>[0]): Promise<Awaited<ReturnType<RunFieldGuideUpdateDependency>>> => {
     const snapshot = await repository.getSessionSnapshot(request.sessionId);
     const frozen = snapshot?.rvSystemPrompt?.fieldGuide;
     if (!frozen) throw new Error("missing frozen Field Guide in test harness");
@@ -131,7 +134,7 @@ function harness(sessionFailureAt?: string) {
         baseContentSha256: frozen.contentSha256,
         packetSha256: `packet-${request.sessionId}`,
       },
-    } as never;
+    } as Awaited<ReturnType<RunFieldGuideUpdateDependency>>;
   });
   let fieldGuideVersion = 0;
   const prepareFieldGuide = vi.fn(async () => ({
