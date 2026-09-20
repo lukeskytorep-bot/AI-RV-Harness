@@ -1,14 +1,133 @@
 <!doctype html>
-<html lang="en" data-theme="aurora">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light dark" />
-    <meta name="description" content="AI RV Harness — local-first Remote Viewing research workspace" />
-    <title>AI RV Harness</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI RV Harness | Blind AI Remote Viewing & Controlled Research</title>
+  <meta name="description" content="AI RV Harness is a local-first desktop environment for blind AI Remote Viewing sessions, structured Training, controlled Research, and blinded evaluation.">
+  <meta name="theme-color" content="#eef8f3">
+  <meta name="robots" content="index,follow">
+  <link rel="canonical" href="https://lukeskytorep-bot.github.io/AI-RV-Harness/">
+  <link rel="icon" href="favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="48x48" href="favicon-48x48.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="AI RV Harness">
+  <meta property="og:title" content="AI RV Harness">
+  <meta property="og:description" content="Local-first desktop workspace for blind AI Remote Viewing sessions, structured Training, controlled Research, and blinded evaluation.">
+  <meta property="og:url" content="https://lukeskytorep-bot.github.io/AI-RV-Harness/">
+  <meta property="og:image" content="https://lukeskytorep-bot.github.io/AI-RV-Harness/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="AI RV Harness project card with the project logo and development preview label">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="AI RV Harness">
+  <meta name="twitter:description" content="Blind AI Remote Viewing sessions and controlled RV research in a local-first desktop workspace.">
+  <meta name="twitter:image" content="https://lukeskytorep-bot.github.io/AI-RV-Harness/og-image.png">
+  <meta name="twitter:image:alt" content="AI RV Harness project card">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap nav-wrap">
+      <a class="brand" href="#top" aria-label="AI RV Harness home">
+        <img src="logo-512.png" width="52" height="52" alt="" aria-hidden="true">
+        <span>AI RV Harness</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#features">Features</a>
+        <a href="#preview">Preview</a>
+        <a href="https://github.com/lukeskytorep-bot/AI-RV-Harness/wiki">Wiki</a>
+        <a href="https://github.com/lukeskytorep-bot/AI-RV-Harness">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="wrap hero-grid">
+        <div>
+          <p class="eyebrow">LOCAL-FIRST · BLIND · REPRODUCIBLE</p>
+          <h1>A structured desktop workspace for AI Remote Viewing research.</h1>
+          <p class="lead">AI RV Harness combines blind session workflows, structured Training, controlled Research, separate AI roles, target management, evidence-preserving Reveal flows, and reproducible evaluation tools.</p>
+          <div class="cta-row">
+            <a class="button primary" href="https://github.com/lukeskytorep-bot/AI-RV-Harness/releases/latest">Latest public release</a>
+            <a class="button secondary" href="https://github.com/lukeskytorep-bot/AI-RV-Harness">View source</a>
+          </div>
+          <p class="version-note"><strong>Public release:</strong> v0.7.12 <span aria-hidden="true">·</span> <strong>Development preview:</strong> v0.7.13</p>
+        </div>
+        <div class="hero-mark" aria-hidden="true">
+          <img src="logo-512.png" width="420" height="420" alt="">
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="features" aria-labelledby="features-title">
+      <div class="wrap">
+        <p class="eyebrow">WHAT IT IS</p>
+        <h2 id="features-title">One environment, several deliberately separated roles.</h2>
+        <div class="feature-grid">
+          <article class="card"><h3>Blind sessions</h3><p>Run supported RV protocols while preserving the separation between Viewer evidence and Reveal information.</p></article>
+          <article class="card"><h3>Structured Training</h3><p>Use bundled and user-provided targets, resumable checkpoints, Viewer self-review, and optional judging.</p></article>
+          <article class="card"><h3>Controlled Research</h3><p>Build locked, blinded studies with randomized assignments, frozen evidence, judging, unblinding, and reproducibility data.</p></article>
+          <article class="card"><h3>AI Center</h3><p>Keep AI Monitor history, AI identities, Viewer Notes, and versioned Viewer Learning resources in distinct roles.</p></article>
+          <article class="card"><h3>Local-first records</h3><p>The desktop application stores project state locally with SQLite while remote providers are used only when selected.</p></article>
+          <article class="card"><h3>Evidence boundaries</h3><p>Viewer, Monitor, Judge, Research, and post-Reveal material are handled through explicit workflow boundaries rather than one blended chat.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section soft" id="preview" aria-labelledby="preview-title">
+      <div class="wrap">
+        <p class="eyebrow">CURRENT DEVELOPMENT UI</p>
+        <h2 id="preview-title">v0.7.13 development preview</h2>
+        <p class="section-intro">These screenshots show the current v0.7.13 development interface. v0.7.13 is not presented here as a public release until its release process is complete.</p>
+        <div class="gallery">
+          <figure><a href="screenshot-home.png"><img src="screenshot-home.png" alt="AI RV Harness Home screen showing recent profile, workspace, and local-first status" loading="lazy"></a><figcaption>Home · project overview and recent activity</figcaption></figure>
+          <figure><a href="screenshot-profiles.png"><img src="screenshot-profiles.png" alt="Profiles screen showing three AI profiles and their workspaces" loading="lazy"></a><figcaption>Profiles · identities, models, and workspaces</figcaption></figure>
+          <figure><a href="screenshot-research.png"><img src="screenshot-research.png" alt="Research Tests screen with blinded research templates" loading="lazy"></a><figcaption>Research · locked and blinded experiment templates</figcaption></figure>
+          <figure><a href="screenshot-targets.png"><img src="screenshot-targets.png" alt="Targets screen showing Training Targets, My Targets, and Telepathic Targets" loading="lazy"></a><figcaption>Targets · training, private, and telepathic target areas</figcaption></figure>
+          <figure><a href="screenshot-training.png"><img src="screenshot-training.png" alt="AI Training screen with Viewer model, RV Lite variant, training scope, and recent training runs" loading="lazy"></a><figcaption>Training · structured RV Lite training and resumable runs</figcaption></figure>
+          <figure><a href="screenshot-ai-center.png"><img src="screenshot-ai-center.png" alt="AI Center screen with AI Monitor, Viewer Learning, and AI Identities" loading="lazy"></a><figcaption>AI Center · Monitor, Viewer Learning, and identities</figcaption></figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="principles-title">
+      <div class="wrap split">
+        <div>
+          <p class="eyebrow">PROJECT BOUNDARY</p>
+          <h2 id="principles-title">A research workflow, not a claim of proof.</h2>
+        </div>
+        <div class="prose">
+          <p>AI RV Harness does not claim that Remote Viewing has been scientifically proven, that a particular model possesses anomalous perception, or that model-generated material is accurate.</p>
+          <p>The project provides controlled procedures, records, and evaluation tools. Interpretation remains the responsibility of the user and researcher.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section callout" aria-labelledby="resources-title">
+      <div class="wrap">
+        <p class="eyebrow">PROJECT RESOURCES</p>
+        <h2 id="resources-title">Source, releases, documentation, and licensing.</h2>
+        <div class="resource-grid">
+          <a class="resource" href="https://github.com/lukeskytorep-bot/AI-RV-Harness"><strong>Repository</strong><span>Source code and project history</span></a>
+          <a class="resource" href="https://github.com/lukeskytorep-bot/AI-RV-Harness/releases/latest"><strong>Latest release</strong><span>Stable public download location</span></a>
+          <a class="resource" href="https://github.com/lukeskytorep-bot/AI-RV-Harness/wiki"><strong>Wiki</strong><span>User and development documentation</span></a>
+          <a class="resource" href="https://github.com/lukeskytorep-bot/AI-RV-Harness/blob/main/LICENSE"><strong>MIT License</strong><span>Application source license</span></a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap footer-wrap">
+      <p><strong>AI RV Harness</strong> · Local-first desktop research software.</p>
+      <p>Code: MIT · Authored protocols, prompts, documentation, and training material: CC BY 4.0 unless otherwise stated.</p>
+    </div>
+  </footer>
+</body>
 </html>
