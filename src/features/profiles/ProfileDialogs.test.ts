@@ -63,4 +63,10 @@ describe("profile AI configuration", () => {
     )).toThrow(getCopy("en").selectModel);
   });
 
+  it("does not persist the legacy Viewer System Prompt when the shared setup passes an empty prompt", () => {
+    const result = buildProfileAiConfiguration(getCopy("en"), provider, model, "", "", "", "", "");
+    expect(result.defaultViewerSystemPrompt).toBeUndefined();
+    expect(result.defaultViewerModelId).toBe("model-1");
+  });
+
 });

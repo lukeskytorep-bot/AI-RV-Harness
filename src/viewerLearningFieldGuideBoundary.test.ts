@@ -9,6 +9,8 @@ import browserFieldGuideRepository from "./storage/browser/fieldGuideRepository.
 import sqliteFieldGuideRepository from "./storage/sqlite/fieldGuideRepository.ts?raw";
 import profileControls from "./features/profiles/ProfileViewerControls.tsx?raw";
 import profileDialogs from "./features/profiles/ProfileDialogs.tsx?raw";
+import profileAiConfiguration from "./features/profiles/profileAiConfiguration.ts?raw";
+import profileSetupController from "./features/profiles/useProfileSetupController.ts?raw";
 import rvSessions from "./features/rvSessions/RvSessionPanel.tsx?raw";
 import training from "./features/training/TrainingScreen.tsx?raw";
 import trainingExecution from "./features/training/trainingExecution.ts?raw";
@@ -85,9 +87,9 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     const createSource = profileDialogs.slice(createStart, editStart);
     expect(createSource).not.toContain("defaultViewerSystemPrompt");
     expect(profileDialogs).toContain("profile.defaultViewerSystemPrompt ?? \"\"");
-    expect(profileDialogs).toContain("defaultViewerSystemPrompt: systemPrompt.trim()");
+    expect(profileAiConfiguration).toContain("defaultViewerSystemPrompt: systemPrompt.trim()");
     expect(profileControls).not.toContain("onSystemPrompt");
-    expect(appSource).toContain("existingProfile?.defaultViewerSystemPrompt?.trim()");
+    expect(profileSetupController).toContain("existingProfile?.defaultViewerSystemPrompt ?? \"\"");
     expect(appSource).not.toContain("...(viewerSystemPrompt.trim() ? { defaultViewerSystemPrompt");
   });
 

@@ -54,15 +54,13 @@ import type {
   Theme,
   Workspace,
 } from "./types";
-import { PROVIDER_KINDS, type ProviderConfig } from "./providers/types";
-import type { ProviderKind, ProviderModel, ReasoningEffort } from "./providers/types";
+import type { ProviderKind } from "./providers/types";
 import { TrainingScreen } from "./features/training";
 import type { AiCenterView } from "./features/aiCenter";
 import type { RvSession } from "./sessions/types";
 import { APP_VERSION } from "./version";
-import { addProvider, refreshProviderModels } from "./providers/service";
 import { HomeScreen } from "./features/home";
-import { CreateProfileDialog, ProfilesScreen, ProfileViewerControls } from "./features/profiles";
+import { CreateProfileDialog, NEW_PROFILE_PROVIDER_CHOICE, ProfilesScreen, ProfileViewerControls, useProfileSetupController } from "./features/profiles";
 import { TargetsScreen } from "./features/targets";
 import { ChatPanel } from "./features/conversations";
 import { WorkspaceSwitcherDialog } from "./features/workspaces";
@@ -72,11 +70,9 @@ import { PageHeader } from "./components/PageHeader";
 import { ensureBundledTrainingTargets } from "./targets/bundled";
 import { createDefaultSettings } from "./startupDefaults";
 import { SettingsSaveQueue } from "./storage/settingsSaveQueue";
-import { isRouteAllowedForCredential, preferredModelOrder, profileNeedingInitialSetup, splitModelRouteKey } from "./profileModelDefaults";
+import { profileNeedingInitialSetup } from "./profileModelDefaults";
 import { ModelRouteSelect } from "./components/ModelRouteSelect";
-import { defaultTemperatureForModel, reasoningEffortForModel } from "./profileViewerDefaults";
 import { aiIsBeDisplayName } from "./domain/isBeIdentity";
-import { factoryViewerEditablePrompt, localizedMonitorEditablePrompt } from "./resources/systemPrompts";
 import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from "./targets/telepathicBundled";
 import { createProfileWithInitialWorkspace } from "./application/profileWorkspace";
 
@@ -423,132 +419,19 @@ function FirstRunSetup({
   onComplete: (profile: Profile, initialWorkspace?: Workspace) => Promise<void>;
 }) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [providers, setProviders] = useState<ProviderConfig[]>([]);
-  const [models, setModels] = useState<ProviderModel[]>([]);
-  const [connectionChoice, setConnectionChoice] = useState("__new__");
-  const [providerKind, setProviderKind] = useState<ProviderKind>("openrouter");
-  const [providerLabel, setProviderLabel] = useState(PROVIDER_LABELS.openrouter);
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [viewerModelId, setViewerModelId] = useState("");
-  const [viewerReasoning, setViewerReasoning] = useState<"" | ReasoningEffort>("");
-  const [viewerTemperature, setViewerTemperature] = useState("");
-  const setupLanguage: InterfaceLanguage = copy.home === "Home" ? "en" : "pl";
-  const [viewerSystemPrompt] = useState(existingProfile?.defaultViewerSystemPrompt ?? factoryViewerEditablePrompt(setupLanguage));
-  const [modelSearch, setModelSearch] = useState("");
   const [profileName, setProfileName] = useState(existingProfile?.name ?? "");
   const [humanName, setHumanName] = useState(existingProfile?.humanName ?? "");
-  const [judgeModelKey, setJudgeModelKey] = useState("");
-  const [monitorModelKey, setMonitorModelKey] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const desktop = isTauriRuntime();
-  const selectedProvider = providers.find((provider) => provider.id === connectionChoice) ?? null;
-  const providerModels = useMemo(
-    () => preferredModelOrder(models.filter((model) => model.providerConfigId === selectedProvider?.id)),
-    [models, selectedProvider?.id],
-  );
-  const visibleViewerModels = useMemo(() => {
-    const query = modelSearch.trim().toLowerCase();
-    const matching = query
-      ? providerModels.filter((model) => `${model.displayName} ${model.modelId}`.toLowerCase().includes(query))
-      : providerModels;
-    return matching.slice(0, 250);
-  }, [modelSearch, providerModels]);
-  const viewerModel = providerModels.find((model) => model.modelId === viewerModelId) ?? null;
-  const cachedModelCount = models.filter((model) => model.providerConfigId === selectedProvider?.id).length;
-
-  const reloadInventory = async (preferredProviderId?: string) => {
-    const [nextProviders, nextModels] = await Promise.all([
-      repository.listProviderConfigs(),
-      repository.listProviderModels(),
-    ]);
-    setProviders(nextProviders);
-    setModels(nextModels);
-    setConnectionChoice((current) => {
-      if (preferredProviderId && nextProviders.some((provider) => provider.id === preferredProviderId)) return preferredProviderId;
-      if (nextProviders.some((provider) => provider.id === current)) return current;
-      const bound = nextProviders.find((provider) => provider.credentialId === existingProfile?.credentialId);
-      return bound?.id ?? nextProviders[0]?.id ?? "__new__";
-    });
-  };
-
-  useEffect(() => {
-    void reloadInventory().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
-  }, [repository]);
-
-  const changeProviderKind = (kind: ProviderKind) => {
-    setProviderKind(kind);
-    setProviderLabel(PROVIDER_LABELS[kind]);
-  };
-
-  const connectProvider = async () => {
-    if (busy || !desktop) return;
-    setBusy(true);
-    setError(null);
-    let provider = selectedProvider;
-    try {
-      if (!provider) {
-        provider = await addProvider(repository, {
-          provider: providerKind,
-          label: providerLabel,
-          apiKey,
-          ...(providerKind === "custom_openai" ? { baseUrl } : {}),
-        });
-        setApiKey("");
-      }
-      await refreshProviderModels(repository, provider);
-      await reloadInventory(provider.id);
-      setViewerModelId("");
-      setViewerReasoning("");
-      setViewerTemperature("");
-      setModelSearch("");
-      setJudgeModelKey("");
-      setMonitorModelKey("");
-      setStep(2);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      await reloadInventory(provider?.id).catch(() => undefined);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const selectViewerModel = (modelId: string) => {
-    const model = providerModels.find((item) => item.modelId === modelId) ?? null;
-    const sameStoredPair = existingProfile?.credentialId === selectedProvider?.credentialId && existingProfile?.defaultViewerModelId === modelId;
-    setViewerModelId(modelId);
-    setViewerReasoning(sameStoredPair ? reasoningEffortForModel(model, existingProfile?.defaultViewerReasoningEffort) ?? "" : "");
-    const temperature = sameStoredPair && existingProfile?.defaultViewerTemperature !== undefined
-      ? existingProfile.defaultViewerTemperature
-      : defaultTemperatureForModel(model);
-    setViewerTemperature(temperature === undefined ? "" : String(temperature));
-  };
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const setup = useProfileSetupController({ copy, repository, existingProfile });
+  const busy = setup.busy || saving;
 
   const finish = async (skipOptional = false) => {
-    const provider = providers.find((item) => item.id === connectionChoice);
-    if (!provider || !viewerModel || busy) return;
-    const temperature = viewerModel.capabilities.temperature.supported
-      ? viewerTemperature.trim() ? Number(viewerTemperature) : defaultTemperatureForModel(viewerModel)
-      : undefined;
-    if (viewerReasoning && !reasoningEffortForModel(viewerModel, viewerReasoning)) { setError(copy.reasoningNotSupported); return; }
-    if (viewerModel.capabilities.temperature.supported && (!Number.isFinite(temperature) || (viewerModel.capabilities.temperature.min !== undefined && temperature! < viewerModel.capabilities.temperature.min) || (viewerModel.capabilities.temperature.max !== undefined && temperature! > viewerModel.capabilities.temperature.max))) { setError(copy.temperatureOutOfRange); return; }
-    const judge = skipOptional || !isRouteAllowedForCredential(judgeModelKey, provider.credentialId, providers, models) ? null : splitModelRouteKey(judgeModelKey);
-    const monitor = skipOptional || !isRouteAllowedForCredential(monitorModelKey, provider.credentialId, providers, models) ? null : splitModelRouteKey(monitorModelKey);
-    setBusy(true);
-    setError(null);
+    if (!setup.selectedProvider || !setup.viewerModel || busy) return;
+    setSaving(true);
+    setSaveError(null);
     try {
-      const aiConfiguration: ProfileAiConfigurationInput = {
-          credentialId: provider.credentialId,
-          credentialProvider: provider.provider,
-          defaultViewerModelId: viewerModel.modelId,
-          ...(viewerReasoning ? { defaultViewerReasoningEffort: viewerReasoning } : {}),
-          ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
-          ...(existingProfile?.defaultViewerSystemPrompt?.trim() ? { defaultViewerSystemPrompt: existingProfile.defaultViewerSystemPrompt.trim() } : {}),
-          defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(existingProfile?.defaultMonitorSystemPrompt, setupLanguage),
-          ...(judge ? { defaultJudgeProviderConfigId: judge.providerConfigId, defaultJudgeModelId: judge.modelId } : {}),
-          ...(monitor ? { defaultMonitorProviderConfigId: monitor.providerConfigId, defaultMonitorModelId: monitor.modelId } : {}),
-      };
+      const aiConfiguration = setup.buildAiConfiguration(skipOptional);
       let profile: Profile;
       let initialWorkspace: Workspace | undefined;
       if (existingProfile) {
@@ -562,8 +445,8 @@ function FirstRunSetup({
       }
       await onComplete(profile, initialWorkspace);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setBusy(false);
+      setSaveError(cause instanceof Error ? cause.message : String(cause));
+      setSaving(false);
     }
   };
 
@@ -582,45 +465,45 @@ function FirstRunSetup({
 
         {step === 1 && <div className="first-run-body">
           <div className="setup-section-heading"><KeyRound size={20} /><div><h2>{copy.setupProvider}</h2><p>{copy.setupProviderLead}</p></div></div>
-          {!desktop && <div className="runtime-warning"><ShieldCheck size={16} />{copy.setupNeedsDesktop}</div>}
-          {providers.length > 0 && <label>{copy.providerConnection}
-            <select value={connectionChoice} onChange={(event) => setConnectionChoice(event.target.value)} disabled={busy}>
-              {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.label} · {provider.credentialHint ?? "••••••••"}</option>)}
-              <option value="__new__">＋ {copy.newProviderConnection}</option>
+          {!setup.desktop && <div className="runtime-warning"><ShieldCheck size={16} />{copy.setupNeedsDesktop}</div>}
+          {setup.providers.length > 0 && <label>{copy.providerConnection}
+            <select value={setup.connectionChoice} onChange={(event) => setup.changeConnection(event.target.value)} disabled={busy}>
+              {setup.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.label} · {provider.credentialHint ?? "••••••••"}</option>)}
+              <option value={NEW_PROFILE_PROVIDER_CHOICE}>＋ {copy.newProviderConnection}</option>
             </select>
           </label>}
-          {(!providers.length || connectionChoice === "__new__") && <div className="setup-provider-grid">
-            <label>{copy.provider}<select value={providerKind} onChange={(event) => changeProviderKind(event.target.value as ProviderKind)} disabled={busy}>{PROVIDER_KINDS.map((kind) => <option key={kind} value={kind}>{PROVIDER_LABELS[kind]}</option>)}</select></label>
-            <label>{copy.providerLabel}<input value={providerLabel} onChange={(event) => setProviderLabel(event.target.value)} disabled={busy} /></label>
-            {providerKind === "custom_openai" && <label className="wide">{copy.baseUrl}<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} disabled={busy} placeholder="https://example.com/v1" /></label>}
-            <label className="wide">{copy.apiKey}<input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} disabled={busy} /></label>
+          {(!setup.providers.length || setup.connectionChoice === NEW_PROFILE_PROVIDER_CHOICE) && <div className="setup-provider-grid">
+            <label>{copy.provider}<select value={setup.providerKind} onChange={(event) => setup.changeProviderKind(event.target.value as ProviderKind)} disabled={busy}>{setup.providerKinds.map((kind) => <option key={kind} value={kind}>{PROVIDER_LABELS[kind]}</option>)}</select></label>
+            <label>{copy.providerLabel}<input value={setup.providerLabel} onChange={(event) => setup.setProviderLabel(event.target.value)} disabled={busy} /></label>
+            {setup.providerKind === "custom_openai" && <label className="wide">{copy.baseUrl}<input type="url" value={setup.baseUrl} onChange={(event) => setup.setBaseUrl(event.target.value)} disabled={busy} placeholder="https://example.com/v1" /></label>}
+            <label className="wide">{copy.apiKey}<input type="password" autoComplete="off" value={setup.apiKey} onChange={(event) => setup.setApiKey(event.target.value)} disabled={busy} /></label>
           </div>}
           <small className="setup-security-note"><LockKeyhole size={13} />{copy.providersReady}</small>
-          <div className="first-run-actions"><span>{selectedProvider && cachedModelCount > 0 && <button className="secondary-button" disabled={busy} onClick={() => { setViewerModelId(""); setModelSearch(""); setStep(2); }}>{copy.useCachedModels} ({cachedModelCount})</button>}</span><button className="primary-button" disabled={!desktop || busy || (!selectedProvider && (!providerLabel.trim() || !apiKey.trim() || (providerKind === "custom_openai" && !baseUrl.trim())))} onClick={() => void connectProvider()}>{busy ? copy.refreshing : copy.connectLoadModels}<ArrowRight size={15} /></button></div>
+          <div className="first-run-actions"><span>{setup.selectedProvider && setup.cachedModelCount > 0 && <button className="secondary-button" disabled={busy} onClick={() => { setup.prepareCachedModels(); setStep(2); }}>{copy.useCachedModels} ({setup.cachedModelCount})</button>}</span><button className="primary-button" disabled={!setup.desktop || busy || (!setup.selectedProvider && (!setup.providerLabel.trim() || !setup.apiKey.trim() || (setup.providerKind === "custom_openai" && !setup.baseUrl.trim())))} onClick={() => void setup.connectProvider().then((provider) => { if (provider) setStep(2); })}>{busy ? copy.refreshing : copy.connectLoadModels}<ArrowRight size={15} /></button></div>
         </div>}
 
         {step === 2 && <div className="first-run-body">
           <div className="setup-section-heading"><Sparkles size={20} /><div><h2>{copy.setupViewer}</h2><p>{copy.setupViewerLead}</p></div></div>
-          <div className="selected-provider-summary"><ServerIcon /><span><strong>{selectedProvider?.label}</strong><small>{selectedProvider?.credentialHint}</small></span><Check size={16} /></div>
-          <label>{copy.modelSearch}<input value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder={copy.modelSearchPlaceholder} /></label>
-          <label>{copy.defaultViewerModel}<select size={Math.min(8, Math.max(3, visibleViewerModels.length))} value={viewerModelId} onChange={(event) => selectViewerModel(event.target.value)}>{visibleViewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label>
-          {!visibleViewerModels.length && <p className="provider-empty">{copy.noMatchingModels}</p>}
-          <ProfileViewerControls copy={copy} model={viewerModel} reasoning={viewerReasoning} temperature={viewerTemperature} systemPrompt={viewerSystemPrompt} onReasoning={setViewerReasoning} onTemperature={setViewerTemperature} />
+          <div className="selected-provider-summary"><ServerIcon /><span><strong>{setup.selectedProvider?.label}</strong><small>{setup.selectedProvider?.credentialHint}</small></span><Check size={16} /></div>
+          <label>{copy.modelSearch}<input value={setup.modelSearch} onChange={(event) => setup.setModelSearch(event.target.value)} placeholder={copy.modelSearchPlaceholder} /></label>
+          <label>{copy.defaultViewerModel}<select size={Math.min(8, Math.max(3, setup.visibleViewerModels.length))} value={setup.viewerModelId} onChange={(event) => setup.selectViewerModel(event.target.value)}>{setup.visibleViewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label>
+          {!setup.visibleViewerModels.length && <p className="provider-empty">{copy.noMatchingModels}</p>}
+          <ProfileViewerControls copy={copy} model={setup.viewerModel} reasoning={setup.viewerReasoning} temperature={setup.viewerTemperature} systemPrompt={setup.viewerSystemPrompt} onReasoning={setup.setViewerReasoning} onTemperature={setup.setViewerTemperature} />
           <div className="identity-name-grid"><label>{copy.aiIsBeName}<input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div>
           <small className="setup-security-note"><Users size={13} />{copy.identityNamesLead}</small>
-          <div className="first-run-actions"><button className="secondary-button" onClick={() => setStep(1)} disabled={busy}>{copy.back}</button><button className="primary-button" disabled={!viewerModelId || busy} onClick={() => setStep(3)}>{copy.continue}<ArrowRight size={15} /></button></div>
+          <div className="first-run-actions"><button className="secondary-button" onClick={() => setStep(1)} disabled={busy}>{copy.back}</button><button className="primary-button" disabled={!setup.viewerModelId || busy} onClick={() => setStep(3)}>{copy.continue}<ArrowRight size={15} /></button></div>
         </div>}
 
         {step === 3 && <div className="first-run-body">
           <div className="setup-section-heading"><BrainCircuit size={20} /><div><h2>{copy.setupRoles}</h2><p>{copy.setupRolesLead}</p></div></div>
           <div className="optional-role-grid">
-            <label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><ModelRouteSelect role="judge" credentialId={selectedProvider?.credentialId} providers={providers} models={models} value={judgeModelKey} onChange={setJudgeModelKey} emptyLabel={copy.skipForNow} /><small>{copy.judgeLead}</small></label>
-            <label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><ModelRouteSelect role="monitor" credentialId={selectedProvider?.credentialId} providers={providers} models={models} value={monitorModelKey} onChange={setMonitorModelKey} emptyLabel={copy.skipForNow} /><small>{copy.monitorGuard}</small></label>
+            <label><span>{copy.defaultJudgeModel}<small>{copy.optional}</small></span><ModelRouteSelect role="judge" credentialId={setup.selectedProvider?.credentialId} providers={setup.providers} models={setup.models} value={setup.judgeModelKey} onChange={setup.setJudgeModelKey} emptyLabel={copy.skipForNow} /><small>{copy.judgeLead}</small></label>
+            <label><span>{copy.defaultMonitorModel}<small>{copy.optional}</small></span><ModelRouteSelect role="monitor" credentialId={setup.selectedProvider?.credentialId} providers={setup.providers} models={setup.models} value={setup.monitorModelKey} onChange={setup.setMonitorModelKey} emptyLabel={copy.skipForNow} /><small>{copy.monitorGuard}</small></label>
           </div>
           <small className="setup-security-note"><Settings2 size={13} />{copy.changeDefaultsLater}</small>
           <div className="first-run-actions"><button className="secondary-button" onClick={() => setStep(2)} disabled={busy}>{copy.back}</button><span><button className="secondary-button" disabled={busy} onClick={() => void finish(true)}>{copy.skipOptionalAndFinish}</button><button className="primary-button" disabled={busy} onClick={() => void finish()}>{busy ? copy.saving : copy.finishSetup}<Check size={15} /></button></span></div>
         </div>}
-        {error && <div className="provider-error first-run-error" role="alert">{error}</div>}
+        {(setup.error || saveError) && <div className="provider-error first-run-error" role="alert">{saveError ?? setup.error}</div>}
       </section>
     </main>
   );

@@ -273,3 +273,22 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 .recent-sessions-inline > summary span { margin-left: auto; color: var(--cyan); font-size: 11px; font-weight: 800; }
 .recent-sessions-inline .recent-session-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px 8px; padding: 6px 9px 9px; border-top: 1px solid var(--border); }
 
+
+/* PROFILE-SETUP-UNIFIED-CONTROLLER-1 */
+.profile-create-ai { min-width: 0; }
+.profile-create-advanced-toggle-row { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.profile-create-advanced-toggle-row .profile-advanced-status { margin-left: auto; color: var(--green); font-size: 11px; font-weight: 700; }
+.profile-create-advanced { grid-column: 1 / -1; min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; padding-top: 4px; border-top: 1px solid var(--border); }
+.profile-create-advanced > p, .profile-create-provider-management, .profile-create-provider-actions, .profile-create-advanced-reset, .profile-create-role-grid, .profile-create-advanced > .profile-viewer-controls { grid-column: 1 / -1; }
+.profile-create-advanced > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.profile-create-advanced > label, .profile-create-provider-management > label, .profile-create-provider-grid label { min-width: 0; display: grid; gap: 6px; color: var(--muted-strong); font-size: 11px; font-weight: 700; }
+.profile-create-advanced input, .profile-create-advanced select { width: 100%; min-width: 0; }
+.profile-create-provider-management { min-width: 0; display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+.profile-create-provider-grid { min-width: 0; }
+.profile-create-provider-actions, .profile-create-advanced-reset { display: flex; justify-content: flex-end; gap: 8px; }
+.profile-create-role-grid { min-width: 0; }
+@media (max-width: 620px) {
+  .profile-edit-ai, .profile-create-advanced, .profile-viewer-controls, .optional-role-grid { grid-template-columns: minmax(0, 1fr); }
+  .profile-create-advanced-toggle-row .profile-advanced-status { width: 100%; margin-left: 0; }
+  .profile-create-advanced-toggle-row > button { flex: 1 1 auto; }
+}
