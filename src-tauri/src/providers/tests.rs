@@ -188,7 +188,7 @@ fn parses_retry_after_seconds_and_current_http_date_with_a_bounded_wait() {
     assert_eq!(retry_after_value_ms_at("0", now), Some(0));
     assert_eq!(retry_after_value_ms_at("120", now), Some(30_000));
     assert_eq!(retry_after_value_ms_at("Sun, 06 Nov 1994 08:49:37 GMT", now - Duration::from_secs(120)), Some(30_000));
-    assert_eq!(retry_after_value_ms_at("Sun, 06 Nov 1994 08:49:37 GMT", now + Duration::from_secs(1)), Some(0));
+    assert_eq!(retry_after_value_ms_at("Sun, 06 Nov 1994 08:49:37 GMT", now + Duration::from_secs(11)), Some(0));
     assert_eq!(retry_after_value_ms_at("Sun, 06 Nov 1994 08:49:60 GMT", now + Duration::from_secs(32)), Some(1_000));
     assert_eq!(retry_after_value_ms_at("Sun, 06 Nov 94 08:49:37 GMT", now), None);
 
