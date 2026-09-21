@@ -1,0 +1,121 @@
+{
+  "fixtureVersion": 1,
+  "sourceKind": "official-documentation-derived-anonymized",
+  "sourceUrl": "https://openrouter.ai/docs/guides/best-practices/reasoning-tokens",
+  "verifiedAt": "2026-09-22",
+  "providerResponse": {
+    "model": "anthropic/claude-fable-5",
+    "choices": [
+      {
+        "message": {
+          "role": "assistant",
+          "content": "Visible fixture answer.",
+          "reasoning_details": [
+            {
+              "type": "reasoning.summary",
+              "summary": "Anonymized summary.",
+              "id": "reasoning-summary-fixture",
+              "format": "anthropic-claude-v1",
+              "index": 0
+            },
+            {
+              "type": "reasoning.encrypted",
+              "data": "RklYVFVSRV9FTkNSWVBURURfREFUQQ==",
+              "id": "reasoning-encrypted-fixture",
+              "format": "anthropic-claude-v1",
+              "index": 1
+            },
+            {
+              "type": "reasoning.text",
+              "text": "Anonymized reasoning text.",
+              "signature": "fixture-signature-001",
+              "id": "reasoning-text-fixture",
+              "format": "anthropic-claude-v1",
+              "index": 2
+            }
+          ]
+        },
+        "finish_reason": "stop"
+      }
+    ]
+  },
+  "continuationState": {
+    "schemaVersion": 1,
+    "transport": "openrouter",
+    "format": "openrouter-reasoning-details",
+    "replayFingerprint": {
+      "transport": "openrouter",
+      "normalizedEndpoint": "https://openrouter.ai/api/v1",
+      "providerConfigId": "provider-config-fixture",
+      "credentialId": "credential-fixture",
+      "requestedModelId": "anthropic/claude-fable-5",
+      "stateFormat": "openrouter-reasoning-details",
+      "stateFormatVersion": 1
+    },
+    "reasoningDetails": [
+      {
+        "type": "reasoning.summary",
+        "summary": "Anonymized summary.",
+        "id": "reasoning-summary-fixture",
+        "format": "anthropic-claude-v1",
+        "index": 0
+      },
+      {
+        "type": "reasoning.encrypted",
+        "data": "RklYVFVSRV9FTkNSWVBURURfREFUQQ==",
+        "id": "reasoning-encrypted-fixture",
+        "format": "anthropic-claude-v1",
+        "index": 1
+      },
+      {
+        "type": "reasoning.text",
+        "text": "Anonymized reasoning text.",
+        "signature": "fixture-signature-001",
+        "id": "reasoning-text-fixture",
+        "format": "anthropic-claude-v1",
+        "index": 2
+      }
+    ]
+  },
+  "nextRequest": {
+    "model": "anthropic/claude-fable-5",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Fixture question."
+      },
+      {
+        "role": "assistant",
+        "content": "Visible fixture answer.",
+        "reasoning_details": [
+          {
+            "type": "reasoning.summary",
+            "summary": "Anonymized summary.",
+            "id": "reasoning-summary-fixture",
+            "format": "anthropic-claude-v1",
+            "index": 0
+          },
+          {
+            "type": "reasoning.encrypted",
+            "data": "RklYVFVSRV9FTkNSWVBURURfREFUQQ==",
+            "id": "reasoning-encrypted-fixture",
+            "format": "anthropic-claude-v1",
+            "index": 1
+          },
+          {
+            "type": "reasoning.text",
+            "text": "Anonymized reasoning text.",
+            "signature": "fixture-signature-001",
+            "id": "reasoning-text-fixture",
+            "format": "anthropic-claude-v1",
+            "index": 2
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "Fixture follow-up."
+      }
+    ]
+  }
+}

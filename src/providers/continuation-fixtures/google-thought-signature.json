@@ -1,0 +1,82 @@
+{
+  "fixtureVersion": 1,
+  "sourceKind": "official-documentation-derived-anonymized",
+  "sourceUrl": "https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures",
+  "verifiedAt": "2026-09-22",
+  "providerResponse": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Anonymized internal thought.",
+              "thought": true
+            },
+            {
+              "text": "Visible fixture answer.",
+              "thoughtSignature": "RklYVFVSRV9USE9VR0hUX1NJR05BVFVSRQ=="
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "continuationState": {
+    "schemaVersion": 1,
+    "transport": "google-native",
+    "format": "google-thought-parts",
+    "replayFingerprint": {
+      "transport": "google-native",
+      "normalizedEndpoint": "https://generativelanguage.googleapis.com/v1beta",
+      "providerConfigId": "provider-config-fixture",
+      "credentialId": "credential-fixture",
+      "requestedModelId": "gemini-3.5-flash",
+      "stateFormat": "google-thought-parts",
+      "stateFormatVersion": 1
+    },
+    "parts": [
+      {
+        "text": "Anonymized internal thought.",
+        "thought": true
+      },
+      {
+        "text": "Visible fixture answer.",
+        "thoughtSignature": "RklYVFVSRV9USE9VR0hUX1NJR05BVFVSRQ=="
+      }
+    ]
+  },
+  "nextRequest": {
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Fixture question."
+          }
+        ]
+      },
+      {
+        "role": "model",
+        "parts": [
+          {
+            "text": "Anonymized internal thought.",
+            "thought": true
+          },
+          {
+            "text": "Visible fixture answer.",
+            "thoughtSignature": "RklYVFVSRV9USE9VR0hUX1NJR05BVFVSRQ=="
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Fixture follow-up."
+          }
+        ]
+      }
+    ]
+  }
+}

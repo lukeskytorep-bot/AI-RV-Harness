@@ -1,0 +1,79 @@
+{
+  "fixtureVersion": 1,
+  "sourceKind": "official-documentation-derived-anonymized",
+  "sourceUrl": "https://platform.claude.com/docs/en/build-with-claude/extended-thinking",
+  "verifiedAt": "2026-09-22",
+  "providerResponse": {
+    "model": "claude-fixture",
+    "content": [
+      {
+        "type": "thinking",
+        "thinking": "Anonymized thinking summary.",
+        "signature": "fixture-anthropic-signature-001"
+      },
+      {
+        "type": "redacted_thinking",
+        "data": "RklYVFVSRV9SRURBQ1RFRF9USElOS0lORw=="
+      },
+      {
+        "type": "text",
+        "text": "Visible fixture answer."
+      }
+    ]
+  },
+  "continuationState": {
+    "schemaVersion": 1,
+    "transport": "anthropic-native",
+    "format": "anthropic-thinking-blocks",
+    "replayFingerprint": {
+      "transport": "anthropic-native",
+      "normalizedEndpoint": "https://api.anthropic.com/v1",
+      "providerConfigId": "provider-config-fixture",
+      "credentialId": "credential-fixture",
+      "requestedModelId": "claude-fixture",
+      "stateFormat": "anthropic-thinking-blocks",
+      "stateFormatVersion": 1
+    },
+    "blocks": [
+      {
+        "type": "thinking",
+        "thinking": "Anonymized thinking summary.",
+        "signature": "fixture-anthropic-signature-001"
+      },
+      {
+        "type": "redacted_thinking",
+        "data": "RklYVFVSRV9SRURBQ1RFRF9USElOS0lORw=="
+      }
+    ]
+  },
+  "nextRequest": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Fixture question."
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Anonymized thinking summary.",
+            "signature": "fixture-anthropic-signature-001"
+          },
+          {
+            "type": "redacted_thinking",
+            "data": "RklYVFVSRV9SRURBQ1RFRF9USElOS0lORw=="
+          },
+          {
+            "type": "text",
+            "text": "Visible fixture answer."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "Fixture follow-up."
+      }
+    ]
+  }
+}
