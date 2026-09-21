@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { isRetryableProviderError, providerRetryAllowance, providerRetryCategory, providerRetryDelayMs } from "./retry";
+import { ProviderCallError } from "./providerError";
+import { isRetryableProviderError, isStandardRetryHttpStatus, providerRetryAllowance, providerRetryCategory, providerRetryDelayMs, STANDARD_RETRY_HTTP_STATUSES } from "./retry";
 
 describe("provider retry policy", () => {
+  it("centralizes the complete standard HTTP retry status policy, including 524 and 529", () => {
+    expect(STANDARD_RETRY_HTTP_STATUSES).toEqual([408, 425, 429, 500, 502, 503, 504, 524, 529]);
+    for (const status of STANDARD_RETRY_HTTP_STATUSES) expect(isStandardRetryHttpStatus(status)).toBe(true);
+    for (const status of [400, 401, 403, 404, 409, 422, 501]) expect(isStandardRetryHttpStatus(status)).toBe(false);
+
+    for (const status of [524, 529]) {
+      expect(providerRetryCategory(new ProviderCallError({ code: "http_status", message: `status ${status}`, phase: "reading_body", httpStatus: status }))).toBe("standard");
+      expect(providerRetryCategory(new Error(`provider request failed (${status}): transient`))).toBe("standard");
+      expect(providerRetryCategory(new Error(`provider error payload code=${status} type=upstream_unavailable: retry`))).toBe("standard");
+    }
+  });
   it("automatically retries only explicit not-yet-processed and throttling responses", () => {
     expect(isRetryableProviderError(new Error("network connection reset"))).toBe(true);
     expect(isRetryableProviderError(new Error("provider request failed (429): rate limit"))).toBe(true);
@@ -44,5 +56,6 @@ describe("provider retry policy", () => {
     expect(providerRetryDelayMs(2, undefined, () => 0.25)).toBe(500);
     expect(providerRetryDelayMs(0, new Error("provider request failed (429) [retry-after-ms=4500]: wait"))).toBe(4500);
     expect(providerRetryDelayMs(0, new Error("provider request failed (429) [retry-after-ms=999999]: wait"))).toBe(30_000);
+    expect(providerRetryDelayMs(0, new ProviderCallError({ code: "http_status", message: "retry now", phase: "reading_body", httpStatus: 429, retryAfterMs: 0 }))).toBe(0);
   });
 });

@@ -36,6 +36,25 @@ describe("provider request executor", () => {
     expect(attempt).toHaveBeenCalledTimes(3);
   });
 
+  it("does not perform a transport retry after a semantic assistant response has already been returned", async () => {
+    const attempt = vi.fn().mockResolvedValue({
+      content: "Partial but already-delivered semantic response.",
+      finishReason: "length",
+      usage: {},
+    });
+    const response = await executeProviderChat({
+      config: { id: "pc", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" },
+      modelId: "model",
+      messages: [{ role: "user", content: "test" }],
+      settings: { requested: {}, effective: {}, omitted: [] },
+      configuredRetries: 5,
+      attempt,
+    });
+    expect(response.content).toContain("already-delivered semantic response");
+    expect(response.finishReason).toBe("length");
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
   it("performs exactly one call when retries are disabled or the error is permanent", async () => {
     const disabled = vi.fn().mockRejectedValue(failure("connect"));
     await expect(executeProviderRequest({ operationId: "test.off", configuredRetries: 0, executeAttempt: disabled, sleep: async () => undefined })).rejects.toBeInstanceOf(ProviderExecutionError);

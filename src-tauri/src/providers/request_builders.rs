@@ -19,7 +19,7 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
         body.insert("temperature".into(), json!(value));
     }
     if let Some(value) = request.max_output_tokens {
-        body.insert("max_tokens".into(), json!(value));
+        body.insert(openai_compatible_output_token_field(request.provider).into(), json!(value));
     }
     if let Some(value) = request.reasoning_transport_value.as_deref().or(request.reasoning_effort.as_deref()) {
         let kind = request.reasoning_transport_kind.as_deref().unwrap_or("effort");
@@ -32,6 +32,18 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
         }
     }
     (endpoint(base, "chat/completions"), Value::Object(body))
+}
+
+fn openai_compatible_output_token_field(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::Openrouter | ProviderKind::Openai => "max_completion_tokens",
+        ProviderKind::Zai
+        | ProviderKind::Deepseek
+        | ProviderKind::Mistral
+        | ProviderKind::Blackbox
+        | ProviderKind::CustomOpenai => "max_tokens",
+        ProviderKind::Google | ProviderKind::Anthropic => unreachable!("native provider routed through OpenAI-compatible request builder"),
+    }
 }
 
 fn openai_message(message: &ProviderMessage) -> Value {

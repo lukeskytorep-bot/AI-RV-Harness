@@ -2,6 +2,14 @@ import { providerErrorDetails } from "./providerError";
 
 export type ProviderRetryCategory = "standard" | "single_recovery" | "never";
 
+export const STANDARD_RETRY_HTTP_STATUSES = [408, 425, 429, 500, 502, 503, 504, 524, 529] as const;
+const STANDARD_RETRY_HTTP_STATUS_SET = new Set<number>(STANDARD_RETRY_HTTP_STATUSES);
+const MAX_RETRY_AFTER_MS = 30_000;
+
+export function isStandardRetryHttpStatus(status: number | undefined): boolean {
+  return typeof status === "number" && STANDARD_RETRY_HTTP_STATUS_SET.has(status);
+}
+
 export function providerRetryCategory(cause: unknown): ProviderRetryCategory {
   // A completed executor operation must never be retried by a caller. This is
   // also a compatibility guard while old controller loops are removed.
@@ -13,18 +21,18 @@ export function providerRetryCategory(cause: unknown): ProviderRetryCategory {
     if (/^(rate_limit_exceeded|provider_overloaded|provider_unavailable|timeout|server)$/i.test(details.providerErrorType ?? "")) return "standard";
     if (["response_body_read", "response_body_decode", "invalid_provider_json", "empty_assistant_response"].includes(details.code)) return "single_recovery";
     if (["connect", "timeout", "request_send"].includes(details.code)) return "standard";
-    if (details.code === "http_status") return [408, 425, 429, 500, 502, 503, 504].includes(details.httpStatus ?? 0) ? "standard" : "never";
+    if (details.code === "http_status") return isStandardRetryHttpStatus(details.httpStatus) ? "standard" : "never";
     if (details.code === "provider_error") return "never";
   }
   const message = (cause instanceof Error ? cause.message : String(cause)).toLowerCase();
   const status = message.match(/\((\d{3})\)/)?.[1];
   if (status) {
     const code = Number(status);
-    if ([408, 425, 429, 500, 502, 503, 504].includes(code)) return "standard";
+    if (isStandardRetryHttpStatus(code)) return "standard";
     return "never";
   }
   const payloadCode = Number(message.match(/\bcode=(\d{3})\b/)?.[1]);
-  if (Number.isFinite(payloadCode)) return [408, 425, 429, 500, 502, 503, 504].includes(payloadCode) ? "standard" : "never";
+  if (Number.isFinite(payloadCode)) return isStandardRetryHttpStatus(payloadCode) ? "standard" : "never";
   if (/content[_ -]?filter|safety|blocked|block reason|prompt feedback|context length|context window|maximum context|invalid model|model not found|unauthorized|forbidden|api key|credential|permission|route mismatch|cancelled|canceled|user stop|cost limit/.test(message)) return "never";
   if (/decod(?:e|ing).*response body|response body.*(?:incomplete|closed|read)|invalid provider json|empty (?:assistant|provider) response|connection reset|connection closed|unexpected eof/.test(message)) return "single_recovery";
   if (/timed? out|timeout|network error|error sending request|connect error|dns error|temporarily unavailable|overloaded/.test(message)) return "standard";
@@ -44,10 +52,10 @@ export function isRetryableProviderError(cause: unknown): boolean {
 
 export function providerRetryDelayMs(failedAttempt: number, cause?: unknown, random: () => number = Math.random): number {
   const details = providerErrorDetails(cause);
-  if (details?.retryAfterMs && details.retryAfterMs > 0) return Math.min(30_000, details.retryAfterMs);
+  if (typeof details?.retryAfterMs === "number" && details.retryAfterMs >= 0) return Math.min(MAX_RETRY_AFTER_MS, details.retryAfterMs);
   const message = cause instanceof Error ? cause.message : String(cause ?? "");
   const retryAfter = Number(message.match(/\[retry-after-ms=(\d+)\]/)?.[1]);
-  if (Number.isFinite(retryAfter) && retryAfter > 0) return Math.min(30_000, retryAfter);
+  if (Number.isFinite(retryAfter) && retryAfter >= 0) return Math.min(MAX_RETRY_AFTER_MS, retryAfter);
   const ceiling = Math.min(8_000, 500 * 2 ** Math.max(0, failedAttempt));
   return Math.floor(Math.max(0, Math.min(1, random())) * ceiling);
 }

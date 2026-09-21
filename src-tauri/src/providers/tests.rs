@@ -11,9 +11,12 @@ fn openrouter_app_attribution_uses_public_project_page() {
 }
 use super::reasoning::split_tagged_reasoning;
 use super::errors::safe_provider_error;
-use super::request_builders::{build_google_request, build_openai_compatible_request};
+use super::request_builders::{build_anthropic_request, build_google_request, build_openai_compatible_request};
 use super::response_parsers::{parse_anthropic_response, parse_google_response, parse_openai_compatible_response};
+use super::transport::retry_after_value_ms_at;
 use super::validation::validate_request_id;
+
+use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::json;
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
@@ -137,6 +140,63 @@ fn debug_payload_redacts_secret_and_binary_data() {
 fn validates_provider_cancellation_ids() {
     assert!(validate_request_id("8f3127e0-844a-4f27-aada-6f14641e67e1").is_ok());
     assert!(validate_request_id("../../escape").is_err());
+}
+
+#[test]
+fn maps_output_token_limit_by_transport_contract() {
+    for provider in [ProviderKind::Openrouter, ProviderKind::Openai] {
+        let mut request = chat_request(provider, "model");
+        request.max_output_tokens = Some(1234);
+        let (_, body) = build_openai_compatible_request(&request, "https://example.test/v1");
+        assert_eq!(body.get("max_completion_tokens"), Some(&json!(1234)));
+        assert!(body.get("max_tokens").is_none());
+    }
+
+    for provider in [
+        ProviderKind::Zai,
+        ProviderKind::Deepseek,
+        ProviderKind::Mistral,
+        ProviderKind::Blackbox,
+        ProviderKind::CustomOpenai,
+    ] {
+        let mut request = chat_request(provider, "model");
+        request.max_output_tokens = Some(2345);
+        let (_, body) = build_openai_compatible_request(&request, "https://example.test/v1");
+        assert_eq!(body.get("max_tokens"), Some(&json!(2345)));
+        assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    let mut google = chat_request(ProviderKind::Google, "gemini-test");
+    google.max_output_tokens = Some(3456);
+    let (_, body) = build_google_request(&google, "https://generativelanguage.googleapis.com/v1beta").unwrap();
+    assert_eq!(body.pointer("/generationConfig/maxOutputTokens"), Some(&json!(3456)));
+    assert!(body.get("max_tokens").is_none());
+    assert!(body.get("max_completion_tokens").is_none());
+
+    let mut anthropic = chat_request(ProviderKind::Anthropic, "claude-test");
+    anthropic.max_output_tokens = Some(4567);
+    let (_, body) = build_anthropic_request(&anthropic, "https://api.anthropic.com/v1");
+    assert_eq!(body.get("max_tokens"), Some(&json!(4567)));
+    assert!(body.get("max_completion_tokens").is_none());
+}
+
+#[test]
+fn parses_retry_after_seconds_and_current_http_date_with_a_bounded_wait() {
+    let now = UNIX_EPOCH + Duration::from_secs(784_111_767);
+    assert_eq!(retry_after_value_ms_at("Sun, 06 Nov 1994 08:49:37 GMT", now), Some(10_000));
+    assert_eq!(retry_after_value_ms_at("4", now), Some(4_000));
+    assert_eq!(retry_after_value_ms_at("0", now), Some(0));
+    assert_eq!(retry_after_value_ms_at("120", now), Some(30_000));
+    assert_eq!(retry_after_value_ms_at("Sun, 06 Nov 1994 08:49:37 GMT", now - Duration::from_secs(120)), Some(30_000));
+    assert_eq!(retry_after_value_ms_at("Sun, 06 Nov 1994 08:49:37 GMT", now + Duration::from_secs(1)), Some(0));
+    assert_eq!(retry_after_value_ms_at("Sun, 06 Nov 1994 08:49:60 GMT", now + Duration::from_secs(32)), Some(1_000));
+    assert_eq!(retry_after_value_ms_at("Sun, 06 Nov 94 08:49:37 GMT", now), None);
+
+    // Obsolete HTTP-date wire forms are intentionally unsupported here. A
+    // provider sending one falls back to the normal bounded jitter/backoff.
+    assert_eq!(retry_after_value_ms_at("Sunday, 06-Nov-94 08:49:37 GMT", now), None);
+    assert_eq!(retry_after_value_ms_at("Sun Nov  6 08:49:37 1994", now), None);
+    assert_eq!(retry_after_value_ms_at("not-a-date", now), None);
 }
 
 #[test]
