@@ -38,7 +38,8 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(sha256(judgeEngine)).toBe("df0f40bb7747f36f184f89211c170b2edef2484a8b07b0920390c1dd8dfa8b7d");
     expect(sha256(monitorPrompt)).toBe("3eda515707b2a6e356e49b3b04d191397a760de248a0ba0c46391e950609dc85");
     expect(sha256(monitorEngine)).toBe("73d2f461bca2a2ef7e07e0013c742f86f5bc5d14f4aec77510977c70e8b86065");
-    expect(sha256(providerRetry)).toBe("1af935d6d31e52f39e0b9595d291e58711c5002c973e4a9293d756e0db83c7cd");
+    // TRANSPORT-RETRY-1 R1 intentionally advances the protected retry baseline.
+    expect(sha256(providerRetry)).toBe("5c77375d62b0ffc50b70d3473db64f69186255c9bfc1a544d23a4408bf26a879");
     expect(sha256(browserControlledPurge)).toBe("502b94e42f6707537fe7f38309fa253a95f088c5e64223b28ea5ccf8375f1b6a");
     expect(sha256(sqliteControlledPurge)).toBe("5ed7115da8cc2bc36ddc06170c766783f19186bf4cd8672396c291ae26cfcfc4");
     expect(sha256(migration023)).toBe("1a9d300daa180a4507c01497b52deaf84722bd710ed4617f84058932dc7838a4");
