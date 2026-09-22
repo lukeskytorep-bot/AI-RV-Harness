@@ -10,6 +10,7 @@ fn openrouter_app_attribution_uses_public_project_page() {
     assert_eq!(OPENROUTER_APP_TITLE, "AI RV Harness");
 }
 use super::reasoning::split_tagged_reasoning;
+use super::endpoint_capabilities::openrouter_model_endpoints_url;
 use super::errors::safe_provider_error;
 use super::request_builders::{build_anthropic_request, build_google_request, build_openai_compatible_request};
 use super::response_parsers::{parse_anthropic_response, parse_google_response, parse_openai_compatible_response};
@@ -59,6 +60,7 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
         temperature: None,
         max_output_tokens: None,
         timeout_ms: None,
+        provider_routing: None,
         detailed_diagnostics: false,
     }
 }
@@ -622,4 +624,58 @@ async fn openai_compatible_contract_passes_against_a_local_simulator() {
     assert_eq!(parsed.actual_model.as_deref(), Some("simulator-model-actual"));
     assert_eq!(parsed.usage.total_tokens, Some(5));
     server.await.unwrap();
+}
+
+
+#[test]
+fn builds_encoded_openrouter_model_endpoint_discovery_url() {
+    assert_eq!(
+        openrouter_model_endpoints_url("https://openrouter.ai/api/v1", "qwen/qwen3-32b").unwrap(),
+        "https://openrouter.ai/api/v1/models/qwen/qwen3-32b/endpoints",
+    );
+    assert_eq!(
+        openrouter_model_endpoints_url("https://openrouter.ai/api/v1", "qwen/qwen3-32b:free").unwrap(),
+        "https://openrouter.ai/api/v1/models/qwen/qwen3-32b:free/endpoints",
+    );
+    assert!(openrouter_model_endpoints_url("https://openrouter.ai/api/v1", "invalid-model").is_err());
+    assert!(openrouter_model_endpoints_url("https://openrouter.ai/api/v1", "a/b/c").is_err());
+}
+
+#[test]
+fn emits_openrouter_capacity_routing_without_changing_other_provider_bodies() {
+    let mut openrouter = chat_request(ProviderKind::Openrouter, "qwen/qwen3-32b");
+    openrouter.provider_routing = Some(OpenRouterProviderRouting {
+        order: vec!["siliconflow".to_string()],
+        only: vec!["siliconflow".to_string()],
+        ignore: vec!["deepinfra".to_string()],
+        allow_fallbacks: Some(true),
+    });
+    let (_, body) = build_openai_compatible_request(&openrouter, "https://openrouter.ai/api/v1");
+    assert_eq!(body.pointer("/provider/order/0"), Some(&json!("siliconflow")));
+    assert_eq!(body.pointer("/provider/only/0"), Some(&json!("siliconflow")));
+    assert_eq!(body.pointer("/provider/ignore/0"), Some(&json!("deepinfra")));
+    assert_eq!(body.pointer("/provider/allow_fallbacks"), Some(&json!(true)));
+
+    let mut openai = chat_request(ProviderKind::Openai, "gpt-test");
+    openai.provider_routing = openrouter.provider_routing.clone();
+    let (_, body) = build_openai_compatible_request(&openai, "https://api.openai.com/v1");
+    assert!(body.get("provider").is_none());
+}
+
+#[test]
+fn parses_selected_openrouter_provider_metadata_when_present() {
+    let parsed = parse_openai_compatible_response(json!({
+        "model": "qwen/qwen3-32b",
+        "choices": [{ "message": { "content": "ok" }, "finish_reason": "stop" }],
+        "usage": { "prompt_tokens": 10, "completion_tokens": 2 },
+        "openrouter_metadata": {
+            "endpoints": {
+                "available": [
+                    { "provider": "DeepInfra", "selected": false },
+                    { "provider": "SiliconFlow", "selected": true }
+                ]
+            }
+        }
+    }), None).unwrap();
+    assert_eq!(parsed.actual_provider.as_deref(), Some("SiliconFlow"));
 }

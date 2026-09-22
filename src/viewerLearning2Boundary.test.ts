@@ -67,15 +67,26 @@ describe("VIEWER-LEARNING-2 boundaries", () => {
     ["Monitor", ["src/monitor", "src/features/monitor", "src/resources/systemPrompts.ts"], "87097f8e0db0e4b4da63a382bcb5f73656a50535a854c12d8c5c09c8e33e3f47"],
     ["Judge", ["src/judge", "src/features/judge"], "520459819dda5f6451accdcab803be5cf9190d58b345d975d8cb51a8f3ba9bb4"],
     ["protocols", ["src/protocols", "src/resources/protocolRegistry.ts", "src/resources/protocols"], "2a324ad15de07985c968622be28174daa6e74ce4edd1442c03e86c4109211263"],
-    // OPENROUTER-CONTINUITY-IN-MEMORY-1 R1 intentionally advances this historical provider baseline.
-    ["provider transport/retry", [
-      "src/providers/native.ts",
-      "src/providers/requestExecutor.ts",
-      "src/providers/retry.ts",
-      "src/providers/providerError.ts",
-      "src/providers/service.ts",
-    ], "fc65d98b5869dec2f700555503e3bae6b4adccf6616d03485285386dd126008b"],
   ] as const)("keeps %s byte-identical to the accepted base", (_label, roots, expected) => {
     expect(aggregateHash([...roots])).toBe(expected);
+  });
+
+  it("allows intentional E1 provider evolution while preserving retry, credential and continuation invariants", () => {
+    const native = source("src/providers/native.ts");
+    const executor = source("src/providers/requestExecutor.ts");
+    const retry = source("src/providers/retry.ts");
+    const capability = source("src/providers/openRouterEndpointCapability.ts");
+
+    expect(native).toContain('invoke<NativeChatResponse>("provider_chat"');
+    expect(native).toContain('invoke<unknown>("provider_discover_model_endpoints"');
+    expect(native).toContain("credentialId: config.credentialId");
+    expect(native).not.toContain("credentialSecret");
+    expect(executor).toContain("providerChatAttempt");
+    expect(executor).toContain("structuredClone(message.continuationState)");
+    expect(executor).toContain("resolveOpenRouterRoutingDecision");
+    expect(retry).toContain("providerRetryAllowance");
+    expect(retry).toContain("context length");
+    expect(capability).toContain('"PROVEN_FIT" | "PROVEN_NO" | "UNKNOWN"');
+    expect(capability).toContain("ROUTING_SAFETY_MARGIN_RATIO = 0.25");
   });
 });

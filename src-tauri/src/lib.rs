@@ -28,6 +28,7 @@ pub fn run() {
             secrets::delete_credential,
             secrets::credential_identity_fingerprint,
             providers::provider_discover_models,
+            providers::provider_discover_model_endpoints,
             providers::provider_binding_endpoint,
             providers::provider_chat,
             providers::cancel_provider_request,

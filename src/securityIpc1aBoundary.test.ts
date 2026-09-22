@@ -87,6 +87,7 @@ describe("SECURITY-IPC-1A trust-boundary hardening", () => {
 
     expect(build).toContain("AppManifest::new().commands(APP_COMMANDS)");
     expect(capability.permissions).toContain("main-window-commands");
+    expect(handlerCommands).toContain("provider_discover_model_endpoints");
     expect(manifestCommands).toEqual(handlerCommands);
     expect(allowedCommands).toEqual(handlerCommands);
   });

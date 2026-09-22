@@ -145,6 +145,13 @@ export interface ProviderImageInput {
   dataBase64: string;
 }
 
+export interface OpenRouterProviderRouting {
+  order?: string[];
+  only?: string[];
+  ignore?: string[];
+  allowFallbacks?: boolean;
+}
+
 export interface ProviderChatRequest {
   providerConfigId: string;
   provider: ProviderKind;
@@ -153,6 +160,7 @@ export interface ProviderChatRequest {
   modelId: string;
   messages: ProviderMessage[];
   settings: EffectiveGenerationSettings;
+  providerRouting?: OpenRouterProviderRouting;
 }
 
 export interface ProviderUsage {
@@ -172,6 +180,7 @@ export interface ProviderChatResponse {
   actualModel?: string;
   usage: ProviderUsage;
   providerRequestId?: string;
+  actualProvider?: string;
   execution?: {
     operationId: string;
     logicalRequestId: string;

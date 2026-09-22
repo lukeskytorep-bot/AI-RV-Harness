@@ -12,6 +12,7 @@ describe("Etap 6 Rust provider module boundary", () => {
 
     for (const moduleName of [
       "adapters",
+      "endpoint_capabilities",
       "errors",
       "reasoning",
       "request_builders",
@@ -24,6 +25,7 @@ describe("Etap 6 Rust provider module boundary", () => {
     }
 
     expect(facade).toContain("pub async fn provider_discover_models");
+    expect(facade).toContain("pub async fn provider_discover_model_endpoints");
     expect(facade).toContain("pub fn provider_binding_endpoint");
     expect(facade).toContain("pub async fn provider_chat");
     expect(facade).toContain("pub fn cancel_provider_request");
@@ -45,6 +47,7 @@ describe("Etap 6 Rust provider module boundary", () => {
   it("keeps wire-format ownership in the intended modules and Tauri command names stable", () => {
     const builders = read("providers/request_builders.rs");
     const parsers = read("providers/response_parsers.rs");
+    const endpointCapabilities = read("providers/endpoint_capabilities.rs");
     const errors = read("providers/errors.rs");
     const adapters = read("providers/adapters.rs");
     const reasoning = read("providers/reasoning.rs");
@@ -60,6 +63,8 @@ describe("Etap 6 Rust provider module boundary", () => {
     expect(parsers).toContain("fn parse_openai_compatible_response");
     expect(parsers).toContain("fn parse_google_response");
     expect(parsers).toContain("fn parse_anthropic_response");
+    expect(endpointCapabilities).toContain("fn discover_openrouter_model_endpoints");
+    expect(endpointCapabilities).toContain("fn openrouter_model_endpoints_url");
     expect(errors).toContain("fn provider_error_metadata");
     expect(reasoning).toContain("fn normalize_reasoning_response");
     expect(transport).toContain("async fn send_chat_request");
@@ -70,6 +75,7 @@ describe("Etap 6 Rust provider module boundary", () => {
     expect(validation).toContain("fn validate_request_id");
 
     expect(lib).toContain("providers::provider_discover_models");
+    expect(lib).toContain("providers::provider_discover_model_endpoints");
     expect(lib).toContain("providers::provider_binding_endpoint");
     expect(lib).toContain("providers::provider_chat");
     expect(lib).toContain("providers::cancel_provider_request");

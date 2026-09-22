@@ -31,6 +31,26 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
             body.insert("reasoning_effort".into(), json!(value));
         }
     }
+    if matches!(request.provider, ProviderKind::Openrouter) {
+        if let Some(routing) = request.provider_routing.as_ref() {
+            let mut provider = Map::new();
+            if !routing.order.is_empty() {
+                provider.insert("order".into(), json!(&routing.order));
+            }
+            if !routing.only.is_empty() {
+                provider.insert("only".into(), json!(&routing.only));
+            }
+            if !routing.ignore.is_empty() {
+                provider.insert("ignore".into(), json!(&routing.ignore));
+            }
+            if let Some(value) = routing.allow_fallbacks {
+                provider.insert("allow_fallbacks".into(), json!(value));
+            }
+            if !provider.is_empty() {
+                body.insert("provider".into(), Value::Object(provider));
+            }
+        }
+    }
     (endpoint(base, "chat/completions"), Value::Object(body))
 }
 

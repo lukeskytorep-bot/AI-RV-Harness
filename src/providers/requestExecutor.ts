@@ -1,7 +1,15 @@
-import { providerChatAttempt } from "./native";
+import { discoverOpenRouterModelEndpoints, providerChatAttempt } from "./native";
 import { normalizeProviderCallError, ProviderCallError } from "./providerError";
+import { estimateProviderInputTokens } from "./inputTokenEstimate";
+import {
+  OPENROUTER_UNKNOWN_CAPACITY_ERROR,
+  createOpenRouterCapacityEnvelope,
+  isOpenRouterContextCapacityError,
+  resolveOpenRouterRoutingDecision,
+  type OpenRouterEndpointDiscovery,
+} from "./openRouterEndpointCapability";
 import { providerRetryAllowance, providerRetryDelayMs } from "./retry";
-import type { EffectiveGenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage } from "./types";
+import type { EffectiveGenerationSettings, OpenRouterProviderRouting, ProviderChatResponse, ProviderConfig, ProviderMessage } from "./types";
 
 export interface ProviderAttemptContext {
   operationId: string;
@@ -43,6 +51,7 @@ export type ProviderChatAttempt = (request: {
   settings: EffectiveGenerationSettings;
   timeoutMs?: number;
   signal?: AbortSignal;
+  providerRouting?: OpenRouterProviderRouting;
 }) => Promise<ProviderChatResponse>;
 
 /**
@@ -130,6 +139,9 @@ export async function executeProviderChat(input: {
   configuredRetries?: number;
   operationId?: string;
   attempt?: ProviderChatAttempt;
+  providerRouting?: OpenRouterProviderRouting;
+  endpointDiscovery?: OpenRouterEndpointDiscovery;
+  capacityProtectedRouting?: boolean;
   onAttemptFailure?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptFailure"];
 }): Promise<ProviderChatResponse> {
   const attempt = input.attempt ?? providerChatAttempt;
@@ -144,24 +156,73 @@ export async function executeProviderChat(input: {
     ...(message.continuationState ? { continuationState: structuredClone(message.continuationState) } : {}),
   }));
   const settings = structuredClone(input.settings);
-  const result = await executeProviderRequest({
-    operationId: input.operationId ?? "provider.chat",
-    configuredRetries: input.configuredRetries,
-    signal: input.signal,
-    onAttemptFailure: input.onAttemptFailure,
-    executeAttempt: () => attempt({
-      config: input.config,
+  let providerRouting = input.providerRouting ? structuredClone(input.providerRouting) : undefined;
+  let openRouterRoutingMode: "normal" | "verified_fit" | "unknown_attempt" | "local_stop" | undefined;
+  if (input.config.provider === "openrouter") {
+    const estimatedInputTokens = estimateProviderInputTokens(messages).estimatedInputTokens;
+    const envelope = createOpenRouterCapacityEnvelope({ estimatedInputTokens, settings });
+    const decision = await resolveOpenRouterRoutingDecision({
+      providerConfigId: input.config.id,
       modelId: input.modelId,
-      messages: messages.map((message) => ({
-        ...message,
-        ...(message.images ? { images: message.images.map((image) => ({ ...image })) } : {}),
-        ...(message.continuationState ? { continuationState: structuredClone(message.continuationState) } : {}),
-      })),
-      settings: structuredClone(settings),
-      timeoutMs: input.timeoutMs,
+      credentialScope: input.config.credentialFingerprint ?? input.config.credentialId,
+      endpointScope: input.config.baseUrl ?? "",
+      envelope,
+      forceCapacityProtection: input.capacityProtectedRouting,
+      existingRouting: providerRouting,
+      discover: input.endpointDiscovery ?? ((modelId) => discoverOpenRouterModelEndpoints(input.config, modelId)),
+    });
+    openRouterRoutingMode = decision.mode;
+    providerRouting = decision.providerRouting;
+    if (decision.mode === "local_stop") {
+      throw new ProviderCallError({
+        code: "configuration",
+        message: decision.humanMessage ?? "This OpenRouter request exceeds verified endpoint capacity.",
+        phase: "before_dispatch",
+      });
+    }
+  }
+  let result: ProviderExecutionResult<ProviderChatResponse>;
+  try {
+    result = await executeProviderRequest({
+      operationId: input.operationId ?? "provider.chat",
+      configuredRetries: input.configuredRetries,
       signal: input.signal,
-    }),
-  });
+      onAttemptFailure: input.onAttemptFailure,
+      executeAttempt: () => attempt({
+        config: input.config,
+        modelId: input.modelId,
+        messages: messages.map((message) => ({
+          ...message,
+          ...(message.images ? { images: message.images.map((image) => ({ ...image })) } : {}),
+          ...(message.continuationState ? { continuationState: structuredClone(message.continuationState) } : {}),
+        })),
+        settings: structuredClone(settings),
+        timeoutMs: input.timeoutMs,
+        signal: input.signal,
+        providerRouting: providerRouting ? structuredClone(providerRouting) : undefined,
+      }),
+    });
+  } catch (cause) {
+    if (
+      input.config.provider === "openrouter"
+      && openRouterRoutingMode === "unknown_attempt"
+      && cause instanceof ProviderExecutionError
+      && (
+        cause.causeError.details.httpStatus === 413
+        || isOpenRouterContextCapacityError([
+          cause.causeError.details.message,
+          cause.causeError.details.providerCode,
+          cause.causeError.details.providerErrorType,
+        ].filter(Boolean).join(" "))
+      )
+    ) {
+      throw new ProviderExecutionError(new ProviderCallError({
+        ...cause.causeError.details,
+        message: OPENROUTER_UNKNOWN_CAPACITY_ERROR,
+      }, { cause: cause.causeError }), cause.report);
+    }
+    throw cause;
+  }
   return { ...result.value, execution: result.report };
 }
 
@@ -169,6 +230,8 @@ export function createProviderChatExecutor(options: {
   configuredRetries?: number;
   operationId?: string;
   attempt?: ProviderChatAttempt;
+  endpointDiscovery?: OpenRouterEndpointDiscovery;
+  capacityProtectedRouting?: boolean;
   onAttemptFailure?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptFailure"];
 }): ProviderChatAttempt {
   const executor: ProviderChatAttempt & { [PROVIDER_EXECUTOR_BRAND]?: boolean } = (request) => executeProviderChat({
@@ -176,6 +239,8 @@ export function createProviderChatExecutor(options: {
     configuredRetries: options.configuredRetries,
     operationId: options.operationId,
     attempt: options.attempt,
+    endpointDiscovery: options.endpointDiscovery,
+    capacityProtectedRouting: options.capacityProtectedRouting,
     onAttemptFailure: options.onAttemptFailure,
   });
   executor[PROVIDER_EXECUTOR_BRAND] = true;

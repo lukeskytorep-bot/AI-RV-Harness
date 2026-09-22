@@ -265,6 +265,7 @@ if (requestedRules.has("rust")) {
   const facade = path.join(rustRoot, "providers.rs");
   const modules = {
     adapters: ["provider_base_url", "normalized_credential_endpoint"],
+    endpoint_capabilities: ["discover_openrouter_model_endpoints", "openrouter_model_endpoints_url"],
     errors: ["provider_error_metadata"],
     reasoning: ["normalize_reasoning_response"],
     request_builders: ["build_openai_compatible_request", "build_google_request", "build_anthropic_request"],

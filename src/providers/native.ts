@@ -10,6 +10,7 @@ import type {
   ProviderKind,
   ProviderMessage,
   ProviderModel,
+  OpenRouterProviderRouting,
 } from "./types";
 
 type NativeChatResponse = {
@@ -27,6 +28,7 @@ type NativeChatResponse = {
     cost_usd?: number | null;
   };
   provider_request_id?: string | null;
+  actual_provider?: string | null;
   debug_payload?: {
     endpoint: string;
     request: unknown;
@@ -87,6 +89,14 @@ export async function discoverModels(config: ProviderConfig): Promise<ProviderMo
   return normalizeModelDiscovery(config, payload);
 }
 
+export async function discoverOpenRouterModelEndpoints(config: ProviderConfig, modelId: string): Promise<unknown> {
+  requireDesktop();
+  if (config.provider !== "openrouter") throw new Error("Endpoint capability discovery is available only for OpenRouter.");
+  return invoke<unknown>("provider_discover_model_endpoints", {
+    request: { ...nativeConfig(config), modelId },
+  });
+}
+
 /** One physical HTTP attempt. Domain code must use requestExecutor instead. */
 export async function providerChatAttempt(input: {
   config: ProviderConfig;
@@ -95,6 +105,7 @@ export async function providerChatAttempt(input: {
   settings: EffectiveGenerationSettings;
   timeoutMs?: number;
   signal?: AbortSignal;
+  providerRouting?: OpenRouterProviderRouting;
 }): Promise<ProviderChatResponse> {
   requireDesktop();
   if (input.signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
@@ -119,6 +130,7 @@ export async function providerChatAttempt(input: {
         maxOutputTokens: input.settings.effective.maxOutputTokens,
         timeoutMs: input.timeoutMs,
         detailedDiagnostics: detailedProviderDiagnosticsEnabled(),
+        providerRouting: input.providerRouting,
       },
     });
   } catch (cause) {
@@ -169,6 +181,7 @@ export async function providerChatAttempt(input: {
       costUsd: response.usage?.cost_usd ?? undefined,
     },
     providerRequestId: response.provider_request_id ?? undefined,
+    actualProvider: response.actual_provider ?? undefined,
   };
 }
 

@@ -21,6 +21,7 @@ pub(super) fn parse_openai_compatible_response(payload: Value, request_id: Optio
         return Err(error);
     }
     let actual_model = payload.get("model").and_then(Value::as_str).map(str::to_string);
+    let actual_provider = selected_openrouter_provider(&payload);
     let finish_reason = payload.pointer("/choices/0/finish_reason").and_then(Value::as_str).map(str::to_string);
     let message = payload.pointer("/choices/0/message").unwrap_or(&Value::Null);
     let raw_content = extract_openai_text(message.get("content"));
@@ -56,8 +57,17 @@ pub(super) fn parse_openai_compatible_response(payload: Value, request_id: Optio
             cost_usd: usage.get("cost").and_then(Value::as_f64),
         },
         provider_request_id: request_id,
+        actual_provider,
         debug_payload: None,
     })
+}
+
+fn selected_openrouter_provider(payload: &Value) -> Option<String> {
+    payload.pointer("/openrouter_metadata/endpoints/available")
+        .and_then(Value::as_array)
+        .and_then(|items| items.iter().find(|item| item.get("selected").and_then(Value::as_bool) == Some(true)))
+        .and_then(|item| item.get("provider").and_then(Value::as_str))
+        .map(str::to_string)
 }
 
 pub(super) fn parse_google_response(payload: Value, request_id: Option<String>) -> Result<ProviderChatResponse, String> {
@@ -119,6 +129,7 @@ pub(super) fn parse_google_response(payload: Value, request_id: Option<String>) 
             cost_usd: None,
         },
         provider_request_id: request_id,
+        actual_provider: None,
         debug_payload: None,
     })
 }
@@ -186,6 +197,7 @@ pub(super) fn parse_anthropic_response(payload: Value, request_id: Option<String
             cost_usd: None,
         },
         provider_request_id: request_id,
+        actual_provider: None,
         debug_payload: None,
     })
 }

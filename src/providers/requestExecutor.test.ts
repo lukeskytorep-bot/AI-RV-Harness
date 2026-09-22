@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderCallError } from "./providerError";
+import { clearOpenRouterEndpointCapabilityCache } from "./openRouterEndpointCapability";
 import { createProviderChatExecutor, executeProviderChat, executeProviderRequest, ProviderExecutionError } from "./requestExecutor";
 
 const failure = (code: ConstructorParameters<typeof ProviderCallError>[0]["code"], extras: Partial<ConstructorParameters<typeof ProviderCallError>[0]> = {}) =>
@@ -179,5 +180,119 @@ describe("provider request executor", () => {
       attempt: inner,
     })).rejects.toThrow("Nested provider retry executor");
     expect(physical).not.toHaveBeenCalled();
+  });
+});
+
+describe("E1 OpenRouter endpoint-capability integration", () => {
+  beforeEach(() => clearOpenRouterEndpointCapabilityCache());
+  const config = { id: "pc-e1", provider: "openrouter" as const, label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
+  const response = { content: "ok", usage: {} };
+  const largeMessage = { role: "user" as const, content: "x".repeat(100_000) };
+
+  it("does not discover or restrict endpoints for an ordinary small request", async () => {
+    const endpointDiscovery = vi.fn();
+    const attempt = vi.fn().mockResolvedValue(response);
+    await executeProviderChat({
+      config,
+      modelId: "qwen/qwen3-32b",
+      messages: [{ role: "user", content: "small" }],
+      settings: { requested: { maxOutputTokens: 4096 }, effective: { maxOutputTokens: 4096 }, omitted: [] },
+      endpointDiscovery,
+      attempt,
+    });
+    expect(endpointDiscovery).not.toHaveBeenCalled();
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(attempt.mock.calls[0][0].providerRouting).toBeUndefined();
+  });
+
+  it("allows the later operation-profile layer to request capacity protection without duplicating routing logic", async () => {
+    const attempt = vi.fn().mockResolvedValue(response);
+    const endpointDiscovery = vi.fn(async () => ({ data: { endpoints: [
+      { tag: "small-route", context_length: 8_192, max_completion_tokens: 4_096 },
+      { tag: "large-route", context_length: 65_536, max_completion_tokens: 8_192 },
+    ] } }));
+    await executeProviderChat({
+      config,
+      modelId: "qwen/qwen3-32b",
+      messages: [{ role: "user", content: "small but protected operation" }],
+      settings: { requested: { maxOutputTokens: 4096 }, effective: { maxOutputTokens: 4096 }, omitted: [] },
+      capacityProtectedRouting: true,
+      endpointDiscovery,
+      attempt,
+    });
+    expect(endpointDiscovery).toHaveBeenCalledTimes(1);
+    expect(attempt.mock.calls[0][0].providerRouting).toEqual({ only: ["large-route"], allowFallbacks: true });
+  });
+
+  it("routes a large request only through verified fitting endpoint tags", async () => {
+    const attempt = vi.fn().mockResolvedValue(response);
+    await executeProviderChat({
+      config,
+      modelId: "qwen/qwen3-32b",
+      messages: [largeMessage],
+      settings: { requested: { maxOutputTokens: 8192 }, effective: { maxOutputTokens: 8192 }, omitted: [] },
+      endpointDiscovery: async () => ({ data: { endpoints: [
+        { tag: "deepinfra", context_length: 40_960, max_completion_tokens: 8_192 },
+        { tag: "siliconflow", context_length: 131_072, max_completion_tokens: 16_384 },
+      ] } }),
+      attempt,
+    });
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(attempt.mock.calls[0][0].providerRouting).toEqual({ only: ["siliconflow"], allowFallbacks: true });
+  });
+
+  it("stops locally when every discovered route is proven too small", async () => {
+    const attempt = vi.fn().mockResolvedValue(response);
+    await expect(executeProviderChat({
+      config,
+      modelId: "qwen/qwen3-32b",
+      messages: [largeMessage],
+      settings: { requested: { maxOutputTokens: 16_384 }, effective: { maxOutputTokens: 16_384 }, omitted: [] },
+      endpointDiscovery: async () => ({ data: { endpoints: [
+        { tag: "small-a", context_length: 40_960, max_completion_tokens: 8_192 },
+        { tag: "small-b", context_length: 49_152, max_completion_tokens: 8_192 },
+      ] } }),
+      attempt,
+    })).rejects.toMatchObject({ name: "ProviderCallError", details: { code: "configuration", phase: "before_dispatch" } });
+    expect(attempt).not.toHaveBeenCalled();
+  });
+
+  it("allows one UNKNOWN-capacity logical attempt and humanizes a real context rejection without blind retry", async () => {
+    const attempt = vi.fn().mockRejectedValue(new ProviderCallError({
+      code: "http_status",
+      httpStatus: 400,
+      phase: "awaiting_headers",
+      message: "maximum context length exceeded for this provider",
+    }));
+    await expect(executeProviderChat({
+      config,
+      modelId: "qwen/qwen3-32b",
+      messages: [largeMessage],
+      settings: { requested: { maxOutputTokens: 8192 }, effective: { maxOutputTokens: 8192 }, omitted: [] },
+      configuredRetries: 5,
+      endpointDiscovery: async () => ({ data: { endpoints: [
+        { tag: "unknown-route", provider_name: "Provider X" },
+      ] } }),
+      attempt,
+    })).rejects.toMatchObject({
+      name: "ProviderExecutionError",
+      causeError: { details: { message: expect.stringContaining("could not verify another route with enough capacity") } },
+      report: { physicalAttempts: 1 },
+    });
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls through to one normal OpenRouter attempt when endpoint discovery is unavailable", async () => {
+    const attempt = vi.fn().mockResolvedValue(response);
+    await executeProviderChat({
+      config: { ...config, id: "pc-e1-discovery-down" },
+      modelId: "qwen/qwen3-32b",
+      messages: [largeMessage],
+      settings: { requested: { maxOutputTokens: 8192 }, effective: { maxOutputTokens: 8192 }, omitted: [] },
+      endpointDiscovery: async () => { throw new Error("metadata unavailable"); },
+      attempt,
+    });
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(attempt.mock.calls[0][0].providerRouting).toBeUndefined();
   });
 });

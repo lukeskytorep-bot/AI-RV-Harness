@@ -6,6 +6,7 @@ use serde_json::Value;
 use crate::secrets;
 
 mod adapters;
+mod endpoint_capabilities;
 mod errors;
 mod reasoning;
 mod request_builders;
@@ -14,6 +15,7 @@ mod transport;
 mod validation;
 
 use adapters::{authenticated, endpoint, normalized_credential_endpoint, provider_base_url};
+use endpoint_capabilities::discover_openrouter_model_endpoints;
 use errors::provider_error_metadata;
 use request_builders::build_chat_request;
 use response_parsers::parse_chat_response;
@@ -76,6 +78,27 @@ pub struct ProviderRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProviderEndpointRequest {
+    provider: ProviderKind,
+    credential_id: String,
+    base_url: Option<String>,
+    model_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenRouterProviderRouting {
+    #[serde(default)]
+    order: Vec<String>,
+    #[serde(default)]
+    only: Vec<String>,
+    #[serde(default)]
+    ignore: Vec<String>,
+    allow_fallbacks: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderChatRequest {
     provider: ProviderKind,
     credential_id: String,
@@ -90,6 +113,8 @@ pub struct ProviderChatRequest {
     temperature: Option<f64>,
     max_output_tokens: Option<u32>,
     timeout_ms: Option<u64>,
+    #[serde(default)]
+    provider_routing: Option<OpenRouterProviderRouting>,
     #[serde(default)]
     detailed_diagnostics: bool,
 }
@@ -156,6 +181,7 @@ pub struct ProviderChatResponse {
     actual_model: Option<String>,
     usage: ProviderUsage,
     provider_request_id: Option<String>,
+    actual_provider: Option<String>,
     debug_payload: Option<ProviderDebugPayload>,
 }
 
@@ -310,6 +336,11 @@ pub async fn provider_discover_models(request: ProviderRequest) -> Result<Value,
 }
 
 #[tauri::command]
+pub async fn provider_discover_model_endpoints(request: ProviderEndpointRequest) -> Result<Value, String> {
+    discover_openrouter_model_endpoints(&request).await
+}
+
+#[tauri::command]
 pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatResponse, ProviderCallError> {
     validate_chat_request(&request).map_err(ProviderCallError::configuration)?;
     let base = provider_base_url(request.provider, request.base_url.as_deref()).map_err(ProviderCallError::configuration)?;
@@ -330,8 +361,15 @@ pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatR
     });
     let timeout_ms = request.timeout_ms.unwrap_or(120_000);
     let (payload, request_id) = send_chat_request(
-        authenticated(client().map_err(ProviderCallError::configuration)?.post(url).json(&body), request.provider, &secret)
-            .timeout(Duration::from_millis(timeout_ms)),
+        {
+            let builder = authenticated(client().map_err(ProviderCallError::configuration)?.post(url).json(&body), request.provider, &secret);
+            let builder = if matches!(request.provider, ProviderKind::Openrouter) {
+                builder.header("X-OpenRouter-Metadata", "enabled")
+            } else {
+                builder
+            };
+            builder.timeout(Duration::from_millis(timeout_ms))
+        },
         request.request_id.as_deref(),
         &secret,
     )
