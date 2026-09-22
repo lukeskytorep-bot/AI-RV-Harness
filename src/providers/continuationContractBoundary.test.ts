@@ -61,10 +61,12 @@ describe("OPENROUTER-CONTINUITY-IN-MEMORY-1 activation boundary", () => {
 
   it("keeps continuation state inside Conversation context preflight before provider dispatch", () => {
     const budget = read("src/chat/contextBudget.ts");
+    const estimator = read("src/providers/inputTokenEstimate.ts");
     const engine = read("src/chat/engine.ts");
     const panel = read("src/features/conversations/ChatPanel.tsx");
-    expect(budget).toContain("message.continuationState");
-    expect(budget).toContain("estimatedContinuationTokens");
+    expect(budget).toContain("estimateProviderInputTokens");
+    expect(estimator).toContain("message.continuationState");
+    expect(estimator).toContain("estimatedContinuationTokens");
     const applyContinuationAt = engine.indexOf("messages = applyConversationContinuationMemory({");
     const contextBudgetAt = engine.indexOf("const budget = estimateContextBudget(");
     const providerDispatchAt = engine.indexOf("const response = await executeProviderChat({");

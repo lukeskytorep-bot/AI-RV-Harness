@@ -208,7 +208,7 @@ describe("E1 OpenRouter endpoint-capability integration", () => {
   it("allows the later operation-profile layer to request capacity protection without duplicating routing logic", async () => {
     const attempt = vi.fn().mockResolvedValue(response);
     const endpointDiscovery = vi.fn(async () => ({ data: { endpoints: [
-      { tag: "small-route", context_length: 8_192, max_completion_tokens: 4_096 },
+      { tag: "small-route", context_length: 6_000, max_completion_tokens: 4_096 },
       { tag: "large-route", context_length: 65_536, max_completion_tokens: 8_192 },
     ] } }));
     await executeProviderChat({
