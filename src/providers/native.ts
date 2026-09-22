@@ -12,6 +12,7 @@ import type {
   ProviderModel,
   OpenRouterProviderRouting,
 } from "./types";
+import type { ProviderTimeoutPolicy } from "./streamingPolicy";
 
 type NativeChatResponse = {
   content: string;
@@ -104,6 +105,7 @@ export async function providerChatAttempt(input: {
   messages: ProviderMessage[];
   settings: EffectiveGenerationSettings;
   timeoutMs?: number;
+  timeoutPolicy?: ProviderTimeoutPolicy;
   signal?: AbortSignal;
   providerRouting?: OpenRouterProviderRouting;
 }): Promise<ProviderChatResponse> {
@@ -129,6 +131,7 @@ export async function providerChatAttempt(input: {
         temperature: input.settings.effective.temperature,
         maxOutputTokens: input.settings.effective.maxOutputTokens,
         timeoutMs: input.timeoutMs,
+        timeoutPolicy: input.timeoutPolicy,
         detailedDiagnostics: detailedProviderDiagnosticsEnabled(),
         providerRouting: input.providerRouting,
       },

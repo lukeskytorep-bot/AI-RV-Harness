@@ -17,6 +17,7 @@ describe("Etap 6 Rust provider module boundary", () => {
       "reasoning",
       "request_builders",
       "response_parsers",
+      "streaming",
       "transport",
       "validation",
     ]) {
@@ -51,6 +52,7 @@ describe("Etap 6 Rust provider module boundary", () => {
     const errors = read("providers/errors.rs");
     const adapters = read("providers/adapters.rs");
     const reasoning = read("providers/reasoning.rs");
+    const streaming = read("providers/streaming.rs");
     const transport = read("providers/transport.rs");
     const validation = read("providers/validation.rs");
     const lib = read("lib.rs");
@@ -67,6 +69,9 @@ describe("Etap 6 Rust provider module boundary", () => {
     expect(endpointCapabilities).toContain("fn openrouter_model_endpoints_url");
     expect(errors).toContain("fn provider_error_metadata");
     expect(reasoning).toContain("fn normalize_reasoning_response");
+    expect(streaming).toContain("async fn send_openrouter_streaming_chat_request");
+    expect(streaming).toContain("struct SseDecoder");
+    expect(streaming).toContain("struct OpenRouterStreamAccumulator");
     expect(transport).toContain("async fn send_chat_request");
     expect(transport).toContain("static HTTP_CLIENT");
     expect(transport).toContain('env!("CARGO_PKG_VERSION")');

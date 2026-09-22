@@ -69,6 +69,18 @@ pub(super) fn validate_chat_request(request: &ProviderChatRequest) -> Result<(),
             return Err("request timeout must be between 1000 and 600000 ms".to_string());
         }
     }
+    if let Some(policy) = request.timeout_policy.as_ref() {
+        if !matches!(policy.timeout_class.as_str(), "interactive" | "analytical" | "long_reasoning") {
+            return Err("invalid provider timeout class".to_string());
+        }
+        if !(1_000..=600_000).contains(&policy.first_event_timeout_ms)
+            || !(1_000..=600_000).contains(&policy.idle_timeout_ms)
+            || !(1_000..=600_000).contains(&policy.non_streaming_timeout_ms)
+            || !(60_000..=7_200_000).contains(&policy.absolute_emergency_timeout_ms)
+        {
+            return Err("invalid provider timeout policy".to_string());
+        }
+    }
     Ok(())
 }
 

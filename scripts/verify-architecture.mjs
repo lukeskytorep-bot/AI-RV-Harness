@@ -271,6 +271,7 @@ if (requestedRules.has("rust")) {
     reasoning: ["normalize_reasoning_response"],
     request_builders: ["build_openai_compatible_request", "build_google_request", "build_anthropic_request"],
     response_parsers: ["parse_openai_compatible_response", "parse_google_response", "parse_anthropic_response"],
+    streaming: ["send_openrouter_streaming_chat_request", "SseDecoder", "OpenRouterStreamAccumulator"],
     transport: ["send_chat_request", "HTTP_CLIENT"],
     validation: ["validate_chat_request", "validate_request_id"],
   };
@@ -300,6 +301,7 @@ if (requestedRules.has("rust")) {
       "fn parse_google_response",
       "fn parse_anthropic_response",
       "fn normalize_reasoning_response",
+      "fn send_openrouter_streaming_chat_request",
       "fn send_chat_request",
       "static HTTP_CLIENT",
     ]) {

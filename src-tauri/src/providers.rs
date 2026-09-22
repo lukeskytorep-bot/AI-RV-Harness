@@ -11,14 +11,16 @@ mod errors;
 mod reasoning;
 mod request_builders;
 mod response_parsers;
+mod streaming;
 mod transport;
 mod validation;
 
 use adapters::{authenticated, endpoint, normalized_credential_endpoint, provider_base_url};
 use endpoint_capabilities::discover_openrouter_model_endpoints;
 use errors::provider_error_metadata;
-use request_builders::build_chat_request;
+use request_builders::{build_chat_request, enable_openrouter_streaming};
 use response_parsers::parse_chat_response;
+use streaming::send_openrouter_streaming_chat_request;
 use transport::{cancel_request, client, json_response, send_chat_request};
 use validation::validate_chat_request;
 
@@ -97,6 +99,28 @@ struct OpenRouterProviderRouting {
     allow_fallbacks: Option<bool>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderTimeoutPolicy {
+    timeout_class: String,
+    first_event_timeout_ms: u64,
+    idle_timeout_ms: u64,
+    absolute_emergency_timeout_ms: u64,
+    non_streaming_timeout_ms: u64,
+}
+
+impl ProviderTimeoutPolicy {
+    fn from_legacy(timeout_ms: u64) -> Self {
+        Self {
+            timeout_class: "interactive".to_string(),
+            first_event_timeout_ms: timeout_ms,
+            idle_timeout_ms: timeout_ms,
+            absolute_emergency_timeout_ms: (timeout_ms.saturating_mul(8)).clamp(15 * 60_000, 2 * 60 * 60_000),
+            non_streaming_timeout_ms: timeout_ms,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderChatRequest {
@@ -113,6 +137,8 @@ pub struct ProviderChatRequest {
     temperature: Option<f64>,
     max_output_tokens: Option<u32>,
     timeout_ms: Option<u64>,
+    #[serde(default)]
+    timeout_policy: Option<ProviderTimeoutPolicy>,
     #[serde(default)]
     provider_routing: Option<OpenRouterProviderRouting>,
     #[serde(default)]
@@ -208,6 +234,8 @@ pub struct ProviderCallError {
     retry_after_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provider_request_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    semantic_output_started: Option<bool>,
 }
 
 impl ProviderCallError {
@@ -221,6 +249,7 @@ impl ProviderCallError {
             provider_code: None,
             retry_after_ms: None,
             provider_request_id: None,
+            semantic_output_started: None,
         }
     }
 
@@ -352,28 +381,45 @@ pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatR
         &binding,
     )
     .map_err(ProviderCallError::configuration)?;
-    let (url, body) = build_chat_request(&request, &base).map_err(ProviderCallError::configuration)?;
+    let (url, mut body) = build_chat_request(&request, &base).map_err(ProviderCallError::configuration)?;
+    let use_streaming = matches!(request.provider, ProviderKind::Openrouter);
+    if use_streaming {
+        enable_openrouter_streaming(&mut body).map_err(ProviderCallError::configuration)?;
+    }
     let debug_endpoint = url.clone();
     let debug_request = request.detailed_diagnostics.then(|| {
         let mut value = body.clone();
         scrub_debug_value(&mut value, &secret, None);
         value
     });
-    let timeout_ms = request.timeout_ms.unwrap_or(120_000);
-    let (payload, request_id) = send_chat_request(
-        {
-            let builder = authenticated(client().map_err(ProviderCallError::configuration)?.post(url).json(&body), request.provider, &secret);
-            let builder = if matches!(request.provider, ProviderKind::Openrouter) {
-                builder.header("X-OpenRouter-Metadata", "enabled")
-            } else {
-                builder
-            };
-            builder.timeout(Duration::from_millis(timeout_ms))
-        },
-        request.request_id.as_deref(),
-        &secret,
-    )
-    .await?;
+    let legacy_timeout_ms = request.timeout_ms.unwrap_or(120_000);
+    let timeout_policy = request.timeout_policy.clone().unwrap_or_else(|| ProviderTimeoutPolicy::from_legacy(legacy_timeout_ms));
+    let builder = {
+        let builder = authenticated(client().map_err(ProviderCallError::configuration)?.post(url).json(&body), request.provider, &secret);
+        if matches!(request.provider, ProviderKind::Openrouter) {
+            builder.header("X-OpenRouter-Metadata", "enabled")
+        } else {
+            builder
+        }
+    };
+    let (payload, request_id, semantic_output_started) = if use_streaming {
+        let streamed = send_openrouter_streaming_chat_request(
+            builder,
+            request.request_id.as_deref(),
+            &secret,
+            &timeout_policy,
+        )
+        .await?;
+        (streamed.payload, streamed.request_id, streamed.semantic_output_started)
+    } else {
+        let (payload, request_id) = send_chat_request(
+            builder.timeout(Duration::from_millis(timeout_policy.non_streaming_timeout_ms)),
+            request.request_id.as_deref(),
+            &secret,
+        )
+        .await?;
+        (payload, request_id, false)
+    };
     let debug_response = request.detailed_diagnostics.then(|| {
         let mut value = payload.clone();
         scrub_debug_value(&mut value, &secret, None);
@@ -392,6 +438,9 @@ pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatR
         failure.provider_error_type = provider_error_type;
         failure.provider_code = provider_code;
         failure.provider_request_id = request_id.map(String::into_boxed_str);
+        if semantic_output_started {
+            failure.semantic_output_started = Some(true);
+        }
         failure
     })?;
     parsed.debug_payload = Some(ProviderDebugPayload {

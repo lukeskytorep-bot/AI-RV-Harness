@@ -17,7 +17,8 @@ export function providerRetryCategory(cause: unknown): ProviderRetryCategory {
   if (cause instanceof DOMException && cause.name === "AbortError") return "never";
   const details = providerErrorDetails(cause);
   if (details) {
-    if (details.code === "cancelled" || details.code === "configuration") return "never";
+    if (details.semanticOutputStarted) return "never";
+    if (details.code === "cancelled" || details.code === "configuration" || details.code === "response_body_too_large") return "never";
     if (/^(rate_limit_exceeded|provider_overloaded|provider_unavailable|timeout|server)$/i.test(details.providerErrorType ?? "")) return "standard";
     if (["response_body_read", "response_body_decode", "invalid_provider_json", "empty_assistant_response"].includes(details.code)) return "single_recovery";
     if (["connect", "timeout", "request_send"].includes(details.code)) return "standard";

@@ -10,6 +10,7 @@ import {
 } from "./openRouterEndpointCapability";
 import { providerRetryAllowance, providerRetryDelayMs } from "./retry";
 import { resolveOperationResourceProfile, type OperationKind } from "./operationResourceProfiles";
+import { resolveProviderTimeoutPolicy, type ProviderTimeoutPolicy } from "./streamingPolicy";
 import type { EffectiveGenerationSettings, OpenRouterProviderRouting, ProviderChatResponse, ProviderConfig, ProviderMessage } from "./types";
 
 export interface ProviderAttemptContext {
@@ -51,6 +52,7 @@ export type ProviderChatAttempt = (request: {
   messages: ProviderMessage[];
   settings: EffectiveGenerationSettings;
   timeoutMs?: number;
+  timeoutPolicy?: ProviderTimeoutPolicy;
   signal?: AbortSignal;
   providerRouting?: OpenRouterProviderRouting;
 }) => Promise<ProviderChatResponse>;
@@ -160,6 +162,7 @@ export async function executeProviderChat(input: {
   const settings = structuredClone(input.settings);
   let providerRouting = input.providerRouting ? structuredClone(input.providerRouting) : undefined;
   const resourceProfile = resolveOperationResourceProfile({ operationId: input.operationId, operationKind: input.operationKind });
+  const timeoutPolicy = resolveProviderTimeoutPolicy(resourceProfile.timeoutClass, input.timeoutMs);
   let openRouterRoutingMode: "normal" | "verified_fit" | "unknown_attempt" | "local_stop" | undefined;
   if (input.config.provider === "openrouter") {
     const estimatedInputTokens = estimateProviderInputTokens(messages).estimatedInputTokens;
@@ -201,6 +204,7 @@ export async function executeProviderChat(input: {
         })),
         settings: structuredClone(settings),
         timeoutMs: input.timeoutMs,
+        timeoutPolicy: structuredClone(timeoutPolicy),
         signal: input.signal,
         providerRouting: providerRouting ? structuredClone(providerRouting) : undefined,
       }),

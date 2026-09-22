@@ -67,6 +67,7 @@ fn selected_openrouter_provider(payload: &Value) -> Option<String> {
         .and_then(Value::as_array)
         .and_then(|items| items.iter().find(|item| item.get("selected").and_then(Value::as_bool) == Some(true)))
         .and_then(|item| item.get("provider").and_then(Value::as_str))
+        .or_else(|| payload.get("provider").and_then(Value::as_str))
         .map(str::to_string)
 }
 

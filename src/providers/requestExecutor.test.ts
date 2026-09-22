@@ -56,6 +56,17 @@ describe("provider request executor", () => {
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry a physical streaming failure after semantic output started", async () => {
+    const attempt = vi.fn().mockRejectedValue(failure("timeout", { semanticOutputStarted: true }));
+    await expect(executeProviderRequest({
+      operationId: "test.stream-semantic-timeout",
+      configuredRetries: 5,
+      executeAttempt: attempt,
+      sleep: async () => undefined,
+    })).rejects.toMatchObject({ name: "ProviderExecutionError", report: { physicalAttempts: 1 } });
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
   it("performs exactly one call when retries are disabled or the error is permanent", async () => {
     const disabled = vi.fn().mockRejectedValue(failure("connect"));
     await expect(executeProviderRequest({ operationId: "test.off", configuredRetries: 0, executeAttempt: disabled, sleep: async () => undefined })).rejects.toBeInstanceOf(ProviderExecutionError);
@@ -86,6 +97,30 @@ describe("provider request executor", () => {
     });
     await expect(executeProviderRequest({ operationId: "test.active-cancel", configuredRetries: 5, signal: controller.signal, executeAttempt: attempt })).rejects.toMatchObject({ name: "AbortError" });
     expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves ORP1 timeoutClass into one immutable S1 timeout policy per logical call", async () => {
+    const policies: unknown[] = [];
+    const attempt = vi.fn(async (request) => {
+      policies.push(structuredClone(request.timeoutPolicy));
+      if (policies.length === 1) throw failure("http_status", { httpStatus: 503 });
+      return { content: "ok", usage: {} };
+    });
+    await executeProviderChat({
+      config: { id: "pc-timeout", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" },
+      modelId: "model",
+      messages: [{ role: "user", content: "test" }],
+      settings: { requested: {}, effective: {}, omitted: [] },
+      timeoutMs: 120_000,
+      operationKind: "judge",
+      configuredRetries: 1,
+      endpointDiscovery: async () => ({ data: { endpoints: [{ tag: "route", context_length: 131_072 }] } }),
+      attempt,
+    });
+    expect(policies).toEqual([
+      { timeoutClass: "long_reasoning", firstEventTimeoutMs: 300_000, idleTimeoutMs: 180_000, absoluteEmergencyTimeoutMs: 3_600_000, nonStreamingTimeoutMs: 300_000 },
+      { timeoutClass: "long_reasoning", firstEventTimeoutMs: 300_000, idleTimeoutMs: 180_000, absoluteEmergencyTimeoutMs: 3_600_000, nonStreamingTimeoutMs: 300_000 },
+    ]);
   });
 
   it("sends an identical immutable payload on every physical retry", async () => {

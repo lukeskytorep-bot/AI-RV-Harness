@@ -21,6 +21,40 @@ describe("provider retry policy", () => {
     expect(isRetryableProviderError(new Error("provider request failed (503): unavailable"))).toBe(true);
   });
 
+  it("keeps the existing transient retry window open before the first semantic chunk", () => {
+    const error = new ProviderCallError({
+      code: "timeout",
+      message: "first-event timeout before semantic output",
+      phase: "reading_body",
+    });
+    expect(providerRetryCategory(error)).toBe("standard");
+    expect(providerRetryAllowance(error, 2)).toBe(2);
+  });
+
+  it("never retries a stream that exceeded a local bounded-buffer guard", () => {
+    for (const semanticOutputStarted of [undefined, true]) {
+      const error = new ProviderCallError({
+        code: "response_body_too_large",
+        message: "provider streaming response exceeded the maximum accumulated data size",
+        phase: "reading_body",
+        ...(semanticOutputStarted ? { semanticOutputStarted } : {}),
+      });
+      expect(providerRetryCategory(error)).toBe("never");
+      expect(providerRetryAllowance(error, 5)).toBe(0);
+    }
+  });
+
+  it("never retries a streaming failure after the first semantic chunk", () => {
+    const error = new ProviderCallError({
+      code: "timeout",
+      message: "idle timeout after partial output",
+      phase: "reading_body",
+      semanticOutputStarted: true,
+    });
+    expect(providerRetryCategory(error)).toBe("never");
+    expect(providerRetryAllowance(error, 5)).toBe(0);
+  });
+
   it("limits ambiguous transport recovery to one retry", () => {
     const error = new Error("error decoding response body");
     expect(providerRetryCategory(error)).toBe("single_recovery");

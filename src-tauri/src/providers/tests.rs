@@ -12,14 +12,18 @@ fn openrouter_app_attribution_uses_public_project_page() {
 use super::reasoning::split_tagged_reasoning;
 use super::endpoint_capabilities::openrouter_model_endpoints_url;
 use super::errors::safe_provider_error;
-use super::request_builders::{build_anthropic_request, build_google_request, build_openai_compatible_request};
+use super::request_builders::{build_anthropic_request, build_google_request, build_openai_compatible_request, enable_openrouter_streaming};
 use super::response_parsers::{parse_anthropic_response, parse_google_response, parse_openai_compatible_response};
+use super::streaming::{
+    send_openrouter_streaming_chat_request, OpenRouterStreamAccumulator, SseDecoder, SseFrame,
+    MAX_ACCUMULATED_STREAM_DATA_BYTES, MAX_PENDING_SSE_EVENT_BYTES,
+};
 use super::transport::retry_after_value_ms_at;
 use super::validation::{validate_continuation_bindings, validate_request_id};
 
 use std::time::{Duration, UNIX_EPOCH};
 
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
 
 async fn read_simulator_request(socket: &mut TcpStream) -> String {
@@ -60,9 +64,21 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
         temperature: None,
         max_output_tokens: None,
         timeout_ms: None,
+        timeout_policy: None,
         provider_routing: None,
         detailed_diagnostics: false,
     }
+}
+
+
+#[test]
+fn enables_openrouter_sse_and_usage_frames_without_changing_other_request_fields() {
+    let request = chat_request(ProviderKind::Openrouter, "qwen/qwen3-32b");
+    let (_, mut body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
+    enable_openrouter_streaming(&mut body).unwrap();
+    assert_eq!(body.get("stream"), Some(&json!(true)));
+    assert!(body.get("stream_options").is_none());
+    assert_eq!(body.get("model"), Some(&json!("qwen/qwen3-32b")));
 }
 
 #[test]
@@ -679,3 +695,336 @@ fn parses_selected_openrouter_provider_metadata_when_present() {
     }), None).unwrap();
     assert_eq!(parsed.actual_provider.as_deref(), Some("SiliconFlow"));
 }
+
+#[test]
+fn parses_openrouter_stream_provider_from_top_level_fallback() {
+    let parsed = parse_openai_compatible_response(json!({
+        "model": "qwen/qwen3-32b",
+        "provider": "SiliconFlow",
+        "choices": [{ "message": { "content": "ok" }, "finish_reason": "stop" }],
+        "usage": { "prompt_tokens": 10, "completion_tokens": 2 }
+    }), None).unwrap();
+    assert_eq!(parsed.actual_provider.as_deref(), Some("SiliconFlow"));
+}
+
+// S1 — PROVIDER-STREAMING-CORE-1
+fn stream_reasoning_detail(id: &str, text: &str, index: u64) -> Value {
+    json!({
+        "type": "reasoning.text",
+        "text": text,
+        "signature": null,
+        "id": id,
+        "format": "anthropic-claude-v1",
+        "index": index,
+    })
+}
+
+#[test]
+fn sse_decoder_handles_chunk_boundaries_multiline_events_and_split_utf8() {
+    let mut decoder = SseDecoder::default();
+    let wire = "data: {\"choices\":[{\"delta\":{\"content\":\"Zażółć\"}}]}\n\ndata: first\ndata: second\n\n: OPENROUTER PROCESSING\n\n".as_bytes();
+    let split = wire.iter().position(|byte| *byte >= 0x80).unwrap() + 1;
+    let mut frames = Vec::new();
+    frames.extend(decoder.push(&wire[..split]).unwrap());
+    frames.extend(decoder.push(&wire[split..split + 3]).unwrap());
+    frames.extend(decoder.push(&wire[split + 3..]).unwrap());
+    assert_eq!(frames.len(), 3);
+    assert!(matches!(&frames[0], SseFrame::Data(value) if value.contains("Zażółć")));
+    assert_eq!(frames[1], SseFrame::Data("first\nsecond".to_string()));
+    assert_eq!(frames[2], SseFrame::Comment);
+}
+
+#[test]
+fn sse_decoder_rejects_oversized_unterminated_event() {
+    let mut decoder = SseDecoder::default();
+    let oversized = vec![b'x'; MAX_PENDING_SSE_EVENT_BYTES + 1];
+    let error = decoder.push(&oversized).unwrap_err();
+    assert_eq!(error.code.as_ref(), "response_body_too_large");
+    assert!(error.message.contains("maximum buffered event size"));
+}
+
+#[test]
+fn stream_accumulator_bounds_total_data_and_preserves_semantic_retry_boundary() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    let detail_text = "r".repeat(512 * 1024);
+    let mut saw_limit = None;
+    for index in 0..64u64 {
+        let event = json!({
+            "choices": [{
+                "delta": {
+                    "reasoning_details": [stream_reasoning_detail(&format!("r{index}"), &detail_text, index)]
+                },
+                "finish_reason": null
+            }]
+        }).to_string();
+        match accumulator.process_data(&event, "secret", Some("stream-limit")) {
+            Ok(()) => {}
+            Err(error) => {
+                saw_limit = Some(error);
+                break;
+            }
+        }
+    }
+    let error = saw_limit.expect("stream accumulation must be bounded");
+    assert_eq!(error.code.as_ref(), "response_body_too_large");
+    assert_eq!(error.semantic_output_started, Some(true));
+    assert!(MAX_ACCUMULATED_STREAM_DATA_BYTES >= 8 * 1024 * 1024);
+}
+
+#[test]
+fn stream_accumulator_accepts_large_but_bounded_valid_output() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    let content = "x".repeat(512 * 1024);
+    for _ in 0..4 {
+        accumulator.process_data(&json!({
+            "choices": [{"delta": {"content": content.clone()}, "finish_reason": null}]
+        }).to_string(), "secret", None).unwrap();
+    }
+    accumulator.process_data(&json!({
+        "choices": [{"delta": {"content": ""}, "finish_reason": "stop"}],
+        "usage": {"completion_tokens": 10}
+    }).to_string(), "secret", None).unwrap();
+    accumulator.process_data("[DONE]", "secret", None).unwrap();
+    let result = accumulator.finish(None).unwrap();
+    assert_eq!(result.payload.pointer("/choices/0/message/content").and_then(Value::as_str).map(str::len), Some(2 * 1024 * 1024));
+}
+
+#[test]
+fn stream_accumulator_preserves_reasoning_details_usage_and_terminal_state() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    accumulator.process_data(&json!({
+        "id": "gen-1",
+        "model": "model-actual",
+        "provider": "SiliconFlow",
+        "choices": [{"delta": {"reasoning": "think ", "reasoning_details": [stream_reasoning_detail("r1", "a", 0)]}, "finish_reason": null}]
+    }).to_string(), "secret", Some("header-id")).unwrap();
+    accumulator.process_data(&json!({
+        "choices": [{"delta": {"reasoning": "more", "reasoning_details": [stream_reasoning_detail("r2", "b", 1)], "content": "answer"}, "finish_reason": "stop"}]
+    }).to_string(), "secret", Some("header-id")).unwrap();
+    accumulator.process_data(&json!({
+        "choices": [{"delta": {"content": ""}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 7, "total_tokens": 17}
+    }).to_string(), "secret", Some("header-id")).unwrap();
+    accumulator.process_data("[DONE]", "secret", Some("header-id")).unwrap();
+    let result = accumulator.finish(Some("header-id".to_string())).unwrap();
+    assert!(result.semantic_output_started);
+    assert_eq!(result.payload.pointer("/choices/0/message/content"), Some(&json!("answer")));
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning"), Some(&json!("think more")));
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details/0/id"), Some(&json!("r1")));
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details/1/id"), Some(&json!("r2")));
+    assert_eq!(result.payload.pointer("/usage/total_tokens"), Some(&json!(17)));
+    assert_eq!(result.payload.get("provider"), Some(&json!("SiliconFlow")));
+}
+
+#[test]
+fn metadata_only_stream_frames_do_not_cross_first_semantic_chunk_boundary() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    accumulator.process_data(&json!({
+        "id": "gen-1",
+        "model": "model",
+        "choices": [{"delta": {"role": "assistant", "content": ""}, "finish_reason": null}]
+    }).to_string(), "secret", None).unwrap();
+    assert!(!accumulator.semantic_output_started);
+    accumulator.process_data(&json!({
+        "choices": [{"delta": {"reasoning_details": [stream_reasoning_detail("r1", "thinking", 0)]}, "finish_reason": null}]
+    }).to_string(), "secret", None).unwrap();
+    assert!(accumulator.semantic_output_started);
+}
+
+#[test]
+fn midstream_error_records_whether_semantic_output_already_started() {
+    let error_event = json!({"error": {"type": "server", "code": "upstream_disconnect", "message": "gone"}, "choices": [{"delta": {}, "finish_reason": "error"}]}).to_string();
+    let mut before = OpenRouterStreamAccumulator::default();
+    let error = before.process_data(&error_event, "secret", Some("r")).unwrap_err();
+    assert_eq!(error.semantic_output_started, None);
+
+    let mut after = OpenRouterStreamAccumulator::default();
+    after.process_data(&json!({"choices":[{"delta":{"content":"partial"}}]}).to_string(), "secret", None).unwrap();
+    let error = after.process_data(&error_event, "secret", Some("r")).unwrap_err();
+    assert_eq!(error.semantic_output_started, Some(true));
+
+    let same_event = json!({
+        "error": {"type": "server", "code": "upstream_disconnect", "message": "gone"},
+        "choices": [{"delta": {"content": "partial-in-error-frame"}, "finish_reason": "error"}]
+    }).to_string();
+    let mut same_frame = OpenRouterStreamAccumulator::default();
+    let error = same_frame.process_data(&same_event, "secret", Some("r")).unwrap_err();
+    assert_eq!(error.semantic_output_started, Some(true));
+}
+
+#[test]
+fn malformed_stream_event_and_abrupt_eof_are_failures_and_keep_retry_boundary() {
+    let mut before = OpenRouterStreamAccumulator::default();
+    let error = before.process_data("{broken", "secret", None).unwrap_err();
+    assert_eq!(error.semantic_output_started, None);
+
+    let mut after = OpenRouterStreamAccumulator::default();
+    after.process_data(&json!({"choices":[{"delta":{"content":"partial"}}]}).to_string(), "secret", None).unwrap();
+    let error = after.finish(None).unwrap_err();
+    assert_eq!(error.code.as_ref(), "response_body_read");
+    assert_eq!(error.semantic_output_started, Some(true));
+}
+
+#[test]
+fn stream_tool_delta_is_semantic_even_before_visible_text() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    accumulator.process_data(&json!({
+        "choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-1"}]}}]
+    }).to_string(), "secret", None).unwrap();
+    assert!(accumulator.semantic_output_started);
+}
+
+fn short_stream_policy(first_ms: u64, idle_ms: u64, emergency_ms: u64) -> ProviderTimeoutPolicy {
+    ProviderTimeoutPolicy {
+        timeout_class: "interactive".to_string(),
+        first_event_timeout_ms: first_ms,
+        idle_timeout_ms: idle_ms,
+        absolute_emergency_timeout_ms: emergency_ms,
+        non_streaming_timeout_ms: first_ms,
+    }
+}
+
+async fn read_stream_request(socket: &mut TcpStream) {
+    let mut request = Vec::new();
+    loop {
+        let mut chunk = [0u8; 1024];
+        let count = socket.read(&mut chunk).await.unwrap();
+        if count == 0 { break; }
+        request.extend_from_slice(&chunk[..count]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") { break; }
+    }
+}
+
+async fn start_sse_server(steps: Vec<(u64, &'static str)>) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_stream_request(&mut socket).await;
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Generation-Id: gen-header-1\r\nConnection: close\r\n\r\n").await.unwrap();
+        for (delay_ms, text) in steps {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            if socket.write_all(text.as_bytes()).await.is_err() { break; }
+            let _ = socket.flush().await;
+        }
+    });
+    (format!("http://{address}/chat/completions"), handle)
+}
+
+#[tokio::test]
+async fn stream_activity_resets_idle_timeout_without_a_whole_request_cap() {
+    let (url, server) = start_sse_server(vec![
+        (50, ": OPENROUTER PROCESSING\n\n"),
+        (100, "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n"),
+        (100, "data: {\"choices\":[{\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}]}\n\n"),
+        (100, "data: {\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"total_tokens\":2}}\n\n"),
+        (100, "data: [DONE]\n\n"),
+    ]).await;
+    let http = reqwest::Client::new();
+    let result = send_openrouter_streaming_chat_request(
+        http.post(url),
+        None,
+        "secret",
+        &short_stream_policy(150, 250, 1_500),
+    ).await.unwrap();
+    assert_eq!(result.payload.pointer("/choices/0/message/content"), Some(&json!("hello world")));
+    assert_eq!(result.payload.pointer("/usage/total_tokens"), Some(&json!(2)));
+    assert_eq!(result.request_id.as_deref(), Some("gen-header-1"));
+    server.await.unwrap();
+}
+
+async fn start_sse_byte_server(steps: Vec<(u64, Vec<u8>)>) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_stream_request(&mut socket).await;
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").await.unwrap();
+        for (delay_ms, bytes) in steps {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            if socket.write_all(&bytes).await.is_err() { break; }
+            let _ = socket.flush().await;
+        }
+    });
+    (format!("http://{address}/chat/completions"), handle)
+}
+
+#[tokio::test]
+async fn oversized_pending_event_after_semantic_output_closes_retry_boundary() {
+    let semantic = b"data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n".to_vec();
+    let oversized = vec![b'x'; MAX_PENDING_SSE_EVENT_BYTES + 1];
+    let (url, server) = start_sse_byte_server(vec![(10, semantic), (10, oversized)]).await;
+    let http = reqwest::Client::new();
+    let error = send_openrouter_streaming_chat_request(
+        http.post(url),
+        None,
+        "secret",
+        &short_stream_policy(500, 500, 2_000),
+    ).await.unwrap_err();
+    assert_eq!(error.code.as_ref(), "response_body_too_large");
+    assert_eq!(error.semantic_output_started, Some(true));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn emergency_ceiling_remains_bounded_even_when_keepalives_continue() {
+    let (url, server) = start_sse_server(vec![
+        (50, ": OPENROUTER PROCESSING\n\n"),
+        (100, ": OPENROUTER PROCESSING\n\n"),
+        (100, ": OPENROUTER PROCESSING\n\n"),
+        (100, ": OPENROUTER PROCESSING\n\n"),
+        (100, "data: [DONE]\n\n"),
+    ]).await;
+    let http = reqwest::Client::new();
+    let error = send_openrouter_streaming_chat_request(
+        http.post(url),
+        None,
+        "secret",
+        &short_stream_policy(200, 250, 400),
+    ).await.unwrap_err();
+    assert_eq!(error.code.as_ref(), "timeout");
+    assert!(error.message.contains("emergency"));
+    assert_eq!(error.semantic_output_started, None);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn genuinely_idle_stream_times_out_without_creating_semantic_output() {
+    let (url, server) = start_sse_server(vec![
+        (50, ": OPENROUTER PROCESSING\n\n"),
+        (450, "data: [DONE]\n\n"),
+    ]).await;
+    let http = reqwest::Client::new();
+    let error = send_openrouter_streaming_chat_request(
+        http.post(url),
+        None,
+        "secret",
+        &short_stream_policy(300, 150, 1_000),
+    ).await.unwrap_err();
+    assert_eq!(error.code.as_ref(), "timeout");
+    assert_eq!(error.semantic_output_started, None);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn user_cancellation_aborts_an_active_stream() {
+    let (url, server) = start_sse_server(vec![
+        (50, ": OPENROUTER PROCESSING\n\n"),
+        (1_000, "data: [DONE]\n\n"),
+    ]).await;
+    let http = reqwest::Client::new();
+    let task = tokio::spawn(async move {
+        send_openrouter_streaming_chat_request(
+            http.post(url),
+            Some("stream-cancel-1"),
+            "secret",
+            &short_stream_policy(300, 1_200, 2_000),
+        ).await
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(super::transport::cancel_request("stream-cancel-1".to_string()).unwrap());
+    let error = task.await.unwrap().unwrap_err();
+    assert_eq!(error.code.as_ref(), "cancelled");
+    server.await.unwrap();
+}
+

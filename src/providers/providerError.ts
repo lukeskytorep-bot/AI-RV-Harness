@@ -6,6 +6,7 @@ export type ProviderFailureCode =
   | "request_send"
   | "response_body_read"
   | "response_body_decode"
+  | "response_body_too_large"
   | "invalid_provider_json"
   | "empty_assistant_response"
   | "http_status"
@@ -23,6 +24,7 @@ export interface ProviderCallErrorDetails {
   providerCode?: string;
   retryAfterMs?: number;
   providerRequestId?: string;
+  semanticOutputStarted?: boolean;
 }
 
 export class ProviderCallError extends Error {
@@ -52,6 +54,7 @@ export function providerErrorDetails(cause: unknown): ProviderCallErrorDetails |
     ...(typeof nested.providerCode === "string" ? { providerCode: nested.providerCode } : {}),
     ...(typeof nested.retryAfterMs === "number" ? { retryAfterMs: nested.retryAfterMs } : {}),
     ...(typeof nested.providerRequestId === "string" ? { providerRequestId: nested.providerRequestId } : {}),
+    ...(typeof nested.semanticOutputStarted === "boolean" ? { semanticOutputStarted: nested.semanticOutputStarted } : {}),
   };
 }
 

@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, sync::{LazyLock, Mutex}, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, HashSet}, future::Future, sync::{LazyLock, Mutex}, time::{Duration, SystemTime, UNIX_EPOCH}};
 
 use futures_util::future::{AbortHandle, Abortable};
 use reqwest::{Client, RequestBuilder};
@@ -31,7 +31,7 @@ pub(super) fn client() -> Result<&'static Client, String> {
 
 const MAX_RETRY_AFTER_MS: u64 = 30_000;
 
-fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+pub(super) fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     let value = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?.trim();
     retry_after_value_ms_at(value, SystemTime::now())
 }
@@ -213,10 +213,16 @@ async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result
     Ok((value, request_id))
 }
 
-pub(super) async fn send_chat_request(builder: RequestBuilder, request_id: Option<&str>, secret: &str) -> Result<(Value, Option<String>), ProviderCallError> {
+pub(super) async fn run_cancellable_chat_request<T, F>(
+    request_id: Option<&str>,
+    cancellation_phase: &'static str,
+    request: F,
+) -> Result<T, ProviderCallError>
+where
+    F: Future<Output = Result<T, ProviderCallError>>,
+{
     let Some(request_id) = request_id else {
-        let response = builder.send().await.map_err(|error| request_error(error, "awaiting_headers"))?;
-        return chat_json_response(response, secret).await;
+        return request.await;
     };
     validate_request_id(request_id).map_err(ProviderCallError::configuration)?;
     let (handle, registration) = AbortHandle::new_pair();
@@ -231,10 +237,6 @@ pub(super) async fn send_chat_request(builder: RequestBuilder, request_id: Optio
             return Err(ProviderCallError::configuration("duplicate provider request id"));
         }
     }
-    let request = async {
-        let response = builder.send().await.map_err(|error| request_error(error, "awaiting_headers"))?;
-        chat_json_response(response, secret).await
-    };
     let result = Abortable::new(request, registration).await;
     CHAT_CANCELLATIONS
         .lock()
@@ -243,8 +245,15 @@ pub(super) async fn send_chat_request(builder: RequestBuilder, request_id: Optio
         .remove(request_id);
     match result {
         Ok(response) => response,
-        Err(_) => Err(ProviderCallError::new("cancelled", "provider request cancelled", "awaiting_headers")),
+        Err(_) => Err(ProviderCallError::new("cancelled", "provider request cancelled", cancellation_phase)),
     }
+}
+
+pub(super) async fn send_chat_request(builder: RequestBuilder, request_id: Option<&str>, secret: &str) -> Result<(Value, Option<String>), ProviderCallError> {
+    run_cancellable_chat_request(request_id, "awaiting_headers", async {
+        let response = builder.send().await.map_err(|error| request_error(error, "awaiting_headers"))?;
+        chat_json_response(response, secret).await
+    }).await
 }
 
 pub(super) fn cancel_request(request_id: String) -> Result<bool, String> {
