@@ -65,8 +65,12 @@ describe("OPENROUTER-CONTINUITY-IN-MEMORY-1 activation boundary", () => {
     const panel = read("src/features/conversations/ChatPanel.tsx");
     expect(budget).toContain("message.continuationState");
     expect(budget).toContain("estimatedContinuationTokens");
-    expect(engine.indexOf("applyConversationContinuationMemory")).toBeLessThan(engine.indexOf("estimateContextBudget"));
-    expect(engine.indexOf("estimateContextBudget")).toBeLessThan(engine.indexOf("executeProviderChat"));
+    const applyContinuationAt = engine.indexOf("messages = applyConversationContinuationMemory({");
+    const contextBudgetAt = engine.indexOf("const budget = estimateContextBudget(");
+    const providerDispatchAt = engine.indexOf("const response = await executeProviderChat({");
+    expect(applyContinuationAt).toBeGreaterThan(-1);
+    expect(contextBudgetAt).toBeGreaterThan(applyContinuationAt);
+    expect(providerDispatchAt).toBeGreaterThan(contextBudgetAt);
     expect(panel).toContain("estimateConversationContinuationMemoryBytes");
     expect(panel).toContain("additionalContinuationStateBytes");
   });

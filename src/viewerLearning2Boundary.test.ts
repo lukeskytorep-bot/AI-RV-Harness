@@ -67,14 +67,14 @@ describe("VIEWER-LEARNING-2 boundaries", () => {
     ["Monitor", ["src/monitor", "src/features/monitor", "src/resources/systemPrompts.ts"], "87097f8e0db0e4b4da63a382bcb5f73656a50535a854c12d8c5c09c8e33e3f47"],
     ["Judge", ["src/judge", "src/features/judge"], "520459819dda5f6451accdcab803be5cf9190d58b345d975d8cb51a8f3ba9bb4"],
     ["protocols", ["src/protocols", "src/resources/protocolRegistry.ts", "src/resources/protocols"], "2a324ad15de07985c968622be28174daa6e74ce4edd1442c03e86c4109211263"],
-    // TRANSPORT-RETRY-1 R1 intentionally advances this historical provider baseline.
+    // OPENROUTER-CONTINUITY-IN-MEMORY-1 R1 intentionally advances this historical provider baseline.
     ["provider transport/retry", [
       "src/providers/native.ts",
       "src/providers/requestExecutor.ts",
       "src/providers/retry.ts",
       "src/providers/providerError.ts",
       "src/providers/service.ts",
-    ], "ede3255e62ccb5cfe7078533d7945b1ca17af382f8776f54db487eb3052b9424"],
+    ], "fc65d98b5869dec2f700555503e3bae6b4adccf6616d03485285386dd126008b"],
   ] as const)("keeps %s byte-identical to the accepted base", (_label, roots, expected) => {
     expect(aggregateHash([...roots])).toBe(expected);
   });
