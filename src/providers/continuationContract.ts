@@ -175,12 +175,21 @@ const canonicalBase64 = (value: string): boolean => {
 };
 
 function scanSensitiveStructure(value: unknown): "ok" | "forbidden" | "invalid" {
-  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
-  const seen = new WeakSet<object>();
+  type Frame =
+    | { kind: "enter"; value: unknown; depth: number }
+    | { kind: "leave"; value: object };
+
+  const stack: Frame[] = [{ kind: "enter", value, depth: 0 }];
+  const activePath = new WeakSet<object>();
   let visited = 0;
 
   while (stack.length > 0) {
     const current = stack.pop()!;
+    if (current.kind === "leave") {
+      activePath.delete(current.value);
+      continue;
+    }
+
     visited += 1;
     if (visited > CONTINUATION_LIMITS_V1.maxTraversalNodes || current.depth > CONTINUATION_LIMITS_V1.maxTraversalDepth) {
       return "invalid";
@@ -188,11 +197,14 @@ function scanSensitiveStructure(value: unknown): "ok" | "forbidden" | "invalid" 
 
     const candidate = current.value;
     if (typeof candidate !== "object" || candidate === null) continue;
-    if (seen.has(candidate)) return "invalid";
-    seen.add(candidate);
+    if (activePath.has(candidate)) return "invalid";
+    activePath.add(candidate);
+    stack.push({ kind: "leave", value: candidate });
 
     if (Array.isArray(candidate)) {
-      for (const child of candidate) stack.push({ value: child, depth: current.depth + 1 });
+      for (let index = candidate.length - 1; index >= 0; index -= 1) {
+        stack.push({ kind: "enter", value: candidate[index], depth: current.depth + 1 });
+      }
       continue;
     }
 
@@ -202,9 +214,10 @@ function scanSensitiveStructure(value: unknown): "ok" | "forbidden" | "invalid" 
     } catch {
       return "invalid";
     }
-    for (const [key, child] of entries) {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const [key, child] = entries[index];
       if (FORBIDDEN_KEYS.has(key)) return "forbidden";
-      stack.push({ value: child, depth: current.depth + 1 });
+      stack.push({ kind: "enter", value: child, depth: current.depth + 1 });
     }
   }
   return "ok";
