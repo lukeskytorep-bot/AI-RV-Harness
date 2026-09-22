@@ -10,6 +10,7 @@ export interface ScopedChatMessage {
 }
 
 export interface ModelMessage {
+  id?: string;
   role: ModelMessageRole;
   content: string;
 }
@@ -34,7 +35,7 @@ export function buildConversationPayload({
 }: ConversationPayloadInput): ModelMessage[] {
   const conversationHistory = history
     .filter((message) => message.scope === "conversation")
-    .map(({ role, content }) => ({ role, content }));
+    .map(({ id, role, content }) => ({ id, role, content }));
 
   return [
     { role: "system", content: systemPrompt },
@@ -65,7 +66,7 @@ export function buildManualRvPayload({
   payload.push(
     ...history
       .filter((message) => message.scope === "manual_rv")
-      .map(({ role, content }) => ({ role, content })),
+      .map(({ id, role, content }) => ({ id, role, content })),
   );
   payload.push({ role: "user", content: currentUserMessage });
   return payload;

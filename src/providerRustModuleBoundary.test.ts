@@ -24,6 +24,7 @@ describe("Etap 6 Rust provider module boundary", () => {
     }
 
     expect(facade).toContain("pub async fn provider_discover_models");
+    expect(facade).toContain("pub fn provider_binding_endpoint");
     expect(facade).toContain("pub async fn provider_chat");
     expect(facade).toContain("pub fn cancel_provider_request");
 
@@ -69,6 +70,7 @@ describe("Etap 6 Rust provider module boundary", () => {
     expect(validation).toContain("fn validate_request_id");
 
     expect(lib).toContain("providers::provider_discover_models");
+    expect(lib).toContain("providers::provider_binding_endpoint");
     expect(lib).toContain("providers::provider_chat");
     expect(lib).toContain("providers::cancel_provider_request");
   });

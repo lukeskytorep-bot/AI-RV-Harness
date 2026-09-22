@@ -1,12 +1,13 @@
 # AI RV Harness v0.7.13 — Provider Continuation Contract v1
 
-**Etap:** `CONTINUATION-CONTRACT-0-R1`  
-**Status:** contract-only / no runtime activation  
+**Etap bazowy:** `CONTINUATION-CONTRACT-0-R1`  
+**Aktualny etap runtime:** `OPENROUTER-CONTINUITY-IN-MEMORY-1-R1`  
+**Status:** OpenRouter Conversation in-memory replay active z continuation-aware context preflight; persistence nadal wyłączone  
 **Zweryfikowano:** 2026-09-22
 
 ## Cel
 
-Ten dokument zamraża kontrakt danych wymaganych do przyszłego provider-native replay. Nie aktywuje replay, persistence ani migracji. `ProviderMessage` pozostaje bez pola continuation state do etapu C1.
+Ten dokument definiuje kontrakt danych provider-native continuation. C1 aktywuje wyłącznie OpenRouter Conversation w pamięci procesu: `ProviderMessage` może przenosić zwalidowany `continuationState` na wiadomości `assistant`, a Rust request builder odsyła `reasoning_details` tylko dla OpenRouter. Persistence, Session/Training/Research/Resume i schema 025 pozostają wyłączone.
 
 ## Klasy danych
 
@@ -111,17 +112,41 @@ Sprawdzone 2026-09-22:
 - Anthropic, Extended thinking / preserving thinking blocks: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
 - Anthropic, Messages API types: https://platform.claude.com/docs/en/api/messages/create
 
-## Granica aktywacji
+## Aktywacja C1 — OpenRouter in-memory
 
-C0 nie zmienia:
+C1 aktywuje wyłącznie następujący łańcuch w zwykłej Conversation:
 
-- `ProviderMessage`;
-- request/response runtime;
-- persistence;
-- schema SQLite 24;
-- migration registry;
-- retry T1;
-- Training/Research/Sessions/Resume;
-- export/logging UI.
+1. kompletne `reasoning_details` z odpowiedzi OpenRouter jest walidowane kontraktem v1;
+2. zwalidowany state jest przypisany w pamięci do dokładnego `ChatMessage.id` wiadomości assistant;
+3. kolejny zgodny request otrzymuje ten state na tej samej wiadomości assistant;
+4. zgodność wymaga tego samego `providerConfigId`, `credentialId`, requested model ID, normalized endpoint i formatu/wersji;
+5. normalized endpoint pochodzi z natywnego credential-binding normalizer, nie z drugiej implementacji TypeScript;
+6. przy niezgodności provider/model/credential/endpoint request zatrzymuje się przed provider call; użytkownik Conversation może jawnie wybrać `Continue text-only`, co usuwa in-memory state tego wątku;
+7. `actualModelId` pozostaje diagnostyczny i nie jest replay gate; generic fingerprint nie zawiera reasoning effort/mode;
+8. `reasoning_details` są redagowane z detailed debug payloadu.
 
-Pierwsza aktywacja runtime może nastąpić dopiero w `OPENROUTER-CONTINUITY-IN-MEMORY-1` po niezależnym audycie C0.
+C1 nadal **nie** dodaje:
+
+- persistence continuation state;
+- migracji 025;
+- state w `chat_messages` ani `session_events`;
+- replay w Training, Research, RV Sessions, Manual RV ani Resume;
+- Google lub Anthropic runtime replay;
+- streamingu.
+
+Historyczne rozmowy i rozmowy po restarcie aplikacji pozostają text-only, ponieważ C1 jest celowo in-memory.
+
+## Hardening C1-R1 — context budget
+
+C1-R1 domyka preflight kontekstu po aktywacji provider-native state. `continuationState` jest dołączany do historycznej wiadomości assistant **przed** `estimateContextBudget()` i jego zwalidowany rozmiar UTF-8 jest uwzględniany przed `executeProviderChat()`. State nie jest przycinany.
+
+Estymacja continuation payload jest celowo bardziej konserwatywna niż zwykłego tekstu, ponieważ signed/encrypted/base64-like data ma inną charakterystykę tokenizacji:
+
+- bazowo: `2 UTF-8 bytes / estimated token`;
+- dodatkowy safety factor: `1.25`;
+- jest to lokalny preflight bezpieczeństwa, nie tokenizer billingowy providera.
+
+Jeżeli widoczny input + obrazy + continuation estimate + zarezerwowany output przekraczają context window modelu, Conversation zatrzymuje request przed provider dispatch. UI context meter używa tego samego `estimateContextBudget()` i dolicza aktualny in-memory continuation state wątku, aby nie pokazywać zaniżonego kontekstu.
+
+C1-R1 nie zmienia limitów kontraktu 64 / 512 KiB / 2 MiB / 8 MiB. Tamte limity pozostają guardrailami struktury/payloadu; context budget jest osobnym limitem modelu.
+

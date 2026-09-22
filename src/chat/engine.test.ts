@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import type { ChatMessage } from "../types";
+import { ConversationContinuationBreakError, clearAllConversationContinuationMemoryForTests, estimateConversationContinuationMemoryBytes } from "./continuationMemory";
 import { retryChatTurn, sendChatTurn } from "./engine";
 
 const provider: ProviderConfig = { id: "provider", provider: "openrouter", label: "OR", credentialId: "cred", enabled: true, createdAt: "x", updatedAt: "x" };
@@ -20,6 +21,8 @@ function repo(history: ChatMessage[]) {
     },
   };
 }
+
+afterEach(() => clearAllConversationContinuationMemoryForTests());
 
 describe("chat engine isolation", () => {
   it("Conversation sends the conversation system prompt", async () => {
@@ -69,7 +72,7 @@ describe("chat engine isolation", () => {
     const chat = async () => { throw new Error("provider must not be called"); };
     const tinyContextModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, contextTokens: 100, maxOutputTokens: 50 } };
     await expect(sendChatTurn({ repository: repo([]), threadId: "c", mode: "conversation", language: "en", providerConfig: provider, model: tinyContextModel, content: "Question", sources: [{ id: "s", workspaceId: "w", sourceType: "text", displayName: "long.txt", content: "x".repeat(1000), contentHash: "h", metadata: {}, createdAt: "x" }], chat }))
-      .rejects.toThrow("Selected sources exceed this model's available context.");
+      .rejects.toThrow("Conversation input exceeds this model's available context.");
   });
 
   it("wraps sources as untrusted JSON data and keeps injection text out of the system role", async () => {
@@ -96,4 +99,133 @@ describe("chat engine isolation", () => {
     expect((await repository.listChatMessages()).map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(roles.at(-1)).toBe("user");
   });
+
+  it("captures OpenRouter reasoning_details in memory and replays them on the exact assistant message", async () => {
+    const repository = repo([]);
+    const details = [
+      { type: "reasoning.summary", summary: "summary", id: "s1", format: "openai-responses-v1", index: 0 },
+      { type: "reasoning.encrypted", data: "RklYVFVSRQ==", id: "e1", format: "openai-responses-v1", index: 1 },
+      { type: "reasoning.text", text: "reasoning", signature: "sig", id: "t1", format: "openai-responses-v1", index: 2 },
+    ];
+    const endpoint = vi.fn(async () => "https://openrouter.ai/api/v1");
+    await sendChatTurn({
+      repository,
+      threadId: "continuity",
+      mode: "conversation",
+      language: "en",
+      providerConfig: provider,
+      model,
+      content: "First",
+      resolveBindingEndpoint: endpoint,
+      chat: async () => ({ content: "First answer", reasoningDetails: details, usage: {} }),
+    });
+
+    let replayed: Parameters<NonNullable<Parameters<typeof sendChatTurn>[0]["chat"]>>[0] | undefined;
+    await sendChatTurn({
+      repository,
+      threadId: "continuity",
+      mode: "conversation",
+      language: "en",
+      providerConfig: provider,
+      model,
+      content: "Second",
+      resolveBindingEndpoint: endpoint,
+      chat: async (request) => { replayed = request; return { content: "Second answer", usage: {} }; },
+    });
+
+    const assistant = replayed?.messages.find((message) => message.id === "m1");
+    expect(assistant?.role).toBe("assistant");
+    expect(assistant?.continuationState?.transport).toBe("openrouter");
+    expect(assistant?.continuationState && "reasoningDetails" in assistant.continuationState ? assistant.continuationState.reasoningDetails : undefined).toEqual(details);
+    expect(replayed?.messages.filter((message) => message.continuationState)).toHaveLength(1);
+    expect(endpoint).toHaveBeenCalled();
+  });
+
+  it("counts replayed OpenRouter continuation state before provider dispatch and blocks an oversized context", async () => {
+    const repository = repo([]);
+    const endpoint = async () => "https://openrouter.ai/api/v1";
+    const largeContextModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, contextTokens: 100_000, maxOutputTokens: 1_000 } };
+    await sendChatTurn({
+      repository,
+      threadId: "continuity-budget",
+      mode: "conversation",
+      language: "en",
+      providerConfig: provider,
+      model: largeContextModel,
+      content: "First",
+      resolveBindingEndpoint: endpoint,
+      chat: async () => ({
+        content: "First answer",
+        reasoningDetails: [{ type: "reasoning.encrypted", data: "R".repeat(12_000), id: "e1", format: "openai-responses-v1" }],
+        usage: {},
+      }),
+    });
+    expect(estimateConversationContinuationMemoryBytes("continuity-budget")).toBeGreaterThan(10_000);
+
+    const tinyContextModel: ProviderModel = { ...largeContextModel, capabilities: { ...largeContextModel.capabilities, contextTokens: 5_000, maxOutputTokens: 500 } };
+    const blockedCall = vi.fn(async () => ({ content: "must not run", usage: {} }));
+    await expect(sendChatTurn({
+      repository,
+      threadId: "continuity-budget",
+      mode: "conversation",
+      language: "en",
+      providerConfig: provider,
+      model: tinyContextModel,
+      content: "Second",
+      requestedSettings: { maxOutputTokens: 500 },
+      resolveBindingEndpoint: endpoint,
+      chat: blockedCall,
+    })).rejects.toThrow("Conversation input exceeds this model's available context.");
+    expect(blockedCall).not.toHaveBeenCalled();
+  });
+
+  it("blocks incompatible OpenRouter replay until Conversation explicitly continues text-only", async () => {
+    const repository = repo([]);
+    const endpoint = async () => "https://openrouter.ai/api/v1";
+    await sendChatTurn({
+      repository,
+      threadId: "continuity-break",
+      mode: "conversation",
+      language: "en",
+      providerConfig: provider,
+      model,
+      content: "First",
+      resolveBindingEndpoint: endpoint,
+      chat: async () => ({
+        content: "First answer",
+        reasoningDetails: [{ type: "reasoning.text", text: "reasoning", id: "t1", format: "openai-responses-v1" }],
+        usage: {},
+      }),
+    });
+    const otherModel: ProviderModel = { ...model, modelId: "other-model", route: "openrouter:other-model" };
+    const blockedCall = vi.fn(async () => ({ content: "must not run", usage: {} }));
+    await expect(sendChatTurn({
+      repository,
+      threadId: "continuity-break",
+      mode: "conversation",
+      language: "en",
+      providerConfig: provider,
+      model: otherModel,
+      content: "Second",
+      resolveBindingEndpoint: endpoint,
+      chat: blockedCall,
+    })).rejects.toBeInstanceOf(ConversationContinuationBreakError);
+    expect(blockedCall).not.toHaveBeenCalled();
+
+    let textOnly: Parameters<NonNullable<Parameters<typeof sendChatTurn>[0]["chat"]>>[0] | undefined;
+    await sendChatTurn({
+      repository,
+      threadId: "continuity-break",
+      mode: "conversation",
+      language: "en",
+      providerConfig: provider,
+      model: otherModel,
+      content: "Second",
+      allowTextOnlyContinuation: true,
+      resolveBindingEndpoint: endpoint,
+      chat: async (request) => { textOnly = request; return { content: "Text-only answer", usage: {} }; },
+    });
+    expect(textOnly?.messages.some((message) => Boolean(message.continuationState))).toBe(false);
+  });
+
 });

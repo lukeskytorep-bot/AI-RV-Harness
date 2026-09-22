@@ -14,7 +14,7 @@ use super::errors::safe_provider_error;
 use super::request_builders::{build_anthropic_request, build_google_request, build_openai_compatible_request};
 use super::response_parsers::{parse_anthropic_response, parse_google_response, parse_openai_compatible_response};
 use super::transport::retry_after_value_ms_at;
-use super::validation::validate_request_id;
+use super::validation::{validate_continuation_bindings, validate_request_id};
 
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -43,6 +43,7 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
     ProviderChatRequest {
         provider,
         credential_id: "credential".to_string(),
+        provider_config_id: "provider-config".to_string(),
         base_url: None,
         request_id: None,
         model_id: model_id.to_string(),
@@ -50,6 +51,7 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
             role: "user".to_string(),
             content: "test".to_string(),
             images: vec![],
+            continuation_state: None,
         }],
         reasoning_effort: None,
         reasoning_transport_kind: None,
@@ -96,6 +98,18 @@ fn credential_binding_uses_canonical_provider_and_endpoint_identity() {
 }
 
 #[test]
+fn exposes_the_same_normalized_endpoint_used_by_credential_binding() {
+    assert_eq!(
+        provider_binding_endpoint("openrouter".to_string(), None).unwrap(),
+        "https://openrouter.ai/api/v1",
+    );
+    assert_eq!(
+        provider_binding_endpoint("custom_openai".to_string(), Some("HTTPS://EXAMPLE.COM:443/v1///".to_string())).unwrap(),
+        "https://example.com/v1",
+    );
+}
+
+#[test]
 fn provider_errors_redact_secret() {
     let error = safe_provider_error(reqwest::StatusCode::UNAUTHORIZED, "bad sk-secret", "sk-secret", None);
     assert!(!error.contains("sk-secret"));
@@ -128,11 +142,14 @@ fn debug_payload_redacts_secret_and_binary_data() {
     let mut value = json!({
         "authorization": "Bearer sk-secret",
         "prompt": "do not echo sk-secret",
+        "reasoning_details": [{ "type": "reasoning.encrypted", "data": "opaque-private-state" }],
         "inlineData": { "data": "A".repeat(300) }
     });
     scrub_debug_value(&mut value, "sk-secret", None);
     let wire = value.to_string();
     assert!(!wire.contains("sk-secret"));
+    assert!(!wire.contains("opaque-private-state"));
+    assert!(wire.contains("CONTINUATION STATE REDACTED"));
     assert!(wire.contains("BINARY REDACTED"));
 }
 
@@ -228,6 +245,107 @@ fn preserves_standard_openrouter_effort_payloads() {
     request.reasoning_transport_value = Some("xhigh".to_string());
     let (_, body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
     assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("xhigh")));
+}
+
+
+#[test]
+fn provider_message_deserializes_camel_case_continuation_state() {
+    let message: ProviderMessage = serde_json::from_value(json!({
+        "role": "assistant",
+        "content": "visible",
+        "continuationState": {
+            "schemaVersion": 1,
+            "transport": "openrouter",
+            "format": "openrouter-reasoning-details",
+            "replayFingerprint": {
+                "transport": "openrouter",
+                "normalizedEndpoint": "https://openrouter.ai/api/v1",
+                "providerConfigId": "provider-config",
+                "credentialId": "credential",
+                "requestedModelId": "model",
+                "actualModelId": "provider-specific-model",
+                "stateFormat": "openrouter-reasoning-details",
+                "stateFormatVersion": 1
+            },
+            "reasoningDetails": [{
+                "type": "reasoning.text",
+                "text": "hidden",
+                "id": "r1",
+                "format": "openai-responses-v1"
+            }]
+        }
+    })).unwrap();
+    let state = message.continuation_state.expect("continuation state");
+    assert_eq!(state.replay_fingerprint.actual_model_id.as_deref(), Some("provider-specific-model"));
+}
+
+#[test]
+fn replays_openrouter_reasoning_details_only_on_the_bound_assistant_message() {
+    let mut request = chat_request(ProviderKind::Openrouter, "openai/gpt-test");
+    request.messages = vec![
+        ProviderMessage {
+            role: "user".to_string(),
+            content: "Question".to_string(),
+            images: vec![],
+            continuation_state: None,
+        },
+        ProviderMessage {
+            role: "assistant".to_string(),
+            content: "Answer".to_string(),
+            images: vec![],
+            continuation_state: Some(OpenRouterContinuationState {
+                schema_version: 1,
+                transport: "openrouter".to_string(),
+                format: "openrouter-reasoning-details".to_string(),
+                replay_fingerprint: OpenRouterReplayFingerprint {
+                    transport: "openrouter".to_string(),
+                    normalized_endpoint: "https://openrouter.ai/api/v1".to_string(),
+                    provider_config_id: "provider-config".to_string(),
+                    credential_id: "credential".to_string(),
+                    requested_model_id: "openai/gpt-test".to_string(),
+                    actual_model_id: None,
+                    state_format: "openrouter-reasoning-details".to_string(),
+                    state_format_version: 1,
+                },
+                reasoning_details: vec![
+                    json!({"type":"reasoning.summary","summary":"summary","id":"r1","format":"openai-responses-v1","index":0}),
+                    json!({"type":"reasoning.encrypted","data":"opaque","id":"r2","format":"openai-responses-v1","index":1}),
+                ],
+            }),
+        },
+    ];
+    validate_continuation_bindings(&request, "https://openrouter.ai/api/v1").unwrap();
+    let (_, body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
+    assert!(body.pointer("/messages/0/reasoning_details").is_none());
+    assert_eq!(body.pointer("/messages/1/reasoning_details/0/type"), Some(&json!("reasoning.summary")));
+    assert_eq!(body.pointer("/messages/1/reasoning_details/1/data"), Some(&json!("opaque")));
+}
+
+#[test]
+fn rejects_openrouter_continuation_state_when_fingerprint_changes() {
+    let mut request = chat_request(ProviderKind::Openrouter, "model-a");
+    request.messages = vec![ProviderMessage {
+        role: "assistant".to_string(),
+        content: "Answer".to_string(),
+        images: vec![],
+        continuation_state: Some(OpenRouterContinuationState {
+            schema_version: 1,
+            transport: "openrouter".to_string(),
+            format: "openrouter-reasoning-details".to_string(),
+            replay_fingerprint: OpenRouterReplayFingerprint {
+                transport: "openrouter".to_string(),
+                normalized_endpoint: "https://openrouter.ai/api/v1".to_string(),
+                provider_config_id: "other-config".to_string(),
+                credential_id: "credential".to_string(),
+                requested_model_id: "model-a".to_string(),
+                actual_model_id: None,
+                state_format: "openrouter-reasoning-details".to_string(),
+                state_format_version: 1,
+            },
+            reasoning_details: vec![json!({"type":"reasoning.text","text":"hidden","id":"r1","format":"openai-responses-v1"})],
+        }),
+    }];
+    assert!(validate_continuation_bindings(&request, "https://openrouter.ai/api/v1").is_err());
 }
 
 #[test]

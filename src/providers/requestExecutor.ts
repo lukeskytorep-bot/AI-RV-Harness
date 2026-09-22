@@ -141,6 +141,7 @@ export async function executeProviderChat(input: {
   const messages = input.messages.map((message) => ({
     ...message,
     ...(message.images ? { images: message.images.map((image) => ({ ...image })) } : {}),
+    ...(message.continuationState ? { continuationState: structuredClone(message.continuationState) } : {}),
   }));
   const settings = structuredClone(input.settings);
   const result = await executeProviderRequest({
@@ -154,6 +155,7 @@ export async function executeProviderChat(input: {
       messages: messages.map((message) => ({
         ...message,
         ...(message.images ? { images: message.images.map((image) => ({ ...image })) } : {}),
+        ...(message.continuationState ? { continuationState: structuredClone(message.continuationState) } : {}),
       })),
       settings: structuredClone(settings),
       timeoutMs: input.timeoutMs,

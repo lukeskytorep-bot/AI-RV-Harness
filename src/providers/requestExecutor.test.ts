@@ -115,6 +115,50 @@ describe("provider request executor", () => {
     expect(payloads[0]).not.toContain("999");
   });
 
+
+  it("deep-clones continuation state so physical retries replay byte-equivalent provider state", async () => {
+    const messages = [{
+      id: "a1",
+      role: "assistant" as const,
+      content: "visible",
+      continuationState: {
+        schemaVersion: 1 as const,
+        transport: "openrouter" as const,
+        format: "openrouter-reasoning-details" as const,
+        replayFingerprint: {
+          transport: "openrouter" as const,
+          normalizedEndpoint: "https://openrouter.ai/api/v1",
+          providerConfigId: "pc",
+          credentialId: "c",
+          requestedModelId: "model",
+          stateFormat: "openrouter-reasoning-details",
+          stateFormatVersion: 1,
+        },
+        reasoningDetails: [{ type: "reasoning.text" as const, text: "hidden", signature: "sig", id: "r1", format: "openai-responses-v1" as const }],
+      },
+    }];
+    const payloads: string[] = [];
+    const attempt = vi.fn(async (request) => {
+      payloads.push(JSON.stringify(request.messages));
+      const state = request.messages[0].continuationState;
+      if (state?.transport === "openrouter") state.reasoningDetails[0].id = "mutated";
+      if (payloads.length === 1) throw failure("http_status", { httpStatus: 503 });
+      return { content: "ok", usage: {} };
+    });
+    await executeProviderChat({
+      config: { id: "pc", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" },
+      modelId: "model",
+      messages,
+      settings: { requested: {}, effective: {}, omitted: [] },
+      configuredRetries: 1,
+      attempt,
+    });
+    messages[0].continuationState.reasoningDetails[0].id = "caller-mutated";
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toBe(payloads[1]);
+    expect(payloads[0]).toContain('"id":"r1"');
+  });
+
   it("reports every failed physical attempt to the audit callback", async () => {
     const onAttemptFailure = vi.fn();
     const attempt = vi.fn().mockRejectedValue(failure("response_body_read"));

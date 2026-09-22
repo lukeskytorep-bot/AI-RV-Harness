@@ -5,16 +5,11 @@ import crypto from "node:crypto";
 
 const read = (relative: string) => fs.readFileSync(path.resolve(process.cwd(), relative), "utf8");
 
-describe("CONTINUATION-CONTRACT-0-R1 activation boundary", () => {
-
-  it("keeps protected provider runtime files byte-for-byte on the green base", () => {
+describe("OPENROUTER-CONTINUITY-IN-MEMORY-1 activation boundary", () => {
+  it("keeps persistence and schema files byte-for-byte on the green C0-R1 base", () => {
     const expected: Record<string, string> = {
-      "src/providers/types.ts": "3d0403adbd48739d4b19e4868e49f3e3347ebff15426406a81582d256031d4d1",
-      "src/providers/native.ts": "4a3e6b603470c124541dcecab73bab8026a0ad474a66042c2e490142b95246f3",
-      "src-tauri/src/providers.rs": "a5e5b9c342d0e3f62fbf9b9fd64d51ce1b6ad859ecfd27589ac64bd3535aa1f2",
-      "src-tauri/src/providers/request_builders.rs": "ba1c66d46d4bef64be7fefa71ee453bda8efafb1bddea9935d6cf27c0242a39a",
-      "src-tauri/src/providers/response_parsers.rs": "47111749c8e0553d5371f180e9fad58ab8687658c1fd1d4983915b9f8bc380af",
       "src-tauri/src/migrations.rs": "e984345044a4a11f03a9c6655113592f97adb87b057cac2f647a6e84bf553731",
+      "src/storage/repository.ts": "5bf4137970efb4938984d4942ca1fd3cff6e309d057998b3149dec9de0155ea9",
     };
     for (const [relative, expectedHash] of Object.entries(expected)) {
       const actual = crypto.createHash("sha256").update(fs.readFileSync(path.resolve(process.cwd(), relative))).digest("hex");
@@ -22,21 +17,27 @@ describe("CONTINUATION-CONTRACT-0-R1 activation boundary", () => {
     }
   });
 
-  it("keeps runtime ProviderMessage and native dispatch unactivated", () => {
+  it("activates continuationState only for in-memory OpenRouter replay", () => {
     const types = read("src/providers/types.ts");
-    const native = read("src/providers/native.ts");
+    const memory = read("src/chat/continuationMemory.ts");
     const rustProviders = read("src-tauri/src/providers.rs");
-    expect(types).not.toContain("continuationState?:");
-    expect(native).not.toContain("continuationContract");
-    expect(rustProviders).not.toContain("ProviderContinuationState");
+    const builders = read("src-tauri/src/providers/request_builders.rs");
+    expect(types).toContain("continuationState?: ProviderContinuationState");
+    expect(memory).toContain("ConversationContinuationBreakError");
+    expect(rustProviders).toContain("OpenRouterContinuationState");
+    expect(builders).toContain('"reasoning_details"');
+    expect(builders).not.toContain("google-thought-parts");
+    expect(builders).not.toContain("anthropic-thinking-blocks");
   });
 
-  it("does not add persistence or schema 025", () => {
+  it("does not add persistence, session workflow replay, or schema 025", () => {
     const migrations = read("src-tauri/src/migrations.rs");
     const contract = read("src/providers/continuationContract.ts");
+    const sessions = read("src/sessions/controller.ts");
     expect(migrations).not.toContain("version: 25");
     expect(contract).not.toContain("chat_message_provider_state");
     expect(contract).not.toContain("session_event_provider_state");
+    expect(sessions).not.toContain("continuationState");
   });
 
   it("forbids a generic opaque or unknown-payload escape hatch", () => {
@@ -49,4 +50,25 @@ describe("CONTINUATION-CONTRACT-0-R1 activation boundary", () => {
     const contract = read("src/providers/continuationContract.ts");
     expect(contract).not.toContain("reasoningMode");
   });
+  it("keeps Conversation fallback explicit and provider debug payloads free of continuation state", () => {
+    const panel = read("src/features/conversations/ChatPanel.tsx");
+    const rustProviders = read("src-tauri/src/providers.rs");
+    expect(panel).toContain("Kontynuuj tylko tekstowo");
+    expect(panel).toContain("Continue text-only");
+    expect(panel).toContain("allowTextOnlyContinuation");
+    expect(rustProviders).toContain("[CONTINUATION STATE REDACTED]");
+  });
+
+  it("keeps continuation state inside Conversation context preflight before provider dispatch", () => {
+    const budget = read("src/chat/contextBudget.ts");
+    const engine = read("src/chat/engine.ts");
+    const panel = read("src/features/conversations/ChatPanel.tsx");
+    expect(budget).toContain("message.continuationState");
+    expect(budget).toContain("estimatedContinuationTokens");
+    expect(engine.indexOf("applyConversationContinuationMemory")).toBeLessThan(engine.indexOf("estimateContextBudget"));
+    expect(engine.indexOf("estimateContextBudget")).toBeLessThan(engine.indexOf("executeProviderChat"));
+    expect(panel).toContain("estimateConversationContinuationMemoryBytes");
+    expect(panel).toContain("additionalContinuationStateBytes");
+  });
+
 });

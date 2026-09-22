@@ -73,6 +73,12 @@ export async function credentialIdentityFingerprint(credentialId: string): Promi
   return invoke<string>("credential_identity_fingerprint", { credentialId });
 }
 
+
+export async function providerBindingEndpoint(config: ProviderConfig): Promise<string> {
+  requireDesktop();
+  return invoke<string>("provider_binding_endpoint", { provider: config.provider, baseUrl: config.baseUrl });
+}
+
 export async function discoverModels(config: ProviderConfig): Promise<ProviderModel[]> {
   requireDesktop();
   const payload = await invoke<unknown>("provider_discover_models", {
@@ -102,6 +108,7 @@ export async function providerChatAttempt(input: {
     response = await invoke<NativeChatResponse>("provider_chat", {
       request: {
         ...nativeConfig(input.config),
+        providerConfigId: input.config.id,
         requestId,
         modelId: input.modelId,
         messages: input.messages,

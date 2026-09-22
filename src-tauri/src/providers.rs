@@ -79,6 +79,7 @@ pub struct ProviderRequest {
 pub struct ProviderChatRequest {
     provider: ProviderKind,
     credential_id: String,
+    provider_config_id: String,
     base_url: Option<String>,
     request_id: Option<String>,
     model_id: String,
@@ -95,11 +96,38 @@ pub struct ProviderChatRequest {
 
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ProviderMessage {
     role: String,
     content: String,
     #[serde(default)]
     images: Vec<ProviderImage>,
+    #[serde(default)]
+    continuation_state: Option<OpenRouterContinuationState>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OpenRouterContinuationState {
+    schema_version: u8,
+    transport: String,
+    format: String,
+    replay_fingerprint: OpenRouterReplayFingerprint,
+    reasoning_details: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OpenRouterReplayFingerprint {
+    transport: String,
+    normalized_endpoint: String,
+    provider_config_id: String,
+    credential_id: String,
+    requested_model_id: String,
+    #[serde(default)]
+    actual_model_id: Option<String>,
+    state_format: String,
+    state_format_version: u8,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -182,6 +210,8 @@ fn scrub_debug_value(value: &mut Value, secret: &str, parent_key: Option<&str>) 
                 let lower = key.to_ascii_lowercase().replace(['-', '_'], "");
                 if matches!(lower.as_str(), "authorization" | "apikey" | "xapikey" | "xgoogapikey") {
                     *child = Value::String("[REDACTED]".to_string());
+                } else if lower == "reasoningdetails" {
+                    *child = Value::String("[CONTINUATION STATE REDACTED]".to_string());
                 } else {
                     scrub_debug_value(child, secret, Some(key));
                 }
@@ -251,6 +281,12 @@ pub fn rebind_credential(
 }
 
 #[tauri::command]
+pub fn provider_binding_endpoint(provider: String, base_url: Option<String>) -> Result<String, String> {
+    let provider = ProviderKind::parse_binding_kind(&provider)?;
+    binding_endpoint(provider, base_url.as_deref())
+}
+
+#[tauri::command]
 pub async fn provider_discover_models(request: ProviderRequest) -> Result<Value, String> {
     let base = provider_base_url(request.provider, request.base_url.as_deref())?;
     let binding = normalized_credential_endpoint(&base)?;
@@ -278,6 +314,7 @@ pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatR
     validate_chat_request(&request).map_err(ProviderCallError::configuration)?;
     let base = provider_base_url(request.provider, request.base_url.as_deref()).map_err(ProviderCallError::configuration)?;
     let binding = normalized_credential_endpoint(&base).map_err(ProviderCallError::configuration)?;
+    validation::validate_continuation_bindings(&request, &binding).map_err(ProviderCallError::configuration)?;
     let secret = secrets::get_credential_for_binding(
         &request.credential_id,
         request.provider.binding_kind(),

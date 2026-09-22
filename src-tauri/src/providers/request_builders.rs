@@ -14,7 +14,7 @@ pub(super) fn build_chat_request(request: &ProviderChatRequest, base: &str) -> R
 pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, base: &str) -> (String, Value) {
     let mut body = Map::new();
     body.insert("model".into(), Value::String(request.model_id.clone()));
-    body.insert("messages".into(), Value::Array(request.messages.iter().map(openai_message).collect()));
+    body.insert("messages".into(), Value::Array(request.messages.iter().map(|message| openai_message(request.provider, message)).collect()));
     if let Some(value) = request.temperature {
         body.insert("temperature".into(), json!(value));
     }
@@ -46,15 +46,25 @@ fn openai_compatible_output_token_field(provider: ProviderKind) -> &'static str 
     }
 }
 
-fn openai_message(message: &ProviderMessage) -> Value {
-    if message.images.is_empty() {
-        return json!({ "role": message.role, "content": message.content });
+fn openai_message(provider: ProviderKind, message: &ProviderMessage) -> Value {
+    let content = if message.images.is_empty() {
+        Value::String(message.content.clone())
+    } else {
+        let mut parts = vec![json!({ "type": "text", "text": message.content })];
+        for image in &message.images {
+            parts.push(json!({ "type": "image_url", "image_url": { "url": format!("data:{};base64,{}", image.mime_type, image.data_base64) } }));
+        }
+        Value::Array(parts)
+    };
+    let mut object = Map::new();
+    object.insert("role".into(), Value::String(message.role.clone()));
+    object.insert("content".into(), content);
+    if matches!(provider, ProviderKind::Openrouter) {
+        if let Some(state) = message.continuation_state.as_ref() {
+            object.insert("reasoning_details".into(), Value::Array(state.reasoning_details.clone()));
+        }
     }
-    let mut parts = vec![json!({ "type": "text", "text": message.content })];
-    for image in &message.images {
-        parts.push(json!({ "type": "image_url", "image_url": { "url": format!("data:{};base64,{}", image.mime_type, image.data_base64) } }));
-    }
-    json!({ "role": message.role, "content": parts })
+    Value::Object(object)
 }
 
 pub(super) fn build_google_request(request: &ProviderChatRequest, base: &str) -> Result<(String, Value), String> {

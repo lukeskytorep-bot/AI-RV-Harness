@@ -7,6 +7,7 @@ import { chooseAndImportAttachments } from "../../attachments/native";
 import { ChatMessageList } from "../../chat/ChatMessageList";
 import { useAppDialogs } from "../../components/AppDialogProvider";
 import { estimateContextBudget } from "../../chat/contextBudget";
+import { ConversationContinuationBreakError, estimateConversationContinuationMemoryBytes } from "../../chat/continuationMemory";
 import { buildChatProviderMessages, retryChatTurn, sendChatTurn } from "../../chat/engine";
 import { buildChatMarkdownExport } from "../../chat/export";
 import { clampChatOutputTokens, defaultChatOutputTokens, loadChatOutputTokens, saveChatOutputTokens } from "../../chat/outputPreference";
@@ -56,6 +57,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingRetry, setPendingRetry] = useState<PendingChatTurn | null>(null);
+  const [continuationFallback, setContinuationFallback] = useState<"send" | "retry" | null>(null);
   const dialogs = useAppDialogs();
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
   const activeProvider = providerConfigs.find((item) => item.credentialId === profile?.credentialId) ?? null;
@@ -135,6 +137,10 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     setPendingRetry(threadId ? loadPendingChatTurn(threadId, messages) : null);
   }, [threadId, messages]);
 
+  useEffect(() => {
+    setContinuationFallback(null);
+  }, [threadId, mode]);
+
   const selectedSources = sources.filter((source) => activeSourceIds.includes(source.id));
   const effectiveMaxOutputTokens = (() => {
     const parsed = Number(maxOutputTokens);
@@ -150,7 +156,10 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     : undefined;
   const rvSystemPrompt = mode === "manual_rv" ? buildEffectiveViewerPrompt(language, stripKnownLockedBaseVocabulary(localizedViewerEditablePrompt(profile?.defaultViewerSystemPrompt, language))) : undefined;
   const previewMessages = buildChatProviderMessages({ mode, language, history: messages, content: input.trim(), rvSystemPrompt, attachedProtocol, sources: selectedSources, images: chatImages });
-  const contextBudget = estimateContextBudget(previewMessages, selectedModel?.capabilities.contextTokens, effectiveMaxOutputTokens);
+  const inMemoryContinuationBytes = mode === "conversation" && threadId ? estimateConversationContinuationMemoryBytes(threadId) : 0;
+  const contextBudget = estimateContextBudget(previewMessages, selectedModel?.capabilities.contextTokens, effectiveMaxOutputTokens, {
+    additionalContinuationStateBytes: inMemoryContinuationBytes,
+  });
   const contextExceeded = contextBudget.exceeded;
 
   const resizeComposer = useCallback(() => {
@@ -310,12 +319,13 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     setMaxOutputTokens(String(next));
   };
 
-  const send = async () => {
+  const send = async (allowTextOnlyContinuation = false) => {
     const content = input.trim();
     if (!repository || !threadId || !activeProvider || !selectedModel || !content || sending) return;
     setInput("");
     setSending(true);
     setError(null);
+    if (!allowTextOnlyContinuation) setContinuationFallback(null);
     let effectiveRvSystemPrompt = rvSystemPrompt;
     try {
       if (mode === "manual_rv" && profile) {
@@ -368,13 +378,21 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
         maxRetries: settings.maxRetries,
         timeoutMs: settings.requestTimeoutMs,
         ...(attachedProtocol ? { attachedProtocol } : {}),
+        allowTextOnlyContinuation,
       });
       clearPendingChatTurn(threadId);
       setPendingRetry(null);
+      setContinuationFallback(null);
       setChatImages([]);
       setChatImageNames([]);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (cause instanceof ConversationContinuationBreakError && mode === "conversation") {
+        setInput(content);
+        setContinuationFallback("send");
+        setError(null);
+      } else {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
     } finally {
       const storedMessages = await repository.listChatMessages(threadId);
       if (storedMessages.at(-1)?.role !== "user") {
@@ -387,7 +405,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     }
   };
 
-  const retryPendingResponse = async () => {
+  const retryPendingResponse = async (allowTextOnlyContinuation = false) => {
     if (!repository || !pendingRetry || sending) return;
     const providerConfig = providerConfigs.find((item) => item.id === pendingRetry.providerConfigId);
     const model = models.find((item) => item.providerConfigId === pendingRetry.providerConfigId && item.modelId === pendingRetry.modelId);
@@ -397,6 +415,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     }
     setSending(true);
     setError(null);
+    if (!allowTextOnlyContinuation) setContinuationFallback(null);
     try {
       await retryChatTurn({
         repository,
@@ -412,11 +431,18 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
         images: pendingRetry.images,
         maxRetries: settings.maxRetries,
         timeoutMs: settings.requestTimeoutMs,
+        allowTextOnlyContinuation,
       });
       clearPendingChatTurn(pendingRetry.threadId);
       setPendingRetry(null);
+      setContinuationFallback(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (cause instanceof ConversationContinuationBreakError && mode === "conversation") {
+        setContinuationFallback("retry");
+        setError(null);
+      } else {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
     } finally {
       setMessages(await repository.listChatMessages(pendingRetry.threadId));
       setThreads(await repository.listChatThreads(workspace.id, mode));
@@ -512,7 +538,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
         emptyState={<div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div>}
       />
       {error && <div className="provider-error chat-error">{error}</div>}
-      {pendingRetry && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Ostatnia wiadomość nie otrzymała odpowiedzi AI." : "The last message did not receive an AI response."}</span><button className="secondary-button" disabled={sending} onClick={() => void retryPendingResponse()}>{settings.interfaceLanguage === "pl" ? "Ponów odpowiedź" : "Retry response"}</button></div>}
+      {continuationFallback && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Natywna ciągłość providera nie pasuje już do bieżącego połączenia lub modelu. Możesz świadomie kontynuować tylko z historią tekstową." : "Provider-native continuity no longer matches the current connection or model. You can explicitly continue with text history only."}</span><button className="secondary-button" disabled={sending} onClick={() => void (continuationFallback === "retry" ? retryPendingResponse(true) : send(true))}>{settings.interfaceLanguage === "pl" ? "Kontynuuj tylko tekstowo" : "Continue text-only"}</button></div>}
+      {pendingRetry && !continuationFallback && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Ostatnia wiadomość nie otrzymała odpowiedzi AI." : "The last message did not receive an AI response."}</span><button className="secondary-button" disabled={sending} onClick={() => void retryPendingResponse()}>{settings.interfaceLanguage === "pl" ? "Ponów odpowiedź" : "Retry response"}</button></div>}
       {(selectedSources.length > 0 || chatImageNames.length > 0) && <div className="attachment-chips">{selectedSources.map((source) => <button type="button" key={source.id} title={copy.removeSource} onClick={() => void toggleSource(source.id)}><FileCheck2 size={12} /><span>{source.displayName} · {source.sourceType.toUpperCase()} · {settings.interfaceLanguage === "pl" ? "aktywne" : "active"} · ~{estimateTextTokens(source.content).toLocaleString()} tokens</span><X size={11} /></button>)}{chatImageNames.map((name, index) => <button type="button" key={`${name}-${index}`} onClick={() => removeChatImage(index)}><span>{name} · IMAGE · {settings.interfaceLanguage === "pl" ? "następna tura" : "next turn"} · ~2,048 tokens</span><X size={11} /></button>)}</div>}
       <div className="composer">
         <textarea ref={composerTextareaRef} rows={2} placeholder={copy.messagePlaceholder} value={input} onChange={(event) => setInput(event.target.value)} disabled={!selectedModel || sending || Boolean(pendingRetry)} />

@@ -1,3 +1,5 @@
+import type { ProviderContinuationState } from "./continuationContract";
+
 export const PROVIDER_KINDS = [
   "openrouter",
   "google",
@@ -131,9 +133,11 @@ export interface EffectiveGenerationSettings {
 }
 
 export interface ProviderMessage {
+  id?: string;
   role: "system" | "user" | "assistant";
   content: string;
   images?: ProviderImageInput[];
+  continuationState?: ProviderContinuationState;
 }
 
 export interface ProviderImageInput {

@@ -1,6 +1,14 @@
 import { buildConversationPayload, buildManualRvPayload, type ScopedChatMessage } from "../domain/chatContext";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat } from "../providers/requestExecutor";
+import { providerBindingEndpoint } from "../providers/native";
+import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
+import {
+  applyConversationContinuationMemory,
+  hasConversationContinuationMemory,
+  rememberConversationContinuationIssue,
+  rememberConversationContinuationState,
+} from "./continuationMemory";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderImageInput, ProviderMessage, ProviderModel } from "../providers/types";
 import { getConversationPrompt } from "../resources/prompts/conversation";
 import type { AppRepository } from "../storage/repository";
@@ -94,6 +102,8 @@ export async function sendChatTurn(input: {
   timeoutMs?: number;
   signal?: AbortSignal;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
+  allowTextOnlyContinuation?: boolean;
+  resolveBindingEndpoint?: (config: ProviderConfig) => Promise<string>;
 }): Promise<{ user: ChatMessage; assistant: ChatMessage; response: ProviderChatResponse }> {
   return executeChatTurn(input, true);
 }
@@ -112,7 +122,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
 
   const storedHistory = await input.repository.listChatMessages(input.threadId);
   const history = appendUser ? storedHistory : storedHistory.slice(0, -1);
-  const messages = buildChatProviderMessages({
+  let messages = buildChatProviderMessages({
     mode: input.mode,
     language: input.language,
     history,
@@ -125,6 +135,23 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   if (input.images?.length) {
     if (!input.model.capabilities.supportsVision || !input.model.capabilities.inputModalities.includes("image")) throw new Error("Selected model route does not advertise image input support.");
   }
+  let normalizedEndpoint: string | undefined;
+  const hasContinuationMemory = input.mode === "conversation" && hasConversationContinuationMemory(input.threadId);
+  if (input.mode === "conversation" && input.providerConfig.provider === "openrouter" && (!input.chat || hasContinuationMemory)) {
+    normalizedEndpoint = await (input.resolveBindingEndpoint ?? providerBindingEndpoint)(input.providerConfig);
+  }
+  if (hasContinuationMemory) {
+    normalizedEndpoint ??= "";
+    messages = applyConversationContinuationMemory({
+      threadId: input.threadId,
+      messages,
+      config: input.providerConfig,
+      requestedModelId: input.model.modelId,
+      normalizedEndpoint,
+      allowTextOnlyContinuation: input.allowTextOnlyContinuation,
+    }).messages;
+  }
+
 
   const maxOutputTokens = Math.floor(input.requestedSettings?.maxOutputTokens ?? input.model.capabilities.maxOutputTokens ?? DEFAULT_UNKNOWN_OUTPUT_LIMIT);
   if (maxOutputTokens < 1 || (input.model.capabilities.maxOutputTokens && maxOutputTokens > input.model.capabilities.maxOutputTokens)) {
@@ -132,7 +159,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   }
   const budget = estimateContextBudget(messages, input.model.capabilities.contextTokens, maxOutputTokens);
   if (budget.exceeded) {
-    throw new Error("Selected sources exceed this model's available context.");
+    throw new Error("Conversation input exceeds this model's available context.");
   }
   const settings = resolveGenerationSettings(input.model.capabilities, { ...input.requestedSettings, maxOutputTokens });
   if (settings.omitted.length) throw new Error(`Unsupported generation settings: ${settings.omitted.join(", ")}`);
@@ -149,6 +176,17 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
     attempt: input.chat,
   });
   const assistant = await input.repository.appendChatMessage(input.threadId, "assistant", response.content);
+  if (input.mode === "conversation" && input.providerConfig.provider === "openrouter" && response.reasoningDetails?.length) {
+    normalizedEndpoint ??= await (input.resolveBindingEndpoint ?? providerBindingEndpoint)(input.providerConfig);
+    const captured = captureOpenRouterContinuationState({
+      config: input.providerConfig,
+      requestedModelId: input.model.modelId,
+      normalizedEndpoint,
+      reasoningDetails: response.reasoningDetails,
+    });
+    if (captured.state) rememberConversationContinuationState(input.threadId, assistant.id, captured.state);
+    else if (captured.issue) rememberConversationContinuationIssue(input.threadId, assistant.id, captured.issue);
+  }
   return { user, assistant, response };
 }
 
