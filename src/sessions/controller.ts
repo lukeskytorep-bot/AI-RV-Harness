@@ -1,6 +1,7 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { sha256Text } from "../application/sha256";
 import { createProviderChatExecutor, providerChatOnce } from "../providers/requestExecutor";
+import type { OperationKind } from "../providers/operationResourceProfiles";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { ProtocolResource } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
@@ -59,6 +60,7 @@ export interface AutomaticRcpRunInput {
   signal?: AbortSignal;
   maxRetries?: number;
   requestTimeoutMs?: number;
+  operationKind?: OperationKind;
   maxSessionCostUsd?: number;
   sessionCodePrefix?: string;
   automaticTarget?: TargetRecord;
@@ -134,6 +136,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   const chat = createProviderChatExecutor({
     configuredRetries: maxRetries,
     operationId: "session.rcp",
+    operationKind: input.operationKind,
     attempt: input.chat,
     onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, {
       eventType: "PROVIDER_ATTEMPT_FAILED",

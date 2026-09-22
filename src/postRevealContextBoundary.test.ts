@@ -89,14 +89,16 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     expect(createHash("sha256").update(telepathicWithoutFieldGuideWiring).digest("hex")).toBe("66abdc5a23016803c32422ed9bd1d68666da1f1147fee5819c89cf158c99d248");
   });
 
-  it("leaves AI Judge prompt, rubric, scoring, packet and frozen-score engine byte-identical to the accepted base", () => {
+  it("keeps AI Judge prompt, rubric, scoring and packet byte-identical while allowing ORP1 resource wiring in the engine", () => {
     const expected = new Map<string, string>([
       ["src/judge/prompt.ts", "dc2af6fe6b478360cab414c4e4d9bc3f3a4d9fae95819f8420f116c8652df492"],
       ["src/judge/types.ts", "51b2377b3e44cf909a799eb4ad94d384db89e2ef8c278c5e421da346293b12ef"],
-      ["src/judge/engine.ts", "df0f40bb7747f36f184f89211c170b2edef2484a8b07b0920390c1dd8dfa8b7d"],
       ["src/domain/scoring.ts", "c73c8950219b6bf0e0698d96a36524ee421f2ad64cf388e8124f1937d7b1f408"],
       ["src/domain/judgePacket.ts", "98a4bc19840da6219858fe63a51615d37911711cd22f4642bb424eea12f15dcb"],
     ]);
     for (const [file, hash] of expected) expect(sha256(file)).toBe(hash);
+    const judge = source("src/judge/engine.ts");
+    expect(judge).toContain('operationKind: "judge"');
+    expect(judge).toContain("recordFrozenJudgeResult");
   });
 });

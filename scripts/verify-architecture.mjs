@@ -150,6 +150,7 @@ if (requestedRules.has("cycles")) {
 if (requestedRules.has("domain")) {
   const providerInfrastructure = [
     "src/providers/native.ts",
+    "src/providers/operationResourceProfiles.ts",
     "src/providers/requestExecutor.ts",
     "src/providers/retry.ts",
     "src/providers/providerError.ts",

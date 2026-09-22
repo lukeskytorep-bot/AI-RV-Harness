@@ -373,8 +373,9 @@ export function reflectionOutputPreflight(model: ProviderModel, capacity: Viewer
   return analyticalOutputBudget({
     model,
     messages: [{ role: "user", content: prompt }],
+    operationKind: "viewer_notes_reflection",
     attempt: 0,
-    minimumUsefulTokens: Math.min(8192, Math.max(1024, capacity)),
+    learningObjectCapacityTokens: capacity,
   });
 }
 
@@ -505,7 +506,7 @@ export async function runViewerNoteReflection(input: {
     { role: "user", content: prompt, ...(images.length ? { images } : {}) },
   ];
   try {
-    analyticalOutputBudget({ model: input.model, messages: reflectionMessages, attempt: 0, minimumUsefulTokens: Math.min(8192, Math.max(1024, packet.capacityTokens)) });
+    analyticalOutputBudget({ model: input.model, messages: reflectionMessages, operationKind: "viewer_notes_reflection", attempt: 0, learningObjectCapacityTokens: packet.capacityTokens });
   } catch (cause) {
     await input.repository.failViewerNoteReflection(runId, "FAILED_OUTPUT_PREFLIGHT", cause instanceof Error ? cause.message : String(cause));
     return null;
@@ -516,8 +517,9 @@ export async function runViewerNoteReflection(input: {
     const result = await callWithAnalyticalOutputRecovery({
       model: input.model,
       messages: reflectionMessages,
+      operationKind: "viewer_notes_reflection",
       requestedSettings: snapshot.generationSettings.requested,
-      minimumUsefulTokens: Math.min(8192, Math.max(1024, packet.capacityTokens)),
+      learningObjectCapacityTokens: packet.capacityTokens,
       call: (attemptSettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: reflectionMessages, settings: attemptSettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.reflect", attempt: input.chat }),
     });
     response = result.response;
@@ -538,7 +540,8 @@ export async function runViewerNoteReflection(input: {
       const repair = await callWithAnalyticalOutputRecovery({
         model: input.model,
         messages: repairMessages,
-        minimumUsefulTokens: 1024,
+        operationKind: "viewer_notes_reflection",
+        learningObjectCapacityTokens: packet.capacityTokens,
         call: (repairSettings) => executeProviderChat({
           config: input.providerConfig,
           modelId: input.model.modelId,
@@ -579,8 +582,9 @@ export async function runViewerNoteReflection(input: {
         const retry = await callWithAnalyticalOutputRecovery({
           model: input.model,
           messages: retryMessages,
+          operationKind: "viewer_notes_reflection",
           requestedSettings: snapshot.generationSettings.requested,
-          minimumUsefulTokens: Math.min(8192, Math.max(1024, packet.capacityTokens)),
+          learningObjectCapacityTokens: packet.capacityTokens,
           call: (retrySettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: retryMessages, settings: retrySettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.capacity-retry", attempt: input.chat }),
         });
         finalResponse = retry.response;
@@ -599,7 +603,8 @@ export async function runViewerNoteReflection(input: {
           const repair = await callWithAnalyticalOutputRecovery({
             model: input.model,
             messages: repairMessages,
-            minimumUsefulTokens: 1024,
+            operationKind: "viewer_notes_reflection",
+            learningObjectCapacityTokens: packet.capacityTokens,
             call: (repairSettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: repairMessages, settings: repairSettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.capacity-json-repair", attempt: input.chat }),
           });
           finalResponse = repair.response;

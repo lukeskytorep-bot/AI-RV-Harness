@@ -59,11 +59,12 @@ export async function sendPostRevealTurn(input: {
       : ({ role: turn.role, content: turn.content } satisfies ProviderMessage)),
     { role: "user", content },
   ];
-  analyticalOutputBudget({ model: input.model, messages, attempt: 0 });
+  analyticalOutputBudget({ model: input.model, messages, operationKind: "post_reveal_viewer", attempt: 0 });
   await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
   const response = (await callWithAnalyticalOutputRecovery({
     model: input.model,
     messages,
+    operationKind: "post_reveal_viewer",
     requestedSettings: snapshot.generationSettings?.requested,
     call: (settings) => executeProviderChat({
       config: input.providerConfig,
@@ -219,6 +220,7 @@ export async function sendMonitorPostRevealReview(input: {
   const response = (await callWithAnalyticalOutputRecovery({
     model: input.model,
     messages,
+    operationKind: "post_reveal_monitor",
     call: (settings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "post-reveal.monitor", attempt: input.chat }),
   })).response;
   const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "monitor", response.content);

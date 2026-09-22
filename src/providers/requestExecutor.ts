@@ -9,6 +9,7 @@ import {
   type OpenRouterEndpointDiscovery,
 } from "./openRouterEndpointCapability";
 import { providerRetryAllowance, providerRetryDelayMs } from "./retry";
+import { resolveOperationResourceProfile, type OperationKind } from "./operationResourceProfiles";
 import type { EffectiveGenerationSettings, OpenRouterProviderRouting, ProviderChatResponse, ProviderConfig, ProviderMessage } from "./types";
 
 export interface ProviderAttemptContext {
@@ -138,6 +139,7 @@ export async function executeProviderChat(input: {
   signal?: AbortSignal;
   configuredRetries?: number;
   operationId?: string;
+  operationKind?: OperationKind;
   attempt?: ProviderChatAttempt;
   providerRouting?: OpenRouterProviderRouting;
   endpointDiscovery?: OpenRouterEndpointDiscovery;
@@ -157,6 +159,7 @@ export async function executeProviderChat(input: {
   }));
   const settings = structuredClone(input.settings);
   let providerRouting = input.providerRouting ? structuredClone(input.providerRouting) : undefined;
+  const resourceProfile = resolveOperationResourceProfile({ operationId: input.operationId, operationKind: input.operationKind });
   let openRouterRoutingMode: "normal" | "verified_fit" | "unknown_attempt" | "local_stop" | undefined;
   if (input.config.provider === "openrouter") {
     const estimatedInputTokens = estimateProviderInputTokens(messages).estimatedInputTokens;
@@ -167,7 +170,7 @@ export async function executeProviderChat(input: {
       credentialScope: input.config.credentialFingerprint ?? input.config.credentialId,
       endpointScope: input.config.baseUrl ?? "",
       envelope,
-      forceCapacityProtection: input.capacityProtectedRouting,
+      forceCapacityProtection: Boolean(input.capacityProtectedRouting) || resourceProfile.capacityRoutingPolicy === "prefer_verified_fit",
       existingRouting: providerRouting,
       discover: input.endpointDiscovery ?? ((modelId) => discoverOpenRouterModelEndpoints(input.config, modelId)),
     });
@@ -229,6 +232,7 @@ export async function executeProviderChat(input: {
 export function createProviderChatExecutor(options: {
   configuredRetries?: number;
   operationId?: string;
+  operationKind?: OperationKind;
   attempt?: ProviderChatAttempt;
   endpointDiscovery?: OpenRouterEndpointDiscovery;
   capacityProtectedRouting?: boolean;
@@ -238,6 +242,7 @@ export function createProviderChatExecutor(options: {
     ...request,
     configuredRetries: options.configuredRetries,
     operationId: options.operationId,
+    operationKind: options.operationKind,
     attempt: options.attempt,
     endpointDiscovery: options.endpointDiscovery,
     capacityProtectedRouting: options.capacityProtectedRouting,

@@ -109,6 +109,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
     const initial = await callWithAnalyticalOutputRecovery({
       model: judge.model,
       messages,
+      operationKind: "judge",
       call: (settings) => chat({
         config: judge.providerConfig,
         modelId: judge.model.modelId,
@@ -129,6 +130,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
       const repaired = await callWithAnalyticalOutputRecovery({
         model: judge.model,
         messages: repairMessages,
+        operationKind: "judge",
         call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: repairMessages, settings }),
       });
       response = repaired.response;
@@ -143,6 +145,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
       response = (await callWithAnalyticalOutputRecovery({
         model: judge.model,
         messages: correctionMessages,
+        operationKind: "judge",
         call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: correctionMessages, settings }),
       })).response;
       parsed = parseJudgeOutput(response.content);

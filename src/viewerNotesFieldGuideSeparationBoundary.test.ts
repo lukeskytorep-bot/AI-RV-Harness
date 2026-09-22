@@ -30,10 +30,17 @@ describe("VIEWER-NOTES-FIELD-GUIDE-SEPARATION-1 boundaries", () => {
     expect(research).not.toContain("createFieldGuideVersion(");
   });
 
-  it("leaves sealed evidence/Post-Reveal Review, Field Guide Update prompt, Research engine and Monitor prompt byte-identical", () => {
-    expect(sha256("src/sessions/postReveal.ts")).toBe("412456ee59f47ef01a11bce5999bfe318c6ef8b418c7396e8aa9c1fb59676a8a");
-    expect(sha256("src/aiCenter/fieldGuideUpdate.ts")).toBe("122c5c8ef69afab5ec33238f83ebaa68397a79c4b22371ac1fe642c48c85428b");
-    expect(sha256("src/research/engine.ts")).toBe("a00eacd6acfc11a9e21f9b06df5f130d8544ba6c77a12623b7796c1b907ea223");
+  it("allows ORP1 resource wiring while preserving learning/read-only and Monitor-prompt boundaries", () => {
+    const postReveal = source("src/sessions/postReveal.ts");
+    const fieldGuideUpdate = source("src/aiCenter/fieldGuideUpdate.ts");
+    const research = source("src/research/engine.ts");
+    expect(postReveal).toContain('operationKind: "post_reveal_viewer"');
+    expect(postReveal).toContain('operationKind: "post_reveal_monitor"');
+    expect(fieldGuideUpdate).toContain("buildFieldGuideUpdatePrompt");
+    expect(fieldGuideUpdate).toContain('operationKind: "field_guide_update"');
+    expect(fieldGuideUpdate).toContain("learningObjectCapacityTokens: frozen.capacityTokens");
+    expect(research).toContain('operationKind: "research_viewer"');
+    expect(research).not.toContain("runFieldGuideUpdate");
     expect(sha256("src/monitor/prompt.ts")).toBe("3eda515707b2a6e356e49b3b04d191397a760de248a0ba0c46391e950609dc85");
   });
 

@@ -37,7 +37,7 @@ describe("analytical output recovery", () => {
       if (budgets.length === 1) throw new Error("provider returned reasoning without a final assistant response [finish-reason=length]");
       return { content: "final answer", usage: {} };
     });
-    const result = await callWithAnalyticalOutputRecovery({ model, messages: [{ role: "user", content: "Evaluate" }], call });
+    const result = await callWithAnalyticalOutputRecovery({ model, messages: [{ role: "user", content: "Evaluate" }], operationKind: "judge", call });
     expect(budgets).toEqual([8192, 16384]);
     expect(result.attempt).toBe(1);
     expect(call).toHaveBeenCalledTimes(2);
@@ -47,14 +47,14 @@ describe("analytical output recovery", () => {
     const call = vi.fn()
       .mockResolvedValueOnce({ content: '{"partial":true}', finishReason: "length", usage: {} })
       .mockResolvedValueOnce({ content: '{"complete":true}', finishReason: "stop", usage: {} });
-    const result = await callWithAnalyticalOutputRecovery({ model, messages: [{ role: "user", content: "JSON" }], call });
+    const result = await callWithAnalyticalOutputRecovery({ model, messages: [{ role: "user", content: "JSON" }], operationKind: "judge", call });
     expect(result.response.content).toContain("complete");
     expect(call).toHaveBeenCalledTimes(2);
   });
 
   it("does not retry ordinary provider or schema failures", async () => {
     const call = vi.fn().mockRejectedValue(new Error("unauthorized"));
-    await expect(callWithAnalyticalOutputRecovery({ model, messages: [{ role: "user", content: "Evaluate" }], call })).rejects.toThrow("unauthorized");
+    await expect(callWithAnalyticalOutputRecovery({ model, messages: [{ role: "user", content: "Evaluate" }], operationKind: "judge", call })).rejects.toThrow("unauthorized");
     expect(call).toHaveBeenCalledTimes(1);
     expect(isOutputLimitFailure(new Error("Judge returned invalid JSON."))).toBe(false);
   });
@@ -67,6 +67,7 @@ describe("analytical output recovery", () => {
     const result = await callWithAnalyticalOutputRecovery({
       model,
       messages: [{ role: "user", content: "Evaluate" }],
+      operationKind: "judge",
       call: async () => (await executeProviderRequest<ProviderChatResponse>({
         operationId: "test.output-and-transport",
         configuredRetries: 5,
@@ -78,9 +79,47 @@ describe("analytical output recovery", () => {
     expect(physical).toHaveBeenCalledTimes(3);
   });
 
+  it("uses durable learning-object capacity instead of the generic 8192 -> 16384 analytical reserve", async () => {
+    const budgets: number[] = [];
+    const call = vi.fn(async (settings) => {
+      budgets.push(settings.effective.maxOutputTokens ?? 0);
+      if (budgets.length === 1) throw new Error("provider returned an incomplete assistant response [finish-reason=length]");
+      return { content: '{"decision":"NO_CHANGE"}', usage: {} };
+    });
+    const result = await callWithAnalyticalOutputRecovery({
+      model,
+      messages: [{ role: "user", content: "Reflect" }],
+      operationKind: "viewer_notes_reflection",
+      learningObjectCapacityTokens: 1024,
+      call,
+    });
+    expect(budgets).toEqual([2048, 3072]);
+    expect(result.attempt).toBe(1);
+  });
+
+  it("uses the capacity-plus-overhead value as a ceiling while refusing routes below the durable object capacity", () => {
+    const exactCapacityRoute = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 8192 } };
+    expect(analyticalOutputBudget({
+      model: exactCapacityRoute,
+      messages: [{ role: "user", content: "Update the Field Guide" }],
+      operationKind: "field_guide_update",
+      learningObjectCapacityTokens: 8192,
+      attempt: 0,
+    })).toBe(8192);
+
+    const tooSmallRoute = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 4096 } };
+    expect(() => analyticalOutputBudget({
+      model: tooSmallRoute,
+      messages: [{ role: "user", content: "Update the Field Guide" }],
+      operationKind: "field_guide_update",
+      learningObjectCapacityTokens: 8192,
+      attempt: 0,
+    })).toThrow(/4096\/8192/);
+  });
+
   it("protects the context window and refuses an unusably small remainder", () => {
     const smallContext = { ...model, capabilities: { ...model.capabilities, contextTokens: 1300 } };
-    expect(() => analyticalOutputBudget({ model: smallContext, messages: [{ role: "user", content: "x".repeat(1400) }], attempt: 0 }))
+    expect(() => analyticalOutputBudget({ model: smallContext, messages: [{ role: "user", content: "x".repeat(1400) }], operationKind: "judge", attempt: 0 }))
       .toThrow(/available context/);
   });
 });

@@ -211,6 +211,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
           signal: input.signal,
           maxRetries: execution.transport.maxRetries,
           requestTimeoutMs: execution.transport.requestTimeoutMs,
+          operationKind: "training_blind_viewer",
           sessionCodePrefix: execution.transport.sessionCodePrefix,
           ...(execution.transport.maxSessionCostUsd > 0 ? { maxSessionCostUsd: execution.transport.maxSessionCostUsd } : {}),
           onProgress: (sessionProgress) => input.onProgress?.({ index, total: working.targetIds.length, target, sessionProgress }),

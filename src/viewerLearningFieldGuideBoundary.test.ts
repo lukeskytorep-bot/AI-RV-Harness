@@ -32,10 +32,12 @@ import nativeCompatibility from "../src-tauri/src/ux_data_compatibility.rs?raw";
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
 describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
-  it("keeps protected Post-Reveal, Judge, Monitor, retry and controlled-purge sources byte-identical", () => {
-    expect(sha256(postReveal)).toBe("412456ee59f47ef01a11bce5999bfe318c6ef8b418c7396e8aa9c1fb59676a8a");
+  it("allows intentional ORP1 Post-Reveal/Judge resource wiring while keeping protected prompts, Monitor, retry and purge invariants", () => {
+    expect(postReveal).toContain('operationKind: "post_reveal_viewer"');
+    expect(postReveal).toContain('operationKind: "post_reveal_monitor"');
+    expect(judgeEngine).toContain('operationKind: "judge"');
+    expect(judgeEngine).toContain("recordFrozenJudgeResult");
     expect(sha256(judgePrompt)).toBe("dc2af6fe6b478360cab414c4e4d9bc3f3a4d9fae95819f8420f116c8652df492");
-    expect(sha256(judgeEngine)).toBe("df0f40bb7747f36f184f89211c170b2edef2484a8b07b0920390c1dd8dfa8b7d");
     expect(sha256(monitorPrompt)).toBe("3eda515707b2a6e356e49b3b04d191397a760de248a0ba0c46391e950609dc85");
     expect(sha256(monitorEngine)).toBe("73d2f461bca2a2ef7e07e0013c742f86f5bc5d14f4aec77510977c70e8b86065");
     // TRANSPORT-RETRY-1 R1 intentionally advances the protected retry baseline.

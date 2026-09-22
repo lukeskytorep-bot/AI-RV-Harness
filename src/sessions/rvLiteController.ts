@@ -1,5 +1,6 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { createProviderChatExecutor } from "../providers/requestExecutor";
+import type { OperationKind } from "../providers/operationResourceProfiles";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import { renderRvLiteSteps, type RvLiteProtocolResource } from "../resources/protocolRegistry";
 import {
@@ -58,6 +59,7 @@ export interface AutomaticRvLiteRunInput {
   signal?: AbortSignal;
   maxRetries?: number;
   requestTimeoutMs?: number;
+  operationKind?: OperationKind;
   maxSessionCostUsd?: number;
   sessionCodePrefix?: string;
   chat?: (input: {
@@ -85,7 +87,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const steps = renderRvLiteSteps(input.protocol, input.profileName, sessionCode);
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
-  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.rv-lite", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code } }) });
+  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.rv-lite", operationKind: input.operationKind, attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code } }) });
   const messages: ProviderMessage[] = [
     ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
     ...(viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage)! }] : []),

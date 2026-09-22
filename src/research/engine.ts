@@ -123,6 +123,7 @@ export async function executeResearchSessions(input: {
       requestedSettings: condition.requestedSettings,
       maxRetries: project.config.sessionPolicy?.maxRetries,
       requestTimeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
+      operationKind: "research_viewer",
       sessionCodePrefix: project.config.sessionPolicy?.sessionCodePrefix,
       ...(project.config.sessionPolicy?.maxSessionCostUsd && project.config.sessionPolicy.maxSessionCostUsd > 0 ? { maxSessionCostUsd: project.config.sessionPolicy.maxSessionCostUsd } : {}),
       automaticTarget: target,

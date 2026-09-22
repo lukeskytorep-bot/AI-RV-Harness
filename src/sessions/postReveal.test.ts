@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../providers/native", () => ({
+  discoverOpenRouterModelEndpoints: vi.fn(async () => ({ data: { endpoints: [
+    { tag: "test/large", context_length: 262_144, max_completion_tokens: 32_768 },
+  ] } })),
+  providerChatAttempt: vi.fn(),
+}));
 import { automaticPostRevealReviewRequest, findCompletedAutomaticViewerReview, findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview, sendPostRevealTurn, supportedAutomaticPostRevealReviewRequests } from "./postReveal";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { ProviderCallError } from "../providers/providerError";

@@ -205,7 +205,7 @@ describe("E1 OpenRouter endpoint-capability integration", () => {
     expect(attempt.mock.calls[0][0].providerRouting).toBeUndefined();
   });
 
-  it("allows the later operation-profile layer to request capacity protection without duplicating routing logic", async () => {
+  it("uses ORP1 prefer_verified_fit to request E1 capacity protection without duplicating routing logic", async () => {
     const attempt = vi.fn().mockResolvedValue(response);
     const endpointDiscovery = vi.fn(async () => ({ data: { endpoints: [
       { tag: "small-route", context_length: 6_000, max_completion_tokens: 4_096 },
@@ -216,12 +216,28 @@ describe("E1 OpenRouter endpoint-capability integration", () => {
       modelId: "qwen/qwen3-32b",
       messages: [{ role: "user", content: "small but protected operation" }],
       settings: { requested: { maxOutputTokens: 4096 }, effective: { maxOutputTokens: 4096 }, omitted: [] },
-      capacityProtectedRouting: true,
+      operationKind: "judge",
       endpointDiscovery,
       attempt,
     });
     expect(endpointDiscovery).toHaveBeenCalledTimes(1);
     expect(attempt.mock.calls[0][0].providerRouting).toEqual({ only: ["large-route"], allowFallbacks: true });
+  });
+
+  it("keeps ORP1 default_auto operations on ordinary routing when the request is small", async () => {
+    const endpointDiscovery = vi.fn();
+    const attempt = vi.fn().mockResolvedValue(response);
+    await executeProviderChat({
+      config: { ...config, id: "pc-e1-default-auto" },
+      modelId: "qwen/qwen3-32b",
+      messages: [{ role: "user", content: "small training turn" }],
+      settings: { requested: { maxOutputTokens: 4096 }, effective: { maxOutputTokens: 4096 }, omitted: [] },
+      operationKind: "training_blind_viewer",
+      endpointDiscovery,
+      attempt,
+    });
+    expect(endpointDiscovery).not.toHaveBeenCalled();
+    expect(attempt.mock.calls[0][0].providerRouting).toBeUndefined();
   });
 
   it("routes a large request only through verified fitting endpoint tags", async () => {

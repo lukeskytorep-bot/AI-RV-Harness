@@ -1,4 +1,5 @@
 import { resolveGenerationSettings } from "./capabilities";
+import { getOperationResourceProfile, learningObjectOutputAllowance, type OperationKind } from "./operationResourceProfiles";
 import type { EffectiveGenerationSettings, GenerationSettings, ProviderChatResponse, ProviderMessage, ProviderModel } from "./types";
 
 export const ANALYTICAL_OUTPUT_INITIAL_TOKENS = 8192;
@@ -11,13 +12,33 @@ export function estimateProviderMessageTokens(messages: ProviderMessage[]): numb
   return textTokens + imageTokens;
 }
 
+function preferredAnalyticalOutputTokens(input: {
+  operationKind: OperationKind;
+  attempt: 0 | 1;
+  learningObjectCapacityTokens?: number;
+}): number {
+  const profile = getOperationResourceProfile(input.operationKind);
+  if (profile.outputPolicy === "capacity_bound_learning_object") {
+    if (!input.learningObjectCapacityTokens || input.learningObjectCapacityTokens <= 0) {
+      throw new Error(`Operation ${input.operationKind} requires a positive learning-object capacity.`);
+    }
+    return learningObjectOutputAllowance(input.learningObjectCapacityTokens, input.attempt);
+  }
+  if (profile.outputPolicy !== "reasoning_heavy_analytical") {
+    throw new Error(`Operation ${input.operationKind} does not use analytical output recovery.`);
+  }
+  return input.attempt === 0 ? ANALYTICAL_OUTPUT_INITIAL_TOKENS : ANALYTICAL_OUTPUT_RECOVERY_TOKENS;
+}
+
 export function analyticalOutputBudget(input: {
   model: ProviderModel;
   messages: ProviderMessage[];
+  operationKind: OperationKind;
   attempt: 0 | 1;
+  learningObjectCapacityTokens?: number;
   minimumUsefulTokens?: number;
 }): number {
-  const preferred = input.attempt === 0 ? ANALYTICAL_OUTPUT_INITIAL_TOKENS : ANALYTICAL_OUTPUT_RECOVERY_TOKENS;
+  const preferred = preferredAnalyticalOutputTokens(input);
   const routeMaximum = input.model.capabilities.maxOutputTokens ?? preferred;
   const estimatedInput = estimateProviderMessageTokens(input.messages);
   const context = input.model.capabilities.contextTokens;
@@ -25,7 +46,10 @@ export function analyticalOutputBudget(input: {
     ? preferred
     : Math.floor(context - estimatedInput - ANALYTICAL_CONTEXT_SAFETY_TOKENS);
   const budget = Math.floor(Math.min(preferred, routeMaximum, contextMaximum));
-  const minimum = Math.max(1, Math.floor(input.minimumUsefulTokens ?? 1024));
+  const profile = getOperationResourceProfile(input.operationKind);
+  const minimum = profile.outputPolicy === "capacity_bound_learning_object"
+    ? Math.max(1, Math.floor(input.learningObjectCapacityTokens ?? 1))
+    : Math.max(1, Math.floor(input.minimumUsefulTokens ?? 1024));
   if (budget < minimum) {
     throw new Error(`Analytical response exceeds this model route's available context or output capacity (${budget}/${minimum} tokens available).`);
   }
@@ -53,13 +77,22 @@ export function assertCompleteAnalyticalResponse(response: ProviderChatResponse)
 export async function callWithAnalyticalOutputRecovery(input: {
   model: ProviderModel;
   messages: ProviderMessage[];
+  operationKind: OperationKind;
   requestedSettings?: GenerationSettings;
+  learningObjectCapacityTokens?: number;
   minimumUsefulTokens?: number;
   call: (settings: EffectiveGenerationSettings, attempt: 0 | 1) => Promise<ProviderChatResponse>;
 }): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; attempt: 0 | 1 }> {
   let firstBudget = 0;
   for (const attempt of [0, 1] as const) {
-    const budget = analyticalOutputBudget({ model: input.model, messages: input.messages, attempt, minimumUsefulTokens: input.minimumUsefulTokens });
+    const budget = analyticalOutputBudget({
+      model: input.model,
+      messages: input.messages,
+      operationKind: input.operationKind,
+      attempt,
+      learningObjectCapacityTokens: input.learningObjectCapacityTokens,
+      minimumUsefulTokens: input.minimumUsefulTokens,
+    });
     if (attempt === 1 && budget <= firstBudget) throw new Error(`Provider exhausted the available analytical output budget; this route cannot increase beyond ${firstBudget} tokens.`);
     if (attempt === 0) firstBudget = budget;
     const settings = resolveGenerationSettings(input.model.capabilities, { ...input.requestedSettings, maxOutputTokens: budget });
