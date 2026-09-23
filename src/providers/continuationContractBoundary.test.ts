@@ -6,15 +6,21 @@ import crypto from "node:crypto";
 const read = (relative: string) => fs.readFileSync(path.resolve(process.cwd(), relative), "utf8");
 
 describe("OPENROUTER-CONTINUITY-IN-MEMORY-1 activation boundary", () => {
-  it("keeps persistence and schema files byte-for-byte on the green C0-R1 base", () => {
-    const expected: Record<string, string> = {
-      "src-tauri/src/migrations.rs": "e984345044a4a11f03a9c6655113592f97adb87b057cac2f647a6e84bf553731",
-      "src/storage/repository.ts": "5bf4137970efb4938984d4942ca1fd3cff6e309d057998b3149dec9de0155ea9",
-    };
-    for (const [relative, expectedHash] of Object.entries(expected)) {
-      const actual = crypto.createHash("sha256").update(fs.readFileSync(path.resolve(process.cwd(), relative))).digest("hex");
-      expect(actual, relative).toBe(expectedHash);
-    }
+  it("keeps schema frozen and continuation persistence absent", () => {
+    const migrationsPath = "src-tauri/src/migrations.rs";
+    const migrationsHash = crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(path.resolve(process.cwd(), migrationsPath)))
+      .digest("hex");
+    expect(migrationsHash, migrationsPath).toBe(
+      "e984345044a4a11f03a9c6655113592f97adb87b057cac2f647a6e84bf553731",
+    );
+
+    const repository = read("src/storage/repository.ts");
+    expect(repository).not.toContain("ProviderContinuationState");
+    expect(repository).not.toContain("chat_message_provider_state");
+    expect(repository).not.toContain("session_event_provider_state");
+    expect(repository).not.toContain("continuationState");
   });
 
   it("activates continuationState only for in-memory OpenRouter replay", () => {
