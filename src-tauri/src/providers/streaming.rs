@@ -32,9 +32,13 @@ pub(super) struct SseDecoder {
 
 impl SseDecoder {
     pub(super) fn push(&mut self, bytes: &[u8]) -> Result<Vec<SseFrame>, ProviderCallError> {
+        // Only the last three buffered bytes can participate in a delimiter
+        // split across the old/new chunk boundary. Starting there avoids
+        // rescanning the entire growing event for every network chunk.
+        let mut search_from = self.buffer.len().saturating_sub(3);
         self.buffer.extend_from_slice(bytes);
         let mut frames = Vec::new();
-        while let Some((boundary, delimiter_len)) = next_event_boundary(&self.buffer) {
+        while let Some((boundary, delimiter_len)) = next_event_boundary(&self.buffer, search_from) {
             if boundary > MAX_PENDING_SSE_EVENT_BYTES {
                 return Err(stream_size_error(
                     "provider SSE event exceeded the maximum buffered event size",
@@ -45,6 +49,10 @@ impl SseDecoder {
             if let Some(frame) = parse_sse_event(&event)? {
                 frames.push(frame);
             }
+            // drain() changed every offset. Scan the remaining bytes once
+            // from their new beginning so multiple events in one chunk are
+            // still decoded in order.
+            search_from = 0;
         }
         if self.buffer.len() > MAX_PENDING_SSE_EVENT_BYTES {
             return Err(stream_size_error(
@@ -68,14 +76,22 @@ impl SseDecoder {
     }
 }
 
-fn next_event_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
-    let mut index = 0usize;
+fn next_event_boundary(buffer: &[u8], search_from: usize) -> Option<(usize, usize)> {
+    let mut index = search_from.min(buffer.len());
     while index < buffer.len() {
-        if buffer[index..].starts_with(b"\r\n\r\n") {
-            return Some((index, 4));
-        }
-        if buffer[index..].starts_with(b"\n\n") {
-            return Some((index, 2));
+        match buffer[index] {
+            b'\r'
+                if index + 3 < buffer.len()
+                    && buffer[index + 1] == b'\n'
+                    && buffer[index + 2] == b'\r'
+                    && buffer[index + 3] == b'\n' =>
+            {
+                return Some((index, 4));
+            }
+            b'\n' if index + 1 < buffer.len() && buffer[index + 1] == b'\n' => {
+                return Some((index, 2));
+            }
+            _ => {}
         }
         index += 1;
     }

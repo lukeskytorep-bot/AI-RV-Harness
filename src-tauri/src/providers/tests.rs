@@ -768,7 +768,7 @@ fn stream_accumulator_bounds_total_data_and_preserves_semantic_retry_boundary() 
     let error = saw_limit.expect("stream accumulation must be bounded");
     assert_eq!(error.code.as_ref(), "response_body_too_large");
     assert_eq!(error.semantic_output_started, Some(true));
-    assert!(MAX_ACCUMULATED_STREAM_DATA_BYTES >= 8 * 1024 * 1024);
+    const { assert!(MAX_ACCUMULATED_STREAM_DATA_BYTES >= 8 * 1024 * 1024) };
 }
 
 #[test]
@@ -1027,4 +1027,3 @@ async fn user_cancellation_aborts_an_active_stream() {
     assert_eq!(error.code.as_ref(), "cancelled");
     server.await.unwrap();
 }
-
