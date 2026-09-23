@@ -4,6 +4,13 @@ import type { ResearchProtocolSelection } from "./types";
 
 export type ResearchProtocolResource = ProtocolResource | RvLiteProtocolResource;
 
+type RuntimeResearchProtocolSelection = {
+  id?: unknown;
+  version?: unknown;
+  variant?: unknown;
+  contentSha256?: unknown;
+};
+
 function unsupportedResearchProtocol(selection: { id?: unknown }): never {
   const id = selection.id;
   throw new Error(`Unsupported Research protocol: ${String(id ?? "<missing>")}.`);
@@ -22,23 +29,33 @@ export function createResearchProtocolSelection(id: ResearchProtocolSelection["i
 }
 
 export function resolveResearchProtocol(selection: ResearchProtocolSelection, language: InterfaceLanguage): ResearchProtocolResource {
-  if (selection.id === "full-rcp") {
+  const runtimeSelection = selection as unknown as RuntimeResearchProtocolSelection;
+
+  if (runtimeSelection.id === "full-rcp") {
     const resource = getFullRcp(language);
-    if (selection.version !== resource.version) throw new Error(`Unsupported Research Full RCP version: ${selection.version}.`);
-    if (selection.contentSha256 && selection.contentSha256 !== resource.contentSha256) throw new Error("Locked Research Full RCP content no longer matches the bundled resource.");
+    if (runtimeSelection.version !== resource.version) {
+      throw new Error(`Unsupported Research Full RCP version: ${String(runtimeSelection.version ?? "<missing>")}.`);
+    }
+    if (runtimeSelection.contentSha256 !== undefined && runtimeSelection.contentSha256 !== resource.contentSha256) {
+      throw new Error("Locked Research Full RCP content no longer matches the bundled resource.");
+    }
     return resource;
   }
 
-  if (selection.id === "rv-lite") {
-    if (selection.version !== "1.1.0" || selection.variant !== "extended") {
-      throw new Error(`Unsupported Research RV Lite selection: ${selection.version}/${selection.variant}.`);
+  if (runtimeSelection.id === "rv-lite") {
+    if (runtimeSelection.version !== "1.1.0" || runtimeSelection.variant !== "extended") {
+      throw new Error(
+        `Unsupported Research RV Lite selection: ${String(runtimeSelection.version ?? "<missing>")}/${String(runtimeSelection.variant ?? "<missing>")}.`,
+      );
     }
     const resource = getRvLite(language, "extended");
-    if (selection.contentSha256 !== resource.contentSha256) throw new Error("Locked Research RV Lite content no longer matches the bundled resource.");
+    if (runtimeSelection.contentSha256 !== resource.contentSha256) {
+      throw new Error("Locked Research RV Lite content no longer matches the bundled resource.");
+    }
     return resource;
   }
 
-  return unsupportedResearchProtocol(selection);
+  return unsupportedResearchProtocol(runtimeSelection);
 }
 
 export function researchProtocolViewerCalls(selection: ResearchProtocolSelection): 4 | 6 {

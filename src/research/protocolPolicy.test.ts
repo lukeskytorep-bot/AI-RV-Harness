@@ -17,6 +17,9 @@ describe("Research protocol policy", () => {
     expect(selection).toMatchObject({ id: "rv-lite", version: "1.1.0", variant: "extended" });
     const resource = resolveResearchProtocol(selection, "pl");
     expect(resource.id).toBe("rv-lite");
+    if (resource.id !== "rv-lite") {
+      throw new Error("Expected RV Lite protocol resource.");
+    }
     expect(resource.variant).toBe("extended");
     expect(resource.contentSha256).toBe(selection.contentSha256);
     expect(researchProtocolViewerCalls(selection)).toBe(4);
