@@ -5,8 +5,9 @@ import type { AppRepository } from "../../storage/repository";
 import { getCopy } from "../../i18n";
 import { createDefaultSettings } from "../../startupDefaults";
 import type { Profile, Workspace } from "../../types";
-import { captureCurrentViewerNotes, ResearchConfigBuilder, researchPreflightSignature } from "./ResearchBuilder";
+import { captureCurrentViewerNotes, reconcileResearchBaseModelKey, ResearchConfigBuilder, researchBaseModelInventorySignature, researchPreflightSignature } from "./ResearchBuilder";
 import type { ResearchConfig } from "../../research/types";
+import researchBuilderSource from "./ResearchBuilder.tsx?raw";
 
 const now = "2026-09-15T12:00:00.000Z";
 const profile: Profile = { id: "profile-a", name: "Orion", credentialId: "cred-a", createdAt: now, updatedAt: now };
@@ -54,6 +55,14 @@ describe("Research Builder Training/Research UX step", () => {
     expect(html).not.toContain("Research workspace");
   });
 
+  it("defaults ordinary Research to current Viewer Notes and current Field Guide while keeping OFF available", () => {
+    const html = renderBuilder("model");
+    expect(html).toContain('<input type="radio" name="research-viewer-notes" checked=""/><span>Use current Viewer Notes</span>');
+    expect(html).toContain('<input type="radio" name="research-field-guide" checked=""/><span>Use current Field Guide</span>');
+    expect(html).toContain('<input type="radio" name="research-viewer-notes"/><span>Do not use</span>');
+    expect(html).toContain('<input type="radio" name="research-field-guide"/><span>Do not use trained Field Guide</span>');
+  });
+
   it("shows a controlled Research error when the selected Profile has no active technical Workspace", () => {
     const html = renderToStaticMarkup(<ResearchConfigBuilder
       copy={getCopy("en")} settings={createDefaultSettings()} repository={repository}
@@ -94,6 +103,42 @@ describe("Research Builder Training/Research UX step", () => {
     expect(html).toContain("Trained Field Guide history");
     expect(html).toContain("standalone experimental prompt");
     expect(html).not.toContain("latest three");
+  });
+
+
+  it("resets Base Viewer on Profile change, watches the actual inventory, and freezes the final selected route", () => {
+    expect(researchBuilderSource).toContain('setBaseProfileId(event.target.value); setBaseModelKey("");');
+    expect(researchBuilderSource).toContain("researchBaseModelInventorySignature(baseModels)");
+    expect(researchBuilderSource).not.toContain("baseModels.length]");
+    expect(researchBuilderSource).toContain('{ mode: "fixed", modelId: baseModel.modelId }');
+  });
+
+  it("uses the new Profile default after Profile reset even when the previous model is still valid", () => {
+    const profileB: Profile = { ...profile, id: "profile-b", name: "Lyra", defaultViewerModelId: "model-b" };
+    const modelB: ProviderModel = { ...model, modelId: "model-b", displayName: "Model B", route: "openrouter:model-b" };
+    const models = [model, modelB];
+
+    expect(reconcileResearchBaseModelKey(profileB, models, "")).toBe("pc-a::model-b");
+  });
+
+  it("preserves a valid manual Base Viewer override after Profile synchronization", () => {
+    const profileB: Profile = { ...profile, id: "profile-b", name: "Lyra", defaultViewerModelId: "model-b" };
+    const modelB: ProviderModel = { ...model, modelId: "model-b", displayName: "Model B", route: "openrouter:model-b" };
+    const modelC: ProviderModel = { ...model, modelId: "model-c", displayName: "Model C", route: "openrouter:model-c" };
+
+    expect(reconcileResearchBaseModelKey(profileB, [model, modelB, modelC], "pc-a::model-c")).toBe("pc-a::model-c");
+  });
+
+  it("detects a same-count model inventory replacement and re-resolves an invalid stale route", () => {
+    const profileB: Profile = { ...profile, id: "profile-b", name: "Lyra", defaultViewerModelId: "model-b" };
+    const modelB: ProviderModel = { ...model, modelId: "model-b", displayName: "Model B", route: "openrouter:model-b" };
+    const modelC: ProviderModel = { ...model, modelId: "model-c", displayName: "Model C", route: "openrouter:model-c" };
+    const before = [model, modelB];
+    const after = [modelB, modelC];
+
+    expect(before).toHaveLength(after.length);
+    expect(researchBaseModelInventorySignature(before)).not.toBe(researchBaseModelInventorySignature(after));
+    expect(reconcileResearchBaseModelKey(profileB, after, "pc-a::model-a")).toBe("pc-a::model-b");
   });
 
   it("captures the currently active Viewer Notes version for the exact base Viewer identity", async () => {

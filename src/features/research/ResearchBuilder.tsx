@@ -50,6 +50,21 @@ function researchReasoningLabel(copy: Copy, model: ProviderModel | null, effort:
 
 const TEMPLATE_ORDER: ResearchTemplateType[] = ["reasoning", "temperature", "profile", "model", "practice", "system_prompt", "viewer_notes"];
 
+export function researchBaseModelInventorySignature(models: ProviderModel[]): string {
+  return models.map(modelRouteKeyFor).sort().join("|");
+}
+
+export function resolveResearchBaseModelKey(profile: Profile | null, models: ProviderModel[]): string {
+  const preferred = models.find((model) => model.modelId === profile?.defaultViewerModelId) ?? models[0];
+  return preferred ? modelRouteKeyFor(preferred) : "";
+}
+
+export function reconcileResearchBaseModelKey(profile: Profile | null, models: ProviderModel[], currentKey: string): string {
+  return models.some((model) => modelRouteKeyFor(model) === currentKey)
+    ? currentKey
+    : resolveResearchBaseModelKey(profile, models);
+}
+
 export function ResearchBuilder({ copy, settings, profiles, workspaces, repository }: { copy: Copy; settings: AppSettings; profiles: Profile[]; workspaces: Workspace[]; repository: AppRepository | null }) {
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [models, setModels] = useState<ProviderModel[]>([]);
@@ -116,8 +131,8 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
   const [profileIds, setProfileIds] = useState<string[]>([]);
   const [modelKeys, setModelKeys] = useState<string[]>([]);
   const [variants, setVariants] = useState(["", ""]);
-  const [viewerNotesMode, setViewerNotesMode] = useState<"none" | "current">("none");
-  const [fieldGuideMode, setFieldGuideMode] = useState<"none" | "current">("none");
+  const [viewerNotesMode, setViewerNotesMode] = useState<"none" | "current">("current");
+  const [fieldGuideMode, setFieldGuideMode] = useState<"none" | "current">("current");
   const [promptResearchSource, setPromptResearchSource] = useState<"manual" | "field_guide_history">("manual");
   const [fieldGuideHistory, setFieldGuideHistory] = useState<ResearchFieldGuideSnapshot[]>([]);
   const [selectedFieldGuideVersionIds, setSelectedFieldGuideVersionIds] = useState<string[]>([]);
@@ -170,13 +185,12 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
   const visibleManualTargets = normalizedSearch
     ? eligibleTargets.filter((target) => `${localizedTargetTitle(target, settings.interfaceLanguage)} ${target.tags.join(" ")}`.toLowerCase().includes(normalizedSearch))
     : eligibleTargets;
+  const baseModelInventorySignature = researchBaseModelInventorySignature(baseModels);
 
   useEffect(() => {
-    if (!baseModels.some((model) => modelRouteKeyFor(model) === baseModelKey)) {
-      const preferred = baseModels.find((model) => model.modelId === baseProfile?.defaultViewerModelId) ?? baseModels[0];
-      setBaseModelKey(preferred ? modelRouteKeyFor(preferred) : "");
-    }
-  }, [baseProfileId, baseProvider?.id, baseProfile?.defaultViewerModelId, baseModels.length]);
+    const nextBaseModelKey = reconcileResearchBaseModelKey(baseProfile, baseModels, baseModelKey);
+    if (nextBaseModelKey !== baseModelKey) setBaseModelKey(nextBaseModelKey);
+  }, [baseProfileId, baseProvider?.id, baseProfile?.defaultViewerModelId, baseModelInventorySignature, baseModelKey]);
   useEffect(() => {
     const defaults = profileGenerationDefaults(baseProfile, baseModel);
     setFixedReasoning(defaults.reasoningEffort ?? "");
@@ -413,7 +427,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
 
   return <div className="research-config-builder">
     <div className="research-builder-toolbar"><button className="secondary-button" onClick={onBack}>← {copy.research}</button><div><strong>{templateName(copy, template)}</strong><small>{copy.lockWarning}</small></div></div>
-    <div className="research-builder-grid"><section className="panel research-form-panel"><FormRow label={copy.researchName}><input value={name} onChange={(event) => setName(event.target.value)} /></FormRow><FormRow label={copy.researchBaseProfile}><select value={baseProfileId} onChange={(event) => { setBaseProfileId(event.target.value); setPreflight(null); setPreflightConfig(null); setDryRun(null); setError(null); }}><option value="">—</option>{profiles.map((item) => <option value={item.id} key={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></FormRow>{!workspace && baseProfile && <div className="provider-error">{copy.researchTechnicalWorkspaceMissing}</div>}{template !== "viewer_notes" && <div className="research-form-section research-viewer-notes-setting"><strong>{copy.viewerNotesSetting}</strong><div className="research-check-grid"><label><input type="radio" name="research-viewer-notes" checked={viewerNotesMode === "none"} onChange={() => { setViewerNotesMode("none"); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} /><span>{copy.viewerNotesDoNotUse}</span></label><label><input type="radio" name="research-viewer-notes" checked={viewerNotesMode === "current"} onChange={() => { setViewerNotesMode("current"); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} /><span>{copy.viewerNotesUseCurrent}</span></label></div><small>{copy.viewerNotesCurrentLead}</small></div>}<FormRow label={copy.sessionLanguage}><select value={language} onChange={(event) => { setLanguage(event.target.value as InterfaceLanguage); setPreflight(null); setPreflightConfig(null); setDryRun(null); }}><option value="pl">Polski</option><option value="en">English</option></select></FormRow><FormRow label={copy.protocol}><select value={researchProtocolId} onChange={(event) => { setResearchProtocolId(event.target.value as ResearchProtocolSelection["id"]); setPreflight(null); setPreflightConfig(null); setDryRun(null); }}><option value="full-rcp">{copy.fullRcp} · 1.5a</option><option value="rv-lite">{copy.rvLite} · 1.1.0</option></select></FormRow>
+    <div className="research-builder-grid"><section className="panel research-form-panel"><FormRow label={copy.researchName}><input value={name} onChange={(event) => setName(event.target.value)} /></FormRow><FormRow label={copy.researchBaseProfile}><select value={baseProfileId} onChange={(event) => { setBaseProfileId(event.target.value); setBaseModelKey(""); setPreflight(null); setPreflightConfig(null); setDryRun(null); setError(null); }}><option value="">—</option>{profiles.map((item) => <option value={item.id} key={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></FormRow>{!workspace && baseProfile && <div className="provider-error">{copy.researchTechnicalWorkspaceMissing}</div>}{template !== "viewer_notes" && <div className="research-form-section research-viewer-notes-setting"><strong>{copy.viewerNotesSetting}</strong><div className="research-check-grid"><label><input type="radio" name="research-viewer-notes" checked={viewerNotesMode === "none"} onChange={() => { setViewerNotesMode("none"); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} /><span>{copy.viewerNotesDoNotUse}</span></label><label><input type="radio" name="research-viewer-notes" checked={viewerNotesMode === "current"} onChange={() => { setViewerNotesMode("current"); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} /><span>{copy.viewerNotesUseCurrent}</span></label></div><small>{copy.viewerNotesCurrentLead}</small></div>}<FormRow label={copy.sessionLanguage}><select value={language} onChange={(event) => { setLanguage(event.target.value as InterfaceLanguage); setPreflight(null); setPreflightConfig(null); setDryRun(null); }}><option value="pl">Polski</option><option value="en">English</option></select></FormRow><FormRow label={copy.protocol}><select value={researchProtocolId} onChange={(event) => { setResearchProtocolId(event.target.value as ResearchProtocolSelection["id"]); setPreflight(null); setPreflightConfig(null); setDryRun(null); }}><option value="full-rcp">{copy.fullRcp} · 1.5a</option><option value="rv-lite">{copy.rvLite} · 1.1.0</option></select></FormRow>
       <ResearchViewerSettings
         copy={copy}
         template={template}
