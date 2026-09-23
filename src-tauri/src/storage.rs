@@ -1533,6 +1533,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn schema_024_rejects_factory_training_localization_mutation_and_preserves_row() {
+        let directory = temp_case("factory-training-localization-guard");
+        let database = directory.join(DATABASE_FILE_NAME);
+        create_database_through(&database, MIGRATION_SPECS.len()).await;
+
+        let options = SqliteConnectOptions::new()
+            .filename(&database)
+            .create_if_missing(false)
+            .foreign_keys(true);
+        let mut connection = SqliteConnection::connect_with(&options)
+            .await
+            .expect("schema-024 database should open");
+
+        let original_metadata = r#"{"origin":"bundled_factory_training_pack","packId":"factory-training-targets-84"}"#;
+        sqlx::query(
+            "INSERT INTO targets (id, collection, title, reveal_text, tags_json, source_metadata_json, content_hash, created_at, updated_at) VALUES (?, 'training', ?, ?, '[]', ?, ?, ?, ?)",
+        )
+        .bind("factory_training_01_01")
+        .bind("Legacy target")
+        .bind("Legacy reveal")
+        .bind(original_metadata)
+        .bind("legacy-hash")
+        .bind("2026-09-01T00:00:00.000Z")
+        .bind("2026-09-01T00:00:00.000Z")
+        .execute(&mut connection)
+        .await
+        .expect("legacy factory target should insert");
+
+        sqlx::query(
+            "INSERT INTO target_usage (id, target_id, profile_id, research_project_id, session_id, used_at) VALUES (?, ?, NULL, NULL, NULL, ?)",
+        )
+        .bind("usage-1")
+        .bind("factory_training_01_01")
+        .bind("2026-09-02T00:00:00.000Z")
+        .execute(&mut connection)
+        .await
+        .expect("target usage should insert");
+
+        let error = sqlx::query(
+            "UPDATE targets SET source_metadata_json = ? WHERE id = ? AND collection = 'training'",
+        )
+        .bind(r#"{"origin":"bundled_factory_training_pack","packId":"factory-training-targets-84","titlePl":"Nowa nazwa"}"#)
+        .bind("factory_training_01_01")
+        .execute(&mut connection)
+        .await
+        .expect_err("schema 024 must reject localization mutation of a used Training target");
+        let database_error = error.as_database_error().expect("SQLite should return a database error");
+        assert_eq!(database_error.code().as_deref(), Some("1811"));
+        assert!(
+            database_error.message().contains("used targets are locked")
+                || database_error.message().contains("training targets are read-only"),
+            "unexpected trigger message: {}",
+            database_error.message(),
+        );
+
+        let persisted: String = sqlx::query_scalar(
+            "SELECT source_metadata_json FROM targets WHERE id = ?",
+        )
+        .bind("factory_training_01_01")
+        .fetch_one(&mut connection)
+        .await
+        .expect("target metadata should still be readable");
+        assert_eq!(persisted, original_metadata);
+
+        connection.close().await.expect("test database should close");
+        fs::remove_dir_all(directory).expect("test directory should be removed");
+    }
+
+    #[tokio::test]
     async fn database_upgrade_from_exact_green_023_to_024_preserves_custom_profile_prompt_as_unresolved_baseline() {
         let directory = temp_case("migration-023-to-024");
         let database = directory.join(DATABASE_FILE_NAME);

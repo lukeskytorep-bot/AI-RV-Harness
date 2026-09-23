@@ -29,7 +29,7 @@ import type { AppSettings, InterfaceLanguage, Profile, SessionLanguageSetting, W
 import type { ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
 import { parseModelCapabilitiesSnapshot } from "../../providers/capabilitySnapshot";
 import { runAutomaticRcpSession, submitExternalReveal, type SessionProgress } from "../../sessions/controller";
-import { buildAutomaticTargetReveal, chooseRandomTarget, createUserTarget, targetIsEligibleForProtocol } from "../../targets/service";
+import { buildAutomaticTargetReveal, chooseRandomTarget, createUserTarget, resolveAutomaticTargetRevealForResume, targetIsEligibleForProtocol } from "../../targets/service";
 import { localizedTargetTitle } from "../../targets/localization";
 import type { TargetRecord } from "../../targets/types";
 import { dryRunCustomProtocol, saveCustomProtocol } from "../../protocols/custom";
@@ -594,8 +594,8 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
       let capturedAutomaticReveal: RevealInput | undefined;
       if (snapshot.revealSource === "automatic" && capturedTarget) {
         if (snapshot.automaticRevealHash) {
-          capturedAutomaticReveal = await buildAutomaticTargetReveal(capturedTarget, snapshot.sessionLanguage);
-          if (capturedAutomaticReveal.hash !== snapshot.automaticRevealHash) {
+          capturedAutomaticReveal = await resolveAutomaticTargetRevealForResume(capturedTarget, snapshot.sessionLanguage, snapshot.automaticRevealHash);
+          if (!capturedAutomaticReveal) {
             throw new Error(settings.interfaceLanguage === "pl"
               ? "Zamrożona wersja Revealu celu jest niedostępna. Resume zatrzymano, aby nie podmienić treści celu."
               : "The frozen target Reveal version is unavailable. Resume was stopped to avoid replacing the target content.");

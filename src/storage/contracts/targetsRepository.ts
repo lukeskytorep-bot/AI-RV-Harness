@@ -4,7 +4,6 @@ import type {
   TargetUsageInput,
   TargetUsageRecord,
   UpdateTargetInput,
-  BundledTargetLocalizationInput,
 } from "../../targets/types";
 
 /** Internal persistence contract for the Targets aggregate. */
@@ -13,7 +12,6 @@ export interface TargetsRepository {
   listArchivedTargets(): Promise<TargetRecord[]>;
   createTarget(input: CreateTargetInput): Promise<TargetRecord>;
   updateTarget(id: string, input: UpdateTargetInput): Promise<TargetRecord>;
-  updateBundledTargetLocalization(id: string, input: BundledTargetLocalizationInput): Promise<TargetRecord>;
   archiveTarget(id: string): Promise<void>;
   restoreTarget(id: string): Promise<void>;
   recordTargetUsage(input: TargetUsageInput): Promise<void>;

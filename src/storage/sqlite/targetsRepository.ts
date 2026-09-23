@@ -1,5 +1,4 @@
 import type {
-  BundledTargetLocalizationInput,
   CreateTargetInput,
   TargetRecord,
   TargetUsageInput,
@@ -110,20 +109,6 @@ export class SqliteTargetsRepository implements TargetsRepository {
     const target = (await this.listTargets("user")).find((item) => item.id === id);
     if (!target) throw new Error("Active user target not found.");
     return target;
-  }
-
-  async updateBundledTargetLocalization(id: string, input: BundledTargetLocalizationInput): Promise<TargetRecord> {
-    const current = (await this.listTargets("training")).find((item) => item.id === id);
-    if (!current || current.sourceMetadata.origin !== "bundled_factory_training_pack" || current.sourceMetadata.packId !== "factory-training-targets-84") {
-      throw new Error("Bundled Training Target not found.");
-    }
-    const sourceMetadata = { ...current.sourceMetadata, ...input };
-    const result = await this.dependencies.executeWrite(
-      "UPDATE targets SET source_metadata_json = $1 WHERE id = $2 AND collection = 'training' AND archived_at IS NULL",
-      [JSON.stringify(sourceMetadata), id],
-    );
-    if (result.rowsAffected !== 1) throw new Error("Bundled Training Target localization update failed.");
-    return { ...current, sourceMetadata };
   }
 
   async archiveTarget(id: string): Promise<void> {

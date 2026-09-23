@@ -115,7 +115,7 @@ export function validateFactoryTrainingPack(targets = BUNDLED_TRAINING_TARGETS):
   return { valid: errors.length === 0, total: targets.length, expectedTotal: 84, counts, errors };
 }
 
-export async function ensureBundledTrainingTargets(repository: Pick<AppRepository, "listTargets" | "createTarget" | "updateBundledTargetLocalization">): Promise<number> {
+export async function ensureBundledTrainingTargets(repository: Pick<AppRepository, "listTargets" | "createTarget">): Promise<number> {
   const validation = validateFactoryTrainingPack();
   if (!validation.valid) throw new Error(`Factory Training Target pack is incomplete: ${validation.errors.join(", ")}`);
   const existingTargets = await repository.listTargets();
@@ -151,11 +151,6 @@ export async function ensureBundledTrainingTargets(repository: Pick<AppRepositor
       created += 1;
       continue;
     }
-    if (!isBundledFactoryTarget(existing, target.id)) continue;
-    if (!localizationMetadataMatches(existing.sourceMetadata, localizationMetadata)) {
-      const updated = await repository.updateBundledTargetLocalization(target.id, localizationMetadata);
-      existingById.set(target.id, updated);
-    }
   }
   return created;
 }
@@ -171,27 +166,6 @@ function bundledLocalizationMetadata(target: BundledTrainingTarget) {
     localizationPackId: FACTORY_TARGET_LOCALIZATION_PACK_ID,
     localizationPackVersion: FACTORY_TARGET_LOCALIZATION_PACK_VERSION,
   };
-}
-
-function isBundledFactoryTarget(target: TargetRecord, id: string): boolean {
-  return target.id === id
-    && target.collection === "training"
-    && target.sourceMetadata.origin === "bundled_factory_training_pack"
-    && target.sourceMetadata.packId === FACTORY_TARGET_PACK_ID;
-}
-
-function localizationMetadataMatches(sourceMetadata: Record<string, unknown>, expected: ReturnType<typeof bundledLocalizationMetadata>): boolean {
-  return sourceMetadata.titleEn === expected.titleEn
-    && sourceMetadata.titlePl === expected.titlePl
-    && sourceMetadata.revealTextEn === expected.revealTextEn
-    && sourceMetadata.revealTextPl === expected.revealTextPl
-    && Array.isArray(sourceMetadata.languages)
-    && sourceMetadata.languages.length === 2
-    && sourceMetadata.languages[0] === "en"
-    && sourceMetadata.languages[1] === "pl"
-    && sourceMetadata.polishTranslationStatus === "accepted"
-    && sourceMetadata.localizationPackId === expected.localizationPackId
-    && sourceMetadata.localizationPackVersion === expected.localizationPackVersion;
 }
 
 export function isFactoryTrainingTargetId(id: string): boolean {

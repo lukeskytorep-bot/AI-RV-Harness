@@ -86,6 +86,23 @@ export async function buildAutomaticTargetReveal(target: TargetRecord, language?
   };
 }
 
+export async function resolveAutomaticTargetRevealForResume(
+  target: TargetRecord,
+  language: InterfaceLanguage,
+  expectedHash: string,
+): Promise<RevealInput | undefined> {
+  const current = await buildAutomaticTargetReveal(target, language);
+  if (current.hash === expectedHash) return current;
+
+  if (target.collection === "training"
+    && target.sourceMetadata.origin === "bundled_factory_training_pack"
+    && target.sourceMetadata.packId === "factory-training-targets-84") {
+    const legacy = await buildAutomaticTargetReveal({ ...target, sourceMetadata: {} }, language);
+    if (legacy.hash === expectedHash) return legacy;
+  }
+  return undefined;
+}
+
 function targetCanonical(title: string, revealText: string | undefined, revealArtifacts: RevealArtifactRecord[], tags: string[]): string {
   return JSON.stringify({ title, revealText, artifacts: revealArtifacts.map((artifact) => ({ sha256: artifact.sha256, mimeType: artifact.mimeType })), tags });
 }

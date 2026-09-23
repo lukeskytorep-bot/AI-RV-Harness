@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildAutomaticTargetReveal, createUserTarget, targetHasSupportedReveal, targetIsEligibleForProtocol, updateUserTarget, userTargetKind } from "./service";
+import { buildAutomaticTargetReveal, createUserTarget, resolveAutomaticTargetRevealForResume, targetHasSupportedReveal, targetIsEligibleForProtocol, updateUserTarget, userTargetKind } from "./service";
 
 describe("target service", () => {
   it("normalizes a private target and records a content hash", async () => {
@@ -60,4 +60,28 @@ describe("target service", () => {
     expect(targetIsEligibleForProtocol(telepathic, "telepathic")).toBe(true);
     expect(targetIsEligibleForProtocol(telepathic, "lite")).toBe(false);
   });
+  it("resumes a legacy factory session with the canonical Reveal when the new bundled localization changes the current hash", async () => {
+    const target = {
+      id: "factory_training_01_01", collection: "training" as const, title: "English", revealText: "English reveal", tags: [],
+      sourceMetadata: { origin: "bundled_factory_training_pack", packId: "factory-training-targets-84" },
+      createdAt: "now", updatedAt: "now",
+    };
+    const legacy = await buildAutomaticTargetReveal({ ...target, sourceMetadata: {} }, "pl");
+    const current = await buildAutomaticTargetReveal(target, "pl");
+    expect(current.hash).not.toBe(legacy.hash);
+
+    const compatible = await resolveAutomaticTargetRevealForResume(target, "pl", legacy.hash);
+    expect(compatible?.hash).toBe(legacy.hash);
+    expect(compatible?.text).toBe("English reveal");
+  });
+
+  it("keeps Resume fail-closed when neither current nor legacy factory Reveal hash matches", async () => {
+    const target = {
+      id: "factory_training_01_01", collection: "training" as const, title: "English", revealText: "English reveal", tags: [],
+      sourceMetadata: { origin: "bundled_factory_training_pack", packId: "factory-training-targets-84" },
+      createdAt: "now", updatedAt: "now",
+    };
+    expect(await resolveAutomaticTargetRevealForResume(target, "pl", "f".repeat(64))).toBeUndefined();
+  });
+
 });

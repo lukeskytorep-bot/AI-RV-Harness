@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TargetRecord } from "./types";
 import { localizedTargetRecord, localizedTargetReveal, localizedTargetTitle } from "./localization";
+import { getBundledTrainingLocalizationPl } from "./bundledLocalization";
 
 const target: TargetRecord = {
   id: "factory_training_01_01",
@@ -24,4 +25,28 @@ describe("Training Target localization", () => {
     expect(localizedTargetTitle(target, "en")).toBe("Mountain");
     expect(localizedTargetReveal(target, "en")).toBe("English reveal");
   });
+  it("uses the bundled Polish resource only when an immutable factory row has no persisted localization", () => {
+    const legacyFactory: TargetRecord = {
+      ...target,
+      sourceMetadata: { origin: "bundled_factory_training_pack", packId: "factory-training-targets-84" },
+    };
+    const bundled = getBundledTrainingLocalizationPl(legacyFactory.id);
+    expect(localizedTargetTitle(legacyFactory, "pl")).toBe(bundled.titlePl);
+    expect(localizedTargetReveal(legacyFactory, "pl")).toBe(bundled.revealTextPl);
+    expect(localizedTargetReveal(legacyFactory, "en")).toBe("English reveal");
+    expect(legacyFactory.sourceMetadata).toEqual({ origin: "bundled_factory_training_pack", packId: "factory-training-targets-84" });
+  });
+
+  it("keeps persisted localization authoritative over a newer bundled resource", () => {
+    const persisted: TargetRecord = {
+      ...target,
+      sourceMetadata: {
+        origin: "bundled_factory_training_pack", packId: "factory-training-targets-84",
+        titlePl: "Historyczna nazwa", revealTextPl: "Historyczny reveal",
+      },
+    };
+    expect(localizedTargetTitle(persisted, "pl")).toBe("Historyczna nazwa");
+    expect(localizedTargetReveal(persisted, "pl")).toBe("Historyczny reveal");
+  });
+
 });

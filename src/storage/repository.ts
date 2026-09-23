@@ -3,7 +3,7 @@ import type { CreateProviderConfigInput, ProviderConfig, ProviderModel } from ".
 import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionEventRecord, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
 import type { CreateJudgeRunInput, FrozenJudgeResultInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
-import type { BundledTargetLocalizationInput, CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord, UpdateTargetInput } from "../targets/types";
+import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord, UpdateTargetInput } from "../targets/types";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
 import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchConditionRecord, ResearchConfig, ResearchLockPlan, ResearchProjectRecord, ResearchResults, ResearchState } from "../research/types";
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
@@ -61,7 +61,6 @@ export interface AppRepository {
   listArchivedTargets(): Promise<TargetRecord[]>;
   createTarget(input: CreateTargetInput): Promise<TargetRecord>;
   updateTarget(id: string, input: UpdateTargetInput): Promise<TargetRecord>;
-  updateBundledTargetLocalization(id: string, input: BundledTargetLocalizationInput): Promise<TargetRecord>;
   archiveTarget(id: string): Promise<void>;
   restoreTarget(id: string): Promise<void>;
   previewPermanentDelete(kind: PurgeEntityKind, id: string): Promise<DeletionPreview>;

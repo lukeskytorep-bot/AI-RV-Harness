@@ -23,8 +23,7 @@ describe("bundled Training Targets", () => {
     const repository = {
       listTargets: vi.fn(async () => [{ id: BUNDLED_TRAINING_TARGETS[0].id }]),
       createTarget: vi.fn(async (input: Record<string, unknown>) => { created.push(input); return input; }),
-      updateBundledTargetLocalization: vi.fn(),
-    } as unknown as Pick<AppRepository, "listTargets" | "createTarget" | "updateBundledTargetLocalization">;
+    } as unknown as Pick<AppRepository, "listTargets" | "createTarget">;
     expect(await ensureBundledTrainingTargets(repository)).toBe(83);
     expect(created).toHaveLength(83);
     expect(created[0]?.id).toBe(BUNDLED_TRAINING_TARGETS[1].id);
@@ -36,33 +35,27 @@ describe("bundled Training Targets", () => {
     })).toBe(true);
   });
 
-  it("idempotently synchronizes accepted localization metadata for an existing factory target only", async () => {
+  it("keeps an existing factory target byte-for-byte unchanged and only inserts missing targets", async () => {
     const first = BUNDLED_TRAINING_TARGETS[0];
     const existingFactory = {
       id: first.id, collection: "training" as const, title: "legacy EN", revealText: "legacy reveal", tags: ["factory-training"],
       sourceMetadata: { origin: "bundled_factory_training_pack", packId: FACTORY_TARGET_PACK_ID, languages: ["en"], polishTranslationStatus: "not_supplied" },
       createdAt: "old", updatedAt: "old",
     };
-    const user = { id: "user-a", collection: "user" as const, title: "User", revealText: "User reveal", tags: [], sourceMetadata: { origin: "user_created" }, createdAt: "old", updatedAt: "old" };
-    const state = new Map([[existingFactory.id, existingFactory as any], [user.id, user as any]]);
-    const updateBundledTargetLocalization = vi.fn(async (id: string, input: Record<string, unknown>) => {
-      const current = state.get(id)!;
-      const updated = { ...current, sourceMetadata: { ...current.sourceMetadata, ...input } };
-      state.set(id, updated);
-      return updated;
-    });
+    const before = structuredClone(existingFactory);
+    const state = new Map([[existingFactory.id, existingFactory as any]]);
     const repository = {
       listTargets: vi.fn(async () => [...state.values()]),
-      createTarget: vi.fn(async (input: Record<string, unknown>) => { const created = { ...input, tags: input.tags ?? [], sourceMetadata: input.sourceMetadata ?? {}, createdAt: "new", updatedAt: "new" }; state.set(String(input.id), created); return created; }),
-      updateBundledTargetLocalization,
-    } as unknown as Pick<AppRepository, "listTargets" | "createTarget" | "updateBundledTargetLocalization">;
+      createTarget: vi.fn(async (input: Record<string, unknown>) => {
+        const created = { ...input, tags: input.tags ?? [], sourceMetadata: input.sourceMetadata ?? {}, createdAt: "new", updatedAt: "new" };
+        state.set(String(input.id), created);
+        return created;
+      }),
+    } as unknown as Pick<AppRepository, "listTargets" | "createTarget">;
 
     expect(await ensureBundledTrainingTargets(repository)).toBe(83);
-    expect(updateBundledTargetLocalization).toHaveBeenCalledTimes(1);
-    expect(updateBundledTargetLocalization).toHaveBeenCalledWith(first.id, expect.objectContaining({ titlePl: first.titlePl, revealTextPl: first.revealTextPl, polishTranslationStatus: "accepted", languages: ["en", "pl"] }));
-    expect(state.get(user.id)?.sourceMetadata).toEqual({ origin: "user_created" });
-
+    expect(state.get(first.id)).toEqual(before);
     expect(await ensureBundledTrainingTargets(repository)).toBe(0);
-    expect(updateBundledTargetLocalization).toHaveBeenCalledTimes(1);
+    expect(state.get(first.id)).toEqual(before);
   });
 });
