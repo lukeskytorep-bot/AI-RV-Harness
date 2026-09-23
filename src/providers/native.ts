@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { isTauriRuntime } from "../storage";
 import { normalizeModelDiscovery } from "./capabilities";
 import { detailedProviderDiagnosticsEnabled, recordProviderDebug } from "./debug";
@@ -10,6 +10,7 @@ import type {
   ProviderKind,
   ProviderMessage,
   ProviderModel,
+  ProviderStreamEvent,
   OpenRouterProviderRouting,
 } from "./types";
 import type { ProviderTimeoutPolicy } from "./streamingPolicy";
@@ -108,6 +109,7 @@ export async function providerChatAttempt(input: {
   timeoutPolicy?: ProviderTimeoutPolicy;
   signal?: AbortSignal;
   providerRouting?: OpenRouterProviderRouting;
+  onStreamEvent?: (event: ProviderStreamEvent) => void;
 }): Promise<ProviderChatResponse> {
   requireDesktop();
   if (input.signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
@@ -116,6 +118,8 @@ export async function providerChatAttempt(input: {
     void invoke("cancel_provider_request", { requestId }).catch(() => undefined);
   };
   input.signal?.addEventListener("abort", cancel, { once: true });
+  const onStream = input.onStreamEvent ? new Channel<ProviderStreamEvent>() : undefined;
+  if (onStream && input.onStreamEvent) onStream.onmessage = input.onStreamEvent;
   let response: NativeChatResponse;
   try {
     response = await invoke<NativeChatResponse>("provider_chat", {
@@ -135,6 +139,7 @@ export async function providerChatAttempt(input: {
         detailedDiagnostics: detailedProviderDiagnosticsEnabled(),
         providerRouting: input.providerRouting,
       },
+      onStream: onStream ?? null,
     });
   } catch (cause) {
     const normalized = normalizeProviderCallError(cause);

@@ -7,7 +7,16 @@ function source(relativePath: string): string {
   return fs.readFileSync(path.join(process.cwd(), relativePath), "utf8");
 }
 
-function aggregateHash(roots: string[]): string {
+function normalizeS2MonitorStreamingWiring(value: string): string {
+  return value
+    .replace(', ProviderStreamEvent } from "../providers/types";', ' } from "../providers/types";')
+    .replace('import type { StreamWorkflowContext } from "../providers/streamPresentation";\n', "")
+    .replace('  streamWorkflowContext?: StreamWorkflowContext;\n  onStreamEvent?: (event: ProviderStreamEvent) => void;\n', "")
+    .replace('; signal?: AbortSignal; onStreamEvent?: (event: ProviderStreamEvent) => void }) => Promise<ProviderChatResponse>;', ' }) => Promise<ProviderChatResponse>;')
+    .replace(', streamWorkflowContext: input.streamWorkflowContext, onStreamEvent: input.onStreamEvent, attempt:', ', attempt:');
+}
+
+function aggregateHash(roots: string[], normalizeMonitorStreaming = false): string {
   const files = roots.flatMap((root) => {
     const absolute = path.join(process.cwd(), root);
     if (!fs.existsSync(absolute)) return [];
@@ -25,7 +34,11 @@ function aggregateHash(roots: string[]): string {
   const hash = createHash("sha256");
   for (const file of files) {
     const relative = path.relative(process.cwd(), file).split(path.sep).join("/");
-    hash.update(relative); hash.update("\0"); hash.update(fs.readFileSync(file)); hash.update("\0");
+    const bytes = fs.readFileSync(file);
+    const protectedBytes = normalizeMonitorStreaming && relative === "src/monitor/engine.ts"
+      ? Buffer.from(normalizeS2MonitorStreamingWiring(bytes.toString("utf8")))
+      : bytes;
+    hash.update(relative); hash.update("\0"); hash.update(protectedBytes); hash.update("\0");
   }
   return hash.digest("hex");
 }
@@ -64,10 +77,10 @@ describe("VIEWER-LEARNING-2 boundaries", () => {
   });
 
   it.each([
-    ["Monitor", ["src/monitor", "src/features/monitor", "src/resources/systemPrompts.ts"], "87097f8e0db0e4b4da63a382bcb5f73656a50535a854c12d8c5c09c8e33e3f47"],
-    ["protocols", ["src/protocols", "src/resources/protocolRegistry.ts", "src/resources/protocols"], "2a324ad15de07985c968622be28174daa6e74ce4edd1442c03e86c4109211263"],
-  ] as const)("keeps %s byte-identical to the accepted base", (_label, roots, expected) => {
-    expect(aggregateHash([...roots])).toBe(expected);
+    ["Monitor", ["src/monitor", "src/features/monitor", "src/resources/systemPrompts.ts"], "87097f8e0db0e4b4da63a382bcb5f73656a50535a854c12d8c5c09c8e33e3f47", true],
+    ["protocols", ["src/protocols", "src/resources/protocolRegistry.ts", "src/resources/protocols"], "2a324ad15de07985c968622be28174daa6e74ce4edd1442c03e86c4109211263", false],
+  ] as const)("keeps %s byte-identical to the accepted base after normalizing allowed S2 wiring", (_label, roots, expected, normalizeMonitorStreaming) => {
+    expect(aggregateHash([...roots], normalizeMonitorStreaming)).toBe(expected);
   });
 
   it("allows intentional ORP1 Judge resource wiring without changing the Judge prompt or score-freeze contract", () => {

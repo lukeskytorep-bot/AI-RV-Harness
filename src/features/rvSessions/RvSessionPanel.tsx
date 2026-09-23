@@ -40,6 +40,7 @@ import { createSessionReplay, isRecoverableProviderInterruption } from "../../se
 import { runOrdinaryBatch, selectBatchTargets, type OrdinaryBatchProgress, type OrdinaryBatchSessionResult } from "../../sessions/batch";
 import { storeRevealArtifact } from "../../artifacts/native";
 import type { RevealArtifactRecord, RevealInput, RvSession } from "../../sessions/types";
+import type { SessionStreamPreview } from "../../sessions/streamingPreview";
 import { chooseDirectory } from "../../storage/native";
 import { runAutomaticPostRevealReview, sendPostRevealTurn } from "../../sessions/postReveal";
 import { ProtocolDialog } from "../../components/ProtocolDialog";
@@ -103,6 +104,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   const [temperature, setTemperature] = useState("");
   const [maxOutputTokens, setMaxOutputTokens] = useState(String(settings.defaultMaxOutputTokens));
   const [progress, setProgress] = useState<SessionProgress | null>(null);
+  const [streamPreview, setStreamPreview] = useState<SessionStreamPreview | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [revealText, setRevealText] = useState("");
   const [revealArtifacts, setRevealArtifacts] = useState<RevealArtifactRecord[]>([]);
@@ -276,6 +278,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
         viewer: { providerConfig: viewerProvider, model: viewerModel },
         ...(capturedMonitorProvider && capturedMonitorModel ? { monitor: { providerConfig: capturedMonitorProvider, model: capturedMonitorModel } } : {}),
         timeoutMs: settings.requestTimeoutMs,
+        streamWorkflowContext: "rv_session",
         maxRetries: settings.maxRetries,
       });
       if (updateVisibleTranscript) setPostRevealTranscript(transcript);
@@ -325,6 +328,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
     setSessionRunning(true);
     setActiveTargetId(executionScope === "single" ? automaticTarget?.id ?? null : null);
     setRunError(null);
+    setStreamPreview(null);
     setRevealText("");
     setRevealArtifacts([]);
     setAcceptedRevealText("");
@@ -347,12 +351,12 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
     const runOne = async (target: TargetRecord | null) => {
       const viewerNotes = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: viewerNotesEnabled });
       if (protocol === "lite") {
-        const result = await runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        const result = await runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
         await finishRevealedSession(result);
         return result;
       }
       if (protocol === "custom" && selectedCustomProtocol) {
-        const result = await runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        const result = await runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
         await finishRevealedSession(result);
         return result;
       }
@@ -376,7 +380,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
           requestTimeoutMs: settings.requestTimeoutMs,
           sessionCodePrefix: settings.sessionCodePrefix,
           ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}),
-          onProgress: setProgress,
+          streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress,
           ...(executionScope === "single" && runType === "automatic" && telepathicQuestionMode === "manual" ? { onManualQuestionStage: setManualQuestionHandle } : {}),
           ...(target ? { automaticTarget: target } : {}),
           ...(runType === "monitor" && monitorModel && monitorProvider ? { monitor: { providerConfig: monitorProvider, model: monitorModel, editablePrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, resolvedLanguage) } } : {}),
@@ -403,7 +407,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
         requestTimeoutMs: settings.requestTimeoutMs,
         sessionCodePrefix: settings.sessionCodePrefix,
         ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}),
-        onProgress: setProgress,
+        streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress,
         ...(target ? { automaticTarget: target } : {}),
         ...(runType === "monitor" && monitorModel && monitorProvider ? { monitor: { providerConfig: monitorProvider, model: monitorModel, editablePrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, resolvedLanguage) } } : {}),
       });
@@ -513,6 +517,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   const resumeTelepathicSession = async (session: RvSession) => {
     if (!repository || !runGuardRef.current.tryAcquire()) return;
     setRunError(null);
+    setStreamPreview(null);
     setProtocol("telepathic");
     setRunType("automatic");
     setExecutionScope("single");
@@ -550,7 +555,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
         requestTimeoutMs: settings.requestTimeoutMs,
         ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}),
         onManualQuestionStage: setManualQuestionHandle,
-        onProgress: setProgress,
+        streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress,
       });
       await finishRevealedSession(result);
     } catch (cause) {
@@ -571,6 +576,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   const runCapturedSession = async (session: RvSession, resume: boolean) => {
     if (!repository || !profile || !runGuardRef.current.tryAcquire()) return;
     setRunError(null);
+    setStreamPreview(null);
     setExecutionScope("single");
     setSessionRunning(true);
     setManualQuestionHandle(null);
@@ -625,24 +631,24 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
         setLiteVariant(variant);
         const resource = getRvLite(snapshot.sessionLanguage, variant);
         if (resource.contentSha256 !== snapshot.protocol.contentSha256) throw new Error("The captured RV Lite protocol version is unavailable.");
-        result = await runAutomaticRvLiteSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, profileName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, ...(snapshot.viewerNotes ? { viewerNotes: snapshot.viewerNotes } : {}), ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(capturedAutomaticReveal ? { capturedAutomaticReveal } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress });
+        result = await runAutomaticRvLiteSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, profileName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, ...(snapshot.viewerNotes ? { viewerNotes: snapshot.viewerNotes } : {}), ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(capturedAutomaticReveal ? { capturedAutomaticReveal } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress });
       } else if (snapshot.protocol.id === "telepathic-protocol") {
         setProtocol("telepathic");
         const resource = getTelepathicProtocol(snapshot.sessionLanguage);
         if (resource.contentSha256 !== snapshot.protocol.contentSha256) throw new Error("The captured Telepathic Protocol version is unavailable.");
         const questionMode = snapshot.telepathic?.step8QuestionMode ?? "predefined";
         setTelepathicQuestionMode(questionMode);
-        result = await runAutomaticTelepathicSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, viewerNotes: snapshot.viewerNotes, step8Questions: { mode: questionMode, questions: snapshot.telepathic?.predefinedQuestions ?? [] }, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress, ...(questionMode === "manual" && !snapshot.monitor ? { onManualQuestionStage: setManualQuestionHandle } : {}) });
+        result = await runAutomaticTelepathicSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, viewerNotes: snapshot.viewerNotes, step8Questions: { mode: questionMode, questions: snapshot.telepathic?.predefinedQuestions ?? [] }, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress, ...(questionMode === "manual" && !snapshot.monitor ? { onManualQuestionStage: setManualQuestionHandle } : {}) });
       } else if (snapshot.protocol.id === "full-rcp") {
         setProtocol("rcp");
         const current = getFullRcp(snapshot.sessionLanguage);
         const resource: ProtocolResource = { ...current, content: snapshot.protocol.fullContent, contentSha256: snapshot.protocol.contentSha256 };
-        result = await runAutomaticRcpSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, viewerNotes: snapshot.viewerNotes, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(capturedAutomaticReveal ? { capturedAutomaticReveal } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress });
+        result = await runAutomaticRcpSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, viewerNotes: snapshot.viewerNotes, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(capturedAutomaticReveal ? { capturedAutomaticReveal } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress });
       } else {
         setProtocol("custom");
         const saved = JSON.parse(snapshot.protocol.fullContent) as { systemPrompt?: string; steps: string[] };
         const resource: CustomProtocolVersion = { protocolId: snapshot.protocol.id, versionId: `captured:${snapshot.protocol.id}:${snapshot.protocol.version}`, displayName: snapshot.protocol.id, version: snapshot.protocol.version, language: snapshot.sessionLanguage, ...(saved.systemPrompt ? { systemPrompt: saved.systemPrompt } : {}), steps: saved.steps, contentHash: snapshot.protocol.contentSha256, createdAt: snapshot.createdAt };
-        result = await runAutomaticCustomSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, viewerNotes: snapshot.viewerNotes, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(capturedAutomaticReveal ? { capturedAutomaticReveal } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, onProgress: setProgress });
+        result = await runAutomaticCustomSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, viewerNotes: snapshot.viewerNotes, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(capturedAutomaticReveal ? { capturedAutomaticReveal } : {}), ...(resume ? { resumeSession: session } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress });
       }
       await finishRevealedSession(result);
     } catch (cause) {
@@ -674,7 +680,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
     setRunError(null);
     try {
       await repository.archiveRvSession(session.id);
-      if (progress?.sessionId === session.id) { setProgress(null); setPostRevealTranscript(""); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); }
+      if (progress?.sessionId === session.id) { setProgress(null); setStreamPreview(null); setPostRevealTranscript(""); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); }
       setRecentSessions((await repository.listRvSessions(workspace.id)).filter((item) => !item.researchProjectId));
     } catch (cause) { setRunError(cause instanceof Error ? cause.message : String(cause)); }
   };
@@ -730,7 +736,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
         rawMetadata: {},
         refreshedAt: snapshot.capabilityCapturedAt,
       };
-      const result = await sendPostRevealTurn({ repository, sessionId: progress.sessionId, existingTranscript: postRevealTranscript, providerConfig, model: viewerModel, content: postRevealText, timeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries });
+      const result = await sendPostRevealTurn({ repository, sessionId: progress.sessionId, existingTranscript: postRevealTranscript, providerConfig, model: viewerModel, content: postRevealText, timeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, streamWorkflowContext: "rv_session" });
       setPostRevealTranscript(result.transcript);
       setPostRevealText("");
       setRecentSessions((await repository.listRvSessions(workspace.id)).filter((session) => !session.researchProjectId));
@@ -776,7 +782,9 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
             </div>
             {executionScope === "batch" && batchProgress && <div className="batch-progress-strip"><strong>{copy.batchProgress}</strong><span>{batchProgress.current} / {batchProgress.total}</span><small>{copy.completedSessions}: {batchProgress.completed}</small></div>}
             {progress.metrics && <div className="session-run-metrics"><span><small>{copy.apiCalls}</small><strong>{progress.metrics.requestCount}</strong></span>{progress.metrics.totalTokens !== undefined && <span><small>{copy.tokens}</small><strong>{Math.round(progress.metrics.totalTokens).toLocaleString()}</strong></span>}{progress.metrics.costUsd !== undefined && <span><small>{copy.cost}</small><strong>${progress.metrics.costUsd.toFixed(4)}</strong></span>}<span><small>{copy.elapsed}</small><strong>{formatDuration(progress.metrics.sessionDurationMs)}</strong></span></div>}
-            {progress.transcript ? <SafeMarkdown className="live-transcript" content={progress.transcript} /> : <div className="session-wait"><span className="loader-orb" /><p>{progress.state === "Preflight" ? "Preflight" : `${copy.runningPhase} ${progress.phase ?? 1}`}</p></div>}
+            {progress.transcript && <SafeMarkdown className="live-transcript" content={progress.transcript} />}
+            {streamPreview?.content && <section className={`session-stream-preview ${streamPreview.role}`} aria-live="polite"><small>{streamPreview.role === "monitor" ? (settings.interfaceLanguage === "pl" ? "AI Monitor · odpowiedź w toku" : "AI Monitor · streaming") : (settings.interfaceLanguage === "pl" ? "AI Viewer · odpowiedź w toku" : "AI Viewer · streaming")}</small><SafeMarkdown content={streamPreview.content} /></section>}
+            {!progress.transcript && !streamPreview?.content && <div className="session-wait"><span className="loader-orb" /><p>{progress.state === "Preflight" ? "Preflight" : `${copy.runningPhase} ${progress.phase ?? 1}`}</p></div>}
             {progress.awaitingStep8Questions && manualQuestionHandle && <section className="telepathic-question-stage"><div><BrainCircuit size={18} /><span><strong>{settings.interfaceLanguage === "pl" ? "Krok 8 zakończony — pytania T9" : "Step 8 complete — T9 questions"}</strong><small>{settings.interfaceLanguage === "pl" ? `Zadane pytania: ${progress.telepathicQuestionCount ?? 0}. Możesz zadawać kolejne pojedynczo.` : `Questions asked: ${progress.telepathicQuestionCount ?? 0}. You may ask more, one at a time.`}</small></span></div><textarea rows={3} value={manualQuestionText} onChange={(event) => setManualQuestionText(event.target.value)} disabled={manualQuestionBusy} placeholder={settings.interfaceLanguage === "pl" ? "Wpisz pytanie do AI Viewera…" : "Enter a question for the AI Viewer…"} /><div className="telepathic-question-actions"><button className="secondary-button" disabled={!manualQuestionText.trim() || manualQuestionBusy} onClick={() => void askManualTelepathicQuestion()}>{manualQuestionBusy ? copy.sending : (settings.interfaceLanguage === "pl" ? "Zadaj pytanie" : "Ask question")}</button><button className="primary-button" disabled={manualQuestionBusy} onClick={finishManualTelepathicQuestions}>{settings.interfaceLanguage === "pl" ? "Zakończ Krok 8 i przejdź do Kroku 9" : "Finish Step 8 and continue to Step 9"}</button></div></section>}
             {progress.state === "AwaitingReveal" && <div className="reveal-box"><div><LockKeyhole size={18} /><span><strong>{copy.awaitingReveal}</strong><small>{copy.blindRunComplete}</small></span></div><textarea rows={5} value={revealText} onChange={(event) => setRevealText(event.target.value)} placeholder={copy.revealPlaceholder} /><div className="reveal-artifact-row"><label className="secondary-button reveal-file-button">{copy.revealFiles}<input type="file" multiple accept=".txt,.md,image/png,image/jpeg,image/webp,image/gif" disabled={artifactBusy} onChange={(event) => void attachRevealFiles(event.target.files)} /></label>{artifactBusy && <small>{copy.storingFile}</small>}{revealArtifacts.map((artifact) => <span className="reveal-artifact-chip" key={`${artifact.artifactId}-${artifact.originalFileName}`}>{artifact.mimeType.startsWith("image/") ? "▣" : "≡"} {artifact.originalFileName}</span>)}</div>{revealArtifacts.some((artifact) => artifact.mimeType.startsWith("image/")) && <small className="vision-guard-note">{copy.imageJudgeGuard}</small>}<button className="primary-button" disabled={artifactBusy || (!revealText.trim() && !revealArtifacts.length)} onClick={() => void submitReveal()}>{copy.submitReveal}</button></div>}
             {(progress.state === "Revealed" || progress.state === "Completed") && <>
@@ -790,7 +798,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
             </>}
             {progress.state === "Interrupted" && <><div className="provider-error"><CircleStop size={16} /><span><strong>{copy.interrupted}</strong>{recoverableSessions[progress.sessionId] ? <><small>{settings.interfaceLanguage === "pl" ? "Provider modelu nie zwrócił kompletnej odpowiedzi. Dotychczasowy przebieg został zapisany i można go kontynuować." : "The model provider did not return a complete response. The completed portion was saved and can be continued."}</small>{progress.stopReason && <details><summary>{settings.interfaceLanguage === "pl" ? "Szczegół techniczny" : "Technical detail"}</summary>{progress.stopReason}</details>}</> : progress.stopReason ? ` · ${progress.stopReason}` : ""}</span></div>{recoverableSessions[progress.sessionId] && (() => { const interruptedSession = recentSessions.find((item) => item.id === progress.sessionId); return interruptedSession ? <div className="session-resume-actions"><button className="primary-button" disabled={sessionRunning || batchRunning} onClick={() => void runCapturedSession(interruptedSession, true)}>{settings.interfaceLanguage === "pl" ? "Kontynuuj sesję" : "Continue session"}</button><button className="secondary-button" disabled={sessionRunning || batchRunning} onClick={() => void runCapturedSession(interruptedSession, false)}>{settings.interfaceLanguage === "pl" ? "Rozpocznij ponownie" : "Start again"}</button></div> : null; })()}</>}
             {executionScope === "batch" && batchResults.length > 0 && !batchRunning && <BatchEvaluation copy={copy} repository={repository} sessions={batchResults} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} profile={profile} defaultModelKey={resolveRoleDefault(profile, "judge", providerConfigs, allModels)} maxRetries={settings.maxRetries} timeoutMs={settings.requestTimeoutMs} onCompleted={() => void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId)))} />}
-            {!running && <button className="secondary-button new-session-button" onClick={() => { setProgress(null); setRunError(null); setActiveTargetId(null); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setPostRevealTranscript(""); setPostRevealText(""); setSessionExportPath(null); setBatchResults([]); setBatchProgress(null); }}>{copy.newAutomaticSession}</button>}
+            {!running && <button className="secondary-button new-session-button" onClick={() => { setProgress(null); setStreamPreview(null); setRunError(null); setActiveTargetId(null); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setPostRevealTranscript(""); setPostRevealText(""); setSessionExportPath(null); setBatchResults([]); setBatchProgress(null); }}>{copy.newAutomaticSession}</button>}
           </div>
         ) : <>
         <ConfigBlock label={copy.sessionScope}>

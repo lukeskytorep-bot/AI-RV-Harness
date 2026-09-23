@@ -10,8 +10,9 @@ import {
 } from "./openRouterEndpointCapability";
 import { providerRetryAllowance, providerRetryDelayMs } from "./retry";
 import { resolveOperationResourceProfile, type OperationKind } from "./operationResourceProfiles";
+import { resolveStreamPresentation, type StreamWorkflowContext } from "./streamPresentation";
 import { resolveProviderTimeoutPolicy, type ProviderTimeoutPolicy } from "./streamingPolicy";
-import type { EffectiveGenerationSettings, OpenRouterProviderRouting, ProviderChatResponse, ProviderConfig, ProviderMessage } from "./types";
+import type { EffectiveGenerationSettings, OpenRouterProviderRouting, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderStreamEvent } from "./types";
 
 export interface ProviderAttemptContext {
   operationId: string;
@@ -55,6 +56,7 @@ export type ProviderChatAttempt = (request: {
   timeoutPolicy?: ProviderTimeoutPolicy;
   signal?: AbortSignal;
   providerRouting?: OpenRouterProviderRouting;
+  onStreamEvent?: (event: ProviderStreamEvent) => void;
 }) => Promise<ProviderChatResponse>;
 
 /**
@@ -146,6 +148,8 @@ export async function executeProviderChat(input: {
   providerRouting?: OpenRouterProviderRouting;
   endpointDiscovery?: OpenRouterEndpointDiscovery;
   capacityProtectedRouting?: boolean;
+  streamWorkflowContext?: StreamWorkflowContext;
+  onStreamEvent?: (event: ProviderStreamEvent) => void;
   onAttemptFailure?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptFailure"];
 }): Promise<ProviderChatResponse> {
   const attempt = input.attempt ?? providerChatAttempt;
@@ -162,6 +166,10 @@ export async function executeProviderChat(input: {
   const settings = structuredClone(input.settings);
   let providerRouting = input.providerRouting ? structuredClone(input.providerRouting) : undefined;
   const resourceProfile = resolveOperationResourceProfile({ operationId: input.operationId, operationKind: input.operationKind });
+  const streamPresentation = resolveStreamPresentation({
+    operationKind: resourceProfile.operationKind,
+    workflowContext: input.streamWorkflowContext,
+  });
   const timeoutPolicy = resolveProviderTimeoutPolicy(resourceProfile.timeoutClass, input.timeoutMs);
   let openRouterRoutingMode: "normal" | "verified_fit" | "unknown_attempt" | "local_stop" | undefined;
   if (input.config.provider === "openrouter") {
@@ -207,6 +215,7 @@ export async function executeProviderChat(input: {
         timeoutPolicy: structuredClone(timeoutPolicy),
         signal: input.signal,
         providerRouting: providerRouting ? structuredClone(providerRouting) : undefined,
+        ...(streamPresentation.presentation === "live" && input.onStreamEvent ? { onStreamEvent: input.onStreamEvent } : {}),
       }),
     });
   } catch (cause) {
@@ -240,6 +249,7 @@ export function createProviderChatExecutor(options: {
   attempt?: ProviderChatAttempt;
   endpointDiscovery?: OpenRouterEndpointDiscovery;
   capacityProtectedRouting?: boolean;
+  streamWorkflowContext?: StreamWorkflowContext;
   onAttemptFailure?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptFailure"];
 }): ProviderChatAttempt {
   const executor: ProviderChatAttempt & { [PROVIDER_EXECUTOR_BRAND]?: boolean } = (request) => executeProviderChat({
@@ -250,6 +260,7 @@ export function createProviderChatExecutor(options: {
     attempt: options.attempt,
     endpointDiscovery: options.endpointDiscovery,
     capacityProtectedRouting: options.capacityProtectedRouting,
+    streamWorkflowContext: options.streamWorkflowContext,
     onAttemptFailure: options.onAttemptFailure,
   });
   executor[PROVIDER_EXECUTOR_BRAND] = true;

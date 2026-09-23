@@ -171,6 +171,11 @@ export interface ProviderUsage {
   costUsd?: number;
 }
 
+export type ProviderStreamEvent =
+  | { event: "started"; data: { providerRequestId?: string } }
+  | { event: "contentDelta"; data: { content: string } }
+  | { event: "finished"; data: { finishReason?: string } };
+
 export interface ProviderChatResponse {
   content: string;
   reasoningContent?: string;

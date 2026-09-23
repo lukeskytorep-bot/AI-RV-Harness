@@ -1,6 +1,7 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { createProviderChatExecutor } from "../providers/requestExecutor";
-import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
+import type { StreamWorkflowContext } from "../providers/streamPresentation";
+import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderStreamEvent } from "../providers/types";
 import type { CustomProtocolVersion } from "../protocols/types";
 import type { AppRepository } from "../storage/repository";
 import { buildAutomaticTargetReveal, targetHasSupportedReveal } from "../targets/service";
@@ -21,6 +22,7 @@ import {
 } from "../resources/systemPrompts";
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
+import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
 
 type CustomSessionRepository = Pick<
   AppRepository,
@@ -53,6 +55,8 @@ export interface AutomaticCustomRunInput {
   signal?: AbortSignal;
   maxRetries?: number;
   requestTimeoutMs?: number;
+  streamWorkflowContext?: StreamWorkflowContext;
+  onStreamPreview?: (preview: SessionStreamPreview | null) => void;
   maxSessionCostUsd?: number;
   sessionCodePrefix?: string;
   chat?: (input: {
@@ -62,6 +66,7 @@ export interface AutomaticCustomRunInput {
     settings: ReturnType<typeof resolveGenerationSettings>;
     timeoutMs?: number;
     signal?: AbortSignal;
+    onStreamEvent?: (event: ProviderStreamEvent) => void;
   }) => Promise<ProviderChatResponse>;
   onProgress?: (progress: SessionProgress) => void;
 }
@@ -78,7 +83,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
-  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.custom", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code } }) });
+  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.custom", streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code } }) });
   const messages: ProviderMessage[] = [
     ...(input.protocol.systemPrompt ? [{ role: "system" as const, content: input.protocol.systemPrompt }] : []),
     ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
@@ -179,12 +184,14 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
       }
       const requestStartedAt = Date.now();
       try {
-        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal });
+        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase: step }) });
+        input.onStreamPreview?.(null);
         response = { ...response, usage: costAuthorization.success(response.usage) };
         responseDurationMs = Date.now() - requestStartedAt;
         metrics = recordProviderRequest(metrics, response.usage, responseDurationMs);
         if (!response.content.trim()) throw new Error("empty provider response");
       } catch (cause) {
+        input.onStreamPreview?.(null);
         costAuthorization.failure();
         if (input.signal?.aborted) return stopRun("USER STOP");
         if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);

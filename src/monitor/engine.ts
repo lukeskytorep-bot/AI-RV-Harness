@@ -2,7 +2,8 @@ import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat } from "../providers/requestExecutor";
 import type { ProviderAttemptContext } from "../providers/requestExecutor";
 import type { ProviderCallError } from "../providers/providerError";
-import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
+import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderStreamEvent } from "../providers/types";
+import type { StreamWorkflowContext } from "../providers/streamPresentation";
 import type { InterfaceLanguage } from "../types";
 import { buildMonitorSystemPrompt, buildMonitorUserPacket, type MonitorPacketOptions } from "./prompt";
 
@@ -25,9 +26,11 @@ export async function evaluateMonitor(input: {
   maxRetries?: number;
   signal?: AbortSignal;
   attempt?: number;
+  streamWorkflowContext?: StreamWorkflowContext;
+  onStreamEvent?: (event: ProviderStreamEvent) => void;
   onOutputRecovery?: (cause: Error, semanticAttempt: 0) => void | Promise<void>;
   onTransportAttemptFailure?: (cause: ProviderCallError, context: ProviderAttemptContext) => void | Promise<void>;
-  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number }) => Promise<ProviderChatResponse>;
+  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal; onStreamEvent?: (event: ProviderStreamEvent) => void }) => Promise<ProviderChatResponse>;
 }): Promise<MonitorDecision> {
   if (input.model.providerConfigId !== input.providerConfig.id) throw new Error("Monitor model/provider route mismatch.");
   const messages: ProviderMessage[] = [
@@ -37,7 +40,7 @@ export async function evaluateMonitor(input: {
   for (const semanticAttempt of [0, 1] as const) {
     const maxOutputTokens = monitorOutputTokenBudget(input.model, semanticAttempt);
     const settings = resolveGenerationSettings(input.model.capabilities, { maxOutputTokens });
-    const response = await executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.requestTimeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: semanticAttempt === 0 ? "monitor.evaluate" : "monitor.output-recovery", attempt: input.chat, onAttemptFailure: input.onTransportAttemptFailure });
+    const response = await executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.requestTimeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: semanticAttempt === 0 ? "monitor.evaluate" : "monitor.output-recovery", streamWorkflowContext: input.streamWorkflowContext, onStreamEvent: input.onStreamEvent, attempt: input.chat, onAttemptFailure: input.onTransportAttemptFailure });
     if (!isIncompleteMonitorResponse(response)) return parseMonitorDecision(response.content);
     const incomplete = new Error(`provider returned an incomplete assistant response [finish-reason=${response.finishReason}]`);
     if (semanticAttempt === 1 || monitorOutputTokenBudget(input.model, 1) <= maxOutputTokens) {

@@ -1,7 +1,8 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { createProviderChatExecutor } from "../providers/requestExecutor";
 import type { OperationKind } from "../providers/operationResourceProfiles";
-import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
+import type { StreamWorkflowContext } from "../providers/streamPresentation";
+import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderStreamEvent } from "../providers/types";
 import { renderRvLiteSteps, type RvLiteProtocolResource } from "../resources/protocolRegistry";
 import {
   lockedViewerIdentity,
@@ -26,6 +27,7 @@ import { renderSpecialTask } from "./specialTask";
 import { politeRevealTransition } from "./courtesy";
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
+import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
 
 type RvLiteSessionRepository = Pick<
   AppRepository,
@@ -60,6 +62,8 @@ export interface AutomaticRvLiteRunInput {
   maxRetries?: number;
   requestTimeoutMs?: number;
   operationKind?: OperationKind;
+  streamWorkflowContext?: StreamWorkflowContext;
+  onStreamPreview?: (preview: SessionStreamPreview | null) => void;
   maxSessionCostUsd?: number;
   sessionCodePrefix?: string;
   chat?: (input: {
@@ -69,6 +73,7 @@ export interface AutomaticRvLiteRunInput {
     settings: ReturnType<typeof resolveGenerationSettings>;
     timeoutMs?: number;
     signal?: AbortSignal;
+    onStreamEvent?: (event: ProviderStreamEvent) => void;
   }) => Promise<ProviderChatResponse>;
   onProgress?: (progress: SessionProgress) => void;
 }
@@ -87,7 +92,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const steps = renderRvLiteSteps(input.protocol, input.profileName, sessionCode);
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
-  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.rv-lite", operationKind: input.operationKind, attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code } }) });
+  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.rv-lite", operationKind: input.operationKind, streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code } }) });
   const messages: ProviderMessage[] = [
     ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
     ...(viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage)! }] : []),
@@ -195,12 +200,14 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
       }
       const requestStartedAt = Date.now();
       try {
-        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal });
+        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase: promptNumber }) });
+        input.onStreamPreview?.(null);
         response = { ...response, usage: costAuthorization.success(response.usage) };
         responseDurationMs = Date.now() - requestStartedAt;
         metrics = recordProviderRequest(metrics, response.usage, responseDurationMs);
         if (!response.content.trim()) throw new Error("empty provider response");
       } catch (cause) {
+        input.onStreamPreview?.(null);
         costAuthorization.failure();
         if (input.signal?.aborted) return stopRun("USER STOP");
         if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
@@ -254,12 +261,14 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
           }
           const requestStartedAt = Date.now();
           try {
-            taskResponse = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal });
+            taskResponse = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase: promptNumber, source: "special_task" }) });
+            input.onStreamPreview?.(null);
             taskResponse = { ...taskResponse, usage: costAuthorization.success(taskResponse.usage) };
             taskDurationMs = Date.now() - requestStartedAt;
             metrics = recordProviderRequest(metrics, taskResponse.usage, taskDurationMs);
             if (!taskResponse.content.trim()) throw new Error("empty provider response");
           } catch (cause) {
+            input.onStreamPreview?.(null);
             costAuthorization.failure();
             if (input.signal?.aborted) return stopRun("USER STOP");
             if (!taskResponse) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);

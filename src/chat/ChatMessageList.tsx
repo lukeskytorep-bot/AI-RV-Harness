@@ -10,12 +10,13 @@ export interface ChatMessageListProps {
   threadCreatedAt?: string;
   messages: ChatMessage[];
   profile: Profile | null;
+  streamingAssistant?: string;
   sending: boolean;
   sendingLabel: string;
   emptyState: ReactNode;
 }
 
-export function ChatMessageList({ language, mode, threadCreatedAt, messages, profile, sending, sendingLabel, emptyState }: ChatMessageListProps) {
+export function ChatMessageList({ language, mode, threadCreatedAt, messages, profile, streamingAssistant = "", sending, sendingLabel, emptyState }: ChatMessageListProps) {
   const conversationStarted = mode === "conversation" && threadCreatedAt
     ? formatConversationStarted(threadCreatedAt, language)
     : null;
@@ -32,7 +33,13 @@ export function ChatMessageList({ language, mode, threadCreatedAt, messages, pro
           </article>
         </div>;
       })}
-      {sending && <div className="typing-row"><span className="loader-orb" />{sendingLabel}</div>}
+      {streamingAssistant && <div className="chat-message-block provisional-stream" aria-live="polite">
+        <article className="chat-message assistant">
+          <span>{initials(aiIsBeDisplayName(profile))}</span>
+          <div><small>{aiIsBeDisplayName(profile)}</small><SafeMarkdown content={streamingAssistant} /></div>
+        </article>
+      </div>}
+      {sending && !streamingAssistant && <div className="typing-row"><span className="loader-orb" />{sendingLabel}</div>}
     </div>}
   </>;
 }

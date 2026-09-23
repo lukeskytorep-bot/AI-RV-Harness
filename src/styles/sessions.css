@@ -59,6 +59,10 @@
 .session-state.revealed, .session-state.completed { color: var(--green); background: rgba(68, 190, 137, .1); }
 .stop-button { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; border: 1px solid rgba(216, 73, 90, .26); border-radius: 10px; color: #e16b79; background: rgba(216, 73, 90, .08); cursor: pointer; font-size: 11px; font-weight: 800; }
 .live-transcript { flex: 1; min-height: 360px; max-height: 560px; overflow: auto; margin: 0; padding: 20px 22px; color: var(--muted-strong); background: color-mix(in srgb, var(--bg) 35%, transparent); font-size: 14px; line-height: 1.62; }
+.session-stream-preview { display: grid; gap: 7px; padding: 14px 22px 18px; border-top: 1px solid var(--border); background: var(--surface-soft); }
+.session-stream-preview > small { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.session-stream-preview > :last-child { margin: 0; color: var(--muted-strong); font-size: 14px; line-height: 1.62; }
+.session-stream-preview.monitor > small { color: var(--violet); }
 .session-wait { flex: 1; min-height: 360px; display: grid; place-items: center; align-content: center; gap: 4px; color: var(--muted); }
 .session-wait p { font-size: 11px; }
 .reveal-box { display: grid; gap: 10px; padding: 16px 18px; border-top: 1px solid rgba(72, 205, 212, .18); background: var(--cyan-soft); }

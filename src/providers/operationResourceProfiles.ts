@@ -34,7 +34,7 @@ export interface OperationResourceProfile {
   outputPolicy: OperationOutputPolicy;
   reasoningPolicy: OperationReasoningPolicy;
   timeoutClass: OperationTimeoutClass;
-  // ORP1 default only. S2 must resolve the final presentation with workflow context before consuming it.
+  // ORP1 default only. S2 resolves the final presentation centrally with workflow context before transport/UI consumes it.
   streamPresentation: StreamPresentation;
   retryClass: OperationRetryClass;
   capacityRoutingPolicy: CapacityRoutingPolicy;

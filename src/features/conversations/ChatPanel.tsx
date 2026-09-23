@@ -16,7 +16,7 @@ import { resolveSessionLanguage } from "../../domain/localization";
 import { getCopy } from "../../i18n";
 import { resolveViewerDefault } from "../../profileModelDefaults";
 import { profileGenerationDefaults } from "../../profileViewerDefaults";
-import type { ProviderConfig, ProviderImageInput, ProviderModel } from "../../providers/types";
+import type { ProviderConfig, ProviderImageInput, ProviderModel, ProviderStreamEvent } from "../../providers/types";
 import { getFullRcp, getRvLite, getTelepathicProtocol } from "../../resources/protocolRegistry";
 import { buildEffectiveViewerPrompt, localizedViewerEditablePrompt, stripKnownLockedBaseVocabulary } from "../../resources/systemPrompts";
 import { createImportedWorkspaceSource, estimateTextTokens } from "../../sources/service";
@@ -55,6 +55,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
   const [maxOutputTokens, setMaxOutputTokens] = useState(String(settings.defaultMaxOutputTokens));
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [sending, setSending] = useState(false);
+  const [streamingAssistant, setStreamingAssistant] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pendingRetry, setPendingRetry] = useState<PendingChatTurn | null>(null);
   const [continuationFallback, setContinuationFallback] = useState<"send" | "retry" | null>(null);
@@ -319,11 +320,20 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
     setMaxOutputTokens(String(next));
   };
 
+  const handleVisibleStreamEvent = (event: ProviderStreamEvent) => {
+    if (event.event === "started") {
+      setStreamingAssistant("");
+      return;
+    }
+    if (event.event === "contentDelta") setStreamingAssistant((current) => current + event.data.content);
+  };
+
   const send = async (allowTextOnlyContinuation = false) => {
     const content = input.trim();
     if (!repository || !threadId || !activeProvider || !selectedModel || !content || sending) return;
     setInput("");
     setSending(true);
+    setStreamingAssistant("");
     setError(null);
     if (!allowTextOnlyContinuation) setContinuationFallback(null);
     let effectiveRvSystemPrompt = rvSystemPrompt;
@@ -378,6 +388,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
         maxRetries: settings.maxRetries,
         timeoutMs: settings.requestTimeoutMs,
         ...(attachedProtocol ? { attachedProtocol } : {}),
+        onStreamEvent: handleVisibleStreamEvent,
         allowTextOnlyContinuation,
       });
       clearPendingChatTurn(threadId);
@@ -400,6 +411,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
         setPendingRetry(null);
       }
       setMessages(storedMessages);
+      setStreamingAssistant("");
       setThreads(await repository.listChatThreads(workspace.id, mode));
       setSending(false);
     }
@@ -414,6 +426,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
       return;
     }
     setSending(true);
+    setStreamingAssistant("");
     setError(null);
     if (!allowTextOnlyContinuation) setContinuationFallback(null);
     try {
@@ -431,6 +444,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
         images: pendingRetry.images,
         maxRetries: settings.maxRetries,
         timeoutMs: settings.requestTimeoutMs,
+        onStreamEvent: handleVisibleStreamEvent,
         allowTextOnlyContinuation,
       });
       clearPendingChatTurn(pendingRetry.threadId);
@@ -445,6 +459,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
       }
     } finally {
       setMessages(await repository.listChatMessages(pendingRetry.threadId));
+      setStreamingAssistant("");
       setThreads(await repository.listChatThreads(workspace.id, mode));
       setSending(false);
     }
@@ -533,6 +548,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
         threadCreatedAt={threads.find((thread) => thread.id === threadId && thread.mode === mode)?.createdAt}
         messages={messages}
         profile={profile}
+        streamingAssistant={streamingAssistant}
         sending={sending}
         sendingLabel={copy.sending}
         emptyState={<div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div>}

@@ -1,6 +1,7 @@
 import { loadRevealImageForJudge } from "../artifacts/native";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat } from "../providers/requestExecutor";
+import type { StreamWorkflowContext } from "../providers/streamPresentation";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import { parsePostRevealTranscript } from "./postRevealTranscript";
@@ -21,6 +22,7 @@ export async function sendPostRevealTurn(input: {
   timeoutMs?: number;
   maxRetries?: number;
   signal?: AbortSignal;
+  streamWorkflowContext?: StreamWorkflowContext;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<{ transcript: string; response: ProviderChatResponse }> {
   const content = input.content.trim();
@@ -75,6 +77,7 @@ export async function sendPostRevealTurn(input: {
       signal: input.signal,
       configuredRetries: input.maxRetries,
       operationId: "post-reveal.viewer",
+      streamWorkflowContext: input.streamWorkflowContext,
       attempt: input.chat,
     }),
   })).response;
@@ -93,6 +96,7 @@ export async function runAutomaticPostRevealReview(input: {
   timeoutMs?: number;
   maxRetries?: number;
   signal?: AbortSignal;
+  streamWorkflowContext?: StreamWorkflowContext;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
   afterViewerReview?: (review: { content: string; transcript: string; response: ProviderChatResponse }) => Promise<void>;
 }): Promise<string> {
@@ -109,6 +113,7 @@ export async function runAutomaticPostRevealReview(input: {
     timeoutMs: input.timeoutMs,
     maxRetries: input.maxRetries,
     signal: input.signal,
+    streamWorkflowContext: input.streamWorkflowContext,
     ...(input.chat ? { chat: input.chat } : {}),
   });
   if (input.afterViewerReview) {
@@ -128,6 +133,7 @@ export async function runAutomaticPostRevealReview(input: {
     timeoutMs: input.timeoutMs,
     maxRetries: input.maxRetries,
     signal: input.signal,
+    streamWorkflowContext: input.streamWorkflowContext,
     ...(input.chat ? { chat: input.chat } : {}),
   });
   return monitorResult.transcript;
@@ -184,6 +190,7 @@ export async function sendMonitorPostRevealReview(input: {
   timeoutMs?: number;
   maxRetries?: number;
   signal?: AbortSignal;
+  streamWorkflowContext?: StreamWorkflowContext;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<{ transcript: string; response: ProviderChatResponse }> {
   const [snapshot, reveal, evidence, clarifications] = await Promise.all([
@@ -221,7 +228,7 @@ export async function sendMonitorPostRevealReview(input: {
     model: input.model,
     messages,
     operationKind: "post_reveal_monitor",
-    call: (settings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "post-reveal.monitor", attempt: input.chat }),
+    call: (settings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "post-reveal.monitor", streamWorkflowContext: input.streamWorkflowContext, attempt: input.chat }),
   })).response;
   const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "monitor", response.content);
   return { transcript, response };

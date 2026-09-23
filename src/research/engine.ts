@@ -124,6 +124,7 @@ export async function executeResearchSessions(input: {
       maxRetries: project.config.sessionPolicy?.maxRetries,
       requestTimeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
       operationKind: "research_viewer",
+        streamWorkflowContext: "research",
       sessionCodePrefix: project.config.sessionPolicy?.sessionCodePrefix,
       ...(project.config.sessionPolicy?.maxSessionCostUsd && project.config.sessionPolicy.maxSessionCostUsd > 0 ? { maxSessionCostUsd: project.config.sessionPolicy.maxSessionCostUsd } : {}),
       automaticTarget: target,
@@ -151,6 +152,7 @@ export async function executeResearchSessions(input: {
         timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
         maxRetries: project.config.sessionPolicy?.maxRetries,
         signal: input.signal,
+        streamWorkflowContext: "research",
       });
     }
     await input.repository.updateResearchAssignment(assignment.id, result.sessionId, "SessionComplete");
@@ -210,6 +212,7 @@ export async function judgeResearch(input: {
       maxRetries: project.config.sessionPolicy?.maxRetries,
       timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
       signal: input.signal,
+      streamWorkflowContext: "research",
     });
     const frozen = await input.repository.listJudgeScores(assignment.sessionId);
     if (frozen.length !== judgeSelections.length || frozen.some((score) => !score.frozenAt)) throw new Error("Judge score freeze verification failed.");

@@ -18,6 +18,22 @@ function sha256(relativePath: string): string {
   return createHash("sha256").update(fs.readFileSync(path.join(process.cwd(), relativePath))).digest("hex");
 }
 
+function normalizeS2TelepathicStreamingWiring(value: string): string {
+  return value
+    .replace('import type { StreamWorkflowContext } from "../providers/streamPresentation";\n', "")
+    .replace(', ProviderStreamEvent, ProviderUsage } from "../providers/types";', ', ProviderUsage } from "../providers/types";')
+    .replace('import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";\n', "")
+    .replace(/  streamWorkflowContext\?: StreamWorkflowContext;\n  onStreamPreview\?: \(preview: SessionStreamPreview \| null\) => void;\n/g, "")
+    .replace('    onStreamEvent?: (event: ProviderStreamEvent) => void;\n', "")
+    .replace(/, streamWorkflowContext: input\.streamWorkflowContext \?\? "rv_session", attempt:/g, ", attempt:")
+    .replace('        const phase = typeof metadata.step === "number" ? metadata.step : undefined;\n        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent: createSessionStreamPreviewHandler({ role: "viewer", phase, source: typeof metadata.source === "string" ? metadata.source : undefined, emit: input.onStreamPreview }) });',
+      '        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal });')
+    .replace('        const phase = typeof metadata.step === "number" ? metadata.step : undefined;\n        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: snapshot.generationSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent: createSessionStreamPreviewHandler({ role: "viewer", phase, source: typeof metadata.source === "string" ? metadata.source : "resume", emit: input.onStreamPreview }) });',
+      '        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: snapshot.generationSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal });')
+    .replace('          streamWorkflowContext: input.streamWorkflowContext ?? "rv_session",\n          onStreamEvent: createSessionStreamPreviewHandler({ role: "monitor", phase: step, exchangeNumber, source: "live_monitor", emit: input.onStreamPreview }),\n', "")
+    .replace(/^\s*input\.onStreamPreview\?\.\(null\);\n/gm, "");
+}
+
 describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
   it("keeps Training, RV Sessions and Research on the shared automatic Viewer review mechanism", () => {
     const training = source("src/features/training/trainingExecution.ts");
@@ -81,12 +97,15 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     })));
     expect(createHash("sha256").update(monitorContract).digest("hex")).toBe("40388dc3bc9b21f9105d94c5f77b8db4bf9d3eff8375ec877e92252e441b32c2");
 
-    const telepathicWithoutFieldGuideWiring = source("src/sessions/telepathicController.ts")
+    const telepathic = source("src/sessions/telepathicController.ts");
+    expect(telepathic).toContain('streamWorkflowContext: input.streamWorkflowContext ?? "rv_session"');
+    expect(telepathic).toContain('source: "live_monitor"');
+    const telepathicWithoutS2OrFieldGuideWiring = normalizeS2TelepathicStreamingWiring(telepathic)
       .replace("  lockedViewerBaseVocabulary,\n", "")
       .replace("  LOCKED_BASE_VOCABULARY_VERSION,\n", "")
       .replace(/^\s*\{ id: "locked-viewer-base-vocabulary"[^\n]*\n/m, "")
       .replace(/^\s*\.\.\.\(input\.rvSystemPrompt\.fieldGuide[^\n]*\n/m, "");
-    expect(createHash("sha256").update(telepathicWithoutFieldGuideWiring).digest("hex")).toBe("66abdc5a23016803c32422ed9bd1d68666da1f1147fee5819c89cf158c99d248");
+    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("66abdc5a23016803c32422ed9bd1d68666da1f1147fee5819c89cf158c99d248");
   });
 
   it("keeps AI Judge prompt, rubric, scoring and packet byte-identical while allowing ORP1 resource wiring in the engine", () => {

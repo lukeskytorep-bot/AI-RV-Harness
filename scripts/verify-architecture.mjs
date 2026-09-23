@@ -152,6 +152,7 @@ if (requestedRules.has("domain")) {
     "src/providers/native.ts",
     "src/providers/operationResourceProfiles.ts",
     "src/providers/requestExecutor.ts",
+    "src/providers/streamPresentation.ts",
     "src/providers/retry.ts",
     "src/providers/providerError.ts",
     "src/providers/service.ts",

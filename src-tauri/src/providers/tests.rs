@@ -15,7 +15,7 @@ use super::errors::safe_provider_error;
 use super::request_builders::{build_anthropic_request, build_google_request, build_openai_compatible_request, enable_openrouter_streaming};
 use super::response_parsers::{parse_anthropic_response, parse_google_response, parse_openai_compatible_response};
 use super::streaming::{
-    send_openrouter_streaming_chat_request, OpenRouterStreamAccumulator, SseDecoder, SseFrame,
+    send_openrouter_streaming_chat_request, OpenRouterStreamAccumulator, ProviderStreamEvent, SseDecoder, SseFrame,
     MAX_ACCUMULATED_STREAM_DATA_BYTES, MAX_PENDING_SSE_EVENT_BYTES,
 };
 use super::transport::retry_after_value_ms_at;
@@ -911,6 +911,121 @@ async fn start_sse_server(steps: Vec<(u64, &'static str)>) -> (String, tokio::ta
     (format!("http://{address}/chat/completions"), handle)
 }
 
+
+fn streamed_visible_text(events: &[ProviderStreamEvent]) -> String {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            ProviderStreamEvent::ContentDelta { content } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+#[test]
+fn s2_stream_accumulator_emits_visible_deltas_without_exposing_continuation_payloads() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    let events = accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {
+            "content": "visible",
+            "reasoning": "private-reasoning",
+            "reasoning_details": [{"type":"reasoning.text","text":"secret-state"}]
+        }, "finish_reason": null}]
+    }).to_string(), "secret", Some("s2-test")).unwrap();
+    assert!(matches!(&events[0], ProviderStreamEvent::ContentDelta { content } if content == "visible"));
+    assert_eq!(events.len(), 1);
+    let done = accumulator.process_data_with_events("[DONE]", "secret", Some("s2-test")).unwrap();
+    assert!(matches!(&done[0], ProviderStreamEvent::Finished { .. }));
+    let result = accumulator.finish(Some("s2-test".to_string())).unwrap();
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details/0/text"), Some(&json!("secret-state")));
+}
+
+
+#[test]
+fn s2_live_filter_hides_tagged_reasoning_without_changing_raw_accumulation() {
+    let cases = [
+        ("<think>", "</think>"),
+        ("<thinking>", "</thinking>"),
+        ("<reason>", "</reason>"),
+        ("<reasoning>", "</reasoning>"),
+        ("<thought>", "</thought>"),
+        ("<|begin_of_thought|>", "<|end_of_thought|>"),
+    ];
+
+    for (open, close) in cases {
+        let mut accumulator = OpenRouterStreamAccumulator::default();
+        let raw = format!("before {open}PRIVATE{close} VISIBLE");
+        let events = accumulator.process_data_with_events(&json!({
+            "choices": [{"delta": {"content": raw.clone()}, "finish_reason": "stop"}]
+        }).to_string(), "secret", Some("privacy-tags")).unwrap();
+        assert_eq!(streamed_visible_text(&events), "before  VISIBLE");
+        accumulator.process_data_with_events("[DONE]", "secret", Some("privacy-tags")).unwrap();
+        let result = accumulator.finish(Some("privacy-tags".to_string())).unwrap();
+        assert_eq!(result.payload.pointer("/choices/0/message/content").and_then(Value::as_str), Some(raw.as_str()));
+    }
+}
+
+#[test]
+fn s2_live_filter_holds_split_reasoning_tags_until_visibility_is_known() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    let first = accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"content": "<thi"}, "finish_reason": null}]
+    }).to_string(), "secret", Some("privacy-split-open")).unwrap();
+    assert!(streamed_visible_text(&first).is_empty());
+    let second = accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"content": "nk>secret</think>Visible"}, "finish_reason": "stop"}]
+    }).to_string(), "secret", Some("privacy-split-open")).unwrap();
+    assert_eq!(streamed_visible_text(&second), "Visible");
+
+    let mut closing = OpenRouterStreamAccumulator::default();
+    let first = closing.process_data_with_events(&json!({
+        "choices": [{"delta": {"content": "<think>secret</thi"}, "finish_reason": null}]
+    }).to_string(), "secret", Some("privacy-split-close")).unwrap();
+    assert!(streamed_visible_text(&first).is_empty());
+    let second = closing.process_data_with_events(&json!({
+        "choices": [{"delta": {"content": "nk>Visible"}, "finish_reason": "stop"}]
+    }).to_string(), "secret", Some("privacy-split-close")).unwrap();
+    assert_eq!(streamed_visible_text(&second), "Visible");
+}
+
+#[test]
+fn s2_live_filter_handles_multiple_reasoning_blocks_and_plain_text() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    let events = accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"content": "A<think>x</think>B<reason>y</reason>C"}, "finish_reason": null}]
+    }).to_string(), "secret", Some("privacy-multiple")).unwrap();
+    assert_eq!(streamed_visible_text(&events), "ABC");
+    let plain = accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"content": " normal visible text"}, "finish_reason": "stop"}]
+    }).to_string(), "secret", Some("privacy-multiple")).unwrap();
+    assert_eq!(streamed_visible_text(&plain), " normal visible text");
+}
+
+#[test]
+fn s2_live_filter_suppresses_typed_reasoning_parts_but_keeps_visible_parts() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    let events = accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"content": [
+            {"type": "reasoning", "text": "hidden reasoning"},
+            {"type": "output_text", "text": "visible final"}
+        ]}, "finish_reason": "stop"}]
+    }).to_string(), "secret", Some("privacy-typed")).unwrap();
+    assert_eq!(streamed_visible_text(&events), "visible final");
+}
+
+#[test]
+fn s2_live_filter_never_flushes_incomplete_reasoning_to_ui() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    let events = accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"content": "<think>private reasoning only"}, "finish_reason": "length"}]
+    }).to_string(), "secret", Some("privacy-incomplete")).unwrap();
+    assert!(streamed_visible_text(&events).is_empty());
+    let done = accumulator.process_data_with_events("[DONE]", "secret", Some("privacy-incomplete")).unwrap();
+    assert!(streamed_visible_text(&done).is_empty());
+    assert!(matches!(done.last(), Some(ProviderStreamEvent::Finished { .. })));
+}
+
 #[tokio::test]
 async fn stream_activity_resets_idle_timeout_without_a_whole_request_cap() {
     let (url, server) = start_sse_server(vec![
@@ -926,6 +1041,7 @@ async fn stream_activity_resets_idle_timeout_without_a_whole_request_cap() {
         None,
         "secret",
         &short_stream_policy(150, 250, 1_500),
+        None,
     ).await.unwrap();
     assert_eq!(result.payload.pointer("/choices/0/message/content"), Some(&json!("hello world")));
     assert_eq!(result.payload.pointer("/usage/total_tokens"), Some(&json!(2)));
@@ -960,6 +1076,7 @@ async fn oversized_pending_event_after_semantic_output_closes_retry_boundary() {
         None,
         "secret",
         &short_stream_policy(500, 500, 2_000),
+        None,
     ).await.unwrap_err();
     assert_eq!(error.code.as_ref(), "response_body_too_large");
     assert_eq!(error.semantic_output_started, Some(true));
@@ -981,6 +1098,7 @@ async fn emergency_ceiling_remains_bounded_even_when_keepalives_continue() {
         None,
         "secret",
         &short_stream_policy(200, 250, 400),
+        None,
     ).await.unwrap_err();
     assert_eq!(error.code.as_ref(), "timeout");
     assert!(error.message.contains("emergency"));
@@ -1000,6 +1118,7 @@ async fn genuinely_idle_stream_times_out_without_creating_semantic_output() {
         None,
         "secret",
         &short_stream_policy(300, 150, 1_000),
+        None,
     ).await.unwrap_err();
     assert_eq!(error.code.as_ref(), "timeout");
     assert_eq!(error.semantic_output_started, None);
@@ -1019,6 +1138,7 @@ async fn user_cancellation_aborts_an_active_stream() {
             Some("stream-cancel-1"),
             "secret",
             &short_stream_policy(300, 1_200, 2_000),
+            None,
         ).await
     });
     tokio::time::sleep(Duration::from_millis(200)).await;

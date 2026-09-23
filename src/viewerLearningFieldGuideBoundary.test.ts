@@ -31,6 +31,13 @@ import nativeCompatibility from "../src-tauri/src/ux_data_compatibility.rs?raw";
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
+const normalizeS2MonitorStreamingWiring = (value: string) => value
+  .replace(', ProviderStreamEvent } from "../providers/types";', ' } from "../providers/types";')
+  .replace('import type { StreamWorkflowContext } from "../providers/streamPresentation";\n', "")
+  .replace('  streamWorkflowContext?: StreamWorkflowContext;\n  onStreamEvent?: (event: ProviderStreamEvent) => void;\n', "")
+  .replace('; signal?: AbortSignal; onStreamEvent?: (event: ProviderStreamEvent) => void }) => Promise<ProviderChatResponse>;', ' }) => Promise<ProviderChatResponse>;')
+  .replace(', streamWorkflowContext: input.streamWorkflowContext, onStreamEvent: input.onStreamEvent, attempt:', ', attempt:');
+
 describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
   it("allows intentional ORP1 Post-Reveal/Judge resource wiring while keeping protected prompts, Monitor, retry and purge invariants", () => {
     expect(postReveal).toContain('operationKind: "post_reveal_viewer"');
@@ -39,7 +46,10 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(judgeEngine).toContain("recordFrozenJudgeResult");
     expect(sha256(judgePrompt)).toBe("dc2af6fe6b478360cab414c4e4d9bc3f3a4d9fae95819f8420f116c8652df492");
     expect(sha256(monitorPrompt)).toBe("3eda515707b2a6e356e49b3b04d191397a760de248a0ba0c46391e950609dc85");
-    expect(sha256(monitorEngine)).toBe("73d2f461bca2a2ef7e07e0013c742f86f5bc5d14f4aec77510977c70e8b86065");
+    // S2 may add only the normalized streaming wiring; all other Monitor execution bytes remain protected.
+    expect(monitorEngine).toContain('operationKind: "live_monitor"');
+    expect(monitorEngine).toContain("onStreamEvent: input.onStreamEvent");
+    expect(sha256(normalizeS2MonitorStreamingWiring(monitorEngine))).toBe("73d2f461bca2a2ef7e07e0013c742f86f5bc5d14f4aec77510977c70e8b86065");
     // Provider transport evolves intentionally in E1/S1. Protect retry semantics rather than byte identity.
     expect(providerRetry).toContain('if (details.semanticOutputStarted) return "never"');
     expect(providerRetry).toContain('details.code === "response_body_too_large"');

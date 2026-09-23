@@ -9,7 +9,7 @@ import {
   rememberConversationContinuationIssue,
   rememberConversationContinuationState,
 } from "./continuationMemory";
-import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderImageInput, ProviderMessage, ProviderModel } from "../providers/types";
+import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderImageInput, ProviderMessage, ProviderModel, ProviderStreamEvent } from "../providers/types";
 import { getConversationPrompt } from "../resources/prompts/conversation";
 import type { AppRepository } from "../storage/repository";
 import type { ChatMessage, ChatMode, InterfaceLanguage } from "../types";
@@ -101,6 +101,7 @@ export async function sendChatTurn(input: {
   maxRetries?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onStreamEvent?: (event: ProviderStreamEvent) => void;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
   allowTextOnlyContinuation?: boolean;
   resolveBindingEndpoint?: (config: ProviderConfig) => Promise<string>;
@@ -173,6 +174,8 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
     signal: input.signal,
     configuredRetries: input.maxRetries,
     operationId: input.mode === "conversation" ? "chat.conversation" : "chat.manual-rv",
+    streamWorkflowContext: input.mode === "conversation" ? "conversation" : "manual_rv",
+    onStreamEvent: input.onStreamEvent,
     attempt: input.chat,
   });
   const assistant = await input.repository.appendChatMessage(input.threadId, "assistant", response.content);

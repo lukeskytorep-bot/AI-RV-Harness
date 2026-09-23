@@ -2,7 +2,9 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use reqwest::RequestBuilder;
+use serde::Serialize;
 use serde_json::{json, Map, Value};
+use tauri::ipc::Channel;
 
 use super::{ProviderCallError, ProviderTimeoutPolicy};
 use super::errors::{provider_error_metadata, request_error, safe_provider_error};
@@ -11,6 +13,14 @@ use super::transport::{retry_after_ms, run_cancellable_chat_request};
 // Hard transport guards. They bound stream memory independently from model/output settings.
 pub(super) const MAX_PENDING_SSE_EVENT_BYTES: usize = 2 * 1024 * 1024;
 pub(super) const MAX_ACCUMULATED_STREAM_DATA_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "event", content = "data")]
+pub(crate) enum ProviderStreamEvent {
+    Started { provider_request_id: Option<String> },
+    ContentDelta { content: String },
+    Finished { finish_reason: Option<String> },
+}
 
 #[derive(Debug)]
 pub(super) struct StreamingChatResult {
@@ -134,6 +144,138 @@ fn parse_sse_event(event: &[u8]) -> Result<Option<SseFrame>, ProviderCallError> 
     }
 }
 
+const LIVE_REASONING_TAGS: [(&str, &str); 6] = [
+    ("<think>", "</think>"),
+    ("<thinking>", "</thinking>"),
+    ("<reason>", "</reason>"),
+    ("<reasoning>", "</reasoning>"),
+    ("<thought>", "</thought>"),
+    ("<|begin_of_thought|>", "<|end_of_thought|>"),
+];
+
+#[derive(Default)]
+struct LiveVisibleContentFilter {
+    pending: String,
+    reasoning_close_tag: Option<&'static str>,
+}
+
+impl LiveVisibleContentFilter {
+    fn filter_content(&mut self, value: Option<&Value>) -> String {
+        match value {
+            Some(Value::String(text)) => self.push_text(text),
+            Some(Value::Array(parts)) => {
+                let mut visible = String::new();
+                for part in parts {
+                    match part {
+                        Value::String(text) => visible.push_str(&self.push_text(text)),
+                        Value::Object(_) => {
+                            let kind = part
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_ascii_lowercase();
+                            let reasoning_part =
+                                kind.contains("reason") || kind.contains("think") || kind.contains("thought");
+                            if reasoning_part {
+                                continue;
+                            }
+                            let text = part
+                                .get("text")
+                                .and_then(Value::as_str)
+                                .or_else(|| part.pointer("/text/value").and_then(Value::as_str))
+                                .or_else(|| part.get("thinking").and_then(Value::as_str))
+                                .or_else(|| part.get("reasoning").and_then(Value::as_str));
+                            if let Some(text) = text {
+                                visible.push_str(&self.push_text(text));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                visible
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn push_text(&mut self, text: &str) -> String {
+        self.pending.push_str(text);
+        let mut visible = String::new();
+
+        loop {
+            if let Some(close_tag) = self.reasoning_close_tag {
+                let lower = self.pending.to_ascii_lowercase();
+                if let Some(offset) = lower.find(close_tag) {
+                    let end = offset + close_tag.len();
+                    self.pending.drain(..end);
+                    self.reasoning_close_tag = None;
+                    continue;
+                }
+
+                let keep = longest_ascii_suffix_prefix(&self.pending, &[close_tag]);
+                if keep == 0 {
+                    self.pending.clear();
+                } else if self.pending.len() > keep {
+                    self.pending.drain(..self.pending.len() - keep);
+                }
+                break;
+            }
+
+            let lower = self.pending.to_ascii_lowercase();
+            let next_open = LIVE_REASONING_TAGS
+                .iter()
+                .filter_map(|(open, close)| lower.find(*open).map(|offset| (offset, *open, *close)))
+                .min_by_key(|entry| entry.0);
+
+            if let Some((offset, open, close)) = next_open {
+                visible.push_str(&self.pending[..offset]);
+                self.pending.drain(..offset + open.len());
+                self.reasoning_close_tag = Some(close);
+                continue;
+            }
+
+            let opens = LIVE_REASONING_TAGS.map(|(open, _)| open);
+            let keep = longest_ascii_suffix_prefix(&self.pending, &opens);
+            let emit_len = self.pending.len().saturating_sub(keep);
+            if emit_len > 0 {
+                visible.push_str(&self.pending[..emit_len]);
+                self.pending.drain(..emit_len);
+            }
+            break;
+        }
+
+        visible
+    }
+
+    fn finish(&mut self) -> String {
+        if self.reasoning_close_tag.is_some() {
+            self.pending.clear();
+            return String::new();
+        }
+        std::mem::take(&mut self.pending)
+    }
+}
+
+fn longest_ascii_suffix_prefix(value: &str, candidates: &[&str]) -> usize {
+    let lower = value
+        .as_bytes()
+        .iter()
+        .map(u8::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    candidates
+        .iter()
+        .flat_map(|candidate| 1..candidate.len())
+        .filter(|length| *length <= lower.len())
+        .filter(|length| {
+            let suffix = &lower[lower.len() - *length..];
+            candidates.iter().any(|candidate| {
+                candidate.len() > *length && &candidate.as_bytes()[..*length] == suffix
+            })
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 #[derive(Default)]
 pub(super) struct OpenRouterStreamAccumulator {
     content: String,
@@ -147,19 +289,28 @@ pub(super) struct OpenRouterStreamAccumulator {
     usage: Option<Value>,
     openrouter_metadata: Option<Value>,
     accumulated_stream_data_bytes: usize,
+    live_visible_content_filter: LiveVisibleContentFilter,
     done: bool,
     pub(super) semantic_output_started: bool,
 }
 
 impl OpenRouterStreamAccumulator {
     fn process_frame(&mut self, frame: SseFrame, secret: &str, request_id: Option<&str>) -> Result<(), ProviderCallError> {
+        self.process_frame_with_events(frame, secret, request_id).map(|_| ())
+    }
+
+    fn process_frame_with_events(&mut self, frame: SseFrame, secret: &str, request_id: Option<&str>) -> Result<Vec<ProviderStreamEvent>, ProviderCallError> {
         match frame {
-            SseFrame::Comment => Ok(()),
-            SseFrame::Data(data) => self.process_data(&data, secret, request_id),
+            SseFrame::Comment => Ok(Vec::new()),
+            SseFrame::Data(data) => self.process_data_with_events(&data, secret, request_id),
         }
     }
 
     pub(super) fn process_data(&mut self, data: &str, secret: &str, request_id: Option<&str>) -> Result<(), ProviderCallError> {
+        self.process_data_with_events(data, secret, request_id).map(|_| ())
+    }
+
+    pub(super) fn process_data_with_events(&mut self, data: &str, secret: &str, request_id: Option<&str>) -> Result<Vec<ProviderStreamEvent>, ProviderCallError> {
         let Some(next_total) = self
             .accumulated_stream_data_bytes
             .checked_add(data.len())
@@ -175,7 +326,13 @@ impl OpenRouterStreamAccumulator {
         self.accumulated_stream_data_bytes = next_total;
         if data.trim() == "[DONE]" {
             self.done = true;
-            return Ok(());
+            let mut events = Vec::new();
+            let visible_tail = self.live_visible_content_filter.finish();
+            if !visible_tail.is_empty() {
+                events.push(ProviderStreamEvent::ContentDelta { content: visible_tail });
+            }
+            events.push(ProviderStreamEvent::Finished { finish_reason: self.finish_reason.clone() });
+            return Ok(events);
         }
         let payload: Value = serde_json::from_str(data).map_err(|error| {
             self.error(
@@ -234,7 +391,7 @@ impl OpenRouterStreamAccumulator {
         }
 
         let Some(choice) = payload.get("choices").and_then(Value::as_array).and_then(|choices| choices.first()) else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         if let Some(value) = choice.get("finish_reason").and_then(Value::as_str) {
             self.finish_reason = Some(value.to_string());
@@ -255,8 +412,13 @@ impl OpenRouterStreamAccumulator {
         if first_semantic_chunk(delta, &content, &reasoning, reasoning_details.map(Vec::as_slice)) {
             self.semantic_output_started = true;
         }
+        let mut events = Vec::new();
         if !content.is_empty() {
             self.content.push_str(&content);
+        }
+        let visible_content = self.live_visible_content_filter.filter_content(delta.get("content"));
+        if !visible_content.is_empty() {
+            events.push(ProviderStreamEvent::ContentDelta { content: visible_content });
         }
         if !reasoning.is_empty() {
             self.reasoning.push_str(&reasoning);
@@ -264,7 +426,7 @@ impl OpenRouterStreamAccumulator {
         if let Some(details) = reasoning_details {
             self.reasoning_details.extend(details.iter().cloned());
         }
-        Ok(())
+        Ok(events)
     }
 
     fn error(&self, code: &str, message: impl Into<String>, phase: &str, request_id: Option<&str>) -> ProviderCallError {
@@ -407,6 +569,7 @@ pub(super) async fn send_openrouter_streaming_chat_request(
     request_id: Option<&str>,
     secret: &str,
     policy: &ProviderTimeoutPolicy,
+    on_stream: Option<&Channel<ProviderStreamEvent>>,
 ) -> Result<StreamingChatResult, ProviderCallError> {
     let first_event_timeout = Duration::from_millis(policy.first_event_timeout_ms);
     let idle_timeout = Duration::from_millis(policy.idle_timeout_ms);
@@ -428,6 +591,11 @@ pub(super) async fn send_openrouter_streaming_chat_request(
         let status = response.status();
         let retry_after = retry_after_ms(response.headers());
         let provider_request_id = response_request_id(&response);
+        if status.is_success() {
+            if let Some(channel) = on_stream {
+                let _ = channel.send(ProviderStreamEvent::Started { provider_request_id: provider_request_id.clone() });
+            }
+        }
         if !status.is_success() {
             let error_body_deadline = earlier_deadline(
                 Instant::now() + Duration::from_millis(policy.non_streaming_timeout_ms),
@@ -509,7 +677,12 @@ pub(super) async fn send_openrouter_streaming_chat_request(
                         error
                     })?;
                     for frame in frames {
-                        accumulator.process_frame(frame, secret, provider_request_id.as_deref())?;
+                        let events = accumulator.process_frame_with_events(frame, secret, provider_request_id.as_deref())?;
+                        if let Some(channel) = on_stream {
+                            for event in events {
+                                let _ = channel.send(event);
+                            }
+                        }
                     }
                 }
                 Some(Err(error)) => {
@@ -529,7 +702,12 @@ pub(super) async fn send_openrouter_streaming_chat_request(
                         error
                     })?;
                     for frame in frames {
-                        accumulator.process_frame(frame, secret, provider_request_id.as_deref())?;
+                        let events = accumulator.process_frame_with_events(frame, secret, provider_request_id.as_deref())?;
+                        if let Some(channel) = on_stream {
+                            for event in events {
+                                let _ = channel.send(event);
+                            }
+                        }
                     }
                     return accumulator.finish(provider_request_id);
                 }

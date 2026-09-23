@@ -78,7 +78,7 @@ export function JudgeEvaluation({ copy, repository, sessionId, language, models,
       const existing = await repository.listJudgeScores(sessionId);
       const missingJudges = selectMissingJudgeSelections(existing, judges);
       const next = missingJudges.length
-        ? await runBlindJudging({ repository, sessionId, language, judges: missingJudges, maxRetries, timeoutMs, onProgress: (done) => setCompleted(existing.length + done) })
+        ? await runBlindJudging({ repository, sessionId, language, judges: missingJudges, maxRetries, timeoutMs, streamWorkflowContext: "rv_session", onProgress: (done) => setCompleted(existing.length + done) })
         : { anonymousSessionId: "stored", scores: existing, aggregate: aggregateJudgeScores(existing) };
       await repository.updateRvSessionState(sessionId, "Completed");
       setResult(next);
@@ -181,7 +181,7 @@ export function BatchEvaluation({ copy, repository, sessions, language, models, 
         const existing = await repository.listJudgeScores(session.sessionId);
         const missingJudges = selectMissingJudgeSelections(existing, judges);
         const result = missingJudges.length
-          ? await runBlindJudging({ repository, sessionId: session.sessionId, language, judges: missingJudges, maxRetries, timeoutMs })
+          ? await runBlindJudging({ repository, sessionId: session.sessionId, language, judges: missingJudges, maxRetries, timeoutMs, streamWorkflowContext: "rv_session" })
           : { anonymousSessionId: "stored", scores: existing, aggregate: aggregateJudgeScores(existing) };
         if (result.scores.length !== judgeCount) throw new Error("Judge score set is incomplete after recovery.");
         await repository.updateRvSessionState(session.sessionId, "Completed");

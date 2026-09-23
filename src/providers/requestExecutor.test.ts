@@ -347,3 +347,66 @@ describe("E1 OpenRouter endpoint-capability integration", () => {
     expect(attempt.mock.calls[0][0].providerRouting).toBeUndefined();
   });
 });
+
+describe("S2 stream presentation integration", () => {
+  const config = { id: "pc-s2", provider: "openai" as const, label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
+  const settings = { requested: {}, effective: {}, omitted: [] };
+  const response = { content: "ok", usage: {} };
+
+  it("forwards a live stream callback for visible Conversation work", async () => {
+    const onStreamEvent = vi.fn();
+    const attempt = vi.fn(async (request) => {
+      expect(request.onStreamEvent).toBe(onStreamEvent);
+      return response;
+    });
+    await executeProviderChat({
+      config,
+      modelId: "model",
+      messages: [{ role: "user", content: "hello" }],
+      settings,
+      operationKind: "conversation",
+      streamWorkflowContext: "conversation",
+      onStreamEvent,
+      attempt,
+    });
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses callbacks for Research Judge even when a caller supplies one", async () => {
+    const onStreamEvent = vi.fn();
+    const attempt = vi.fn(async (request) => {
+      expect(request.onStreamEvent).toBeUndefined();
+      return response;
+    });
+    await executeProviderChat({
+      config,
+      modelId: "model",
+      messages: [{ role: "user", content: "judge" }],
+      settings,
+      operationKind: "judge",
+      streamWorkflowContext: "research",
+      onStreamEvent,
+      attempt,
+    });
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps RV Session Judge structured-final instead of forwarding provisional JSON", async () => {
+    const onStreamEvent = vi.fn();
+    const attempt = vi.fn(async (request) => {
+      expect(request.onStreamEvent).toBeUndefined();
+      return response;
+    });
+    await executeProviderChat({
+      config,
+      modelId: "model",
+      messages: [{ role: "user", content: "judge" }],
+      settings,
+      operationKind: "judge",
+      streamWorkflowContext: "rv_session",
+      onStreamEvent,
+      attempt,
+    });
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+});

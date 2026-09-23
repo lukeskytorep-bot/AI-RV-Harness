@@ -2,7 +2,8 @@ import { resolveGenerationSettings } from "../providers/capabilities";
 import { sha256Text } from "../application/sha256";
 import { createProviderChatExecutor, providerChatOnce } from "../providers/requestExecutor";
 import type { OperationKind } from "../providers/operationResourceProfiles";
-import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
+import type { StreamWorkflowContext } from "../providers/streamPresentation";
+import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderStreamEvent } from "../providers/types";
 import type { ProtocolResource } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
@@ -31,6 +32,7 @@ import {
 } from "../resources/systemPrompts";
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
+import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
 
 export { detectRepetitiveOutput } from "./repetitionGuard";
 
@@ -61,6 +63,8 @@ export interface AutomaticRcpRunInput {
   maxRetries?: number;
   requestTimeoutMs?: number;
   operationKind?: OperationKind;
+  streamWorkflowContext?: StreamWorkflowContext;
+  onStreamPreview?: (preview: SessionStreamPreview | null) => void;
   maxSessionCostUsd?: number;
   sessionCodePrefix?: string;
   automaticTarget?: TargetRecord;
@@ -87,6 +91,7 @@ export interface AutomaticRcpRunInput {
     settings: ReturnType<typeof resolveGenerationSettings>;
     timeoutMs?: number;
     signal?: AbortSignal;
+    onStreamEvent?: (event: ProviderStreamEvent) => void;
   }) => Promise<ProviderChatResponse>;
   onSessionCreated?: (sessionId: string, sessionCode: string) => Promise<void>;
   onProgress?: (progress: SessionProgress) => void;
@@ -137,6 +142,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     configuredRetries: maxRetries,
     operationId: "session.rcp",
     operationKind: input.operationKind,
+    streamWorkflowContext: input.streamWorkflowContext ?? "rv_session",
     attempt: input.chat,
     onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, {
       eventType: "PROVIDER_ATTEMPT_FAILED",
@@ -315,12 +321,15 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
           settings: effectiveSettings,
           timeoutMs: input.requestTimeoutMs,
           signal: input.signal,
+          onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase }),
         });
+        input.onStreamPreview?.(null);
         response = { ...response, usage: costAuthorization.success(response.usage) };
         responseDurationMs = Date.now() - requestStartedAt;
         metrics = recordProviderRequest(metrics, response.usage, responseDurationMs);
         if (!response.content.trim()) throw new Error("empty provider response");
       } catch (cause) {
+        input.onStreamPreview?.(null);
         costAuthorization.failure();
         if (input.signal?.aborted) return stop("USER STOP");
         if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
@@ -395,12 +404,15 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
               settings: effectiveSettings,
               timeoutMs: input.requestTimeoutMs,
               signal: input.signal,
+              onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase, source: "special_task" }),
             });
+            input.onStreamPreview?.(null);
             taskResponse = { ...taskResponse, usage: costAuthorization.success(taskResponse.usage) };
             taskDurationMs = Date.now() - requestStartedAt;
             metrics = recordProviderRequest(metrics, taskResponse.usage, taskDurationMs);
             if (!taskResponse.content.trim()) throw new Error("empty provider response");
           } catch (cause) {
+            input.onStreamPreview?.(null);
             costAuthorization.failure();
             if (input.signal?.aborted) return stop("USER STOP");
             if (!taskResponse) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
@@ -461,6 +473,8 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
             requestTimeoutMs: input.requestTimeoutMs,
             maxRetries,
             signal: input.signal,
+            streamWorkflowContext: input.streamWorkflowContext ?? "rv_session",
+            onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "monitor", phase, exchangeNumber }),
             onOutputRecovery: async (cause) => {
               await input.repository.appendSessionEvent(sessionId, {
                 eventType: "MONITOR_PROVIDER_ERROR",
@@ -496,7 +510,9 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
               }
             },
             });
+            input.onStreamPreview?.(null);
           } catch (cause) {
+            input.onStreamPreview?.(null);
             if (cause instanceof CostGuardStop) return stop(cause.message);
             if (input.signal?.aborted) return stop("USER STOP");
             monitorError = cause instanceof Error ? cause.message : String(cause);
@@ -552,12 +568,15 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
               settings: effectiveSettings,
               timeoutMs: input.requestTimeoutMs,
               signal: input.signal,
+              onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase, source: "monitor_intervention" }),
             });
+            input.onStreamPreview?.(null);
             deepening = { ...deepening, usage: costAuthorization.success(deepening.usage) };
             deepeningDurationMs = Date.now() - requestStartedAt;
             metrics = recordProviderRequest(metrics, deepening.usage, deepeningDurationMs);
             if (!deepening.content.trim()) throw new Error("empty provider response");
           } catch (cause) {
+            input.onStreamPreview?.(null);
             costAuthorization.failure();
             if (input.signal?.aborted) return stop("USER STOP");
             if (!deepening) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);

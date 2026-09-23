@@ -2,6 +2,7 @@ import { buildJudgePacket } from "../domain/judgePacket";
 import { aggregateJudgeScores, computeJudgeTotal, validateJudgeScores, type JudgeComponentScores } from "../domain/scoring";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat } from "../providers/requestExecutor";
+import type { StreamWorkflowContext } from "../providers/streamPresentation";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { ProviderImageInput } from "../providers/types";
 import type { RevealInput } from "../sessions/types";
@@ -34,6 +35,7 @@ export interface RunJudgingInput {
   maxRetries?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
+  streamWorkflowContext?: StreamWorkflowContext;
   chat?: (request: {
     config: ProviderConfig;
     modelId: string;
@@ -90,6 +92,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
     signal: input.signal,
     configuredRetries: input.maxRetries,
     operationId: "judge.evaluate",
+    streamWorkflowContext: input.streamWorkflowContext,
     attempt: input.chat,
   });
   const scores: JudgeScoreRecord[] = [...existing];

@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tauri::ipc::Channel;
 
 use crate::secrets;
 
@@ -20,7 +21,7 @@ use endpoint_capabilities::discover_openrouter_model_endpoints;
 use errors::provider_error_metadata;
 use request_builders::{build_chat_request, enable_openrouter_streaming};
 use response_parsers::parse_chat_response;
-use streaming::send_openrouter_streaming_chat_request;
+use streaming::{send_openrouter_streaming_chat_request, ProviderStreamEvent};
 use transport::{cancel_request, client, json_response, send_chat_request};
 use validation::validate_chat_request;
 
@@ -370,7 +371,10 @@ pub async fn provider_discover_model_endpoints(request: ProviderEndpointRequest)
 }
 
 #[tauri::command]
-pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatResponse, ProviderCallError> {
+pub async fn provider_chat(
+    request: ProviderChatRequest,
+    on_stream: Option<Channel<ProviderStreamEvent>>,
+) -> Result<ProviderChatResponse, ProviderCallError> {
     validate_chat_request(&request).map_err(ProviderCallError::configuration)?;
     let base = provider_base_url(request.provider, request.base_url.as_deref()).map_err(ProviderCallError::configuration)?;
     let binding = normalized_credential_endpoint(&base).map_err(ProviderCallError::configuration)?;
@@ -408,6 +412,7 @@ pub async fn provider_chat(request: ProviderChatRequest) -> Result<ProviderChatR
             request.request_id.as_deref(),
             &secret,
             &timeout_policy,
+            on_stream.as_ref(),
         )
         .await?;
         (streamed.payload, streamed.request_id, streamed.semantic_output_started)

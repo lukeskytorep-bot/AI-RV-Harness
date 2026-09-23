@@ -37,28 +37,29 @@ describe("ORP1 operation-resource profile boundaries", () => {
     expect(rcp).toContain("operationKind: input.operationKind");
   });
 
-  it("keeps streamPresentation as an ORP1 default until S2 adds workflow-aware resolution", () => {
+  it("keeps streamPresentation workflow-aware through the single S2 resolver", () => {
     const profiles = source("src/providers/operationResourceProfiles.ts");
-    expect(profiles).toContain("ORP1 default only. S2 must resolve the final presentation with workflow context before consuming it.");
+    const resolver = source("src/providers/streamPresentation.ts");
+    expect(profiles).toContain("S2 resolves the final presentation centrally with workflow context before transport/UI consumes it.");
+    expect(resolver).toContain("resolveStreamPresentation");
+    expect(resolver).toContain('workflowContext === "training" || workflowContext === "research"');
+    expect(resolver).toContain('presentation = "hidden"');
+    expect(resolver).toContain('presentation = "structured-final"');
 
     const srcRoot = path.join(process.cwd(), "src");
     const consumers: string[] = [];
     const visit = (dir: string) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const absolute = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          visit(absolute);
-          continue;
-        }
+        if (entry.isDirectory()) { visit(absolute); continue; }
         if (!/\.(ts|tsx)$/.test(entry.name) || /\.test\.(ts|tsx)$/.test(entry.name)) continue;
         const relative = path.relative(process.cwd(), absolute).replaceAll("\\", "/");
         if (relative === "src/providers/operationResourceProfiles.ts") continue;
-        if (fs.readFileSync(absolute, "utf8").includes("streamPresentation")) consumers.push(relative);
+        if (fs.readFileSync(absolute, "utf8").includes(".streamPresentation")) consumers.push(relative);
       }
     };
     visit(srcRoot);
-
-    expect(consumers).toEqual([]);
+    expect(consumers).toEqual(["src/providers/streamPresentation.ts"]);
   });
 
   it("keeps Judge/post-Reveal analytical headroom and uses capacity-bound learning-object budgets", () => {

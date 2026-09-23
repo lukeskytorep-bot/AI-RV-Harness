@@ -212,6 +212,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
           maxRetries: execution.transport.maxRetries,
           requestTimeoutMs: execution.transport.requestTimeoutMs,
           operationKind: "training_blind_viewer",
+          streamWorkflowContext: "training",
           sessionCodePrefix: execution.transport.sessionCodePrefix,
           ...(execution.transport.maxSessionCostUsd > 0 ? { maxSessionCostUsd: execution.transport.maxSessionCostUsd } : {}),
           onProgress: (sessionProgress) => input.onProgress?.({ index, total: working.targetIds.length, target, sessionProgress }),
@@ -248,6 +249,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
             timeoutMs: execution.transport.requestTimeoutMs,
             maxRetries: execution.transport.maxRetries,
             signal: input.signal,
+            streamWorkflowContext: "training",
           });
           const completedReview = findCompletedAutomaticViewerReviewRecord(transcript, execution.language);
           viewerReview = completedReview?.content ?? null;
@@ -351,6 +353,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
             maxRetries: execution.transport.maxRetries,
             timeoutMs: execution.transport.requestTimeoutMs,
             signal: input.signal,
+            streamWorkflowContext: "training",
           });
         }
         checkpoint = { ...checkpoint, stage: "judging_completed" };
