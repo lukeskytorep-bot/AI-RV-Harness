@@ -59,7 +59,24 @@ describe("PROFILE-SETUP-UNIFIED-CONTROLLER-1 boundaries", () => {
     expect(createSource).toContain("setup.resetAdvancedOptions");
     expect(createSource).not.toContain("addProvider(");
     expect(createSource).not.toContain("refreshProviderModels(");
+    expect(createSource).toContain("setup.providerModels.map");
+    expect(createSource).not.toContain("setup.visibleViewerModels");
+    expect(createSource).not.toContain("setup.modelSearch");
+    expect(createSource).not.toContain("setup.setModelSearch");
+    expect(createSource).not.toContain("copy.modelSearch");
     expect(createSource).not.toContain("defaultViewerSystemPrompt");
+  });
+
+
+  it("feeds the one Create Profile Viewer selector from the refreshed full provider inventory", () => {
+    const createStart = profileDialogs.indexOf("export function CreateProfileDialog");
+    const editStart = profileDialogs.indexOf("export interface EditProfileDialogProps");
+    const createSource = profileDialogs.slice(createStart, editStart);
+    expect(createSource).toContain("setup.providerModels.map");
+    expect(createSource).not.toContain("setup.visibleViewerModels");
+    expect(createSource).not.toContain("setup.modelSearch");
+    expect(controllerSource).toContain("await refreshProviderModels(repository, provider);");
+    expect(controllerSource).toContain("await reloadInventory(provider.id);");
   });
 
   it("does not roll back a consciously created global provider when Profile creation is cancelled", () => {
