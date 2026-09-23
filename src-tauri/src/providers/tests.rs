@@ -757,8 +757,8 @@ fn stream_accumulator_bounds_total_data_and_preserves_semantic_retry_boundary() 
                 "finish_reason": null
             }]
         }).to_string();
-        match accumulator.process_data(&event, "secret", Some("stream-limit")) {
-            Ok(()) => {}
+        match accumulator.process_data_with_events(&event, "secret", Some("stream-limit")) {
+            Ok(_) => {}
             Err(error) => {
                 saw_limit = Some(error);
                 break;
@@ -776,15 +776,15 @@ fn stream_accumulator_accepts_large_but_bounded_valid_output() {
     let mut accumulator = OpenRouterStreamAccumulator::default();
     let content = "x".repeat(512 * 1024);
     for _ in 0..4 {
-        accumulator.process_data(&json!({
+        accumulator.process_data_with_events(&json!({
             "choices": [{"delta": {"content": content.clone()}, "finish_reason": null}]
         }).to_string(), "secret", None).unwrap();
     }
-    accumulator.process_data(&json!({
+    accumulator.process_data_with_events(&json!({
         "choices": [{"delta": {"content": ""}, "finish_reason": "stop"}],
         "usage": {"completion_tokens": 10}
     }).to_string(), "secret", None).unwrap();
-    accumulator.process_data("[DONE]", "secret", None).unwrap();
+    accumulator.process_data_with_events("[DONE]", "secret", None).unwrap();
     let result = accumulator.finish(None).unwrap();
     assert_eq!(result.payload.pointer("/choices/0/message/content").and_then(Value::as_str).map(str::len), Some(2 * 1024 * 1024));
 }
@@ -792,20 +792,20 @@ fn stream_accumulator_accepts_large_but_bounded_valid_output() {
 #[test]
 fn stream_accumulator_preserves_reasoning_details_usage_and_terminal_state() {
     let mut accumulator = OpenRouterStreamAccumulator::default();
-    accumulator.process_data(&json!({
+    accumulator.process_data_with_events(&json!({
         "id": "gen-1",
         "model": "model-actual",
         "provider": "SiliconFlow",
         "choices": [{"delta": {"reasoning": "think ", "reasoning_details": [stream_reasoning_detail("r1", "a", 0)]}, "finish_reason": null}]
     }).to_string(), "secret", Some("header-id")).unwrap();
-    accumulator.process_data(&json!({
+    accumulator.process_data_with_events(&json!({
         "choices": [{"delta": {"reasoning": "more", "reasoning_details": [stream_reasoning_detail("r2", "b", 1)], "content": "answer"}, "finish_reason": "stop"}]
     }).to_string(), "secret", Some("header-id")).unwrap();
-    accumulator.process_data(&json!({
+    accumulator.process_data_with_events(&json!({
         "choices": [{"delta": {"content": ""}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 7, "total_tokens": 17}
     }).to_string(), "secret", Some("header-id")).unwrap();
-    accumulator.process_data("[DONE]", "secret", Some("header-id")).unwrap();
+    accumulator.process_data_with_events("[DONE]", "secret", Some("header-id")).unwrap();
     let result = accumulator.finish(Some("header-id".to_string())).unwrap();
     assert!(result.semantic_output_started);
     assert_eq!(result.payload.pointer("/choices/0/message/content"), Some(&json!("answer")));
@@ -819,13 +819,13 @@ fn stream_accumulator_preserves_reasoning_details_usage_and_terminal_state() {
 #[test]
 fn metadata_only_stream_frames_do_not_cross_first_semantic_chunk_boundary() {
     let mut accumulator = OpenRouterStreamAccumulator::default();
-    accumulator.process_data(&json!({
+    accumulator.process_data_with_events(&json!({
         "id": "gen-1",
         "model": "model",
         "choices": [{"delta": {"role": "assistant", "content": ""}, "finish_reason": null}]
     }).to_string(), "secret", None).unwrap();
     assert!(!accumulator.semantic_output_started);
-    accumulator.process_data(&json!({
+    accumulator.process_data_with_events(&json!({
         "choices": [{"delta": {"reasoning_details": [stream_reasoning_detail("r1", "thinking", 0)]}, "finish_reason": null}]
     }).to_string(), "secret", None).unwrap();
     assert!(accumulator.semantic_output_started);
@@ -835,12 +835,12 @@ fn metadata_only_stream_frames_do_not_cross_first_semantic_chunk_boundary() {
 fn midstream_error_records_whether_semantic_output_already_started() {
     let error_event = json!({"error": {"type": "server", "code": "upstream_disconnect", "message": "gone"}, "choices": [{"delta": {}, "finish_reason": "error"}]}).to_string();
     let mut before = OpenRouterStreamAccumulator::default();
-    let error = before.process_data(&error_event, "secret", Some("r")).unwrap_err();
+    let error = before.process_data_with_events(&error_event, "secret", Some("r")).unwrap_err();
     assert_eq!(error.semantic_output_started, None);
 
     let mut after = OpenRouterStreamAccumulator::default();
-    after.process_data(&json!({"choices":[{"delta":{"content":"partial"}}]}).to_string(), "secret", None).unwrap();
-    let error = after.process_data(&error_event, "secret", Some("r")).unwrap_err();
+    after.process_data_with_events(&json!({"choices":[{"delta":{"content":"partial"}}]}).to_string(), "secret", None).unwrap();
+    let error = after.process_data_with_events(&error_event, "secret", Some("r")).unwrap_err();
     assert_eq!(error.semantic_output_started, Some(true));
 
     let same_event = json!({
@@ -848,18 +848,18 @@ fn midstream_error_records_whether_semantic_output_already_started() {
         "choices": [{"delta": {"content": "partial-in-error-frame"}, "finish_reason": "error"}]
     }).to_string();
     let mut same_frame = OpenRouterStreamAccumulator::default();
-    let error = same_frame.process_data(&same_event, "secret", Some("r")).unwrap_err();
+    let error = same_frame.process_data_with_events(&same_event, "secret", Some("r")).unwrap_err();
     assert_eq!(error.semantic_output_started, Some(true));
 }
 
 #[test]
 fn malformed_stream_event_and_abrupt_eof_are_failures_and_keep_retry_boundary() {
     let mut before = OpenRouterStreamAccumulator::default();
-    let error = before.process_data("{broken", "secret", None).unwrap_err();
+    let error = before.process_data_with_events("{broken", "secret", None).unwrap_err();
     assert_eq!(error.semantic_output_started, None);
 
     let mut after = OpenRouterStreamAccumulator::default();
-    after.process_data(&json!({"choices":[{"delta":{"content":"partial"}}]}).to_string(), "secret", None).unwrap();
+    after.process_data_with_events(&json!({"choices":[{"delta":{"content":"partial"}}]}).to_string(), "secret", None).unwrap();
     let error = after.finish(None).unwrap_err();
     assert_eq!(error.code.as_ref(), "response_body_read");
     assert_eq!(error.semantic_output_started, Some(true));
@@ -868,7 +868,7 @@ fn malformed_stream_event_and_abrupt_eof_are_failures_and_keep_retry_boundary() 
 #[test]
 fn stream_tool_delta_is_semantic_even_before_visible_text() {
     let mut accumulator = OpenRouterStreamAccumulator::default();
-    accumulator.process_data(&json!({
+    accumulator.process_data_with_events(&json!({
         "choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-1"}]}}]
     }).to_string(), "secret", None).unwrap();
     assert!(accumulator.semantic_output_started);

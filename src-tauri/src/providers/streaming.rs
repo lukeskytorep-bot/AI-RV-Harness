@@ -295,19 +295,11 @@ pub(super) struct OpenRouterStreamAccumulator {
 }
 
 impl OpenRouterStreamAccumulator {
-    fn process_frame(&mut self, frame: SseFrame, secret: &str, request_id: Option<&str>) -> Result<(), ProviderCallError> {
-        self.process_frame_with_events(frame, secret, request_id).map(|_| ())
-    }
-
     fn process_frame_with_events(&mut self, frame: SseFrame, secret: &str, request_id: Option<&str>) -> Result<Vec<ProviderStreamEvent>, ProviderCallError> {
         match frame {
             SseFrame::Comment => Ok(Vec::new()),
             SseFrame::Data(data) => self.process_data_with_events(&data, secret, request_id),
         }
-    }
-
-    pub(super) fn process_data(&mut self, data: &str, secret: &str, request_id: Option<&str>) -> Result<(), ProviderCallError> {
-        self.process_data_with_events(data, secret, request_id).map(|_| ())
     }
 
     pub(super) fn process_data_with_events(&mut self, data: &str, secret: &str, request_id: Option<&str>) -> Result<Vec<ProviderStreamEvent>, ProviderCallError> {
