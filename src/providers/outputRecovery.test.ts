@@ -79,7 +79,7 @@ describe("analytical output recovery", () => {
     expect(physical).toHaveBeenCalledTimes(3);
   });
 
-  it("uses durable learning-object capacity instead of the generic 8192 -> 16384 analytical reserve", async () => {
+  it("uses the centralized 4096 -> 8192 learning-object headroom instead of the generic analytical reserve", async () => {
     const budgets: number[] = [];
     const call = vi.fn(async (settings) => {
       budgets.push(settings.effective.maxOutputTokens ?? 0);
@@ -93,11 +93,20 @@ describe("analytical output recovery", () => {
       learningObjectCapacityTokens: 1024,
       call,
     });
-    expect(budgets).toEqual([2048, 3072]);
+    expect(budgets).toEqual([4096, 8192]);
     expect(result.attempt).toBe(1);
   });
 
-  it("uses the capacity-plus-overhead value as a ceiling while refusing routes below the durable object capacity", () => {
+  it("keeps route/model output capability authoritative over learning-object headroom", () => {
+    const cappedRecoveryRoute = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 4096 } };
+    expect(analyticalOutputBudget({
+      model: cappedRecoveryRoute,
+      messages: [{ role: "user", content: "Reflect" }],
+      operationKind: "viewer_notes_reflection",
+      learningObjectCapacityTokens: 1024,
+      attempt: 1,
+    })).toBe(4096);
+
     const exactCapacityRoute = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 8192 } };
     expect(analyticalOutputBudget({
       model: exactCapacityRoute,
@@ -115,6 +124,18 @@ describe("analytical output recovery", () => {
       learningObjectCapacityTokens: 8192,
       attempt: 0,
     })).toThrow(/4096\/8192/);
+  });
+
+  it("stops after the single semantic recovery when the second learning-object response is still incomplete", async () => {
+    const call = vi.fn().mockResolvedValue({ content: '{"partial":true}', finishReason: "length", usage: {} });
+    await expect(callWithAnalyticalOutputRecovery({
+      model,
+      messages: [{ role: "user", content: "Reflect" }],
+      operationKind: "viewer_notes_reflection",
+      learningObjectCapacityTokens: 1024,
+      call,
+    })).rejects.toThrow(/incomplete assistant response/);
+    expect(call).toHaveBeenCalledTimes(2);
   });
 
   it("protects the context window and refuses an unusably small remainder", () => {

@@ -69,12 +69,14 @@ describe("ORP1 operation resource profiles", () => {
     }
   });
 
-  it("derives learning-object completion allowances from durable capacity plus centralized overhead", () => {
-    expect(learningObjectOutputAllowance(1024, 0)).toBe(2048);
-    expect(learningObjectOutputAllowance(2048, 0)).toBe(3072);
+  it("applies 4096/8192 learning-object floors without shrinking larger capacity-derived allowances", () => {
+    expect(learningObjectOutputAllowance(1024, 0)).toBe(4096);
+    expect(learningObjectOutputAllowance(1024, 1)).toBe(8192);
+    expect(learningObjectOutputAllowance(2048, 0)).toBe(4096);
+    expect(learningObjectOutputAllowance(2048, 1)).toBe(8192);
     expect(learningObjectOutputAllowance(4096, 0)).toBe(5120);
+    expect(learningObjectOutputAllowance(4096, 1)).toBe(8192);
     expect(learningObjectOutputAllowance(8192, 0)).toBe(9216);
-    expect(learningObjectOutputAllowance(1024, 1)).toBe(3072);
     expect(learningObjectOutputAllowance(8192, 1)).toBe(10240);
   });
 

@@ -70,6 +70,26 @@ describe("ORP1 operation-resource profile boundaries", () => {
     expect(consumers).toEqual(["src/providers/streamPresentation.ts"]);
   });
 
+  it("keeps the 4096/8192 learning-object floors owned only by the centralized operation-resource policy", () => {
+    const profiles = source("src/providers/operationResourceProfiles.ts");
+    expect(profiles).toContain("LEARNING_OBJECT_INITIAL_MINIMUM_ALLOWANCE_TOKENS = 4096");
+    expect(profiles).toContain("LEARNING_OBJECT_RECOVERY_MINIMUM_ALLOWANCE_TOKENS = 8192");
+    expect(profiles).toContain("Math.max(baseAllowance, LEARNING_OBJECT_INITIAL_MINIMUM_ALLOWANCE_TOKENS)");
+    expect(profiles).toContain("LEARNING_OBJECT_RECOVERY_MINIMUM_ALLOWANCE_TOKENS");
+
+    for (const relative of [
+      "src/features/training/trainingExecution.ts",
+      "src/aiCenter/fieldGuideUpdate.ts",
+      "src/aiCenter/viewerNotes.ts",
+      "src/providers/native.ts",
+      "src/providers/openRouterEndpointCapability.ts",
+    ]) {
+      const contents = source(relative);
+      expect(contents).not.toContain("LEARNING_OBJECT_INITIAL_MINIMUM_ALLOWANCE_TOKENS");
+      expect(contents).not.toContain("LEARNING_OBJECT_RECOVERY_MINIMUM_ALLOWANCE_TOKENS");
+    }
+  });
+
   it("keeps Judge/post-Reveal analytical headroom and uses capacity-bound learning-object budgets", () => {
     const judge = source("src/judge/engine.ts");
     const postReveal = source("src/sessions/postReveal.ts");

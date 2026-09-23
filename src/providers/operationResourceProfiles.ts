@@ -155,6 +155,8 @@ export const LEARNING_OBJECT_STRUCTURED_OUTPUT_OVERHEAD_TOKENS = 256;
 export const LEARNING_OBJECT_CHANGE_SUMMARY_OVERHEAD_TOKENS = 256;
 export const LEARNING_OBJECT_SAFETY_ALLOWANCE_TOKENS = 512;
 export const LEARNING_OBJECT_RECOVERY_EXTRA_ALLOWANCE_TOKENS = 1024;
+export const LEARNING_OBJECT_INITIAL_MINIMUM_ALLOWANCE_TOKENS = 4096;
+export const LEARNING_OBJECT_RECOVERY_MINIMUM_ALLOWANCE_TOKENS = 8192;
 
 export function getOperationResourceProfile(operationKind: OperationKind): OperationResourceProfile {
   return PROFILE_BY_KIND[operationKind];
@@ -183,9 +185,15 @@ export function resolveOperationResourceProfile(input: {
 
 export function learningObjectOutputAllowance(capacityTokens: number, attempt: 0 | 1): number {
   const capacity = Math.max(1, Math.floor(capacityTokens));
-  return capacity
+  const baseAllowance = capacity
     + LEARNING_OBJECT_STRUCTURED_OUTPUT_OVERHEAD_TOKENS
     + LEARNING_OBJECT_CHANGE_SUMMARY_OVERHEAD_TOKENS
-    + LEARNING_OBJECT_SAFETY_ALLOWANCE_TOKENS
-    + (attempt === 1 ? LEARNING_OBJECT_RECOVERY_EXTRA_ALLOWANCE_TOKENS : 0);
+    + LEARNING_OBJECT_SAFETY_ALLOWANCE_TOKENS;
+  if (attempt === 0) {
+    return Math.max(baseAllowance, LEARNING_OBJECT_INITIAL_MINIMUM_ALLOWANCE_TOKENS);
+  }
+  return Math.max(
+    baseAllowance + LEARNING_OBJECT_RECOVERY_EXTRA_ALLOWANCE_TOKENS,
+    LEARNING_OBJECT_RECOVERY_MINIMUM_ALLOWANCE_TOKENS,
+  );
 }
