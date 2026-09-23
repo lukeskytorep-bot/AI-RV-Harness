@@ -99,6 +99,37 @@ describe("provider request executor", () => {
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves one immutable I1 transport envelope and reuses it across physical retries", async () => {
+    const envelopes: unknown[] = [];
+    const attempt = vi.fn(async (request) => {
+      envelopes.push(structuredClone(request.transportEnvelope));
+      if (request.transportEnvelope) request.transportEnvelope.presentationMode = "hidden";
+      if (envelopes.length === 1) throw failure("http_status", { httpStatus: 503 });
+      return { content: "ok", usage: {} };
+    });
+    await executeProviderChat({
+      config: { id: "pc-i1-envelope", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" },
+      modelId: "model",
+      messages: [{ role: "user", content: "test" }],
+      settings: { requested: { maxOutputTokens: 4096 }, effective: { maxOutputTokens: 4096 }, omitted: [] },
+      operationKind: "conversation",
+      streamWorkflowContext: "conversation",
+      configuredRetries: 1,
+      endpointDiscovery: vi.fn(),
+      attempt,
+    });
+    expect(envelopes).toHaveLength(2);
+    expect(envelopes[0]).toEqual(envelopes[1]);
+    expect(envelopes[0]).toMatchObject({
+      operationKind: "conversation",
+      modelId: "model",
+      presentationMode: "live",
+      streamingMode: "streaming",
+      timeoutClass: "interactive",
+      routeCertainty: "not_required",
+    });
+  });
+
   it("resolves ORP1 timeoutClass into one immutable S1 timeout policy per logical call", async () => {
     const policies: unknown[] = [];
     const attempt = vi.fn(async (request) => {

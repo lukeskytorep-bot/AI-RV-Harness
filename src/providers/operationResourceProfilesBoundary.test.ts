@@ -18,12 +18,20 @@ describe("ORP1 operation-resource profile boundaries", () => {
     expect(profiles).not.toContain("300000");
   });
 
-  it("routes capacity preference through the existing E1 decision point", () => {
+  it("routes E1 + ORP1 + S1 + S2 through the single I1 effective-envelope decision point", () => {
     const executor = source("src/providers/requestExecutor.ts");
-    expect(executor).toContain("resolveOperationResourceProfile");
-    expect(executor).toContain('resourceProfile.capacityRoutingPolicy === "prefer_verified_fit"');
-    expect(executor).toContain("resolveOpenRouterRoutingDecision");
-    expect(executor).not.toContain("classifyOpenRouterEndpoint(");
+    const integration = source("src/providers/effectiveRequestEnvelope.ts");
+    expect(executor).toContain("resolveEffectiveRequestEnvelope");
+    expect(executor).not.toContain("resolveOperationResourceProfile");
+    expect(executor).not.toContain("resolveOpenRouterRoutingDecision");
+    expect(executor).not.toContain("resolveStreamPresentation");
+    expect(executor).not.toContain("resolveProviderTimeoutPolicy");
+    expect(integration).toContain("resolveOperationResourceProfile");
+    expect(integration).toContain('capacityRoutingPolicy === "prefer_verified_fit"');
+    expect(integration).toContain("resolveOpenRouterRoutingDecision");
+    expect(integration).toContain("resolveStreamPresentation");
+    expect(integration).toContain("resolveProviderTimeoutPolicy");
+    expect(integration).not.toContain("classifyOpenRouterEndpoint(");
   });
 
   it("marks Training and Research Viewer work explicitly while leaving normal RV sessions on the default inferred profile", () => {

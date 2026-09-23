@@ -1,3 +1,4 @@
+import type { EffectiveRequestEnvelope } from "./effectiveRequestEnvelope";
 import type { ProviderKind } from "./types";
 import type { ProviderUsage } from "./types";
 
@@ -17,6 +18,7 @@ export interface ProviderDebugEntry {
     characterCount: number;
     detailCount: number;
   };
+  transport?: EffectiveRequestEnvelope;
   error?: string;
 }
 

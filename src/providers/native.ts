@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { isTauriRuntime } from "../storage";
 import { normalizeModelDiscovery } from "./capabilities";
+import type { EffectiveRequestEnvelope } from "./effectiveRequestEnvelope";
 import { detailedProviderDiagnosticsEnabled, recordProviderDebug } from "./debug";
 import { normalizeProviderCallError } from "./providerError";
 import type {
@@ -110,6 +111,7 @@ export async function providerChatAttempt(input: {
   signal?: AbortSignal;
   providerRouting?: OpenRouterProviderRouting;
   onStreamEvent?: (event: ProviderStreamEvent) => void;
+  transportEnvelope?: EffectiveRequestEnvelope;
 }): Promise<ProviderChatResponse> {
   requireDesktop();
   if (input.signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
@@ -149,6 +151,7 @@ export async function providerChatAttempt(input: {
       modelId: input.modelId,
       status: "error",
       error: normalized.message,
+      ...(input.transportEnvelope ? { transport: structuredClone(input.transportEnvelope) } : {}),
     });
     throw normalized;
   } finally {
@@ -174,6 +177,7 @@ export async function providerChatAttempt(input: {
       characterCount: response.reasoning_content.length,
       detailCount: response.reasoning_details?.length ?? 0,
     } : undefined,
+    ...(input.transportEnvelope ? { transport: structuredClone(input.transportEnvelope) } : {}),
   });
   return {
     content: response.content,

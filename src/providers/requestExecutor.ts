@@ -1,17 +1,15 @@
 import { discoverOpenRouterModelEndpoints, providerChatAttempt } from "./native";
 import { normalizeProviderCallError, ProviderCallError } from "./providerError";
-import { estimateProviderInputTokens } from "./inputTokenEstimate";
 import {
   OPENROUTER_UNKNOWN_CAPACITY_ERROR,
-  createOpenRouterCapacityEnvelope,
   isOpenRouterContextCapacityError,
-  resolveOpenRouterRoutingDecision,
   type OpenRouterEndpointDiscovery,
 } from "./openRouterEndpointCapability";
 import { providerRetryAllowance, providerRetryDelayMs } from "./retry";
-import { resolveOperationResourceProfile, type OperationKind } from "./operationResourceProfiles";
-import { resolveStreamPresentation, type StreamWorkflowContext } from "./streamPresentation";
-import { resolveProviderTimeoutPolicy, type ProviderTimeoutPolicy } from "./streamingPolicy";
+import { resolveEffectiveRequestEnvelope, type EffectiveRequestEnvelope } from "./effectiveRequestEnvelope";
+import type { OperationKind } from "./operationResourceProfiles";
+import type { StreamWorkflowContext } from "./streamPresentation";
+import type { ProviderTimeoutPolicy } from "./streamingPolicy";
 import type { EffectiveGenerationSettings, OpenRouterProviderRouting, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderStreamEvent } from "./types";
 
 export interface ProviderAttemptContext {
@@ -57,6 +55,7 @@ export type ProviderChatAttempt = (request: {
   signal?: AbortSignal;
   providerRouting?: OpenRouterProviderRouting;
   onStreamEvent?: (event: ProviderStreamEvent) => void;
+  transportEnvelope?: EffectiveRequestEnvelope;
 }) => Promise<ProviderChatResponse>;
 
 /**
@@ -164,36 +163,31 @@ export async function executeProviderChat(input: {
     ...(message.continuationState ? { continuationState: structuredClone(message.continuationState) } : {}),
   }));
   const settings = structuredClone(input.settings);
-  let providerRouting = input.providerRouting ? structuredClone(input.providerRouting) : undefined;
-  const resourceProfile = resolveOperationResourceProfile({ operationId: input.operationId, operationKind: input.operationKind });
-  const streamPresentation = resolveStreamPresentation({
-    operationKind: resourceProfile.operationKind,
-    workflowContext: input.streamWorkflowContext,
+  const dispatch = await resolveEffectiveRequestEnvelope({
+    config: input.config,
+    modelId: input.modelId,
+    messages,
+    settings,
+    timeoutMs: input.timeoutMs,
+    operationId: input.operationId,
+    operationKind: input.operationKind,
+    providerRouting: input.providerRouting ? structuredClone(input.providerRouting) : undefined,
+    endpointDiscovery: input.config.provider === "openrouter"
+      ? input.endpointDiscovery ?? ((modelId) => discoverOpenRouterModelEndpoints(input.config, modelId))
+      : undefined,
+    capacityProtectedRouting: input.capacityProtectedRouting,
+    streamWorkflowContext: input.streamWorkflowContext,
   });
-  const timeoutPolicy = resolveProviderTimeoutPolicy(resourceProfile.timeoutClass, input.timeoutMs);
-  let openRouterRoutingMode: "normal" | "verified_fit" | "unknown_attempt" | "local_stop" | undefined;
-  if (input.config.provider === "openrouter") {
-    const estimatedInputTokens = estimateProviderInputTokens(messages).estimatedInputTokens;
-    const envelope = createOpenRouterCapacityEnvelope({ estimatedInputTokens, settings });
-    const decision = await resolveOpenRouterRoutingDecision({
-      providerConfigId: input.config.id,
-      modelId: input.modelId,
-      credentialScope: input.config.credentialFingerprint ?? input.config.credentialId,
-      endpointScope: input.config.baseUrl ?? "",
-      envelope,
-      forceCapacityProtection: Boolean(input.capacityProtectedRouting) || resourceProfile.capacityRoutingPolicy === "prefer_verified_fit",
-      existingRouting: providerRouting,
-      discover: input.endpointDiscovery ?? ((modelId) => discoverOpenRouterModelEndpoints(input.config, modelId)),
+  const providerRouting = dispatch.providerRouting;
+  const timeoutPolicy = dispatch.timeoutPolicy;
+  const transportEnvelope = dispatch.envelope;
+  const openRouterRoutingMode = dispatch.endpointRoutingMode;
+  if (dispatch.localStopMessage) {
+    throw new ProviderCallError({
+      code: "configuration",
+      message: dispatch.localStopMessage,
+      phase: "before_dispatch",
     });
-    openRouterRoutingMode = decision.mode;
-    providerRouting = decision.providerRouting;
-    if (decision.mode === "local_stop") {
-      throw new ProviderCallError({
-        code: "configuration",
-        message: decision.humanMessage ?? "This OpenRouter request exceeds verified endpoint capacity.",
-        phase: "before_dispatch",
-      });
-    }
   }
   let result: ProviderExecutionResult<ProviderChatResponse>;
   try {
@@ -215,7 +209,8 @@ export async function executeProviderChat(input: {
         timeoutPolicy: structuredClone(timeoutPolicy),
         signal: input.signal,
         providerRouting: providerRouting ? structuredClone(providerRouting) : undefined,
-        ...(streamPresentation.presentation === "live" && input.onStreamEvent ? { onStreamEvent: input.onStreamEvent } : {}),
+        transportEnvelope: structuredClone(transportEnvelope),
+        ...(transportEnvelope.presentationMode === "live" && input.onStreamEvent ? { onStreamEvent: input.onStreamEvent } : {}),
       }),
     });
   } catch (cause) {

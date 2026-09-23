@@ -96,6 +96,7 @@ describe("VIEWER-LEARNING-2 boundaries", () => {
   it("allows intentional E1 provider evolution while preserving retry, credential and continuation invariants", () => {
     const native = source("src/providers/native.ts");
     const executor = source("src/providers/requestExecutor.ts");
+    const integration = source("src/providers/effectiveRequestEnvelope.ts");
     const retry = source("src/providers/retry.ts");
     const capability = source("src/providers/openRouterEndpointCapability.ts");
 
@@ -105,7 +106,9 @@ describe("VIEWER-LEARNING-2 boundaries", () => {
     expect(native).not.toContain("credentialSecret");
     expect(executor).toContain("providerChatAttempt");
     expect(executor).toContain("structuredClone(message.continuationState)");
-    expect(executor).toContain("resolveOpenRouterRoutingDecision");
+    expect(executor).toContain("resolveEffectiveRequestEnvelope");
+    expect(integration).toContain("resolveOpenRouterRoutingDecision");
+    expect(integration).toContain("resolveOperationResourceProfile");
     expect(retry).toContain("providerRetryAllowance");
     expect(retry).toContain("context length");
     expect(capability).toContain('"PROVEN_FIT" | "PROVEN_NO" | "UNKNOWN"');
