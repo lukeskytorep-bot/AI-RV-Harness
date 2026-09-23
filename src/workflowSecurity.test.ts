@@ -39,10 +39,16 @@ describe("GitHub workflow supply-chain policy", () => {
     expect(workflows["release-linux.yml"]).toContain("Require the expected Linux packages");
   });
 
-  it("generates Cargo.lock only as a reviewable artifact and never modifies the repository", () => {
-    expect(prepareCargoLock).toContain("cargo generate-lockfile");
+  it("prepares Cargo.lock conservatively as a reviewable artifact and never modifies the repository", () => {
+    expect(prepareCargoLock).toContain(
+      "cargo update --manifest-path src-tauri/Cargo.toml -p reqwest@0.12.28 --precise 0.12.28",
+    );
+    expect(prepareCargoLock).not.toContain("cargo generate-lockfile");
+    expect(prepareCargoLock).toContain("cargo metadata --manifest-path src-tauri/Cargo.toml --locked --no-deps");
+    expect(prepareCargoLock).toContain("cargo test --manifest-path src-tauri/Cargo.toml --all-targets --locked");
     expect(prepareCargoLock).toContain("actions/upload-artifact@");
     expect(prepareCargoLock).toContain("contents: read");
+    expect(prepareCargoLock).toContain("persist-credentials: false");
     expect(prepareCargoLock).not.toMatch(/git\s+(commit|push)/i);
   });
 
