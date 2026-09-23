@@ -118,8 +118,8 @@ export async function providerChatAttempt(input: {
     void invoke("cancel_provider_request", { requestId }).catch(() => undefined);
   };
   input.signal?.addEventListener("abort", cancel, { once: true });
-  const onStream = input.onStreamEvent ? new Channel<ProviderStreamEvent>() : undefined;
-  if (onStream && input.onStreamEvent) onStream.onmessage = input.onStreamEvent;
+  const onStream = new Channel<ProviderStreamEvent>();
+  onStream.onmessage = input.onStreamEvent ?? (() => {});
   let response: NativeChatResponse;
   try {
     response = await invoke<NativeChatResponse>("provider_chat", {
@@ -139,7 +139,8 @@ export async function providerChatAttempt(input: {
         detailedDiagnostics: detailedProviderDiagnosticsEnabled(),
         providerRouting: input.providerRouting,
       },
-      onStream: onStream ?? null,
+      onStream,
+      emitStreamEvents: Boolean(input.onStreamEvent),
     });
   } catch (cause) {
     const normalized = normalizeProviderCallError(cause);

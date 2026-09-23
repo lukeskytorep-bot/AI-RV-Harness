@@ -373,7 +373,8 @@ pub async fn provider_discover_model_endpoints(request: ProviderEndpointRequest)
 #[tauri::command]
 pub async fn provider_chat(
     request: ProviderChatRequest,
-    on_stream: Option<Channel<ProviderStreamEvent>>,
+    on_stream: Channel<ProviderStreamEvent>,
+    emit_stream_events: bool,
 ) -> Result<ProviderChatResponse, ProviderCallError> {
     validate_chat_request(&request).map_err(ProviderCallError::configuration)?;
     let base = provider_base_url(request.provider, request.base_url.as_deref()).map_err(ProviderCallError::configuration)?;
@@ -412,7 +413,7 @@ pub async fn provider_chat(
             request.request_id.as_deref(),
             &secret,
             &timeout_policy,
-            on_stream.as_ref(),
+            emit_stream_events.then_some(&on_stream),
         )
         .await?;
         (streamed.payload, streamed.request_id, streamed.semantic_output_started)

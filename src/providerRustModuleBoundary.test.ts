@@ -29,6 +29,10 @@ describe("Etap 6 Rust provider module boundary", () => {
     expect(facade).toContain("pub async fn provider_discover_model_endpoints");
     expect(facade).toContain("pub fn provider_binding_endpoint");
     expect(facade).toContain("pub async fn provider_chat");
+
+    expect(facade).toContain("on_stream: Channel<ProviderStreamEvent>");
+    expect(facade).toContain("emit_stream_events: bool");
+    expect(facade).not.toContain("Option<Channel<ProviderStreamEvent>>");
     expect(facade).toContain("pub fn cancel_provider_request");
 
     for (const implementationSymbol of [

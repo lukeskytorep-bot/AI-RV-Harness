@@ -23,6 +23,7 @@ import judgeEngine from "./judge/engine.ts?raw";
 import monitorPrompt from "./monitor/prompt.ts?raw";
 import monitorEngine from "./monitor/engine.ts?raw";
 import providerRetry from "./providers/retry.ts?raw";
+import operationResourceProfiles from "./providers/operationResourceProfiles.ts?raw";
 import migration023 from "../src-tauri/migrations/023_controlled_purge.sql?raw";
 import migration024 from "../src-tauri/migrations/024_viewer_learning_field_guide.sql?raw";
 import browserControlledPurge from "./storage/browser/controlledPurge.ts?raw";
@@ -47,7 +48,9 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(sha256(judgePrompt)).toBe("dc2af6fe6b478360cab414c4e4d9bc3f3a4d9fae95819f8420f116c8652df492");
     expect(sha256(monitorPrompt)).toBe("3eda515707b2a6e356e49b3b04d191397a760de248a0ba0c46391e950609dc85");
     // S2 may add only the normalized streaming wiring; all other Monitor execution bytes remain protected.
-    expect(monitorEngine).toContain('operationKind: "live_monitor"');
+    expect(monitorEngine).toContain('"monitor.evaluate"');
+    expect(monitorEngine).toContain('"monitor.output-recovery"');
+    expect(operationResourceProfiles).toContain('if (id.startsWith("monitor.")) return "live_monitor";');
     expect(monitorEngine).toContain("onStreamEvent: input.onStreamEvent");
     expect(sha256(normalizeS2MonitorStreamingWiring(monitorEngine))).toBe("73d2f461bca2a2ef7e07e0013c742f86f5bc5d14f4aec77510977c70e8b86065");
     // Provider transport evolves intentionally in E1/S1. Protect retry semantics rather than byte identity.
