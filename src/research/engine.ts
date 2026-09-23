@@ -4,7 +4,6 @@ import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { getFullRcp } from "../resources/protocolRegistry";
 import { runAutomaticRcpSession, type AutomaticRcpRunInput, type AutomaticRcpRunResult, type SessionProgress } from "../sessions/controller";
-import { runAutomaticPostRevealReview } from "../sessions/postReveal";
 import type { AppRepository } from "../storage/repository";
 import { buildResearchLockPlan, stableStringify } from "./planner";
 import { runResearchPreflight, type ResearchPreflightInventory } from "./preflight";
@@ -143,17 +142,6 @@ export async function executeResearchSessions(input: {
       await input.repository.updateResearchAssignment(assignment.id, linkedSessionId ?? result.sessionId, "Interrupted");
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       return;
-    }
-    if (!input.sessionRunner) {
-      await runAutomaticPostRevealReview({
-        repository: input.repository,
-        sessionId: result.sessionId,
-        viewer: { providerConfig: provider, model },
-        timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
-        maxRetries: project.config.sessionPolicy?.maxRetries,
-        signal: input.signal,
-        streamWorkflowContext: "research",
-      });
     }
     await input.repository.updateResearchAssignment(assignment.id, result.sessionId, "SessionComplete");
     completed += 1;

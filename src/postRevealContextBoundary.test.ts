@@ -35,7 +35,7 @@ function normalizeS2TelepathicStreamingWiring(value: string): string {
 }
 
 describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
-  it("keeps Training, RV Sessions and Research on the shared automatic Viewer review mechanism", () => {
+  it("keeps Training and RV Sessions on the shared automatic Viewer review while Research omits automatic pre-judging review", () => {
     const training = source("src/features/training/trainingExecution.ts");
     const rvSessions = source("src/features/rvSessions/RvSessionPanel.tsx");
     const research = source("src/research/engine.ts");
@@ -44,8 +44,8 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     expect(training).toContain("runAutomaticPostRevealReview({");
     expect(rvSessions).toContain('from "../../sessions/postReveal"');
     expect(rvSessions).toContain("runAutomaticPostRevealReview({");
-    expect(research).toContain('from "../sessions/postReveal"');
-    expect(research).toContain("runAutomaticPostRevealReview({");
+    expect(research).not.toContain('from "../sessions/postReveal"');
+    expect(research).not.toContain("runAutomaticPostRevealReview({");
   });
 
   it("routes RV Lite, Full RCP, Custom and Telepathic session completion through the shared post-Reveal review", () => {
@@ -57,13 +57,31 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     expect(rvSessions).toContain("await automaticReview(progress.sessionId, true);");
   });
 
-  it("keeps Research free of Viewer Notes reflection during the automatic post-Reveal review", () => {
+  it("keeps Research free of automatic post-Reveal discussion before Judge scores are frozen", () => {
     const research = source("src/research/engine.ts");
     expect(research).not.toContain("runViewerNoteReflection");
     expect(research).not.toContain("commitViewerNoteReflection");
-    const call = research.match(/await runAutomaticPostRevealReview\(\{[\s\S]*?\n      \}\);/)?.[0] ?? "";
-    expect(call).toContain("runAutomaticPostRevealReview");
-    expect(call).not.toContain("afterViewerReview");
+    expect(research).not.toContain("runAutomaticPostRevealReview");
+    expect(research).toContain('await input.repository.updateResearchAssignment(assignment.id, result.sessionId, "SessionComplete");');
+  });
+
+  it("preserves the Research frozen-score guard in both repositories and migration 009", () => {
+    const browserSessions = source("src/storage/browser/sessionsRepository.ts");
+    const sqliteSessions = source("src/storage/sqlite/sessionsRepository.ts");
+    const migration009 = source("src-tauri/migrations/009_post_reveal_append_only.sql");
+    const guardMessage = "Research post-reveal discussion requires frozen scores";
+
+    expect(browserSessions).toContain(guardMessage);
+    expect(sqliteSessions).toContain(guardMessage);
+    expect(migration009).toContain(guardMessage);
+  });
+
+  it("does not promise an automatic Viewer post-Reveal review in Research export guidance", () => {
+    const researchExport = source("src/exports/research.ts");
+    expect(researchExport).not.toContain("opinię Viewera po Revealu");
+    expect(researchExport).not.toContain("the Viewer's post-Reveal review");
+    expect(researchExport).toContain("Jeżeli istnieje dozwolony rekord post-Reveal, jest dołączony jako oddzielna część.");
+    expect(researchExport).toContain("If a permitted post-Reveal record exists, it is included as a separate section.");
   });
 
   it("keeps the target-surroundings methodology in one production source", () => {
