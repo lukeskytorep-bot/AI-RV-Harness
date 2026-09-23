@@ -105,13 +105,17 @@ export interface ResearchViewerControl {
   maxOutputTokens: number;
 }
 
+export type ResearchProtocolSelection =
+  | { id: "full-rcp"; version: "1.5a"; contentSha256?: string }
+  | { id: "rv-lite"; version: "1.1.0"; variant: "extended"; contentSha256: string };
+
 export interface ResearchConfig {
   schemaVersion: 1;
   name: string;
   workspaceId: string;
   templateType: ResearchTemplateType;
   sessionLanguage: InterfaceLanguage;
-  protocol: { id: "full-rcp"; version: "1.5a" };
+  protocol: ResearchProtocolSelection;
   targetIds: string[];
   targetSelection?: { source: ResearchTargetSource; mode: ResearchTargetSelectionMode; requestedCount?: number };
   repetitions: number;

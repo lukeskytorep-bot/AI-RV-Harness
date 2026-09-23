@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runResearchPreflight, type ResearchPreflightInventory } from "./preflight";
 import type { ResearchConfig } from "./types";
+import { createResearchProtocolSelection } from "./protocolPolicy";
 
 const FIXED_SYSTEM_PROMPT = {
   id: "profile_viewer_prompt_profile",
@@ -10,6 +11,26 @@ const FIXED_SYSTEM_PROMPT = {
 };
 
 describe("Research preflight", () => {
+  it("uses protocol-aware Viewer call counts for Full RCP and RV Lite", () => {
+    const capabilities = { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" as const }, temperature: { supported: false, confidence: "unknown" as const }, supportedParameters: [], contextTokens: 100000, maxOutputTokens: 4096, source: "provider" as const, capturedAt: "now" };
+    const base: ResearchConfig = {
+      schemaVersion: 1, name: "Protocol calls", workspaceId: "w", templateType: "model", sessionLanguage: "en", protocol: { id: "full-rcp", version: "1.5a" }, targetIds: ["t"], repetitions: 2, requireUnusedTargets: false,
+      conditions: [
+        { key: "a", label: "A", profileId: "profile", providerConfigId: "pc", modelId: "m", requestedSettings: {}, capabilitySnapshot: capabilities, effectiveSettings: { requested: {}, effective: {}, omitted: [] }, systemPrompt: FIXED_SYSTEM_PROMPT },
+        { key: "b", label: "B", profileId: "profile", providerConfigId: "pc", modelId: "m", requestedSettings: {}, capabilitySnapshot: capabilities, effectiveSettings: { requested: {}, effective: {}, omitted: [] }, systemPrompt: FIXED_SYSTEM_PROMPT },
+      ], evaluationMode: "save_only", judges: [], randomization: { matchedTargets: true, randomizedExecution: true, randomizedJudgeOrder: true },
+    };
+    const inventory: ResearchPreflightInventory = {
+      profiles: [{ id: "profile", name: "P", credentialId: "cred", createdAt: "now", updatedAt: "now" }],
+      providerConfigs: [{ id: "pc", provider: "openrouter", label: "P", credentialId: "cred", enabled: true, lastStatus: "ok", createdAt: "now", updatedAt: "now" }],
+      models: [{ providerConfigId: "pc", provider: "openrouter", modelId: "m", displayName: "M", route: "openrouter:m", capabilities, pricing: {}, recommended: true, rawMetadata: {}, refreshedAt: "now" }],
+      targets: [{ id: "t", collection: "user", title: "T", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }], targetUsage: [],
+    };
+    expect(runResearchPreflight(base, inventory).estimatedViewerCalls).toBe(24);
+    const lite = { ...base, protocol: createResearchProtocolSelection("rv-lite", "en") };
+    expect(runResearchPreflight(lite, inventory).estimatedViewerCalls).toBe(16);
+  });
+
   it("blocks unsupported reasoning conditions instead of simulating them", () => {
     const config: ResearchConfig = {
       schemaVersion: 1, name: "R", workspaceId: "w", templateType: "reasoning", sessionLanguage: "en", protocol: { id: "full-rcp", version: "1.5a" }, targetIds: ["t"], repetitions: 1, requireUnusedTargets: false,

@@ -57,6 +57,8 @@ export interface AutomaticRvLiteRunInput {
   resumeSession?: RvSession;
   automaticTarget?: TargetRecord;
   capturedAutomaticReveal?: RevealInput;
+  researchProjectId?: string;
+  researchConditionInstruction?: ViewerSystemPromptSnapshot;
   specialTask?: SpecialTaskInput;
   signal?: AbortSignal;
   maxRetries?: number;
@@ -76,6 +78,7 @@ export interface AutomaticRvLiteRunInput {
     onStreamEvent?: (event: ProviderStreamEvent) => void;
   }) => Promise<ProviderChatResponse>;
   onProgress?: (progress: SessionProgress) => void;
+  onSessionCreated?: (sessionId: string, sessionCode: string) => void | Promise<void>;
 }
 
 export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput): Promise<{ sessionId: string; sessionCode: string; state: "AwaitingReveal" | "Revealed" | "Interrupted"; transcript: string; stopReason?: string }> {
@@ -96,6 +99,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   const messages: ProviderMessage[] = [
     ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
     ...(viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage)! }] : []),
+    ...(input.researchConditionInstruction?.content.trim() ? [{ role: "system" as const, content: `[LOCKED RESEARCH CONDITION INSTRUCTION]\n${input.researchConditionInstruction.content.trim()}` }] : []),
   ];
   const startedAtMs = Date.now();
   let metrics = emptySessionRequestMetrics();
@@ -109,8 +113,10 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     sessionCode,
     runType: "automatic",
     targetId: input.automaticTarget?.id,
+    researchProjectId: input.researchProjectId,
   });
   await input.repository.appendSessionEvent(sessionId, { eventType: "SESSION_CREATED", role: "controller", metadata: { sessionCode, protocolFamily: "rv-lite" } });
+  if (!input.resumeSession) await input.onSessionCreated?.(sessionId, sessionCode);
   await input.repository.updateRvSessionState(sessionId, "Preflight");
 
   const snapshot: SessionSnapshot = {
@@ -157,6 +163,15 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
       },
     } : {}),
     ...(input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),
+    ...(input.researchConditionInstruction ? {
+      researchConditionInstruction: {
+        id: input.researchConditionInstruction.id,
+        version: input.researchConditionInstruction.version,
+        language: input.sessionLanguage,
+        contentSha256: input.researchConditionInstruction.contentSha256,
+        fullContent: input.researchConditionInstruction.content,
+      },
+    } : {}),
     ...(renderSpecialTask(input.specialTask, input.sessionLanguage) ? {
       specialTask: {
         selectedOptions: input.specialTask?.selectedOptions ?? [],
@@ -168,6 +183,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     revealSource: input.automaticTarget ? "automatic" : "external",
     ...(input.automaticTarget ? { targetId: input.automaticTarget.id } : {}),
     ...(automaticReveal ? { automaticRevealHash: automaticReveal.hash } : {}),
+    ...(input.researchProjectId ? { researchProjectId: input.researchProjectId } : {}),
     applicationVersion: APP_VERSION,
     createdAt: new Date().toISOString(),
   };
@@ -311,7 +327,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
 
   await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_TRANSITION", role: "controller", content: politeRevealTransition(input.sessionLanguage) });
   await input.repository.acceptReveal(sessionId, automaticReveal!);
-  await input.repository.recordTargetUsage({ targetId: input.automaticTarget.id, profileId: input.profileId, sessionId });
+  await input.repository.recordTargetUsage({ targetId: input.automaticTarget.id, profileId: input.profileId, researchProjectId: input.researchProjectId, sessionId });
   await input.repository.appendSessionEvent(sessionId, { eventType: "REVEAL_ACCEPTED", role: "controller", metadata: { source: "automatic_target", targetId: input.automaticTarget.id } });
   notify(input, sessionId, sessionCode, "Revealed", transcript, undefined, undefined, metrics, startedAtMs);
   return { sessionId, sessionCode, state: "Revealed", transcript };

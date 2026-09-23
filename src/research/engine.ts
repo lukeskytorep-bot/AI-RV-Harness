@@ -2,8 +2,8 @@ import { aggregateJudgeScores } from "../domain/scoring";
 import { runBlindJudging, selectMissingJudgeSelections, type JudgeSelection } from "../judge/engine";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { resolveGenerationSettings } from "../providers/capabilities";
-import { getFullRcp } from "../resources/protocolRegistry";
 import { runAutomaticRcpSession, type AutomaticRcpRunInput, type AutomaticRcpRunResult, type SessionProgress } from "../sessions/controller";
+import { runAutomaticRvLiteSession, type AutomaticRvLiteRunInput } from "../sessions/rvLiteController";
 import type { AppRepository } from "../storage/repository";
 import { buildResearchLockPlan, stableStringify } from "./planner";
 import { runResearchPreflight, type ResearchPreflightInventory } from "./preflight";
@@ -13,6 +13,7 @@ import { aiIsBeDisplayName, humanIsBeDisplayName } from "../domain/isBeIdentity"
 import { modelRouteKey } from "../modelRoutes";
 import { viewerNotesSnapshotSignature } from "./viewerNotesPolicy";
 import { fieldGuideSnapshotSignature } from "./fieldGuidePolicy";
+import { resolveResearchProtocol } from "./protocolPolicy";
 
 type ResearchRepository = AppRepository;
 
@@ -37,10 +38,18 @@ export async function executeResearchSessions(input: {
   projectId: string;
   signal?: AbortSignal;
   sessionRunner?: (input: AutomaticRcpRunInput) => Promise<AutomaticRcpRunResult>;
+  rvLiteSessionRunner?: (input: AutomaticRvLiteRunInput) => ReturnType<typeof runAutomaticRvLiteSession>;
   onProgress?: (progress: { completed: number; total: number; anonymousSessionId: string; session?: SessionProgress }) => void;
 }): Promise<void> {
   const project = await requireProject(input.repository, input.projectId);
   if (!["Locked", "Running", "Interrupted"].includes(project.state)) throw new Error(`Research sessions cannot run from state ${project.state}.`);
+  let protocol;
+  try {
+    protocol = resolveResearchProtocol(project.config.protocol, project.config.sessionLanguage);
+  } catch (cause) {
+    await input.repository.setResearchProjectState(project.id, "Interrupted");
+    throw cause;
+  }
   const [assignments, mappings, conditions, targets, providers, models, profiles] = await Promise.all([
     input.repository.listResearchAssignments(project.id),
     input.repository.listBlindingMappings(project.id),
@@ -76,7 +85,6 @@ export async function executeResearchSessions(input: {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const modelByKey = new Map(models.map((model) => [modelRouteKey(model.providerConfigId, model.modelId), model]));
   const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
-  const run = input.sessionRunner ?? runAutomaticRcpSession;
   let completed = assignments.filter((assignment) => assignment.status === "SessionComplete" || assignment.status === "Judged").length;
   await input.repository.setResearchProjectState(project.id, "Running");
 
@@ -109,21 +117,23 @@ export async function executeResearchSessions(input: {
       throw new Error("Requested/effective settings no longer match Experiment Lock.");
     }
     let linkedSessionId: string | undefined;
-    const result = await run({
+    const onSessionCreated = async (sessionId: string) => {
+      linkedSessionId = sessionId;
+      await input.repository.updateResearchAssignment(assignment.id, sessionId, "Running");
+    };
+    const onProgress = (session: SessionProgress) => input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId, session });
+    const common = {
       repository: input.repository,
       workspaceId: project.workspaceId,
       profileId: condition.profileId,
-      aiIsBeDisplayName: sessionProfile ? aiIsBeDisplayName(sessionProfile) : "AI IS-BE",
-      humanIsBeDisplayName: sessionProfile ? humanIsBeDisplayName(sessionProfile) : "Human IS-BE",
       providerConfig: provider,
       model,
-      protocol: getFullRcp(project.config.sessionLanguage),
       sessionLanguage: project.config.sessionLanguage,
       requestedSettings: condition.requestedSettings,
       maxRetries: project.config.sessionPolicy?.maxRetries,
       requestTimeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
-      operationKind: "research_viewer",
-        streamWorkflowContext: "research",
+      operationKind: "research_viewer" as const,
+      streamWorkflowContext: "research" as const,
       sessionCodePrefix: project.config.sessionPolicy?.sessionCodePrefix,
       ...(project.config.sessionPolicy?.maxSessionCostUsd && project.config.sessionPolicy.maxSessionCostUsd > 0 ? { maxSessionCostUsd: project.config.sessionPolicy.maxSessionCostUsd } : {}),
       automaticTarget: target,
@@ -132,12 +142,22 @@ export async function executeResearchSessions(input: {
       ...(condition.conditionInstruction ? { researchConditionInstruction: condition.conditionInstruction } : {}),
       ...(condition.viewerNotes ? { viewerNotes: condition.viewerNotes } : {}),
       signal: input.signal,
-      onSessionCreated: async (sessionId) => {
-        linkedSessionId = sessionId;
-        await input.repository.updateResearchAssignment(assignment.id, sessionId, "Running");
-      },
-      onProgress: (session) => input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId, session }),
-    });
+      onSessionCreated,
+      onProgress,
+    };
+    const result = protocol.id === "full-rcp"
+      ? await (input.sessionRunner ?? runAutomaticRcpSession)({
+          ...common,
+          aiIsBeDisplayName: sessionProfile ? aiIsBeDisplayName(sessionProfile) : "AI IS-BE",
+          humanIsBeDisplayName: sessionProfile ? humanIsBeDisplayName(sessionProfile) : "Human IS-BE",
+          protocol,
+        })
+      : await (input.rvLiteSessionRunner ?? runAutomaticRvLiteSession)({
+          ...common,
+          profileName: sessionProfile ? aiIsBeDisplayName(sessionProfile) : "AI IS-BE",
+          humanIsBeDisplayName: sessionProfile ? humanIsBeDisplayName(sessionProfile) : "Human IS-BE",
+          protocol,
+        });
     if (result.state !== "Revealed") {
       await input.repository.updateResearchAssignment(assignment.id, linkedSessionId ?? result.sessionId, "Interrupted");
       await input.repository.setResearchProjectState(project.id, "Interrupted");

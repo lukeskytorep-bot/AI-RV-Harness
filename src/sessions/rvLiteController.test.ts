@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getRvLite } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
@@ -60,6 +60,39 @@ describe("automatic RV Lite controller", () => {
     expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity", "locked-viewer-base-vocabulary"]);
     expect(snapshots[0].rvSystemPrompt?.fieldGuide).toMatchObject({ versionId: "fg-v1", content: "FIELD GUIDE", capacityTokens: 2048 });
     expect(snapshots[0].automaticRevealHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("preserves Research ownership, assignment linkage and locked condition instruction", async () => {
+    const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
+    const repo = repository(log, snapshots);
+    const createRvSession = vi.fn(async () => ({} as never));
+    const recordTargetUsage = vi.fn(async () => undefined);
+    repo.createRvSession = createRvSession;
+    repo.recordTargetUsage = recordTargetUsage;
+    const onSessionCreated = vi.fn(async () => undefined);
+    let calls = 0;
+    await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "profile", profileName: "Viewer", providerConfig: config, model,
+      protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, automaticTarget: target,
+      researchProjectId: "research-1",
+      researchConditionInstruction: { id: "condition-a", version: "1", content: "LOCKED VARIABLE A", contentSha256: "c".repeat(64) },
+      onSessionCreated,
+      chat: async ({ messages }) => {
+        calls += 1;
+        expect(JSON.stringify(messages)).toContain("[LOCKED RESEARCH CONDITION INSTRUCTION]");
+        expect(JSON.stringify(messages)).toContain("LOCKED VARIABLE A");
+        return { content: `Evidence ${calls}`, usage: {} };
+      },
+    });
+    expect(calls).toBe(4);
+    expect(createRvSession).toHaveBeenCalledWith(expect.objectContaining({ researchProjectId: "research-1" }));
+    expect(onSessionCreated).toHaveBeenCalledTimes(1);
+    expect(recordTargetUsage).toHaveBeenCalledWith(expect.objectContaining({ researchProjectId: "research-1" }));
+    expect(snapshots[0]).toMatchObject({
+      researchProjectId: "research-1",
+      researchConditionInstruction: { id: "condition-a", version: "1", fullContent: "LOCKED VARIABLE A" },
+    });
   });
 
   it("runs the Special Viewer Task in a separate call after Step 3 and appends the visible response", async () => {

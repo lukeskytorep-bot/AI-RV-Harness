@@ -1,6 +1,5 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
-import { getFullRcp } from "../resources/protocolRegistry";
 import { buildEffectiveViewerPrompt, LOCKED_BASE_VOCABULARY_VERSION, LOCKED_IDENTITY_VERSION } from "../resources/systemPrompts";
 import type { TargetRecord, TargetUsageRecord } from "../targets/types";
 import { targetHasSupportedReveal } from "../targets/service";
@@ -9,6 +8,7 @@ import type { PreflightCheck, ResearchConfig, ResearchPreflightResult } from "./
 import { modelRouteKey } from "../modelRoutes";
 import { activeViewerNotesControlSignature, sameFrozenViewerNotesVersion, viewerNotesSnapshotSignature } from "./viewerNotesPolicy";
 import { fieldGuideSnapshotSignature } from "./fieldGuidePolicy";
+import { researchProtocolLabel, researchProtocolViewerCalls, resolveResearchProtocol, type ResearchProtocolResource } from "./protocolPolicy";
 
 export interface ResearchPreflightInventory {
   profiles: Profile[];
@@ -24,6 +24,13 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   const providerMap = new Map(inventory.providerConfigs.map((provider) => [provider.id, provider]));
   const profileMap = new Map(inventory.profiles.map((profile) => [profile.id, profile]));
   const modelMap = new Map(inventory.models.map((model) => [modelRouteKey(model.providerConfigId, model.modelId), model]));
+  let protocol: ResearchProtocolResource | undefined;
+  try {
+    protocol = resolveResearchProtocol(config.protocol, config.sessionLanguage);
+    checks.push(pass("protocol", `${researchProtocolLabel(config.protocol)} is available and frozen for this Research project`));
+  } catch (cause) {
+    checks.push(fail("protocol", cause instanceof Error ? cause.message : String(cause)));
+  }
 
   if (config.sessionPolicy) {
     checks.push(config.sessionPolicy.requestTimeoutMs >= 1_000 && config.sessionPolicy.requestTimeoutMs <= 600_000 ? pass("session_timeout", "Request timeout is within the supported safety range") : fail("session_timeout", "Request timeout must be between 1 and 600 seconds"));
@@ -94,11 +101,12 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     if (condition.conditionInstruction?.contentSha256) conditionInstructionHashes.add(condition.conditionInstruction.contentSha256);
     if (condition.conditionInstruction?.content.trim()) conditionInstructionContents.add(condition.conditionInstruction.content.trim());
 
-    const protocol = getFullRcp(config.sessionLanguage);
-    const roughInputTokens = Math.ceil((protocol.content.length + (condition.systemPrompt?.content.length ?? 0) + (condition.viewerNotes?.content.length ?? 0)) / 3.5);
-    if (model.capabilities.contextTokens && roughInputTokens >= model.capabilities.contextTokens) checks.push(fail(`${prefix}:context`, `${condition.label}: estimated protocol context exceeds the advertised context window`));
-    else if (model.capabilities.contextTokens) checks.push(pass(`${prefix}:context`, `${condition.label}: advertised context window is sufficient for protocol preflight`));
-    else checks.push(warn(`${prefix}:context`, `${condition.label}: provider did not advertise a context limit`));
+    if (protocol) {
+      const roughInputTokens = Math.ceil((protocol.content.length + (condition.systemPrompt?.content.length ?? 0) + (condition.viewerNotes?.content.length ?? 0) + (condition.conditionInstruction?.content.length ?? 0)) / 3.5);
+      if (model.capabilities.contextTokens && roughInputTokens >= model.capabilities.contextTokens) checks.push(fail(`${prefix}:context`, `${condition.label}: estimated protocol context exceeds the advertised context window`));
+      else if (model.capabilities.contextTokens) checks.push(pass(`${prefix}:context`, `${condition.label}: advertised context window is sufficient for protocol preflight`));
+      else checks.push(warn(`${prefix}:context`, `${condition.label}: provider did not advertise a context limit`));
+    }
   }
   if ((config.templateType === "reasoning" || config.templateType === "temperature") && [...effectiveSignatures.values()].some((keys) => keys.length > 1)) {
     checks.push(fail("condition_distinguishability", "Two or more tested conditions resolve to the same effective generation settings"));
@@ -315,7 +323,7 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   checks.push(pass("secrets", "Judge/export design uses identifiers only; raw API keys are not part of Research config"));
 
   const sessionCount = config.targetIds.length * config.repetitions * config.conditions.length;
-  const estimatedViewerCalls = sessionCount * 6;
+  const estimatedViewerCalls = sessionCount * researchProtocolViewerCalls(config.protocol);
   const estimatedJudgeCalls = sessionCount * config.judges.length;
   const estimatedCostUsd = estimateViewerCost(config, modelMap);
   if (estimatedCostUsd === undefined) checks.push(warn("cost", "Exact preflight cost is unavailable because one or more routes lack pricing metadata"));
@@ -324,15 +332,21 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
 }
 
 function estimateViewerCost(config: ResearchConfig, models: Map<string, ProviderModel>): number | undefined {
-  const protocol = getFullRcp(config.sessionLanguage);
+  let protocol: ResearchProtocolResource;
+  try {
+    protocol = resolveResearchProtocol(config.protocol, config.sessionLanguage);
+  } catch {
+    return undefined;
+  }
+  const viewerCalls = researchProtocolViewerCalls(config.protocol);
   let total = 0;
   for (const condition of config.conditions) {
     const model = models.get(modelRouteKey(condition.providerConfigId, condition.modelId));
     if (model?.pricing.promptPerToken === undefined || model.pricing.completionPerToken === undefined) return undefined;
-    const inputTokens = Math.ceil((protocol.content.length + (condition.systemPrompt?.content.length ?? 0) + (condition.viewerNotes?.content.length ?? 0)) / 3.5);
+    const inputTokens = Math.ceil((protocol.content.length + (condition.systemPrompt?.content.length ?? 0) + (condition.viewerNotes?.content.length ?? 0) + (condition.conditionInstruction?.content.length ?? 0)) / 3.5);
     const outputTokens = Math.min(condition.requestedSettings.maxOutputTokens ?? 2048, model.capabilities.maxOutputTokens ?? 2048);
     const sessions = config.targetIds.length * config.repetitions;
-    total += sessions * 6 * ((inputTokens * model.pricing.promptPerToken) + (outputTokens * model.pricing.completionPerToken));
+    total += sessions * viewerCalls * ((inputTokens * model.pricing.promptPerToken) + (outputTokens * model.pricing.completionPerToken));
   }
   return Math.round(total * 1_000_000) / 1_000_000;
 }

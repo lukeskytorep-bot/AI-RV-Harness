@@ -29,7 +29,7 @@ describe("central provider inference contract", () => {
     ["Custom Protocol", "/sessions/customController.ts", "createProviderChatExecutor", "signal: input.signal", "configuredRetries: maxRetries"],
     ["Telepathic and Resume", "/sessions/telepathicController.ts", "createProviderChatExecutor", "signal: input.signal", "configuredRetries: maxRetries"],
     ["post-Reveal", "/sessions/postReveal.ts", "executeProviderChat", "signal: input.signal", "configuredRetries: input.maxRetries"],
-    ["Research", "/research/engine.ts", "runAutomaticRcpSession", "signal: input.signal", "runBlindJudging"],
+    ["Research", "/research/engine.ts", "runAutomaticRcpSession", "runAutomaticRvLiteSession", "signal: input.signal", "runBlindJudging"],
     ["Training", "/features/training/trainingExecution.ts", "runAutomaticRvLiteSession", "signal: input.signal", "runBlindJudging"],
   ])("routes %s through the shared retry/cancellation contract", (_family, suffix, ...requirements) => {
     const source = bySuffix(suffix);

@@ -39,6 +39,13 @@ function renderBuilder(template: "model" | "viewer_notes" | "system_prompt") {
 }
 
 describe("Research Builder Training/Research UX step", () => {
+  it("offers exactly Full RCP and RV Lite as Research-wide protocol choices", () => {
+    const html = renderBuilder("model");
+    expect(html).toContain("Full RCP · 1.5a");
+    expect(html).toContain("RV Lite · 1.1.0");
+    expect(html).not.toContain("Core · 1.1.0");
+  });
+
   it("replaces the Research Workspace selector with direct AI Profile and ordinary Viewer Notes controls", () => {
     const html = renderBuilder("model");
     expect(html).toContain("AI Profile / AI IS-BE");

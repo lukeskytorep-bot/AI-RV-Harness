@@ -6,6 +6,7 @@ import type { AppRepository } from "../storage/repository";
 import type { JudgeScoreRecord } from "../judge/types";
 import { executeResearchSessions, judgeResearch, prepareInterruptedResearchRetry, unblindAndComputeResearch } from "./engine";
 import type { ResearchConfig, ResearchProjectRecord, ResearchResults, ResearchState } from "./types";
+import { createResearchProtocolSelection } from "./protocolPolicy";
 
 const config: ResearchConfig = {
   schemaVersion: 1, name: "Blind test", workspaceId: "w", templateType: "model", sessionLanguage: "en", protocol: { id: "full-rcp", version: "1.5a" }, targetIds: ["t"], repetitions: 1, requireUnusedTargets: false,
@@ -51,6 +52,45 @@ describe("Research evidence boundaries", () => {
     } as unknown as AppRepository;
     await executeResearchSessions({ repository: repo, projectId: "r", sessionRunner });
     expect(sessionRunner).toHaveBeenCalledWith(expect.objectContaining({ rvSystemPrompt: fixedPrompt, researchConditionInstruction: conditionInstruction }));
+  });
+
+  it("dispatches locked RV Lite Research through four-call controller semantics and keeps assignment ownership", async () => {
+    const conditionInstruction = { id: "condition_a", version: "1", content: "VARIABLE A", contentSha256: "b".repeat(64) };
+    const condition = {
+      key: "a", label: "A", profileId: "p", providerConfigId: "pc", modelId: "m", requestedSettings: {},
+      capabilitySnapshot: model.capabilities, effectiveSettings: { requested: {}, effective: {}, omitted: [] }, conditionInstruction,
+    };
+    const project: ResearchProjectRecord = {
+      id: "r", workspaceId: "w", name: "RV Lite Research", templateType: "custom", state: "Locked",
+      config: { ...config, templateType: "custom", protocol: createResearchProtocolSelection("rv-lite", "en"), conditions: [condition] },
+      createdAt: "now", updatedAt: "now",
+    };
+    const rcpRunner = vi.fn();
+    const rvLiteSessionRunner = vi.fn(async (input) => {
+      expect(input.protocol).toMatchObject({ id: "rv-lite", version: "1.1.0", variant: "extended" });
+      expect(input.researchProjectId).toBe("r");
+      expect(input.researchConditionInstruction).toEqual(conditionInstruction);
+      await input.onSessionCreated?.("session-lite", "RV-LITE");
+      return { sessionId: "session-lite", sessionCode: "RV-LITE", state: "Revealed" as const, transcript: "evidence" };
+    });
+    const updateResearchAssignment = vi.fn();
+    const repo = {
+      getResearchProject: vi.fn().mockResolvedValue(project),
+      listResearchAssignments: vi.fn().mockResolvedValue([{ id: "assignment", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "Pending" }]),
+      listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: "hash", createdAt: "now" }]),
+      listResearchConditions: vi.fn().mockResolvedValue([{ id: "condition", researchProjectId: "r", conditionKey: "a", config: condition }]),
+      listTargets: vi.fn().mockResolvedValue([{ id: "t", collection: "user", title: "T", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }]),
+      listProviderConfigs: vi.fn().mockResolvedValue([provider]),
+      listProviderModels: vi.fn().mockResolvedValue([model]),
+      listProfiles: vi.fn().mockResolvedValue([{ id: "p", name: "P", credentialId: "c", createdAt: "now", updatedAt: "now" }]),
+      setResearchProjectState: vi.fn(),
+      updateResearchAssignment,
+    } as unknown as AppRepository;
+    await executeResearchSessions({ repository: repo, projectId: "r", sessionRunner: rcpRunner, rvLiteSessionRunner });
+    expect(rcpRunner).not.toHaveBeenCalled();
+    expect(rvLiteSessionRunner).toHaveBeenCalledTimes(1);
+    expect(updateResearchAssignment).toHaveBeenCalledWith("assignment", "session-lite", "Running");
+    expect(updateResearchAssignment).toHaveBeenCalledWith("assignment", "session-lite", "SessionComplete");
   });
 
   it("resumes with the Viewer Notes snapshot saved at Experiment Lock and rejects snapshot drift", async () => {
