@@ -12,10 +12,15 @@ import { serializePostRevealTurn } from "../../sessions/postRevealTranscript";
 import type { Profile, Workspace } from "../../types";
 import { verifySealedViewerEvidence } from "../../sessions/evidence";
 import type { SessionsRepository } from "../contracts/sessionsRepository";
+import type { ProviderContinuationState } from "../../providers/continuationContract";
+import { prepareProviderContinuationState, ProviderContinuationPersistenceError, restoreProviderContinuationState, type PersistedProviderContinuationStateRow, type ProviderContinuationStateBinding } from "../providerContinuationState";
 import { createId, nowIso } from "../repository";
 
 const RV_SESSIONS_KEY = "rvh.dev.rv_sessions";
 const SESSION_EVENTS_KEY = "rvh.dev.session_events";
+const SESSION_EVENT_PROVIDER_STATE_KEY = "rvh.dev.session_event_provider_state";
+
+type BrowserSessionEventProviderState = Omit<PersistedProviderContinuationStateRow, "ownerId"> & { sessionEventId: string };
 const SESSION_SNAPSHOTS_KEY = "rvh.dev.session_snapshots";
 const REVEALS_KEY = "rvh.dev.reveals";
 const TARGET_CLARIFICATIONS_KEY = "rvh.dev.target_clarifications";
@@ -46,6 +51,21 @@ export class BrowserSessionsRepository implements SessionsRepository {
 
   private write<T>(key: string, value: T): void {
     this.storage.setItem(key, JSON.stringify(value));
+  }
+
+  private readProviderStateRowsStrict(): BrowserSessionEventProviderState[] {
+    const raw = this.storage.getItem(SESSION_EVENT_PROVIDER_STATE_KEY);
+    if (!raw) return [];
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new ProviderContinuationPersistenceError("storage", "persistence_integrity", "Persisted Session continuation state storage is malformed.");
+    }
+    if (!Array.isArray(parsed) || parsed.some((candidate) => !candidate || typeof candidate !== "object" || !("sessionEventId" in candidate) || typeof candidate.sessionEventId !== "string")) {
+      throw new ProviderContinuationPersistenceError("storage", "persistence_integrity", "Persisted Session continuation state row is malformed.");
+    }
+    return parsed as BrowserSessionEventProviderState[];
   }
 
   private now(): string {
@@ -106,6 +126,46 @@ export class BrowserSessionsRepository implements SessionsRepository {
     const all = this.read<SessionEventRecord[]>(SESSION_EVENTS_KEY, []);
     const sequenceNumber = all.filter((item) => item.sessionId === sessionId).reduce((max, item) => Math.max(max, item.sequenceNumber), 0) + 1;
     this.write(SESSION_EVENTS_KEY, [...all, { ...event, id: createId("event"), sessionId, sequenceNumber, createdAt: this.now() }]);
+  }
+
+  async appendSessionEventWithProviderState(sessionId: string, event: SessionEventInput, state: ProviderContinuationState): Promise<SessionEventRecord> {
+    if (event.role !== "assistant") throw new Error("Provider continuation state can only be attached to an assistant Session event.");
+    const prepared = await prepareProviderContinuationState(state);
+    const all = this.read<SessionEventRecord[]>(SESSION_EVENTS_KEY, []);
+    const sequenceNumber = all.filter((item) => item.sessionId === sessionId).reduce((max, item) => Math.max(max, item.sequenceNumber), 0) + 1;
+    const record: SessionEventRecord = { ...event, id: createId("event"), sessionId, sequenceNumber, createdAt: this.now() };
+    const eventsBefore = this.storage.getItem(SESSION_EVENTS_KEY);
+    const stateBefore = this.storage.getItem(SESSION_EVENT_PROVIDER_STATE_KEY);
+    try {
+      const states = this.readProviderStateRowsStrict();
+      this.write(SESSION_EVENTS_KEY, [...all, record]);
+      this.write(SESSION_EVENT_PROVIDER_STATE_KEY, [...states, {
+        sessionEventId: record.id,
+        format: prepared.format,
+        formatVersion: prepared.formatVersion,
+        transport: prepared.transport,
+        replayFingerprintJson: prepared.replayFingerprintJson,
+        payloadJson: prepared.payloadJson,
+        payloadSha256: prepared.payloadSha256,
+        payloadSizeBytes: prepared.payloadSizeBytes,
+        createdAt: record.createdAt,
+      }]);
+      return structuredClone(record);
+    } catch (cause) {
+      for (const [key, previous] of [[SESSION_EVENTS_KEY, eventsBefore], [SESSION_EVENT_PROVIDER_STATE_KEY, stateBefore]] as const) {
+        if (previous === null) this.storage.removeItem(key); else this.storage.setItem(key, previous);
+      }
+      throw cause;
+    }
+  }
+
+  async getSessionEventProviderState(sessionEventId: string): Promise<ProviderContinuationStateBinding | null> {
+    const rows = this.readProviderStateRowsStrict();
+    for (const row of rows) {
+      if (row.sessionEventId !== sessionEventId) continue;
+      return restoreProviderContinuationState({ ...row, ownerId: row.sessionEventId });
+    }
+    return null;
   }
 
   async listSessionEvents(sessionId: string): Promise<SessionEventRecord[]> {

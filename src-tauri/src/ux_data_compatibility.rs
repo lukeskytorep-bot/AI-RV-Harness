@@ -125,6 +125,96 @@ async fn exact_green_v23_to_v24_preserves_existing_data_and_provenance() {
         .expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 24);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(24));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 25);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(25));
+}
+
+#[tokio::test]
+async fn exact_green_v24_to_v25_adds_provider_state_storage_without_mutating_existing_data() {
+    let mut connection = SqliteConnection::connect("sqlite::memory:")
+        .await
+        .expect("in-memory SQLite should open");
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut connection)
+        .await
+        .expect("foreign keys should be enabled");
+
+    for migration in &MIGRATION_SPECS[..23] {
+        apply_sql(&mut connection, migration.sql).await;
+    }
+    apply_sql(&mut connection, GREEN_V23_FIXTURE).await;
+    apply_sql(&mut connection, MIGRATION_SPECS[23].sql).await;
+    assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
+
+    let message_before = sqlx::query_scalar::<_, String>("SELECT content FROM chat_messages WHERE id = 'message-green'")
+        .fetch_one(&mut connection)
+        .await
+        .expect("green message should exist before migration 025");
+    apply_sql(&mut connection, MIGRATION_SPECS[24].sql).await;
+    let message_after = sqlx::query_scalar::<_, String>("SELECT content FROM chat_messages WHERE id = 'message-green'")
+        .fetch_one(&mut connection)
+        .await
+        .expect("green message should survive migration 025");
+    assert_eq!(message_after, message_before);
+
+    for table in ["chat_message_provider_state", "session_event_provider_state"] {
+        let exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+        )
+        .bind(table)
+        .fetch_one(&mut connection)
+        .await
+        .expect("migration 025 table lookup should execute");
+        assert_eq!(exists, 1, "migration 025 should create {table}");
+    }
+
+    sqlx::query("INSERT INTO chat_messages(id, thread_id, role, content, created_at) VALUES ('assistant-green', 'conversation-green', 'assistant', 'answer', '2026-09-24T00:00:00Z')")
+        .execute(&mut connection)
+        .await
+        .expect("assistant message fixture should insert");
+    sqlx::query("INSERT INTO session_events(id, session_id, sequence_number, event_type, role, content, metadata_json, created_at) VALUES ('event-green', 'session-green', 1, 'VIEWER_RESPONSE', 'assistant', 'answer', '{}', '2026-09-24T00:00:00Z')")
+        .execute(&mut connection)
+        .await
+        .expect("session event fixture should insert");
+    let payload = r#"{"schemaVersion":1,"transport":"openrouter","format":"openrouter-reasoning-details","replayFingerprint":{"transport":"openrouter"},"reasoningDetails":[]}"#;
+    let fingerprint = r#"{"transport":"openrouter"}"#;
+    let sha = "0".repeat(64);
+    sqlx::query("INSERT INTO chat_message_provider_state(message_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ('assistant-green','openrouter-reasoning-details',1,'openrouter',?,?,?,?,'2026-09-24T00:00:00Z')")
+        .bind(fingerprint)
+        .bind(payload)
+        .bind(&sha)
+        .bind(payload.len() as i64)
+        .execute(&mut connection)
+        .await
+        .expect("Conversation provider state fixture should insert");
+    sqlx::query("INSERT INTO session_event_provider_state(session_event_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ('event-green','openrouter-reasoning-details',1,'openrouter',?,?,?,?,'2026-09-24T00:00:00Z')")
+        .bind(fingerprint)
+        .bind(payload)
+        .bind(&sha)
+        .bind(payload.len() as i64)
+        .execute(&mut connection)
+        .await
+        .expect("Session provider state fixture should insert");
+
+    sqlx::query("DELETE FROM chat_messages WHERE id = 'assistant-green'")
+        .execute(&mut connection)
+        .await
+        .expect("assistant message should delete");
+    sqlx::query("DELETE FROM session_events WHERE id = 'event-green'")
+        .execute(&mut connection)
+        .await
+        .expect("session event should delete");
+    let chat_state = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chat_message_provider_state")
+        .fetch_one(&mut connection)
+        .await
+        .expect("Conversation state count should query");
+    let session_state = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM session_event_provider_state")
+        .fetch_one(&mut connection)
+        .await
+        .expect("Session state count should query");
+    assert_eq!(chat_state, 0, "Conversation provider state should cascade with its message");
+    assert_eq!(session_state, 0, "Session provider state should cascade with its event");
+    assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
+    assert_eq!(CURRENT_MIGRATION_VERSION, 25);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(25));
 }

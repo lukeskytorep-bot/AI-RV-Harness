@@ -36,7 +36,7 @@ The current private development baseline is v0.7.13, built on the public v0.7.12
 - [Viewer Learning 3 Research Field Guide controls report](reports/VIEWER_LEARNING_3_RESEARCH_FIELD_GUIDE_CONTROLS_v0.7.13_PL.md)
 - [Source package hygiene report](reports/SOURCE_PACKAGE_HYGIENE_1_v0.7.13_PL.md)
 
-The current SQLite boundary is schema **24**. Only the exact accepted green schema 23 boundary has a controlled upgrade to 24; public/legacy schemas are handled by the v0.7.13 database compatibility epoch gate.
+The current SQLite boundary is schema **25**. The accepted current-epoch upgrade chain preserves the exact green schema 23 → 24 Viewer Learning transition and adds the exact green schema 24 → 25 provider-continuation persistence transition. Public/legacy schemas remain handled by the v0.7.13 database compatibility epoch gate and are not silently migrated into this chain.
 
 - [AI Center implementation plan](releases/v0.7.12/AI_CENTER_IMPLEMENTATION_PLAN_PL.md)
 - [AI Center wiki documentation](releases/v0.7.12/AI_CENTER_VIEWER_NOTES_WIKI_EN.md)

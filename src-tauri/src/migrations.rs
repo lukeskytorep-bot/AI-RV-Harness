@@ -128,6 +128,11 @@ pub(crate) const MIGRATION_SPECS: &[MigrationSpec] = &[
         description: "viewer_learning_field_guide_foundation",
         sql: include_str!("../migrations/024_viewer_learning_field_guide.sql"),
     },
+    MigrationSpec {
+        version: 25,
+        description: "provider_continuation_state_persistence",
+        sql: include_str!("../migrations/025_provider_continuation_state.sql"),
+    },
 ];
 
 pub(crate) const CURRENT_MIGRATION_VERSION: i64 =
@@ -150,13 +155,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_is_contiguous_and_current_version_is_024() {
+    fn registry_is_contiguous_and_current_version_is_025() {
         let versions = MIGRATION_SPECS
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>();
-        assert_eq!(versions, (1_i64..=24).collect::<Vec<_>>());
-        assert_eq!(CURRENT_MIGRATION_VERSION, 24);
+        assert_eq!(versions, (1_i64..=25).collect::<Vec<_>>());
+        assert_eq!(CURRENT_MIGRATION_VERSION, 25);
         assert_eq!(registered_migrations().len(), MIGRATION_SPECS.len());
     }
 }

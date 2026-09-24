@@ -1,15 +1,20 @@
 import type { ChatMessage, ChatMode, ChatThread, CreateWorkspaceInput, Workspace } from "../../types";
 import type { WorkspacesConversationsRepository } from "../contracts/workspacesConversationsRepository";
+import type { ProviderContinuationState } from "../../providers/continuationContract";
+import { prepareProviderContinuationState, restoreProviderContinuationState, type ProviderContinuationStateBinding } from "../providerContinuationState";
 import { createId, nowIso } from "../repository";
 
 type WriteResult = { rowsAffected: number };
 type WorkspaceRow = { id: string; profile_id: string; name: string; description: string | null; created_at: string; updated_at: string; last_opened_at: string; archived_at: string | null };
 type ChatThreadRow = { id: string; workspace_id: string; mode: ChatMode; thread_group_id: string | null; title: string; formal_rv_state: ChatThread["formalRvState"] | null; created_at: string; updated_at: string; archived_at: string | null };
 type ChatMessageRow = { id: string; thread_id: string; role: "user" | "assistant"; content: string; created_at: string };
+type ProviderStateRow = { message_id: string; format: string; format_version: number; transport: string; replay_fingerprint_json: string; payload_json: string; payload_sha256: string; payload_size_bytes: number; created_at: string };
+type TransactionStatement = { query: string; values?: unknown[] };
 
 export interface SqliteWorkspacesConversationsRepositoryDependencies {
   select<T>(query: string, bindValues?: unknown[]): Promise<T>;
   executeWrite(query: string, bindValues?: unknown[]): Promise<WriteResult>;
+  executeTransaction(statements: TransactionStatement[]): Promise<number[]>;
   now?: typeof nowIso;
 }
 
@@ -149,5 +154,30 @@ export class SqliteWorkspacesConversationsRepository implements WorkspacesConver
     await this.dependencies.executeWrite(`INSERT INTO chat_messages (id, thread_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)`, [message.id, threadId, role, content, timestamp]);
     await this.dependencies.executeWrite("UPDATE chat_threads SET updated_at = $1 WHERE id = $2", [timestamp, threadId]);
     return message;
+  }
+
+  async appendAssistantMessageWithProviderState(threadId: string, content: string, state: ProviderContinuationState): Promise<ChatMessage> {
+    const prepared = await prepareProviderContinuationState(state);
+    const timestamp = this.now();
+    const message: ChatMessage = { id: createId("message"), threadId, role: "assistant", content, createdAt: timestamp };
+    await this.dependencies.executeTransaction([
+      { query: `INSERT INTO chat_messages (id, thread_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)`, values: [message.id, threadId, "assistant", content, timestamp] },
+      { query: `INSERT INTO chat_message_provider_state (message_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, values: [message.id, prepared.format, prepared.formatVersion, prepared.transport, prepared.replayFingerprintJson, prepared.payloadJson, prepared.payloadSha256, prepared.payloadSizeBytes, timestamp] },
+      { query: "UPDATE chat_threads SET updated_at = $1 WHERE id = $2", values: [timestamp, threadId] },
+    ]);
+    return message;
+  }
+
+  async listChatMessageProviderStates(threadId: string): Promise<ProviderContinuationStateBinding[]> {
+    const rows = await this.dependencies.select<ProviderStateRow[]>(`SELECT s.message_id, s.format, s.format_version, s.transport, s.replay_fingerprint_json, s.payload_json, s.payload_sha256, s.payload_size_bytes, s.created_at FROM chat_message_provider_state s JOIN chat_messages m ON m.id = s.message_id WHERE m.thread_id = $1 AND m.role = 'assistant' ORDER BY m.created_at`, [threadId]);
+    const result: ProviderContinuationStateBinding[] = [];
+    for (const row of rows) {
+      result.push(await restoreProviderContinuationState({ ownerId: row.message_id, format: row.format, formatVersion: row.format_version, transport: row.transport, replayFingerprintJson: row.replay_fingerprint_json, payloadJson: row.payload_json, payloadSha256: row.payload_sha256, payloadSizeBytes: row.payload_size_bytes, createdAt: row.created_at }));
+    }
+    return result;
+  }
+
+  async resetChatMessageProviderStates(threadId: string): Promise<void> {
+    await this.dependencies.executeWrite(`DELETE FROM chat_message_provider_state WHERE message_id IN (SELECT id FROM chat_messages WHERE thread_id = $1)`, [threadId]);
   }
 }

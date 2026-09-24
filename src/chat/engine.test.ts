@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
+import type { ProviderContinuationState } from "../providers/continuationContract";
 import type { ChatMessage } from "../types";
+import { ProviderContinuationPersistenceError } from "../storage/providerContinuationState";
 import { ConversationContinuationBreakError, clearAllConversationContinuationMemoryForTests, estimateConversationContinuationMemoryBytes } from "./continuationMemory";
 import { retryChatTurn, sendChatTurn } from "./engine";
 
@@ -12,12 +14,40 @@ const model: ProviderModel = {
 
 function repo(history: ChatMessage[]) {
   const stored = [...history];
+  const providerStates = new Map<string, ProviderContinuationState>();
+  const appendChatMessage = async (threadId: string, role: "user" | "assistant", content: string) => {
+    const message: ChatMessage = { id: `m${stored.length}`, threadId, role, content, createdAt: "x" };
+    stored.push(message);
+    return message;
+  };
   return {
     listChatMessages: async () => [...stored],
-    appendChatMessage: async (threadId: string, role: "user" | "assistant", content: string) => {
-      const message: ChatMessage = { id: `m${stored.length}`, threadId, role, content, createdAt: "x" };
-      stored.push(message);
+    appendChatMessage,
+    appendAssistantMessageWithProviderState: async (threadId: string, content: string, state: ProviderContinuationState) => {
+      const message = await appendChatMessage(threadId, "assistant", content);
+      providerStates.set(message.id, structuredClone(state));
       return message;
+    },
+    listChatMessageProviderStates: async (threadId: string) => stored
+      .filter((message) => message.threadId === threadId && providerStates.has(message.id))
+      .map((message) => {
+        const state = providerStates.get(message.id)!;
+        return {
+          ownerId: message.id,
+          format: state.format,
+          formatVersion: state.schemaVersion,
+          transport: state.transport,
+          replayFingerprint: structuredClone(state.replayFingerprint),
+          state: structuredClone(state),
+          payloadSha256: "test",
+          payloadSizeBytes: JSON.stringify(state).length,
+          createdAt: message.createdAt,
+        };
+      }),
+    resetChatMessageProviderStates: async (threadId: string) => {
+      for (const message of stored) {
+        if (message.threadId === threadId) providerStates.delete(message.id);
+      }
     },
   };
 }
@@ -141,6 +171,29 @@ describe("chat engine isolation", () => {
     expect(endpoint).toHaveBeenCalled();
   });
 
+  it("rehydrates persisted OpenRouter continuation state after in-memory continuity is cleared", async () => {
+    const repository = repo([]);
+    const endpoint = async () => "https://openrouter.ai/api/v1";
+    const details = [{ type: "reasoning.text", text: "persist me", id: "t1", format: "openai-responses-v1" }];
+    await sendChatTurn({
+      repository, threadId: "persisted-continuity", mode: "conversation", language: "en", providerConfig: provider, model, content: "First",
+      resolveBindingEndpoint: endpoint,
+      chat: async () => ({ content: "First answer", reasoningDetails: details, usage: {} }),
+    });
+
+    clearAllConversationContinuationMemoryForTests();
+    let replayed: Parameters<NonNullable<Parameters<typeof sendChatTurn>[0]["chat"]>>[0] | undefined;
+    await sendChatTurn({
+      repository, threadId: "persisted-continuity", mode: "conversation", language: "en", providerConfig: provider, model, content: "Second",
+      resolveBindingEndpoint: endpoint,
+      chat: async (request) => { replayed = request; return { content: "Second answer", usage: {} }; },
+    });
+
+    const priorAssistant = replayed?.messages.find((message) => message.id === "m1");
+    expect(priorAssistant?.continuationState?.transport).toBe("openrouter");
+    expect(priorAssistant?.continuationState && "reasoningDetails" in priorAssistant.continuationState ? priorAssistant.continuationState.reasoningDetails : undefined).toEqual(details);
+  });
+
   it("counts replayed OpenRouter continuation state before provider dispatch and blocks an oversized context", async () => {
     const repository = repo([]);
     const endpoint = async () => "https://openrouter.ai/api/v1";
@@ -226,6 +279,75 @@ describe("chat engine isolation", () => {
       chat: async (request) => { textOnly = request; return { content: "Text-only answer", usage: {} }; },
     });
     expect(textOnly?.messages.some((message) => Boolean(message.continuationState))).toBe(false);
+  });
+
+  it("keeps Continue text-only reset durable across a simulated restart and starts a fresh continuation chain", async () => {
+    const repository = repo([]);
+    const endpoint = async () => "https://openrouter.ai/api/v1";
+    await sendChatTurn({
+      repository, threadId: "continuity-reset", mode: "conversation", language: "en", providerConfig: provider, model, content: "First",
+      resolveBindingEndpoint: endpoint,
+      chat: async () => ({ content: "A answer", reasoningDetails: [{ type: "reasoning.text", text: "A reasoning", id: "a1", format: "openai-responses-v1" }], usage: {} }),
+    });
+
+    const otherModel: ProviderModel = { ...model, modelId: "other-model", route: "openrouter:other-model" };
+    await sendChatTurn({
+      repository, threadId: "continuity-reset", mode: "conversation", language: "en", providerConfig: provider, model: otherModel, content: "Second",
+      allowTextOnlyContinuation: true, resolveBindingEndpoint: endpoint,
+      chat: async (request) => {
+        expect(request.messages.some((message) => Boolean(message.continuationState))).toBe(false);
+        return { content: "B answer", reasoningDetails: [{ type: "reasoning.text", text: "B reasoning", id: "b1", format: "openai-responses-v1" }], usage: {} };
+      },
+    });
+
+    clearAllConversationContinuationMemoryForTests();
+    let afterRestart: Parameters<NonNullable<Parameters<typeof sendChatTurn>[0]["chat"]>>[0] | undefined;
+    await sendChatTurn({
+      repository, threadId: "continuity-reset", mode: "conversation", language: "en", providerConfig: provider, model: otherModel, content: "Third",
+      resolveBindingEndpoint: endpoint,
+      chat: async (request) => { afterRestart = request; return { content: "C answer", usage: {} }; },
+    });
+
+    const replayedStates = afterRestart?.messages.filter((message) => Boolean(message.continuationState)) ?? [];
+    expect(replayedStates).toHaveLength(1);
+    expect(replayedStates[0]?.content).toBe("B answer");
+  });
+
+  it("resets malformed persisted Conversation state before an explicit text-only provider call", async () => {
+    const baseRepository = repo([]);
+    let corrupted = true;
+    const reset = vi.fn(async (threadId: string) => {
+      corrupted = false;
+      await baseRepository.resetChatMessageProviderStates(threadId);
+    });
+    const repository = {
+      ...baseRepository,
+      listChatMessageProviderStates: async (threadId: string) => {
+        if (corrupted) throw new ProviderContinuationPersistenceError("storage", "persistence_integrity", "Persisted state is corrupted.");
+        return baseRepository.listChatMessageProviderStates(threadId);
+      },
+      resetChatMessageProviderStates: reset,
+    };
+    const endpoint = async () => "https://openrouter.ai/api/v1";
+
+    await sendChatTurn({
+      repository, threadId: "corrupted-reset", mode: "conversation", language: "en", providerConfig: provider, model, content: "Recover",
+      allowTextOnlyContinuation: true, resolveBindingEndpoint: endpoint,
+      chat: async (request) => {
+        expect(request.messages.some((message) => Boolean(message.continuationState))).toBe(false);
+        return { content: "Recovered", reasoningDetails: [{ type: "reasoning.text", text: "fresh", id: "fresh-1", format: "openai-responses-v1" }], usage: {} };
+      },
+    });
+    expect(reset).toHaveBeenCalledTimes(1);
+
+    clearAllConversationContinuationMemoryForTests();
+    let afterRestart: Parameters<NonNullable<Parameters<typeof sendChatTurn>[0]["chat"]>>[0] | undefined;
+    await sendChatTurn({
+      repository, threadId: "corrupted-reset", mode: "conversation", language: "en", providerConfig: provider, model, content: "Continue",
+      resolveBindingEndpoint: endpoint,
+      chat: async (request) => { afterRestart = request; return { content: "Next", usage: {} }; },
+    });
+    expect(afterRestart?.messages.filter((message) => Boolean(message.continuationState))).toHaveLength(1);
   });
 
 });

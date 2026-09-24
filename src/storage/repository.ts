@@ -1,3 +1,5 @@
+import type { ProviderContinuationState } from "../providers/continuationContract";
+import type { ProviderContinuationStateBinding } from "./providerContinuationState";
 import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CreateProviderConfigInput, ProviderConfig, ProviderModel } from "../providers/types";
 import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionEventRecord, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
@@ -41,6 +43,9 @@ export interface AppRepository {
   setChatThreadFormalRvState(threadId: string, state?: ChatThread["formalRvState"]): Promise<void>;
   listChatMessages(threadId: string): Promise<ChatMessage[]>;
   appendChatMessage(threadId: string, role: ChatMessage["role"], content: string): Promise<ChatMessage>;
+  appendAssistantMessageWithProviderState(threadId: string, content: string, state: ProviderContinuationState): Promise<ChatMessage>;
+  listChatMessageProviderStates(threadId: string): Promise<ProviderContinuationStateBinding[]>;
+  resetChatMessageProviderStates(threadId: string): Promise<void>;
   listWorkspaceSources(workspaceId: string): Promise<WorkspaceSource[]>;
   createWorkspaceSource(input: CreateWorkspaceSourceInput): Promise<WorkspaceSource>;
   deleteWorkspaceSource(id: string): Promise<void>;
@@ -106,6 +111,8 @@ export interface AppRepository {
   createRvSession(input: CreateRvSessionInput): Promise<RvSession>;
   updateRvSessionState(id: string, state: RvSessionState, stopReason?: string): Promise<void>;
   appendSessionEvent(sessionId: string, event: SessionEventInput): Promise<void>;
+  appendSessionEventWithProviderState(sessionId: string, event: SessionEventInput, state: ProviderContinuationState): Promise<SessionEventRecord>;
+  getSessionEventProviderState(sessionEventId: string): Promise<ProviderContinuationStateBinding | null>;
   listSessionEvents(sessionId: string): Promise<SessionEventRecord[]>;
   updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void>;
   appendPostRevealTurn(sessionId: string, role: "user" | "assistant" | "monitor", content: string): Promise<string>;

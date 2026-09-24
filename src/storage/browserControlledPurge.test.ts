@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { previewBrowserPermanentDelete, purgeBrowserPermanentDelete } from "./browser/controlledPurge";
+import { browserChatMessageProviderStateFreshKey, browserChatMessageProviderStateResetKey } from "./providerContinuationState";
 
 class MemoryStorage implements Storage {
   private data = new Map<string, string>();
@@ -19,7 +20,14 @@ describe("Browser controlled purge", () => {
     const storage = new MemoryStorage();
     set(storage, "rvh.dev.profiles", [{ id: "p1", name: "P1" }, { id: "p2", name: "P2" }]);
     set(storage, "rvh.dev.workspaces", [{ id: "w1", profileId: "p1", name: "W1", archivedAt: "2026-09-10" }]);
+    set(storage, "rvh.dev.chat_threads", [{ id: "c1", workspaceId: "w1", mode: "conversation", title: "C1" }]);
+    set(storage, "rvh.dev.chat_messages", [{ id: "m1", threadId: "c1", role: "assistant", content: "answer" }]);
+    set(storage, "rvh.dev.chat_message_provider_state", [{ messageId: "m1", payloadJson: "{}" }]);
+    storage.setItem(browserChatMessageProviderStateResetKey("c1"), "1");
+    set(storage, browserChatMessageProviderStateFreshKey("c1"), [{ messageId: "m1", payloadJson: "{}" }]);
     set(storage, "rvh.dev.rv_sessions", [{ id: "s1", workspaceId: "w1", profileId: "p1", sessionCode: "S1", archivedAt: "2026-09-10" }]);
+    set(storage, "rvh.dev.session_events", [{ id: "e1", sessionId: "s1", sequenceNumber: 1, eventType: "VIEWER_RESPONSE", createdAt: "2026-09-10" }]);
+    set(storage, "rvh.dev.session_event_provider_state", [{ sessionEventId: "e1", payloadJson: "{}" }]);
     set(storage, "rvh.dev.ai_identities", [{ id: "ai2", profileId: "p2" }]);
     set(storage, "rvh.dev.ai_note_versions", [{ id: "v1", aiIdentityId: "ai2", sourceSessionId: "s1", sourceWorkspaceId: "w1", sourceSnapshot: { workspaceId: "w1", sessionId: "s1" } }]);
     set(storage, "rvh.dev.ai_note_reflection_runs", [{ id: "r1", aiIdentityId: "ai2", sourceSessionId: "s1", sourceWorkspaceId: "w1", sourceSnapshot: { workspaceId: "w1", sessionId: "s1" } }]);
@@ -31,11 +39,25 @@ describe("Browser controlled purge", () => {
     purgeBrowserPermanentDelete(storage, "workspace", "w1");
 
     expect(get<unknown[]>(storage, "rvh.dev.workspaces")).toEqual([]);
+    expect(get<unknown[]>(storage, "rvh.dev.chat_messages")).toEqual([]);
+    expect(get<unknown[]>(storage, "rvh.dev.chat_message_provider_state")).toEqual([]);
+    expect(storage.getItem(browserChatMessageProviderStateResetKey("c1"))).toBeNull();
+    expect(storage.getItem(browserChatMessageProviderStateFreshKey("c1"))).toBeNull();
     expect(get<unknown[]>(storage, "rvh.dev.rv_sessions")).toEqual([]);
+    expect(get<unknown[]>(storage, "rvh.dev.session_events")).toEqual([]);
+    expect(get<unknown[]>(storage, "rvh.dev.session_event_provider_state")).toEqual([]);
     const version = get<Array<Record<string, unknown>>>(storage, "rvh.dev.ai_note_versions")[0];
     expect(version.sourceSessionId).toBeUndefined();
     expect(version.sourceWorkspaceId).toBeUndefined();
     expect(version.sourceSnapshot).toEqual({ workspaceId: "w1", sessionId: "s1" });
+  });
+
+  it("fails closed on malformed provider-state storage instead of dropping unrelated continuation records", () => {
+    const storage = new MemoryStorage();
+    set(storage, "rvh.dev.workspaces", [{ id: "w1", profileId: "p1", name: "W1", archivedAt: "2026-09-10" }]);
+    storage.setItem("rvh.dev.chat_message_provider_state", "{broken");
+    expect(() => previewBrowserPermanentDelete(storage, "workspace", "w1")).toThrow(/provider continuation state storage is malformed/i);
+    expect(storage.getItem("rvh.dev.chat_message_provider_state")).toBe("{broken");
   });
 
   it("deletes Viewer Notes only when the owning Profile itself is purged", () => {

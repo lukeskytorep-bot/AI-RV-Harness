@@ -95,6 +95,9 @@ export type DatabaseWriteOperation =
   | "workspaces_conversations_update_chat_threads_05"
   | "workspaces_conversations_insert_chat_messages_01"
   | "workspaces_conversations_update_chat_threads_06"
+  | "continuation_insert_chat_message_provider_state_01"
+  | "continuation_delete_chat_message_provider_state_01"
+  | "continuation_insert_session_event_provider_state_01"
   | "sqlite_update_workspaces_01"
   | "sqlite_update_profiles_01"
   | "sqlite_update_profiles_02"
@@ -199,6 +202,9 @@ const WRITE_OPERATIONS = new Map<string, DatabaseWriteOperation>([
   ["UPDATE chat_threads SET formal_rv_state = $1, updated_at = $2 WHERE id = $3 AND mode = 'manual_rv'", "workspaces_conversations_update_chat_threads_05"],
   ["INSERT INTO chat_messages (id, thread_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)", "workspaces_conversations_insert_chat_messages_01"],
   ["UPDATE chat_threads SET updated_at = $1 WHERE id = $2", "workspaces_conversations_update_chat_threads_06"],
+  ["INSERT INTO chat_message_provider_state (message_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", "continuation_insert_chat_message_provider_state_01"],
+  ["DELETE FROM chat_message_provider_state WHERE message_id IN (SELECT id FROM chat_messages WHERE thread_id = $1)", "continuation_delete_chat_message_provider_state_01"],
+  ["INSERT INTO session_event_provider_state (session_event_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", "continuation_insert_session_event_provider_state_01"],
   ["UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE profile_id = $2 AND archived_at IS NULL", "sqlite_update_workspaces_01"],
   ["UPDATE profiles SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", "sqlite_update_profiles_01"],
   ["UPDATE profiles SET archived_at = NULL, updated_at = $1 WHERE id = $2", "sqlite_update_profiles_02"],

@@ -8,12 +8,16 @@ import type {
   SessionSnapshot,
   TargetClarificationRecord,
 } from "../../sessions/types";
+import type { ProviderContinuationState } from "../../providers/continuationContract";
+import type { ProviderContinuationStateBinding } from "../providerContinuationState";
 
 /** Internal persistence contract for RV session records and their sealed/reveal lifecycle. */
 export interface SessionsRepository {
   createRvSession(input: CreateRvSessionInput): Promise<RvSession>;
   updateRvSessionState(id: string, state: RvSessionState, stopReason?: string): Promise<void>;
   appendSessionEvent(sessionId: string, event: SessionEventInput): Promise<void>;
+  appendSessionEventWithProviderState(sessionId: string, event: SessionEventInput, state: ProviderContinuationState): Promise<SessionEventRecord>;
+  getSessionEventProviderState(sessionEventId: string): Promise<ProviderContinuationStateBinding | null>;
   listSessionEvents(sessionId: string): Promise<SessionEventRecord[]>;
   updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void>;
   appendPostRevealTurn(sessionId: string, role: "user" | "assistant" | "monitor", content: string): Promise<string>;

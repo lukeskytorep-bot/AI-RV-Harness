@@ -67,6 +67,7 @@ export class SqliteRepository implements AppRepository {
     this.workspacesConversationsRepository = new SqliteWorkspacesConversationsRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
+      executeTransaction: (statements) => this.executeTransaction(statements),
     });
     this.researchRepository = new SqliteResearchRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
@@ -76,6 +77,7 @@ export class SqliteRepository implements AppRepository {
     this.sessionsRepository = new SqliteSessionsRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
+      executeTransaction: (statements) => this.executeTransaction(statements),
       isResearchScoresFrozen: (projectId) => this.researchRepository.isScoresFrozen(projectId),
     });
     this.trainingRepository = new SqliteTrainingRepository({
@@ -263,6 +265,9 @@ export class SqliteRepository implements AppRepository {
   setChatThreadFormalRvState: AppRepository["setChatThreadFormalRvState"] = (threadId, state) => this.workspacesConversationsRepository.setChatThreadFormalRvState(threadId, state);
   listChatMessages: AppRepository["listChatMessages"] = (threadId) => this.workspacesConversationsRepository.listChatMessages(threadId);
   appendChatMessage: AppRepository["appendChatMessage"] = (threadId, role, content) => this.workspacesConversationsRepository.appendChatMessage(threadId, role, content);
+  appendAssistantMessageWithProviderState: AppRepository["appendAssistantMessageWithProviderState"] = (threadId, content, state) => this.workspacesConversationsRepository.appendAssistantMessageWithProviderState(threadId, content, state);
+  listChatMessageProviderStates: AppRepository["listChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.listChatMessageProviderStates(threadId);
+  resetChatMessageProviderStates: AppRepository["resetChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.resetChatMessageProviderStates(threadId);
 
   async listWorkspaceSources(workspaceId: string): Promise<WorkspaceSource[]> {
     const rows = await selectDatabaseReadonly<WorkspaceSourceRow[]>(
@@ -385,6 +390,8 @@ export class SqliteRepository implements AppRepository {
   createRvSession: AppRepository["createRvSession"] = (input) => this.sessionsRepository.createRvSession(input);
   updateRvSessionState: AppRepository["updateRvSessionState"] = (id, state, stopReason) => this.sessionsRepository.updateRvSessionState(id, state, stopReason);
   appendSessionEvent: AppRepository["appendSessionEvent"] = (sessionId, event) => this.sessionsRepository.appendSessionEvent(sessionId, event);
+  appendSessionEventWithProviderState: AppRepository["appendSessionEventWithProviderState"] = (sessionId, event, state) => this.sessionsRepository.appendSessionEventWithProviderState(sessionId, event, state);
+  getSessionEventProviderState: AppRepository["getSessionEventProviderState"] = (sessionEventId) => this.sessionsRepository.getSessionEventProviderState(sessionEventId);
   listSessionEvents: AppRepository["listSessionEvents"] = (sessionId) => this.sessionsRepository.listSessionEvents(sessionId);
   updatePreRevealTranscript: AppRepository["updatePreRevealTranscript"] = (sessionId, transcript) => this.sessionsRepository.updatePreRevealTranscript(sessionId, transcript);
   appendPostRevealTurn: AppRepository["appendPostRevealTurn"] = (sessionId, role, content) => this.sessionsRepository.appendPostRevealTurn(sessionId, role, content);

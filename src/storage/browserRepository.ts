@@ -215,6 +215,9 @@ export class BrowserRepository implements AppRepository {
   setChatThreadFormalRvState: AppRepository["setChatThreadFormalRvState"] = (threadId, state) => this.workspacesConversationsRepository.setChatThreadFormalRvState(threadId, state);
   listChatMessages: AppRepository["listChatMessages"] = (threadId) => this.workspacesConversationsRepository.listChatMessages(threadId);
   appendChatMessage: AppRepository["appendChatMessage"] = (threadId, role, content) => this.workspacesConversationsRepository.appendChatMessage(threadId, role, content);
+  appendAssistantMessageWithProviderState: AppRepository["appendAssistantMessageWithProviderState"] = (threadId, content, state) => this.workspacesConversationsRepository.appendAssistantMessageWithProviderState(threadId, content, state);
+  listChatMessageProviderStates: AppRepository["listChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.listChatMessageProviderStates(threadId);
+  resetChatMessageProviderStates: AppRepository["resetChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.resetChatMessageProviderStates(threadId);
 
   async listWorkspaceSources(workspaceId: string): Promise<WorkspaceSource[]> {
     return read<WorkspaceSource[]>(WORKSPACE_SOURCES_KEY, []).filter((source) => source.workspaceId === workspaceId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -287,6 +290,8 @@ export class BrowserRepository implements AppRepository {
   createRvSession: AppRepository["createRvSession"] = (input) => this.sessionsRepository.createRvSession(input);
   updateRvSessionState: AppRepository["updateRvSessionState"] = (id, state, stopReason) => this.sessionsRepository.updateRvSessionState(id, state, stopReason);
   appendSessionEvent: AppRepository["appendSessionEvent"] = (sessionId, event) => this.sessionsRepository.appendSessionEvent(sessionId, event);
+  appendSessionEventWithProviderState: AppRepository["appendSessionEventWithProviderState"] = (sessionId, event, state) => this.sessionsRepository.appendSessionEventWithProviderState(sessionId, event, state);
+  getSessionEventProviderState: AppRepository["getSessionEventProviderState"] = (sessionEventId) => this.sessionsRepository.getSessionEventProviderState(sessionEventId);
   listSessionEvents: AppRepository["listSessionEvents"] = (sessionId) => this.sessionsRepository.listSessionEvents(sessionId);
   updatePreRevealTranscript: AppRepository["updatePreRevealTranscript"] = (sessionId, transcript) => this.sessionsRepository.updatePreRevealTranscript(sessionId, transcript);
   appendPostRevealTurn: AppRepository["appendPostRevealTurn"] = (sessionId, role, content) => this.sessionsRepository.appendPostRevealTurn(sessionId, role, content);

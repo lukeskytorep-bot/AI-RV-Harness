@@ -1,7 +1,7 @@
 # AI RV Harness v0.7.13 — desktop runtime i release smoke
 
 **Status modularizacji:** Etapy 1–9 `COMPLETED — AUTOMATED GATES PASS`.  
-**Cel:** bieżąca ręczna bramka desktopowa przed akceptacją/release v0.7.13; zachowuje scenariusze modularizacji i obejmuje późniejsze zmiany schema 24 oraz Viewer Learning.  
+**Cel:** bieżąca ręczna bramka desktopowa przed akceptacją/release v0.7.13; zachowuje scenariusze modularizacji i obejmuje schema 25, Viewer Learning oraz persistence OpenRouter continuation state.  
 **Wymagana baza:** dokładny aktualny zielony kandydat v0.7.13, nie historyczny ZIP Etapu 9.  
 **Zasada:** wykonywać na desktopowym buildzie Tauri z kopią danych testowych. Nie używać jedynej kopii realnej bazy użytkownika.
 
@@ -10,7 +10,7 @@
 - pełny GitHub Actions dla dokładnego aktualnego kandydata jest zielony;
 - `verify:source`, `verify:ux-data`, `verify:architecture`, pełny Vitest, typecheck, Vite, Rust/Tauri i Clippy przechodzą;
 - build uruchamia się z nowym, pustym profilem aplikacji;
-- dostępna jest osobna kopia dokładnej zielonej bazy schema 23 do kontrolowanego testu upgrade 23 → 24;
+- dostępna jest osobna kopia dokładnej zielonej bazy schema 24 do kontrolowanego testu upgrade 24 → 25; natywne testy nadal osobno zachowują bramkę v23 → v24;
 - osobna baza legacy służy do sprawdzenia ekranu compatibility epoch; nie wolno pozwalać pluginowi SQL migrować jej automatycznie;
 - dla provider smoke używany jest testowy credential należący do użytkownika.
 
@@ -18,8 +18,8 @@
 
 | # | Scenariusz | Procedura minimalna | Wynik wymagany |
 | --- | --- | --- | --- |
-| 1 | Start na schema 24 | Uruchom aplikację na aktualnej bazie 24, zamknij i uruchom ponownie. | Start bez błędu, dane widoczne, brak ponownej/niekończącej się migracji. |
-| 2 | Kontrolowany upgrade i legacy epoch | Uruchom kopię dokładnej zielonej bazy 23, a osobno kopię legacy v1–20. | Zielona v23 przechodzi do v24 z zachowaniem danych. Legacy jest zatrzymana przed `Database.load()` i oferuje bezpieczne zachowanie/start fresh; nie jest automatycznie migrowana. |
+| 1 | Start na schema 25 | Uruchom aplikację na aktualnej bazie 25, zamknij i uruchom ponownie. | Start bez błędu, dane widoczne, brak ponownej/niekończącej się migracji. |
+| 2 | Kontrolowany upgrade i legacy epoch | Uruchom kopię dokładnej zielonej bazy 24, a osobno kopię legacy v1–20. | Zielona v24 przechodzi do v25 z zachowaniem danych i tworzy obie tabele continuation state. Legacy jest zatrzymana przed `Database.load()` i oferuje bezpieczne zachowanie/start fresh; nie jest automatycznie migrowana. |
 | 3 | Lazy routes | Otwórz kolejno Research, Settings i AI Center/Monitor, wróć na Home i otwórz je ponownie. | Każda trasa renderuje się, fallback znika, brak pustego ekranu i błędu dynamic import. |
 | 4 | Zwykłe odczyty/zapisy | Utwórz/zmień nazwę Workspace lub Conversation, zapisz wiadomość/ustawienie i uruchom ponownie aplikację. | Odczyt i zapis działają; dane pozostają po restarcie. |
 | 5 | Training | Uruchom krótki testowy Training, doprowadź co najmniej jeden target do trwałego checkpointu; jeśli możliwe przerwij i użyj Resume. | Brak duplikatu ukończonego kroku; checkpoint i Resume zachowują się zgodnie z rekordem. |
@@ -32,7 +32,9 @@
 | 12 | Training Viewer Learning | Wykonaj Training do zakończenia jednego targetu i otwórz Viewer Learning w AI Center. | Kolejność to Viewer Review → Field Guide Update → Viewer Notes Reflection; wersje są przypisane do exact identity/language i zachowują provenance. Zwykła RV Session nie tworzy nowych wersji. |
 | 13 | Field Guide capacity/Resume | Przetestuj `NO_CHANGE` lub poprawny update, a w kontrolowanym przypadku odpowiedź ponad limitem i Resume. | Limit nie powoduje obcięcia; działa jedna poprawa pojemności; ukończone etapy nie są płatnie powtarzane po Resume. |
 | 14 | Research/Judge sanity | Zablokuj minimalny Research z Notes OFF/CURRENT i Field Guide OFF/CURRENT; sprawdź także historię Field Guide, jeśli dostępna. | Lock zamraża dokładne snapshoty, Resume ich nie podmienia, Research nie tworzy wersji Notes ani Field Guide, a frozen Judge score/blinding nie zmienia się od odczytu. |
-| 15 | Restart końcowy | Zamknij aplikację po wszystkich operacjach i uruchom ponownie. | Brak startup error; ostatnie poprawne dane i archiwa są dostępne. |
+| 15 | OpenRouter Conversation continuity persistence | W Conversation użyj kompatybilnego modelu OpenRouter zwracającego `reasoning_details`, wykonaj kolejny turn, zamknij aplikację, uruchom ponownie i wykonaj następny turn w tej samej Conversation. | Assistant message i state zapisują się atomowo; po restarcie state jest odczytany, zwalidowany i replayowany wyłącznie przy zgodnym fingerprint. Ordinary transcript/export nie pokazuje payloadu. |
+| 16 | Continuation backup/restore + purge | Po zapisaniu Conversation continuation state wykonaj backup, Restore i ponowny odczyt; następnie na osobnej kopii wykonaj controlled purge Conversation. | Backup/Restore zachowuje exact payload/hash/size; purge usuwa state razem z wiadomością i nie pozostawia orphan/FK violations. |
+| 17 | Restart końcowy | Zamknij aplikację po wszystkich operacjach i uruchom ponownie. | Brak startup error; ostatnie poprawne dane i archiwa są dostępne. |
 
 ## Kryterium zaliczenia
 

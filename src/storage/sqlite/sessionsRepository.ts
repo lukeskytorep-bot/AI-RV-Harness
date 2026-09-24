@@ -11,6 +11,8 @@ import type {
 import { serializePostRevealTurn } from "../../sessions/postRevealTranscript";
 import { verifySealedViewerEvidence } from "../../sessions/evidence";
 import type { SessionsRepository } from "../contracts/sessionsRepository";
+import type { ProviderContinuationState } from "../../providers/continuationContract";
+import { prepareProviderContinuationState, restoreProviderContinuationState, type ProviderContinuationStateBinding } from "../providerContinuationState";
 import { createId, nowIso } from "../repository";
 
 type WriteResult = { rowsAffected: number };
@@ -35,10 +37,13 @@ type RvSessionRow = {
 };
 type RevealRow = { reveal_source: RevealInput["source"]; reveal_text: string | null; artifact_manifest_json: string; reveal_hash: string };
 type SessionEventRow = { id: string; session_id: string; sequence_number: number; event_type: string; role: SessionEventRecord["role"] | null; content: string | null; metadata_json: string; created_at: string };
+type SessionEventProviderStateRow = { session_event_id: string; format: string; format_version: number; transport: string; replay_fingerprint_json: string; payload_json: string; payload_sha256: string; payload_size_bytes: number; created_at: string };
+type TransactionStatement = { query: string; values?: unknown[] };
 
 export interface SqliteSessionsRepositoryDependencies {
   select<T>(query: string, bindValues?: unknown[]): Promise<T>;
   executeWrite(query: string, bindValues?: unknown[]): Promise<WriteResult>;
+  executeTransaction(statements: TransactionStatement[]): Promise<number[]>;
   isResearchScoresFrozen(researchProjectId: string): Promise<boolean>;
   now?: typeof nowIso;
 }
@@ -133,6 +138,27 @@ export class SqliteSessionsRepository implements SessionsRepository {
          FROM session_events WHERE session_id = $2`,
       [createId("event"), sessionId, event.eventType, event.role ?? null, event.content ?? null, JSON.stringify(event.metadata ?? {}), timestamp],
     );
+  }
+
+  async appendSessionEventWithProviderState(sessionId: string, event: SessionEventInput, state: ProviderContinuationState): Promise<SessionEventRecord> {
+    if (event.role !== "assistant") throw new Error("Provider continuation state can only be attached to an assistant Session event.");
+    const prepared = await prepareProviderContinuationState(state);
+    const timestamp = this.now();
+    const eventId = createId("event");
+    await this.dependencies.executeTransaction([
+      { query: `INSERT INTO session_events (id, session_id, sequence_number, event_type, role, content, metadata_json, created_at) SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7 FROM session_events WHERE session_id = $2`, values: [eventId, sessionId, event.eventType, event.role ?? null, event.content ?? null, JSON.stringify(event.metadata ?? {}), timestamp] },
+      { query: `INSERT INTO session_event_provider_state (session_event_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, values: [eventId, prepared.format, prepared.formatVersion, prepared.transport, prepared.replayFingerprintJson, prepared.payloadJson, prepared.payloadSha256, prepared.payloadSizeBytes, timestamp] },
+    ]);
+    const rows = await this.dependencies.select<SessionEventRow[]>(`SELECT id, session_id, sequence_number, event_type, role, content, metadata_json, created_at FROM session_events WHERE id = $1 LIMIT 1`, [eventId]);
+    const row = rows[0];
+    if (!row) throw new Error("Persisted Session event was not found after commit.");
+    return { id: row.id, sessionId: row.session_id, sequenceNumber: Number(row.sequence_number), eventType: row.event_type, ...(row.role ? { role: row.role } : {}), ...(row.content !== null ? { content: row.content } : {}), metadata: JSON.parse(row.metadata_json || "{}") as Record<string, unknown>, createdAt: row.created_at };
+  }
+
+  async getSessionEventProviderState(sessionEventId: string): Promise<ProviderContinuationStateBinding | null> {
+    const rows = await this.dependencies.select<SessionEventProviderStateRow[]>(`SELECT session_event_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at FROM session_event_provider_state WHERE session_event_id = $1 ORDER BY format, format_version LIMIT 1`, [sessionEventId]);
+    const row = rows[0];
+    return row ? restoreProviderContinuationState({ ownerId: row.session_event_id, format: row.format, formatVersion: row.format_version, transport: row.transport, replayFingerprintJson: row.replay_fingerprint_json, payloadJson: row.payload_json, payloadSha256: row.payload_sha256, payloadSizeBytes: row.payload_size_bytes, createdAt: row.created_at }) : null;
   }
 
   async listSessionEvents(sessionId: string): Promise<SessionEventRecord[]> {

@@ -153,6 +153,7 @@ describe("SQLite Sessions repository contract", () => {
     const repository = new SqliteSessionsRepository({
       select: async <T>(query: string) => query.includes("FROM rv_sessions WHERE workspace_id") ? [{ id: "session-a", workspace_id: "workspace-a", profile_id: "profile-a", session_code: "RV-1234", state: "Draft", run_type: "automatic", pre_reveal_transcript: "", pre_reveal_hash: null, pre_reveal_sealed_at: null, post_reveal_transcript: "", target_id: "target-a", research_project_id: null, created_at: timestamp, updated_at: timestamp, completed_at: null }] as T : [] as T,
       executeWrite: async (query, values) => { writes.push({ query, values }); return { rowsAffected: 1 }; },
+      executeTransaction: async () => [],
       isResearchScoresFrozen: async () => true,
       now: () => timestamp,
     });
@@ -175,6 +176,7 @@ describe("SQLite Sessions repository contract", () => {
     const repository = new SqliteSessionsRepository({
       select: async <T>() => [{ snapshot_json: JSON.stringify(historical) }] as T,
       executeWrite: async () => ({ rowsAffected: 0 }),
+      executeTransaction: async () => [],
       isResearchScoresFrozen: async () => true,
       now: () => timestamp,
     });
@@ -191,6 +193,7 @@ describe("SQLite Sessions repository contract", () => {
         return [{ id: "session-b1", workspace_id: "workspace-b", profile_id: "profile-a", session_code: "B1", state: "Draft", run_type: "automatic", pre_reveal_transcript: "", pre_reveal_hash: null, pre_reveal_sealed_at: null, post_reveal_transcript: "", target_id: "target-a", research_project_id: null, created_at: "2026-09-08T11:00:00.000Z", updated_at: "2026-09-08T12:00:00.000Z", completed_at: null }] as T;
       },
       executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async () => [],
       isResearchScoresFrozen: async () => true,
       now: () => timestamp,
     });
@@ -208,6 +211,7 @@ describe("SQLite Sessions repository contract", () => {
     const repository = new SqliteSessionsRepository({
       select: async <T>() => [] as T,
       executeWrite: async (query) => { writes.push(query); return { rowsAffected: 1 }; },
+      executeTransaction: async () => [],
       isResearchScoresFrozen: async () => true,
       now: () => timestamp,
     });
@@ -223,6 +227,7 @@ describe("SQLite Sessions repository contract", () => {
     const repository = new SqliteSessionsRepository({
       select: async <T>(query: string) => query.startsWith("SELECT state") ? [{ state: "Revealed", post_reveal_transcript: "", research_project_id: "research-a" }] as T : [] as T,
       executeWrite: async (query) => { writes.push(query); return { rowsAffected: 1 }; },
+      executeTransaction: async () => [],
       isResearchScoresFrozen: async () => frozen,
       now: () => timestamp,
     });
@@ -237,6 +242,7 @@ describe("SQLite Sessions repository contract", () => {
     const repository = new SqliteSessionsRepository({
       select: async <T>() => [] as T,
       executeWrite: async (query) => { writes.push(query); return { rowsAffected: 1 }; },
+      executeTransaction: async () => [],
       isResearchScoresFrozen: async () => true,
       now: () => timestamp,
     });

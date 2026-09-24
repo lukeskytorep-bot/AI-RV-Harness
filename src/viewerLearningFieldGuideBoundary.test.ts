@@ -135,7 +135,7 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(aiCenter).toContain("setFieldGuideCapacity");
   });
 
-  it("keeps migration 024 inside the current epoch and only tests the accepted green v23 -> v24 upgrade", () => {
+  it("keeps migration 024 immutable inside the current epoch while later migrations extend the exact-green chain", () => {
     expect(migration024).toContain("CREATE TABLE field_guide_versions");
     expect(migration024).toContain("field_guide_versions_append_only_delete");
     expect(migration024).toContain("controlled_purge_context");
@@ -143,5 +143,7 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(nativeCompatibility).not.toContain("legacy_fixture_manual_chain_through_024");
     expect(nativeCompatibility).toContain("MIGRATION_SPECS[..23]");
     expect(nativeCompatibility).toContain("MIGRATION_SPECS[23].sql");
+    expect(nativeCompatibility).toContain("exact_green_v24_to_v25_adds_provider_state_storage_without_mutating_existing_data");
+    expect(nativeCompatibility).toContain("MIGRATION_SPECS[24].sql");
   });
 });

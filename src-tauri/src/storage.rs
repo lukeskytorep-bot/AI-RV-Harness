@@ -581,6 +581,20 @@ async fn inspect_database_identity(path: &Path) -> Result<DatabaseIdentity, Stri
             }
         }
     }
+    if migration_version >= 25 {
+        for table in ["chat_message_provider_state", "session_event_provider_state"] {
+            let exists = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+            )
+            .bind(table)
+            .fetch_one(&mut connection)
+            .await
+            .map_err(|error| format!("database migration 025 marker check failed: {error}"))?;
+            if exists != 1 {
+                return Err(format!("database migration 025 marker is missing: {table}"));
+            }
+        }
+    }
 
     let interface_language = sqlx::query_scalar::<_, Option<String>>(
         "SELECT value FROM app_settings WHERE key = 'interfaceLanguage' LIMIT 1",
@@ -1317,6 +1331,17 @@ async fn validate_sqlite_database(path: &Path) -> Result<i64, String> {
             "backup database has unsupported migration version {migration_version}"
         ));
     }
+    if migration_version >= 25 {
+        let continuation_tables = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('chat_message_provider_state','session_event_provider_state')",
+        )
+        .fetch_one(&mut connection)
+        .await
+        .map_err(|error| format!("backup database migration 025 schema check failed: {error}"))?;
+        if continuation_tables != 2 {
+            return Err("backup database is missing provider continuation state tables".to_string());
+        }
+    }
     Ok(migration_version)
 }
 
@@ -1519,15 +1544,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn database_after_migrations_001_through_024_passes_live_validation() {
-        let directory = temp_case("migration-024-live-validation");
+    async fn database_after_migrations_001_through_025_passes_live_validation() {
+        let directory = temp_case("migration-025-live-validation");
         let database = directory.join(DATABASE_FILE_NAME);
         create_database_through(&database, MIGRATION_SPECS.len()).await;
 
-        assert_eq!(CURRENT_MIGRATION_VERSION, 24);
+        assert_eq!(CURRENT_MIGRATION_VERSION, 25);
         validate_current_database(&database)
             .await
-            .expect("migration-024 database should pass live validation");
+            .expect("migration-025 database should pass live validation");
 
         fs::remove_dir_all(directory).expect("test directory should be removed");
     }
@@ -1602,8 +1627,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn database_upgrade_from_exact_green_023_to_024_preserves_custom_profile_prompt_as_unresolved_baseline() {
-        let directory = temp_case("migration-023-to-024");
+    async fn database_upgrade_from_exact_green_023_through_025_preserves_custom_profile_prompt_as_unresolved_baseline() {
+        let directory = temp_case("migration-023-through-025");
         let database = directory.join(DATABASE_FILE_NAME);
         create_database_through(&database, 23).await;
 
@@ -1645,19 +1670,41 @@ mod tests {
 
         validate_current_database(&database)
             .await
-            .expect("database upgraded from exact green 023 to 024 should pass live validation");
+            .expect("database upgraded from exact green 023 through 025 should pass live validation");
 
         fs::remove_dir_all(directory).expect("test directory should be removed");
     }
 
     #[tokio::test]
-    async fn portable_backup_and_restore_preflight_accept_database_version_024() {
-        let root = temp_case("backup-version-024");
-        let backup_id = "backup_viewer_learning_1_v24";
+    async fn portable_backup_and_restore_preflight_accept_database_version_025() {
+        let root = temp_case("backup-version-025");
+        let backup_id = "backup_continuation_c2_v25";
         let directory = root.join(format!("AI_RV_Harness_{backup_id}"));
         fs::create_dir_all(&directory).expect("portable backup directory should be created");
         let database = directory.join(DATABASE_FILE_NAME);
         create_database_through(&database, MIGRATION_SPECS.len()).await;
+
+        let options = SqliteConnectOptions::new()
+            .filename(&database)
+            .create_if_missing(false)
+            .foreign_keys(true);
+        let mut connection = SqliteConnection::connect_with(&options)
+            .await
+            .expect("schema-025 backup fixture database should open");
+        sqlx::raw_sql(r#"
+            INSERT INTO profiles(id, display_name, created_at, updated_at) VALUES ('p-c2', 'C2', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z');
+            INSERT INTO workspaces(id, profile_id, name, created_at, updated_at, last_opened_at) VALUES ('w-c2', 'p-c2', 'C2', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z');
+            INSERT INTO chat_threads(id, workspace_id, mode, title, created_at, updated_at) VALUES ('t-c2', 'w-c2', 'conversation', 'C2', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z');
+            INSERT INTO chat_messages(id, thread_id, role, content, created_at) VALUES ('m-c2', 't-c2', 'assistant', 'answer', '2026-09-24T00:00:00Z');
+            INSERT INTO chat_message_provider_state(message_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ('m-c2', 'openrouter-reasoning-details', 1, 'openrouter', '{}', '{}', '0000000000000000000000000000000000000000000000000000000000000000', 2, '2026-09-24T00:00:00Z');
+            INSERT INTO rv_sessions(id, workspace_id, profile_id, session_code, state, run_type, created_at, updated_at) VALUES ('s-c2', 'w-c2', 'p-c2', 'C2-001', 'Draft', 'automatic', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z');
+            INSERT INTO session_events(id, session_id, sequence_number, event_type, role, content, metadata_json, created_at) VALUES ('e-c2', 's-c2', 1, 'VIEWER_RESPONSE', 'assistant', 'answer', '{}', '2026-09-24T00:00:00Z');
+            INSERT INTO session_event_provider_state(session_event_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ('e-c2', 'openrouter-reasoning-details', 1, 'openrouter', '{}', '{}', '1111111111111111111111111111111111111111111111111111111111111111', 2, '2026-09-24T00:00:00Z');
+        "#)
+        .execute(&mut connection)
+        .await
+        .expect("schema-025 provider state backup fixture should insert");
+        connection.close().await.expect("backup fixture database should close");
 
         let manifest = BackupManifest {
             schema_version: BACKUP_SCHEMA_VERSION,
@@ -1689,6 +1736,24 @@ mod tests {
                 .expect("restore preflight should accept the current migration version"),
             CURRENT_MIGRATION_VERSION
         );
+        let options = SqliteConnectOptions::new()
+            .filename(&restore_copy)
+            .create_if_missing(false)
+            .foreign_keys(true);
+        let mut restored = SqliteConnection::connect_with(&options)
+            .await
+            .expect("restored schema-025 database should open");
+        let chat_payload: String = sqlx::query_scalar("SELECT payload_json FROM chat_message_provider_state WHERE message_id = 'm-c2'")
+            .fetch_one(&mut restored)
+            .await
+            .expect("Conversation provider state should survive backup/restore");
+        let session_payload: String = sqlx::query_scalar("SELECT payload_json FROM session_event_provider_state WHERE session_event_id = 'e-c2'")
+            .fetch_one(&mut restored)
+            .await
+            .expect("Session provider state should survive backup/restore");
+        assert_eq!(chat_payload, "{}");
+        assert_eq!(session_payload, "{}");
+        restored.close().await.expect("restored database should close");
 
         fs::remove_dir_all(root).expect("test directory should be removed");
     }

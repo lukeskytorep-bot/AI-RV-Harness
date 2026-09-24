@@ -94,7 +94,7 @@ describe("SQLite Workspaces and Conversations repository contract", () => {
         queries.push({ query, values });
         return [{ id: "workspace-a", profile_id: "profile-a", name: "Workspace", description: null, created_at: timestamp, updated_at: timestamp, last_opened_at: timestamp, archived_at: null }] as T;
       },
-      executeWrite: async () => ({ rowsAffected: 1 }), now: () => timestamp,
+      executeWrite: async () => ({ rowsAffected: 1 }), executeTransaction: async () => [], now: () => timestamp,
     });
 
     expect(await repository.listWorkspaces("profile-a")).toEqual([{ id: "workspace-a", profileId: "profile-a", name: "Workspace", description: undefined, createdAt: timestamp, updatedAt: timestamp, lastOpenedAt: timestamp }]);
@@ -107,6 +107,7 @@ describe("SQLite Workspaces and Conversations repository contract", () => {
     const repository = new SqliteWorkspacesConversationsRepository({
       select: async <T>() => [{ id: "workspace-a" }] as T,
       executeWrite: async (query) => { writes.push(query); return { rowsAffected: 0 }; },
+      executeTransaction: async () => [],
       now: () => timestamp,
     });
 
@@ -120,6 +121,7 @@ describe("SQLite Workspaces and Conversations repository contract", () => {
     const repository = new SqliteWorkspacesConversationsRepository({
       select: async <T>() => [{ id: "workspace-a" }] as T,
       executeWrite: async (query) => { writes.push(query); return { rowsAffected: 1 }; },
+      executeTransaction: async () => [],
       now: () => timestamp,
     });
 
@@ -134,6 +136,7 @@ describe("SQLite Workspaces and Conversations repository contract", () => {
     const repository = new SqliteWorkspacesConversationsRepository({
       select: async <T>() => [] as T,
       executeWrite: async (query, values) => { writes.push({ query, values }); return { rowsAffected: 1 }; },
+      executeTransaction: async () => [],
       now: () => timestamp,
     });
 
@@ -170,6 +173,7 @@ describe("SQLite Workspaces and Conversations repository contract", () => {
         return responses[selectIndex++] as T;
       },
       executeWrite: async (query) => { writes.push(query); return { rowsAffected: 1 }; },
+      executeTransaction: async () => [],
       now: () => timestamp,
     });
 
@@ -188,6 +192,7 @@ describe("SQLite Workspaces and Conversations repository contract", () => {
         return responses[selectIndex++] as T;
       },
       executeWrite: async (query) => { writes.push(query); return { rowsAffected: 1 }; },
+      executeTransaction: async () => [],
       now: () => timestamp,
     });
 
@@ -200,6 +205,7 @@ describe("SQLite Workspaces and Conversations repository contract", () => {
     const repository = new SqliteWorkspacesConversationsRepository({
       select: async <T>() => [] as T,
       executeWrite: async (query, values) => { writes.push({ query, values }); return { rowsAffected: 1 }; },
+      executeTransaction: async () => [],
       now: () => timestamp,
     });
 

@@ -1,10 +1,14 @@
 import type { ChatMessage, ChatMode, ChatThread, CreateWorkspaceInput, Workspace } from "../../types";
 import type { WorkspacesConversationsRepository } from "../contracts/workspacesConversationsRepository";
+import type { ProviderContinuationState } from "../../providers/continuationContract";
+import { BROWSER_CHAT_MESSAGE_PROVIDER_STATE_KEY, browserChatMessageProviderStateFreshKey, browserChatMessageProviderStateResetKey, prepareProviderContinuationState, ProviderContinuationPersistenceError, restoreProviderContinuationState, type PersistedProviderContinuationStateRow, type ProviderContinuationStateBinding } from "../providerContinuationState";
 import { createId, nowIso } from "../repository";
 
 const WORKSPACES_KEY = "rvh.dev.workspaces";
 const CHAT_THREADS_KEY = "rvh.dev.chat_threads";
 const CHAT_MESSAGES_KEY = "rvh.dev.chat_messages";
+
+type BrowserChatMessageProviderState = Omit<PersistedProviderContinuationStateRow, "ownerId"> & { messageId: string };
 
 export interface BrowserWorkspacesConversationsRepositoryDependencies {
   storage?: Storage;
@@ -29,6 +33,40 @@ export class BrowserWorkspacesConversationsRepository implements WorkspacesConve
 
   private write<T>(key: string, value: T): void {
     this.storage.setItem(key, JSON.stringify(value));
+  }
+
+  private providerStateResetKey(threadId: string): string {
+    return browserChatMessageProviderStateResetKey(threadId);
+  }
+
+  private providerStateFreshKey(threadId: string): string {
+    return browserChatMessageProviderStateFreshKey(threadId);
+  }
+
+  private hasProviderStateResetBoundary(threadId: string): boolean {
+    return this.storage.getItem(this.providerStateResetKey(threadId)) !== null;
+  }
+
+  private readProviderStateRowsStrictFromKey(key: string): BrowserChatMessageProviderState[] {
+    const raw = this.storage.getItem(key);
+    if (!raw) return [];
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new ProviderContinuationPersistenceError("storage", "persistence_integrity", "Persisted Conversation continuation state storage is malformed.");
+    }
+    if (!Array.isArray(parsed) || parsed.some((candidate) => !candidate || typeof candidate !== "object" || !("messageId" in candidate) || typeof candidate.messageId !== "string")) {
+      throw new ProviderContinuationPersistenceError("storage", "persistence_integrity", "Persisted Conversation continuation state row is malformed.");
+    }
+    return parsed as BrowserChatMessageProviderState[];
+  }
+
+  private readProviderStateRowsStrict(threadId: string): BrowserChatMessageProviderState[] {
+    if (this.hasProviderStateResetBoundary(threadId)) {
+      return this.readProviderStateRowsStrictFromKey(this.providerStateFreshKey(threadId));
+    }
+    return this.readProviderStateRowsStrictFromKey(BROWSER_CHAT_MESSAGE_PROVIDER_STATE_KEY);
   }
 
   private now(): string {
@@ -163,5 +201,66 @@ export class BrowserWorkspacesConversationsRepository implements WorkspacesConve
     const timestamp = this.now();
     this.write(CHAT_THREADS_KEY, this.read<ChatThread[]>(CHAT_THREADS_KEY, []).map((thread) => thread.id === threadId ? { ...thread, updatedAt: timestamp } : thread));
     return message;
+  }
+
+  async appendAssistantMessageWithProviderState(threadId: string, content: string, state: ProviderContinuationState): Promise<ChatMessage> {
+    const prepared = await prepareProviderContinuationState(state);
+    const timestamp = this.now();
+    const message: ChatMessage = { id: createId("message"), threadId, role: "assistant", content, createdAt: timestamp };
+    const stateKey = this.hasProviderStateResetBoundary(threadId) ? this.providerStateFreshKey(threadId) : BROWSER_CHAT_MESSAGE_PROVIDER_STATE_KEY;
+    const messagesBefore = this.storage.getItem(CHAT_MESSAGES_KEY);
+    const stateBefore = this.storage.getItem(stateKey);
+    const threadsBefore = this.storage.getItem(CHAT_THREADS_KEY);
+    try {
+      const states = this.readProviderStateRowsStrict(threadId);
+      if (states.some((entry) => entry.messageId === message.id && entry.format === prepared.format && entry.formatVersion === prepared.formatVersion)) {
+        throw new Error("Provider continuation state already exists for this assistant message.");
+      }
+      this.write(CHAT_MESSAGES_KEY, [...this.read<ChatMessage[]>(CHAT_MESSAGES_KEY, []), message]);
+      this.write(stateKey, [...states, {
+        messageId: message.id,
+        format: prepared.format,
+        formatVersion: prepared.formatVersion,
+        transport: prepared.transport,
+        replayFingerprintJson: prepared.replayFingerprintJson,
+        payloadJson: prepared.payloadJson,
+        payloadSha256: prepared.payloadSha256,
+        payloadSizeBytes: prepared.payloadSizeBytes,
+        createdAt: timestamp,
+      }]);
+      this.write(CHAT_THREADS_KEY, this.read<ChatThread[]>(CHAT_THREADS_KEY, []).map((thread) => thread.id === threadId ? { ...thread, updatedAt: timestamp } : thread));
+      return message;
+    } catch (cause) {
+      for (const [key, previous] of [[CHAT_MESSAGES_KEY, messagesBefore], [stateKey, stateBefore], [CHAT_THREADS_KEY, threadsBefore]] as const) {
+        if (previous === null) this.storage.removeItem(key); else this.storage.setItem(key, previous);
+      }
+      throw cause;
+    }
+  }
+
+  async listChatMessageProviderStates(threadId: string): Promise<ProviderContinuationStateBinding[]> {
+    const messageIds = new Set(this.read<ChatMessage[]>(CHAT_MESSAGES_KEY, []).filter((message) => message.threadId === threadId && message.role === "assistant").map((message) => message.id));
+    const rows = this.readProviderStateRowsStrict(threadId);
+    const result: ProviderContinuationStateBinding[] = [];
+    for (const row of rows) {
+      if (!messageIds.has(row.messageId)) continue;
+      result.push(await restoreProviderContinuationState({ ...row, ownerId: row.messageId }));
+    }
+    return result;
+  }
+
+  async resetChatMessageProviderStates(threadId: string): Promise<void> {
+    const resetKey = this.providerStateResetKey(threadId);
+    const freshKey = this.providerStateFreshKey(threadId);
+    const resetBefore = this.storage.getItem(resetKey);
+    const freshBefore = this.storage.getItem(freshKey);
+    try {
+      this.storage.setItem(resetKey, "1");
+      this.storage.removeItem(freshKey);
+    } catch (cause) {
+      if (resetBefore === null) this.storage.removeItem(resetKey); else this.storage.setItem(resetKey, resetBefore);
+      if (freshBefore === null) this.storage.removeItem(freshKey); else this.storage.setItem(freshKey, freshBefore);
+      throw cause;
+    }
   }
 }

@@ -11,6 +11,7 @@ export type ConversationContinuationMemoryEntry =
   | { kind: "issue"; issue: OpenRouterContinuationIssue };
 
 const memory = new Map<string, Map<string, ConversationContinuationMemoryEntry>>();
+const persistenceHydrationSuppressed = new Set<string>();
 
 function threadMemory(threadId: string): Map<string, ConversationContinuationMemoryEntry> {
   let entries = memory.get(threadId);
@@ -37,6 +38,14 @@ export function clearConversationContinuationMemory(threadId: string): void {
   memory.delete(threadId);
 }
 
+export function shouldHydrateConversationContinuationPersistence(threadId: string): boolean {
+  return !persistenceHydrationSuppressed.has(threadId);
+}
+
+export function suppressConversationContinuationPersistenceHydration(threadId: string): void {
+  persistenceHydrationSuppressed.add(threadId);
+}
+
 export function estimateConversationContinuationMemoryBytes(threadId: string): number {
   const entries = memory.get(threadId);
   if (!entries?.size) return 0;
@@ -51,6 +60,7 @@ export function estimateConversationContinuationMemoryBytes(threadId: string): n
 
 export function clearAllConversationContinuationMemoryForTests(): void {
   memory.clear();
+  persistenceHydrationSuppressed.clear();
 }
 
 export class ConversationContinuationBreakError extends Error {

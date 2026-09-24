@@ -8,16 +8,19 @@ import type { TrainingRunRecord } from "../../training/types";
 import type { ChatMessage, ChatThread, Profile, Workspace } from "../../types";
 import type { WorkspaceSource } from "../../sources/types";
 import { emptyDeletionCounts, type DeletionPreview, type PurgeEntityKind } from "../controlledPurge";
+import { BROWSER_CHAT_MESSAGE_PROVIDER_STATE_KEY, browserChatMessageProviderStateFreshKey, browserChatMessageProviderStateResetKey, ProviderContinuationPersistenceError } from "../providerContinuationState";
 
 const K = {
   profiles: "rvh.dev.profiles",
   workspaces: "rvh.dev.workspaces",
   threads: "rvh.dev.chat_threads",
   messages: "rvh.dev.chat_messages",
+  chatMessageProviderState: BROWSER_CHAT_MESSAGE_PROVIDER_STATE_KEY,
   workspaceSources: "rvh.dev.workspace_sources",
   chatSourceSelection: "rvh.dev.chat_source_selection",
   sessions: "rvh.dev.rv_sessions",
   sessionEvents: "rvh.dev.session_events",
+  sessionEventProviderState: "rvh.dev.session_event_provider_state",
   sessionSnapshots: "rvh.dev.session_snapshots",
   reveals: "rvh.dev.reveals",
   targetClarifications: "rvh.dev.target_clarifications",
@@ -49,6 +52,8 @@ type MonitorRun = { id: string; sessionId: string };
 type ResearchOwned = { id: string; researchProjectId: string };
 type ResearchResultRecord = { id: string; projectId: string };
 type ExportRecord = { id: string; workspaceId: string; researchProjectId?: string };
+type ChatMessageProviderStateRecord = { messageId: string };
+type SessionEventProviderStateRecord = { sessionEventId: string };
 
 function read<T>(storage: StorageLike, key: string, fallback: T): T {
   try {
@@ -57,6 +62,25 @@ function read<T>(storage: StorageLike, key: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function readProviderStateOwners<T extends Record<K, string>, K extends "messageId" | "sessionEventId">(
+  storage: StorageLike,
+  key: string,
+  ownerKey: K,
+): T[] {
+  const raw = storage.getItem(key);
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ProviderContinuationPersistenceError("storage", "persistence_integrity", "Persisted provider continuation state storage is malformed.");
+  }
+  if (!Array.isArray(parsed) || parsed.some((item) => !item || typeof item !== "object" || !(ownerKey in item) || typeof (item as Record<string, unknown>)[ownerKey] !== "string")) {
+    throw new ProviderContinuationPersistenceError("storage", "persistence_integrity", "Persisted provider continuation state row is malformed.");
+  }
+  return parsed as T[];
 }
 
 function setOf(values: Iterable<string>): Set<string> {
@@ -92,9 +116,11 @@ function collections(storage: StorageLike) {
     workspaces: read<Workspace[]>(storage, K.workspaces, []),
     threads: read<ChatThread[]>(storage, K.threads, []),
     messages: read<ChatMessage[]>(storage, K.messages, []),
+    chatMessageProviderState: readProviderStateOwners<ChatMessageProviderStateRecord, "messageId">(storage, K.chatMessageProviderState, "messageId"),
     workspaceSources: read<WorkspaceSource[]>(storage, K.workspaceSources, []),
     sessions: read<RvSession[]>(storage, K.sessions, []),
     sessionEvents: read<SessionEventRecord[]>(storage, K.sessionEvents, []),
+    sessionEventProviderState: readProviderStateOwners<SessionEventProviderStateRecord, "sessionEventId">(storage, K.sessionEventProviderState, "sessionEventId"),
     sessionSnapshots: read<SessionSnapshotRecord[]>(storage, K.sessionSnapshots, []),
     reveals: read<RevealRecord[]>(storage, K.reveals, []),
     targetClarifications: read<TargetClarificationRecord[]>(storage, K.targetClarifications, []),
@@ -278,11 +304,12 @@ function assertDeletable(preview: DeletionPreview): void {
   if (preview.blockedReason) throw new Error(preview.blockedReason);
 }
 
-function atomicWrite(storage: StorageLike, changes: Map<string, unknown>): void {
+function atomicWrite(storage: StorageLike, changes: Map<string, unknown>, removals: readonly string[] = []): void {
   const previous = new Map<string, string | null>();
-  for (const key of changes.keys()) previous.set(key, storage.getItem(key));
+  for (const key of [...changes.keys(), ...removals]) previous.set(key, storage.getItem(key));
   try {
     for (const [key, value] of changes) storage.setItem(key, JSON.stringify(value));
+    for (const key of removals) storage.removeItem(key);
   } catch (cause) {
     for (const [key, value] of previous) {
       if (value === null) storage.removeItem(key);
@@ -309,6 +336,8 @@ export function purgeBrowserPermanentDelete(storage: StorageLike, kind: PurgeEnt
   const monitorRunIds = setOf(c.monitorRuns.filter((item) => scope.sessionIds.has(item.sessionId)).map((item) => item.id));
   const judgeRunIds = setOf(c.judgeRuns.filter((item) => scope.sessionIds.has(item.sessionId)).map((item) => item.id));
   const deletedSourceIds = setOf(c.workspaceSources.filter((item) => scope.workspaceIds.has(item.workspaceId)).map((item) => item.id));
+  const deletedMessageIds = setOf(c.messages.filter((item) => scope.threadIds.has(item.threadId)).map((item) => item.id));
+  const deletedSessionEventIds = setOf(c.sessionEvents.filter((item) => scope.sessionIds.has(item.sessionId)).map((item) => item.id));
   const selection = read<Record<string, string[]>>(storage, K.chatSourceSelection, {});
   const nextSelection: Record<string, string[]> = {};
   for (const [threadId, sourceIds] of Object.entries(selection)) {
@@ -340,10 +369,12 @@ export function purgeBrowserPermanentDelete(storage: StorageLike, kind: PurgeEnt
   changes.set(K.workspaces, c.workspaces.filter((item) => !scope.workspaceIds.has(item.id)));
   changes.set(K.threads, c.threads.filter((item) => !scope.threadIds.has(item.id)));
   changes.set(K.messages, c.messages.filter((item) => !scope.threadIds.has(item.threadId)));
+  changes.set(K.chatMessageProviderState, c.chatMessageProviderState.filter((item) => !deletedMessageIds.has(item.messageId)));
   changes.set(K.workspaceSources, c.workspaceSources.filter((item) => !scope.workspaceIds.has(item.workspaceId)));
   changes.set(K.chatSourceSelection, nextSelection);
   changes.set(K.sessions, c.sessions.filter((item) => !scope.sessionIds.has(item.id)));
   changes.set(K.sessionEvents, c.sessionEvents.filter((item) => !scope.sessionIds.has(item.sessionId)));
+  changes.set(K.sessionEventProviderState, c.sessionEventProviderState.filter((item) => !deletedSessionEventIds.has(item.sessionEventId)));
   changes.set(K.sessionSnapshots, c.sessionSnapshots.filter((item) => !scope.sessionIds.has(item.sessionId)));
   changes.set(K.reveals, c.reveals.filter((item) => !scope.sessionIds.has(item.sessionId)));
   changes.set(K.targetClarifications, c.targetClarifications.filter((item) => !scope.sessionIds.has(item.sessionId)));
@@ -364,5 +395,9 @@ export function purgeBrowserPermanentDelete(storage: StorageLike, kind: PurgeEnt
   changes.set(K.aiNoteVersions, retainedVersions);
   changes.set(K.aiNoteReflectionRuns, retainedRuns);
   changes.set(K.aiNoteActivationEvents, retainedActivations);
-  atomicWrite(storage, changes);
+  const providerStateResetArtifacts = [...scope.threadIds].flatMap((threadId) => [
+    browserChatMessageProviderStateResetKey(threadId),
+    browserChatMessageProviderStateFreshKey(threadId),
+  ]);
+  atomicWrite(storage, changes, providerStateResetArtifacts);
 }

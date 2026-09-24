@@ -1,13 +1,13 @@
 # AI RV Harness v0.7.13 — Provider Continuation Contract v1
 
 **Etap bazowy:** `CONTINUATION-CONTRACT-0-R1`  
-**Aktualny etap runtime:** `OPENROUTER-CONTINUITY-IN-MEMORY-1-R1`  
-**Status:** OpenRouter Conversation in-memory replay active z continuation-aware context preflight; persistence nadal wyłączone  
-**Zweryfikowano:** 2026-09-22
+**Aktualny etap runtime:** `OPENROUTER-CONTINUITY-PERSISTENCE-1` (`C2`)  
+**Status:** OpenRouter Conversation capture/replay ma trwały, walidowany persistence; schema 025 aktywuje dedykowany state dla Conversation i Session Events, lecz automatyczne workflowy Session/Training/Research/Resume pozostają poza C2  
+**Zweryfikowano:** 2026-09-24
 
 ## Cel
 
-Ten dokument definiuje kontrakt danych provider-native continuation. C1 aktywuje wyłącznie OpenRouter Conversation w pamięci procesu: `ProviderMessage` może przenosić zwalidowany `continuationState` na wiadomości `assistant`, a Rust request builder odsyła `reasoning_details` tylko dla OpenRouter. Persistence, Session/Training/Research/Resume i schema 025 pozostają wyłączone.
+Ten dokument definiuje kontrakt danych provider-native continuation. C2 zachowuje kontrakt C1 i dodaje trwały zapis: zwalidowany OpenRouter `continuationState` jest atomowo wiązany z dokładną wiadomością `assistant` w Conversation, a schema 025 udostępnia analogiczny storage przypisany do dokładnego `session_event_id`. Rust request builder nadal odsyła `reasoning_details` tylko dla OpenRouter. Automatyczne workflowy RV Sessions, Training, Research, post-Reveal i Resume nie korzystają jeszcze z Session persistence; to pozostaje zakresem C3.
 
 ## Klasy danych
 
@@ -125,16 +125,19 @@ C1 aktywuje wyłącznie następujący łańcuch w zwykłej Conversation:
 7. `actualModelId` pozostaje diagnostyczny i nie jest replay gate; generic fingerprint nie zawiera reasoning effort/mode;
 8. `reasoning_details` są redagowane z detailed debug payloadu.
 
-C1 nadal **nie** dodaje:
+C2 zachowuje powyższy kontrakt C1 i dodaje wyłącznie warstwę persistence:
 
-- persistence continuation state;
-- migracji 025;
-- state w `chat_messages` ani `session_events`;
-- replay w Training, Research, RV Sessions, Manual RV ani Resume;
-- Google lub Anthropic runtime replay;
-- streamingu.
+- schema 025 tworzy `chat_message_provider_state` oraz `session_event_provider_state`;
+- payload nie trafia do `chat_messages.content`, `session_events.metadata_json`, zwykłych eksportów ani logów;
+- Conversation zapisuje assistant message + state atomowo i po restarcie hydratuje zwalidowany state przed kolejnym kompatybilnym requestem;
+- hash SHA-256, rozmiar UTF-8, format, wersja i fingerprint są sprawdzane ponownie przy odczycie;
+- Browser storage zachowuje logiczną parytetowość z SQLite, włącznie z rollbackiem zapisu i controlled purge;
+- Session storage ma atomowe API event + state przypisane do dokładnego `session_event_id`, ale kontrolery RV/Training/Research jeszcze go nie wywołują;
+- historyczne rekordy bez state nadal działają text-only;
+- Google i Anthropic runtime replay pozostają wyłączone;
+- workflow rollout i fail-closed Resume pozostają zakresem C3.
 
-Historyczne rozmowy i rozmowy po restarcie aplikacji pozostają text-only, ponieważ C1 jest celowo in-memory.
+C2 nie rekonstruuje state z widocznego reasoning ani z transcriptu. Persistence przechowuje wyłącznie zwalidowany provider-native state wymagany do replay.
 
 ## Hardening C1-R1 — context budget
 
