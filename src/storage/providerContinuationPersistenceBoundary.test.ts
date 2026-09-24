@@ -52,7 +52,7 @@ describe("OPENROUTER-CONTINUITY-PERSISTENCE-1 boundary", () => {
     const exports = [
       read("src/exports/research.ts"),
       read("src/exports/session.ts"),
-      read("src/exports/training.ts"),
+      read("src/training/export.ts"),
     ];
     for (const source of exports) {
       expect(source).not.toContain("providerContinuationState");
@@ -78,7 +78,7 @@ describe("OPENROUTER-CONTINUITY-PERSISTENCE-1 boundary", () => {
     for (const relative of [
       "src/sessions/controller.ts",
       "src/sessions/rvLiteController.ts",
-      "src/training/execution.ts",
+      "src/features/training/trainingExecution.ts",
       "src/research/engine.ts",
       "src/sessions/postReveal.ts",
     ]) {

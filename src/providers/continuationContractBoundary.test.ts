@@ -33,7 +33,7 @@ describe("provider continuation staged-delivery boundary", () => {
 
   it("stops at C2 and does not roll session persistence into automatic workflows", () => {
     const sessionController = read("src/sessions/controller.ts");
-    const training = read("src/training/execution.ts");
+    const training = read("src/features/training/trainingExecution.ts");
     const research = read("src/research/engine.ts");
     for (const [name, source] of [["sessions", sessionController], ["training", training], ["research", research]] as const) {
       expect(source, name).not.toContain("appendSessionEventWithProviderState");

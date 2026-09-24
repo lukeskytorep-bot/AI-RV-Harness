@@ -1985,11 +1985,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fresh_v23_integrity_and_foreign_keys_are_clean() {
-        let directory = temp_case("epoch-r1-fresh-v23");
+    async fn fresh_current_integrity_and_foreign_keys_are_clean() {
+        let directory = temp_case("epoch-r1-fresh-current");
         let database = directory.join(DATABASE_FILE_NAME);
         create_database_through(&database, MIGRATION_SPECS.len()).await;
-        assert_eq!(validate_sqlite_database(&database).await.expect("fresh database should validate"), 24);
+        assert_eq!(
+            validate_sqlite_database(&database)
+                .await
+                .expect("fresh database should validate"),
+            CURRENT_MIGRATION_VERSION
+        );
         let options = SqliteConnectOptions::new().filename(&database).read_only(true).create_if_missing(false);
         let mut connection = SqliteConnection::connect_with(&options).await.expect("fresh database should reopen");
         let integrity: String = sqlx::query_scalar("PRAGMA integrity_check").fetch_one(&mut connection).await.unwrap();

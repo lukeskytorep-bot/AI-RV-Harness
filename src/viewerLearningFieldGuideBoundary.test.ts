@@ -57,7 +57,9 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(providerRetry).toContain('if (details.semanticOutputStarted) return "never"');
     expect(providerRetry).toContain('details.code === "response_body_too_large"');
     expect(providerRetry).toContain('return category === "standard" ? configured : category === "single_recovery" ? 1 : 0');
-    expect(sha256(browserControlledPurge)).toBe("502b94e42f6707537fe7f38309fa253a95f088c5e64223b28ea5ccf8375f1b6a");
+    // C2-R1 intentionally extends Browser controlled purge with durable
+    // continuation reset/fresh artifacts; protect the accepted R1 bytes.
+    expect(sha256(browserControlledPurge)).toBe("8f61ac511dd3226833ff1cca14190b162d6ecb32712ccaad558c59caf8410a98");
     expect(sha256(sqliteControlledPurge)).toBe("5ed7115da8cc2bc36ddc06170c766783f19186bf4cd8672396c291ae26cfcfc4");
     expect(sha256(migration023)).toBe("1a9d300daa180a4507c01497b52deaf84722bd710ed4617f84058932dc7838a4");
   });
