@@ -9,9 +9,11 @@ import type { ProviderContinuationStateBinding } from "../storage/providerContin
 import type { SessionEventInput, SessionEventRecord, SessionSnapshot } from "./types";
 import {
   captureSessionContinuationRoute,
+  captureSessionContinuationState,
   hydrateSessionMessageContinuation,
   persistSessionAssistantResponse,
   SessionContinuationError,
+  validateFrozenSessionContinuationRequest,
   validateFrozenSessionContinuationRoute,
 } from "./providerContinuation";
 
@@ -163,6 +165,48 @@ describe("provider continuation session bridge", () => {
       message: { role: "assistant", content: "answer" },
     })).rejects.toThrow(SessionContinuationError);
   });
+  it("fails closed on an unsupported persisted continuation transport before state hydration or capture", async () => {
+    const googleConfig: ProviderConfig = { ...config, id: "google-config", provider: "google", label: "Google" };
+    const googleModel: ProviderModel = { ...model, providerConfigId: googleConfig.id, provider: "google", modelId: "gemini-3.8-flash", route: "google:gemini-3.8-flash" };
+    const validRoute = captureSessionContinuationRoute(googleConfig, googleModel);
+    if (!validRoute) throw new Error("Expected Google continuation route.");
+    const malformedSnapshot = {
+      ...snapshot(),
+      providerConfigId: googleConfig.id,
+      credentialId: googleConfig.credentialId,
+      provider: "google",
+      modelId: googleModel.modelId,
+      modelRoute: googleModel.route,
+      continuationRoute: { ...validRoute, transport: "anthropic-native" },
+    } as unknown as SessionSnapshot;
+
+    expect(() => validateFrozenSessionContinuationRequest(malformedSnapshot, googleConfig, googleModel.modelId))
+      .toThrow("Unsupported frozen provider continuation transport.");
+
+    const getSessionEventProviderState = vi.fn();
+    const event: SessionEventRecord = {
+      id: "event-unsupported", sessionId: "session-1", sequenceNumber: 1, createdAt: "now",
+      eventType: "VIEWER_RESPONSE", role: "assistant", content: "answer",
+      metadata: { continuationState: { status: "stored" } },
+    };
+    await expect(hydrateSessionMessageContinuation({
+      repository: { getSessionEventProviderState },
+      snapshot: malformedSnapshot,
+      config: googleConfig,
+      model: googleModel,
+      event,
+      message: { role: "assistant", content: "answer" },
+    })).rejects.toThrow("Unsupported frozen provider continuation transport.");
+    expect(getSessionEventProviderState).not.toHaveBeenCalled();
+
+    expect(() => captureSessionContinuationState({
+      response: { content: "answer", reasoningDetails: structuredClone(googleFixture.providerResponse.candidates[0].content.parts), usage: {} },
+      providerConfig: googleConfig,
+      model: googleModel,
+      route: malformedSnapshot.continuationRoute,
+    })).toThrow("Unsupported frozen provider continuation transport.");
+  });
+
   it("freezes, persists and rehydrates Google native thoughtSignature state on the exact Session event", async () => {
     const googleConfig: ProviderConfig = { ...config, id: "google-config", provider: "google", label: "Google" };
     const googleModel: ProviderModel = { ...model, providerConfigId: googleConfig.id, provider: "google", modelId: "gemini-3.8-flash", route: "google:gemini-3.8-flash" };
