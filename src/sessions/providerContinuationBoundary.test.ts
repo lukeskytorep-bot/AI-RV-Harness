@@ -23,7 +23,8 @@ describe("OPENROUTER-CONTINUITY-WORKFLOWS-1 boundary", () => {
     expect(types).toContain("schemaVersion: 1 | 2 | 3 | 4");
     expect(panel).toContain("resumeContinuationRoute: snapshot.continuationRoute");
     expect(replay).toContain("validateFrozenSessionContinuationRequest");
-    expect(replay).toContain("getSessionEventProviderState");
+    expect(replay).toContain("hydrateSessionMessageContinuationForRequest");
+    expect(read("src/sessions/providerContinuation.ts")).toContain("getSessionEventProviderState");
     expect(replay).toContain("isViewerRequest");
   });
 

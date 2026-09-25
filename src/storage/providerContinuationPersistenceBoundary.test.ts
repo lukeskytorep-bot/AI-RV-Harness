@@ -83,7 +83,8 @@ describe("OPENROUTER-CONTINUITY-PERSISTENCE-1 boundary", () => {
     ]) {
       expect(read(relative), relative).toContain("persistSessionAssistantResponse");
     }
-    expect(read("src/sessions/resumeReplay.ts")).toContain("getSessionEventProviderState");
+    expect(read("src/sessions/resumeReplay.ts")).toContain("hydrateSessionMessageContinuationForRequest");
+    expect(read("src/sessions/providerContinuation.ts")).toContain("getSessionEventProviderState");
     expect(read("src/sessions/postReveal.ts")).toContain("appendPostRevealTurnWithProviderState");
     expect(read("src/storage/sqlite/sessionsRepository.ts")).toContain("async appendPostRevealTurn");
     expect(read("src/storage/sqlite/sessionsRepository.ts")).toContain("executeTransaction([");

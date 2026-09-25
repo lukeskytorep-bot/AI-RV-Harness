@@ -35,11 +35,13 @@ describe("provider continuation staged-delivery boundary", () => {
     const sessionController = read("src/sessions/controller.ts");
     const rvLite = read("src/sessions/rvLiteController.ts");
     const resume = read("src/sessions/resumeReplay.ts");
+    const bridge = read("src/sessions/providerContinuation.ts");
     const training = read("src/features/training/trainingExecution.ts");
     const research = read("src/research/engine.ts");
     expect(sessionController).toContain("persistSessionAssistantResponse");
     expect(rvLite).toContain("persistSessionAssistantResponse");
-    expect(resume).toContain("getSessionEventProviderState");
+    expect(resume).toContain("hydrateSessionMessageContinuationForRequest");
+    expect(bridge).toContain("getSessionEventProviderState");
     for (const [name, source] of [["training", training], ["research", research]] as const) {
       expect(source, name).not.toContain("appendSessionEventWithProviderState");
       expect(source, name).not.toContain("getSessionEventProviderState");

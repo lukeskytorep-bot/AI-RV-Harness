@@ -203,7 +203,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
     };
     const malformedChat = vi.fn().mockResolvedValue({
       content: "Visible answer survives",
-      reasoningDetails: [{ type: "reasoning.encrypted", data: "not-base64", id: "broken", format: "openai-responses-v1", index: 0 }],
+      reasoningDetails: [{ type: "reasoning.encrypted", data: "", id: "broken", format: "openai-responses-v1", index: 0 }],
       usage: {},
     });
     await expect(sendPostRevealTurn({ repository: repository as never, sessionId: "s", existingTranscript: "", providerConfig: config, model, content: "First question", chat: malformedChat as never }))

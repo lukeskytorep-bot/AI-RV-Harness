@@ -149,7 +149,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
     const eventId = createId("event");
     await this.dependencies.executeTransaction([
       { query: "UPDATE rv_sessions SET post_reveal_transcript = $1, updated_at = $2 WHERE id = $3", values: [next, timestamp, sessionId] },
-      { query: `INSERT INTO session_events (id, session_id, sequence_number, event_type, role, content, metadata_json, created_at) SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, 'POST_REVEAL_ASSISTANT', 'assistant', $3, $4, $5 FROM session_events WHERE session_id = $2`, values: [eventId, sessionId, content.trim(), JSON.stringify({ continuationState: { status: "stored", format: prepared.format, version: prepared.formatVersion } }), timestamp] },
+      { query: `INSERT INTO session_events (id, session_id, sequence_number, event_type, role, content, metadata_json, created_at) SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7 FROM session_events WHERE session_id = $2`, values: [eventId, sessionId, "POST_REVEAL_ASSISTANT", "assistant", content.trim(), JSON.stringify({ continuationState: { status: "stored", format: prepared.format, version: prepared.formatVersion } }), timestamp] },
       { query: `INSERT INTO session_event_provider_state (session_event_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, values: [eventId, prepared.format, prepared.formatVersion, prepared.transport, prepared.replayFingerprintJson, prepared.payloadJson, prepared.payloadSha256, prepared.payloadSizeBytes, timestamp] },
     ]);
     return next;
