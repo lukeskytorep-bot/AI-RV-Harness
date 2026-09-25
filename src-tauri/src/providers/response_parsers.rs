@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use super::{ProviderChatResponse, ProviderKind, ProviderUsage};
 use super::adapters::{provider_family, ProviderFamily};
