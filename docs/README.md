@@ -90,3 +90,8 @@ The authoritative project-level files remain in the repository root:
 - [Credits](../CREDITS.md)
 - [Citation metadata](../CITATION.cff)
 - [Credits and attribution records](credits/)
+
+
+### Custom OpenAI wire parameter override
+
+Custom OpenAI-compatible connections keep `max_tokens` as the compatibility default. A connection may explicitly override only the maximum-output-token wire field to `max_completion_tokens`. The override is scoped to that Custom OpenAI provider configuration, stored in existing application settings, and never changes the built-in OpenRouter, OpenAI, Google, Anthropic, Z.AI, DeepSeek, Mistral, or Blackbox mappings. SQLite schema remains 25.

@@ -136,6 +136,7 @@ export async function providerChatAttempt(input: {
         reasoningTransportValue: input.settings.reasoningResolution?.transport.value,
         temperature: input.settings.effective.temperature,
         maxOutputTokens: input.settings.effective.maxOutputTokens,
+        ...(input.config.provider === "custom_openai" && input.config.customOutputTokenField ? { customOutputTokenField: input.config.customOutputTokenField } : {}),
         timeoutMs: input.timeoutMs,
         timeoutPolicy: input.timeoutPolicy,
         detailedDiagnostics: detailedProviderDiagnosticsEnabled(),

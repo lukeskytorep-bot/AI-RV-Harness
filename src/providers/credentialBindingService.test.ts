@@ -12,7 +12,7 @@ const native = vi.hoisted(() => ({
 
 vi.mock("./native", () => native);
 
-import { rebindProviderCredential } from "./service";
+import { rebindProviderCredential, updateCustomOpenAiOutputTokenField } from "./service";
 
 describe("provider credential rebinding", () => {
   beforeEach(() => {
@@ -65,5 +65,28 @@ describe("provider credential rebinding", () => {
 
     await expect(rebindProviderCredential(repository, config, "   ")).rejects.toThrow("API key is required");
     expect(native.rebindCredentialSecret).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("Custom OpenAI wire parameter override", () => {
+  it("updates only an explicit Custom OpenAI-compatible connection", async () => {
+    const config = {
+      id: "provider-custom", provider: "custom_openai", label: "Custom", credentialId: "credential-custom",
+      enabled: true, createdAt: "2026-09-10T00:00:00.000Z", updatedAt: "2026-09-10T00:00:00.000Z",
+    } satisfies ProviderConfig;
+    const repository = { updateProviderCustomOutputTokenField: vi.fn().mockResolvedValue(undefined) } as unknown as AppRepository;
+    await updateCustomOpenAiOutputTokenField(repository, config, "max_completion_tokens");
+    expect(repository.updateProviderCustomOutputTokenField).toHaveBeenCalledWith("provider-custom", "max_completion_tokens");
+  });
+
+  it("rejects the override for built-in providers", async () => {
+    const config = {
+      id: "provider-openai", provider: "openai", label: "OpenAI", credentialId: "credential-openai",
+      enabled: true, createdAt: "2026-09-10T00:00:00.000Z", updatedAt: "2026-09-10T00:00:00.000Z",
+    } satisfies ProviderConfig;
+    const repository = { updateProviderCustomOutputTokenField: vi.fn() } as unknown as AppRepository;
+    await expect(updateCustomOpenAiOutputTokenField(repository, config, "max_completion_tokens")).rejects.toThrow("only for Custom OpenAI-compatible");
+    expect(repository.updateProviderCustomOutputTokenField).not.toHaveBeenCalled();
   });
 });

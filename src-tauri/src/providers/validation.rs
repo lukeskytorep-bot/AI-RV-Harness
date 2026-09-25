@@ -59,6 +59,9 @@ pub(super) fn validate_chat_request(request: &ProviderChatRequest) -> Result<(),
             }
         }
     }
+    if request.custom_output_token_field.is_some() && !matches!(request.provider, super::ProviderKind::CustomOpenai) {
+        return Err("output-token wire override is allowed only for Custom OpenAI-compatible providers".to_string());
+    }
     if let Some(value) = request.temperature {
         if !value.is_finite() {
             return Err("temperature must be finite".to_string());

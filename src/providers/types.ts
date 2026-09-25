@@ -13,6 +13,7 @@ export const PROVIDER_KINDS = [
 ] as const;
 
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
+export type CustomOpenAiOutputTokenField = "max_tokens" | "max_completion_tokens";
 
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type CapabilityConfidence = "provider_metadata" | "verified" | "unknown";
@@ -39,6 +40,7 @@ export interface ProviderConfig {
   credentialHint?: string;
   credentialFingerprint?: string;
   baseUrl?: string;
+  customOutputTokenField?: CustomOpenAiOutputTokenField;
   enabled: boolean;
   lastTestedAt?: string;
   lastStatus?: "ok" | "error";
@@ -54,6 +56,7 @@ export interface CreateProviderConfigInput {
   credentialId: string;
   credentialHint?: string;
   baseUrl?: string;
+  customOutputTokenField?: CustomOpenAiOutputTokenField;
   fingerprint?: string;
 }
 

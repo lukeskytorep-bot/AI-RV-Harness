@@ -63,6 +63,7 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
         reasoning_transport_value: None,
         temperature: None,
         max_output_tokens: None,
+        custom_output_token_field: None,
         timeout_ms: None,
         timeout_policy: None,
         provider_routing: None,
@@ -203,7 +204,6 @@ fn maps_output_token_limit_by_transport_contract() {
         ProviderKind::Deepseek,
         ProviderKind::Mistral,
         ProviderKind::Blackbox,
-        ProviderKind::CustomOpenai,
     ] {
         let mut request = chat_request(provider, "model");
         request.max_output_tokens = Some(2345);
@@ -211,6 +211,23 @@ fn maps_output_token_limit_by_transport_contract() {
         assert_eq!(body.get("max_tokens"), Some(&json!(2345)));
         assert!(body.get("max_completion_tokens").is_none());
     }
+
+    let mut custom_default = chat_request(ProviderKind::CustomOpenai, "model");
+    custom_default.max_output_tokens = Some(2345);
+    let (_, body) = build_openai_compatible_request(&custom_default, "https://example.test/v1");
+    assert_eq!(body.get("max_tokens"), Some(&json!(2345)));
+    assert!(body.get("max_completion_tokens").is_none());
+
+    let mut custom_override = chat_request(ProviderKind::CustomOpenai, "model");
+    custom_override.max_output_tokens = Some(3456);
+    custom_override.custom_output_token_field = Some(CustomOpenAiOutputTokenField::MaxCompletionTokens);
+    let (_, body) = build_openai_compatible_request(&custom_override, "https://example.test/v1");
+    assert_eq!(body.get("max_completion_tokens"), Some(&json!(3456)));
+    assert!(body.get("max_tokens").is_none());
+
+    let mut invalid_builtin_override = chat_request(ProviderKind::Openai, "model");
+    invalid_builtin_override.custom_output_token_field = Some(CustomOpenAiOutputTokenField::MaxTokens);
+    assert!(validate_chat_request(&invalid_builtin_override).is_err());
 
     let mut google = chat_request(ProviderKind::Google, "gemini-test");
     google.max_output_tokens = Some(3456);

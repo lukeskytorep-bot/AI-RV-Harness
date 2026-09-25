@@ -1,4 +1,4 @@
-import type { ProviderConfig, ProviderModel, CreateProviderConfigInput } from "../../providers/types";
+import type { CustomOpenAiOutputTokenField, ProviderConfig, ProviderModel, CreateProviderConfigInput } from "../../providers/types";
 import type { AppSettings } from "../../types";
 
 /** Internal persistence contract for application settings and the provider/model registry. */
@@ -8,6 +8,7 @@ export interface SettingsModelsRepository {
   listProviderConfigs(): Promise<ProviderConfig[]>;
   createProviderConfig(input: CreateProviderConfigInput): Promise<ProviderConfig>;
   updateProviderCredentialMetadata(id: string, credentialHint: string, fingerprint: string): Promise<void>;
+  updateProviderCustomOutputTokenField(id: string, field?: CustomOpenAiOutputTokenField): Promise<void>;
   deleteProviderConfig(id: string): Promise<void>;
   updateProviderConnectionStatus(id: string, status: "ok" | "error", error?: string): Promise<void>;
   listProviderModels(providerConfigId?: string): Promise<ProviderModel[]>;

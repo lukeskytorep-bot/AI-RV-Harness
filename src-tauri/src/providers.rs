@@ -122,6 +122,22 @@ impl ProviderTimeoutPolicy {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CustomOpenAiOutputTokenField {
+    MaxTokens,
+    MaxCompletionTokens,
+}
+
+impl CustomOpenAiOutputTokenField {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::MaxTokens => "max_tokens",
+            Self::MaxCompletionTokens => "max_completion_tokens",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderChatRequest {
@@ -137,6 +153,7 @@ pub struct ProviderChatRequest {
     reasoning_transport_value: Option<String>,
     temperature: Option<f64>,
     max_output_tokens: Option<u32>,
+    custom_output_token_field: Option<CustomOpenAiOutputTokenField>,
     timeout_ms: Option<u64>,
     #[serde(default)]
     timeout_policy: Option<ProviderTimeoutPolicy>,

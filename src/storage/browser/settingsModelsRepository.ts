@@ -1,4 +1,4 @@
-import type { ProviderConfig, ProviderModel } from "../../providers/types";
+import type { CustomOpenAiOutputTokenField, ProviderConfig, ProviderModel } from "../../providers/types";
 import { applyReasoningRegistryToProviderModel } from "../../providers/modelReasoningRegistry";
 import type { AppSettings } from "../../types";
 import type { SettingsModelsRepository } from "../contracts/settingsModelsRepository";
@@ -52,6 +52,16 @@ export class BrowserSettingsModelsRepository implements SettingsModelsRepository
 
   async updateProviderCredentialMetadata(_id: string, _credentialHint: string, _fingerprint: string): Promise<void> {
     throw new Error("Provider connections and credential metadata require the desktop runtime.");
+  }
+
+  async updateProviderCustomOutputTokenField(id: string, field?: CustomOpenAiOutputTokenField): Promise<void> {
+    const configs = await this.listProviderConfigs();
+    const current = configs.find((item) => item.id === id);
+    if (!current) throw new Error("Provider connection not found.");
+    if (current.provider !== "custom_openai") throw new Error("Output-token wire override is available only for Custom OpenAI-compatible providers.");
+    this.write(PROVIDERS_KEY, configs.map((item) => item.id === id
+      ? { ...item, ...(field ? { customOutputTokenField: field } : {}), ...(!field ? { customOutputTokenField: undefined } : {}) }
+      : item));
   }
 
   async deleteProviderConfig(id: string): Promise<void> {

@@ -73,6 +73,16 @@ describe("browser Settings and models repository contract", () => {
     await expect(repository.updateProviderCredentialMetadata("p", "…1234", "hash")).rejects.toThrow("desktop runtime");
   });
 
+  it("keeps the Custom OpenAI wire override isolated to Custom OpenAI configs in browser preview data", async () => {
+    const storage = new MemoryStorage();
+    storage.setItem("rvh.dev.providers", JSON.stringify([{ ...provider("custom", timestamp), provider: "custom_openai" }]));
+    const repository = new BrowserSettingsModelsRepository({ storage, clearProfileReferences: () => undefined, now: () => timestamp });
+    await repository.updateProviderCustomOutputTokenField("custom", "max_completion_tokens");
+    expect((await repository.listProviderConfigs())[0]?.customOutputTokenField).toBe("max_completion_tokens");
+    await repository.updateProviderCustomOutputTokenField("custom");
+    expect((await repository.listProviderConfigs())[0]?.customOutputTokenField).toBeUndefined();
+  });
+
   it("persists provider status, favorites and cache clearing with their existing browser semantics", async () => {
     const storage = new MemoryStorage();
     storage.setItem("rvh.dev.providers", JSON.stringify([provider("provider-a", "2026-09-07T00:00:00.000Z")]));
@@ -117,6 +127,33 @@ describe("SQLite Settings and models repository contract", () => {
     expect(statements[1].query).toContain("INSERT INTO provider_configs");
   });
 
+  it("rejects a Custom OpenAI wire override on built-in provider creation", async () => {
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [] as T, executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async () => [], now: () => timestamp,
+    });
+    await expect(repository.createProviderConfig({
+      id: "provider-openai", provider: "openai", label: "OpenAI", credentialId: "credential-openai",
+      customOutputTokenField: "max_completion_tokens",
+    })).rejects.toThrow("only for Custom OpenAI-compatible");
+  });
+
+  it("stores a Custom OpenAI output-token wire override in existing app_settings without changing schema", async () => {
+    const transactions: DatabaseTransactionStatement[][] = [];
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [] as T, executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async (statements) => { transactions.push(statements); return []; }, now: () => timestamp,
+    });
+    const created = await repository.createProviderConfig({
+      id: "provider-custom", provider: "custom_openai", label: "Custom", credentialId: "credential-custom",
+      customOutputTokenField: "max_completion_tokens",
+    });
+    expect(created.customOutputTokenField).toBe("max_completion_tokens");
+    expect(transactions[0]).toHaveLength(3);
+    expect(transactions[0]?.[2].query).toContain("INSERT INTO app_settings");
+    expect(transactions[0]?.[2].values).toEqual(["provider.customOutputTokenField.provider-custom", "max_completion_tokens", timestamp]);
+  });
+
   it("deletes provider metadata and clears profile references in one transaction", async () => {
     const transactions: DatabaseTransactionStatement[][] = [];
     const executeTransaction = async (statements: DatabaseTransactionStatement[]) => { transactions.push(statements); return []; };
@@ -128,9 +165,22 @@ describe("SQLite Settings and models repository contract", () => {
     const statements = transactions[0]!;
     expect(statements.map((item: { query: string }) => item.query)).toEqual([
       expect.stringContaining("UPDATE profiles"),
+      expect.stringContaining("DELETE FROM app_settings"),
       expect.stringContaining("DELETE FROM provider_configs"),
       expect.stringContaining("DELETE FROM credentials_metadata"),
     ]);
+  });
+
+  it("updates or clears the Custom OpenAI wire override atomically", async () => {
+    const transactions: DatabaseTransactionStatement[][] = [];
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [{ provider: "custom_openai" }] as T, executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async (statements) => { transactions.push(statements); return []; }, now: () => timestamp,
+    });
+    await repository.updateProviderCustomOutputTokenField("provider-a", "max_completion_tokens");
+    expect(transactions[0]?.[0].query).toContain("INSERT INTO app_settings");
+    await repository.updateProviderCustomOutputTokenField("provider-a");
+    expect(transactions[1]?.[0].query).toContain("DELETE FROM app_settings");
   });
 
   it("replaces a provider model registry atomically and preserves saved favorites", async () => {

@@ -45,8 +45,8 @@ describe("SECURITY-IPC-1C-R1 SQLite IPC boundary", () => {
 
   it("keeps the fixed Rust write registry explicit and complete", () => {
     expect(writeRegistry).toContain("registeredWriteOperationCount");
-    expect(writeRegistry.match(/\["(?:INSERT|UPDATE|DELETE)/g)?.length).toBe(105);
-    expect(nativeDatabase.match(/#\[serde\(rename = "/g)?.length).toBeGreaterThanOrEqual(105);
+    expect(writeRegistry.match(/\["(?:INSERT|UPDATE|DELETE)/g)?.length).toBe(106);
+    expect(nativeDatabase.match(/#\[serde\(rename = "/g)?.length).toBeGreaterThanOrEqual(106);
   });
 
 

@@ -1,4 +1,4 @@
-import type { ProviderConfig, ProviderKind, ProviderModel } from "../../providers/types";
+import type { CustomOpenAiOutputTokenField, ProviderConfig, ProviderKind, ProviderModel } from "../../providers/types";
 import { applyReasoningRegistryToProviderModel } from "../../providers/modelReasoningRegistry";
 import type { AppSettings } from "../../types";
 import type { DatabaseTransactionStatement } from "../databaseNative";
@@ -7,9 +7,11 @@ import { nowIso } from "../repository";
 
 type WriteResult = { rowsAffected: number };
 
+const customOutputTokenFieldSettingKey = (providerConfigId: string) => `provider.customOutputTokenField.${providerConfigId}`;
+
 type ProviderConfigRow = {
   id: string; provider: ProviderKind; label: string; credential_id: string; credential_hint: string | null;
-  credential_fingerprint: string | null; base_url: string | null; enabled: number; last_tested_at: string | null;
+  credential_fingerprint: string | null; base_url: string | null; custom_output_token_field: string | null; enabled: number; last_tested_at: string | null;
   last_status: "ok" | "error" | null; last_error: string | null; created_at: string; updated_at: string;
 };
 
@@ -25,11 +27,17 @@ export interface SqliteSettingsModelsRepositoryDependencies {
   now?: typeof nowIso;
 }
 
+function parseCustomOutputTokenField(value: string | null | undefined): CustomOpenAiOutputTokenField | undefined {
+  if (value == null) return undefined;
+  if (value === "max_tokens" || value === "max_completion_tokens") return value;
+  throw new Error("Invalid Custom OpenAI output-token wire setting.");
+}
+
 function mapProviderConfig(row: ProviderConfigRow): ProviderConfig {
   return {
     id: row.id, provider: row.provider, label: row.label, credentialId: row.credential_id,
     credentialHint: row.credential_hint ?? undefined, credentialFingerprint: row.credential_fingerprint ?? undefined,
-    baseUrl: row.base_url ?? undefined, enabled: row.enabled === 1, lastTestedAt: row.last_tested_at ?? undefined,
+    baseUrl: row.base_url ?? undefined, customOutputTokenField: parseCustomOutputTokenField(row.custom_output_token_field), enabled: row.enabled === 1, lastTestedAt: row.last_tested_at ?? undefined,
     lastStatus: row.last_status ?? undefined, lastError: row.last_error ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
@@ -79,28 +87,39 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
   async listProviderConfigs(): Promise<ProviderConfig[]> {
     const rows = await this.dependencies.select<ProviderConfigRow[]>(
       `SELECT pc.id, pc.provider, pc.label, pc.credential_id, pc.credential_hint,
-              cm.fingerprint AS credential_fingerprint, pc.base_url, pc.enabled, pc.last_tested_at, pc.last_status, pc.last_error,
+              cm.fingerprint AS credential_fingerprint, pc.base_url, wire.value AS custom_output_token_field, pc.enabled, pc.last_tested_at, pc.last_status, pc.last_error,
               pc.created_at, pc.updated_at FROM provider_configs pc
-         LEFT JOIN credentials_metadata cm ON cm.id = pc.credential_id ORDER BY pc.updated_at DESC`,
+         LEFT JOIN credentials_metadata cm ON cm.id = pc.credential_id
+         LEFT JOIN app_settings wire ON pc.provider = 'custom_openai'
+           AND wire.key = 'provider.customOutputTokenField.' || pc.id
+         ORDER BY pc.updated_at DESC`,
     );
     return rows.map(mapProviderConfig);
   }
 
   async createProviderConfig(input: Parameters<SettingsModelsRepository["createProviderConfig"]>[0]): Promise<ProviderConfig> {
+    if (input.provider !== "custom_openai" && input.customOutputTokenField) throw new Error("Output-token wire override is available only for Custom OpenAI-compatible providers.");
     const timestamp = (this.dependencies.now ?? nowIso)();
     const config: ProviderConfig = {
       id: input.id, provider: input.provider, label: input.label.trim(), credentialId: input.credentialId,
       credentialHint: input.credentialHint, credentialFingerprint: input.fingerprint, baseUrl: input.baseUrl?.trim() || undefined,
+      ...(input.provider === "custom_openai" && input.customOutputTokenField ? { customOutputTokenField: input.customOutputTokenField } : {}),
       enabled: true, createdAt: timestamp, updatedAt: timestamp,
     };
-    await this.dependencies.executeTransaction([
+    const statements: DatabaseTransactionStatement[] = [
       { query: `INSERT INTO credentials_metadata (id, provider, label, fingerprint, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $5)`, values: [input.credentialId, input.provider, config.label, input.fingerprint ?? null, timestamp] },
       { query: `INSERT INTO provider_configs
                 (id, provider, label, credential_id, credential_hint, base_url, enabled, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7)`,
         values: [config.id, config.provider, config.label, config.credentialId, config.credentialHint ?? null, config.baseUrl ?? null, timestamp] },
-    ]);
+    ];
+    if (config.customOutputTokenField) statements.push({
+      query: `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, $3)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      values: [customOutputTokenFieldSettingKey(config.id), config.customOutputTokenField, timestamp],
+    });
+    await this.dependencies.executeTransaction(statements);
     return config;
   }
 
@@ -114,6 +133,24 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
                 last_tested_at = NULL, updated_at = $2 WHERE id = $3`, values: [credentialHint, timestamp, id] },
       { query: "UPDATE credentials_metadata SET fingerprint = $1, updated_at = $2 WHERE id = $3", values: [fingerprint, timestamp, credentialId] },
     ]);
+  }
+
+  async updateProviderCustomOutputTokenField(id: string, field?: CustomOpenAiOutputTokenField): Promise<void> {
+    const rows = await this.dependencies.select<{ provider: ProviderKind }[]>("SELECT provider FROM provider_configs WHERE id = $1 LIMIT 1", [id]);
+    if (!rows[0]) throw new Error("Provider connection not found.");
+    if (rows[0].provider !== "custom_openai") throw new Error("Output-token wire override is available only for Custom OpenAI-compatible providers.");
+    const timestamp = (this.dependencies.now ?? nowIso)();
+    const statements: DatabaseTransactionStatement[] = [];
+    if (field) {
+      statements.push({
+        query: `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, $3)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        values: [customOutputTokenFieldSettingKey(id), field, timestamp],
+      });
+    } else {
+      statements.push({ query: "DELETE FROM app_settings WHERE key = $1", values: [customOutputTokenFieldSettingKey(id)] });
+    }
+    await this.dependencies.executeTransaction(statements);
   }
 
   async deleteProviderConfig(id: string): Promise<void> {
@@ -136,6 +173,7 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
         values: [credentialId, id, (this.dependencies.now ?? nowIso)()],
       });
     }
+    statements.push({ query: "DELETE FROM app_settings WHERE key = $1", values: [customOutputTokenFieldSettingKey(id)] });
     statements.push({ query: "DELETE FROM provider_configs WHERE id = $1", values: [id] });
     if (credentialId) statements.push({ query: "DELETE FROM credentials_metadata WHERE id = $1", values: [credentialId] });
     await this.dependencies.executeTransaction(statements);

@@ -5,7 +5,7 @@ import sqliteFacade from "./sqliteRepository.ts?raw";
 
 const methods = [
   "loadSettings", "saveSettings", "listProviderConfigs", "createProviderConfig", "updateProviderCredentialMetadata",
-  "deleteProviderConfig", "updateProviderConnectionStatus", "listProviderModels", "replaceProviderModels",
+  "updateProviderCustomOutputTokenField", "deleteProviderConfig", "updateProviderConnectionStatus", "listProviderModels", "replaceProviderModels",
   "setProviderModelFavorite", "clearProviderModelCache",
 ] as const;
 

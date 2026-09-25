@@ -1,9 +1,9 @@
-import { Check, KeyRound, Plus, RefreshCw, Server, ShieldCheck, Sparkles, Star, Trash2, X } from "lucide-react";
+import { Check, KeyRound, Plus, RefreshCw, Server, Settings2, ShieldCheck, Sparkles, Star, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { getCopy } from "../i18n";
 import { useAppDialogs } from "./AppDialogProvider";
-import { addProvider, rebindProviderCredential, refreshProviderModels, removeProvider } from "../providers/service";
-import { PROVIDER_KINDS, type ProviderConfig, type ProviderKind, type ProviderModel } from "../providers/types";
+import { addProvider, rebindProviderCredential, refreshProviderModels, removeProvider, updateCustomOpenAiOutputTokenField } from "../providers/service";
+import { PROVIDER_KINDS, type CustomOpenAiOutputTokenField, type ProviderConfig, type ProviderKind, type ProviderModel } from "../providers/types";
 import { isTauriRuntime } from "../storage";
 import type { AppRepository } from "../storage/repository";
 
@@ -26,6 +26,7 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [rebindConfig, setRebindConfig] = useState<ProviderConfig | null>(null);
+  const [wireConfig, setWireConfig] = useState<ProviderConfig | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const desktop = isTauriRuntime();
@@ -74,6 +75,21 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
     }
   };
 
+  const updateWireField = async (config: ProviderConfig, field?: CustomOpenAiOutputTokenField) => {
+    if (!repository) return;
+    setBusyId(config.id);
+    setError(null);
+    try {
+      await updateCustomOpenAiOutputTokenField(repository, config, field);
+      setWireConfig(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      await reload();
+      setBusyId(null);
+    }
+  };
+
   const remove = async (config: ProviderConfig) => {
     if (!repository) return;
     const confirmed = await dialogs.confirm({ title: copy.dialogWarningTitle, description: copy.removeProviderConfirm, confirmLabel: copy.dialogDelete, cancelLabel: copy.cancel, severity: "destructive" });
@@ -90,7 +106,7 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
     }
   };
 
-  const add = async (input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string }) => {
+  const add = async (input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string; customOutputTokenField?: CustomOpenAiOutputTokenField }) => {
     if (!repository) return;
     setBusyId("new");
     setError(null);
@@ -135,6 +151,9 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
                 <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => void refresh(config)} title={copy.testRefresh}>
                   <RefreshCw size={14} className={busyId === config.id ? "spin-icon" : ""} />{busyId === config.id ? copy.refreshing : copy.testRefresh}
                 </button>
+                {config.provider === "custom_openai" && <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => setWireConfig(config)} title={copy.customWireSettings}>
+                  <Settings2 size={14} />{copy.customWireSettings}
+                </button>}
                 <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => setRebindConfig(config)} title={copy.apiKey}>
                   <KeyRound size={14} />{copy.apiKey}
                 </button>
@@ -147,6 +166,7 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
       {section !== "providers" && <ModelRegistry copy={copy} repository={repository} providers={providers} models={models} onChanged={reload} />}
       {dialogOpen && <AddProviderDialog copy={copy} busy={busyId === "new"} onClose={() => setDialogOpen(false)} onSubmit={add} />}
       {rebindConfig && <RebindCredentialDialog copy={copy} config={rebindConfig} busy={busyId === rebindConfig.id} onClose={() => setRebindConfig(null)} onSubmit={(apiKey) => rebind(rebindConfig, apiKey)} />}
+      {wireConfig && <CustomWireSettingsDialog copy={copy} config={wireConfig} busy={busyId === wireConfig.id} onClose={() => setWireConfig(null)} onSubmit={(field) => updateWireField(wireConfig, field)} />}
     </>
   );
 }
@@ -189,20 +209,23 @@ function ModelRegistry({ copy, repository, providers, models, onChanged }: { cop
   );
 }
 
-function AddProviderDialog({ copy, busy, onClose, onSubmit }: { copy: Copy; busy: boolean; onClose: () => void; onSubmit: (input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string }) => Promise<void> }) {
+function AddProviderDialog({ copy, busy, onClose, onSubmit }: { copy: Copy; busy: boolean; onClose: () => void; onSubmit: (input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string; customOutputTokenField?: CustomOpenAiOutputTokenField }) => Promise<void> }) {
   const [provider, setProvider] = useState<ProviderKind>("openrouter");
   const [label, setLabel] = useState(PROVIDER_LABELS.openrouter);
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [customOutputTokenField, setCustomOutputTokenField] = useState<"default" | CustomOpenAiOutputTokenField>("default");
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const secret = apiKey;
     setApiKey("");
-    void onSubmit({ provider, label, apiKey: secret, ...(baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}) });
+    void onSubmit({ provider, label, apiKey: secret, ...(baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}), ...(provider === "custom_openai" && customOutputTokenField !== "default" ? { customOutputTokenField } : {}) });
   };
   const changeProvider = (next: ProviderKind) => {
     setProvider(next);
     setLabel(PROVIDER_LABELS[next]);
+    setBaseUrl("");
+    setCustomOutputTokenField("default");
   };
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
@@ -211,9 +234,29 @@ function AddProviderDialog({ copy, busy, onClose, onSubmit }: { copy: Copy; busy
         <form onSubmit={submit}>
           <label>{copy.provider}<select value={provider} onChange={(event) => changeProvider(event.target.value as ProviderKind)}>{PROVIDER_KINDS.map((kind) => <option key={kind} value={kind}>{PROVIDER_LABELS[kind]}</option>)}</select></label>
           <label>{copy.providerLabel}<input value={label} onChange={(event) => setLabel(event.target.value)} required /></label>
-          {provider === "custom_openai" && <label>{copy.baseUrl}<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://example.com/v1" required /></label>}
+          {provider === "custom_openai" && <><label>{copy.baseUrl}<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://example.com/v1" required /></label><label>{copy.customOutputTokenField}<select value={customOutputTokenField} onChange={(event) => setCustomOutputTokenField(event.target.value as "default" | CustomOpenAiOutputTokenField)}><option value="default">{copy.customOutputTokenDefault}</option><option value="max_completion_tokens">{copy.customOutputTokenCompletion}</option></select><small>{copy.customOutputTokenFieldHelp}</small></label></>}
           <label>{copy.apiKey}<input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} required /></label>
           <div className="modal-actions"><button className="secondary-button" type="button" disabled={busy} onClick={onClose}>{copy.cancel}</button><button className="primary-button" type="submit" disabled={busy}>{busy ? copy.refreshing : copy.saveAndTest}</button></div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function CustomWireSettingsDialog({ copy, config, busy, onClose, onSubmit }: { copy: Copy; config: ProviderConfig; busy: boolean; onClose: () => void; onSubmit: (field?: CustomOpenAiOutputTokenField) => Promise<void> }) {
+  const [value, setValue] = useState<"default" | CustomOpenAiOutputTokenField>(config.customOutputTokenField ?? "default");
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void onSubmit(value === "default" ? undefined : value);
+  };
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
+      <section className="modal form-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-heading"><div><small>{PROVIDER_LABELS[config.provider]}</small><h2>{copy.customWireSettings}</h2><p>{config.label}</p></div><button className="icon-button" type="button" disabled={busy} onClick={onClose}><X size={19} /></button></div>
+        <form onSubmit={submit}>
+          {config.baseUrl && <label>{copy.baseUrl}<input value={config.baseUrl} readOnly /></label>}
+          <label>{copy.customOutputTokenField}<select value={value} onChange={(event) => setValue(event.target.value as "default" | CustomOpenAiOutputTokenField)}><option value="default">{copy.customOutputTokenDefault}</option><option value="max_completion_tokens">{copy.customOutputTokenCompletion}</option></select><small>{copy.customOutputTokenFieldHelp}</small></label>
+          <div className="modal-actions"><button className="secondary-button" type="button" disabled={busy} onClick={onClose}>{copy.cancel}</button><button className="primary-button" type="submit" disabled={busy}>{copy.saveWireSettings}</button></div>
         </form>
       </section>
     </div>

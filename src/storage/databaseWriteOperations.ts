@@ -61,6 +61,7 @@ export type DatabaseWriteOperation =
   | "sessions_update_rv_sessions_06"
   | "sessions_insert_target_clarifications_01"
   | "settings_models_insert_app_settings_01"
+  | "settings_models_delete_app_settings_01"
   | "settings_models_insert_credentials_metadata_01"
   | "settings_models_insert_provider_configs_01"
   | "settings_models_update_provider_configs_01"
@@ -168,6 +169,7 @@ const WRITE_OPERATIONS = new Map<string, DatabaseWriteOperation>([
   ["UPDATE rv_sessions SET archived_at = NULL, updated_at = $1 WHERE id = $2 AND archived_at IS NOT NULL", "sessions_update_rv_sessions_06"],
   ["INSERT INTO target_clarifications (id, session_id, content, created_at) VALUES ($1, $2, $3, $4)", "sessions_insert_target_clarifications_01"],
   ["INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, $3) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", "settings_models_insert_app_settings_01"],
+  ["DELETE FROM app_settings WHERE key = $1", "settings_models_delete_app_settings_01"],
   ["INSERT INTO credentials_metadata (id, provider, label, fingerprint, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)", "settings_models_insert_credentials_metadata_01"],
   ["INSERT INTO provider_configs (id, provider, label, credential_id, credential_hint, base_url, enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7)", "settings_models_insert_provider_configs_01"],
   ["UPDATE provider_configs SET credential_hint = $1, last_status = NULL, last_error = NULL, last_tested_at = NULL, updated_at = $2 WHERE id = $3", "settings_models_update_provider_configs_01"],
