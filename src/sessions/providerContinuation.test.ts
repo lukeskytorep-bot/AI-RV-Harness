@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import anthropicFixture from "../providers/continuation-fixtures/anthropic-thinking-blocks.json";
 import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
 import type { ProviderContinuationState } from "../providers/continuationContract";
 import { captureGoogleContinuationState } from "../providers/googleContinuation";
@@ -8,10 +9,12 @@ import type { AppRepository } from "../storage/repository";
 import type { ProviderContinuationStateBinding } from "../storage/providerContinuationState";
 import type { SessionEventInput, SessionEventRecord, SessionSnapshot } from "./types";
 import {
+  ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON,
   captureSessionContinuationRoute,
   captureSessionContinuationState,
   hydrateSessionMessageContinuation,
   persistSessionAssistantResponse,
+  requiresAnthropicContinuationStopAfterContentMutation,
   SessionContinuationError,
   validateFrozenSessionContinuationRequest,
   validateFrozenSessionContinuationRoute,
@@ -177,7 +180,7 @@ describe("provider continuation session bridge", () => {
       provider: "google",
       modelId: googleModel.modelId,
       modelRoute: googleModel.route,
-      continuationRoute: { ...validRoute, transport: "anthropic-native" },
+      continuationRoute: { ...validRoute, transport: "future-native" },
     } as unknown as SessionSnapshot;
 
     expect(() => validateFrozenSessionContinuationRequest(malformedSnapshot, googleConfig, googleModel.modelId))
@@ -242,6 +245,74 @@ describe("provider continuation session bridge", () => {
     });
     expect(hydrated.continuationState?.transport).toBe("google-native");
     expect(hydrated.continuationState && "parts" in hydrated.continuationState ? hydrated.continuationState.parts : undefined).toEqual(parts);
+  });
+
+  it("fails closed when an Anthropic frozen route loses its append-only prefix policy", () => {
+    const anthropicConfig: ProviderConfig = { ...config, id: "anthropic-config", provider: "anthropic", label: "Anthropic", credentialId: "anthropic-credential" };
+    const anthropicModel: ProviderModel = { ...model, providerConfigId: anthropicConfig.id, provider: "anthropic", modelId: "claude-fixture", route: "anthropic:claude-fixture" };
+    const route = captureSessionContinuationRoute(anthropicConfig, anthropicModel);
+    if (!route || route.transport !== "anthropic-native") throw new Error("Expected Anthropic continuation route.");
+    const malformedSnapshot = {
+      ...snapshot(),
+      providerConfigId: anthropicConfig.id,
+      credentialId: anthropicConfig.credentialId,
+      provider: "anthropic",
+      modelId: anthropicModel.modelId,
+      modelRoute: anthropicModel.route,
+      continuationRoute: { ...route, prefixPolicy: "mutable" },
+    } as unknown as SessionSnapshot;
+
+    expect(() => validateFrozenSessionContinuationRequest(malformedSnapshot, anthropicConfig, anthropicModel.modelId))
+      .toThrow(SessionContinuationError);
+  });
+
+  it("freezes, persists and rehydrates Anthropic thinking blocks on the exact Session event", async () => {
+    const anthropicConfig: ProviderConfig = { ...config, id: "anthropic-config", provider: "anthropic", label: "Anthropic", credentialId: "anthropic-credential" };
+    const anthropicModel: ProviderModel = { ...model, providerConfigId: anthropicConfig.id, provider: "anthropic", modelId: "claude-fixture", route: "anthropic:claude-fixture" };
+    const route = captureSessionContinuationRoute(anthropicConfig, anthropicModel);
+    expect(route).toMatchObject({ transport: "anthropic-native", stateFormat: "anthropic-thinking-blocks", prefixPolicy: "append-only" });
+    if (!route) throw new Error("Expected Anthropic continuation route.");
+    const anthropicSnapshot: SessionSnapshot = {
+      ...snapshot(), providerConfigId: anthropicConfig.id, credentialId: anthropicConfig.credentialId, provider: "anthropic",
+      modelId: anthropicModel.modelId, modelRoute: anthropicModel.route, continuationRoute: route,
+    };
+    expect(validateFrozenSessionContinuationRoute(anthropicSnapshot, anthropicConfig, anthropicModel)).toEqual(route);
+
+    let storedState: ProviderContinuationStateBinding | undefined;
+    const appendSessionEventWithProviderState = vi.fn(async (_sessionId: string, event: SessionEventInput, state: ProviderContinuationState) => {
+      storedState = { ownerId: "anthropic-event", format: state.format, formatVersion: state.schemaVersion, transport: state.transport, replayFingerprint: state.replayFingerprint, state: structuredClone(state), payloadSha256: "a".repeat(64), payloadSizeBytes: JSON.stringify(state).length, createdAt: "now" };
+      return { ...event, id: "anthropic-event", sessionId: "session-1", sequenceNumber: 1, createdAt: "now" } as SessionEventRecord;
+    });
+    const blocks = structuredClone(anthropicFixture.continuationState.blocks);
+    const persisted = await persistSessionAssistantResponse({
+      repository: { appendSessionEvent: vi.fn(async () => undefined), appendSessionEventWithProviderState },
+      sessionId: "session-1",
+      event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: "Visible fixture answer." },
+      response: { content: "Visible fixture answer.", reasoningDetails: blocks, reasoningSource: "anthropic_thinking_blocks", usage: {} },
+      providerConfig: anthropicConfig, model: anthropicModel, route,
+    });
+    expect(persisted.state?.transport).toBe("anthropic-native");
+    expect(appendSessionEventWithProviderState).toHaveBeenCalledTimes(1);
+    if (!storedState) throw new Error("Expected persisted Anthropic state.");
+    const event: SessionEventRecord = { id: "anthropic-event", sessionId: "session-1", sequenceNumber: 1, createdAt: "now", eventType: "VIEWER_RESPONSE", role: "assistant", content: "Visible fixture answer.", metadata: { continuationState: { status: "stored" } } };
+    const hydrated = await hydrateSessionMessageContinuation({
+      repository: { getSessionEventProviderState: vi.fn(async () => storedState!) },
+      snapshot: anthropicSnapshot, config: anthropicConfig, model: anthropicModel, event,
+      message: { role: "assistant", content: "Visible fixture answer." },
+    });
+    expect(hydrated.continuationState?.transport).toBe("anthropic-native");
+    expect(hydrated.continuationState && "blocks" in hydrated.continuationState ? hydrated.continuationState.blocks : undefined).toEqual(blocks);
+  });
+
+  it("flags only Anthropic signed continuation when persisted visible content differs from the provider turn", () => {
+    const anthropicConfig: ProviderConfig = { ...config, id: "anthropic-config", provider: "anthropic", label: "Anthropic", credentialId: "anthropic-credential" };
+    const anthropicModel: ProviderModel = { ...model, providerConfigId: anthropicConfig.id, provider: "anthropic", modelId: "claude-fixture", route: "anthropic:claude-fixture" };
+    const anthropicRoute = captureSessionContinuationRoute(anthropicConfig, anthropicModel);
+    const openRouterRoute = captureSessionContinuationRoute(config, model);
+    expect(requiresAnthropicContinuationStopAfterContentMutation(anthropicRoute, "raw", "sanitized")).toBe(true);
+    expect(requiresAnthropicContinuationStopAfterContentMutation(anthropicRoute, "same", "same")).toBe(false);
+    expect(requiresAnthropicContinuationStopAfterContentMutation(openRouterRoute, "raw", "sanitized")).toBe(false);
+    expect(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON).toContain("Anthropic continuation");
   });
 
 });

@@ -41,7 +41,11 @@ export async function sendPostRevealTurn(input: {
   if (snapshot.providerConfigId !== input.providerConfig.id || snapshot.modelId !== input.model.modelId) {
     throw new Error("Post-reveal discussion must use the Viewer route captured in the Session Snapshot.");
   }
-  const continuationRoute = validateFrozenSessionContinuationRoute(snapshot, input.providerConfig, input.model);
+  const frozenContinuationRoute = validateFrozenSessionContinuationRoute(snapshot, input.providerConfig, input.model);
+  // Anthropic preserved-thinking binds signed blocks to the exact earlier prefix.
+  // Post-Reveal can legitimately gain supplementary clarifications between turns,
+  // so Anthropic continuation remains text-only here until that prefix is frozen.
+  const continuationRoute = frozenContinuationRoute?.transport === "anthropic-native" ? undefined : frozenContinuationRoute;
   if (continuationRoute && (!input.repository.listSessionEvents || !input.repository.getSessionEventProviderState || !input.repository.appendPostRevealTurnWithProviderState)) {
     throw new Error("The repository cannot restore the frozen provider continuation state required by this post-Reveal conversation.");
   }

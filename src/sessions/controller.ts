@@ -33,7 +33,7 @@ import {
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
-import { appendAssistantMessageWithContinuation, captureSessionContinuationRoute, persistSessionAssistantResponse, SessionContinuationError, validateSessionContinuationBudget } from "./providerContinuation";
+import { ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON, appendAssistantMessageWithContinuation, captureSessionContinuationRoute, persistSessionAssistantResponse, requiresAnthropicContinuationStopAfterContentMutation, SessionContinuationError, validateSessionContinuationBudget } from "./providerContinuation";
 
 export { detectRepetitiveOutput } from "./repetitionGuard";
 
@@ -355,6 +355,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     const rawResponseContent = response.content;
     const sanitized = sanitizeRepetitiveOutput(rawResponseContent, input.sessionLanguage);
     response = { ...response, content: sanitized.content };
+    const stopAfterSanitizedAnthropicTurn = requiresAnthropicContinuationStopAfterContentMutation(continuationRoute, rawResponseContent, response.content);
     if (sanitized.truncated) {
       await input.repository.appendSessionEvent(sessionId, {
         eventType: "OUTPUT_TRUNCATED_LOOP",
@@ -366,8 +367,8 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     let continuationState;
     try {
       ({ state: continuationState } = await persistSessionAssistantResponse({
-        repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: continuationRoute,
-        event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { phase, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs } },
+        repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : continuationRoute,
+        event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { phase, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
       }));
     } catch (cause) {
       if (cause instanceof SessionContinuationError) return stop(`AUTO-STOP: ${cause.message}`);
@@ -378,6 +379,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     // Persistence is awaited before any next provider call. This is the autosave boundary.
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
+    if (stopAfterSanitizedAnthropicTurn) return stop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
     if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
 
     if (input.signal?.aborted) return stop("USER STOP");
@@ -441,6 +443,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         const rawTaskContent = taskResponse.content;
         const sanitizedTask = sanitizeRepetitiveOutput(rawTaskContent, input.sessionLanguage);
         taskResponse = { ...taskResponse, content: sanitizedTask.content };
+        const stopAfterSanitizedAnthropicTask = requiresAnthropicContinuationStopAfterContentMutation(continuationRoute, rawTaskContent, taskResponse.content);
         if (sanitizedTask.truncated) {
           await input.repository.appendSessionEvent(sessionId, {
             eventType: "OUTPUT_TRUNCATED_LOOP",
@@ -452,8 +455,8 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         let taskContinuationState;
         try {
           ({ state: taskContinuationState } = await persistSessionAssistantResponse({
-            repository: input.repository, sessionId, response: taskResponse, providerConfig: input.providerConfig, model: input.model, route: continuationRoute,
-            event: { eventType: "VIEWER_SPECIAL_TASK_RESPONSE", role: "assistant", content: taskResponse.content, metadata: { phase, finishReason: taskResponse.finishReason, actualModel: taskResponse.actualModel ?? "unavailable", providerRequestId: taskResponse.providerRequestId ?? "unavailable", usage: taskResponse.usage, usageAccuracy: taskResponse.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: taskDurationMs } },
+            repository: input.repository, sessionId, response: taskResponse, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTask ? undefined : continuationRoute,
+            event: { eventType: "VIEWER_SPECIAL_TASK_RESPONSE", role: "assistant", content: taskResponse.content, metadata: { phase, finishReason: taskResponse.finishReason, actualModel: taskResponse.actualModel ?? "unavailable", providerRequestId: taskResponse.providerRequestId ?? "unavailable", usage: taskResponse.usage, usageAccuracy: taskResponse.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: taskDurationMs, ...(stopAfterSanitizedAnthropicTask ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
           }));
         } catch (cause) {
           if (cause instanceof SessionContinuationError) return stop(`AUTO-STOP: ${cause.message}`);
@@ -463,6 +466,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         transcript = appendSpecialTaskTranscript(transcript, phase, taskPrompt, taskResponse.content, input.sessionLanguage);
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
+        if (stopAfterSanitizedAnthropicTask) return stop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
         if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
       }
     }
@@ -611,6 +615,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         const rawDeepeningContent = deepening.content;
         const sanitizedDeepening = sanitizeRepetitiveOutput(rawDeepeningContent, input.sessionLanguage);
         deepening = { ...deepening, content: sanitizedDeepening.content };
+        const stopAfterSanitizedAnthropicDeepening = requiresAnthropicContinuationStopAfterContentMutation(continuationRoute, rawDeepeningContent, deepening.content);
         if (sanitizedDeepening.truncated) {
           await input.repository.appendSessionEvent(sessionId, {
             eventType: "OUTPUT_TRUNCATED_LOOP",
@@ -622,8 +627,8 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         let deepeningContinuationState;
         try {
           ({ state: deepeningContinuationState } = await persistSessionAssistantResponse({
-            repository: input.repository, sessionId, response: deepening, providerConfig: input.providerConfig, model: input.model, route: continuationRoute,
-            event: { eventType: "VIEWER_MONITOR_RESPONSE", role: "assistant", content: deepening.content, metadata: { phase, exchangeNumber, finishReason: deepening.finishReason, actualModel: deepening.actualModel ?? "unavailable", providerRequestId: deepening.providerRequestId ?? "unavailable", usage: deepening.usage, usageAccuracy: deepening.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: deepeningDurationMs } },
+            repository: input.repository, sessionId, response: deepening, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicDeepening ? undefined : continuationRoute,
+            event: { eventType: "VIEWER_MONITOR_RESPONSE", role: "assistant", content: deepening.content, metadata: { phase, exchangeNumber, finishReason: deepening.finishReason, actualModel: deepening.actualModel ?? "unavailable", providerRequestId: deepening.providerRequestId ?? "unavailable", usage: deepening.usage, usageAccuracy: deepening.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: deepeningDurationMs, ...(stopAfterSanitizedAnthropicDeepening ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
           }));
         } catch (cause) {
           if (cause instanceof SessionContinuationError) return stop(`AUTO-STOP: ${cause.message}`);
@@ -633,6 +638,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         transcript = appendMonitorTranscript(transcript, phase, decision.commandText, deepening.content, input.sessionLanguage);
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
+        if (stopAfterSanitizedAnthropicDeepening) return stop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
         if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
       }
     }

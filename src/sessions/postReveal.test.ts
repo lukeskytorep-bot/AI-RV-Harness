@@ -180,6 +180,30 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
     expect(appendPostRevealTurnWithProviderState).toHaveBeenCalledTimes(1);
   });
 
+
+  it("keeps Anthropic post-Reveal discussion text-only because supplementary clarifications can change the signed prefix", async () => {
+    const anthropicConfig: ProviderConfig = { ...config, id: "anthropic-pc", provider: "anthropic", label: "Anthropic" };
+    const anthropicModel: ProviderModel = { ...model, providerConfigId: "anthropic-pc", provider: "anthropic", modelId: "claude-fixture", route: "anthropic:claude-fixture" };
+    let transcript = `${serializePostRevealTurn("user", "First question")}${serializePostRevealTurn("assistant", "First answer")}`;
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({
+        schemaVersion: 4, providerConfigId: "anthropic-pc", credentialId: "cred", provider: "anthropic", modelId: "claude-fixture", modelRoute: "anthropic:claude-fixture", sessionLanguage: "en",
+        continuationRoute: { transport: "anthropic-native", normalizedEndpoint: "https://api.anthropic.com/v1", providerConfigId: "anthropic-pc", credentialId: "cred", requestedModelId: "claude-fixture", stateFormat: "anthropic-thinking-blocks", stateFormatVersion: 1, prefixPolicy: "append-only" },
+      }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Lighthouse", hash: "h" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
+      listTargetClarifications: vi.fn().mockResolvedValue([{ id: "c1", sessionId: "s", content: "New clarification", createdAt: "now" }]),
+      appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant" | "monitor", content: string) => { transcript += serializePostRevealTurn(role, content); return transcript; }),
+    };
+    const chat = vi.fn(async ({ messages }: { messages: ProviderMessage[] }) => {
+      expect(messages.some((message) => message.continuationState?.transport === "anthropic-native")).toBe(false);
+      return { content: "Text-only Anthropic post-Reveal answer.", usage: {} };
+    });
+    await sendPostRevealTurn({ repository: repository as never, sessionId: "s", existingTranscript: transcript, providerConfig: anthropicConfig, model: anthropicModel, content: "Second question", chat: chat as never });
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(repository.appendPostRevealTurn).toHaveBeenCalled();
+  });
+
   it("fails closed when a frozen post-Reveal assistant turn has no matching Session event", async () => {
     const existingTranscript = `${serializePostRevealTurn("user", "First question")}${serializePostRevealTurn("assistant", "Persisted assistant answer")}`;
     const repository = {

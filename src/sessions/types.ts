@@ -88,6 +88,16 @@ export type SessionContinuationRouteSnapshot =
       requestedModelId: string;
       stateFormat: "google-thought-parts";
       stateFormatVersion: 1;
+    }
+  | {
+      transport: "anthropic-native";
+      normalizedEndpoint: string;
+      providerConfigId: string;
+      credentialId: string;
+      requestedModelId: string;
+      stateFormat: "anthropic-thinking-blocks";
+      stateFormatVersion: 1;
+      prefixPolicy: "append-only";
     };
 
 export interface SessionSnapshot {

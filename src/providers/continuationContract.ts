@@ -381,7 +381,7 @@ function validateProviderContinuationStateInternal(input: unknown): Continuation
     if (!Array.isArray(input.blocks)) return { ok: false, code: "invalid_payload", message: "blocks must be an array" };
     const limitError = validateBlockCountAndSize(input.blocks); if (limitError) return limitError;
     const blocks = input.blocks.map(parseAnthropicBlock);
-    if (blocks.some((item) => item === null)) return { ok: false, code: "invalid_payload", message: "invalid Anthropic thinking block" };
+    if (!blocks.length || blocks.some((item) => item === null)) return { ok: false, code: "invalid_payload", message: "invalid Anthropic thinking block" };
     value = { schemaVersion: 1, transport: "anthropic-native", format: "anthropic-thinking-blocks", replayFingerprint: fingerprint, blocks: blocks as AnthropicThinkingBlock[] };
   }
 

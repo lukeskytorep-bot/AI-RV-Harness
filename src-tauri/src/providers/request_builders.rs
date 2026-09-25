@@ -165,7 +165,11 @@ pub(super) fn build_anthropic_request(request: &ProviderChatRequest, base: &str)
         .iter()
         .filter(|message| message.role != "system")
         .map(|message| {
-            if message.images.is_empty() {
+            if let Some(ProviderContinuationState::Anthropic(state)) = message.continuation_state.as_ref() {
+                let mut blocks = state.blocks.clone();
+                blocks.push(json!({ "type": "text", "text": message.content }));
+                json!({ "role": message.role, "content": blocks })
+            } else if message.images.is_empty() {
                 json!({ "role": message.role, "content": message.content })
             } else {
                 let mut blocks = vec![json!({ "type": "text", "text": message.content })];

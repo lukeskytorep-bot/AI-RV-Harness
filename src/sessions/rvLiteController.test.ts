@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderContinuationState } from "../providers/continuationContract";
+import anthropicFixture from "../providers/continuation-fixtures/anthropic-thinking-blocks.json";
 import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getRvLite } from "../resources/protocolRegistry";
@@ -130,6 +131,79 @@ describe("automatic RV Lite controller", () => {
     expect(persisted).toHaveLength(4);
     expect(persisted.every((state) => state.transport === "google-native")).toBe(true);
     expect(snapshots[0].continuationRoute).toMatchObject({ transport: "google-native", providerConfigId: "google-p", credentialId: "c", requestedModelId: "gemini-3.8-flash", stateFormat: "google-thought-parts" });
+  });
+
+  it("persists and replays Anthropic thinking blocks across all RV Lite Viewer calls on an append-only route", async () => {
+    const anthropicConfig: ProviderConfig = { ...config, id: "anthropic-p", provider: "anthropic", label: "Anthropic" };
+    const anthropicModel: ProviderModel = { ...model, providerConfigId: anthropicConfig.id, provider: "anthropic", modelId: "claude-fixture", route: "anthropic:claude-fixture" };
+    const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
+    const repo = repository(log, snapshots);
+    const persisted: ProviderContinuationState[] = [];
+    repo.appendSessionEventWithProviderState = vi.fn(async (_sessionId: string, event: SessionEventInput, state: ProviderContinuationState) => {
+      persisted.push(structuredClone(state));
+      return { ...event, id: `anthropic-event-${persisted.length}`, sessionId: "session", sequenceNumber: persisted.length, createdAt: "now" };
+    });
+    const blocks = structuredClone(anthropicFixture.continuationState.blocks);
+    let calls = 0;
+    await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "profile", providerConfig: anthropicConfig, model: anthropicModel,
+      protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+      chat: async ({ messages }) => {
+        calls += 1;
+        if (calls > 1) {
+          const previousAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+          expect(previousAssistant?.continuationState?.transport).toBe("anthropic-native");
+          expect(previousAssistant?.continuationState && "blocks" in previousAssistant.continuationState ? previousAssistant.continuationState.blocks : undefined).toEqual(blocks);
+        }
+        return { content: "Visible fixture answer.", reasoningDetails: blocks, reasoningSource: "anthropic_thinking_blocks", usage: {} };
+      },
+    });
+    expect(calls).toBe(4);
+    expect(persisted).toHaveLength(4);
+    expect(persisted.every((state) => state.transport === "anthropic-native")).toBe(true);
+    expect(snapshots[0].continuationRoute).toMatchObject({ transport: "anthropic-native", providerConfigId: "anthropic-p", credentialId: "c", requestedModelId: "claude-fixture", stateFormat: "anthropic-thinking-blocks", prefixPolicy: "append-only" });
+  });
+
+  it("auto-stops before replay when repetition sanitization changes an Anthropic signed turn", async () => {
+    const anthropicConfig: ProviderConfig = { ...config, id: "anthropic-p", provider: "anthropic", label: "Anthropic" };
+    const anthropicModel: ProviderModel = { ...model, providerConfigId: anthropicConfig.id, provider: "anthropic", modelId: "claude-fixture", route: "anthropic:claude-fixture" };
+    const log: string[] = [];
+    const repo = repository(log);
+    const events: SessionEventInput[] = [];
+    repo.appendSessionEvent = vi.fn(async (_sessionId: string, event: SessionEventInput) => {
+      events.push(structuredClone(event));
+      log.push(event.eventType);
+      return { ...event, id: `event-${events.length}`, sessionId: "session", sequenceNumber: events.length, createdAt: "now" } as never;
+    });
+    const persistWithProviderState = vi.fn(repo.appendSessionEventWithProviderState);
+    repo.appendSessionEventWithProviderState = persistWithProviderState;
+    const blocks = structuredClone(anthropicFixture.continuationState.blocks);
+    const runaway = `Useful perceptual evidence before the provider loop.\n${"X".repeat(650)}`;
+    let calls = 0;
+
+    const result = await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "profile", providerConfig: anthropicConfig, model: anthropicModel,
+      protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+      chat: async ({ messages }) => {
+        calls += 1;
+        expect(messages.some((message) => Boolean(message.continuationState))).toBe(false);
+        return { content: runaway, reasoningDetails: blocks, reasoningSource: "anthropic_thinking_blocks", usage: {} };
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(result.state).toBe("Interrupted");
+    expect(result.stopReason).toContain("Anthropic continuation");
+    expect(result.transcript).toContain("Useful perceptual evidence");
+    expect(result.transcript).toContain("OUTPUT TRUNCATED");
+    expect(persistWithProviderState).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({
+      eventType: "VIEWER_RESPONSE",
+      role: "assistant",
+      metadata: expect.objectContaining({ continuationState: { status: "suppressed", code: "signed_turn_content_modified" } }),
+    }));
+    expect(events).toContainEqual(expect.objectContaining({ eventType: "SESSION_STOPPED", content: expect.stringContaining("Anthropic continuation") }));
   });
 
   it("preserves Research ownership, assignment linkage and locked condition instruction", async () => {

@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppRepository } from "../storage/repository";
 import type { RvSession, SessionEventRecord, SessionSnapshot } from "./types";
+import anthropicFixture from "../providers/continuation-fixtures/anthropic-thinking-blocks.json";
 import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
+import { captureAnthropicContinuationState } from "../providers/anthropicContinuation";
 import { captureGoogleContinuationState } from "../providers/googleContinuation";
 import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
 import type { ProviderContinuationState } from "../providers/continuationContract";
 import type { ProviderConfig } from "../providers/types";
+import { ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON, SessionContinuationError } from "./providerContinuation";
 import { createSessionReplay, isRecoverableProviderInterruption } from "./resumeReplay";
 
 const session: RvSession = {
@@ -36,6 +39,7 @@ describe("durable session replay", () => {
     expect(isRecoverableProviderInterruption(session, [event(1, "SESSION_STOPPED", "AUTO-STOP: Monitor provider failure — empty assistant response")])).toBe(true);
     expect(isRecoverableProviderInterruption(session, [event(1, "SESSION_STOPPED", "USER STOP")])).toBe(false);
     expect(isRecoverableProviderInterruption(session, [event(1, "SESSION_STOPPED", "AUTO-STOP: configured session cost limit exceeded")])).toBe(false);
+    expect(isRecoverableProviderInterruption(session, [event(1, "SESSION_STOPPED", ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON)])).toBe(false);
   });
 
   it("replays saved responses and starts the provider only at the missing call", async () => {
@@ -139,7 +143,7 @@ describe("durable session replay", () => {
     const config: ProviderConfig = { id: "google-pc", provider: "google", label: "Google", credentialId: "google-cred", enabled: true, createdAt: "now", updatedAt: "now" };
     const snapshot = {
       schemaVersion: 4, providerConfigId: "google-pc", credentialId: "google-cred", provider: "google", modelId: "gemini-3.8-flash", modelRoute: "google:gemini-3.8-flash",
-      continuationRoute: { transport: "anthropic-native", normalizedEndpoint: "https://generativelanguage.googleapis.com/v1beta", providerConfigId: "google-pc", credentialId: "google-cred", requestedModelId: "gemini-3.8-flash", stateFormat: "google-thought-parts", stateFormatVersion: 1 },
+      continuationRoute: { transport: "future-native", normalizedEndpoint: "https://generativelanguage.googleapis.com/v1beta", providerConfigId: "google-pc", credentialId: "google-cred", requestedModelId: "gemini-3.8-flash", stateFormat: "google-thought-parts", stateFormatVersion: 1 },
     } as unknown as SessionSnapshot;
     const liveChat = vi.fn().mockResolvedValue({ content: "must not run", usage: {} });
     const repository = {
@@ -179,6 +183,53 @@ describe("durable session replay", () => {
     } as unknown as AppRepository;
     const replay = await createSessionReplay({ repository, session, events: [viewerEvent], liveChat });
     const request = { config, modelId: "gemini-3.8-flash", messages: [{ role: "user" as const, content: "step 1" }, { role: "assistant" as const, content: "Visible fixture answer." }, { role: "user" as const, content: "step 2" }], settings: { requested: {}, effective: {}, omitted: [] } };
+    expect((await replay.chat(request)).content).toBe("Visible fixture answer.");
+    expect((await replay.chat(request)).content).toBe("live");
+    const sent = liveChat.mock.calls[0][0];
+    expect(sent.messages[1].continuationState).toEqual(captured.state);
+  });
+
+  it("stops Resume before a provider call when the frozen Anthropic prefix policy is malformed", async () => {
+    const config: ProviderConfig = { id: "anthropic-pc", provider: "anthropic", label: "Anthropic", credentialId: "anthropic-cred", enabled: true, createdAt: "now", updatedAt: "now" };
+    const snapshot = {
+      schemaVersion: 4, providerConfigId: "anthropic-pc", credentialId: "anthropic-cred", provider: "anthropic", modelId: "claude-fixture", modelRoute: "anthropic:claude-fixture",
+      continuationRoute: { transport: "anthropic-native", normalizedEndpoint: "https://api.anthropic.com/v1", providerConfigId: "anthropic-pc", credentialId: "anthropic-cred", requestedModelId: "claude-fixture", stateFormat: "anthropic-thinking-blocks", stateFormatVersion: 1, prefixPolicy: "mutable" },
+    } as unknown as SessionSnapshot;
+    const liveChat = vi.fn().mockResolvedValue({ content: "must not run", usage: {} });
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue(snapshot),
+      updateRvSessionState: vi.fn().mockResolvedValue(undefined),
+      appendSessionEvent: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AppRepository;
+    const replay = await createSessionReplay({ repository, session, events: [], liveChat });
+    const request = { config, modelId: "claude-fixture", messages: [{ role: "user" as const, content: "step" }], settings: { requested: {}, effective: {}, omitted: [] } };
+
+    await expect(replay.chat(request)).rejects.toBeInstanceOf(SessionContinuationError);
+    expect(liveChat).not.toHaveBeenCalled();
+  });
+
+  it("rehydrates exact Anthropic thinking blocks before a live resumed call", async () => {
+    const config: ProviderConfig = { id: "anthropic-pc", provider: "anthropic", label: "Anthropic", credentialId: "anthropic-cred", enabled: true, createdAt: "now", updatedAt: "now" };
+    const blocks = structuredClone(anthropicFixture.continuationState.blocks);
+    const captured = captureAnthropicContinuationState({
+      config, requestedModelId: "claude-fixture", normalizedEndpoint: "https://api.anthropic.com/v1", blocks,
+    });
+    if (!captured.state) throw new Error("Expected Anthropic continuation state.");
+    const viewerEvent = event(1, "VIEWER_RESPONSE", "Visible fixture answer.", { continuationState: { status: "stored", format: captured.state.format, version: 1 } });
+    const snapshot = {
+      schemaVersion: 4, providerConfigId: "anthropic-pc", credentialId: "anthropic-cred", provider: "anthropic", modelId: "claude-fixture", modelRoute: "anthropic:claude-fixture",
+      continuationRoute: { transport: "anthropic-native", normalizedEndpoint: "https://api.anthropic.com/v1", providerConfigId: "anthropic-pc", credentialId: "anthropic-cred", requestedModelId: "claude-fixture", stateFormat: "anthropic-thinking-blocks", stateFormatVersion: 1, prefixPolicy: "append-only" },
+    } as unknown as SessionSnapshot;
+    const liveChat = vi.fn().mockResolvedValue({ content: "live", usage: {} });
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue(snapshot),
+      listSessionEvents: vi.fn().mockResolvedValue([viewerEvent]),
+      getSessionEventProviderState: vi.fn().mockResolvedValue(bindingFor(viewerEvent.id, captured.state)),
+      updateRvSessionState: vi.fn().mockResolvedValue(undefined),
+      appendSessionEvent: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AppRepository;
+    const replay = await createSessionReplay({ repository, session, events: [viewerEvent], liveChat });
+    const request = { config, modelId: "claude-fixture", messages: [{ role: "user" as const, content: "step 1" }, { role: "assistant" as const, content: "Visible fixture answer." }, { role: "user" as const, content: "step 2" }], settings: { requested: {}, effective: {}, omitted: [] } };
     expect((await replay.chat(request)).content).toBe("Visible fixture answer.");
     expect((await replay.chat(request)).content).toBe("live");
     const sent = liveChat.mock.calls[0][0];

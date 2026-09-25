@@ -163,6 +163,7 @@ struct ProviderMessage {
 enum ProviderContinuationState {
     OpenRouter(OpenRouterContinuationState),
     Google(GoogleContinuationState),
+    Anthropic(AnthropicContinuationState),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -183,6 +184,16 @@ struct GoogleContinuationState {
     format: String,
     replay_fingerprint: ProviderReplayFingerprint,
     parts: Vec<GoogleThoughtPart>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AnthropicContinuationState {
+    schema_version: u8,
+    transport: String,
+    format: String,
+    replay_fingerprint: ProviderReplayFingerprint,
+    blocks: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -290,11 +301,18 @@ fn scrub_debug_value(value: &mut Value, secret: &str, parent_key: Option<&str>) 
     match value {
         Value::Object(map) => {
             let google_thought_part = map.get("thought").and_then(Value::as_bool) == Some(true);
+            let anthropic_thinking_block = map.get("type").and_then(Value::as_str) == Some("thinking");
+            let anthropic_redacted_block = map.get("type").and_then(Value::as_str) == Some("redacted_thinking");
             for (key, child) in map.iter_mut() {
                 let lower = key.to_ascii_lowercase().replace(['-', '_'], "");
                 if matches!(lower.as_str(), "authorization" | "apikey" | "xapikey" | "xgoogapikey") {
                     *child = Value::String("[REDACTED]".to_string());
-                } else if lower == "reasoningdetails" || lower == "thoughtsignature" || (google_thought_part && lower == "text") {
+                } else if lower == "reasoningdetails"
+                    || lower == "thoughtsignature"
+                    || (google_thought_part && lower == "text")
+                    || (anthropic_thinking_block && matches!(lower.as_str(), "thinking" | "signature"))
+                    || (anthropic_redacted_block && lower == "data")
+                {
                     *child = Value::String("[CONTINUATION STATE REDACTED]".to_string());
                 } else {
                     scrub_debug_value(child, secret, Some(key));

@@ -5,7 +5,7 @@ import path from "node:path";
 const read = (relative: string) => fs.readFileSync(path.resolve(process.cwd(), relative), "utf8");
 
 describe("provider continuation workflow boundary", () => {
-  it("keeps C4 on schema 025, activates Google native, and does not start Anthropic continuation rollout", () => {
+  it("keeps C5 on schema 025 and activates Anthropic only through frozen append-only Session routes", () => {
     const migrations = read("src-tauri/src/migrations.rs");
     const sessionBridge = read("src/sessions/providerContinuation.ts");
     expect(migrations).toContain("version: 25");
@@ -13,7 +13,9 @@ describe("provider continuation workflow boundary", () => {
     expect(sessionBridge).toContain("captureOpenRouterContinuationState");
     expect(sessionBridge).toContain("captureGoogleContinuationState");
     expect(sessionBridge).toContain("google-thought-parts");
-    expect(sessionBridge).not.toContain("anthropic-thinking-blocks");
+    expect(sessionBridge).toContain("captureAnthropicContinuationState");
+    expect(sessionBridge).toContain("anthropic-thinking-blocks");
+    expect(sessionBridge).toContain('prefixPolicy: "append-only"');
   });
 
   it("freezes provider continuation identity in SessionSnapshot and reuses only that route on Resume", () => {
@@ -46,6 +48,24 @@ describe("provider continuation workflow boundary", () => {
     expect(bridge).toContain("Persisted provider continuation state is incompatible with the frozen session route");
   });
 
+  it("suppresses Anthropic signed state and stops before replay if output sanitization changes visible content", () => {
+    const bridge = read("src/sessions/providerContinuation.ts");
+    expect(bridge).toContain("requiresAnthropicContinuationStopAfterContentMutation");
+    expect(bridge).toContain('route?.transport === "anthropic-native" && originalContent !== persistedContent');
+    expect(bridge).toContain("ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON");
+    for (const relative of [
+      "src/sessions/controller.ts",
+      "src/sessions/rvLiteController.ts",
+      "src/sessions/customController.ts",
+      "src/sessions/telepathicController.ts",
+    ]) {
+      const source = read(relative);
+      expect(source, relative).toContain("requiresAnthropicContinuationStopAfterContentMutation");
+      expect(source, relative).toContain('code: "signed_turn_content_modified"');
+      expect(source, relative).toContain("ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON");
+    }
+  });
+
   it("keeps Training and Research on shared controllers rather than duplicating provider-state storage", () => {
     for (const relative of ["src/features/training/trainingExecution.ts", "src/research/engine.ts"]) {
       const source = read(relative);
@@ -53,6 +73,7 @@ describe("provider continuation workflow boundary", () => {
       expect(source, relative).not.toContain("getSessionEventProviderState");
       expect(source, relative).not.toContain("captureOpenRouterContinuationState");
       expect(source, relative).not.toContain("captureGoogleContinuationState");
+      expect(source, relative).not.toContain("captureAnthropicContinuationState");
     }
   });
 

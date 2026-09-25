@@ -161,21 +161,40 @@ pub(super) fn parse_anthropic_response(payload: Value, request_id: Option<String
         .filter_map(|block| block.get("thinking").and_then(Value::as_str))
         .collect::<Vec<_>>()
         .join("");
+    let has_continuation_state = blocks.iter().any(|block| {
+        matches!(block.get("type").and_then(Value::as_str), Some("thinking") | Some("redacted_thinking"))
+    });
+    if has_continuation_state {
+        let mut saw_text = false;
+        let mut text_blocks = 0usize;
+        for block in &blocks {
+            match block.get("type").and_then(Value::as_str) {
+                Some("thinking") | Some("redacted_thinking") if !saw_text => {}
+                Some("text") if block.as_object().is_some_and(|object| object.len() == 2)
+                    && block.get("text").and_then(Value::as_str).is_some() => {
+                    saw_text = true;
+                    text_blocks += 1;
+                }
+                _ => return Err("unsupported Anthropic continuation block layout".to_string()),
+            }
+        }
+        if text_blocks != 1 {
+            return Err("unsupported Anthropic continuation block layout".to_string());
+        }
+    }
     let reasoning_details = blocks
         .iter()
         .filter(|block| matches!(block.get("type").and_then(Value::as_str), Some("thinking") | Some("redacted_thinking")))
-        .map(|block| if block.get("type").and_then(Value::as_str) == Some("redacted_thinking") {
-            json!({ "type": "redacted_thinking", "redacted": true })
-        } else {
-            block.clone()
-        })
+        .cloned()
         .collect::<Vec<_>>();
     let normalized = normalize_reasoning_response(
-        raw_content,
+        raw_content.clone(),
         (!native_reasoning.trim().is_empty()).then_some(native_reasoning),
         Some("anthropic_thinking".to_string()),
     );
-    let content = normalized.content;
+    // A signed Anthropic assistant turn must be replayed with the same text block value.
+    // Do not apply tagged-content normalization once native continuation blocks exist.
+    let content = if has_continuation_state { raw_content } else { normalized.content };
     if content.trim().is_empty() {
         return Err(empty_response_error_with_reasoning(
             finish_reason.as_deref(),

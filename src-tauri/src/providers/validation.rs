@@ -1,3 +1,5 @@
+use serde_json::Value;
+
 use super::{ProviderChatRequest, ProviderContinuationState};
 
 pub(super) fn validate_request_id(value: &str) -> Result<(), String> {
@@ -36,6 +38,7 @@ pub(super) fn validate_chat_request(request: &ProviderChatRequest) -> Result<(),
                 (request.provider, state),
                 (super::ProviderKind::Openrouter, ProviderContinuationState::OpenRouter(_))
                     | (super::ProviderKind::Google, ProviderContinuationState::Google(_))
+                    | (super::ProviderKind::Anthropic, ProviderContinuationState::Anthropic(_))
             );
             if !supported {
                 return Err("continuation state belongs to a different or unsupported provider transport".to_string());
@@ -152,6 +155,23 @@ fn validate_openrouter_reasoning_detail(detail: &serde_json::Value) -> bool {
     }
 }
 
+
+fn validate_anthropic_thinking_block(value: &Value) -> bool {
+    let Some(object) = value.as_object() else { return false; };
+    match object.get("type").and_then(Value::as_str) {
+        Some("thinking") => {
+            object.len() == 3
+                && object.get("thinking").and_then(Value::as_str).is_some()
+                && object.get("signature").and_then(Value::as_str).is_some_and(|value| !value.is_empty())
+        }
+        Some("redacted_thinking") => {
+            object.len() == 2
+                && object.get("data").and_then(Value::as_str).is_some_and(|value| !value.is_empty())
+        }
+        _ => false,
+    }
+}
+
 fn canonical_base64(value: &str) -> bool {
     if value.is_empty() || !value.len().is_multiple_of(4) {
         return false;
@@ -263,6 +283,43 @@ pub(super) fn validate_continuation_bindings(request: &ProviderChatRequest, norm
                     return Err("Google continuation state contains no thought or thoughtSignature data".to_string());
                 }
                 serde_json::to_vec(state).map_err(|_| "invalid Google continuation state".to_string())?.len()
+            }
+            ProviderContinuationState::Anthropic(state) => {
+                if !matches!(request.provider, super::ProviderKind::Anthropic) {
+                    return Err("Anthropic continuation state cannot be replayed through this provider".to_string());
+                }
+                if state.schema_version != 1
+                    || state.transport != "anthropic-native"
+                    || state.format != "anthropic-thinking-blocks"
+                    || state.replay_fingerprint.transport != "anthropic-native"
+                    || state.replay_fingerprint.state_format != "anthropic-thinking-blocks"
+                    || state.replay_fingerprint.state_format_version != 1
+                {
+                    return Err("unsupported Anthropic continuation state".to_string());
+                }
+                if state.replay_fingerprint.normalized_endpoint != normalized_endpoint
+                    || state.replay_fingerprint.provider_config_id != request.provider_config_id
+                    || state.replay_fingerprint.credential_id != request.credential_id
+                    || state.replay_fingerprint.requested_model_id != request.model_id
+                {
+                    return Err("Anthropic continuation fingerprint is incompatible with this request".to_string());
+                }
+                if state.blocks.is_empty() || state.blocks.len() > MAX_BLOCKS {
+                    return Err("Anthropic continuation state has an invalid block count".to_string());
+                }
+                if !message.images.is_empty() {
+                    return Err("Anthropic continuation state cannot be replayed on an assistant message with images".to_string());
+                }
+                for block in &state.blocks {
+                    if !validate_anthropic_thinking_block(block) {
+                        return Err("invalid Anthropic thinking block".to_string());
+                    }
+                    let bytes = serde_json::to_vec(block).map_err(|_| "invalid Anthropic thinking block".to_string())?.len();
+                    if bytes > MAX_BLOCK_BYTES {
+                        return Err("Anthropic continuation state contains an oversized block".to_string());
+                    }
+                }
+                serde_json::to_vec(state).map_err(|_| "invalid Anthropic continuation state".to_string())?.len()
             }
         };
 

@@ -29,7 +29,7 @@ describe("GOOGLE-CONTINUITY-1 boundary", () => {
     expect(validation).toContain("Google continuation parts do not match the bound assistant message content");
   });
 
-  it("activates Google in Conversation and Session continuity without starting Anthropic runtime replay", () => {
+  it("keeps Google active in Conversation and Session while Anthropic remains Session-only under C5", () => {
     const chat = read("src/chat/engine.ts");
     const memory = read("src/chat/continuationMemory.ts");
     const session = read("src/sessions/providerContinuation.ts");
@@ -37,7 +37,10 @@ describe("GOOGLE-CONTINUITY-1 boundary", () => {
     expect(memory).toContain("validateGoogleReplayForRequest");
     expect(session).toContain("captureGoogleContinuationState");
     expect(session).toContain('transport: "google-native"');
-    expect(session).not.toContain("captureAnthropic");
+    expect(session).toContain("captureAnthropicContinuationState");
+    expect(session).toContain('prefixPolicy: "append-only"');
+    expect(chat).not.toContain("captureAnthropicContinuationState");
+    expect(memory).not.toContain("validateAnthropicReplayForRequest");
   });
 
   it("keeps schema 025 and ProviderMessage v1 free of tool/function parts", () => {

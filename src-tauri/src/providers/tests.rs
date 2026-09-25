@@ -19,7 +19,7 @@ use super::streaming::{
     MAX_ACCUMULATED_STREAM_DATA_BYTES, MAX_PENDING_SSE_EVENT_BYTES,
 };
 use super::transport::retry_after_value_ms_at;
-use super::validation::{validate_continuation_bindings, validate_request_id};
+use super::validation::{validate_chat_request, validate_continuation_bindings, validate_request_id};
 
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -163,6 +163,8 @@ fn debug_payload_redacts_secret_and_binary_data() {
         "reasoning_details": [{ "type": "reasoning.encrypted", "data": "opaque-private-state" }],
         "googleVisiblePart": { "text": "visible answer", "thoughtSignature": "private-google-signature" },
         "googleThoughtPart": { "text": "private hidden thought", "thought": true, "thoughtSignature": "private-thought-signature" },
+        "anthropicThinking": { "type": "thinking", "thinking": "private anthropic thinking", "signature": "private-anthropic-signature" },
+        "anthropicRedacted": { "type": "redacted_thinking", "data": "private-redacted-thinking" },
         "inlineData": { "data": "A".repeat(300) }
     });
     scrub_debug_value(&mut value, "sk-secret", None);
@@ -172,6 +174,9 @@ fn debug_payload_redacts_secret_and_binary_data() {
     assert!(!wire.contains("private-google-signature"));
     assert!(!wire.contains("private-thought-signature"));
     assert!(!wire.contains("private hidden thought"));
+    assert!(!wire.contains("private anthropic thinking"));
+    assert!(!wire.contains("private-anthropic-signature"));
+    assert!(!wire.contains("private-redacted-thinking"));
     assert!(wire.contains("visible answer"));
     assert!(wire.contains("CONTINUATION STATE REDACTED"));
     assert!(wire.contains("BINARY REDACTED"));
@@ -304,7 +309,9 @@ fn provider_message_deserializes_camel_case_continuation_state() {
         ProviderContinuationState::OpenRouter(state) => {
             assert_eq!(state.replay_fingerprint.actual_model_id.as_deref(), Some("provider-specific-model"));
         }
-        ProviderContinuationState::Google(_) => panic!("expected OpenRouter continuation state"),
+        ProviderContinuationState::Google(_) | ProviderContinuationState::Anthropic(_) => {
+            panic!("expected OpenRouter continuation state")
+        }
     }
 }
 
@@ -398,6 +405,85 @@ fn replays_google_thought_signature_on_the_exact_model_part() {
     assert_eq!(body.pointer("/contents/1/role"), Some(&json!("model")));
     assert_eq!(body.pointer("/contents/1/parts/0/text"), Some(&json!("Visible fixture answer.")));
     assert_eq!(body.pointer("/contents/1/parts/0/thoughtSignature"), Some(&json!(signature)));
+}
+
+#[test]
+fn replays_anthropic_thinking_blocks_before_the_exact_visible_text() {
+    let mut request = chat_request(ProviderKind::Anthropic, "claude-sonnet-5");
+    request.messages = vec![
+        ProviderMessage {
+            role: "user".to_string(),
+            content: "Fixture question.".to_string(),
+            images: vec![],
+            continuation_state: None,
+        },
+        ProviderMessage {
+            role: "assistant".to_string(),
+            content: "Visible fixture answer.".to_string(),
+            images: vec![],
+            continuation_state: Some(ProviderContinuationState::Anthropic(AnthropicContinuationState {
+                schema_version: 1,
+                transport: "anthropic-native".to_string(),
+                format: "anthropic-thinking-blocks".to_string(),
+                replay_fingerprint: ProviderReplayFingerprint {
+                    transport: "anthropic-native".to_string(),
+                    normalized_endpoint: "https://api.anthropic.com/v1".to_string(),
+                    provider_config_id: "provider-config".to_string(),
+                    credential_id: "credential".to_string(),
+                    requested_model_id: "claude-sonnet-5".to_string(),
+                    actual_model_id: None,
+                    state_format: "anthropic-thinking-blocks".to_string(),
+                    state_format_version: 1,
+                },
+                blocks: vec![
+                    json!({"type":"thinking","thinking":"Anonymized thinking summary.","signature":"fixture-anthropic-signature-001"}),
+                    json!({"type":"redacted_thinking","data":"RklYVFVSRV9SRURBQ1RFRF9USElOS0lORw=="}),
+                ],
+            })),
+        },
+        ProviderMessage {
+            role: "user".to_string(),
+            content: "Fixture follow-up.".to_string(),
+            images: vec![],
+            continuation_state: None,
+        },
+    ];
+    validate_chat_request(&request).unwrap();
+    validate_continuation_bindings(&request, "https://api.anthropic.com/v1").unwrap();
+    let (_, body) = build_anthropic_request(&request, "https://api.anthropic.com/v1");
+    assert_eq!(body.pointer("/messages/1/content/0/type"), Some(&json!("thinking")));
+    assert_eq!(body.pointer("/messages/1/content/0/signature"), Some(&json!("fixture-anthropic-signature-001")));
+    assert_eq!(body.pointer("/messages/1/content/1/type"), Some(&json!("redacted_thinking")));
+    assert_eq!(body.pointer("/messages/1/content/1/data"), Some(&json!("RklYVFVSRV9SRURBQ1RFRF9USElOS0lORw==")));
+    assert_eq!(body.pointer("/messages/1/content/2/type"), Some(&json!("text")));
+    assert_eq!(body.pointer("/messages/1/content/2/text"), Some(&json!("Visible fixture answer.")));
+}
+
+#[test]
+fn rejects_anthropic_continuation_state_when_fingerprint_changes() {
+    let mut request = chat_request(ProviderKind::Anthropic, "claude-sonnet-5");
+    request.messages = vec![ProviderMessage {
+        role: "assistant".to_string(),
+        content: "Visible fixture answer.".to_string(),
+        images: vec![],
+        continuation_state: Some(ProviderContinuationState::Anthropic(AnthropicContinuationState {
+            schema_version: 1,
+            transport: "anthropic-native".to_string(),
+            format: "anthropic-thinking-blocks".to_string(),
+            replay_fingerprint: ProviderReplayFingerprint {
+                transport: "anthropic-native".to_string(),
+                normalized_endpoint: "https://api.anthropic.com/v1".to_string(),
+                provider_config_id: "provider-config".to_string(),
+                credential_id: "other".to_string(),
+                requested_model_id: "claude-sonnet-5".to_string(),
+                actual_model_id: None,
+                state_format: "anthropic-thinking-blocks".to_string(),
+                state_format_version: 1,
+            },
+            blocks: vec![json!({"type":"thinking","thinking":"summary","signature":"sig"})],
+        })),
+    }];
+    assert!(validate_continuation_bindings(&request, "https://api.anthropic.com/v1").is_err());
 }
 
 #[test]
@@ -644,7 +730,50 @@ fn separates_anthropic_thinking_and_preserves_redacted_details() {
     assert_eq!(parsed.reasoning_content.as_deref(), Some("internal analysis"));
     assert_eq!(parsed.reasoning_source.as_deref(), Some("anthropic_thinking"));
     assert_eq!(parsed.reasoning_details.as_ref().map(Vec::len), Some(2));
-    assert!(parsed.reasoning_details.as_ref().unwrap()[1].get("data").is_none());
+    assert_eq!(parsed.reasoning_details.as_ref().unwrap()[1].get("data"), Some(&json!("opaque")));
+}
+
+#[test]
+fn preserves_anthropic_signed_visible_text_without_tagged_content_rewrite() {
+    let parsed = parse_anthropic_response(json!({
+        "model": "claude-reasoning",
+        "content": [
+            { "type": "thinking", "thinking": "internal analysis", "signature": "sig" },
+            { "type": "text", "text": "Literal <think>example</think> stays visible." }
+        ],
+        "stop_reason": "end_turn",
+        "usage": {}
+    }), None).unwrap();
+    assert_eq!(parsed.content, "Literal <think>example</think> stays visible.");
+}
+
+#[test]
+fn rejects_anthropic_signed_text_blocks_with_unapproved_fields() {
+    let error = parse_anthropic_response(json!({
+        "model": "claude-reasoning",
+        "content": [
+            { "type": "thinking", "thinking": "internal analysis", "signature": "sig" },
+            { "type": "text", "text": "answer", "future_field": "nope" }
+        ],
+        "stop_reason": "end_turn",
+        "usage": {}
+    }), None).unwrap_err();
+    assert!(error.contains("unsupported Anthropic continuation block layout"));
+}
+
+#[test]
+fn rejects_anthropic_thinking_layouts_that_cannot_be_replayed_exactly() {
+    let error = parse_anthropic_response(json!({
+        "model": "claude-reasoning",
+        "content": [
+            { "type": "thinking", "thinking": "internal analysis", "signature": "sig" },
+            { "type": "text", "text": "first" },
+            { "type": "text", "text": "second" }
+        ],
+        "stop_reason": "end_turn",
+        "usage": {}
+    }), None).unwrap_err();
+    assert!(error.contains("unsupported Anthropic continuation block layout"));
 }
 
 #[test]

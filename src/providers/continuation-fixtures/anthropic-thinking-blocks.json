@@ -1,8 +1,8 @@
 {
   "fixtureVersion": 1,
   "sourceKind": "official-documentation-derived-anonymized",
-  "sourceUrl": "https://platform.claude.com/docs/en/build-with-claude/extended-thinking",
-  "verifiedAt": "2026-09-22",
+  "sourceUrl": "https://platform.claude.com/docs/en/build-with-claude/preserved-thinking",
+  "verifiedAt": "2026-09-25",
   "providerResponse": {
     "model": "claude-fixture",
     "content": [

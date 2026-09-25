@@ -19,16 +19,17 @@ describe("provider continuation staged-delivery boundary", () => {
     expect(migrations).toContain('025_provider_continuation_state.sql');
   });
 
-  it("keeps OpenRouter and Google-native capture/replay active while provider debug payloads stay redacted", () => {
+  it("keeps OpenRouter, Google-native, and Session-safe Anthropic capture/replay active while provider debug payloads stay redacted", () => {
     const memory = read("src/chat/continuationMemory.ts");
     const rustProviders = read("src-tauri/src/providers.rs");
     const builders = read("src-tauri/src/providers/request_builders.rs");
     expect(memory).toContain("ConversationContinuationBreakError");
     expect(rustProviders).toContain("OpenRouterContinuationState");
     expect(rustProviders).toContain("GoogleContinuationState");
+    expect(rustProviders).toContain("AnthropicContinuationState");
     expect(builders).toContain('"reasoning_details"');
     expect(builders).toContain('"thoughtSignature"');
-    expect(builders).not.toContain("anthropic-thinking-blocks");
+    expect(builders).toContain("ProviderContinuationState::Anthropic");
     expect(rustProviders).toContain("[CONTINUATION STATE REDACTED]");
   });
 

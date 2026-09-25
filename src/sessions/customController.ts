@@ -23,7 +23,7 @@ import {
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
-import { appendAssistantMessageWithContinuation, captureSessionContinuationRoute, persistSessionAssistantResponse, SessionContinuationError, validateSessionContinuationBudget } from "./providerContinuation";
+import { ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON, appendAssistantMessageWithContinuation, captureSessionContinuationRoute, persistSessionAssistantResponse, requiresAnthropicContinuationStopAfterContentMutation, SessionContinuationError, validateSessionContinuationBudget } from "./providerContinuation";
 
 type CustomSessionRepository = Pick<
   AppRepository,
@@ -210,6 +210,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
     const rawResponseContent = response.content;
     const sanitized = sanitizeRepetitiveOutput(rawResponseContent, input.sessionLanguage);
     response = { ...response, content: sanitized.content };
+    const stopAfterSanitizedAnthropicTurn = requiresAnthropicContinuationStopAfterContentMutation(continuationRoute, rawResponseContent, response.content);
     if (sanitized.truncated) {
       await input.repository.appendSessionEvent(sessionId, {
         eventType: "OUTPUT_TRUNCATED_LOOP",
@@ -220,7 +221,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
     }
     let continuationState;
     try {
-      ({ state: continuationState } = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { step, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs } } }));
+      ({ state: continuationState } = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { step, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } }));
     } catch (cause) {
       if (cause instanceof SessionContinuationError) return stopRun(`AUTO-STOP: ${cause.message}`);
       throw cause;
@@ -229,6 +230,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
     transcript = appendStepTranscript(transcript, step, prompt, response.content, input.sessionLanguage);
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, step, undefined, metrics, startedAtMs);
+    if (stopAfterSanitizedAnthropicTurn) return stopRun(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
     if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) return stopRun("AUTO-STOP: configured session cost limit exceeded");
   }
 

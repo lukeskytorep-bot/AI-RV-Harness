@@ -1,4 +1,5 @@
 import { validateContinuationRequestBudget, type ProviderContinuationState } from "../providers/continuationContract";
+import { captureAnthropicContinuationState, validateAnthropicReplayForRequest } from "../providers/anthropicContinuation";
 import { captureGoogleContinuationState, validateGoogleReplayForRequest } from "../providers/googleContinuation";
 import { captureOpenRouterContinuationState, validateOpenRouterReplayForRequest } from "../providers/openRouterContinuation";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
@@ -7,6 +8,17 @@ import type { SessionContinuationRouteSnapshot, SessionEventInput, SessionEventR
 
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1";
 const GOOGLE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
+const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1";
+
+export const ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON = "AUTO-STOP: Anthropic continuation cannot safely replay a signed assistant turn after output sanitization modified its visible text.";
+
+export function requiresAnthropicContinuationStopAfterContentMutation(
+  route: SessionContinuationRouteSnapshot | undefined,
+  originalContent: string,
+  persistedContent: string,
+): boolean {
+  return route?.transport === "anthropic-native" && originalContent !== persistedContent;
+}
 
 export class SessionContinuationError extends Error {
   constructor(message: string) {
@@ -23,13 +35,13 @@ function requireSupportedSessionContinuationRoute(
   route: SessionContinuationRouteSnapshot,
 ): SessionContinuationRouteSnapshot {
   const runtimeRoute = route as unknown as RuntimeSessionContinuationRouteSnapshot;
-  if (runtimeRoute.transport === "openrouter" || runtimeRoute.transport === "google-native") return route;
+  if (runtimeRoute.transport === "openrouter" || runtimeRoute.transport === "google-native" || runtimeRoute.transport === "anthropic-native") return route;
   throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
 }
 
 export function captureSessionContinuationRoute(config: ProviderConfig, model: ProviderModel): SessionContinuationRouteSnapshot | undefined {
   if (model.providerConfigId !== config.id || model.provider !== config.provider) {
-    if (config.provider === "openrouter" || config.provider === "google") throw new SessionContinuationError("Viewer model/provider route mismatch while freezing continuation state.");
+    if (config.provider === "openrouter" || config.provider === "google" || config.provider === "anthropic") throw new SessionContinuationError("Viewer model/provider route mismatch while freezing continuation state.");
     return undefined;
   }
   if (config.provider === "openrouter") {
@@ -52,6 +64,18 @@ export function captureSessionContinuationRoute(config: ProviderConfig, model: P
       requestedModelId: model.modelId,
       stateFormat: "google-thought-parts",
       stateFormatVersion: 1,
+    };
+  }
+  if (config.provider === "anthropic") {
+    return {
+      transport: "anthropic-native",
+      normalizedEndpoint: ANTHROPIC_ENDPOINT,
+      providerConfigId: config.id,
+      credentialId: config.credentialId,
+      requestedModelId: model.modelId,
+      stateFormat: "anthropic-thinking-blocks",
+      stateFormatVersion: 1,
+      prefixPolicy: "append-only",
     };
   }
   return undefined;
@@ -78,6 +102,11 @@ export function validateFrozenSessionContinuationRequest(
     transportMismatch = config.provider !== "google"
       || route.normalizedEndpoint !== GOOGLE_ENDPOINT
       || route.stateFormat !== "google-thought-parts";
+  } else if (route.transport === "anthropic-native") {
+    transportMismatch = config.provider !== "anthropic"
+      || route.normalizedEndpoint !== ANTHROPIC_ENDPOINT
+      || route.stateFormat !== "anthropic-thinking-blocks"
+      || route.prefixPolicy !== "append-only";
   } else {
     throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
   }
@@ -99,6 +128,8 @@ export function validateFrozenSessionContinuationRoute(
     expectedProvider = "openrouter";
   } else if (route.transport === "google-native") {
     expectedProvider = "google";
+  } else if (route.transport === "anthropic-native") {
+    expectedProvider = "anthropic";
   } else {
     throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
   }
@@ -136,6 +167,14 @@ export function captureSessionContinuationState(input: {
       normalizedEndpoint: route.normalizedEndpoint,
       parts: input.response.reasoningDetails,
       visibleContent: input.response.content,
+    });
+  }
+  if (route.transport === "anthropic-native") {
+    return captureAnthropicContinuationState({
+      config: input.providerConfig,
+      requestedModelId: input.model.modelId,
+      normalizedEndpoint: route.normalizedEndpoint,
+      blocks: input.response.reasoningDetails,
     });
   }
   throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
@@ -197,6 +236,11 @@ function replayStateForRoute(input: {
   }
   if (route.transport === "google-native") {
     return validateGoogleReplayForRequest({
+      state: input.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: route.normalizedEndpoint,
+    });
+  }
+  if (route.transport === "anthropic-native") {
+    return validateAnthropicReplayForRequest({
       state: input.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: route.normalizedEndpoint,
     });
   }

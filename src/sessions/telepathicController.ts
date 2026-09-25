@@ -37,7 +37,7 @@ import { politeRevealTransition, politeSessionGreeting } from "./courtesy";
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
 import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
-import { appendAssistantMessageWithContinuation, captureSessionContinuationRoute, hydrateSessionMessageContinuation, persistSessionAssistantResponse, SessionContinuationError, validateFrozenSessionContinuationRoute, validateSessionContinuationBudget } from "./providerContinuation";
+import { ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON, appendAssistantMessageWithContinuation, captureSessionContinuationRoute, hydrateSessionMessageContinuation, persistSessionAssistantResponse, requiresAnthropicContinuationStopAfterContentMutation, SessionContinuationError, validateFrozenSessionContinuationRoute, validateSessionContinuationBudget } from "./providerContinuation";
 
 type TelepathicSessionRepository = Pick<
   AppRepository,
@@ -266,6 +266,8 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     notify(input, sessionId, sessionCode, "Interrupted", transcript, undefined, metrics, startedAtMs, reason);
     return { sessionId, sessionCode, state: "Interrupted", transcript, stopReason: reason };
   };
+  let pendingAnthropicSanitizedTurnStop = false;
+  let deferredManualAnthropicSanitizedTurnStop = false;
 
   const viewerCall = async (prompt: string, metadata: Record<string, unknown>): Promise<ProviderChatResponse> => {
     if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
@@ -307,12 +309,14 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     const raw = response.content;
     const sanitized = sanitizeRepetitiveOutput(raw, input.sessionLanguage);
     response = { ...response, content: sanitized.content };
+    const stopAfterSanitizedAnthropicTurn = requiresAnthropicContinuationStopAfterContentMutation(continuationRoute, raw, response.content);
     if (sanitized.truncated) {
       await input.repository.appendSessionEvent(sessionId, { eventType: "OUTPUT_TRUNCATED_LOOP", role: "controller", content: sanitized.finding?.fragment, metadata: { ...metadata, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(raw) } });
     }
     try {
-      const persisted = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs } } });
+      const persisted = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } });
       appendAssistantMessageWithContinuation(messages, response.content, persisted.state);
+      if (stopAfterSanitizedAnthropicTurn) pendingAnthropicSanitizedTurnStop = true;
     } catch (cause) {
       if (cause instanceof SessionContinuationError) throw new TelepathicRunStop(`AUTO-STOP: ${cause.message}`);
       throw cause;
@@ -325,6 +329,10 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     transcript = nextTranscript;
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, step, metrics, startedAtMs, undefined, awaitingStep8Questions, questionCount);
+    if (pendingAnthropicSanitizedTurnStop) {
+      pendingAnthropicSanitizedTurnStop = false;
+      throw new TelepathicRunStop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
+    }
     if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) {
       throw new TelepathicRunStop("AUTO-STOP: configured session cost limit exceeded");
     }
@@ -461,6 +469,12 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
               try {
                 questionCount += 1;
                 await runQuestion(question, questionCount, "operator");
+              } catch (cause) {
+                if (cause instanceof TelepathicRunStop && cause.message === ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON) {
+                  deferredManualAnthropicSanitizedTurnStop = true;
+                  finishRequested = true;
+                }
+                throw cause;
               } finally {
                 inFlight = false;
                 if (finishRequested) finish();
@@ -476,6 +490,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
           await waiting;
           input.signal?.removeEventListener("abort", abort);
           input.onManualQuestionStage?.(null);
+          if (deferredManualAnthropicSanitizedTurnStop) throw new TelepathicRunStop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
           if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
           await input.repository.appendSessionEvent(sessionId, { eventType: "TELEPATHIC_QUESTIONS_COMPLETED", role: "controller", metadata: { step: 8, questionCount } });
           notify(input, sessionId, sessionCode, "BlindRunning", transcript, 8, metrics, startedAtMs, undefined, false, questionCount);
@@ -564,10 +579,16 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
     notifyResume("Interrupted", undefined, reason);
     return { sessionId: input.session.id, sessionCode: input.session.sessionCode, state: "Interrupted", transcript, stopReason: reason };
   };
+  let pendingAnthropicSanitizedTurnStop = false;
+  let deferredManualAnthropicSanitizedTurnStop = false;
   const persist = async (nextTranscript: string, phase: number, awaitingQuestions = false): Promise<void> => {
     transcript = nextTranscript;
     await input.repository.updatePreRevealTranscript(input.session.id, transcript);
     notifyResume("BlindRunning", phase, undefined, awaitingQuestions);
+    if (pendingAnthropicSanitizedTurnStop) {
+      pendingAnthropicSanitizedTurnStop = false;
+      throw new TelepathicRunStop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
+    }
     if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) {
       throw new TelepathicRunStop("AUTO-STOP: configured session cost limit exceeded");
     }
@@ -612,12 +633,14 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
     const raw = response.content;
     const sanitized = sanitizeRepetitiveOutput(raw, snapshot.sessionLanguage);
     response = { ...response, content: sanitized.content };
+    const stopAfterSanitizedAnthropicTurn = requiresAnthropicContinuationStopAfterContentMutation(snapshot.continuationRoute, raw, response.content);
     if (sanitized.truncated) {
       await input.repository.appendSessionEvent(input.session.id, { eventType: "OUTPUT_TRUNCATED_LOOP", role: "controller", content: sanitized.finding?.fragment, metadata: { ...metadata, resumed: true, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(raw) } });
     }
     try {
-      const persisted = await persistSessionAssistantResponse({ repository: input.repository, sessionId: input.session.id, response, providerConfig: input.providerConfig, model: input.model, route: snapshot.continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, resumed: true, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs } } });
+      const persisted = await persistSessionAssistantResponse({ repository: input.repository, sessionId: input.session.id, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : snapshot.continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, resumed: true, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } });
       appendAssistantMessageWithContinuation(messages, response.content, persisted.state);
+      if (stopAfterSanitizedAnthropicTurn) pendingAnthropicSanitizedTurnStop = true;
     } catch (cause) {
       if (cause instanceof SessionContinuationError) throw new TelepathicRunStop(`AUTO-STOP: ${cause.message}`);
       throw cause;
@@ -655,8 +678,15 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
           if (finished) throw new Error("The Step 8 question stage is already closed.");
           if (inFlight) throw new Error("Wait for the current answer before asking another question.");
           inFlight = true;
-          try { await runQuestion(question); }
-          finally {
+          try {
+            await runQuestion(question);
+          } catch (cause) {
+            if (cause instanceof TelepathicRunStop && cause.message === ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON) {
+              deferredManualAnthropicSanitizedTurnStop = true;
+              finishRequested = true;
+            }
+            throw cause;
+          } finally {
             inFlight = false;
             if (finishRequested) finish();
           }
@@ -670,6 +700,7 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
       await waiting;
       input.signal?.removeEventListener("abort", abort);
       input.onManualQuestionStage(null);
+      if (deferredManualAnthropicSanitizedTurnStop) throw new TelepathicRunStop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
       if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
       await input.repository.appendSessionEvent(input.session.id, { eventType: "TELEPATHIC_QUESTIONS_COMPLETED", role: "controller", metadata: { step: 8, questionCount, resumed: true } });
     }
