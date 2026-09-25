@@ -399,6 +399,7 @@ impl DatabaseWriteOperation {
             Self::SessionsUpdateRvSessions06 => 2,
             Self::SessionsInsertTargetClarifications01 => 4,
             Self::SettingsModelsInsertAppSettings01 => 3,
+            Self::SettingsModelsDeleteAppSettings01 => 1,
             Self::SettingsModelsInsertCredentialsMetadata01 => 5,
             Self::SettingsModelsInsertProviderConfigs01 => 7,
             Self::SettingsModelsUpdateProviderConfigs01 => 3,
