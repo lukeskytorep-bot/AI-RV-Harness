@@ -9,8 +9,12 @@ import type { InterfaceLanguage } from "../types";
 import { buildEffectiveMonitorPrompt } from "../resources/systemPrompts";
 import { politeRevealTransition } from "./courtesy";
 import { analyticalOutputBudget, callWithAnalyticalOutputRecovery } from "../providers/outputRecovery";
+import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
+import { hydrateSessionMessageContinuation, validateFrozenSessionContinuationRoute, validateSessionContinuationBudget } from "./providerContinuation";
 
-type PostRevealRepository = Pick<AppRepository, "appendPostRevealTurn" | "getReveal" | "getSessionSnapshot" | "getViewerEvidence" | "listTargetClarifications">;
+type PostRevealContinuationRepository = Pick<AppRepository, "appendPostRevealTurnWithProviderState" | "listSessionEvents" | "getSessionEventProviderState">;
+type PostRevealRepository = Pick<AppRepository, "appendPostRevealTurn" | "getReveal" | "getSessionSnapshot" | "getViewerEvidence" | "listTargetClarifications">
+  & Partial<PostRevealContinuationRepository>;
 
 export async function sendPostRevealTurn(input: {
   repository: PostRevealRepository;
@@ -38,6 +42,15 @@ export async function sendPostRevealTurn(input: {
   if (snapshot.providerConfigId !== input.providerConfig.id || snapshot.modelId !== input.model.modelId) {
     throw new Error("Post-reveal discussion must use the Viewer route captured in the Session Snapshot.");
   }
+  const continuationRoute = validateFrozenSessionContinuationRoute(snapshot, input.providerConfig, input.model);
+  if (continuationRoute && (!input.repository.listSessionEvents || !input.repository.getSessionEventProviderState || !input.repository.appendPostRevealTurnWithProviderState)) {
+    throw new Error("The repository cannot restore the frozen OpenRouter continuation state required by this post-Reveal conversation.");
+  }
+  const continuationRepository: PostRevealContinuationRepository | undefined = continuationRoute ? {
+    listSessionEvents: input.repository.listSessionEvents!,
+    getSessionEventProviderState: input.repository.getSessionEventProviderState!,
+    appendPostRevealTurnWithProviderState: input.repository.appendPostRevealTurnWithProviderState!,
+  } : undefined;
 
   const imageArtifacts = (reveal.artifactManifest ?? []).filter((artifact) => artifact.mimeType.startsWith("image/"));
   if (imageArtifacts.length && (!input.model.capabilities.supportsVision || !input.model.capabilities.inputModalities.includes("image"))) {
@@ -56,11 +69,32 @@ export async function sendPostRevealTurn(input: {
   const messages: ProviderMessage[] = [
     { role: "system", content: system },
     { role: "user", content: revealText, ...(images.length ? { images } : {}) },
-    ...parsePostRevealTranscript(input.existingTranscript).map((turn) => turn.role === "monitor"
-      ? ({ role: "user", content: `[AI MONITOR POST-REVEAL REVIEW]\n${turn.content}` } satisfies ProviderMessage)
-      : ({ role: turn.role, content: turn.content } satisfies ProviderMessage)),
-    { role: "user", content },
   ];
+  const postRevealAssistantEvents = continuationRepository
+    ? (await continuationRepository.listSessionEvents(input.sessionId))
+      .filter((event) => event.eventType === "POST_REVEAL_ASSISTANT" && event.content?.trim())
+      .sort((left, right) => left.sequenceNumber - right.sequenceNumber)
+    : [];
+  let assistantIndex = 0;
+  for (const turn of parsePostRevealTranscript(input.existingTranscript)) {
+    if (turn.role === "monitor") {
+      messages.push({ role: "user", content: `[AI MONITOR POST-REVEAL REVIEW]\n${turn.content}` });
+    } else if (turn.role === "assistant") {
+      const event = postRevealAssistantEvents[assistantIndex++];
+      const message: ProviderMessage = { role: "assistant", content: turn.content };
+      if (continuationRoute && !event) {
+        throw new Error("Post-Reveal transcript contains an assistant turn without a matching persisted Session event.");
+      }
+      messages.push(event ? await hydrateSessionMessageContinuation({ repository: continuationRepository!, snapshot, config: input.providerConfig, model: input.model, event, message }) : message);
+    } else {
+      messages.push({ role: "user", content: turn.content });
+    }
+  }
+  if (continuationRoute && assistantIndex !== postRevealAssistantEvents.length) {
+    throw new Error("Post-Reveal Session events do not match the persisted assistant transcript turns.");
+  }
+  messages.push({ role: "user", content });
+  validateSessionContinuationBudget(messages);
   analyticalOutputBudget({ model: input.model, messages, operationKind: "post_reveal_viewer", attempt: 0 });
   await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
   const response = (await callWithAnalyticalOutputRecovery({
@@ -81,11 +115,25 @@ export async function sendPostRevealTurn(input: {
       attempt: input.chat,
     }),
   })).response;
-  const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "assistant", response.content);
+  let transcript: string;
+  if (continuationRoute && input.providerConfig.provider === "openrouter") {
+    const captured = captureOpenRouterContinuationState({ config: input.providerConfig, requestedModelId: input.model.modelId, normalizedEndpoint: continuationRoute.normalizedEndpoint, reasoningDetails: response.reasoningDetails });
+    if (captured.issue) {
+      transcript = await input.repository.appendPostRevealTurn(input.sessionId, "assistant", response.content, {
+        continuationState: { status: "invalid", code: captured.issue.code },
+      });
+      throw new Error(`OpenRouter continuation state was returned during post-Reveal review but failed validation: ${captured.issue.message}`);
+    }
+    transcript = captured.state
+      ? await continuationRepository!.appendPostRevealTurnWithProviderState(input.sessionId, response.content, captured.state)
+      : await input.repository.appendPostRevealTurn(input.sessionId, "assistant", response.content);
+  } else {
+    transcript = await input.repository.appendPostRevealTurn(input.sessionId, "assistant", response.content);
+  }
   return { transcript, response };
 }
 
-type MonitorPostRevealRepository = Pick<AppRepository, "appendPostRevealTurn" | "getReveal" | "getSessionSnapshot" | "getViewerEvidence" | "listTargetClarifications" | "listMonitorRuns" | "listMonitorInterventions">;
+type MonitorPostRevealRepository = PostRevealRepository & Pick<AppRepository, "listMonitorRuns" | "listMonitorInterventions">;
 
 export async function runAutomaticPostRevealReview(input: {
   repository: MonitorPostRevealRepository;

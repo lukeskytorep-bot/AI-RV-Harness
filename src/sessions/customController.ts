@@ -11,7 +11,7 @@ import type { TargetRecord } from "../targets/types";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
 import { sha256Text, type SessionProgress } from "./controller";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics } from "./metrics";
-import type { RevealInput, RvSession, RvSessionState, SessionSnapshot } from "./types";
+import type { RevealInput, RvSession, RvSessionState, SessionContinuationRouteSnapshot, SessionSnapshot } from "./types";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
 import {
@@ -23,6 +23,7 @@ import {
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
+import { appendAssistantMessageWithContinuation, captureSessionContinuationRoute, persistSessionAssistantResponse, SessionContinuationError, validateSessionContinuationBudget } from "./providerContinuation";
 
 type CustomSessionRepository = Pick<
   AppRepository,
@@ -34,7 +35,7 @@ type CustomSessionRepository = Pick<
   | "sealPreReveal"
   | "acceptReveal"
   | "recordTargetUsage"
->;
+> & Partial<Pick<AppRepository, "appendSessionEventWithProviderState">>;
 
 export interface AutomaticCustomRunInput {
   repository: CustomSessionRepository;
@@ -50,6 +51,7 @@ export interface AutomaticCustomRunInput {
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
   viewerNotes?: ViewerNotesSessionSnapshot;
   resumeSession?: RvSession;
+  resumeContinuationRoute?: SessionContinuationRouteSnapshot;
   automaticTarget?: TargetRecord;
   capturedAutomaticReveal?: RevealInput;
   signal?: AbortSignal;
@@ -76,6 +78,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   const effectiveSettings = resolveGenerationSettings(input.model.capabilities, input.requestedSettings);
   if (effectiveSettings.omitted.length) throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
   const costGuard = new SessionCostGuard(input.maxSessionCostUsd);
+  const continuationRoute = input.resumeSession ? input.resumeContinuationRoute : captureSessionContinuationRoute(input.providerConfig, input.model);
   costGuard.validateModel(input.model);
   const automaticReveal = input.automaticTarget
     ? input.capturedAutomaticReveal ?? await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage)
@@ -107,7 +110,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
 
   const fullProtocol = JSON.stringify({ systemPrompt: input.protocol.systemPrompt ?? "", steps: input.protocol.steps });
   const snapshot: SessionSnapshot = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     sessionId,
     sessionCode,
     profileId: input.profileId,
@@ -122,6 +125,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
     provider: input.providerConfig.provider,
     modelId: input.model.modelId,
     modelRoute: input.model.route,
+    ...(continuationRoute ? { continuationRoute } : {}),
     capabilitySnapshot: JSON.parse(JSON.stringify(input.model.capabilities)) as Record<string, unknown>,
     capabilityCapturedAt: input.model.capabilities.capturedAt,
     generationSettings: effectiveSettings,
@@ -177,6 +181,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
       if (input.signal?.aborted) return stopRun("USER STOP");
       let costAuthorization;
       try {
+        validateSessionContinuationBudget(messages);
         costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
       } catch (cause) {
         if (cause instanceof CostGuardStop) return stopRun(cause.message);
@@ -213,9 +218,15 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
         metadata: { step, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(rawResponseContent) },
       });
     }
-    messages.push({ role: "assistant", content: response.content });
+    let continuationState;
+    try {
+      ({ state: continuationState } = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { step, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs } } }));
+    } catch (cause) {
+      if (cause instanceof SessionContinuationError) return stopRun(`AUTO-STOP: ${cause.message}`);
+      throw cause;
+    }
+    appendAssistantMessageWithContinuation(messages, response.content, continuationState);
     transcript = appendStepTranscript(transcript, step, prompt, response.content, input.sessionLanguage);
-    await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { step, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs } });
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, step, undefined, metrics, startedAtMs);
     if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) return stopRun("AUTO-STOP: configured session cost limit exceeded");

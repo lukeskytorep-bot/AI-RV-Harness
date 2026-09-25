@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ProviderContinuationState } from "../providers/continuationContract";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getRvLite } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import type { TargetRecord } from "../targets/types";
 import { runAutomaticRvLiteSession } from "./rvLiteController";
-import type { SessionSnapshot } from "./types";
+import type { SessionEventInput, SessionSnapshot } from "./types";
 
 const config: ProviderConfig = { id: "p", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
 const model: ProviderModel = {
@@ -18,12 +19,13 @@ function repository(log: string[], snapshots: SessionSnapshot[] = []) {
     createRvSession: async () => ({} as never),
     updateRvSessionState: async (_id: string, state: string) => { log.push(`state:${state}`); },
     appendSessionEvent: async (_id: string, event: { eventType: string }) => { log.push(event.eventType); },
+    appendSessionEventWithProviderState: async (_id: string, event: { eventType: string }) => ({ ...event, id: "event", sessionId: "session", sequenceNumber: 1, createdAt: "now" } as never),
     updatePreRevealTranscript: async () => { log.push("saved"); },
     saveSessionSnapshot: async (_id: string, snapshot: SessionSnapshot) => { snapshots.push(snapshot); },
     sealPreReveal: async () => { log.push("sealed"); },
     acceptReveal: async () => { log.push("reveal"); },
     recordTargetUsage: async () => undefined,
-  } as unknown as Pick<AppRepository, "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage">;
+  } as unknown as Pick<AppRepository, "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "appendSessionEventWithProviderState" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage">;
 }
 
 describe("automatic RV Lite controller", () => {
@@ -60,6 +62,41 @@ describe("automatic RV Lite controller", () => {
     expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity", "locked-viewer-base-vocabulary"]);
     expect(snapshots[0].rvSystemPrompt?.fieldGuide).toMatchObject({ versionId: "fg-v1", content: "FIELD GUIDE", capacityTokens: 2048 });
     expect(snapshots[0].automaticRevealHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("persists OpenRouter continuation state on the exact response event and replays it on later Viewer calls", async () => {
+    const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
+    const repo = repository(log, snapshots);
+    const persisted: Array<{ event: { eventType: string; content?: string; metadata?: Record<string, unknown> }; state: unknown }> = [];
+    repo.appendSessionEventWithProviderState = vi.fn(async (_sessionId: string, event: SessionEventInput, state: ProviderContinuationState) => {
+      persisted.push({ event, state });
+      return { ...event, id: `event-${persisted.length}`, sessionId: "session", sequenceNumber: persisted.length, createdAt: "now" };
+    });
+    let calls = 0;
+    await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "profile", providerConfig: config, model,
+      protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+      chat: async ({ messages }) => {
+        calls += 1;
+        if (calls > 1) {
+          const previousAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+          expect(previousAssistant?.continuationState).toBeDefined();
+          expect(previousAssistant?.continuationState?.transport).toBe("openrouter");
+        }
+        return {
+          content: `Evidence ${calls}`,
+          reasoningDetails: [{ type: "reasoning.encrypted", data: "RklYVFVSRQ==", id: `r${calls}`, format: "openai-responses-v1", index: 0 }],
+          usage: {},
+        };
+      },
+    });
+    expect(calls).toBe(4);
+    expect(persisted).toHaveLength(4);
+    expect(persisted.every(({ event }) => event.eventType === "VIEWER_RESPONSE")).toBe(true);
+    expect(snapshots[0].continuationRoute).toMatchObject({
+      transport: "openrouter", providerConfigId: "p", credentialId: "c", requestedModelId: "m",
+    });
   });
 
   it("preserves Research ownership, assignment linkage and locked condition instruction", async () => {

@@ -70,8 +70,18 @@ export interface LockedPromptBlockSnapshot {
   fullContent: string;
 }
 
+export interface SessionContinuationRouteSnapshot {
+  transport: "openrouter";
+  normalizedEndpoint: string;
+  providerConfigId: string;
+  credentialId: string;
+  requestedModelId: string;
+  stateFormat: "openrouter-reasoning-details";
+  stateFormatVersion: 1;
+}
+
 export interface SessionSnapshot {
-  schemaVersion: 1 | 2 | 3;
+  schemaVersion: 1 | 2 | 3 | 4;
   sessionId: string;
   sessionCode: string;
   profileId: string;
@@ -86,6 +96,7 @@ export interface SessionSnapshot {
   provider: ProviderKind;
   modelId: string;
   modelRoute: string;
+  continuationRoute?: SessionContinuationRouteSnapshot;
   capabilitySnapshot: Record<string, unknown>;
   capabilityCapturedAt: string;
   generationSettings: EffectiveGenerationSettings;

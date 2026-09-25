@@ -394,7 +394,8 @@ export class SqliteRepository implements AppRepository {
   getSessionEventProviderState: AppRepository["getSessionEventProviderState"] = (sessionEventId) => this.sessionsRepository.getSessionEventProviderState(sessionEventId);
   listSessionEvents: AppRepository["listSessionEvents"] = (sessionId) => this.sessionsRepository.listSessionEvents(sessionId);
   updatePreRevealTranscript: AppRepository["updatePreRevealTranscript"] = (sessionId, transcript) => this.sessionsRepository.updatePreRevealTranscript(sessionId, transcript);
-  appendPostRevealTurn: AppRepository["appendPostRevealTurn"] = (sessionId, role, content) => this.sessionsRepository.appendPostRevealTurn(sessionId, role, content);
+  appendPostRevealTurn: AppRepository["appendPostRevealTurn"] = (sessionId, role, content, metadata) => this.sessionsRepository.appendPostRevealTurn(sessionId, role, content, metadata);
+  appendPostRevealTurnWithProviderState: AppRepository["appendPostRevealTurnWithProviderState"] = (sessionId, content, state) => this.sessionsRepository.appendPostRevealTurnWithProviderState(sessionId, content, state);
   saveSessionSnapshot: AppRepository["saveSessionSnapshot"] = (sessionId, snapshot, hash) => this.sessionsRepository.saveSessionSnapshot(sessionId, snapshot, hash);
   getSessionSnapshot: AppRepository["getSessionSnapshot"] = (sessionId) => this.sessionsRepository.getSessionSnapshot(sessionId);
   sealPreReveal: AppRepository["sealPreReveal"] = (sessionId, transcript, hash) => this.sessionsRepository.sealPreReveal(sessionId, transcript, hash);

@@ -115,7 +115,8 @@ export interface AppRepository {
   getSessionEventProviderState(sessionEventId: string): Promise<ProviderContinuationStateBinding | null>;
   listSessionEvents(sessionId: string): Promise<SessionEventRecord[]>;
   updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void>;
-  appendPostRevealTurn(sessionId: string, role: "user" | "assistant" | "monitor", content: string): Promise<string>;
+  appendPostRevealTurn(sessionId: string, role: "user" | "assistant" | "monitor", content: string, metadata?: Record<string, unknown>): Promise<string>;
+  appendPostRevealTurnWithProviderState(sessionId: string, content: string, state: ProviderContinuationState): Promise<string>;
   saveSessionSnapshot(sessionId: string, snapshot: SessionSnapshot, hash: string): Promise<void>;
   getSessionSnapshot(sessionId: string): Promise<SessionSnapshot | null>;
   sealPreReveal(sessionId: string, transcript: string, hash: string): Promise<void>;

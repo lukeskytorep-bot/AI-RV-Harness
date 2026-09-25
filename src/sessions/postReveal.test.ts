@@ -7,8 +7,9 @@ vi.mock("../providers/native", () => ({
   providerChatAttempt: vi.fn(),
 }));
 import { automaticPostRevealReviewRequest, findCompletedAutomaticViewerReview, findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview, sendPostRevealTurn, supportedAutomaticPostRevealReviewRequests } from "./postReveal";
-import type { ProviderConfig, ProviderModel } from "../providers/types";
+import type { ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import { ProviderCallError } from "../providers/providerError";
+import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
 import { serializePostRevealTurn } from "./postRevealTranscript";
 
 const config: ProviderConfig = { id: "pc", provider: "openrouter", label: "P", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
@@ -93,6 +94,127 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
     expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(1, "s", "user", "Compare my session with the feedback.");
     expect(repository.appendPostRevealTurn).toHaveBeenNthCalledWith(2, "s", "assistant", expect.stringContaining("lighthouse"));
     expect(result.transcript).toContain('"role":"assistant"');
+  });
+
+
+  it("rehydrates exact post-Reveal OpenRouter state and atomically stores the next assistant state", async () => {
+    const prior = captureOpenRouterContinuationState({
+      config,
+      requestedModelId: model.modelId,
+      normalizedEndpoint: "https://openrouter.ai/api/v1",
+      reasoningDetails: [{ type: "reasoning.encrypted", data: "RklYVFVSRQ==", id: "prior", format: "openai-responses-v1", index: 0 }],
+    });
+    if (!prior.state) throw new Error("Expected prior state.");
+    const existingTranscript = `${serializePostRevealTurn("user", "First post-Reveal question")}${serializePostRevealTurn("assistant", "First answer")}`;
+    let transcript = existingTranscript;
+    const appendPostRevealTurnWithProviderState = vi.fn(async (_id: string, content: string) => {
+      transcript += serializePostRevealTurn("assistant", content);
+      return transcript;
+    });
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({
+        schemaVersion: 4,
+        providerConfigId: "pc", credentialId: "cred", provider: "openrouter", modelId: "viewer", modelRoute: "openrouter:viewer", sessionLanguage: "en",
+        continuationRoute: { transport: "openrouter", normalizedEndpoint: "https://openrouter.ai/api/v1", providerConfigId: "pc", credentialId: "cred", requestedModelId: "viewer", stateFormat: "openrouter-reasoning-details", stateFormatVersion: 1 },
+      }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Lighthouse", hash: "h" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
+      listTargetClarifications: vi.fn().mockResolvedValue([]),
+      listSessionEvents: vi.fn().mockResolvedValue([{
+        id: "post-event-1", sessionId: "s", sequenceNumber: 10, createdAt: "now", eventType: "POST_REVEAL_ASSISTANT", role: "assistant", content: "First answer",
+        metadata: { continuationState: { status: "stored", format: "openrouter-reasoning-details", version: 1 } },
+      }]),
+      getSessionEventProviderState: vi.fn().mockResolvedValue({ ownerId: "post-event-1", format: prior.state.format, formatVersion: 1, transport: "openrouter", replayFingerprint: prior.state.replayFingerprint, state: prior.state, payloadSha256: "a".repeat(64), payloadSizeBytes: 1, createdAt: "now" }),
+      appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant" | "monitor", content: string) => {
+        transcript += serializePostRevealTurn(role, content);
+        return transcript;
+      }),
+      appendPostRevealTurnWithProviderState,
+    };
+    const chat = vi.fn(async ({ messages }: { messages: ProviderMessage[] }) => {
+      const priorAssistant = messages.find((message) => message.role === "assistant" && message.content === "First answer");
+      expect(priorAssistant?.continuationState).toEqual(prior.state);
+      return {
+        content: "Second answer",
+        reasoningDetails: [{ type: "reasoning.encrypted", data: "TkVXU1RBVEU=", id: "next", format: "openai-responses-v1", index: 0 }],
+        usage: {},
+      };
+    });
+    await sendPostRevealTurn({ repository: repository as never, sessionId: "s", existingTranscript, providerConfig: config, model, content: "Second question", chat: chat as never });
+    expect(appendPostRevealTurnWithProviderState).toHaveBeenCalledTimes(1);
+    expect(repository.getSessionEventProviderState).toHaveBeenCalledWith("post-event-1");
+  });
+
+
+
+  it("fails closed when a frozen post-Reveal assistant turn has no matching Session event", async () => {
+    const existingTranscript = `${serializePostRevealTurn("user", "First question")}${serializePostRevealTurn("assistant", "Persisted assistant answer")}`;
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({
+        schemaVersion: 4, providerConfigId: "pc", credentialId: "cred", provider: "openrouter", modelId: "viewer", modelRoute: "openrouter:viewer", sessionLanguage: "en",
+        continuationRoute: { transport: "openrouter", normalizedEndpoint: "https://openrouter.ai/api/v1", providerConfigId: "pc", credentialId: "cred", requestedModelId: "viewer", stateFormat: "openrouter-reasoning-details", stateFormatVersion: 1 },
+      }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Lighthouse", hash: "h" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
+      listTargetClarifications: vi.fn().mockResolvedValue([]),
+      listSessionEvents: vi.fn().mockResolvedValue([]),
+      getSessionEventProviderState: vi.fn(),
+      appendPostRevealTurnWithProviderState: vi.fn(),
+      appendPostRevealTurn: vi.fn(),
+    };
+    const chat = vi.fn().mockResolvedValue({ content: "must not run", usage: {} });
+
+    await expect(sendPostRevealTurn({
+      repository: repository as never,
+      sessionId: "s",
+      existingTranscript,
+      providerConfig: config,
+      model,
+      content: "Second question",
+      chat: chat as never,
+    })).rejects.toThrow("assistant turn without a matching persisted Session event");
+
+    expect(chat).not.toHaveBeenCalled();
+    expect(repository.appendPostRevealTurn).not.toHaveBeenCalled();
+    expect(repository.getSessionEventProviderState).not.toHaveBeenCalled();
+  });
+
+  it("marks malformed post-Reveal state invalid and blocks the next call before dispatch", async () => {
+    let transcript = "";
+    const events: Array<{ id: string; sessionId: string; sequenceNumber: number; createdAt: string; eventType: string; role?: "assistant"; content?: string; metadata?: Record<string, unknown> }> = [];
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({
+        schemaVersion: 4, providerConfigId: "pc", credentialId: "cred", provider: "openrouter", modelId: "viewer", modelRoute: "openrouter:viewer", sessionLanguage: "en",
+        continuationRoute: { transport: "openrouter", normalizedEndpoint: "https://openrouter.ai/api/v1", providerConfigId: "pc", credentialId: "cred", requestedModelId: "viewer", stateFormat: "openrouter-reasoning-details", stateFormatVersion: 1 },
+      }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Lighthouse", hash: "h" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
+      listTargetClarifications: vi.fn().mockResolvedValue([]),
+      listSessionEvents: vi.fn(async () => events),
+      getSessionEventProviderState: vi.fn().mockResolvedValue(null),
+      appendPostRevealTurnWithProviderState: vi.fn(),
+      appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant" | "monitor", content: string, metadata?: Record<string, unknown>) => {
+        transcript += serializePostRevealTurn(role, content);
+        if (role === "assistant") {
+          events.push({ id: `event-${events.length + 1}`, sessionId: "s", sequenceNumber: events.length + 1, createdAt: "now", eventType: "POST_REVEAL_ASSISTANT", role: "assistant", content, metadata });
+        }
+        return transcript;
+      }),
+    };
+    const malformedChat = vi.fn().mockResolvedValue({
+      content: "Visible answer survives",
+      reasoningDetails: [{ type: "reasoning.encrypted", data: "not-base64", id: "broken", format: "openai-responses-v1", index: 0 }],
+      usage: {},
+    });
+    await expect(sendPostRevealTurn({ repository: repository as never, sessionId: "s", existingTranscript: "", providerConfig: config, model, content: "First question", chat: malformedChat as never }))
+      .rejects.toThrow("failed validation");
+    expect(events[0]?.metadata).toEqual(expect.objectContaining({ continuationState: expect.objectContaining({ status: "invalid" }) }));
+    expect(transcript).toContain("Visible answer survives");
+
+    const secondChat = vi.fn().mockResolvedValue({ content: "must not run", usage: {} });
+    await expect(sendPostRevealTurn({ repository: repository as never, sessionId: "s", existingTranscript: transcript, providerConfig: config, model, content: "Second question", chat: secondChat as never }))
+      .rejects.toThrow("invalid OpenRouter continuation state");
+    expect(secondChat).not.toHaveBeenCalled();
   });
 
   it("automatically stores the Viewer review first and the Monitor review second", async () => {

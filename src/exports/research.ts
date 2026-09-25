@@ -63,8 +63,9 @@ export async function exportResearchPackage(repository: AppRepository, projectId
       if (clarifications.length) files.push({ relativePath: `${base}/target_clarifications.json`, content: pretty({ label: "Supplementary analysis — after target clarification", records: clarifications }) });
     }
     if (snapshot) {
-      snapshots[assignment.anonymousSessionId] = snapshot;
-      if (!saveOnly) files.push({ relativePath: `${base}/session_snapshot.json`, content: pretty(snapshot) });
+      const { continuationRoute: _continuationRoute, ...exportSnapshot } = snapshot;
+      snapshots[assignment.anonymousSessionId] = exportSnapshot;
+      if (!saveOnly) files.push({ relativePath: `${base}/session_snapshot.json`, content: pretty(exportSnapshot) });
     }
     let exportedArtifacts: Array<{ artifactId: string; mimeType: string; size: number; sha256: string; exportedPath: string }> = [];
     if (reveal) {

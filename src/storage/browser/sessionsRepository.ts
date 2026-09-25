@@ -107,7 +107,7 @@ export class BrowserSessionsRepository implements SessionsRepository {
     if (stopReason) await this.appendSessionEvent(id, { eventType: "SESSION_STOPPED", role: "controller", content: stopReason });
   }
 
-  async appendPostRevealTurn(sessionId: string, role: "user" | "assistant" | "monitor", content: string): Promise<string> {
+  async appendPostRevealTurn(sessionId: string, role: "user" | "assistant" | "monitor", content: string, metadata?: Record<string, unknown>): Promise<string> {
     const sessions = this.read<RvSession[]>(RV_SESSIONS_KEY, []);
     const session = sessions.find((item) => item.id === sessionId);
     if (!session) throw new Error("RV session not found.");
@@ -117,9 +117,39 @@ export class BrowserSessionsRepository implements SessionsRepository {
     }
     const next = `${session.postRevealTranscript}${serializePostRevealTurn(role, content)}`;
     const timestamp = this.now();
-    this.write(RV_SESSIONS_KEY, sessions.map((item) => item.id === sessionId ? { ...item, postRevealTranscript: next, updatedAt: timestamp } : item));
-    await this.appendSessionEvent(sessionId, { eventType: `POST_REVEAL_${role.toUpperCase()}`, role, content: content.trim() });
-    return next;
+    const sessionsBefore = this.storage.getItem(RV_SESSIONS_KEY);
+    const eventsBefore = this.storage.getItem(SESSION_EVENTS_KEY);
+    try {
+      this.write(RV_SESSIONS_KEY, sessions.map((item) => item.id === sessionId ? { ...item, postRevealTranscript: next, updatedAt: timestamp } : item));
+      await this.appendSessionEvent(sessionId, { eventType: `POST_REVEAL_${role.toUpperCase()}`, role, content: content.trim(), ...(metadata ? { metadata } : {}) });
+      return next;
+    } catch (cause) {
+      for (const [key, previous] of [[RV_SESSIONS_KEY, sessionsBefore], [SESSION_EVENTS_KEY, eventsBefore]] as const) {
+        if (previous === null) this.storage.removeItem(key); else this.storage.setItem(key, previous);
+      }
+      throw cause;
+    }
+  }
+
+  async appendPostRevealTurnWithProviderState(sessionId: string, content: string, state: ProviderContinuationState): Promise<string> {
+    const sessions = this.read<RvSession[]>(RV_SESSIONS_KEY, []);
+    const session = sessions.find((item) => item.id === sessionId);
+    if (!session) throw new Error("RV session not found.");
+    if (session.state !== "Revealed" && session.state !== "Completed") throw new Error("Post-reveal discussion requires Reveal.");
+    if (session.researchProjectId && !this.dependencies.isResearchScoresFrozen(session.researchProjectId)) {
+      throw new Error("Research post-reveal discussion requires frozen scores.");
+    }
+    const next = `${session.postRevealTranscript}${serializePostRevealTurn("assistant", content)}`;
+    const timestamp = this.now();
+    const sessionsBefore = this.storage.getItem(RV_SESSIONS_KEY);
+    try {
+      this.write(RV_SESSIONS_KEY, sessions.map((item) => item.id === sessionId ? { ...item, postRevealTranscript: next, updatedAt: timestamp } : item));
+      await this.appendSessionEventWithProviderState(sessionId, { eventType: "POST_REVEAL_ASSISTANT", role: "assistant", content: content.trim() }, state);
+      return next;
+    } catch (cause) {
+      if (sessionsBefore === null) this.storage.removeItem(RV_SESSIONS_KEY); else this.storage.setItem(RV_SESSIONS_KEY, sessionsBefore);
+      throw cause;
+    }
   }
 
   async appendSessionEvent(sessionId: string, event: SessionEventInput): Promise<void> {

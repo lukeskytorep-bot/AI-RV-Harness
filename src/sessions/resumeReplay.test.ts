@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppRepository } from "../storage/repository";
-import type { RvSession, SessionEventRecord } from "./types";
+import type { RvSession, SessionEventRecord, SessionSnapshot } from "./types";
+import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
+import type { ProviderContinuationState } from "../providers/continuationContract";
+import type { ProviderConfig } from "../providers/types";
 import { createSessionReplay, isRecoverableProviderInterruption } from "./resumeReplay";
 
 const session: RvSession = {
@@ -10,6 +13,20 @@ const session: RvSession = {
 
 function event(sequenceNumber: number, eventType: string, content?: string, metadata: Record<string, unknown> = {}): SessionEventRecord {
   return { id: `e${sequenceNumber}`, sessionId: session.id, sequenceNumber, eventType, ...(content ? { content } : {}), metadata, createdAt: "2026-01-01" };
+}
+
+function bindingFor(ownerId: string, state: ProviderContinuationState) {
+  return {
+    ownerId,
+    format: state.format,
+    formatVersion: state.schemaVersion,
+    transport: state.transport,
+    replayFingerprint: state.replayFingerprint,
+    state,
+    payloadSha256: "a".repeat(64),
+    payloadSizeBytes: 1,
+    createdAt: "now",
+  };
 }
 
 describe("durable session replay", () => {
@@ -23,8 +40,8 @@ describe("durable session replay", () => {
     const update = vi.fn().mockResolvedValue(undefined);
     const append = vi.fn().mockResolvedValue(undefined);
     const liveChat = vi.fn().mockResolvedValue({ content: "recovered", usage: {} });
-    const repository = { updateRvSessionState: update, appendSessionEvent: append } as unknown as AppRepository;
-    const replay = createSessionReplay({
+    const repository = { updateRvSessionState: update, appendSessionEvent: append, getSessionSnapshot: vi.fn().mockResolvedValue({ schemaVersion: 3 } as unknown as SessionSnapshot) } as unknown as AppRepository;
+    const replay = await createSessionReplay({
       repository,
       session,
       events: [
@@ -42,4 +59,151 @@ describe("durable session replay", () => {
     expect(update).toHaveBeenCalledWith(session.id, "BlindRunning");
     expect(append).toHaveBeenCalledWith(session.id, expect.objectContaining({ eventType: "SESSION_RESUMED" }));
   });
+
+
+
+  it("keeps historical Resume text-only when the saved snapshot has no continuation route", async () => {
+    const config: ProviderConfig = { id: "pc", provider: "openrouter", label: "OpenRouter", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
+    const liveChat = vi.fn().mockResolvedValue({ content: "historical live", usage: {} });
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ schemaVersion: 3, providerConfigId: "pc", credentialId: "cred", provider: "openrouter", modelId: "m", modelRoute: "openrouter:m" } as unknown as SessionSnapshot),
+      getSessionEventProviderState: vi.fn(),
+      updateRvSessionState: vi.fn().mockResolvedValue(undefined),
+      appendSessionEvent: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AppRepository;
+    const replay = await createSessionReplay({ repository, session, events: [], liveChat });
+    const response = await replay.chat({
+      config,
+      modelId: "m",
+      messages: [{ role: "user", content: "old step" }, { role: "assistant", content: "historical answer" }, { role: "user", content: "continue" }],
+      settings: { requested: {}, effective: {}, omitted: [] },
+    });
+    expect(response.content).toBe("historical live");
+    expect(repository.getSessionEventProviderState).not.toHaveBeenCalled();
+    expect(liveChat.mock.calls[0][0].messages[1].continuationState).toBeUndefined();
+  });
+
+  it("does not apply the frozen Viewer continuation route to a live Monitor request", async () => {
+    const viewerConfig: ProviderConfig = { id: "viewer-pc", provider: "openrouter", label: "Viewer", credentialId: "viewer-cred", enabled: true, createdAt: "now", updatedAt: "now" };
+    const monitorConfig: ProviderConfig = { id: "monitor-pc", provider: "openrouter", label: "Monitor", credentialId: "monitor-cred", enabled: true, createdAt: "now", updatedAt: "now" };
+    const snapshot = {
+      schemaVersion: 4, providerConfigId: "viewer-pc", credentialId: "viewer-cred", provider: "openrouter", modelId: "viewer-model", modelRoute: "openrouter:viewer-model",
+      continuationRoute: { transport: "openrouter", normalizedEndpoint: "https://openrouter.ai/api/v1", providerConfigId: "viewer-pc", credentialId: "viewer-cred", requestedModelId: "viewer-model", stateFormat: "openrouter-reasoning-details", stateFormatVersion: 1 },
+    } as unknown as SessionSnapshot;
+    const liveChat = vi.fn().mockResolvedValue({ content: "monitor decision", usage: {} });
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue(snapshot),
+      getSessionEventProviderState: vi.fn(),
+      updateRvSessionState: vi.fn().mockResolvedValue(undefined),
+      appendSessionEvent: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AppRepository;
+    const replay = await createSessionReplay({ repository, session, events: [], liveChat });
+    const response = await replay.chat({ config: monitorConfig, modelId: "monitor-model", messages: [{ role: "user", content: "telemetry" }], settings: { requested: {}, effective: {}, omitted: [] } });
+    expect(response.content).toBe("monitor decision");
+    expect(repository.getSessionEventProviderState).not.toHaveBeenCalled();
+    expect(liveChat).toHaveBeenCalledTimes(1);
+    expect(viewerConfig.id).not.toBe(monitorConfig.id);
+  });
+
+  it("rehydrates exact OpenRouter continuation state before the first live resumed call", async () => {
+    const config: ProviderConfig = { id: "pc", provider: "openrouter", label: "OpenRouter", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
+    const captured = captureOpenRouterContinuationState({
+      config, requestedModelId: "m", normalizedEndpoint: "https://openrouter.ai/api/v1",
+      reasoningDetails: [{ type: "reasoning.summary", summary: "saved", id: "s1", format: "openai-responses-v1", index: 0 }],
+    });
+    expect(captured.state).toBeDefined();
+    if (!captured.state) return;
+    const viewerEvent = event(1, "VIEWER_RESPONSE", "saved viewer", { continuationState: { status: "stored", format: captured.state.format, version: 1 } });
+    const liveChat = vi.fn().mockResolvedValue({ content: "live", usage: {} });
+    const snapshot = {
+      schemaVersion: 4, providerConfigId: "pc", credentialId: "cred", provider: "openrouter", modelId: "m", modelRoute: "openrouter:m",
+      continuationRoute: { transport: "openrouter", normalizedEndpoint: "https://openrouter.ai/api/v1", providerConfigId: "pc", credentialId: "cred", requestedModelId: "m", stateFormat: "openrouter-reasoning-details", stateFormatVersion: 1 },
+    } as unknown as SessionSnapshot;
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue(snapshot),
+      listSessionEvents: vi.fn().mockResolvedValue([viewerEvent]),
+      getSessionEventProviderState: vi.fn().mockResolvedValue({ ownerId: viewerEvent.id, format: captured.state.format, formatVersion: 1, transport: "openrouter", replayFingerprint: captured.state.replayFingerprint, state: captured.state, payloadSha256: "a".repeat(64), payloadSizeBytes: 1, createdAt: "now" }),
+      updateRvSessionState: vi.fn().mockResolvedValue(undefined), appendSessionEvent: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AppRepository;
+    const replay = await createSessionReplay({ repository, session, events: [viewerEvent], liveChat });
+    const request = { config, modelId: "m", messages: [{ role: "user" as const, content: "step 1" }, { role: "assistant" as const, content: "saved viewer" }, { role: "user" as const, content: "step 2" }], settings: { requested: {}, effective: {}, omitted: [] } };
+    expect((await replay.chat(request)).content).toBe("saved viewer");
+    expect((await replay.chat(request)).content).toBe("live");
+    expect(liveChat).toHaveBeenCalledTimes(1);
+    const sent = liveChat.mock.calls[0][0];
+    expect(sent.messages[1].continuationState).toEqual(captured.state);
+  });
+  it("refreshes durable Viewer events before every live resumed call", async () => {
+    const config: ProviderConfig = { id: "pc", provider: "openrouter", label: "OpenRouter", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
+    const saved = captureOpenRouterContinuationState({
+      config, requestedModelId: "m", normalizedEndpoint: "https://openrouter.ai/api/v1",
+      reasoningDetails: [{ type: "reasoning.summary", summary: "saved-A", id: "a", format: "openai-responses-v1", index: 0 }],
+    });
+    const resumed = captureOpenRouterContinuationState({
+      config, requestedModelId: "m", normalizedEndpoint: "https://openrouter.ai/api/v1",
+      reasoningDetails: [{ type: "reasoning.summary", summary: "live-B", id: "b", format: "openai-responses-v1", index: 0 }],
+    });
+    if (!saved.state || !resumed.state) throw new Error("Expected OpenRouter continuation fixtures.");
+    const savedState = saved.state;
+    const resumedState = resumed.state;
+
+    const persistedEvents: SessionEventRecord[] = [
+      event(1, "VIEWER_RESPONSE", "saved viewer", { continuationState: { status: "stored", format: savedState.format, version: 1 } }),
+    ];
+    const bindings = new Map<string, ReturnType<typeof bindingFor>>([
+      [persistedEvents[0].id, bindingFor(persistedEvents[0].id, savedState)],
+    ]);
+    const snapshot = {
+      schemaVersion: 4, providerConfigId: "pc", credentialId: "cred", provider: "openrouter", modelId: "m", modelRoute: "openrouter:m",
+      continuationRoute: { transport: "openrouter", normalizedEndpoint: "https://openrouter.ai/api/v1", providerConfigId: "pc", credentialId: "cred", requestedModelId: "m", stateFormat: "openrouter-reasoning-details", stateFormatVersion: 1 },
+    } as unknown as SessionSnapshot;
+    const liveChat = vi.fn()
+      .mockResolvedValueOnce({ content: "new viewer", usage: {} })
+      .mockResolvedValueOnce({ content: "next viewer", usage: {} });
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue(snapshot),
+      listSessionEvents: vi.fn(async () => [...persistedEvents]),
+      getSessionEventProviderState: vi.fn(async (eventId: string) => bindings.get(eventId) ?? null),
+      updateRvSessionState: vi.fn().mockResolvedValue(undefined),
+      appendSessionEvent: vi.fn().mockResolvedValue(undefined),
+      appendSessionEventWithProviderState: vi.fn(async (_sessionId: string, input: { eventType: string; role?: "assistant"; content?: string; metadata?: Record<string, unknown> }, state: ProviderContinuationState) => {
+        const next = event(persistedEvents.length + 1, input.eventType, input.content, input.metadata);
+        persistedEvents.push(next);
+        bindings.set(next.id, bindingFor(next.id, state));
+        return next;
+      }),
+    } as unknown as AppRepository;
+    const replay = await createSessionReplay({ repository, session, events: [...persistedEvents], liveChat });
+
+    const firstRequest = {
+      config, modelId: "m",
+      messages: [{ role: "user" as const, content: "step 1" }, { role: "assistant" as const, content: "saved viewer" }, { role: "user" as const, content: "step 2" }],
+      settings: { requested: {}, effective: {}, omitted: [] },
+    };
+    expect((await replay.chat(firstRequest)).content).toBe("saved viewer");
+    expect((await replay.chat(firstRequest)).content).toBe("new viewer");
+    await replay.repository.appendSessionEventWithProviderState(session.id, {
+      eventType: "VIEWER_RESPONSE", role: "assistant", content: "new viewer",
+      metadata: { continuationState: { status: "stored", format: resumedState.format, version: 1 } },
+    }, resumedState);
+
+    const secondRequest = {
+      config, modelId: "m",
+      messages: [
+        { role: "user" as const, content: "step 1" },
+        { role: "assistant" as const, content: "saved viewer" },
+        { role: "user" as const, content: "step 2" },
+        { role: "assistant" as const, content: "new viewer" },
+        { role: "user" as const, content: "step 3" },
+      ],
+      settings: { requested: {}, effective: {}, omitted: [] },
+    };
+    expect((await replay.chat(secondRequest)).content).toBe("next viewer");
+    expect(liveChat).toHaveBeenCalledTimes(2);
+    const secondLiveMessages = liveChat.mock.calls[1][0].messages;
+    expect(secondLiveMessages[1].continuationState).toEqual(savedState);
+    expect(secondLiveMessages[3].continuationState).toEqual(resumedState);
+    expect(repository.listSessionEvents).toHaveBeenCalledTimes(2);
+  });
+
 });

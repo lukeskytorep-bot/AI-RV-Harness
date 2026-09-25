@@ -5,7 +5,7 @@ import path from "node:path";
 const read = (relative: string) => fs.readFileSync(path.resolve(process.cwd(), relative), "utf8");
 
 describe("provider continuation staged-delivery boundary", () => {
-  it("keeps the strict continuation contract while allowing C2 persistence", () => {
+  it("keeps the strict continuation contract while allowing C2/C3 persistence", () => {
     const types = read("src/providers/types.ts");
     const contract = read("src/providers/continuationContract.ts");
     const persistence = read("src/storage/providerContinuationState.ts");
@@ -31,11 +31,16 @@ describe("provider continuation staged-delivery boundary", () => {
     expect(rustProviders).toContain("[CONTINUATION STATE REDACTED]");
   });
 
-  it("stops at C2 and does not roll session persistence into automatic workflows", () => {
+  it("activates C3 through shared session controllers without duplicating persistence inside Training or Research", () => {
     const sessionController = read("src/sessions/controller.ts");
+    const rvLite = read("src/sessions/rvLiteController.ts");
+    const resume = read("src/sessions/resumeReplay.ts");
     const training = read("src/features/training/trainingExecution.ts");
     const research = read("src/research/engine.ts");
-    for (const [name, source] of [["sessions", sessionController], ["training", training], ["research", research]] as const) {
+    expect(sessionController).toContain("persistSessionAssistantResponse");
+    expect(rvLite).toContain("persistSessionAssistantResponse");
+    expect(resume).toContain("getSessionEventProviderState");
+    for (const [name, source] of [["training", training], ["research", research]] as const) {
       expect(source, name).not.toContain("appendSessionEventWithProviderState");
       expect(source, name).not.toContain("getSessionEventProviderState");
     }

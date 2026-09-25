@@ -12,7 +12,7 @@ import { evaluateMonitor, isIncompleteMonitorResponse, type MonitorDecision } fr
 import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
 import { RCP_CONTROLLER_PROMPT_ID, RCP_CONTROLLER_PROMPT_VERSION, rcpPhasePrompt } from "./controllerPrompts";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics, type SessionRunMetrics } from "./metrics";
-import type { RevealArtifactRecord, RevealInput, RvSession, RvSessionState, SessionSnapshot } from "./types";
+import type { RevealArtifactRecord, RevealInput, RvSession, RvSessionState, SessionContinuationRouteSnapshot, SessionSnapshot } from "./types";
 import { buildAutomaticTargetReveal, targetHasSupportedReveal } from "../targets/service";
 import { APP_VERSION } from "../version";
 import { createSessionCode } from "./sessionCode";
@@ -33,6 +33,7 @@ import {
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
+import { appendAssistantMessageWithContinuation, captureSessionContinuationRoute, persistSessionAssistantResponse, SessionContinuationError, validateSessionContinuationBudget } from "./providerContinuation";
 
 export { detectRepetitiveOutput } from "./repetitionGuard";
 
@@ -48,7 +49,7 @@ type SessionRepository = Pick<
   | "createMonitorRun"
   | "appendMonitorIntervention"
   | "recordTargetUsage"
->;
+> & Partial<Pick<AppRepository, "appendSessionEventWithProviderState">>;
 
 export interface AutomaticRcpRunInput {
   repository: SessionRepository;
@@ -77,6 +78,7 @@ export interface AutomaticRcpRunInput {
   viewerNotes?: ViewerNotesSessionSnapshot;
   researchConditionInstruction?: ViewerSystemPromptSnapshot;
   resumeSession?: RvSession;
+  resumeContinuationRoute?: SessionContinuationRouteSnapshot;
   monitor?: {
     providerConfig: ProviderConfig;
     model: ProviderModel;
@@ -124,6 +126,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
   }
   const costGuard = new SessionCostGuard(input.maxSessionCostUsd);
+  const continuationRoute = input.resumeSession ? input.resumeContinuationRoute : captureSessionContinuationRoute(input.providerConfig, input.model);
   costGuard.validateModel(input.model);
   if (input.monitor) costGuard.validateModel(input.monitor.model);
   const automaticReveal = input.automaticTarget
@@ -176,7 +179,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   if (!input.resumeSession) await input.onSessionCreated?.(sessionId, sessionCode);
 
   const snapshot: SessionSnapshot = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     sessionId,
     sessionCode,
     profileId: input.profileId,
@@ -191,6 +194,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     provider: input.providerConfig.provider,
     modelId: input.model.modelId,
     modelRoute: input.model.route,
+    ...(continuationRoute ? { continuationRoute } : {}),
     capabilitySnapshot: JSON.parse(JSON.stringify(input.model.capabilities)) as Record<string, unknown>,
     capabilityCapturedAt: input.model.capabilities.capturedAt,
     generationSettings: effectiveSettings,
@@ -307,6 +311,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
       if (input.signal?.aborted) return stop("USER STOP");
       let costAuthorization;
       try {
+        validateSessionContinuationBudget(messages);
         costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
       } catch (cause) {
         if (cause instanceof CostGuardStop) return stop(cause.message);
@@ -358,14 +363,18 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         metadata: { phase, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(rawResponseContent) },
       });
     }
-    messages.push({ role: "assistant", content: response.content });
+    let continuationState;
+    try {
+      ({ state: continuationState } = await persistSessionAssistantResponse({
+        repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: continuationRoute,
+        event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { phase, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs } },
+      }));
+    } catch (cause) {
+      if (cause instanceof SessionContinuationError) return stop(`AUTO-STOP: ${cause.message}`);
+      throw cause;
+    }
+    appendAssistantMessageWithContinuation(messages, response.content, continuationState);
     transcript = appendPhaseTranscript(transcript, phase, controllerPrompt, response.content, input.sessionLanguage);
-    await input.repository.appendSessionEvent(sessionId, {
-      eventType: "VIEWER_RESPONSE",
-      role: "assistant",
-      content: response.content,
-      metadata: { phase, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs },
-    });
     // Persistence is awaited before any next provider call. This is the autosave boundary.
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
@@ -390,6 +399,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
           if (input.signal?.aborted) return stop("USER STOP");
           let costAuthorization;
           try {
+            validateSessionContinuationBudget(messages);
             costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
           } catch (cause) {
             if (cause instanceof CostGuardStop) return stop(cause.message);
@@ -439,14 +449,18 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
             metadata: { phase, source: "special_task", rule: sanitizedTask.finding?.rule, originalLength: sanitizedTask.originalLength, retainedLength: sanitizedTask.retainedLength, rawOutputSha256: await sha256Text(rawTaskContent) },
           });
         }
-        messages.push({ role: "assistant", content: taskResponse.content });
+        let taskContinuationState;
+        try {
+          ({ state: taskContinuationState } = await persistSessionAssistantResponse({
+            repository: input.repository, sessionId, response: taskResponse, providerConfig: input.providerConfig, model: input.model, route: continuationRoute,
+            event: { eventType: "VIEWER_SPECIAL_TASK_RESPONSE", role: "assistant", content: taskResponse.content, metadata: { phase, finishReason: taskResponse.finishReason, actualModel: taskResponse.actualModel ?? "unavailable", providerRequestId: taskResponse.providerRequestId ?? "unavailable", usage: taskResponse.usage, usageAccuracy: taskResponse.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: taskDurationMs } },
+          }));
+        } catch (cause) {
+          if (cause instanceof SessionContinuationError) return stop(`AUTO-STOP: ${cause.message}`);
+          throw cause;
+        }
+        appendAssistantMessageWithContinuation(messages, taskResponse.content, taskContinuationState);
         transcript = appendSpecialTaskTranscript(transcript, phase, taskPrompt, taskResponse.content, input.sessionLanguage);
-        await input.repository.appendSessionEvent(sessionId, {
-          eventType: "VIEWER_SPECIAL_TASK_RESPONSE",
-          role: "assistant",
-          content: taskResponse.content,
-          metadata: { phase, finishReason: taskResponse.finishReason, actualModel: taskResponse.actualModel ?? "unavailable", providerRequestId: taskResponse.providerRequestId ?? "unavailable", usage: taskResponse.usage, usageAccuracy: taskResponse.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: taskDurationMs },
-        });
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
         if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
@@ -554,6 +568,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
           if (input.signal?.aborted) return stop("USER STOP");
           let costAuthorization;
           try {
+            validateSessionContinuationBudget(messages);
             costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
           } catch (cause) {
             if (cause instanceof CostGuardStop) return stop(cause.message);
@@ -604,14 +619,18 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
             metadata: { phase, source: "monitor_intervention", rule: sanitizedDeepening.finding?.rule, originalLength: sanitizedDeepening.originalLength, retainedLength: sanitizedDeepening.retainedLength, rawOutputSha256: await sha256Text(rawDeepeningContent) },
           });
         }
-        messages.push({ role: "assistant", content: deepening.content });
+        let deepeningContinuationState;
+        try {
+          ({ state: deepeningContinuationState } = await persistSessionAssistantResponse({
+            repository: input.repository, sessionId, response: deepening, providerConfig: input.providerConfig, model: input.model, route: continuationRoute,
+            event: { eventType: "VIEWER_MONITOR_RESPONSE", role: "assistant", content: deepening.content, metadata: { phase, exchangeNumber, finishReason: deepening.finishReason, actualModel: deepening.actualModel ?? "unavailable", providerRequestId: deepening.providerRequestId ?? "unavailable", usage: deepening.usage, usageAccuracy: deepening.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: deepeningDurationMs } },
+          }));
+        } catch (cause) {
+          if (cause instanceof SessionContinuationError) return stop(`AUTO-STOP: ${cause.message}`);
+          throw cause;
+        }
+        appendAssistantMessageWithContinuation(messages, deepening.content, deepeningContinuationState);
         transcript = appendMonitorTranscript(transcript, phase, decision.commandText, deepening.content, input.sessionLanguage);
-        await input.repository.appendSessionEvent(sessionId, {
-          eventType: "VIEWER_MONITOR_RESPONSE",
-          role: "assistant",
-          content: deepening.content,
-          metadata: { phase, exchangeNumber, finishReason: deepening.finishReason, actualModel: deepening.actualModel ?? "unavailable", providerRequestId: deepening.providerRequestId ?? "unavailable", usage: deepening.usage, usageAccuracy: deepening.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: deepeningDurationMs },
-        });
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
         if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");

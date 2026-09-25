@@ -74,14 +74,21 @@ describe("OPENROUTER-CONTINUITY-PERSISTENCE-1 boundary", () => {
     expect(engine).toContain("ProviderContinuationPersistenceError");
   });
 
-  it("keeps C3 workflow rollout absent", () => {
+  it("rolls C3 into shared Session, Resume and post-Reveal paths while keeping Training/Research as controller clients", () => {
     for (const relative of [
       "src/sessions/controller.ts",
       "src/sessions/rvLiteController.ts",
-      "src/features/training/trainingExecution.ts",
-      "src/research/engine.ts",
-      "src/sessions/postReveal.ts",
+      "src/sessions/customController.ts",
+      "src/sessions/telepathicController.ts",
     ]) {
+      expect(read(relative), relative).toContain("persistSessionAssistantResponse");
+    }
+    expect(read("src/sessions/resumeReplay.ts")).toContain("getSessionEventProviderState");
+    expect(read("src/sessions/postReveal.ts")).toContain("appendPostRevealTurnWithProviderState");
+    expect(read("src/storage/sqlite/sessionsRepository.ts")).toContain("async appendPostRevealTurn");
+    expect(read("src/storage/sqlite/sessionsRepository.ts")).toContain("executeTransaction([");
+    expect(read("src/storage/browser/sessionsRepository.ts")).toContain("const eventsBefore = this.storage.getItem(SESSION_EVENTS_KEY)");
+    for (const relative of ["src/features/training/trainingExecution.ts", "src/research/engine.ts"]) {
       const source = read(relative);
       expect(source, relative).not.toContain("appendSessionEventWithProviderState");
       expect(source, relative).not.toContain("getSessionEventProviderState");

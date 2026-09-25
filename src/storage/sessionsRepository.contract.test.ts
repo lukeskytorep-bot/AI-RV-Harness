@@ -221,20 +221,21 @@ describe("SQLite Sessions repository contract", () => {
     expect(writes[0]).not.toContain("UPDATE rv_sessions");
   });
 
-  it("preserves Research post-Reveal guard and the transcript-plus-event write sequence", async () => {
-    const writes: string[] = [];
+  it("preserves the Research post-Reveal guard and atomically writes transcript plus event", async () => {
+    const transactions: Array<Array<{ query: string; values?: unknown[] }>> = [];
     let frozen = false;
     const repository = new SqliteSessionsRepository({
       select: async <T>(query: string) => query.startsWith("SELECT state") ? [{ state: "Revealed", post_reveal_transcript: "", research_project_id: "research-a" }] as T : [] as T,
-      executeWrite: async (query) => { writes.push(query); return { rowsAffected: 1 }; },
-      executeTransaction: async () => [],
+      executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async (statements) => { transactions.push(statements); return []; },
       isResearchScoresFrozen: async () => frozen,
       now: () => timestamp,
     });
     await expect(repository.appendPostRevealTurn("session-a", "assistant", "review")).rejects.toThrow("frozen scores");
     frozen = true;
     expect(await repository.appendPostRevealTurn("session-a", "assistant", "review")).toContain("review");
-    expect(writes.map((query) => query.includes("session_events") ? "event" : query.includes("post_reveal_transcript") ? "transcript" : "other")).toEqual(["transcript", "event"]);
+    expect(transactions).toHaveLength(1);
+    expect(transactions[0].map(({ query }) => query.includes("session_events") ? "event" : query.includes("post_reveal_transcript") ? "transcript" : "other")).toEqual(["transcript", "event"]);
   });
 
   it("keeps target clarification persistence delegated to the database guards", async () => {
