@@ -4,18 +4,19 @@ import path from "node:path";
 
 const read = (relative: string) => fs.readFileSync(path.resolve(process.cwd(), relative), "utf8");
 
-describe("OPENROUTER-CONTINUITY-WORKFLOWS-1 boundary", () => {
-  it("keeps C3 on schema 025 and does not start Google or Anthropic continuation rollout", () => {
+describe("provider continuation workflow boundary", () => {
+  it("keeps C4 on schema 025, activates Google native, and does not start Anthropic continuation rollout", () => {
     const migrations = read("src-tauri/src/migrations.rs");
     const sessionBridge = read("src/sessions/providerContinuation.ts");
     expect(migrations).toContain("version: 25");
     expect(migrations).not.toContain("version: 26");
     expect(sessionBridge).toContain("captureOpenRouterContinuationState");
-    expect(sessionBridge).not.toContain("google-thought-parts");
+    expect(sessionBridge).toContain("captureGoogleContinuationState");
+    expect(sessionBridge).toContain("google-thought-parts");
     expect(sessionBridge).not.toContain("anthropic-thinking-blocks");
   });
 
-  it("freezes OpenRouter continuation identity in SessionSnapshot and reuses only that route on Resume", () => {
+  it("freezes provider continuation identity in SessionSnapshot and reuses only that route on Resume", () => {
     const types = read("src/sessions/types.ts");
     const panel = read("src/features/rvSessions/RvSessionPanel.tsx");
     const replay = read("src/sessions/resumeReplay.ts");
@@ -41,8 +42,8 @@ describe("OPENROUTER-CONTINUITY-WORKFLOWS-1 boundary", () => {
     }
     const bridge = read("src/sessions/providerContinuation.ts");
     expect(bridge).toContain("appendSessionEventWithProviderState");
-    expect(bridge).toContain("Required OpenRouter continuation state is missing");
-    expect(bridge).toContain("Persisted OpenRouter continuation state is incompatible with the frozen session route");
+    expect(bridge).toContain("Required provider continuation state is missing");
+    expect(bridge).toContain("Persisted provider continuation state is incompatible with the frozen session route");
   });
 
   it("keeps Training and Research on shared controllers rather than duplicating provider-state storage", () => {
@@ -51,6 +52,7 @@ describe("OPENROUTER-CONTINUITY-WORKFLOWS-1 boundary", () => {
       expect(source, relative).not.toContain("appendSessionEventWithProviderState");
       expect(source, relative).not.toContain("getSessionEventProviderState");
       expect(source, relative).not.toContain("captureOpenRouterContinuationState");
+      expect(source, relative).not.toContain("captureGoogleContinuationState");
     }
   });
 

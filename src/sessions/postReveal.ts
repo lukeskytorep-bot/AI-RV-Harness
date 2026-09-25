@@ -9,8 +9,7 @@ import type { InterfaceLanguage } from "../types";
 import { buildEffectiveMonitorPrompt } from "../resources/systemPrompts";
 import { politeRevealTransition } from "./courtesy";
 import { analyticalOutputBudget, callWithAnalyticalOutputRecovery } from "../providers/outputRecovery";
-import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
-import { hydrateSessionMessageContinuation, validateFrozenSessionContinuationRoute, validateSessionContinuationBudget } from "./providerContinuation";
+import { captureSessionContinuationState, hydrateSessionMessageContinuation, validateFrozenSessionContinuationRoute, validateSessionContinuationBudget } from "./providerContinuation";
 
 type PostRevealContinuationRepository = Pick<AppRepository, "appendPostRevealTurnWithProviderState" | "listSessionEvents" | "getSessionEventProviderState">;
 type PostRevealRepository = Pick<AppRepository, "appendPostRevealTurn" | "getReveal" | "getSessionSnapshot" | "getViewerEvidence" | "listTargetClarifications">
@@ -44,7 +43,7 @@ export async function sendPostRevealTurn(input: {
   }
   const continuationRoute = validateFrozenSessionContinuationRoute(snapshot, input.providerConfig, input.model);
   if (continuationRoute && (!input.repository.listSessionEvents || !input.repository.getSessionEventProviderState || !input.repository.appendPostRevealTurnWithProviderState)) {
-    throw new Error("The repository cannot restore the frozen OpenRouter continuation state required by this post-Reveal conversation.");
+    throw new Error("The repository cannot restore the frozen provider continuation state required by this post-Reveal conversation.");
   }
   const continuationRepository: PostRevealContinuationRepository | undefined = continuationRoute ? {
     listSessionEvents: input.repository.listSessionEvents!,
@@ -116,13 +115,13 @@ export async function sendPostRevealTurn(input: {
     }),
   })).response;
   let transcript: string;
-  if (continuationRoute && input.providerConfig.provider === "openrouter") {
-    const captured = captureOpenRouterContinuationState({ config: input.providerConfig, requestedModelId: input.model.modelId, normalizedEndpoint: continuationRoute.normalizedEndpoint, reasoningDetails: response.reasoningDetails });
+  if (continuationRoute) {
+    const captured = captureSessionContinuationState({ response, providerConfig: input.providerConfig, model: input.model, route: continuationRoute });
     if (captured.issue) {
       transcript = await input.repository.appendPostRevealTurn(input.sessionId, "assistant", response.content, {
         continuationState: { status: "invalid", code: captured.issue.code },
       });
-      throw new Error(`OpenRouter continuation state was returned during post-Reveal review but failed validation: ${captured.issue.message}`);
+      throw new Error(`Provider continuation state was returned during post-Reveal review but failed validation: ${captured.issue.message}`);
     }
     transcript = captured.state
       ? await continuationRepository!.appendPostRevealTurnWithProviderState(input.sessionId, response.content, captured.state)

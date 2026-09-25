@@ -1,13 +1,13 @@
 # AI RV Harness v0.7.13 — Provider Continuation Contract v1
 
 **Etap bazowy:** `CONTINUATION-CONTRACT-0-R1`  
-**Aktualny etap runtime:** `OPENROUTER-CONTINUITY-PERSISTENCE-1` (`C2`)  
-**Status:** OpenRouter Conversation capture/replay ma trwały, walidowany persistence; schema 025 aktywuje dedykowany state dla Conversation i Session Events, lecz automatyczne workflowy Session/Training/Research/Resume pozostają poza C2  
-**Zweryfikowano:** 2026-09-24
+**Aktualny etap runtime:** `GOOGLE-CONTINUITY-1` (`C4`)  
+**Status:** OpenRouter continuity działa w Conversation i workflowach C3; C4 aktywuje Google native `google-thought-parts` dla potwierdzonego kontraktu text/thought `Part` + `thoughtSignature`, z tym samym persistence schema 025 i exact-event replay  
+**Zweryfikowano:** 2026-09-25
 
 ## Cel
 
-Ten dokument definiuje kontrakt danych provider-native continuation. C2 zachowuje kontrakt C1 i dodaje trwały zapis: zwalidowany OpenRouter `continuationState` jest atomowo wiązany z dokładną wiadomością `assistant` w Conversation, a schema 025 udostępnia analogiczny storage przypisany do dokładnego `session_event_id`. Rust request builder nadal odsyła `reasoning_details` tylko dla OpenRouter. Automatyczne workflowy RV Sessions, Training, Research, post-Reveal i Resume nie korzystają jeszcze z Session persistence; to pozostaje zakresem C3.
+Ten dokument definiuje kontrakt danych provider-native continuation. C2 dodało trwały zapis schema 025, C3 podłączyło OpenRouter continuation do RV Sessions, Training, Research, post-Reveal i Resume, a C4 aktywuje analogiczny, provider-native replay Google dla zweryfikowanych text/thought `Part` z `thoughtSignature`. State pozostaje przypisany do dokładnej wiadomości `assistant` lub `session_event_id`; nie jest rekonstruowany z transcriptu ani widocznego reasoning.
 
 ## Klasy danych
 
@@ -63,8 +63,8 @@ Rationale: oficjalne fixture’y są małe, ale podpisy i encrypted blocks są o
 
 | ProviderKind / transport | Oficjalny state | Wymóg replay | Stan obecnego Harnessa | Decyzja C0 |
 |---|---|---|---|---|
-| OpenRouter | `message.reasoning_details[]`: `reasoning.summary`, `reasoning.encrypted`, `reasoning.text` | przy special/encrypted/summarized reasoning zachować pełną tablicę i kolejność | parser już zachowuje całe `reasoning_details`, request builder go nie odsyła | **CONTRACTED; C1 first runtime transport** |
-| Google native (`generateContent`) | `Part.thoughtSignature` na dokładnym part; thought parts mogą mieć `thought=true` | signature należy zwrócić dokładnie na właściwym part; function calling Gemini 3 wymaga ścisłego round-trip | parser zbiera tylko `thought=true` parts; signature na zwykłym final part może zostać zgubiony; request builder rekonstruuje tekst/obrazy | **CONTRACTED shape; runtime deferred to C4** |
+| OpenRouter | `message.reasoning_details[]`: `reasoning.summary`, `reasoning.encrypted`, `reasoning.text` | przy special/encrypted/summarized reasoning zachować pełną tablicę i kolejność | **ACTIVE C1–C3:** capture, persistence, exact-message/event replay, Resume i post-Reveal | **ACTIVE** |
+| Google native (`generateContent`) | `Part.thoughtSignature` na dokładnym part; thought parts mogą mieć `thought=true` | signature należy zwrócić dokładnie na właściwym part | **ACTIVE C4 dla zweryfikowanego text/thought subsetu:** parser zachowuje kompletną wspieraną sekwencję Parts, persistence wiąże ją z exact assistant turn/event, a request builder replayuje `thoughtSignature` na tym samym Part | **ACTIVE C4; tools/function parts nadal poza v1** |
 | Anthropic native | `thinking { thinking, signature }`, `redacted_thinking { data }` | zachować bloki, kolejność i opaque signature/data; modyfikacja może dać 400 | parser zachowuje `thinking`, ale obecnie zastępuje `redacted_thinking.data` placeholderem; request builder nie replayuje bloków | **CONTRACTED shape; runtime deferred to C5** |
 | OpenAI direct | brak zatwierdzonego osobnego Chat Completions continuation fixture w C0 | zależne od API/modelu | text-only continuation | **NOT CONTRACTED** |
 | Z.AI direct | brak zatwierdzonego provider-native fixture | nieznane | text-only continuation | **NOT CONTRACTED** |
@@ -75,10 +75,10 @@ Rationale: oficjalne fixture’y są małe, ale podpisy i encrypted blocks są o
 
 ## Fixture’y
 
-`src/providers/continuation-fixtures/` zawiera trzy pary response → next request. Są to **zanonimizowane fixture’y odwzorowujące oficjalnie opublikowane wire shapes**, a nie zapis prywatnego ruchu użytkownika ani odpowiedzi z klucza API.
+`src/providers/continuation-fixtures/` zawiera trzy pary response → next request. OpenRouter i Anthropic odwzorowują zatwierdzone wire shapes; Google fixture C4 jest **zanonimizowanym odwzorowaniem rzeczywiście zaobserwowanej odpowiedzi Google native `gemini-3.8-flash` z 2026-09-25**. Repo nie zapisuje prywatnej treści rozmowy, prawdziwego podpisu użytkownika ani klucza API.
 
 - OpenRouter: struktura `reasoning_details` zachowana 1:1 i w kolejności;
-- Google: `thoughtSignature` pozostaje na dokładnym part;
+- Google: C4 pokazuje zarówno historyczny request bez podpisu, jak i oczekiwany replay, w którym `thoughtSignature` pozostaje na dokładnym text `Part`;
 - Anthropic: `thinking` i `redacted_thinking` zachowane bez modyfikacji.
 
 ## Prywatność
@@ -123,7 +123,7 @@ C1 aktywuje wyłącznie następujący łańcuch w zwykłej Conversation:
 5. normalized endpoint pochodzi z natywnego credential-binding normalizer, nie z drugiej implementacji TypeScript;
 6. przy niezgodności provider/model/credential/endpoint request zatrzymuje się przed provider call; użytkownik Conversation może jawnie wybrać `Continue text-only`, co usuwa in-memory state tego wątku;
 7. `actualModelId` pozostaje diagnostyczny i nie jest replay gate; generic fingerprint nie zawiera reasoning effort/mode;
-8. `reasoning_details` są redagowane z detailed debug payloadu.
+8. `reasoning_details`, Google `thoughtSignature` oraz tekst ukrytych `thought:true` parts są redagowane z detailed debug payloadu; widoczny semantic text pozostaje diagnostycznie czytelny.
 
 C2 zachowuje powyższy kontrakt C1 i dodaje wyłącznie warstwę persistence:
 
@@ -132,10 +132,10 @@ C2 zachowuje powyższy kontrakt C1 i dodaje wyłącznie warstwę persistence:
 - Conversation zapisuje assistant message + state atomowo i po restarcie hydratuje zwalidowany state przed kolejnym kompatybilnym requestem;
 - hash SHA-256, rozmiar UTF-8, format, wersja i fingerprint są sprawdzane ponownie przy odczycie;
 - Browser storage zachowuje logiczną parytetowość z SQLite, włącznie z rollbackiem zapisu i controlled purge;
-- Session storage ma atomowe API event + state przypisane do dokładnego `session_event_id`, ale kontrolery RV/Training/Research jeszcze go nie wywołują;
+- Session storage ma atomowe API event + state przypisane do dokładnego `session_event_id`; C3 używa go w RV Sessions, Training, Research, post-Reveal i Resume dla OpenRouter;
 - historyczne rekordy bez state nadal działają text-only;
-- Google i Anthropic runtime replay pozostają wyłączone;
-- workflow rollout i fail-closed Resume pozostają zakresem C3.
+- C4 używa tego samego schema 025 dla Google native bez migracji 026;
+- Anthropic runtime replay pozostaje wyłączone do C5.
 
 C2 nie rekonstruuje state z widocznego reasoning ani z transcriptu. Persistence przechowuje wyłącznie zwalidowany provider-native state wymagany do replay.
 
@@ -153,3 +153,18 @@ Jeżeli widoczny input + obrazy + continuation estimate + zarezerwowany output p
 
 C1-R1 nie zmienia limitów kontraktu 64 / 512 KiB / 2 MiB / 8 MiB. Tamte limity pozostają guardrailami struktury/payloadu; context budget jest osobnym limitem modelu.
 
+
+
+## Aktywacja C4 — Google native text/thought parts
+
+C4 aktywuje wyłącznie potwierdzony kontrakt Google native `generateContent` dla text/thought `Part`:
+
+1. parser Rust wykrywa continuation, gdy odpowiedź zawiera `thought=true` lub niepusty `thoughtSignature`;
+2. jeżeli continuation istnieje, zachowywana jest kompletna **wspierana** kolejność text/thought Parts, ponieważ Gemini 3 może dołączyć `thoughtSignature` bezpośrednio do widocznego text Part;
+3. TypeScript waliduje zamknięty format `google-native / google-thought-parts`, canonical base64 signature, limity i exact visible-content binding;
+4. Conversation, Session, Resume i post-Reveal korzystają z istniejącego persistence schema 025 i exact-message/event ownership;
+5. request builder Google odtwarza zapisane Parts wraz z niezmienionym `thoughtSignature` zamiast rekonstruować tylko `{ text }`;
+6. zmiana provider config, credential, endpointu lub requested model ID unieważnia automatyczny replay;
+7. historyczne rekordy bez Google state pozostają text-only;
+8. function/tool parts, pełny uniwersalny `parts[]` AST i Google function calling pozostają poza ProviderMessage v1 i wymagają osobnego etapu/fixture’ów;
+9. Anthropic continuation pozostaje wyłączone do C5.

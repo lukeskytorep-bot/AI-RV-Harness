@@ -1,14 +1,16 @@
-import { CONTINUATION_LIMITS_V1, validateProviderContinuationState, type ProviderContinuationState } from "../providers/continuationContract";
-import {
-  validateOpenRouterReplayBudget,
-  validateOpenRouterReplayForRequest,
-  type OpenRouterContinuationIssue,
-} from "../providers/openRouterContinuation";
+import { CONTINUATION_LIMITS_V1, validateContinuationRequestBudget, validateProviderContinuationState, type ContinuationValidationCode, type ProviderContinuationState } from "../providers/continuationContract";
+import { validateGoogleReplayForRequest } from "../providers/googleContinuation";
+import { validateOpenRouterReplayForRequest } from "../providers/openRouterContinuation";
 import type { ProviderConfig, ProviderMessage } from "../providers/types";
+
+export interface ConversationContinuationIssue {
+  code: ContinuationValidationCode | "incompatible_replay";
+  message: string;
+}
 
 export type ConversationContinuationMemoryEntry =
   | { kind: "state"; state: ProviderContinuationState }
-  | { kind: "issue"; issue: OpenRouterContinuationIssue };
+  | { kind: "issue"; issue: ConversationContinuationIssue };
 
 const memory = new Map<string, Map<string, ConversationContinuationMemoryEntry>>();
 const persistenceHydrationSuppressed = new Set<string>();
@@ -26,7 +28,7 @@ export function rememberConversationContinuationState(threadId: string, messageI
   threadMemory(threadId).set(messageId, { kind: "state", state: structuredClone(state) });
 }
 
-export function rememberConversationContinuationIssue(threadId: string, messageId: string, issue: OpenRouterContinuationIssue): void {
+export function rememberConversationContinuationIssue(threadId: string, messageId: string, issue: ConversationContinuationIssue): void {
   threadMemory(threadId).set(messageId, { kind: "issue", issue: { ...issue } });
 }
 
@@ -64,10 +66,10 @@ export function clearAllConversationContinuationMemoryForTests(): void {
 }
 
 export class ConversationContinuationBreakError extends Error {
-  readonly issue: OpenRouterContinuationIssue;
+  readonly issue: ConversationContinuationIssue;
   readonly messageId: string;
 
-  constructor(messageId: string, issue: OpenRouterContinuationIssue) {
+  constructor(messageId: string, issue: ConversationContinuationIssue) {
     super(issue.message);
     this.name = "ConversationContinuationBreakError";
     this.issue = issue;
@@ -87,7 +89,7 @@ export function applyConversationContinuationMemory(input: {
   if (!entries?.size) return { messages: input.messages, textOnlyFallbackUsed: false };
 
   const states: ProviderContinuationState[] = [];
-  let firstBreak: { messageId: string; issue: OpenRouterContinuationIssue } | undefined;
+  let firstBreak: { messageId: string; issue: ConversationContinuationIssue } | undefined;
   const messages = input.messages.map((message) => {
     if (message.role !== "assistant" || !message.id) return message;
     const entry = entries.get(message.id);
@@ -96,12 +98,21 @@ export function applyConversationContinuationMemory(input: {
       firstBreak ??= { messageId: message.id, issue: entry.issue };
       return message;
     }
-    const compatible = validateOpenRouterReplayForRequest({
-      state: entry.state,
-      config: input.config,
-      requestedModelId: input.requestedModelId,
-      normalizedEndpoint: input.normalizedEndpoint,
-    });
+    const compatible = entry.state.transport === "openrouter"
+      ? validateOpenRouterReplayForRequest({
+          state: entry.state,
+          config: input.config,
+          requestedModelId: input.requestedModelId,
+          normalizedEndpoint: input.normalizedEndpoint,
+        })
+      : entry.state.transport === "google-native"
+        ? validateGoogleReplayForRequest({
+            state: entry.state,
+            config: input.config,
+            requestedModelId: input.requestedModelId,
+            normalizedEndpoint: input.normalizedEndpoint,
+          })
+        : { ok: false as const, issue: { code: "incompatible_replay" as const, message: "continuation state belongs to a provider transport that is not active yet" } };
     if (compatible.ok === false) {
       firstBreak ??= { messageId: message.id, issue: compatible.issue };
       return message;
@@ -111,8 +122,8 @@ export function applyConversationContinuationMemory(input: {
   });
 
   if (!firstBreak) {
-    const budget = validateOpenRouterReplayBudget(states);
-    if (budget.ok === false) firstBreak = { messageId: "request", issue: budget.issue };
+    const budget = validateContinuationRequestBudget(states);
+    if (budget.ok === false) firstBreak = { messageId: "request", issue: { code: budget.code, message: budget.message } };
   }
 
   if (firstBreak) {

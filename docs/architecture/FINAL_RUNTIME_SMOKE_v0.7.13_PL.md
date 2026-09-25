@@ -1,7 +1,7 @@
 # AI RV Harness v0.7.13 — desktop runtime i release smoke
 
 **Status modularizacji:** Etapy 1–9 `COMPLETED — AUTOMATED GATES PASS`.  
-**Cel:** bieżąca ręczna bramka desktopowa przed akceptacją/release v0.7.13; zachowuje scenariusze modularizacji i obejmuje schema 25, Viewer Learning oraz persistence OpenRouter continuation state.  
+**Cel:** bieżąca ręczna bramka desktopowa przed akceptacją/release v0.7.13; zachowuje scenariusze modularizacji i obejmuje schema 25, Viewer Learning oraz provider-native continuation dla OpenRouter i Google native.  
 **Wymagana baza:** dokładny aktualny zielony kandydat v0.7.13, nie historyczny ZIP Etapu 9.  
 **Zasada:** wykonywać na desktopowym buildzie Tauri z kopią danych testowych. Nie używać jedynej kopii realnej bazy użytkownika.
 
@@ -34,7 +34,9 @@
 | 14 | Research/Judge sanity | Zablokuj minimalny Research z Notes OFF/CURRENT i Field Guide OFF/CURRENT; sprawdź także historię Field Guide, jeśli dostępna. | Lock zamraża dokładne snapshoty, Resume ich nie podmienia, Research nie tworzy wersji Notes ani Field Guide, a frozen Judge score/blinding nie zmienia się od odczytu. |
 | 15 | OpenRouter Conversation continuity persistence | W Conversation użyj kompatybilnego modelu OpenRouter zwracającego `reasoning_details`, wykonaj kolejny turn, zamknij aplikację, uruchom ponownie i wykonaj następny turn w tej samej Conversation. | Assistant message i state zapisują się atomowo; po restarcie state jest odczytany, zwalidowany i replayowany wyłącznie przy zgodnym fingerprint. Ordinary transcript/export nie pokazuje payloadu. |
 | 16 | Continuation backup/restore + purge | Po zapisaniu Conversation continuation state wykonaj backup, Restore i ponowny odczyt; następnie na osobnej kopii wykonaj controlled purge Conversation. | Backup/Restore zachowuje exact payload/hash/size; purge usuwa state razem z wiadomością i nie pozostawia orphan/FK violations. |
-| 17 | Restart końcowy | Zamknij aplikację po wszystkich operacjach i uruchom ponownie. | Brak startup error; ostatnie poprawne dane i archiwa są dostępne. |
+| 17 | Google native Conversation continuity | Użyj Google native Gemini 3.x zwracającego `thoughtSignature`: turn A → turn B → restart → turn C. W detailed diagnostics potwierdź obecność redacted continuation marker zamiast jawnego podpisu. | Request B/C zachowuje exact `thoughtSignature` na tym samym historycznym model `Part` (potwierdzane testem kontraktowym/providerowym), po restarcie persistence odtwarza state, debug nie ujawnia podpisu, a zmiana credential/model route blokuje replay zamiast go pomijać. |
+| 18 | Google native Session/Resume/post-Reveal | Uruchom krótki RV Lite lub Full RCP przez Google native, przerwij po co najmniej jednym zapisanym Viewer response, wykonaj Resume i jeden post-Reveal turn. | State jest związany z dokładnym `session_event_id`, Resume replayuje go przed kolejnym Viewer call, a post-Reveal zapisuje kolejny signed turn atomowo. Historyczne sesje bez state pozostają text-only. |
+| 19 | Restart końcowy | Zamknij aplikację po wszystkich operacjach i uruchom ponownie. | Brak startup error; ostatnie poprawne dane i archiwa są dostępne. |
 
 ## Kryterium zaliczenia
 

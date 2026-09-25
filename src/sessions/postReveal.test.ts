@@ -9,6 +9,8 @@ vi.mock("../providers/native", () => ({
 import { automaticPostRevealReviewRequest, findCompletedAutomaticViewerReview, findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview, sendPostRevealTurn, supportedAutomaticPostRevealReviewRequests } from "./postReveal";
 import type { ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import { ProviderCallError } from "../providers/providerError";
+import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
+import { captureGoogleContinuationState } from "../providers/googleContinuation";
 import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
 import { serializePostRevealTurn } from "./postRevealTranscript";
 
@@ -147,6 +149,37 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
 
 
 
+  it("rehydrates and stores Google native thoughtSignature during post-Reveal discussion", async () => {
+    const googleConfig: ProviderConfig = { ...config, id: "google-pc", provider: "google", label: "Google" };
+    const googleModel: ProviderModel = { ...model, providerConfigId: "google-pc", provider: "google", modelId: "gemini-3.8-flash", route: "google:gemini-3.8-flash" };
+    const parts = structuredClone(googleFixture.providerResponse.candidates[0].content.parts);
+    const prior = captureGoogleContinuationState({ config: googleConfig, requestedModelId: googleModel.modelId, normalizedEndpoint: "https://generativelanguage.googleapis.com/v1beta", parts });
+    if (!prior.state) throw new Error("Expected Google prior state.");
+    const existingTranscript = `${serializePostRevealTurn("user", "First post-Reveal question")}${serializePostRevealTurn("assistant", "Visible fixture answer.")}`;
+    let transcript = existingTranscript;
+    const appendPostRevealTurnWithProviderState = vi.fn(async (_id: string, content: string) => { transcript += serializePostRevealTurn("assistant", content); return transcript; });
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({
+        schemaVersion: 4, providerConfigId: "google-pc", credentialId: "cred", provider: "google", modelId: "gemini-3.8-flash", modelRoute: "google:gemini-3.8-flash", sessionLanguage: "en",
+        continuationRoute: { transport: "google-native", normalizedEndpoint: "https://generativelanguage.googleapis.com/v1beta", providerConfigId: "google-pc", credentialId: "cred", requestedModelId: "gemini-3.8-flash", stateFormat: "google-thought-parts", stateFormatVersion: 1 },
+      }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Lighthouse", hash: "h" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
+      listTargetClarifications: vi.fn().mockResolvedValue([]),
+      listSessionEvents: vi.fn().mockResolvedValue([{ id: "post-google-1", sessionId: "s", sequenceNumber: 10, createdAt: "now", eventType: "POST_REVEAL_ASSISTANT", role: "assistant", content: "Visible fixture answer.", metadata: { continuationState: { status: "stored", format: "google-thought-parts", version: 1 } } }]),
+      getSessionEventProviderState: vi.fn().mockResolvedValue({ ownerId: "post-google-1", format: prior.state.format, formatVersion: 1, transport: "google-native", replayFingerprint: prior.state.replayFingerprint, state: prior.state, payloadSha256: "a".repeat(64), payloadSizeBytes: 1, createdAt: "now" }),
+      appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant" | "monitor", content: string) => { transcript += serializePostRevealTurn(role, content); return transcript; }),
+      appendPostRevealTurnWithProviderState,
+    };
+    const chat = vi.fn(async ({ messages }: { messages: ProviderMessage[] }) => {
+      const priorAssistant = messages.find((message) => message.role === "assistant" && message.content === "Visible fixture answer.");
+      expect(priorAssistant?.continuationState).toEqual(prior.state);
+      return { content: "Visible fixture answer.", reasoningDetails: parts, reasoningSource: "google_thought_parts", usage: {} };
+    });
+    await sendPostRevealTurn({ repository: repository as never, sessionId: "s", existingTranscript, providerConfig: googleConfig, model: googleModel, content: "Second question", chat: chat as never });
+    expect(appendPostRevealTurnWithProviderState).toHaveBeenCalledTimes(1);
+  });
+
   it("fails closed when a frozen post-Reveal assistant turn has no matching Session event", async () => {
     const existingTranscript = `${serializePostRevealTurn("user", "First question")}${serializePostRevealTurn("assistant", "Persisted assistant answer")}`;
     const repository = {
@@ -213,7 +246,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
 
     const secondChat = vi.fn().mockResolvedValue({ content: "must not run", usage: {} });
     await expect(sendPostRevealTurn({ repository: repository as never, sessionId: "s", existingTranscript: transcript, providerConfig: config, model, content: "Second question", chat: secondChat as never }))
-      .rejects.toThrow("invalid OpenRouter continuation state");
+      .rejects.toThrow("invalid provider continuation state");
     expect(secondChat).not.toHaveBeenCalled();
   });
 

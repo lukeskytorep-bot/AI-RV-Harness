@@ -15,18 +15,6 @@ export class SessionContinuationError extends Error {
   }
 }
 
-type RuntimeSessionContinuationRouteSnapshot = {
-  transport?: unknown;
-};
-
-function requireSupportedSessionContinuationRoute(
-  route: SessionContinuationRouteSnapshot,
-): SessionContinuationRouteSnapshot {
-  const runtimeRoute = route as unknown as RuntimeSessionContinuationRouteSnapshot;
-  if (runtimeRoute.transport === "openrouter" || runtimeRoute.transport === "google-native") return route;
-  throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
-}
-
 export function captureSessionContinuationRoute(config: ProviderConfig, model: ProviderModel): SessionContinuationRouteSnapshot | undefined {
   if (model.providerConfigId !== config.id || model.provider !== config.provider) {
     if (config.provider === "openrouter" || config.provider === "google") throw new SessionContinuationError("Viewer model/provider route mismatch while freezing continuation state.");
@@ -62,25 +50,15 @@ export function validateFrozenSessionContinuationRequest(
   config: ProviderConfig,
   requestedModelId: string,
 ): SessionContinuationRouteSnapshot | undefined {
-  const frozenRoute = snapshot.continuationRoute;
-  if (!frozenRoute) return undefined;
-  const route = requireSupportedSessionContinuationRoute(frozenRoute);
+  const route = snapshot.continuationRoute;
+  if (!route) return undefined;
   const commonMismatch = route.providerConfigId !== config.id
     || route.credentialId !== config.credentialId
     || route.requestedModelId !== requestedModelId
     || route.stateFormatVersion !== 1;
-  let transportMismatch: boolean;
-  if (route.transport === "openrouter") {
-    transportMismatch = config.provider !== "openrouter"
-      || route.normalizedEndpoint !== OPENROUTER_ENDPOINT
-      || route.stateFormat !== "openrouter-reasoning-details";
-  } else if (route.transport === "google-native") {
-    transportMismatch = config.provider !== "google"
-      || route.normalizedEndpoint !== GOOGLE_ENDPOINT
-      || route.stateFormat !== "google-thought-parts";
-  } else {
-    throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
-  }
+  const transportMismatch = route.transport === "openrouter"
+    ? config.provider !== "openrouter" || route.normalizedEndpoint !== OPENROUTER_ENDPOINT || route.stateFormat !== "openrouter-reasoning-details"
+    : config.provider !== "google" || route.normalizedEndpoint !== GOOGLE_ENDPOINT || route.stateFormat !== "google-thought-parts";
   if (commonMismatch || transportMismatch) {
     throw new SessionContinuationError("The frozen provider continuation route no longer matches the captured provider, credential, endpoint, or model.");
   }
@@ -94,14 +72,7 @@ export function validateFrozenSessionContinuationRoute(
 ): SessionContinuationRouteSnapshot | undefined {
   const route = validateFrozenSessionContinuationRequest(snapshot, config, model.modelId);
   if (!route) return undefined;
-  let expectedProvider: ProviderModel["provider"];
-  if (route.transport === "openrouter") {
-    expectedProvider = "openrouter";
-  } else if (route.transport === "google-native") {
-    expectedProvider = "google";
-  } else {
-    throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
-  }
+  const expectedProvider = route.transport === "openrouter" ? "openrouter" : "google";
   if (model.provider !== expectedProvider || model.providerConfigId !== config.id) {
     throw new SessionContinuationError("The frozen provider continuation route no longer matches the captured Viewer model route.");
   }
@@ -117,10 +88,8 @@ export function captureSessionContinuationState(input: {
   | { state: ProviderContinuationState; issue?: never }
   | { state?: never; issue: { code: string; message: string } }
   | { state?: never; issue?: never } {
-  const frozenRoute = input.route;
-  if (!frozenRoute) return {};
-  const route = requireSupportedSessionContinuationRoute(frozenRoute);
-  if (!input.response.reasoningDetails?.length) return {};
+  const route = input.route;
+  if (!route || !input.response.reasoningDetails?.length) return {};
   if (route.transport === "openrouter") {
     return captureOpenRouterContinuationState({
       config: input.providerConfig,
@@ -129,16 +98,13 @@ export function captureSessionContinuationState(input: {
       reasoningDetails: input.response.reasoningDetails,
     });
   }
-  if (route.transport === "google-native") {
-    return captureGoogleContinuationState({
-      config: input.providerConfig,
-      requestedModelId: input.model.modelId,
-      normalizedEndpoint: route.normalizedEndpoint,
-      parts: input.response.reasoningDetails,
-      visibleContent: input.response.content,
-    });
-  }
-  throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
+  return captureGoogleContinuationState({
+    config: input.providerConfig,
+    requestedModelId: input.model.modelId,
+    normalizedEndpoint: route.normalizedEndpoint,
+    parts: input.response.reasoningDetails,
+    visibleContent: input.response.content,
+  });
 }
 
 export async function persistSessionAssistantResponse(input: {
@@ -189,18 +155,9 @@ function replayStateForRoute(input: {
   config: ProviderConfig;
   requestedModelId: string;
 }): { ok: true; state: ProviderContinuationState } | { ok: false; issue: { message: string } } {
-  const route = requireSupportedSessionContinuationRoute(input.route);
-  if (route.transport === "openrouter") {
-    return validateOpenRouterReplayForRequest({
-      state: input.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: route.normalizedEndpoint,
-    });
-  }
-  if (route.transport === "google-native") {
-    return validateGoogleReplayForRequest({
-      state: input.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: route.normalizedEndpoint,
-    });
-  }
-  throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
+  return input.route.transport === "openrouter"
+    ? validateOpenRouterReplayForRequest({ state: input.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: input.route.normalizedEndpoint })
+    : validateGoogleReplayForRequest({ state: input.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: input.route.normalizedEndpoint });
 }
 
 export async function hydrateSessionMessageContinuationForRequest(input: {

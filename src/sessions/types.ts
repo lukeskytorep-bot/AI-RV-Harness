@@ -70,15 +70,25 @@ export interface LockedPromptBlockSnapshot {
   fullContent: string;
 }
 
-export interface SessionContinuationRouteSnapshot {
-  transport: "openrouter";
-  normalizedEndpoint: string;
-  providerConfigId: string;
-  credentialId: string;
-  requestedModelId: string;
-  stateFormat: "openrouter-reasoning-details";
-  stateFormatVersion: 1;
-}
+export type SessionContinuationRouteSnapshot =
+  | {
+      transport: "openrouter";
+      normalizedEndpoint: string;
+      providerConfigId: string;
+      credentialId: string;
+      requestedModelId: string;
+      stateFormat: "openrouter-reasoning-details";
+      stateFormatVersion: 1;
+    }
+  | {
+      transport: "google-native";
+      normalizedEndpoint: string;
+      providerConfigId: string;
+      credentialId: string;
+      requestedModelId: string;
+      stateFormat: "google-thought-parts";
+      stateFormatVersion: 1;
+    };
 
 export interface SessionSnapshot {
   schemaVersion: 1 | 2 | 3 | 4;

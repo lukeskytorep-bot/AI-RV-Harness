@@ -161,12 +161,18 @@ fn debug_payload_redacts_secret_and_binary_data() {
         "authorization": "Bearer sk-secret",
         "prompt": "do not echo sk-secret",
         "reasoning_details": [{ "type": "reasoning.encrypted", "data": "opaque-private-state" }],
+        "googleVisiblePart": { "text": "visible answer", "thoughtSignature": "private-google-signature" },
+        "googleThoughtPart": { "text": "private hidden thought", "thought": true, "thoughtSignature": "private-thought-signature" },
         "inlineData": { "data": "A".repeat(300) }
     });
     scrub_debug_value(&mut value, "sk-secret", None);
     let wire = value.to_string();
     assert!(!wire.contains("sk-secret"));
     assert!(!wire.contains("opaque-private-state"));
+    assert!(!wire.contains("private-google-signature"));
+    assert!(!wire.contains("private-thought-signature"));
+    assert!(!wire.contains("private hidden thought"));
+    assert!(wire.contains("visible answer"));
     assert!(wire.contains("CONTINUATION STATE REDACTED"));
     assert!(wire.contains("BINARY REDACTED"));
 }
@@ -294,7 +300,12 @@ fn provider_message_deserializes_camel_case_continuation_state() {
         }
     })).unwrap();
     let state = message.continuation_state.expect("continuation state");
-    assert_eq!(state.replay_fingerprint.actual_model_id.as_deref(), Some("provider-specific-model"));
+    match state {
+        ProviderContinuationState::OpenRouter(state) => {
+            assert_eq!(state.replay_fingerprint.actual_model_id.as_deref(), Some("provider-specific-model"));
+        }
+        ProviderContinuationState::Google(_) => panic!("expected OpenRouter continuation state"),
+    }
 }
 
 #[test]
@@ -311,11 +322,11 @@ fn replays_openrouter_reasoning_details_only_on_the_bound_assistant_message() {
             role: "assistant".to_string(),
             content: "Answer".to_string(),
             images: vec![],
-            continuation_state: Some(OpenRouterContinuationState {
+            continuation_state: Some(ProviderContinuationState::OpenRouter(OpenRouterContinuationState {
                 schema_version: 1,
                 transport: "openrouter".to_string(),
                 format: "openrouter-reasoning-details".to_string(),
-                replay_fingerprint: OpenRouterReplayFingerprint {
+                replay_fingerprint: ProviderReplayFingerprint {
                     transport: "openrouter".to_string(),
                     normalized_endpoint: "https://openrouter.ai/api/v1".to_string(),
                     provider_config_id: "provider-config".to_string(),
@@ -329,7 +340,7 @@ fn replays_openrouter_reasoning_details_only_on_the_bound_assistant_message() {
                     json!({"type":"reasoning.summary","summary":"summary","id":"r1","format":"openai-responses-v1","index":0}),
                     json!({"type":"reasoning.encrypted","data":"opaque","id":"r2","format":"openai-responses-v1","index":1}),
                 ],
-            }),
+            })),
         },
     ];
     validate_continuation_bindings(&request, "https://openrouter.ai/api/v1").unwrap();
@@ -340,17 +351,103 @@ fn replays_openrouter_reasoning_details_only_on_the_bound_assistant_message() {
 }
 
 #[test]
+fn replays_google_thought_signature_on_the_exact_model_part() {
+    let signature = "R0VNSU5JXzNfVEhPVUdIVF9TSUdOQVRVUkU=";
+    let mut request = chat_request(ProviderKind::Google, "gemini-3.8-flash");
+    request.messages = vec![
+        ProviderMessage {
+            role: "user".to_string(),
+            content: "Fixture question.".to_string(),
+            images: vec![],
+            continuation_state: None,
+        },
+        ProviderMessage {
+            role: "assistant".to_string(),
+            content: "Visible fixture answer.".to_string(),
+            images: vec![],
+            continuation_state: Some(ProviderContinuationState::Google(GoogleContinuationState {
+                schema_version: 1,
+                transport: "google-native".to_string(),
+                format: "google-thought-parts".to_string(),
+                replay_fingerprint: ProviderReplayFingerprint {
+                    transport: "google-native".to_string(),
+                    normalized_endpoint: "https://generativelanguage.googleapis.com/v1beta".to_string(),
+                    provider_config_id: "provider-config".to_string(),
+                    credential_id: "credential".to_string(),
+                    requested_model_id: "gemini-3.8-flash".to_string(),
+                    actual_model_id: None,
+                    state_format: "google-thought-parts".to_string(),
+                    state_format_version: 1,
+                },
+                parts: vec![GoogleThoughtPart {
+                    text: "Visible fixture answer.".to_string(),
+                    thought: None,
+                    thought_signature: Some(signature.to_string()),
+                }],
+            })),
+        },
+        ProviderMessage {
+            role: "user".to_string(),
+            content: "Fixture follow-up.".to_string(),
+            images: vec![],
+            continuation_state: None,
+        },
+    ];
+    validate_continuation_bindings(&request, "https://generativelanguage.googleapis.com/v1beta").unwrap();
+    let (_, body) = build_google_request(&request, "https://generativelanguage.googleapis.com/v1beta").unwrap();
+    assert_eq!(body.pointer("/contents/1/role"), Some(&json!("model")));
+    assert_eq!(body.pointer("/contents/1/parts/0/text"), Some(&json!("Visible fixture answer.")));
+    assert_eq!(body.pointer("/contents/1/parts/0/thoughtSignature"), Some(&json!(signature)));
+}
+
+#[test]
+fn rejects_google_continuation_state_when_bound_message_or_fingerprint_changes() {
+    let mut request = chat_request(ProviderKind::Google, "gemini-3.8-flash");
+    request.messages = vec![ProviderMessage {
+        role: "assistant".to_string(),
+        content: "Different visible text.".to_string(),
+        images: vec![],
+        continuation_state: Some(ProviderContinuationState::Google(GoogleContinuationState {
+            schema_version: 1,
+            transport: "google-native".to_string(),
+            format: "google-thought-parts".to_string(),
+            replay_fingerprint: ProviderReplayFingerprint {
+                transport: "google-native".to_string(),
+                normalized_endpoint: "https://generativelanguage.googleapis.com/v1beta".to_string(),
+                provider_config_id: "provider-config".to_string(),
+                credential_id: "credential".to_string(),
+                requested_model_id: "gemini-3.8-flash".to_string(),
+                actual_model_id: None,
+                state_format: "google-thought-parts".to_string(),
+                state_format_version: 1,
+            },
+            parts: vec![GoogleThoughtPart {
+                text: "Visible fixture answer.".to_string(),
+                thought: None,
+                thought_signature: Some("R0VNSU5JXzNfVEhPVUdIVF9TSUdOQVRVUkU=".to_string()),
+            }],
+        })),
+    }];
+    assert!(validate_continuation_bindings(&request, "https://generativelanguage.googleapis.com/v1beta").is_err());
+    if let Some(ProviderContinuationState::Google(state)) = request.messages[0].continuation_state.as_mut() {
+        request.messages[0].content = "Visible fixture answer.".to_string();
+        state.replay_fingerprint.credential_id = "other".to_string();
+    }
+    assert!(validate_continuation_bindings(&request, "https://generativelanguage.googleapis.com/v1beta").is_err());
+}
+
+#[test]
 fn rejects_openrouter_continuation_state_when_fingerprint_changes() {
     let mut request = chat_request(ProviderKind::Openrouter, "model-a");
     request.messages = vec![ProviderMessage {
         role: "assistant".to_string(),
         content: "Answer".to_string(),
         images: vec![],
-        continuation_state: Some(OpenRouterContinuationState {
+        continuation_state: Some(ProviderContinuationState::OpenRouter(OpenRouterContinuationState {
             schema_version: 1,
             transport: "openrouter".to_string(),
             format: "openrouter-reasoning-details".to_string(),
-            replay_fingerprint: OpenRouterReplayFingerprint {
+            replay_fingerprint: ProviderReplayFingerprint {
                 transport: "openrouter".to_string(),
                 normalized_endpoint: "https://openrouter.ai/api/v1".to_string(),
                 provider_config_id: "other-config".to_string(),
@@ -361,7 +458,7 @@ fn rejects_openrouter_continuation_state_when_fingerprint_changes() {
                 state_format_version: 1,
             },
             reasoning_details: vec![json!({"type":"reasoning.text","text":"hidden","id":"r1","format":"openai-responses-v1"})],
-        }),
+        })),
     }];
     assert!(validate_continuation_bindings(&request, "https://openrouter.ai/api/v1").is_err());
 }
@@ -510,6 +607,25 @@ fn separates_google_thought_parts_from_visible_parts() {
     assert_eq!(parsed.reasoning_content.as_deref(), Some("internal analysis"));
     assert_eq!(parsed.reasoning_source.as_deref(), Some("google_thought_parts"));
     assert_eq!(parsed.usage.reasoning_tokens, Some(42));
+}
+
+#[test]
+fn captures_visible_google_text_part_when_it_carries_a_thought_signature() {
+    let signature = "R0VNSU5JXzNfVEhPVUdIVF9TSUdOQVRVUkU=";
+    let parsed = parse_google_response(json!({
+        "modelVersion": "gemini-3.8-flash",
+        "candidates": [{
+            "content": { "role": "model", "parts": [
+                { "text": "Visible fixture answer.", "thoughtSignature": signature }
+            ]},
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": { "thoughtsTokenCount": 258 }
+    }), None).unwrap();
+    assert_eq!(parsed.content, "Visible fixture answer.");
+    assert!(parsed.reasoning_content.is_none());
+    assert_eq!(parsed.reasoning_details.as_ref().map(Vec::len), Some(1));
+    assert_eq!(parsed.reasoning_details.as_ref().unwrap()[0].get("thoughtSignature"), Some(&json!(signature)));
 }
 
 #[test]

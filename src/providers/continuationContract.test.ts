@@ -195,7 +195,7 @@ describe("CONTINUATION-CONTRACT-0-R1", () => {
 
   it("rejects malformed Google thoughtSignature base64 without rewriting it", () => {
     const google: any = structuredClone(googleFixture.continuationState);
-    google.parts[1].thoughtSignature = "not base64!";
+    google.parts[0].thoughtSignature = "not base64!";
     expect(validateProviderContinuationState(google)).toMatchObject({ ok: false, code: "invalid_payload" });
   });
 

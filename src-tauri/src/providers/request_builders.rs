@@ -1,6 +1,6 @@
 use serde_json::{json, Map, Value};
 
-use super::{ProviderChatRequest, ProviderKind, ProviderMessage};
+use super::{ProviderChatRequest, ProviderContinuationState, ProviderKind, ProviderMessage};
 use super::adapters::{endpoint, provider_family, ProviderFamily};
 
 pub(super) fn build_chat_request(request: &ProviderChatRequest, base: &str) -> Result<(String, Value), String> {
@@ -80,7 +80,7 @@ fn openai_message(provider: ProviderKind, message: &ProviderMessage) -> Value {
     object.insert("role".into(), Value::String(message.role.clone()));
     object.insert("content".into(), content);
     if matches!(provider, ProviderKind::Openrouter) {
-        if let Some(state) = message.continuation_state.as_ref() {
+        if let Some(ProviderContinuationState::OpenRouter(state)) = message.continuation_state.as_ref() {
             object.insert("reasoning_details".into(), Value::Array(state.reasoning_details.clone()));
         }
     }
@@ -105,7 +105,21 @@ pub(super) fn build_google_request(request: &ProviderChatRequest, base: &str) ->
         .filter(|message| message.role != "system")
         .map(|message| {
             let role = if message.role == "assistant" { "model" } else { "user" };
-            let mut parts = vec![json!({ "text": message.content })];
+            let mut parts = if let Some(ProviderContinuationState::Google(state)) = message.continuation_state.as_ref() {
+                state.parts.iter().map(|part| {
+                    let mut value = Map::new();
+                    value.insert("text".into(), Value::String(part.text.clone()));
+                    if let Some(thought) = part.thought {
+                        value.insert("thought".into(), Value::Bool(thought));
+                    }
+                    if let Some(signature) = part.thought_signature.as_ref() {
+                        value.insert("thoughtSignature".into(), Value::String(signature.clone()));
+                    }
+                    Value::Object(value)
+                }).collect::<Vec<_>>()
+            } else {
+                vec![json!({ "text": message.content })]
+            };
             for image in &message.images {
                 parts.push(json!({ "inlineData": { "mimeType": image.mime_type, "data": image.data_base64 } }));
             }

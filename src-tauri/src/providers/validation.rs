@@ -1,4 +1,4 @@
-use super::ProviderChatRequest;
+use super::{ProviderChatRequest, ProviderContinuationState};
 
 pub(super) fn validate_request_id(value: &str) -> Result<(), String> {
     if value.is_empty()
@@ -28,8 +28,18 @@ pub(super) fn validate_chat_request(request: &ProviderChatRequest) -> Result<(),
         return Err("unsupported chat role".to_string());
     }
     for message in &request.messages {
-        if message.continuation_state.is_some() && (!matches!(request.provider, super::ProviderKind::Openrouter) || message.role != "assistant") {
-            return Err("continuation state is supported only on OpenRouter assistant messages".to_string());
+        if let Some(state) = message.continuation_state.as_ref() {
+            if message.role != "assistant" {
+                return Err("continuation state is allowed only on assistant messages".to_string());
+            }
+            let supported = matches!(
+                (request.provider, state),
+                (super::ProviderKind::Openrouter, ProviderContinuationState::OpenRouter(_))
+                    | (super::ProviderKind::Google, ProviderContinuationState::Google(_))
+            );
+            if !supported {
+                return Err("continuation state belongs to a different or unsupported provider transport".to_string());
+            }
         }
         if !message.images.is_empty() && message.role != "user" {
             return Err("image input is allowed only on user messages".to_string());
@@ -142,6 +152,19 @@ fn validate_openrouter_reasoning_detail(detail: &serde_json::Value) -> bool {
     }
 }
 
+fn canonical_base64(value: &str) -> bool {
+    if value.is_empty() || value.len() % 4 != 0 {
+        return false;
+    }
+    if !value.chars().all(|character| character.is_ascii_alphanumeric() || character == '+' || character == '/' || character == '=') {
+        return false;
+    }
+    match value.find('=') {
+        None => true,
+        Some(index) => index >= value.len().saturating_sub(2) && value[index..].chars().all(|character| character == '='),
+    }
+}
+
 pub(super) fn validate_continuation_bindings(request: &ProviderChatRequest, normalized_endpoint: &str) -> Result<(), String> {
     const MAX_BLOCKS: usize = 64;
     const MAX_BLOCK_BYTES: usize = 512 * 1024;
@@ -151,47 +174,104 @@ pub(super) fn validate_continuation_bindings(request: &ProviderChatRequest, norm
     let mut request_bytes = 0usize;
     for message in &request.messages {
         let Some(state) = message.continuation_state.as_ref() else { continue; };
-        if !matches!(request.provider, super::ProviderKind::Openrouter) {
-            return Err("continuation state is supported only for OpenRouter in C1".to_string());
-        }
         if message.role != "assistant" {
             return Err("continuation state is allowed only on assistant messages".to_string());
         }
-        if state.schema_version != 1
-            || state.transport != "openrouter"
-            || state.format != "openrouter-reasoning-details"
-            || state.replay_fingerprint.transport != "openrouter"
-            || state.replay_fingerprint.state_format != "openrouter-reasoning-details"
-            || state.replay_fingerprint.state_format_version != 1
-        {
-            return Err("unsupported OpenRouter continuation state".to_string());
-        }
-        if state.replay_fingerprint.normalized_endpoint != normalized_endpoint
-            || state.replay_fingerprint.provider_config_id != request.provider_config_id
-            || state.replay_fingerprint.credential_id != request.credential_id
-            || state.replay_fingerprint.requested_model_id != request.model_id
-        {
-            return Err("OpenRouter continuation fingerprint is incompatible with this request".to_string());
-        }
-        if state.reasoning_details.len() > MAX_BLOCKS {
-            return Err("OpenRouter continuation state exceeds block count limit".to_string());
-        }
-        for detail in &state.reasoning_details {
-            if !validate_openrouter_reasoning_detail(detail) {
-                return Err("invalid OpenRouter continuation detail".to_string());
+
+        let state_bytes = match state {
+            ProviderContinuationState::OpenRouter(state) => {
+                if !matches!(request.provider, super::ProviderKind::Openrouter) {
+                    return Err("OpenRouter continuation state cannot be replayed through this provider".to_string());
+                }
+                if state.schema_version != 1
+                    || state.transport != "openrouter"
+                    || state.format != "openrouter-reasoning-details"
+                    || state.replay_fingerprint.transport != "openrouter"
+                    || state.replay_fingerprint.state_format != "openrouter-reasoning-details"
+                    || state.replay_fingerprint.state_format_version != 1
+                {
+                    return Err("unsupported OpenRouter continuation state".to_string());
+                }
+                if state.replay_fingerprint.normalized_endpoint != normalized_endpoint
+                    || state.replay_fingerprint.provider_config_id != request.provider_config_id
+                    || state.replay_fingerprint.credential_id != request.credential_id
+                    || state.replay_fingerprint.requested_model_id != request.model_id
+                {
+                    return Err("OpenRouter continuation fingerprint is incompatible with this request".to_string());
+                }
+                if state.reasoning_details.len() > MAX_BLOCKS {
+                    return Err("OpenRouter continuation state exceeds block count limit".to_string());
+                }
+                for detail in &state.reasoning_details {
+                    if !validate_openrouter_reasoning_detail(detail) {
+                        return Err("invalid OpenRouter continuation detail".to_string());
+                    }
+                    let bytes = serde_json::to_vec(detail).map_err(|_| "invalid OpenRouter continuation detail".to_string())?.len();
+                    if bytes > MAX_BLOCK_BYTES {
+                        return Err("OpenRouter continuation state contains an oversized block".to_string());
+                    }
+                }
+                serde_json::to_vec(state).map_err(|_| "invalid OpenRouter continuation state".to_string())?.len()
             }
-            let bytes = serde_json::to_vec(detail).map_err(|_| "invalid OpenRouter continuation detail".to_string())?.len();
-            if bytes > MAX_BLOCK_BYTES {
-                return Err("OpenRouter continuation state contains an oversized block".to_string());
+            ProviderContinuationState::Google(state) => {
+                if !matches!(request.provider, super::ProviderKind::Google) {
+                    return Err("Google continuation state cannot be replayed through this provider".to_string());
+                }
+                if state.schema_version != 1
+                    || state.transport != "google-native"
+                    || state.format != "google-thought-parts"
+                    || state.replay_fingerprint.transport != "google-native"
+                    || state.replay_fingerprint.state_format != "google-thought-parts"
+                    || state.replay_fingerprint.state_format_version != 1
+                {
+                    return Err("unsupported Google continuation state".to_string());
+                }
+                if state.replay_fingerprint.normalized_endpoint != normalized_endpoint
+                    || state.replay_fingerprint.provider_config_id != request.provider_config_id
+                    || state.replay_fingerprint.credential_id != request.credential_id
+                    || state.replay_fingerprint.requested_model_id != request.model_id
+                {
+                    return Err("Google continuation fingerprint is incompatible with this request".to_string());
+                }
+                if state.parts.is_empty() || state.parts.len() > MAX_BLOCKS {
+                    return Err("Google continuation state has an invalid part count".to_string());
+                }
+                let visible_content = state.parts.iter()
+                    .filter(|part| part.thought != Some(true))
+                    .map(|part| part.text.as_str())
+                    .collect::<String>();
+                if visible_content != message.content {
+                    return Err("Google continuation parts do not match the bound assistant message content".to_string());
+                }
+                let mut has_continuation_signal = false;
+                for part in &state.parts {
+                    if let Some(signature) = part.thought_signature.as_deref() {
+                        if signature.len() > MAX_BLOCK_BYTES || !canonical_base64(signature) {
+                            return Err("invalid Google thoughtSignature".to_string());
+                        }
+                        has_continuation_signal = true;
+                    }
+                    if part.thought == Some(true) {
+                        has_continuation_signal = true;
+                    }
+                    let bytes = serde_json::to_vec(part).map_err(|_| "invalid Google continuation part".to_string())?.len();
+                    if bytes > MAX_BLOCK_BYTES {
+                        return Err("Google continuation state contains an oversized part".to_string());
+                    }
+                }
+                if !has_continuation_signal {
+                    return Err("Google continuation state contains no thought or thoughtSignature data".to_string());
+                }
+                serde_json::to_vec(state).map_err(|_| "invalid Google continuation state".to_string())?.len()
             }
-        }
-        let state_bytes = serde_json::to_vec(state).map_err(|_| "invalid OpenRouter continuation state".to_string())?.len();
+        };
+
         if state_bytes > MAX_STATE_BYTES {
-            return Err("OpenRouter continuation state exceeds per-message size limit".to_string());
+            return Err("provider continuation state exceeds per-message size limit".to_string());
         }
         request_bytes = request_bytes.saturating_add(state_bytes);
         if request_bytes > MAX_REQUEST_BYTES {
-            return Err("OpenRouter continuation states exceed per-request size limit".to_string());
+            return Err("provider continuation states exceed per-request size limit".to_string());
         }
     }
     Ok(())

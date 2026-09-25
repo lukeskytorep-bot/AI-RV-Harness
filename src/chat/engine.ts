@@ -2,6 +2,7 @@ import { buildConversationPayload, buildManualRvPayload, type ScopedChatMessage 
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat } from "../providers/requestExecutor";
 import { providerBindingEndpoint } from "../providers/native";
+import { captureGoogleContinuationState } from "../providers/googleContinuation";
 import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
 import {
   applyConversationContinuationMemory,
@@ -180,7 +181,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   }
   let normalizedEndpoint: string | undefined;
   const hasContinuationMemory = input.mode === "conversation" && hasConversationContinuationMemory(input.threadId);
-  if (input.mode === "conversation" && input.providerConfig.provider === "openrouter" && (!input.chat || hasContinuationMemory)) {
+  if (input.mode === "conversation" && ["openrouter", "google"].includes(input.providerConfig.provider) && (!input.chat || hasContinuationMemory)) {
     normalizedEndpoint = await (input.resolveBindingEndpoint ?? providerBindingEndpoint)(input.providerConfig);
   }
   if (hasContinuationMemory) {
@@ -225,15 +226,26 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
     onStreamEvent: input.onStreamEvent,
     attempt: input.chat,
   });
-  let continuationCapture: ReturnType<typeof captureOpenRouterContinuationState> | undefined;
-  if (input.mode === "conversation" && input.providerConfig.provider === "openrouter" && response.reasoningDetails?.length) {
+  let continuationCapture:
+    | ReturnType<typeof captureOpenRouterContinuationState>
+    | ReturnType<typeof captureGoogleContinuationState>
+    | undefined;
+  if (input.mode === "conversation" && response.reasoningDetails?.length && ["openrouter", "google"].includes(input.providerConfig.provider)) {
     normalizedEndpoint ??= await (input.resolveBindingEndpoint ?? providerBindingEndpoint)(input.providerConfig);
-    continuationCapture = captureOpenRouterContinuationState({
-      config: input.providerConfig,
-      requestedModelId: input.model.modelId,
-      normalizedEndpoint,
-      reasoningDetails: response.reasoningDetails,
-    });
+    continuationCapture = input.providerConfig.provider === "openrouter"
+      ? captureOpenRouterContinuationState({
+          config: input.providerConfig,
+          requestedModelId: input.model.modelId,
+          normalizedEndpoint,
+          reasoningDetails: response.reasoningDetails,
+        })
+      : captureGoogleContinuationState({
+          config: input.providerConfig,
+          requestedModelId: input.model.modelId,
+          normalizedEndpoint,
+          parts: response.reasoningDetails,
+          visibleContent: response.content,
+        });
   }
   const assistant = continuationCapture?.state
     ? await input.repository.appendAssistantMessageWithProviderState(input.threadId, response.content, continuationCapture.state)

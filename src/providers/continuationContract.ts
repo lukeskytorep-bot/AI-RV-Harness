@@ -63,8 +63,9 @@ export type OpenRouterReasoningDetail =
   | OpenRouterReasoningText;
 
 /**
- * C0 intentionally contracts only REST generateContent text/thought parts.
- * Function/tool parts are outside ProviderMessage v1 and remain deferred to C4.
+ * ProviderMessage v1 contracts only REST generateContent text/thought parts.
+ * Function/tool parts remain outside the v1 message model; GOOGLE-CONTINUITY-1
+ * activates replay only for this verified text/thought subset.
  */
 export interface GoogleThoughtPart {
   text: string;
@@ -367,7 +368,11 @@ function validateProviderContinuationStateInternal(input: unknown): Continuation
     const limitError = validateBlockCountAndSize(input.parts); if (limitError) return limitError;
     const parts = input.parts.map(parseGooglePart);
     if (parts.some((item) => item === null)) return { ok: false, code: "invalid_payload", message: "invalid Google thought part" };
-    value = { schemaVersion: 1, transport: "google-native", format: "google-thought-parts", replayFingerprint: fingerprint, parts: parts as GoogleThoughtPart[] };
+    const googleParts = parts as GoogleThoughtPart[];
+    if (!googleParts.length || !googleParts.some((part) => part.thought === true || part.thoughtSignature !== undefined)) {
+      return { ok: false, code: "invalid_payload", message: "Google continuation state contains no thought or thoughtSignature data" };
+    }
+    value = { schemaVersion: 1, transport: "google-native", format: "google-thought-parts", replayFingerprint: fingerprint, parts: googleParts };
   } else {
     if (input.format !== "anthropic-thinking-blocks") return { ok: false, code: "unknown_format", message: "unsupported Anthropic continuation format" };
     if (!exactKeys(input, ["schemaVersion", "transport", "format", "replayFingerprint", "blocks"])) return { ok: false, code: "invalid_payload", message: "Anthropic continuation state contains unapproved fields" };

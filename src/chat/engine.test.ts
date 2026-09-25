@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
+import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
 import type { ProviderContinuationState } from "../providers/continuationContract";
 import type { ChatMessage } from "../types";
 import { ProviderContinuationPersistenceError } from "../storage/providerContinuationState";
@@ -348,6 +349,33 @@ describe("chat engine isolation", () => {
       chat: async (request) => { afterRestart = request; return { content: "Next", usage: {} }; },
     });
     expect(afterRestart?.messages.filter((message) => Boolean(message.continuationState))).toHaveLength(1);
+  });
+
+  it("captures Google native thoughtSignature and replays it on the exact prior assistant message", async () => {
+    const repository = repo([]);
+    const googleProvider: ProviderConfig = { ...provider, id: "google-provider", provider: "google", label: "Google" };
+    const googleModel: ProviderModel = { ...model, providerConfigId: "google-provider", provider: "google", modelId: "gemini-3.8-flash", route: "google:gemini-3.8-flash" };
+    const endpoint = vi.fn(async () => "https://generativelanguage.googleapis.com/v1beta");
+    const parts = structuredClone(googleFixture.providerResponse.candidates[0].content.parts);
+
+    await sendChatTurn({
+      repository, threadId: "google-continuity", mode: "conversation", language: "en", providerConfig: googleProvider, model: googleModel, content: "First",
+      resolveBindingEndpoint: endpoint,
+      chat: async () => ({ content: "Visible fixture answer.", reasoningDetails: parts, reasoningSource: "google_thought_parts", usage: {} }),
+    });
+
+    clearAllConversationContinuationMemoryForTests();
+    let replayed: Parameters<NonNullable<Parameters<typeof sendChatTurn>[0]["chat"]>>[0] | undefined;
+    await sendChatTurn({
+      repository, threadId: "google-continuity", mode: "conversation", language: "en", providerConfig: googleProvider, model: googleModel, content: "Second",
+      resolveBindingEndpoint: endpoint,
+      chat: async (request) => { replayed = request; return { content: "Next answer", usage: {} }; },
+    });
+
+    const prior = replayed?.messages.find((message) => message.content === "Visible fixture answer.");
+    expect(prior?.continuationState?.transport).toBe("google-native");
+    expect(prior?.continuationState && "parts" in prior.continuationState ? prior.continuationState.parts : undefined).toEqual(parts);
+    expect(endpoint).toHaveBeenCalled();
   });
 
 });

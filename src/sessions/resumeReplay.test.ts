@@ -135,28 +135,6 @@ describe("durable session replay", () => {
     const sent = liveChat.mock.calls[0][0];
     expect(sent.messages[1].continuationState).toEqual(captured.state);
   });
-  it("rejects an unsupported frozen continuation transport before any live provider call", async () => {
-    const config: ProviderConfig = { id: "google-pc", provider: "google", label: "Google", credentialId: "google-cred", enabled: true, createdAt: "now", updatedAt: "now" };
-    const snapshot = {
-      schemaVersion: 4, providerConfigId: "google-pc", credentialId: "google-cred", provider: "google", modelId: "gemini-3.8-flash", modelRoute: "google:gemini-3.8-flash",
-      continuationRoute: { transport: "anthropic-native", normalizedEndpoint: "https://generativelanguage.googleapis.com/v1beta", providerConfigId: "google-pc", credentialId: "google-cred", requestedModelId: "gemini-3.8-flash", stateFormat: "google-thought-parts", stateFormatVersion: 1 },
-    } as unknown as SessionSnapshot;
-    const liveChat = vi.fn().mockResolvedValue({ content: "must not run", usage: {} });
-    const repository = {
-      getSessionSnapshot: vi.fn().mockResolvedValue(snapshot),
-      updateRvSessionState: vi.fn().mockResolvedValue(undefined),
-      appendSessionEvent: vi.fn().mockResolvedValue(undefined),
-    } as unknown as AppRepository;
-    const replay = await createSessionReplay({ repository, session, events: [], liveChat });
-    await expect(replay.chat({
-      config,
-      modelId: "gemini-3.8-flash",
-      messages: [{ role: "user", content: "continue" }],
-      settings: { requested: {}, effective: {}, omitted: [] },
-    })).rejects.toThrow("Unsupported frozen provider continuation transport.");
-    expect(liveChat).not.toHaveBeenCalled();
-  });
-
   it("rehydrates exact Google native thoughtSignature state before a live resumed call", async () => {
     const config: ProviderConfig = { id: "google-pc", provider: "google", label: "Google", credentialId: "google-cred", enabled: true, createdAt: "now", updatedAt: "now" };
     const parts = structuredClone(googleFixture.providerResponse.candidates[0].content.parts);

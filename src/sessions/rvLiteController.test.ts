@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderContinuationState } from "../providers/continuationContract";
+import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getRvLite } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
@@ -97,6 +98,38 @@ describe("automatic RV Lite controller", () => {
     expect(snapshots[0].continuationRoute).toMatchObject({
       transport: "openrouter", providerConfigId: "p", credentialId: "c", requestedModelId: "m",
     });
+  });
+
+  it("persists and replays Google native thoughtSignature across all RV Lite Viewer calls", async () => {
+    const googleConfig: ProviderConfig = { ...config, id: "google-p", provider: "google", label: "Google" };
+    const googleModel: ProviderModel = { ...model, providerConfigId: googleConfig.id, provider: "google", modelId: "gemini-3.8-flash", route: "google:gemini-3.8-flash" };
+    const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
+    const repo = repository(log, snapshots);
+    const persisted: ProviderContinuationState[] = [];
+    repo.appendSessionEventWithProviderState = vi.fn(async (_sessionId: string, event: SessionEventInput, state: ProviderContinuationState) => {
+      persisted.push(structuredClone(state));
+      return { ...event, id: `google-event-${persisted.length}`, sessionId: "session", sequenceNumber: persisted.length, createdAt: "now" };
+    });
+    const parts = structuredClone(googleFixture.providerResponse.candidates[0].content.parts);
+    let calls = 0;
+    await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "profile", providerConfig: googleConfig, model: googleModel,
+      protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+      chat: async ({ messages }) => {
+        calls += 1;
+        if (calls > 1) {
+          const previousAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+          expect(previousAssistant?.continuationState?.transport).toBe("google-native");
+          expect(previousAssistant?.continuationState && "parts" in previousAssistant.continuationState ? previousAssistant.continuationState.parts : undefined).toEqual(parts);
+        }
+        return { content: "Visible fixture answer.", reasoningDetails: parts, reasoningSource: "google_thought_parts", usage: {} };
+      },
+    });
+    expect(calls).toBe(4);
+    expect(persisted).toHaveLength(4);
+    expect(persisted.every((state) => state.transport === "google-native")).toBe(true);
+    expect(snapshots[0].continuationRoute).toMatchObject({ transport: "google-native", providerConfigId: "google-p", credentialId: "c", requestedModelId: "gemini-3.8-flash", stateFormat: "google-thought-parts" });
   });
 
   it("preserves Research ownership, assignment linkage and locked condition instruction", async () => {

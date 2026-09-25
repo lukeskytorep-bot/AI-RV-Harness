@@ -155,7 +155,14 @@ struct ProviderMessage {
     #[serde(default)]
     images: Vec<ProviderImage>,
     #[serde(default)]
-    continuation_state: Option<OpenRouterContinuationState>,
+    continuation_state: Option<ProviderContinuationState>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum ProviderContinuationState {
+    OpenRouter(OpenRouterContinuationState),
+    Google(GoogleContinuationState),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -164,13 +171,23 @@ struct OpenRouterContinuationState {
     schema_version: u8,
     transport: String,
     format: String,
-    replay_fingerprint: OpenRouterReplayFingerprint,
+    replay_fingerprint: ProviderReplayFingerprint,
     reasoning_details: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct OpenRouterReplayFingerprint {
+struct GoogleContinuationState {
+    schema_version: u8,
+    transport: String,
+    format: String,
+    replay_fingerprint: ProviderReplayFingerprint,
+    parts: Vec<GoogleThoughtPart>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProviderReplayFingerprint {
     transport: String,
     normalized_endpoint: String,
     provider_config_id: String,
@@ -180,6 +197,16 @@ struct OpenRouterReplayFingerprint {
     actual_model_id: Option<String>,
     state_format: String,
     state_format_version: u8,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GoogleThoughtPart {
+    text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thought: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thought_signature: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -262,11 +289,12 @@ impl ProviderCallError {
 fn scrub_debug_value(value: &mut Value, secret: &str, parent_key: Option<&str>) {
     match value {
         Value::Object(map) => {
+            let google_thought_part = map.get("thought").and_then(Value::as_bool) == Some(true);
             for (key, child) in map.iter_mut() {
                 let lower = key.to_ascii_lowercase().replace(['-', '_'], "");
                 if matches!(lower.as_str(), "authorization" | "apikey" | "xapikey" | "xgoogapikey") {
                     *child = Value::String("[REDACTED]".to_string());
-                } else if lower == "reasoningdetails" {
+                } else if lower == "reasoningdetails" || lower == "thoughtsignature" || (google_thought_part && lower == "text") {
                     *child = Value::String("[CONTINUATION STATE REDACTED]".to_string());
                 } else {
                     scrub_debug_value(child, secret, Some(key));

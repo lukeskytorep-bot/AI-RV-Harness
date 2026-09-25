@@ -95,11 +95,14 @@ pub(super) fn parse_google_response(payload: Value, request_id: Option<String>) 
         .filter_map(|part| part.get("text").and_then(Value::as_str))
         .collect::<Vec<_>>()
         .join("");
-    let reasoning_details = parts
-        .iter()
-        .filter(|part| part.get("thought").and_then(Value::as_bool) == Some(true))
-        .cloned()
-        .collect::<Vec<_>>();
+    let has_continuation_state = parts.iter().any(|part| {
+        part.get("thought").and_then(Value::as_bool) == Some(true)
+            || part.get("thoughtSignature").and_then(Value::as_str).is_some_and(|value| !value.is_empty())
+    });
+    // Google native replay must preserve the complete supported model Part sequence,
+    // not only hidden thought parts. Gemini 3 can attach thoughtSignature directly
+    // to the visible text Part, as observed in the live Harness fixture.
+    let reasoning_details = has_continuation_state.then(|| parts.clone()).unwrap_or_default();
     let normalized = normalize_reasoning_response(
         raw_content,
         (!native_reasoning.trim().is_empty()).then_some(native_reasoning),
