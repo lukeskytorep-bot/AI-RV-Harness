@@ -1,10 +1,12 @@
-import { captureOpenRouterContinuationState, validateOpenRouterReplayBudget, validateOpenRouterReplayForRequest } from "../providers/openRouterContinuation";
-import type { ProviderContinuationState } from "../providers/continuationContract";
+import { validateContinuationRequestBudget, type ProviderContinuationState } from "../providers/continuationContract";
+import { captureGoogleContinuationState, validateGoogleReplayForRequest } from "../providers/googleContinuation";
+import { captureOpenRouterContinuationState, validateOpenRouterReplayForRequest } from "../providers/openRouterContinuation";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import type { SessionContinuationRouteSnapshot, SessionEventInput, SessionEventRecord, SessionSnapshot } from "./types";
 
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1";
+const GOOGLE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 
 export class SessionContinuationError extends Error {
   constructor(message: string) {
@@ -13,42 +15,78 @@ export class SessionContinuationError extends Error {
   }
 }
 
-export function captureSessionContinuationRoute(config: ProviderConfig, model: ProviderModel): SessionContinuationRouteSnapshot | undefined {
-  if (config.provider !== "openrouter") return undefined;
-  if (model.providerConfigId !== config.id || model.provider !== config.provider) throw new SessionContinuationError("Viewer model/provider route mismatch while freezing continuation state.");
-  return {
-    transport: "openrouter",
-    normalizedEndpoint: OPENROUTER_ENDPOINT,
-    providerConfigId: config.id,
-    credentialId: config.credentialId,
-    requestedModelId: model.modelId,
-    stateFormat: "openrouter-reasoning-details",
-    stateFormatVersion: 1,
-  };
+type RuntimeSessionContinuationRouteSnapshot = {
+  transport?: unknown;
+};
+
+function requireSupportedSessionContinuationRoute(
+  route: SessionContinuationRouteSnapshot,
+): SessionContinuationRouteSnapshot {
+  const runtimeRoute = route as unknown as RuntimeSessionContinuationRouteSnapshot;
+  if (runtimeRoute.transport === "openrouter" || runtimeRoute.transport === "google-native") return route;
+  throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
 }
 
+export function captureSessionContinuationRoute(config: ProviderConfig, model: ProviderModel): SessionContinuationRouteSnapshot | undefined {
+  if (model.providerConfigId !== config.id || model.provider !== config.provider) {
+    if (config.provider === "openrouter" || config.provider === "google") throw new SessionContinuationError("Viewer model/provider route mismatch while freezing continuation state.");
+    return undefined;
+  }
+  if (config.provider === "openrouter") {
+    return {
+      transport: "openrouter",
+      normalizedEndpoint: OPENROUTER_ENDPOINT,
+      providerConfigId: config.id,
+      credentialId: config.credentialId,
+      requestedModelId: model.modelId,
+      stateFormat: "openrouter-reasoning-details",
+      stateFormatVersion: 1,
+    };
+  }
+  if (config.provider === "google") {
+    return {
+      transport: "google-native",
+      normalizedEndpoint: GOOGLE_ENDPOINT,
+      providerConfigId: config.id,
+      credentialId: config.credentialId,
+      requestedModelId: model.modelId,
+      stateFormat: "google-thought-parts",
+      stateFormatVersion: 1,
+    };
+  }
+  return undefined;
+}
 
 export function validateFrozenSessionContinuationRequest(
   snapshot: SessionSnapshot,
   config: ProviderConfig,
   requestedModelId: string,
 ): SessionContinuationRouteSnapshot | undefined {
-  const route = snapshot.continuationRoute;
-  if (!route) return undefined;
-  if (
-    route.transport !== "openrouter"
-    || route.normalizedEndpoint !== OPENROUTER_ENDPOINT
-    || route.providerConfigId !== config.id
+  const frozenRoute = snapshot.continuationRoute;
+  if (!frozenRoute) return undefined;
+  const route = requireSupportedSessionContinuationRoute(frozenRoute);
+  const commonMismatch = route.providerConfigId !== config.id
     || route.credentialId !== config.credentialId
     || route.requestedModelId !== requestedModelId
-    || route.stateFormat !== "openrouter-reasoning-details"
-    || route.stateFormatVersion !== 1
-    || config.provider !== "openrouter"
-  ) {
-    throw new SessionContinuationError("The frozen OpenRouter continuation route no longer matches the captured provider, credential, endpoint, or model.");
+    || route.stateFormatVersion !== 1;
+  let transportMismatch: boolean;
+  if (route.transport === "openrouter") {
+    transportMismatch = config.provider !== "openrouter"
+      || route.normalizedEndpoint !== OPENROUTER_ENDPOINT
+      || route.stateFormat !== "openrouter-reasoning-details";
+  } else if (route.transport === "google-native") {
+    transportMismatch = config.provider !== "google"
+      || route.normalizedEndpoint !== GOOGLE_ENDPOINT
+      || route.stateFormat !== "google-thought-parts";
+  } else {
+    throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
+  }
+  if (commonMismatch || transportMismatch) {
+    throw new SessionContinuationError("The frozen provider continuation route no longer matches the captured provider, credential, endpoint, or model.");
   }
   return route;
 }
+
 export function validateFrozenSessionContinuationRoute(
   snapshot: SessionSnapshot,
   config: ProviderConfig,
@@ -56,10 +94,51 @@ export function validateFrozenSessionContinuationRoute(
 ): SessionContinuationRouteSnapshot | undefined {
   const route = validateFrozenSessionContinuationRequest(snapshot, config, model.modelId);
   if (!route) return undefined;
-  if (model.provider !== "openrouter" || model.providerConfigId !== config.id) {
-    throw new SessionContinuationError("The frozen OpenRouter continuation route no longer matches the captured Viewer model route.");
+  let expectedProvider: ProviderModel["provider"];
+  if (route.transport === "openrouter") {
+    expectedProvider = "openrouter";
+  } else if (route.transport === "google-native") {
+    expectedProvider = "google";
+  } else {
+    throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
+  }
+  if (model.provider !== expectedProvider || model.providerConfigId !== config.id) {
+    throw new SessionContinuationError("The frozen provider continuation route no longer matches the captured Viewer model route.");
   }
   return route;
+}
+
+export function captureSessionContinuationState(input: {
+  response: ProviderChatResponse;
+  providerConfig: ProviderConfig;
+  model: ProviderModel;
+  route?: SessionContinuationRouteSnapshot;
+}):
+  | { state: ProviderContinuationState; issue?: never }
+  | { state?: never; issue: { code: string; message: string } }
+  | { state?: never; issue?: never } {
+  const frozenRoute = input.route;
+  if (!frozenRoute) return {};
+  const route = requireSupportedSessionContinuationRoute(frozenRoute);
+  if (!input.response.reasoningDetails?.length) return {};
+  if (route.transport === "openrouter") {
+    return captureOpenRouterContinuationState({
+      config: input.providerConfig,
+      requestedModelId: input.model.modelId,
+      normalizedEndpoint: route.normalizedEndpoint,
+      reasoningDetails: input.response.reasoningDetails,
+    });
+  }
+  if (route.transport === "google-native") {
+    return captureGoogleContinuationState({
+      config: input.providerConfig,
+      requestedModelId: input.model.modelId,
+      normalizedEndpoint: route.normalizedEndpoint,
+      parts: input.response.reasoningDetails,
+      visibleContent: input.response.content,
+    });
+  }
+  throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
 }
 
 export async function persistSessionAssistantResponse(input: {
@@ -71,29 +150,24 @@ export async function persistSessionAssistantResponse(input: {
   model: ProviderModel;
   route?: SessionContinuationRouteSnapshot;
 }): Promise<{ state?: ProviderContinuationState; event?: SessionEventRecord }> {
-  if (!input.route || input.providerConfig.provider !== "openrouter") {
+  if (!input.route) {
     await input.repository.appendSessionEvent(input.sessionId, input.event);
     return {};
   }
-  const captured = captureOpenRouterContinuationState({
-    config: input.providerConfig,
-    requestedModelId: input.model.modelId,
-    normalizedEndpoint: input.route.normalizedEndpoint,
-    reasoningDetails: input.response.reasoningDetails,
-  });
+  const captured = captureSessionContinuationState(input);
   if (captured.issue) {
     await input.repository.appendSessionEvent(input.sessionId, {
       ...input.event,
       metadata: { ...(input.event.metadata ?? {}), continuationState: { status: "invalid", code: captured.issue.code } },
     });
-    throw new SessionContinuationError(`OpenRouter continuation state was returned but failed validation: ${captured.issue.message}`);
+    throw new SessionContinuationError(`Provider continuation state was returned but failed validation: ${captured.issue.message}`);
   }
   if (!captured.state) {
     await input.repository.appendSessionEvent(input.sessionId, input.event);
     return {};
   }
   if (!input.repository.appendSessionEventWithProviderState) {
-    throw new SessionContinuationError("The repository cannot persist the OpenRouter continuation state returned for this Session turn.");
+    throw new SessionContinuationError("The repository cannot persist the provider continuation state returned for this Session turn.");
   }
   const event = await input.repository.appendSessionEventWithProviderState(input.sessionId, {
     ...input.event,
@@ -109,6 +183,26 @@ export function appendAssistantMessageWithContinuation(messages: ProviderMessage
   messages.push({ role: "assistant", content, ...(state ? { continuationState: structuredClone(state) } : {}) });
 }
 
+function replayStateForRoute(input: {
+  state: ProviderContinuationState;
+  route: SessionContinuationRouteSnapshot;
+  config: ProviderConfig;
+  requestedModelId: string;
+}): { ok: true; state: ProviderContinuationState } | { ok: false; issue: { message: string } } {
+  const route = requireSupportedSessionContinuationRoute(input.route);
+  if (route.transport === "openrouter") {
+    return validateOpenRouterReplayForRequest({
+      state: input.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: route.normalizedEndpoint,
+    });
+  }
+  if (route.transport === "google-native") {
+    return validateGoogleReplayForRequest({
+      state: input.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: route.normalizedEndpoint,
+    });
+  }
+  throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
+}
+
 export async function hydrateSessionMessageContinuationForRequest(input: {
   repository: Pick<AppRepository, "getSessionEventProviderState">;
   snapshot: SessionSnapshot;
@@ -122,12 +216,12 @@ export async function hydrateSessionMessageContinuationForRequest(input: {
   const marker = input.event.metadata?.continuationState as { status?: unknown } | undefined;
   const binding = await input.repository.getSessionEventProviderState(input.event.id);
   if (!binding) {
-    if (marker?.status === "stored") throw new SessionContinuationError("Required OpenRouter continuation state is missing for a persisted assistant Session event.");
-    if (marker?.status === "invalid") throw new SessionContinuationError("A persisted assistant Session event records invalid OpenRouter continuation state.");
+    if (marker?.status === "stored") throw new SessionContinuationError("Required provider continuation state is missing for a persisted assistant Session event.");
+    if (marker?.status === "invalid") throw new SessionContinuationError("A persisted assistant Session event records invalid provider continuation state.");
     return input.message;
   }
-  const replay = validateOpenRouterReplayForRequest({ state: binding.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: route.normalizedEndpoint });
-  if (!replay.ok) throw new SessionContinuationError(`Persisted OpenRouter continuation state is incompatible with the frozen session route: ${replay.issue.message}`);
+  const replay = replayStateForRoute({ state: binding.state, route, config: input.config, requestedModelId: input.requestedModelId });
+  if (!replay.ok) throw new SessionContinuationError(`Persisted provider continuation state is incompatible with the frozen session route: ${replay.issue.message}`);
   return { ...input.message, continuationState: structuredClone(replay.state) };
 }
 
@@ -144,22 +238,17 @@ export async function hydrateSessionMessageContinuation(input: {
   const marker = input.event.metadata?.continuationState as { status?: unknown } | undefined;
   const binding = await input.repository.getSessionEventProviderState(input.event.id);
   if (!binding) {
-    if (marker?.status === "stored") throw new SessionContinuationError("Required OpenRouter continuation state is missing for a persisted assistant Session event.");
-    if (marker?.status === "invalid") throw new SessionContinuationError("A persisted assistant Session event records invalid OpenRouter continuation state.");
+    if (marker?.status === "stored") throw new SessionContinuationError("Required provider continuation state is missing for a persisted assistant Session event.");
+    if (marker?.status === "invalid") throw new SessionContinuationError("A persisted assistant Session event records invalid provider continuation state.");
     return input.message;
   }
-  const replay = validateOpenRouterReplayForRequest({
-    state: binding.state,
-    config: input.config,
-    requestedModelId: input.model.modelId,
-    normalizedEndpoint: route.normalizedEndpoint,
-  });
-  if (!replay.ok) throw new SessionContinuationError(`Persisted OpenRouter continuation state is incompatible with the frozen session route: ${replay.issue.message}`);
+  const replay = replayStateForRoute({ state: binding.state, route, config: input.config, requestedModelId: input.model.modelId });
+  if (!replay.ok) throw new SessionContinuationError(`Persisted provider continuation state is incompatible with the frozen session route: ${replay.issue.message}`);
   return { ...input.message, continuationState: structuredClone(replay.state) };
 }
 
 export function validateSessionContinuationBudget(messages: readonly ProviderMessage[]): void {
   const states = messages.flatMap((message) => message.continuationState ? [message.continuationState] : []);
-  const checked = validateOpenRouterReplayBudget(states);
-  if (!checked.ok) throw new SessionContinuationError(`OpenRouter continuation state cannot fit this request: ${checked.issue.message}`);
+  const checked = validateContinuationRequestBudget(states);
+  if (!checked.ok) throw new SessionContinuationError(`Provider continuation state cannot fit this request: ${checked.message}`);
 }
