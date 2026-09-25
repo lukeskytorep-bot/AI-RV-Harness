@@ -102,7 +102,11 @@ pub(super) fn parse_google_response(payload: Value, request_id: Option<String>) 
     // Google native replay must preserve the complete supported model Part sequence,
     // not only hidden thought parts. Gemini 3 can attach thoughtSignature directly
     // to the visible text Part, as observed in the live Harness fixture.
-    let reasoning_details = has_continuation_state.then(|| parts.clone()).unwrap_or_default();
+    let reasoning_details = if has_continuation_state {
+        parts.clone()
+    } else {
+        Vec::new()
+    };
     let normalized = normalize_reasoning_response(
         raw_content,
         (!native_reasoning.trim().is_empty()).then_some(native_reasoning),

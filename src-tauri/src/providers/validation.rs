@@ -153,7 +153,7 @@ fn validate_openrouter_reasoning_detail(detail: &serde_json::Value) -> bool {
 }
 
 fn canonical_base64(value: &str) -> bool {
-    if value.is_empty() || value.len() % 4 != 0 {
+    if value.is_empty() || !value.len().is_multiple_of(4) {
         return false;
     }
     if !value.chars().all(|character| character.is_ascii_alphanumeric() || character == '+' || character == '/' || character == '=') {
