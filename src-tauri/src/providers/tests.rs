@@ -429,8 +429,8 @@ fn rejects_google_continuation_state_when_bound_message_or_fingerprint_changes()
         })),
     }];
     assert!(validate_continuation_bindings(&request, "https://generativelanguage.googleapis.com/v1beta").is_err());
+    request.messages[0].content = "Visible fixture answer.".to_string();
     if let Some(ProviderContinuationState::Google(state)) = request.messages[0].continuation_state.as_mut() {
-        request.messages[0].content = "Visible fixture answer.".to_string();
         state.replay_fingerprint.credential_id = "other".to_string();
     }
     assert!(validate_continuation_bindings(&request, "https://generativelanguage.googleapis.com/v1beta").is_err());
