@@ -37,6 +37,17 @@ describe("Training Target localization", () => {
     expect(legacyFactory.sourceMetadata).toEqual({ origin: "bundled_factory_training_pack", packId: "factory-training-targets-84" });
   });
 
+  it("uses the bundled Polish resource for newly inserted 94-pack factory rows", () => {
+    const currentFactory: TargetRecord = {
+      ...target,
+      id: "factory_training_08_01",
+      sourceMetadata: { origin: "bundled_factory_training_pack", packId: "factory-training-targets-94" },
+    };
+    const bundled = getBundledTrainingLocalizationPl(currentFactory.id);
+    expect(localizedTargetTitle(currentFactory, "pl")).toBe(bundled.titlePl);
+    expect(localizedTargetReveal(currentFactory, "pl")).toBe(bundled.revealTextPl);
+  });
+
   it("keeps persisted localization authoritative over a newer bundled resource", () => {
     const persisted: TargetRecord = {
       ...target,

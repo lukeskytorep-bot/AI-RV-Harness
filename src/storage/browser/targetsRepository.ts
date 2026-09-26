@@ -79,6 +79,13 @@ export class BrowserTargetsRepository implements TargetsRepository {
     return target;
   }
 
+  async syncFactoryTrainingTargetClassification(id: string, sourceMetadata: Record<string, unknown>): Promise<void> {
+    const all = this.read<TargetRecord[]>(TARGETS_KEY, []);
+    const target = all.find((item) => item.id === id && !item.archivedAt);
+    if (!target || target.collection !== "training") throw new Error("Active factory Training target not found.");
+    this.write(TARGETS_KEY, all.map((item) => item.id === id ? { ...item, sourceMetadata: { ...sourceMetadata } } : item));
+  }
+
   async updateTarget(id: string, input: UpdateTargetInput): Promise<TargetRecord> {
     const all = this.read<TargetRecord[]>(TARGETS_KEY, []);
     const target = all.find((item) => item.id === id && !item.archivedAt);

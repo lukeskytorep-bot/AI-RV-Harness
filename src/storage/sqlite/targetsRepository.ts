@@ -98,6 +98,14 @@ export class SqliteTargetsRepository implements TargetsRepository {
     return target;
   }
 
+  async syncFactoryTrainingTargetClassification(id: string, sourceMetadata: Record<string, unknown>): Promise<void> {
+    const result = await this.dependencies.executeWrite(
+      "UPDATE targets SET source_metadata_json = $1 WHERE id = $2 AND collection = 'training' AND retired_at IS NULL AND archived_at IS NULL",
+      [JSON.stringify(sourceMetadata), id],
+    );
+    if (result.rowsAffected !== 1) throw new Error("Active factory Training target not found.");
+  }
+
   async updateTarget(id: string, input: UpdateTargetInput): Promise<TargetRecord> {
     const timestamp = (this.dependencies.now ?? nowIso)();
     await this.dependencies.executeWrite(

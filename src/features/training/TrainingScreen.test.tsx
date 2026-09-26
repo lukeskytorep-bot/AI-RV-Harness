@@ -21,6 +21,7 @@ describe("TrainingScreen", () => {
 
     expect(html).toContain("AI Training");
     expect(html).toContain("How does AI Training work?");
+    expect(html).toContain("94/94");
     expect(html).toContain("84");
     expect(html).toContain("Viewer model");
     expect(html).toContain("Use Viewer Notes");

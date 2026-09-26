@@ -31,7 +31,7 @@ export function localizedTargetRecord(target: TargetRecord, language: InterfaceL
 function bundledFactoryPolish(target: TargetRecord) {
   if (target.collection !== "training"
     || target.sourceMetadata.origin !== "bundled_factory_training_pack"
-    || target.sourceMetadata.packId !== "factory-training-targets-84") {
+    || !["factory-training-targets-84", "factory-training-targets-94"].includes(String(target.sourceMetadata.packId))) {
     return undefined;
   }
   try {

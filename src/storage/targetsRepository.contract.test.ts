@@ -183,6 +183,16 @@ for (const [name, makeHarness] of [["browser", browserHarness], ["sqlite", sqlit
 
 
 
+    it("syncs factory Training classification metadata without changing semantic target fields", async () => {
+      const harness = makeHarness();
+      const original = { ...target("factory_training_01_01", "training"), title: "Original", revealText: "Reveal", tags: ["factory-training"], sourceMetadata: { origin: "bundled_factory_training_pack", category: "mountain_structure_contrast" }, contentHash: "hash" };
+      harness.seedTargets([original]);
+      await harness.repository.syncFactoryTrainingTargetClassification(original.id, { ...original.sourceMetadata, category: "mountains", subtype: "mountain" });
+      const synced = (await harness.repository.listTargets("training"))[0];
+      expect(synced).toMatchObject({ id: original.id, title: "Original", revealText: "Reveal", tags: ["factory-training"], contentHash: "hash", createdAt: original.createdAt, updatedAt: original.updatedAt });
+      expect(synced.sourceMetadata).toMatchObject({ origin: "bundled_factory_training_pack", category: "mountains", subtype: "mountain" });
+    });
+
     it("records and returns usage newest first", async () => {
       const harness = makeHarness();
       harness.seedUsage([]);

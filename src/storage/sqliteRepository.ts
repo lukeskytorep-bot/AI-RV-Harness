@@ -325,6 +325,7 @@ export class SqliteRepository implements AppRepository {
   listTargets: AppRepository["listTargets"] = (collection) => this.targetsRepository.listTargets(collection);
   listArchivedTargets: AppRepository["listArchivedTargets"] = () => this.targetsRepository.listArchivedTargets();
   createTarget: AppRepository["createTarget"] = (input) => this.targetsRepository.createTarget(input);
+  syncFactoryTrainingTargetClassification: AppRepository["syncFactoryTrainingTargetClassification"] = (id, sourceMetadata) => this.targetsRepository.syncFactoryTrainingTargetClassification(id, sourceMetadata);
   updateTarget: AppRepository["updateTarget"] = (id, input) => this.targetsRepository.updateTarget(id, input);
   archiveTarget: AppRepository["archiveTarget"] = (id) => this.targetsRepository.archiveTarget(id);
   restoreTarget: AppRepository["restoreTarget"] = (id) => this.targetsRepository.restoreTarget(id);

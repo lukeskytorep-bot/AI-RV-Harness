@@ -5,7 +5,7 @@ const polishModules = import.meta.glob<string>("../resources/training-targets-lo
 });
 
 export const FACTORY_TARGET_LOCALIZATION_PACK_ID = "factory-training-target-localization-pl";
-export const FACTORY_TARGET_LOCALIZATION_PACK_VERSION = "1.0.0-r1";
+export const FACTORY_TARGET_LOCALIZATION_PACK_VERSION = "2.0.0";
 
 export interface BundledTrainingTargetLocalization {
   id: string;

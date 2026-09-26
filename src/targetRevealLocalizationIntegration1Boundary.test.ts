@@ -18,15 +18,15 @@ const polishResources = import.meta.glob<string>("./resources/training-targets-l
 });
 
 describe("FACTORY-TARGET-LOCALIZATION-COMPAT-1 boundaries", () => {
-  it("keeps startup factory seeding insert-only for existing immutable target rows", () => {
-    expect(Object.keys(polishResources)).toHaveLength(84);
+  it("keeps semantic factory rows immutable while allowing the Stage 2 classification-only metadata sync", () => {
+    expect(Object.keys(polishResources)).toHaveLength(94);
     expect(localizationPack).toContain("factory-training-target-localization-pl");
-    expect(bundled).toContain('Pick<AppRepository, "listTargets" | "createTarget">');
-    expect(bundled).not.toContain("updateBundledTargetLocalization");
-    expect(repositoryContract).not.toContain("updateBundledTargetLocalization");
-    expect(sqliteTargets).not.toContain("UPDATE targets SET source_metadata_json");
-    expect(writeRegistry).not.toContain("targets_update_targets_04");
-    expect(nativeDatabase).not.toContain("TargetsUpdateTargets04");
+    expect(bundled).toContain('syncFactoryTrainingTargetClassification');
+    expect(repositoryContract).toContain("syncFactoryTrainingTargetClassification");
+    expect(sqliteTargets).toContain("UPDATE targets SET source_metadata_json = $1");
+    expect(sqliteTargets).not.toContain("SET title = $1, reveal_text = $2, tags_json = $3, source_metadata_json");
+    expect(writeRegistry).toContain("targets_update_targets_04");
+    expect(nativeDatabase).toContain("TargetsUpdateTargets04");
   });
 
   it("uses bundled Polish resources only as a read-time fallback and preserves persisted localization", () => {

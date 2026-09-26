@@ -12,7 +12,7 @@ describe("Targets repository boundary", () => {
     expect(contract).toContain("recordTargetUsage(input");
     expect(browserFacade).toContain("new BrowserTargetsRepository({");
     expect(sqliteFacade).toContain("new SqliteTargetsRepository({");
-    for (const method of ["listTargets", "listArchivedTargets", "createTarget", "updateTarget", "archiveTarget", "restoreTarget", "recordTargetUsage", "listTargetUsage"]) {
+    for (const method of ["listTargets", "listArchivedTargets", "createTarget", "syncFactoryTrainingTargetClassification", "updateTarget", "archiveTarget", "restoreTarget", "recordTargetUsage", "listTargetUsage"]) {
       expect(browserFacade).toContain(`${method}: AppRepository[\"${method}\"]`);
       expect(sqliteFacade).toContain(`${method}: AppRepository[\"${method}\"]`);
     }

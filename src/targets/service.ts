@@ -96,7 +96,7 @@ export async function resolveAutomaticTargetRevealForResume(
 
   if (target.collection === "training"
     && target.sourceMetadata.origin === "bundled_factory_training_pack"
-    && target.sourceMetadata.packId === "factory-training-targets-84") {
+    && ["factory-training-targets-84", "factory-training-targets-94"].includes(String(target.sourceMetadata.packId))) {
     const legacy = await buildAutomaticTargetReveal({ ...target, sourceMetadata: {} }, language);
     if (legacy.hash === expectedHash) return legacy;
   }

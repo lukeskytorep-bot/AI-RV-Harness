@@ -17,12 +17,24 @@ export function buildFactoryCurriculum(): TrainingCurriculumItem[] {
   const validation = validateFactoryTrainingPack();
   if (!validation.valid) throw new Error(`Factory curriculum unavailable: ${validation.errors.join(", ")}`);
   const mixed = BUNDLED_TRAINING_TARGETS.filter((target) => target.category === "mixed_targets");
-  const specialistCategories = TRAINING_CATEGORIES.filter((category) => category !== "mixed_targets");
+  // Stage 2 expands the pack to eight categories, but Full Training remains on the
+  // historical 84-target / 12-block curriculum until Stage 3 introduces rounds.
+  // Keep the original first ten IDs as one legacy curriculum group even though
+  // their persisted metadata is now correctly split between mountains/structures.
+  const legacySpecialistGroups = [
+    BUNDLED_TRAINING_TARGETS.filter((target) => target.id.startsWith("factory_training_01_")),
+    ...([
+      "structures_in_mountain_terrain",
+      "water_combined_elements",
+      "human_activity",
+      "disasters_destruction",
+      "space",
+    ] as const).map((category) => BUNDLED_TRAINING_TARGETS.filter((target) => target.category === category)),
+  ];
   const result: TrainingCurriculumItem[] = [];
   let mixedIndex = 0;
   let block = 0;
-  for (const category of specialistCategories) {
-    const categoryTargets = BUNDLED_TRAINING_TARGETS.filter((target) => target.category === category).slice(0, 10);
+  for (const categoryTargets of legacySpecialistGroups) {
     for (const half of [categoryTargets.slice(0, 5), categoryTargets.slice(5, 10)]) {
       block += 1;
       for (const target of [...half, ...mixed.slice(mixedIndex, mixedIndex + 2)]) {
