@@ -32,10 +32,11 @@ export interface ChatPanelProps {
   profile: Profile | null;
   workspace: Workspace;
   repository: AppRepository | null;
+  fixedMode?: ChatMode;
 }
 
-export function ChatPanel({ copy, settings, profile, workspace, repository }: ChatPanelProps) {
-  const [mode, setMode] = useState<ChatMode>("conversation");
+export function ChatPanel({ copy, settings, profile, workspace, repository, fixedMode }: ChatPanelProps) {
+  const [mode, setMode] = useState<ChatMode>(fixedMode ?? "conversation");
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [threadTitle, setThreadTitle] = useState("");
@@ -63,6 +64,10 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
   const activeProvider = providerConfigs.find((item) => item.credentialId === profile?.credentialId) ?? null;
   const selectedModel = models.find((item) => item.modelId === modelId) ?? null;
+
+  useEffect(() => {
+    if (fixedMode) setMode(fixedMode);
+  }, [fixedMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -499,10 +504,10 @@ export function ChatPanel({ copy, settings, profile, workspace, repository }: Ch
         <span className="hierarchy-workspace"><RadioTower size={15} /><span><small>{copy.workspace}</small><strong>{workspace.name}</strong></span></span>
       </div>
       <div className="chat-toolbar">
-        <div className="segmented large-segmented">
+        {!fixedMode && <div className="segmented large-segmented">
           <button disabled={sending} className={mode === "conversation" ? "active" : ""} onClick={() => setMode("conversation")}><MessageCircle size={16} />{copy.conversation}</button>
           <button disabled={sending} className={mode === "manual_rv" ? "active" : ""} onClick={() => setMode("manual_rv")}><Crosshair size={16} />{copy.manualRv}</button>
-        </div>
+        </div>}
         <div className="conversation-switcher">
           <label><span>{mode === "conversation" ? copy.chatThreads : copy.manualRv}</span><select value={threadId ?? ""} disabled={!threadId || sending} onChange={(event) => void openThread(event.target.value)}>{threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}</select></label>
           <button className="secondary-button" disabled={!repository || sending} onClick={() => void createNewThread()}><Plus size={13} />{copy.newChat}</button>

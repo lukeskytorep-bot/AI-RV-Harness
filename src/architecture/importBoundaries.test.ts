@@ -119,10 +119,11 @@ describe("architecture import boundaries", () => {
       .filter(({ content }) => /from\s+["'][^"']*features\/workspaces\//.test(content))
       .map(({ projectPath }) => projectPath);
 
-    expect(appSource).toContain('from "./features/workspaces"');
     expect(appSource).not.toContain("WorkspacesScreen");
     expect(sourceFiles["../features/workspaces/WorkspacesScreen.tsx"]).toBeUndefined();
     expect(sourceFiles["../features/workspaces/WorkspaceSwitcherDialog.tsx"]).toContain("function WorkspaceSwitcherDialog(");
+    expect(sourceFiles["../features/conversations/ConversationsScreen.tsx"]).toContain('from "../workspaces"');
+    expect(sourceFiles["../features/rvSessions/RvSessionsScreen.tsx"]).toContain('from "../workspaces"');
     expect(deepImportOffenders, "Workspaces consumers must import the public feature entry point").toEqual([]);
   });
 

@@ -13,13 +13,11 @@ import {
   LockKeyhole,
   MessageCircle,
   Moon,
-  RadioTower,
   Settings2,
   ShieldCheck,
   Sparkles,
   Sun,
   Users,
-  X,
 } from "lucide-react";
 import rosehipLogo from "./assets/rosehip-logo.png";
 import {
@@ -62,11 +60,9 @@ import { APP_VERSION } from "./version";
 import { HomeScreen } from "./features/home";
 import { CreateProfileDialog, NEW_PROFILE_PROVIDER_CHOICE, ProfilesScreen, ProfileViewerControls, useProfileSetupController } from "./features/profiles";
 import { TargetsScreen } from "./features/targets";
-import { ChatPanel } from "./features/conversations";
-import { WorkspaceSwitcherDialog } from "./features/workspaces";
-import { RvSessionPanel } from "./features/rvSessions";
+import { ConversationsScreen } from "./features/conversations";
+import { RvSessionsScreen, type RvSessionsView } from "./features/rvSessions";
 import { FormDialog } from "./components/FormDialog";
-import { PageHeader } from "./components/PageHeader";
 import { ensureBundledTrainingTargets } from "./targets/bundled";
 import { createDefaultSettings } from "./startupDefaults";
 import { SettingsSaveQueue } from "./storage/settingsSaveQueue";
@@ -86,13 +82,14 @@ const LazyAiCenterRoute = lazy(() =>
   import("./features/aiCenter").then(({ AiCenterRoute }) => ({ default: AiCenterRoute })),
 );
 
-export type Page = "home" | "profiles" | "research" | "targets" | "training" | "ai-center" | "settings" | "workspace";
-export type LegacyPage = Page | "workspaces";
+export type Page = "home" | "profiles" | "conversations" | "rv-sessions" | "training" | "research" | "ai-center" | "targets" | "settings";
+export type LegacyPage = Page | "workspace" | "workspaces";
 
 export function normalizePage(page: LegacyPage): Page {
-  return page === "workspaces" ? "profiles" : page;
+  if (page === "workspaces") return "profiles";
+  if (page === "workspace") return "conversations";
+  return page;
 }
-type WorkspaceTab = "chat" | "rv";
 
 export default function App() {
   const [repository, setRepository] = useState<AppRepository | null>(null);
@@ -100,7 +97,7 @@ export default function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [page, setPage] = useState<Page>("home");
-  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("chat");
+  const [rvSessionsView, setRvSessionsView] = useState<RvSessionsView>("automatic");
   const [aiCenterView, setAiCenterView] = useState<AiCenterView>("overview");
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
@@ -209,11 +206,15 @@ export default function App() {
     setPage(normalized);
   };
 
-  const openWorkspace = async (workspace: Workspace) => {
+  const openWorkspace = async (
+    workspace: Workspace,
+    destination: "conversations" | "rv-sessions" = "conversations",
+    rvView: RvSessionsView = "automatic",
+  ) => {
     setActiveWorkspaceId(workspace.id);
     setActiveProfileId(workspace.profileId);
-    setWorkspaceTab("chat");
-    setPage("workspace");
+    if (destination === "rv-sessions") setRvSessionsView(rvView);
+    setPage(destination);
     if (repository) {
       await repository.touchWorkspace(workspace.id);
       setWorkspaces(await repository.listWorkspaces());
@@ -330,8 +331,8 @@ export default function App() {
               profiles={profiles}
               onCreateProfile={() => setProfileDialog(true)}
               onOpenProfiles={() => navigate("profiles")}
-              onOpenWorkspace={openWorkspace}
-              onOpenSession={(session) => { const owner = workspaces.find((item) => item.id === session.workspaceId); if (owner) { void openWorkspace(owner).then(() => setWorkspaceTab("rv")); } }}
+              onOpenWorkspace={(workspace) => void openWorkspace(workspace, "conversations")}
+              onOpenSession={(session) => { const owner = workspaces.find((item) => item.id === session.workspaceId); if (owner) void openWorkspace(owner, "rv-sessions", "automatic"); }}
             />
           ) : page === "profiles" ? (
             <ProfilesScreen
@@ -340,7 +341,7 @@ export default function App() {
               workspaces={workspaces}
               onCreateProfile={() => setProfileDialog(true)}
               onCreateWorkspace={(profileId) => setWorkspaceDialogFor(profileId)}
-              onOpenWorkspace={openWorkspace}
+              onOpenWorkspace={(workspace) => void openWorkspace(workspace, "conversations")}
               activeWorkspaceId={activeWorkspaceId}
               onActiveWorkspaceArchived={setActiveWorkspaceId}
               repository={repository!}
@@ -367,21 +368,38 @@ export default function App() {
             />
           ) : page === "settings" ? (
             <LazySettingsScreen copy={copy} settings={settings} workspaces={workspaces} repository={repository} onDataChanged={refreshProfiles} onChange={updateSettings} />
-          ) : activeWorkspace ? (
-            <WorkspaceScreen
-              copy={copy}
-              settings={settings}
-              profile={profiles.find((item) => item.id === activeWorkspace.profileId) ?? null}
-              workspace={activeWorkspace}
-              tab={workspaceTab}
-              onTab={setWorkspaceTab}
-              repository={repository}
-              profiles={profiles}
-              workspaces={workspaces}
-              onOpenWorkspace={openWorkspace}
-              createdNotice={workspaceCreatedNotice?.workspaceId === activeWorkspace.id ? workspaceCreatedNotice : null}
-              onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
-            />
+          ) : page === "conversations" ? (
+            activeWorkspace ? (
+              <ConversationsScreen
+                copy={copy}
+                settings={settings}
+                profile={profiles.find((item) => item.id === activeWorkspace.profileId) ?? null}
+                workspace={activeWorkspace}
+                repository={repository}
+                profiles={profiles}
+                workspaces={workspaces}
+                onOpenWorkspace={(workspace) => void openWorkspace(workspace, "conversations")}
+                createdNotice={workspaceCreatedNotice?.workspaceId === activeWorkspace.id ? workspaceCreatedNotice : null}
+                onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
+              />
+            ) : <EmptyCard>{copy.noWorkspace}</EmptyCard>
+          ) : page === "rv-sessions" ? (
+            activeWorkspace ? (
+              <RvSessionsScreen
+                copy={copy}
+                settings={settings}
+                profile={profiles.find((item) => item.id === activeWorkspace.profileId) ?? null}
+                workspace={activeWorkspace}
+                repository={repository}
+                profiles={profiles}
+                workspaces={workspaces}
+                view={rvSessionsView}
+                onViewChange={setRvSessionsView}
+                onOpenWorkspace={(workspace) => void openWorkspace(workspace, "rv-sessions", rvSessionsView)}
+                createdNotice={workspaceCreatedNotice?.workspaceId === activeWorkspace.id ? workspaceCreatedNotice : null}
+                onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
+              />
+            ) : <EmptyCard>{copy.noWorkspace}</EmptyCard>
           ) : (
             <EmptyCard>{copy.noWorkspace}</EmptyCard>
                 )}
@@ -517,10 +535,12 @@ function Sidebar({ page, copy, compact, onNavigate }: { page: Page; copy: Return
   const items: Array<{ id: Page; icon: typeof Home; label: string }> = [
     { id: "home", icon: Home, label: copy.home },
     { id: "profiles", icon: Users, label: copy.profiles },
-    { id: "research", icon: FlaskConical, label: copy.research },
-    { id: "targets", icon: Crosshair, label: copy.targets },
+    { id: "conversations", icon: MessageCircle, label: copy.conversationsNav },
+    { id: "rv-sessions", icon: Crosshair, label: copy.rvSessionsNav },
     { id: "training", icon: GraduationCap, label: copy.training },
+    { id: "research", icon: FlaskConical, label: copy.research },
     { id: "ai-center", icon: BrainCircuit, label: "AI Center" },
+    { id: "targets", icon: Crosshair, label: copy.targets },
     { id: "settings", icon: Settings2, label: copy.settings },
   ];
   return (
@@ -532,7 +552,7 @@ function Sidebar({ page, copy, compact, onNavigate }: { page: Page; copy: Return
       <nav className="side-nav">
         {items.map((item) => {
           const Icon = item.icon;
-          const active = page === item.id || (page === "workspace" && item.id === "profiles");
+          const active = page === item.id;
           return (
             <button key={item.id} title={item.label} aria-label={item.label} className={active ? "nav-item active" : "nav-item"} onClick={() => onNavigate(item.id)}>
               <Icon size={18} />
@@ -579,23 +599,6 @@ function TopBar({
     </header>
   );
 }
-
-
-function WorkspaceScreen({ copy, settings, profile, workspace, tab, onTab, repository, profiles, workspaces, onOpenWorkspace, createdNotice, onDismissCreatedNotice }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; tab: WorkspaceTab; onTab: (tab: WorkspaceTab) => void; repository: AppRepository | null; profiles: Profile[]; workspaces: Workspace[]; onOpenWorkspace: (workspace: Workspace) => void; createdNotice: { workspaceId: string; workspaceName: string; profileName: string } | null; onDismissCreatedNotice: () => void }) {
-  const [switcherOpen, setSwitcherOpen] = useState(false);
-  return (
-    <><div className="page workspace-page">
-      <PageHeader title={workspace.name} subtitle={workspace.description || `${profile ? aiIsBeDisplayName(profile) : "—"} · ${copy.workspace}`} action={<button className="secondary-button" onClick={() => setSwitcherOpen(true)}><RadioTower size={15} />{copy.switchWorkspace}</button>} />
-      {createdNotice && <div className="workspace-created-notice"><Check size={16} /><span><strong>{copy.workspaceCreated}</strong><small>{createdNotice.profileName} → {createdNotice.workspaceName}</small></span><button className="icon-button" onClick={onDismissCreatedNotice}><X size={14} /></button></div>}
-      <div className="module-tabs">
-        <button className={tab === "chat" ? "module-tab active" : "module-tab"} onClick={() => onTab("chat")}><MessageCircle size={17} />{copy.chat}</button>
-        <button className={tab === "rv" ? "module-tab active" : "module-tab"} onClick={() => onTab("rv")}><Crosshair size={17} />{copy.rvSession}</button>
-      </div>
-      {tab === "chat" ? <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} /> : <RvSessionPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} />}
-    </div>{switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={onOpenWorkspace} onClose={() => setSwitcherOpen(false)} />}</>
-  );
-}
-
 
 
 function CreateWorkspaceDialog({ copy, profile, profiles, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; profile: Profile | null; profiles: Profile[]; onCancel: () => void; onCreate: (profileId: string, name: string, description?: string) => Promise<void> }) {

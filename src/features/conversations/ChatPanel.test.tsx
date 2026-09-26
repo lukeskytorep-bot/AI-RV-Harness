@@ -22,4 +22,25 @@ describe("Conversations feature", () => {
     expect(html).toContain(copy.chatThreads);
     expect(html).not.toContain("Thread");
   });
+
+  it("supports a fixed Conversation surface without exposing the Manual RV mode switch", () => {
+    const copy = getCopy("en");
+    const html = renderToStaticMarkup(<ChatPanel copy={copy} settings={createDefaultSettings()} profile={profile} workspace={workspace} repository={null} fixedMode="conversation" />);
+
+    expect(html).toContain(copy.systemActive);
+    expect(html).toContain(copy.conversationTitle);
+    expect(html).not.toContain(copy.manualTitle);
+    expect(html).not.toContain('class="segmented large-segmented"');
+  });
+
+  it("supports a fixed Manual RV surface without exposing the Conversation mode switch", () => {
+    const copy = getCopy("en");
+    const html = renderToStaticMarkup(<ChatPanel copy={copy} settings={createDefaultSettings()} profile={profile} workspace={workspace} repository={null} fixedMode="manual_rv" />);
+
+    expect(html).toContain(copy.viewerSystemActive);
+    expect(html).toContain(copy.manualTitle);
+    expect(html).not.toContain(copy.conversationTitle);
+    expect(html).not.toContain('class="segmented large-segmented"');
+  });
+
 });

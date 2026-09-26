@@ -11,7 +11,7 @@ const sourceFiles = import.meta.glob<string>("./**/*.{ts,tsx}", {
 describe("Profiles Workspace management boundary", () => {
   it("maps the retired Workspaces view id safely to Profiles", () => {
     expect(normalizePage("workspaces")).toBe("profiles");
-    expect(normalizePage("workspace")).toBe("workspace");
+    expect(normalizePage("workspace")).toBe("conversations");
   });
 
   it("removes Workspaces from the main navigation and leaves no production screen", () => {

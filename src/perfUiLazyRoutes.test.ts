@@ -14,13 +14,13 @@ describe("PERF-UI-1 route-level lazy loading", () => {
       expect(app).toContain(`import("./features/${route}")`);
     }
 
-    for (const eagerRoute of ["home", "profiles", "workspaces", "training", "rvSessions"]) {
+    for (const eagerRoute of ["home", "profiles", "conversations", "workspaces", "training", "rvSessions"]) {
       expect(app).not.toContain(`import("./features/${eagerRoute}")`);
     }
 
     expect(app).toContain('from "./features/home"');
     expect(app).toContain('from "./features/profiles"');
-    expect(app).toContain('from "./features/workspaces"');
+    expect(app).toContain('from "./features/conversations"');
     expect(app).toContain('from "./features/training"');
     expect(app).toContain('from "./features/rvSessions"');
   });
