@@ -125,8 +125,8 @@ async fn exact_green_v23_to_v24_preserves_existing_data_and_provenance() {
         .expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 25);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(25));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 26);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(26));
 }
 
 #[tokio::test]
@@ -215,6 +215,26 @@ async fn exact_green_v24_to_v25_adds_provider_state_storage_without_mutating_exi
     assert_eq!(chat_state, 0, "Conversation provider state should cascade with its message");
     assert_eq!(session_state, 0, "Session provider state should cascade with its event");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 25);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(25));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 26);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(26));
+}
+
+
+#[tokio::test]
+async fn exact_green_v25_to_v26_types_existing_workspaces_without_moving_history() {
+    let mut connection = SqliteConnection::connect("sqlite::memory:").await.expect("in-memory SQLite should open");
+    sqlx::query("PRAGMA foreign_keys = ON").execute(&mut connection).await.expect("foreign keys should be enabled");
+    for migration in &MIGRATION_SPECS[..25] { apply_sql(&mut connection, migration.sql).await; }
+    apply_sql(&mut connection, GREEN_V23_FIXTURE).await;
+    let workspace_id_before = sqlx::query_scalar::<_, String>("SELECT id FROM workspaces WHERE id = 'workspace-green'").fetch_one(&mut connection).await.expect("green workspace should exist");
+    apply_sql(&mut connection, MIGRATION_SPECS[25].sql).await;
+    let row = sqlx::query("SELECT id, kind FROM workspaces WHERE id = 'workspace-green'").fetch_one(&mut connection).await.expect("green workspace should survive migration 026");
+    assert_eq!(row.get::<String, _>("id"), workspace_id_before);
+    assert_eq!(row.get::<String, _>("kind"), "legacy_combined");
+    let message = sqlx::query_scalar::<_, String>("SELECT content FROM chat_messages WHERE id = 'message-green'").fetch_one(&mut connection).await.expect("green message should survive migration 026");
+    assert_eq!(message, "preserve me");
+    let integrity = sqlx::query_scalar::<_, String>("PRAGMA integrity_check").fetch_one(&mut connection).await.expect("integrity_check should execute");
+    assert_eq!(integrity, "ok");
+    assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
+    assert_eq!(CURRENT_MIGRATION_VERSION, 26);
 }

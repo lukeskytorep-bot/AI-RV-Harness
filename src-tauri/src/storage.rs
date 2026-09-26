@@ -595,6 +595,11 @@ async fn inspect_database_identity(path: &Path) -> Result<DatabaseIdentity, Stri
             }
         }
     }
+    if migration_version >= 26 {
+        if !column_exists(&mut connection, "workspaces", "kind").await? {
+            return Err("database migration 026 marker is missing: workspaces.kind".to_string());
+        }
+    }
 
     let interface_language = sqlx::query_scalar::<_, Option<String>>(
         "SELECT value FROM app_settings WHERE key = 'interfaceLanguage' LIMIT 1",
@@ -1342,6 +1347,9 @@ async fn validate_sqlite_database(path: &Path) -> Result<i64, String> {
             return Err("backup database is missing provider continuation state tables".to_string());
         }
     }
+    if migration_version >= 26 && !column_exists(&mut connection, "workspaces", "kind").await? {
+        return Err("backup database is missing typed Workspace metadata".to_string());
+    }
     Ok(migration_version)
 }
 
@@ -1549,10 +1557,10 @@ mod tests {
         let database = directory.join(DATABASE_FILE_NAME);
         create_database_through(&database, MIGRATION_SPECS.len()).await;
 
-        assert_eq!(CURRENT_MIGRATION_VERSION, 25);
+        assert_eq!(CURRENT_MIGRATION_VERSION, 26);
         validate_current_database(&database)
             .await
-            .expect("migration-025 database should pass live validation");
+            .expect("migration-026 database should pass live validation");
 
         fs::remove_dir_all(directory).expect("test directory should be removed");
     }

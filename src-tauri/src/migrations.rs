@@ -133,6 +133,11 @@ pub(crate) const MIGRATION_SPECS: &[MigrationSpec] = &[
         description: "provider_continuation_state_persistence",
         sql: include_str!("../migrations/025_provider_continuation_state.sql"),
     },
+    MigrationSpec {
+        version: 26,
+        description: "typed_workspaces",
+        sql: include_str!("../migrations/026_typed_workspaces.sql"),
+    },
 ];
 
 pub(crate) const CURRENT_MIGRATION_VERSION: i64 =
@@ -155,13 +160,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_is_contiguous_and_current_version_is_025() {
+    fn registry_is_contiguous_and_current_version_is_026() {
         let versions = MIGRATION_SPECS
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>();
-        assert_eq!(versions, (1_i64..=25).collect::<Vec<_>>());
-        assert_eq!(CURRENT_MIGRATION_VERSION, 25);
+        assert_eq!(versions, (1_i64..=26).collect::<Vec<_>>());
+        assert_eq!(CURRENT_MIGRATION_VERSION, 26);
         assert_eq!(registered_migrations().len(), MIGRATION_SPECS.len());
     }
 }

@@ -11,7 +11,7 @@ interface LegacyThreadGroupRecord {
 }
 
 export const legacyThreadHierarchyFixture: {
-  workspaces: Workspace[];
+  workspaces: Array<Omit<Workspace, "kind"> & { kind?: Workspace["kind"] }>;
   groups: LegacyThreadGroupRecord[];
   threads: ChatThread[];
   messages: ChatMessage[];

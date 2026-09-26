@@ -93,7 +93,7 @@ describe("TrainingScreen", () => {
         copy={getCopy("en")}
         settings={createDefaultSettings()}
         profiles={[{ id: "profile-a", name: "Orion", createdAt: now, updatedAt: now }]}
-        workspaces={[{ id: "workspace-a", profileId: "profile-a", name: "Workspace 1", createdAt: now, updatedAt: now, lastOpenedAt: now }]}
+        workspaces={[{ id: "workspace-a", profileId: "profile-a", name: "Workspace 1", kind: "legacy_combined", createdAt: now, updatedAt: now, lastOpenedAt: now }]}
         repository={null}
       />,
     );
@@ -110,12 +110,12 @@ describe("TrainingScreen", () => {
         copy={getCopy("en")}
         settings={createDefaultSettings()}
         profiles={[{ id: "profile-a", name: "Orion", createdAt: now, updatedAt: now }]}
-        workspaces={[{ id: "workspace-b", profileId: "profile-b", name: "Workspace 1", createdAt: now, updatedAt: now, lastOpenedAt: now }]}
+        workspaces={[{ id: "workspace-b", profileId: "profile-b", name: "Workspace 1", kind: "rv", createdAt: now, updatedAt: now, lastOpenedAt: now }]}
         repository={null}
       />,
     );
 
-    expect(html).toContain("The selected Profile has no active Workspace");
+    expect(html).toContain("The selected Profile has no active RV Workspace or legacy combined Workspace");
     expect(html).not.toContain(">Workspace<");
   });
 

@@ -59,10 +59,10 @@ describe("Stage 4 top-level Conversations / RV Sessions boundary", () => {
     expect(rvSessions).toContain("<RvSessionPanel");
   });
 
-  it("does not change Workspace storage or introduce typed Workspace data in Stage 4", () => {
+  it("preserves Stage 4 routing while Stage 5 adds typed Workspace data", () => {
     const types = sourceFiles["./types.ts"] ?? "";
+    expect(types).toContain('export type WorkspaceKind = "conversation" | "rv" | "legacy_combined"');
+    expect(types).toContain("kind: WorkspaceKind");
     expect(types).not.toContain('purpose: "conversation"');
-    expect(types).not.toContain('kind: "conversation"');
-    expect(types).not.toContain("legacy_combined");
   });
 });

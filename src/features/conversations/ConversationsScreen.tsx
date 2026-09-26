@@ -47,7 +47,7 @@ export function ConversationsScreen({
         {createdNotice && <div className="workspace-created-notice"><Check size={16} /><span><strong>{copy.workspaceCreated}</strong><small>{createdNotice.profileName} → {createdNotice.workspaceName}</small></span><button className="icon-button" onClick={onDismissCreatedNotice}><X size={14} /></button></div>}
         <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} fixedMode="conversation" />
       </div>
-      {switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={onOpenWorkspace} onClose={() => setSwitcherOpen(false)} />}
+      {switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} kind="conversation" onOpenWorkspace={onOpenWorkspace} onClose={() => setSwitcherOpen(false)} />}
     </>
   );
 }

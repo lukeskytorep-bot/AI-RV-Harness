@@ -43,11 +43,11 @@ describe("GOOGLE-CONTINUITY-1 boundary", () => {
     expect(memory).not.toContain("validateAnthropicReplayForRequest");
   });
 
-  it("keeps schema 025 and ProviderMessage v1 free of tool/function parts", () => {
+  it("keeps Google continuation persistence on schema 025 and ProviderMessage v1 free of tool/function parts", () => {
     const migrations = read("src-tauri/src/migrations.rs");
     const contract = read("src/providers/continuationContract.ts");
     expect(migrations).toContain("version: 25");
-    expect(migrations).not.toContain("version: 26");
+    expect(migrations).toContain("version: 26");
     expect(contract).toContain("Function/tool parts remain outside the v1 message model");
     expect(contract).not.toContain('format: "opaque"');
   });

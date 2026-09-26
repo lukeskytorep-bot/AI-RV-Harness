@@ -19,15 +19,9 @@ export async function archiveWorkspaceAndRefresh(
   repository: WorkspaceRepository,
   workspace: Workspace,
   ownerProfileId: string,
-  workspaces: Workspace[],
-  activeWorkspaceId: string | null,
-  onActiveArchived: (nextId: string | null) => void,
   refresh: () => Promise<void>,
 ): Promise<void> {
   if (workspace.profileId !== ownerProfileId) throw new Error("Workspace does not belong to the selected Profile.");
   await repository.archiveWorkspace(workspace.id);
-  if (workspace.id === activeWorkspaceId) {
-    onActiveArchived(workspaces.find((item) => item.id !== workspace.id && item.profileId === workspace.profileId)?.id ?? null);
-  }
   await refresh();
 }

@@ -23,7 +23,7 @@ describe("CUSTOM-WIRE-PARAMETER-OVERRIDE-1 boundary", () => {
     expect(validation).toContain("override is allowed only for Custom OpenAI-compatible providers");
   });
 
-  it("persists the optional override in existing settings and keeps SQLite schema 025", () => {
+  it("persists the optional override in existing settings and keeps its persistence on schema 025 while current schema advances", () => {
     const repository = read("src/storage/sqlite/settingsModelsRepository.ts");
     const writes = read("src/storage/databaseWriteOperations.ts");
     const migrations = read("src-tauri/src/migrations.rs");
@@ -34,8 +34,8 @@ describe("CUSTOM-WIRE-PARAMETER-OVERRIDE-1 boundary", () => {
     expect(repository).toContain("DELETE FROM app_settings WHERE key = $1");
     expect(writes).toContain("settings_models_delete_app_settings_01");
     expect(migrations).toContain("version: 25");
-    expect(migrations).not.toContain("version: 26");
-    expect(docs).toContain("SQLite schema remains 25");
+    expect(migrations).toContain("version: 26");
+    expect(docs).toContain("Custom OpenAI wire parameter override");
   });
 
   it("exposes the control only on Custom OpenAI provider settings", () => {

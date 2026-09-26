@@ -7,7 +7,7 @@ import { ProfilesScreen, type ProfilesScreenProps } from "./index";
 
 const now = "2026-09-02T10:00:00.000Z";
 const profile: Profile = { id: "profile-1", name: "Orion", humanName: "Luke", createdAt: now, updatedAt: now };
-const workspace: Workspace = { id: "workspace-1", profileId: profile.id, name: "Training Lab", createdAt: now, updatedAt: now, lastOpenedAt: now };
+const workspace: Workspace = { id: "workspace-1", profileId: profile.id, name: "Training Lab", kind: "conversation", createdAt: now, updatedAt: now, lastOpenedAt: now };
 
 function makeProps(overrides: Partial<ProfilesScreenProps> = {}): ProfilesScreenProps {
   return {
@@ -17,8 +17,8 @@ function makeProps(overrides: Partial<ProfilesScreenProps> = {}): ProfilesScreen
     onCreateProfile: vi.fn(),
     onCreateWorkspace: vi.fn(),
     onOpenWorkspace: vi.fn(),
-    activeWorkspaceId: null,
-    onActiveWorkspaceArchived: vi.fn(),
+    activeConversationWorkspaceId: null,
+    activeRvWorkspaceId: null,
     repository: null,
     onProfilesChanged: vi.fn(async () => undefined),
     ...overrides,
@@ -36,7 +36,7 @@ describe("ProfilesScreen", () => {
   });
 
   it("renders every active Workspace owned by the Profile and exposes its action menu", () => {
-    const second: Workspace = { ...workspace, id: "workspace-2", name: "Research Lab" };
+    const second: Workspace = { ...workspace, id: "workspace-2", name: "Research Lab", kind: "rv" };
     const html = renderToStaticMarkup(<ProfilesScreen {...makeProps({ profiles: [profile], workspaces: [workspace, second] })} />);
 
     expect(html).toContain("Orion");
@@ -50,7 +50,7 @@ describe("ProfilesScreen", () => {
 
   it("keeps a foreign Profile Workspace inside its own Profile card", () => {
     const foreignProfile: Profile = { ...profile, id: "profile-2", name: "Nemo" };
-    const foreignWorkspace: Workspace = { ...workspace, id: "workspace-foreign", profileId: foreignProfile.id, name: "Foreign Lab" };
+    const foreignWorkspace: Workspace = { ...workspace, id: "workspace-foreign", profileId: foreignProfile.id, name: "Foreign Lab", kind: "legacy_combined" };
     const html = renderToStaticMarkup(<ProfilesScreen {...makeProps({ profiles: [profile, foreignProfile], workspaces: [workspace, foreignWorkspace] })} />);
 
     const orionCard = html.slice(html.indexOf("Orion"), html.indexOf("Nemo"));
@@ -61,7 +61,7 @@ describe("ProfilesScreen", () => {
   it("disables Archive for the last active Workspace of a Profile", () => {
     const html = renderToStaticMarkup(<ProfilesScreen {...makeProps({ profiles: [profile], workspaces: [workspace] })} />);
 
-    expect(html).toContain('title="Each Profile must keep at least one active Workspace."');
+    expect(html).toContain('title="Each Profile must keep at least one active compatible Workspace of each required type."');
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Archive/s);
   });
 });

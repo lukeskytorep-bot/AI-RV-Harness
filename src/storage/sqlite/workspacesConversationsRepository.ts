@@ -1,11 +1,12 @@
-import type { ChatMessage, ChatMode, ChatThread, CreateWorkspaceInput, Workspace } from "../../types";
+import type { ChatMessage, ChatMode, ChatThread, CreateWorkspaceInput, Workspace, WorkspaceKind } from "../../types";
 import type { WorkspacesConversationsRepository } from "../contracts/workspacesConversationsRepository";
 import type { ProviderContinuationState } from "../../providers/continuationContract";
 import { prepareProviderContinuationState, restoreProviderContinuationState, type ProviderContinuationStateBinding } from "../providerContinuationState";
+import { canArchiveWorkspace } from "../../domain/workspaceKind";
 import { createId, nowIso } from "../repository";
 
 type WriteResult = { rowsAffected: number };
-type WorkspaceRow = { id: string; profile_id: string; name: string; description: string | null; created_at: string; updated_at: string; last_opened_at: string; archived_at: string | null };
+type WorkspaceRow = { id: string; profile_id: string; name: string; description: string | null; kind: WorkspaceKind; created_at: string; updated_at: string; last_opened_at: string; archived_at: string | null };
 type ChatThreadRow = { id: string; workspace_id: string; mode: ChatMode; thread_group_id: string | null; title: string; formal_rv_state: ChatThread["formalRvState"] | null; created_at: string; updated_at: string; archived_at: string | null };
 type ChatMessageRow = { id: string; thread_id: string; role: "user" | "assistant"; content: string; created_at: string };
 type ProviderStateRow = { message_id: string; format: string; format_version: number; transport: string; replay_fingerprint_json: string; payload_json: string; payload_sha256: string; payload_size_bytes: number; created_at: string };
@@ -19,7 +20,7 @@ export interface SqliteWorkspacesConversationsRepositoryDependencies {
 }
 
 function mapWorkspace(row: WorkspaceRow): Workspace {
-  return { id: row.id, profileId: row.profile_id, name: row.name, description: row.description ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at, lastOpenedAt: row.last_opened_at, ...(row.archived_at ? { archivedAt: row.archived_at } : {}) };
+  return { id: row.id, profileId: row.profile_id, name: row.name, description: row.description ?? undefined, kind: row.kind, createdAt: row.created_at, updatedAt: row.updated_at, lastOpenedAt: row.last_opened_at, ...(row.archived_at ? { archivedAt: row.archived_at } : {}) };
 }
 
 function mapChatThread(row: ChatThreadRow): ChatThread {
@@ -36,19 +37,19 @@ export class SqliteWorkspacesConversationsRepository implements WorkspacesConver
 
   async listWorkspaces(profileId?: string): Promise<Workspace[]> {
     const rows = profileId
-      ? await this.dependencies.select<WorkspaceRow[]>(`SELECT id, profile_id, name, description, created_at, updated_at, last_opened_at, archived_at FROM workspaces WHERE profile_id = $1 AND archived_at IS NULL ORDER BY last_opened_at DESC`, [profileId])
-      : await this.dependencies.select<WorkspaceRow[]>(`SELECT id, profile_id, name, description, created_at, updated_at, last_opened_at, archived_at FROM workspaces WHERE archived_at IS NULL ORDER BY last_opened_at DESC`);
+      ? await this.dependencies.select<WorkspaceRow[]>(`SELECT id, profile_id, name, description, kind, created_at, updated_at, last_opened_at, archived_at FROM workspaces WHERE profile_id = $1 AND archived_at IS NULL ORDER BY last_opened_at DESC`, [profileId])
+      : await this.dependencies.select<WorkspaceRow[]>(`SELECT id, profile_id, name, description, kind, created_at, updated_at, last_opened_at, archived_at FROM workspaces WHERE archived_at IS NULL ORDER BY last_opened_at DESC`);
     return rows.map(mapWorkspace);
   }
 
   async listArchivedWorkspaces(): Promise<Workspace[]> {
-    return (await this.dependencies.select<WorkspaceRow[]>(`SELECT id, profile_id, name, description, created_at, updated_at, last_opened_at, archived_at FROM workspaces WHERE archived_at IS NOT NULL ORDER BY archived_at DESC`)).map(mapWorkspace);
+    return (await this.dependencies.select<WorkspaceRow[]>(`SELECT id, profile_id, name, description, kind, created_at, updated_at, last_opened_at, archived_at FROM workspaces WHERE archived_at IS NOT NULL ORDER BY archived_at DESC`)).map(mapWorkspace);
   }
 
   async createWorkspace(input: CreateWorkspaceInput): Promise<Workspace> {
     const timestamp = this.now();
-    const workspace: Workspace = { id: createId("workspace"), profileId: input.profileId, name: input.name.trim(), description: input.description?.trim() || undefined, createdAt: timestamp, updatedAt: timestamp, lastOpenedAt: timestamp };
-    await this.dependencies.executeWrite(`INSERT INTO workspaces (id, profile_id, name, description, created_at, updated_at, last_opened_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [workspace.id, workspace.profileId, workspace.name, workspace.description ?? null, timestamp, timestamp, timestamp]);
+    const workspace: Workspace = { id: createId("workspace"), profileId: input.profileId, name: input.name.trim(), description: input.description?.trim() || undefined, kind: input.kind, createdAt: timestamp, updatedAt: timestamp, lastOpenedAt: timestamp };
+    await this.dependencies.executeWrite(`INSERT INTO workspaces (id, profile_id, name, description, kind, created_at, updated_at, last_opened_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [workspace.id, workspace.profileId, workspace.name, workspace.description ?? null, workspace.kind, timestamp, timestamp, timestamp]);
     return workspace;
   }
 
@@ -63,18 +64,13 @@ export class SqliteWorkspacesConversationsRepository implements WorkspacesConver
   }
 
   async archiveWorkspace(id: string): Promise<void> {
-    const active = await this.dependencies.select<Array<{ id: string }>>("SELECT id FROM workspaces WHERE id = $1 AND archived_at IS NULL LIMIT 1", [id]);
-    if (!active[0]) throw new Error("Active Workspace not found.");
-    const timestamp = this.now();
-    const result = await this.dependencies.executeWrite(
-      `UPDATE workspaces
-          SET archived_at = $1, updated_at = $1
-        WHERE id = $2
-          AND archived_at IS NULL
-          AND (SELECT COUNT(*) FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.archived_at IS NULL) > 1`,
-      [timestamp, id],
-    );
-    if (result.rowsAffected === 0) throw new Error("A Profile must keep at least one active Workspace.");
+    const active = await this.dependencies.select<WorkspaceRow[]>("SELECT id, profile_id, name, description, kind, created_at, updated_at, last_opened_at, archived_at FROM workspaces WHERE id = $1 AND archived_at IS NULL LIMIT 1", [id]);
+    const workspace = active[0] ? mapWorkspace(active[0]) : null;
+    if (!workspace) throw new Error("Active Workspace not found.");
+    const siblings = (await this.dependencies.select<WorkspaceRow[]>("SELECT id, profile_id, name, description, kind, created_at, updated_at, last_opened_at, archived_at FROM workspaces WHERE profile_id = $1 AND archived_at IS NULL", [workspace.profileId])).map(mapWorkspace);
+    if (!canArchiveWorkspace(workspace, siblings)) throw new Error("A Profile must keep at least one active compatible Workspace of each required type.");
+    const result = await this.dependencies.executeWrite("UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL AND ((kind = 'conversation' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('conversation', 'legacy_combined'))) OR (kind = 'rv' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('rv', 'legacy_combined'))) OR (kind = 'legacy_combined' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('conversation', 'legacy_combined')) AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('rv', 'legacy_combined'))))", [this.now(), id]);
+    if (result.rowsAffected === 0) throw new Error("Active Workspace not found.");
   }
 
   async restoreWorkspace(id: string, name?: string): Promise<void> {

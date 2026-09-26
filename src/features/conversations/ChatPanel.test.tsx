@@ -8,7 +8,7 @@ import { ChatPanel } from "./index";
 
 const now = "2026-09-05T10:00:00.000Z";
 const profile: Profile = { id: "profile-1", name: "Orion", createdAt: now, updatedAt: now };
-const workspace: Workspace = { id: "workspace-1", profileId: profile.id, name: "Conversation Lab", createdAt: now, updatedAt: now, lastOpenedAt: now };
+const workspace: Workspace = { id: "workspace-1", profileId: profile.id, name: "Conversation Lab", kind: "conversation", createdAt: now, updatedAt: now, lastOpenedAt: now };
 
 describe("Conversations feature", () => {
   it("renders Conversation and Manual RV boundaries through the public entry point", () => {

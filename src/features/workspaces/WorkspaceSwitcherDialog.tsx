@@ -5,19 +5,22 @@ import { EmptyState } from "../../components/EmptyState";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 import { filterWorkspaceDirectory } from "../../domain/workspaceDirectory";
 import { getCopy } from "../../i18n";
-import type { Profile, Workspace } from "../../types";
+import type { NewWorkspaceKind, Profile, Workspace } from "../../types";
+import { isWorkspaceCompatible } from "../../domain/workspaceKind";
 
 export interface WorkspaceSwitcherDialogProps {
   copy: ReturnType<typeof getCopy>;
   profiles: Profile[];
   workspaces: Workspace[];
+  kind: NewWorkspaceKind;
   onOpenWorkspace: (workspace: Workspace) => void;
   onClose: () => void;
 }
 
-export function WorkspaceSwitcherDialog({ copy, profiles, workspaces, onOpenWorkspace, onClose }: WorkspaceSwitcherDialogProps) {
+export function WorkspaceSwitcherDialog({ copy, profiles, workspaces, kind, onOpenWorkspace, onClose }: WorkspaceSwitcherDialogProps) {
   const [query, setQuery] = useState("");
-  const groups = useMemo(() => filterWorkspaceDirectory(workspaces, profiles, query), [workspaces, profiles, query]);
+  const compatible = useMemo(() => workspaces.filter((workspace) => isWorkspaceCompatible(workspace, kind)), [workspaces, kind]);
+  const groups = useMemo(() => filterWorkspaceDirectory(compatible, profiles, query), [compatible, profiles, query]);
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="modal workspace-switcher-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
@@ -32,7 +35,7 @@ export function WorkspaceSwitcherDialog({ copy, profiles, workspaces, onOpenWork
                   <div>{group.workspaces.map((workspace) => (
                     <div className="workspace-directory-tile" key={workspace.id}>
                       <button className="workspace-open-button" onClick={() => { onClose(); onOpenWorkspace(workspace); }}>
-                        <span><RadioTower size={16} /><span><strong>{workspace.name}</strong><small>{workspace.description || new Date(workspace.lastOpenedAt).toLocaleString()}</small></span></span><ArrowRight size={15} />
+                        <span><RadioTower size={16} /><span><strong>{workspace.name}</strong><small>{workspace.description || (workspace.kind === "legacy_combined" ? copy.legacyCombinedWorkspace : workspace.kind === "conversation" ? copy.conversationWorkspace : copy.rvWorkspace)}</small></span></span><ArrowRight size={15} />
                       </button>
                     </div>
                   ))}</div>

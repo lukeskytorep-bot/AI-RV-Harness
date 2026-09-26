@@ -8,7 +8,7 @@ import { RvSessionsScreen } from "./index";
 
 const now = "2026-09-26T18:00:00.000Z";
 const profile: Profile = { id: "profile-1", name: "Orion", createdAt: now, updatedAt: now };
-const workspace: Workspace = { id: "workspace-1", profileId: profile.id, name: "Shared Workspace", createdAt: now, updatedAt: now, lastOpenedAt: now };
+const workspace: Workspace = { id: "workspace-1", profileId: profile.id, name: "Shared Workspace", kind: "rv", createdAt: now, updatedAt: now, lastOpenedAt: now };
 
 function render(view: "manual" | "automatic") {
   const copy = getCopy("en");

@@ -1,31 +1,24 @@
 import { describe, expect, it } from "vitest";
-import type { Workspace } from "../types";
+import type { Workspace, WorkspaceKind } from "../types";
 import { resolveTechnicalWorkspaceForProfile } from "./technicalWorkspace";
 
-const workspace = (id: string, profileId: string, createdAt: string, archivedAt?: string): Workspace => ({
-  id,
-  profileId,
-  name: id,
-  createdAt,
-  updatedAt: createdAt,
-  lastOpenedAt: createdAt,
-  ...(archivedAt ? { archivedAt } : {}),
-});
+const workspace = (id: string, profileId: string, createdAt: string, kind: WorkspaceKind, archivedAt?: string): Workspace => ({ id, profileId, name: id, kind, createdAt, updatedAt: createdAt, lastOpenedAt: createdAt, ...(archivedAt ? { archivedAt } : {}) });
 
 describe("technical Workspace resolution", () => {
-  it("selects the first active Workspace of the selected Profile deterministically", () => {
+  it("selects the earliest active RV-compatible Workspace deterministically", () => {
     const resolved = resolveTechnicalWorkspaceForProfile([
-      workspace("newer", "profile-a", "2026-02-01T00:00:00.000Z"),
-      workspace("foreign", "profile-b", "2025-01-01T00:00:00.000Z"),
-      workspace("first", "profile-a", "2026-01-01T00:00:00.000Z"),
+      workspace("conversation", "profile-a", "2025-01-01T00:00:00.000Z", "conversation"),
+      workspace("rv-newer", "profile-a", "2026-02-01T00:00:00.000Z", "rv"),
+      workspace("legacy-first", "profile-a", "2026-01-01T00:00:00.000Z", "legacy_combined"),
     ], "profile-a");
-    expect(resolved?.id).toBe("first");
+    expect(resolved?.id).toBe("legacy-first");
   });
 
-  it("never falls through to another Profile and ignores archived Workspaces", () => {
+  it("never selects a Conversation-only, archived, or foreign Workspace", () => {
     const resolved = resolveTechnicalWorkspaceForProfile([
-      workspace("archived", "profile-a", "2026-01-01T00:00:00.000Z", "2026-09-01T00:00:00.000Z"),
-      workspace("foreign", "profile-b", "2025-01-01T00:00:00.000Z"),
+      workspace("conversation", "profile-a", "2026-01-01T00:00:00.000Z", "conversation"),
+      workspace("archived-rv", "profile-a", "2026-01-02T00:00:00.000Z", "rv", "2026-09-01T00:00:00.000Z"),
+      workspace("foreign-rv", "profile-b", "2025-01-01T00:00:00.000Z", "rv"),
     ], "profile-a");
     expect(resolved).toBeNull();
   });

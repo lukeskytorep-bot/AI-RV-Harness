@@ -19,6 +19,7 @@ const workspace: Workspace = {
   id: "workspace-1",
   profileId: profile.id,
   name: "Training Lab",
+  kind: "legacy_combined",
   createdAt: now,
   updatedAt: now,
   lastOpenedAt: now,

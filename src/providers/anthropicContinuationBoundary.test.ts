@@ -37,11 +37,11 @@ describe("ANTHROPIC-CONTINUITY-1 boundary", () => {
     expect(postReveal).toContain('frozenContinuationRoute?.transport === "anthropic-native" ? undefined');
   });
 
-  it("keeps schema 025 and does not expand v1 into tools/function calls", () => {
+  it("keeps continuation persistence on schema 025 and does not expand v1 into tools/function calls", () => {
     const migrations = read("src-tauri/src/migrations.rs");
     const contract = read("src/providers/continuationContract.ts");
     expect(migrations).toContain("version: 25");
-    expect(migrations).not.toContain("version: 26");
+    expect(migrations).toContain("version: 26");
     expect(contract).toContain("Function/tool parts remain outside the v1 message model");
   });
 });

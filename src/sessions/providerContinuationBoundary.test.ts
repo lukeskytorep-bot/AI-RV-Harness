@@ -5,11 +5,11 @@ import path from "node:path";
 const read = (relative: string) => fs.readFileSync(path.resolve(process.cwd(), relative), "utf8");
 
 describe("provider continuation workflow boundary", () => {
-  it("keeps C5 on schema 025 and activates Anthropic only through frozen append-only Session routes", () => {
+  it("keeps C5 continuation persistence on schema 025 and activates Anthropic only through frozen append-only Session routes", () => {
     const migrations = read("src-tauri/src/migrations.rs");
     const sessionBridge = read("src/sessions/providerContinuation.ts");
     expect(migrations).toContain("version: 25");
-    expect(migrations).not.toContain("version: 26");
+    expect(migrations).toContain("version: 26");
     expect(sessionBridge).toContain("captureOpenRouterContinuationState");
     expect(sessionBridge).toContain("captureGoogleContinuationState");
     expect(sessionBridge).toContain("google-thought-parts");

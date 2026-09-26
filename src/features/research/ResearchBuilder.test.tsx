@@ -11,7 +11,7 @@ import researchBuilderSource from "./ResearchBuilder.tsx?raw";
 
 const now = "2026-09-15T12:00:00.000Z";
 const profile: Profile = { id: "profile-a", name: "Orion", credentialId: "cred-a", createdAt: now, updatedAt: now };
-const workspace: Workspace = { id: "workspace-a", profileId: profile.id, name: "Workspace 1", createdAt: now, updatedAt: now, lastOpenedAt: now };
+const workspace: Workspace = { id: "workspace-a", profileId: profile.id, name: "Workspace 1", kind: "rv", createdAt: now, updatedAt: now, lastOpenedAt: now };
 const provider: ProviderConfig = { id: "pc-a", provider: "openrouter", label: "OpenRouter", credentialId: "cred-a", credentialFingerprint: "fingerprint", enabled: true, lastStatus: "ok", createdAt: now, updatedAt: now };
 const model: ProviderModel = {
   providerConfigId: provider.id, provider: "openrouter", modelId: "model-a", displayName: "Model A", route: "openrouter:model-a",
@@ -69,7 +69,7 @@ describe("Research Builder Training/Research UX step", () => {
       profiles={[profile]} workspaces={[]} providers={[provider]} models={[model]} targets={[]} usage={[]} template="model"
       onBack={() => undefined} onLocked={noop}
     />);
-    expect(html).toContain("The selected Profile has no active Workspace");
+    expect(html).toContain("The selected Profile has no active RV Workspace or legacy combined Workspace");
     expect(html).not.toContain("Research workspace");
   });
 

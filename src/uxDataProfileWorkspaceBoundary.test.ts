@@ -9,7 +9,7 @@ const source = (relative: string) => fs.readFileSync(path.join(process.cwd(), re
 describe("UX-DATA-4 Profile + Workspace boundaries", () => {
   it("routes product-level Profile creation through the initial-Workspace use case", () => {
     const app = source("src/App.tsx");
-    expect(app).toContain("createProfileWithInitialWorkspace");
+    expect(app).toContain("createProfileWithInitialWorkspaces");
     const productionRoots = ["src/App.tsx", "src/features"];
     const offenders: string[] = [];
     const visit = (target: string) => {
@@ -35,7 +35,7 @@ describe("UX-DATA-4 Profile + Workspace boundaries", () => {
   });
 
   it("keeps last-Workspace protection in both persistence adapters", () => {
-    expect(source("src/storage/browser/workspacesConversationsRepository.ts")).toContain("A Profile must keep at least one active Workspace.");
-    expect(source("src/storage/sqlite/workspacesConversationsRepository.ts")).toContain("A Profile must keep at least one active Workspace.");
+    expect(source("src/storage/browser/workspacesConversationsRepository.ts")).toContain("A Profile must keep at least one active compatible Workspace of each required type.");
+    expect(source("src/storage/sqlite/workspacesConversationsRepository.ts")).toContain("A Profile must keep at least one active compatible Workspace of each required type.");
   });
 });

@@ -51,6 +51,7 @@ import type {
   ProfileAiConfigurationInput,
   Theme,
   Workspace,
+  NewWorkspaceKind,
 } from "./types";
 import type { ProviderKind } from "./providers/types";
 import { TrainingScreen } from "./features/training";
@@ -70,7 +71,8 @@ import { profileNeedingInitialSetup } from "./profileModelDefaults";
 import { ModelRouteSelect } from "./components/ModelRouteSelect";
 import { aiIsBeDisplayName } from "./domain/isBeIdentity";
 import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from "./targets/telepathicBundled";
-import { createProfileWithInitialWorkspace } from "./application/profileWorkspace";
+import { createProfileWithInitialWorkspaces } from "./application/profileWorkspace";
+import { isWorkspaceCompatible, latestCompatibleWorkspace } from "./domain/workspaceKind";
 
 const LazyResearchScreen = lazy(() =>
   import("./features/research").then(({ ResearchScreen }) => ({ default: ResearchScreen })),
@@ -100,9 +102,10 @@ export default function App() {
   const [rvSessionsView, setRvSessionsView] = useState<RvSessionsView>("automatic");
   const [aiCenterView, setAiCenterView] = useState<AiCenterView>("overview");
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [activeConversationWorkspaceId, setActiveConversationWorkspaceId] = useState<string | null>(null);
+  const [activeRvWorkspaceId, setActiveRvWorkspaceId] = useState<string | null>(null);
   const [profileDialog, setProfileDialog] = useState(false);
-  const [workspaceDialogFor, setWorkspaceDialogFor] = useState<string | null>(null);
+  const [workspaceDialogFor, setWorkspaceDialogFor] = useState<{ profileId: string; kind: NewWorkspaceKind } | null>(null);
   const [workspaceCreatedNotice, setWorkspaceCreatedNotice] = useState<{ workspaceId: string; workspaceName: string; profileName: string } | null>(null);
   const [recentSessions, setRecentSessions] = useState<RvSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,7 +117,9 @@ export default function App() {
   const settingsSaveQueueRef = useRef<{ repository: AppRepository; queue: SettingsSaveQueue } | null>(null);
 
   const copy = getCopy(settings.interfaceLanguage);
-  const activeWorkspace = workspaces.find((item) => item.id === activeWorkspaceId) ?? null;
+  const activeConversationWorkspace = workspaces.find((item) => item.id === activeConversationWorkspaceId && isWorkspaceCompatible(item, "conversation")) ?? null;
+  const activeRvWorkspace = workspaces.find((item) => item.id === activeRvWorkspaceId && isWorkspaceCompatible(item, "rv")) ?? null;
+  const activeWorkspace = page === "rv-sessions" || page === "ai-center" ? activeRvWorkspace : activeConversationWorkspace;
   const lastWorkspace = workspaces[0] ?? null;
   const lastProfile =
     profiles.find((item) => item.id === (activeProfileId ?? lastWorkspace?.profileId)) ?? profiles[0] ?? null;
@@ -145,14 +150,30 @@ export default function App() {
           await repo.saveSettings(nextSettings);
         }
         if (cancelled) return;
+        const storedConversationWorkspace = storedWorkspaces.find((workspace) =>
+          workspace.id === nextSettings.activeConversationWorkspaceId
+          && !workspace.archivedAt
+          && isWorkspaceCompatible(workspace, "conversation")) ?? null;
+        const storedRvWorkspace = storedWorkspaces.find((workspace) =>
+          workspace.id === nextSettings.activeRvWorkspaceId
+          && !workspace.archivedAt
+          && isWorkspaceCompatible(workspace, "rv")) ?? null;
+        const initialConversationWorkspace = storedConversationWorkspace ?? latestCompatibleWorkspace(storedWorkspaces, "conversation");
+        const initialRvWorkspace = storedRvWorkspace ?? latestCompatibleWorkspace(storedWorkspaces, "rv");
+        nextSettings = {
+          ...nextSettings,
+          activeConversationWorkspaceId: initialConversationWorkspace?.id ?? "",
+          activeRvWorkspaceId: initialRvWorkspace?.id ?? "",
+        };
         setRepository(repo);
         setSettings(nextSettings);
         setProfiles(storedProfiles);
         setWorkspaces(storedWorkspaces);
         const sessions = await repo.listRecentRvSessions(8);
         setRecentSessions(sessions);
-        setActiveProfileId(storedWorkspaces[0]?.profileId ?? storedProfiles[0]?.id ?? null);
-        setActiveWorkspaceId(storedWorkspaces[0]?.id ?? null);
+        setActiveProfileId(initialConversationWorkspace?.profileId ?? initialRvWorkspace?.profileId ?? storedProfiles[0]?.id ?? null);
+        setActiveConversationWorkspaceId(initialConversationWorkspace?.id ?? null);
+        setActiveRvWorkspaceId(initialRvWorkspace?.id ?? null);
         setLoading(false);
       } catch (error) {
         if (cancelled) return;
@@ -200,46 +221,72 @@ export default function App() {
     settingsSaveQueueRef.current.queue.enqueue(settings);
   }, [repository, loading, settings]);
 
+  const rememberActiveWorkspace = (kind: NewWorkspaceKind, workspaceId: string | null) => {
+    if (kind === "conversation") setActiveConversationWorkspaceId(workspaceId);
+    else setActiveRvWorkspaceId(workspaceId);
+    setSettings((current) => ({
+      ...current,
+      ...(kind === "conversation"
+        ? { activeConversationWorkspaceId: workspaceId ?? "" }
+        : { activeRvWorkspaceId: workspaceId ?? "" }),
+    }));
+  };
+
   const navigate = (destination: LegacyPage) => {
     const normalized = normalizePage(destination);
     if (normalized === "ai-center") setAiCenterView("overview");
+    if (normalized === "conversations") {
+      const target = activeConversationWorkspace ?? latestCompatibleWorkspace(workspaces, "conversation", activeProfileId);
+      if (!activeConversationWorkspace) rememberActiveWorkspace("conversation", target?.id ?? null);
+      if (target) setActiveProfileId(target.profileId);
+    }
+    if (normalized === "rv-sessions") {
+      const target = activeRvWorkspace ?? latestCompatibleWorkspace(workspaces, "rv", activeProfileId);
+      if (!activeRvWorkspace) rememberActiveWorkspace("rv", target?.id ?? null);
+      if (target) setActiveProfileId(target.profileId);
+    }
     setPage(normalized);
   };
 
   const openWorkspace = async (
     workspace: Workspace,
-    destination: "conversations" | "rv-sessions" = "conversations",
+    destination: "conversations" | "rv-sessions" = workspace.kind === "rv" ? "rv-sessions" : "conversations",
     rvView: RvSessionsView = "automatic",
   ) => {
-    setActiveWorkspaceId(workspace.id);
+    const requiredKind: NewWorkspaceKind = destination === "rv-sessions" ? "rv" : "conversation";
+    if (!isWorkspaceCompatible(workspace, requiredKind)) return;
+    rememberActiveWorkspace(requiredKind, workspace.id);
     setActiveProfileId(workspace.profileId);
     if (destination === "rv-sessions") setRvSessionsView(rvView);
     setPage(destination);
     if (repository) {
       await repository.touchWorkspace(workspace.id);
-      setWorkspaces(await repository.listWorkspaces());
+      const nextWorkspaces = await repository.listWorkspaces();
+      setWorkspaces(nextWorkspaces);
     }
   };
 
   const createProfile = async (name: string, humanName: string | undefined, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => {
     if (!repository) return;
-    const { profile, workspace } = await createProfileWithInitialWorkspace(repository, { name, humanName, note, aiConfiguration });
+    const { profile, conversationWorkspace, rvWorkspace } = await createProfileWithInitialWorkspaces(repository, { name, humanName, note, aiConfiguration });
     const [nextProfiles, nextWorkspaces] = await Promise.all([repository.listProfiles(), repository.listWorkspaces()]);
     setProfiles(nextProfiles);
     setWorkspaces(nextWorkspaces);
     setActiveProfileId(profile.id);
-    setActiveWorkspaceId(workspace.id);
+    rememberActiveWorkspace("conversation", conversationWorkspace.id);
+    rememberActiveWorkspace("rv", rvWorkspace.id);
     setProfileDialog(false);
   };
 
-  const createWorkspace = async (profileId: string, name: string, description?: string) => {
+  const createWorkspace = async (profileId: string, kind: NewWorkspaceKind, name: string, description?: string) => {
     if (!repository) return;
-    const workspace = await repository.createWorkspace({ profileId, name, description });
+    const workspace = await repository.createWorkspace({ profileId, kind, name, description });
     const owner = profiles.find((profile) => profile.id === profileId);
     setWorkspaceCreatedNotice({ workspaceId: workspace.id, workspaceName: workspace.name, profileName: owner ? aiIsBeDisplayName(owner) : "AI IS-BE" });
-    setWorkspaces(await repository.listWorkspaces());
+    const nextWorkspaces = await repository.listWorkspaces();
+    setWorkspaces(nextWorkspaces);
     setWorkspaceDialogFor(null);
-    await openWorkspace(workspace);
+    await openWorkspace(workspace, kind === "rv" ? "rv-sessions" : "conversations");
   };
 
   const refreshProfiles = async () => {
@@ -247,17 +294,31 @@ export default function App() {
     const [nextProfiles, nextWorkspaces] = await Promise.all([repository.listProfiles(), repository.listWorkspaces()]);
     setProfiles(nextProfiles);
     setWorkspaces(nextWorkspaces);
+    const activeProfileStillExists = activeProfileId ? nextProfiles.some((profile) => profile.id === activeProfileId) : false;
+    const fallbackProfileId = activeProfileStillExists ? activeProfileId : nextProfiles[0]?.id ?? null;
+    const currentConversation = nextWorkspaces.find((item) => item.id === activeConversationWorkspaceId && isWorkspaceCompatible(item, "conversation")) ?? null;
+    const currentRv = nextWorkspaces.find((item) => item.id === activeRvWorkspaceId && isWorkspaceCompatible(item, "rv")) ?? null;
+    const nextConversationWorkspaceId = currentConversation?.id
+      ?? latestCompatibleWorkspace(nextWorkspaces, "conversation", fallbackProfileId)?.id
+      ?? null;
+    const nextRvWorkspaceId = currentRv?.id
+      ?? latestCompatibleWorkspace(nextWorkspaces, "rv", fallbackProfileId)?.id
+      ?? null;
+    setActiveProfileId(fallbackProfileId ?? currentConversation?.profileId ?? currentRv?.profileId ?? null);
+    rememberActiveWorkspace("conversation", nextConversationWorkspaceId);
+    rememberActiveWorkspace("rv", nextRvWorkspaceId);
   };
 
   const updateSettings = (patch: Partial<AppSettings>) => setSettings((current) => ({ ...current, ...patch }));
 
-  const finishFirstRun = async (profile: Profile, initialWorkspace?: Workspace) => {
+  const finishFirstRun = async (profile: Profile, initialConversationWorkspace?: Workspace, initialRvWorkspace?: Workspace) => {
     if (!repository) return;
     const [nextProfiles, nextWorkspaces] = await Promise.all([repository.listProfiles(), repository.listWorkspaces()]);
     setProfiles(nextProfiles);
     setWorkspaces(nextWorkspaces);
     setActiveProfileId(profile.id);
-    if (initialWorkspace) setActiveWorkspaceId(initialWorkspace.id);
+    if (initialConversationWorkspace) rememberActiveWorkspace("conversation", initialConversationWorkspace.id);
+    if (initialRvWorkspace) rememberActiveWorkspace("rv", initialRvWorkspace.id);
     setPage("home");
   };
 
@@ -331,7 +392,7 @@ export default function App() {
               profiles={profiles}
               onCreateProfile={() => setProfileDialog(true)}
               onOpenProfiles={() => navigate("profiles")}
-              onOpenWorkspace={(workspace) => void openWorkspace(workspace, "conversations")}
+              onOpenWorkspace={(workspace) => void openWorkspace(workspace)}
               onOpenSession={(session) => { const owner = workspaces.find((item) => item.id === session.workspaceId); if (owner) void openWorkspace(owner, "rv-sessions", "automatic"); }}
             />
           ) : page === "profiles" ? (
@@ -340,10 +401,10 @@ export default function App() {
               profiles={profiles}
               workspaces={workspaces}
               onCreateProfile={() => setProfileDialog(true)}
-              onCreateWorkspace={(profileId) => setWorkspaceDialogFor(profileId)}
-              onOpenWorkspace={(workspace) => void openWorkspace(workspace, "conversations")}
-              activeWorkspaceId={activeWorkspaceId}
-              onActiveWorkspaceArchived={setActiveWorkspaceId}
+              onCreateWorkspace={(profileId, kind) => setWorkspaceDialogFor({ profileId, kind })}
+              onOpenWorkspace={(workspace, kind) => void openWorkspace(workspace, kind === "rv" ? "rv-sessions" : "conversations")}
+              activeConversationWorkspaceId={activeConversationWorkspaceId}
+              activeRvWorkspaceId={activeRvWorkspaceId}
               repository={repository!}
               onProfilesChanged={refreshProfiles}
             />
@@ -363,43 +424,43 @@ export default function App() {
               activeWorkspace={activeWorkspace}
               repository={repository!}
               initialView={aiCenterView}
-              onProfileChange={(profileId) => { setActiveProfileId(profileId); setActiveWorkspaceId(workspaces.find((item) => item.profileId === profileId)?.id ?? null); }}
+              onProfileChange={(profileId) => { setActiveProfileId(profileId); rememberActiveWorkspace("rv", latestCompatibleWorkspace(workspaces, "rv", profileId)?.id ?? null); }}
               onProfileChanged={refreshProfiles}
             />
           ) : page === "settings" ? (
             <LazySettingsScreen copy={copy} settings={settings} workspaces={workspaces} repository={repository} onDataChanged={refreshProfiles} onChange={updateSettings} />
           ) : page === "conversations" ? (
-            activeWorkspace ? (
+            activeConversationWorkspace ? (
               <ConversationsScreen
                 copy={copy}
                 settings={settings}
-                profile={profiles.find((item) => item.id === activeWorkspace.profileId) ?? null}
-                workspace={activeWorkspace}
+                profile={profiles.find((item) => item.id === activeConversationWorkspace.profileId) ?? null}
+                workspace={activeConversationWorkspace}
                 repository={repository}
                 profiles={profiles}
                 workspaces={workspaces}
                 onOpenWorkspace={(workspace) => void openWorkspace(workspace, "conversations")}
-                createdNotice={workspaceCreatedNotice?.workspaceId === activeWorkspace.id ? workspaceCreatedNotice : null}
+                createdNotice={workspaceCreatedNotice?.workspaceId === activeConversationWorkspace.id ? workspaceCreatedNotice : null}
                 onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
               />
-            ) : <EmptyCard>{copy.noWorkspace}</EmptyCard>
+            ) : <EmptyCard><p>{copy.noCompatibleWorkspace}</p>{activeProfileId && <button className="primary-button" onClick={() => setWorkspaceDialogFor({ profileId: activeProfileId, kind: "conversation" })}>{copy.createWorkspace}</button>}</EmptyCard>
           ) : page === "rv-sessions" ? (
-            activeWorkspace ? (
+            activeRvWorkspace ? (
               <RvSessionsScreen
                 copy={copy}
                 settings={settings}
-                profile={profiles.find((item) => item.id === activeWorkspace.profileId) ?? null}
-                workspace={activeWorkspace}
+                profile={profiles.find((item) => item.id === activeRvWorkspace.profileId) ?? null}
+                workspace={activeRvWorkspace}
                 repository={repository}
                 profiles={profiles}
                 workspaces={workspaces}
                 view={rvSessionsView}
                 onViewChange={setRvSessionsView}
                 onOpenWorkspace={(workspace) => void openWorkspace(workspace, "rv-sessions", rvSessionsView)}
-                createdNotice={workspaceCreatedNotice?.workspaceId === activeWorkspace.id ? workspaceCreatedNotice : null}
+                createdNotice={workspaceCreatedNotice?.workspaceId === activeRvWorkspace.id ? workspaceCreatedNotice : null}
                 onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
               />
-            ) : <EmptyCard>{copy.noWorkspace}</EmptyCard>
+            ) : <EmptyCard><p>{copy.noCompatibleWorkspace}</p>{activeProfileId && <button className="primary-button" onClick={() => setWorkspaceDialogFor({ profileId: activeProfileId, kind: "rv" })}>{copy.createWorkspace}</button>}</EmptyCard>
           ) : (
             <EmptyCard>{copy.noWorkspace}</EmptyCard>
                 )}
@@ -415,10 +476,11 @@ export default function App() {
       {workspaceDialogFor && (
         <CreateWorkspaceDialog
           copy={copy}
-          profile={profiles.find((item) => item.id === workspaceDialogFor) ?? null}
+          profile={profiles.find((item) => item.id === workspaceDialogFor.profileId) ?? null}
+          kind={workspaceDialogFor.kind}
           profiles={profiles}
           onCancel={() => setWorkspaceDialogFor(null)}
-          onCreate={(profileId, name, description) => createWorkspace(profileId, name, description)}
+          onCreate={(profileId, kind, name, description) => createWorkspace(profileId, kind, name, description)}
         />
       )}
     </div>
@@ -434,7 +496,7 @@ function FirstRunSetup({
   copy: ReturnType<typeof getCopy>;
   repository: AppRepository;
   existingProfile: Profile | null;
-  onComplete: (profile: Profile, initialWorkspace?: Workspace) => Promise<void>;
+  onComplete: (profile: Profile, initialConversationWorkspace?: Workspace, initialRvWorkspace?: Workspace) => Promise<void>;
 }) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [profileName, setProfileName] = useState(existingProfile?.name ?? "");
@@ -451,17 +513,19 @@ function FirstRunSetup({
     try {
       const aiConfiguration = setup.buildAiConfiguration(skipOptional);
       let profile: Profile;
-      let initialWorkspace: Workspace | undefined;
+      let initialConversationWorkspace: Workspace | undefined;
+      let initialRvWorkspace: Workspace | undefined;
       if (existingProfile) {
         profile = { ...existingProfile, name: profileName.trim(), humanName: humanName.trim() || undefined, ...aiConfiguration, updatedAt: new Date().toISOString() };
         await repository.updateProfile(existingProfile.id, { name: profileName, humanName, note: existingProfile.note });
         await repository.setProfileAiConfiguration(existingProfile.id, aiConfiguration);
       } else {
-        const created = await createProfileWithInitialWorkspace(repository, { name: profileName, humanName, aiConfiguration });
+        const created = await createProfileWithInitialWorkspaces(repository, { name: profileName, humanName, aiConfiguration });
         profile = created.profile;
-        initialWorkspace = created.workspace;
+        initialConversationWorkspace = created.conversationWorkspace;
+        initialRvWorkspace = created.rvWorkspace;
       }
-      await onComplete(profile, initialWorkspace);
+      await onComplete(profile, initialConversationWorkspace, initialRvWorkspace);
     } catch (cause) {
       setSaveError(cause instanceof Error ? cause.message : String(cause));
       setSaving(false);
@@ -601,12 +665,13 @@ function TopBar({
 }
 
 
-function CreateWorkspaceDialog({ copy, profile, profiles, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; profile: Profile | null; profiles: Profile[]; onCancel: () => void; onCreate: (profileId: string, name: string, description?: string) => Promise<void> }) {
-  const [name, setName] = useState("");
+function CreateWorkspaceDialog({ copy, profile, profiles, kind, onCancel, onCreate }: { copy: ReturnType<typeof getCopy>; profile: Profile | null; profiles: Profile[]; kind: NewWorkspaceKind; onCancel: () => void; onCreate: (profileId: string, kind: NewWorkspaceKind, name: string, description?: string) => Promise<void> }) {
+  const [name, setName] = useState(kind === "conversation" ? copy.conversationWorkspace : copy.rvWorkspace);
   const [description, setDescription] = useState("");
   const [profileId, setProfileId] = useState(profile?.id ?? profiles[0]?.id ?? "");
-  const submit = (event: FormEvent) => { event.preventDefault(); if (profileId && name.trim()) void onCreate(profileId, name, description); };
-  return <FormDialog title={`${copy.createWorkspace}${profile ? ` · ${aiIsBeDisplayName(profile)}` : ""}`} onCancel={onCancel}><form onSubmit={submit}>{!profile && profiles.length > 1 && <label>{copy.home === "Home" ? "Profile" : "Profil"}<select autoFocus value={profileId} onChange={(event) => setProfileId(event.target.value)}>{profiles.map((item) => <option key={item.id} value={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></label>}<label>{copy.workspaceName}<input autoFocus={Boolean(profile) || profiles.length <= 1} value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.workspaceDescription}<textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!profileId || !name.trim()}>{copy.create}</button></div></form></FormDialog>;
+  const submit = (event: FormEvent) => { event.preventDefault(); if (profileId && name.trim()) void onCreate(profileId, kind, name, description); };
+  const kindLabel = kind === "conversation" ? copy.conversationWorkspace : copy.rvWorkspace;
+  return <FormDialog title={`${copy.createWorkspace} · ${kindLabel}${profile ? ` · ${aiIsBeDisplayName(profile)}` : ""}`} onCancel={onCancel}><form onSubmit={submit}>{!profile && profiles.length > 1 && <label>{copy.home === "Home" ? "Profile" : "Profil"}<select autoFocus value={profileId} onChange={(event) => setProfileId(event.target.value)}>{profiles.map((item) => <option key={item.id} value={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></label>}<label>{copy.workspaceName}<input autoFocus={Boolean(profile) || profiles.length <= 1} value={name} onChange={(event) => setName(event.target.value)} /></label><label>{copy.workspaceType}<input value={kindLabel} readOnly /></label><label>{copy.workspaceDescription}<textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>{copy.cancel}</button><button className="primary-button" disabled={!profileId || !name.trim()}>{copy.create}</button></div></form></FormDialog>;
 }
 
 function EmptyCard({ children }: { children: ReactNode }) {

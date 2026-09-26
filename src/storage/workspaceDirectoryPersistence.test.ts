@@ -22,15 +22,20 @@ describe("workspace directory persistence", () => {
     const profileA = await repository.createProfile({ name: "Edward" });
     const profileB = await repository.createProfile({ name: "Badania" });
     const created = [
-      await repository.createWorkspace({ profileId: profileA.id, name: "Sesje sierpniowe" }),
-      await repository.createWorkspace({ profileId: profileA.id, name: "Kalibracja" }),
-      await repository.createWorkspace({ profileId: profileB.id, name: "Archiwum prób" }),
+      await repository.createWorkspace({ profileId: profileA.id, name: "Sesje sierpniowe", kind: "conversation" }),
+      await repository.createWorkspace({ profileId: profileA.id, name: "Kalibracja", kind: "rv" }),
+      await repository.createWorkspace({ profileId: profileB.id, name: "Archiwum prób", kind: "conversation" }),
     ];
 
     const restarted = new BrowserRepository();
     const profiles = await restarted.listProfiles();
     const workspaces = await restarted.listWorkspaces();
     expect(new Set(workspaces.map((workspace) => workspace.id))).toEqual(new Set(created.map((workspace) => workspace.id)));
+    expect(Object.fromEntries(workspaces.map((workspace) => [workspace.id, workspace.kind]))).toMatchObject({
+      [created[0].id]: "conversation",
+      [created[1].id]: "rv",
+      [created[2].id]: "conversation",
+    });
     expect(filterWorkspaceDirectory(workspaces, profiles, "Edward").flatMap((group) => group.workspaces)).toHaveLength(2);
     expect(filterWorkspaceDirectory(workspaces, profiles, "archiwum")[0]?.profile.id).toBe(profileB.id);
 
@@ -41,8 +46,8 @@ describe("workspace directory persistence", () => {
   it("renames, archives and restores a Workspace without deleting its conversations", async () => {
     const repository = new BrowserRepository();
     const profile = await repository.createProfile({ name: "Edward" });
-    const workspace = await repository.createWorkspace({ profileId: profile.id, name: "Original" });
-    const sibling = await repository.createWorkspace({ profileId: profile.id, name: "Keep active" });
+    const workspace = await repository.createWorkspace({ profileId: profile.id, name: "Original", kind: "conversation" });
+    const sibling = await repository.createWorkspace({ profileId: profile.id, name: "Keep active", kind: "conversation" });
     const thread = await repository.createChatThread(workspace.id, "conversation", "Part 1");
     await repository.appendChatMessage(thread.id, "user", "Preserve me");
 
@@ -61,7 +66,7 @@ describe("workspace directory persistence", () => {
   it("archives and restores Conversations independently under the Workspace", async () => {
     const repository = new BrowserRepository();
     const profile = await repository.createProfile({ name: "Edward" });
-    const workspace = await repository.createWorkspace({ profileId: profile.id, name: "W" });
+    const workspace = await repository.createWorkspace({ profileId: profile.id, name: "W", kind: "conversation" });
     const first = await repository.createChatThread(workspace.id, "conversation", "First");
     const second = await repository.createChatThread(workspace.id, "conversation", "Second");
     await repository.archiveChatThread(first.id);

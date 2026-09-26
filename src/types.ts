@@ -42,6 +42,8 @@ export interface AppSettings {
   animations: boolean;
   trainingDirectory?: string;
   telepathicStarterPackVersion?: string;
+  activeConversationWorkspaceId: string;
+  activeRvWorkspaceId: string;
 }
 
 export interface Profile {
@@ -87,11 +89,15 @@ export interface ViewerSystemPromptSnapshot {
   fieldGuide?: FieldGuideSessionSnapshot;
 }
 
+export type WorkspaceKind = "conversation" | "rv" | "legacy_combined";
+export type NewWorkspaceKind = Exclude<WorkspaceKind, "legacy_combined">;
+
 export interface Workspace {
   id: string;
   profileId: string;
   name: string;
   description?: string;
+  kind: WorkspaceKind;
   createdAt: string;
   updatedAt: string;
   lastOpenedAt: string;
@@ -115,4 +121,5 @@ export interface CreateWorkspaceInput {
   profileId: string;
   name: string;
   description?: string;
+  kind: NewWorkspaceKind;
 }

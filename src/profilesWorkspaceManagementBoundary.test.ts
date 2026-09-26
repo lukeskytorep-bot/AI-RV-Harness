@@ -32,8 +32,8 @@ describe("Profiles Workspace management boundary", () => {
 
   it("keeps Workspace creation bound to the selected Profile", () => {
     const app = sourceFiles["./App.tsx"] ?? "";
-    expect(app).toContain("repository.createWorkspace({ profileId, name, description })");
-    expect(app).toContain("setWorkspaceDialogFor(profileId)");
+    expect(app).toContain("repository.createWorkspace({ profileId, kind, name, description })");
+    expect(app).toContain("setWorkspaceDialogFor({ profileId, kind })");
   });
 
   it("uses application use cases instead of cross-feature private imports", () => {

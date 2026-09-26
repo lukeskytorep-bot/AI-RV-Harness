@@ -17,5 +17,7 @@ export function createDefaultSettings(): AppSettings {
     sessionCodePrefix: "RVH",
     textScale: "large",
     animations: true,
+    activeConversationWorkspaceId: "",
+    activeRvWorkspaceId: "",
   };
 }

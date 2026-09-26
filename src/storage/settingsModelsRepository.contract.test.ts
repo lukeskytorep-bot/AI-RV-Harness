@@ -104,10 +104,16 @@ describe("SQLite Settings and models repository contract", () => {
     const transactions: DatabaseTransactionStatement[][] = [];
     const executeTransaction = async (statements: DatabaseTransactionStatement[]) => { transactions.push(statements); return []; };
     const repository = new SqliteSettingsModelsRepository({
-      select: async <T>() => [{ key: "interfaceLanguage", value: "pl" }, { key: "maxRetries", value: "5" }, { key: "animations", value: "false" }] as T,
+      select: async <T>() => [
+        { key: "interfaceLanguage", value: "pl" }, { key: "maxRetries", value: "5" }, { key: "animations", value: "false" },
+        { key: "activeConversationWorkspaceId", value: "workspace-conversation" }, { key: "activeRvWorkspaceId", value: "workspace-rv" },
+      ] as T,
       executeWrite: async () => ({ rowsAffected: 1 }), executeTransaction, now: () => timestamp,
     });
-    expect(await repository.loadSettings()).toEqual({ interfaceLanguage: "pl", maxRetries: 5, animations: false });
+    expect(await repository.loadSettings()).toEqual({
+      interfaceLanguage: "pl", maxRetries: 5, animations: false,
+      activeConversationWorkspaceId: "workspace-conversation", activeRvWorkspaceId: "workspace-rv",
+    });
     await repository.saveSettings(createDefaultSettings());
     expect(transactions).toHaveLength(1);
     expect(transactions[0]).toHaveLength(Object.keys(createDefaultSettings()).length);

@@ -10,7 +10,7 @@ import { persistMonitorSystemPrompt } from "./MonitorPanel";
 
 const now = "2026-09-05T10:00:00.000Z";
 const profile: Profile = { id: "profile", name: "Nemo", credentialId: "credential", createdAt: now, updatedAt: now };
-const workspace: Workspace = { id: "workspace", profileId: profile.id, name: "Lab", createdAt: now, updatedAt: now, lastOpenedAt: now };
+const workspace: Workspace = { id: "workspace", profileId: profile.id, name: "Lab", kind: "legacy_combined", createdAt: now, updatedAt: now, lastOpenedAt: now };
 
 describe("MonitorPanel", () => {
   it("renders through the public feature entry point without repository work during render", () => {

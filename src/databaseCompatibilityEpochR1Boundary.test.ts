@@ -12,6 +12,7 @@ import migration022 from "../src-tauri/migrations/022_viewer_notes_source_preser
 import migration023 from "../src-tauri/migrations/023_controlled_purge.sql?raw";
 import migration024 from "../src-tauri/migrations/024_viewer_learning_field_guide.sql?raw";
 import migration025 from "../src-tauri/migrations/025_provider_continuation_state.sql?raw";
+import migration026 from "../src-tauri/migrations/026_typed_workspaces.sql?raw";
 import migrationRegistry from "../src-tauri/src/migrations.rs?raw";
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -90,16 +91,18 @@ describe("DATABASE-COMPATIBILITY-EPOCH-1-R1 boundaries", () => {
     expect(app).toContain('status.kind === "incomplete_current_initialization"');
   });
 
-  it("preserves migrations 021 through 024 and registers provider-continuation migration 025 in the current v0.7.13 epoch", () => {
+  it("preserves migrations 021 through 025 and registers typed-workspace migration 026 in the current v0.7.13 epoch", () => {
     expect(sha256(migration021)).toBe("c441d1b0e71dc654de517f34285fc2d2909c1e8f60c0b43089fe3ca6ca3a8f73");
     expect(sha256(migration022)).toBe("7fcec7326bbd8083efa830155ada3552fabeabf99ac92dab1b972260854aa4d4");
     expect(sha256(migration023)).toBe("1a9d300daa180a4507c01497b52deaf84722bd710ed4617f84058932dc7838a4");
     expect(sha256(migration024)).toBe("637d33319c0c1abcb85a4b565b16c4c3c2343b7e45a392079d73eaa1ce410837");
-    expect(migrationRegistry).toContain("(1_i64..=25)");
+    expect(migrationRegistry).toContain("(1_i64..=26)");
     expect(migrationRegistry).toContain('include_str!("../migrations/024_viewer_learning_field_guide.sql")');
     expect(migrationRegistry).toContain('include_str!("../migrations/025_provider_continuation_state.sql")');
+    expect(migrationRegistry).toContain('include_str!("../migrations/026_typed_workspaces.sql")');
     expect(migration024).toContain("CREATE TABLE field_guide_versions");
     expect(migration025).toContain("CREATE TABLE chat_message_provider_state");
     expect(migration025).toContain("CREATE TABLE session_event_provider_state");
+    expect(migration026).toContain("ADD COLUMN kind TEXT NOT NULL DEFAULT 'legacy_combined'");
   });
 });

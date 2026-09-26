@@ -1,5 +1,6 @@
 import type { ChatMessage, ChatMode, ChatThread, CreateWorkspaceInput, Workspace } from "../../types";
 import type { WorkspacesConversationsRepository } from "../contracts/workspacesConversationsRepository";
+import { canArchiveWorkspace, normalizeWorkspaceKind } from "../../domain/workspaceKind";
 import type { ProviderContinuationState } from "../../providers/continuationContract";
 import { BROWSER_CHAT_MESSAGE_PROVIDER_STATE_KEY, browserChatMessageProviderStateFreshKey, browserChatMessageProviderStateResetKey, prepareProviderContinuationState, ProviderContinuationPersistenceError, restoreProviderContinuationState, type PersistedProviderContinuationStateRow, type ProviderContinuationStateBinding } from "../providerContinuationState";
 import { createId, nowIso } from "../repository";
@@ -73,24 +74,29 @@ export class BrowserWorkspacesConversationsRepository implements WorkspacesConve
     return (this.dependencies.now ?? nowIso)();
   }
 
+  private readWorkspaces(): Workspace[] {
+    return this.read<Array<Workspace & { kind?: unknown }>>(WORKSPACES_KEY, [])
+      .map((workspace) => ({ ...workspace, kind: normalizeWorkspaceKind(workspace.kind) }));
+  }
+
   async listWorkspaces(profileId?: string): Promise<Workspace[]> {
-    return this.read<Workspace[]>(WORKSPACES_KEY, [])
+    return this.readWorkspaces()
       .filter((workspace) => !workspace.archivedAt && (!profileId || workspace.profileId === profileId))
       .sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
   }
 
   async listArchivedWorkspaces(): Promise<Workspace[]> {
-    return this.read<Workspace[]>(WORKSPACES_KEY, [])
+    return this.readWorkspaces()
       .filter((workspace) => Boolean(workspace.archivedAt))
       .sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
   }
 
   async createWorkspace(input: CreateWorkspaceInput): Promise<Workspace> {
-    const all = this.read<Workspace[]>(WORKSPACES_KEY, []);
+    const all = this.readWorkspaces();
     const timestamp = this.now();
     const workspace: Workspace = {
       id: createId("workspace"), profileId: input.profileId, name: input.name.trim(),
-      description: input.description?.trim() || undefined, createdAt: timestamp, updatedAt: timestamp, lastOpenedAt: timestamp,
+      description: input.description?.trim() || undefined, kind: input.kind, createdAt: timestamp, updatedAt: timestamp, lastOpenedAt: timestamp,
     };
     this.write(WORKSPACES_KEY, [workspace, ...all]);
     return workspace;
@@ -99,7 +105,7 @@ export class BrowserWorkspacesConversationsRepository implements WorkspacesConve
   async renameWorkspace(id: string, name: string): Promise<void> {
     const clean = name.trim().slice(0, 160);
     if (!clean) throw new Error("Workspace name is required.");
-    const all = this.read<Workspace[]>(WORKSPACES_KEY, []);
+    const all = this.readWorkspaces();
     const current = all.find((workspace) => workspace.id === id);
     if (!current) throw new Error("Workspace not found.");
     if (all.some((workspace) => workspace.id !== id && workspace.profileId === current.profileId && !workspace.archivedAt && workspace.name.trim().toLocaleLowerCase() === clean.toLocaleLowerCase())) throw new Error("An active Workspace with this name already exists in the Profile.");
@@ -108,17 +114,17 @@ export class BrowserWorkspacesConversationsRepository implements WorkspacesConve
   }
 
   async archiveWorkspace(id: string): Promise<void> {
-    const all = this.read<Workspace[]>(WORKSPACES_KEY, []);
+    const all = this.readWorkspaces();
     const current = all.find((workspace) => workspace.id === id && !workspace.archivedAt);
     if (!current) throw new Error("Active Workspace not found.");
     const activeForProfile = all.filter((workspace) => workspace.profileId === current.profileId && !workspace.archivedAt);
-    if (activeForProfile.length <= 1) throw new Error("A Profile must keep at least one active Workspace.");
+    if (!canArchiveWorkspace(current, activeForProfile)) throw new Error("A Profile must keep at least one active compatible Workspace of each required type.");
     const timestamp = this.now();
     this.write(WORKSPACES_KEY, all.map((workspace) => workspace.id === id ? { ...workspace, archivedAt: timestamp, updatedAt: timestamp } : workspace));
   }
 
   async restoreWorkspace(id: string, name?: string): Promise<void> {
-    const all = this.read<Workspace[]>(WORKSPACES_KEY, []);
+    const all = this.readWorkspaces();
     const current = all.find((workspace) => workspace.id === id && workspace.archivedAt);
     if (!current) throw new Error("Archived Workspace not found.");
     const clean = (name ?? current.name).trim().slice(0, 160);
@@ -130,7 +136,7 @@ export class BrowserWorkspacesConversationsRepository implements WorkspacesConve
 
   async touchWorkspace(id: string): Promise<void> {
     const timestamp = this.now();
-    this.write(WORKSPACES_KEY, this.read<Workspace[]>(WORKSPACES_KEY, []).map((workspace) =>
+    this.write(WORKSPACES_KEY, this.readWorkspaces().map((workspace) =>
       workspace.id === id ? { ...workspace, updatedAt: timestamp, lastOpenedAt: timestamp } : workspace));
   }
 

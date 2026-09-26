@@ -19,8 +19,8 @@ describe("browser Workspaces and Conversations repository contract", () => {
   it("preserves Workspace keys, ordering, normalization and duplicate protection", async () => {
     const storage = new MemoryStorage();
     const repository = new BrowserWorkspacesConversationsRepository({ storage, now: () => timestamp });
-    const first = await repository.createWorkspace({ profileId: "profile-a", name: "  First  ", description: "  Notes  " });
-    const second = await repository.createWorkspace({ profileId: "profile-a", name: "Second" });
+    const first = await repository.createWorkspace({ profileId: "profile-a", name: "  First  ", description: "  Notes  ", kind: "conversation" });
+    const second = await repository.createWorkspace({ profileId: "profile-a", name: "Second", kind: "conversation" });
 
     expect(first).toMatchObject({ name: "First", description: "Notes", lastOpenedAt: timestamp });
     expect((await repository.listWorkspaces("profile-a")).map((item) => item.id)).toEqual([second.id, first.id]);
@@ -31,10 +31,10 @@ describe("browser Workspaces and Conversations repository contract", () => {
   it("protects the last active Workspace of a Profile and allows archive when another remains", async () => {
     const storage = new MemoryStorage();
     const repository = new BrowserWorkspacesConversationsRepository({ storage, now: () => timestamp });
-    const first = await repository.createWorkspace({ profileId: "profile-a", name: "First" });
+    const first = await repository.createWorkspace({ profileId: "profile-a", name: "First", kind: "conversation" });
 
     await expect(repository.archiveWorkspace(first.id)).rejects.toThrow("at least one active Workspace");
-    const second = await repository.createWorkspace({ profileId: "profile-a", name: "Second" });
+    const second = await repository.createWorkspace({ profileId: "profile-a", name: "Second", kind: "conversation" });
     await repository.archiveWorkspace(first.id);
     expect((await repository.listWorkspaces("profile-a")).map((item) => item.id)).toEqual([second.id]);
   });
@@ -42,7 +42,7 @@ describe("browser Workspaces and Conversations repository contract", () => {
   it("creates, archives and restores Conversations directly under Workspace", async () => {
     const storage = new MemoryStorage();
     const repository = new BrowserWorkspacesConversationsRepository({ storage, now: () => timestamp });
-    const workspace = await repository.createWorkspace({ profileId: "profile-a", name: "Workspace" });
+    const workspace = await repository.createWorkspace({ profileId: "profile-a", name: "Workspace", kind: "conversation" });
     const conversation = await repository.createChatThread(workspace.id, "conversation", "Conversation A");
     await repository.appendChatMessage(conversation.id, "user", "Preserve me");
 
@@ -63,6 +63,7 @@ describe("browser Workspaces and Conversations repository contract", () => {
     storage.setItem("rvh.dev.chat_messages", JSON.stringify(legacyThreadHierarchyFixture.messages));
     const repository = new BrowserWorkspacesConversationsRepository({ storage, now: () => timestamp });
 
+    expect((await repository.listWorkspaces("profile-legacy"))[0]?.kind).toBe("legacy_combined");
     expect((await repository.listChatThreads("workspace-legacy", "conversation")).map((item) => item.id)).toEqual(["conversation-active"]);
     expect((await repository.listChatMessages("conversation-active"))[0]?.content).toBe("Preserved legacy message");
 
@@ -92,34 +93,38 @@ describe("SQLite Workspaces and Conversations repository contract", () => {
     const repository = new SqliteWorkspacesConversationsRepository({
       select: async <T>(query: string, values?: unknown[]) => {
         queries.push({ query, values });
-        return [{ id: "workspace-a", profile_id: "profile-a", name: "Workspace", description: null, created_at: timestamp, updated_at: timestamp, last_opened_at: timestamp, archived_at: null }] as T;
+        return [{ id: "workspace-a", profile_id: "profile-a", name: "Workspace", description: null, kind: "legacy_combined", created_at: timestamp, updated_at: timestamp, last_opened_at: timestamp, archived_at: null }] as T;
       },
       executeWrite: async () => ({ rowsAffected: 1 }), executeTransaction: async () => [], now: () => timestamp,
     });
 
-    expect(await repository.listWorkspaces("profile-a")).toEqual([{ id: "workspace-a", profileId: "profile-a", name: "Workspace", description: undefined, createdAt: timestamp, updatedAt: timestamp, lastOpenedAt: timestamp }]);
+    expect(await repository.listWorkspaces("profile-a")).toEqual([{ id: "workspace-a", profileId: "profile-a", name: "Workspace", description: undefined, kind: "legacy_combined", createdAt: timestamp, updatedAt: timestamp, lastOpenedAt: timestamp }]);
     expect(queries[0]?.query).toContain("profile_id = $1 AND archived_at IS NULL");
     expect(queries[0]?.values).toEqual(["profile-a"]);
   });
 
-  it("enforces the last-active-Workspace guard below the UI with an atomic conditional write", async () => {
+  it("enforces the per-type last-compatible-Workspace guard below the UI before writing", async () => {
     const writes: string[] = [];
+    let selectCall = 0;
+    const conversationRow = { id: "workspace-a", profile_id: "profile-a", name: "Conversation", description: null, kind: "conversation", created_at: timestamp, updated_at: timestamp, last_opened_at: timestamp, archived_at: null };
     const repository = new SqliteWorkspacesConversationsRepository({
-      select: async <T>() => [{ id: "workspace-a" }] as T,
-      executeWrite: async (query) => { writes.push(query); return { rowsAffected: 0 }; },
+      select: async <T>() => (++selectCall === 1 ? [conversationRow] : [conversationRow]) as T,
+      executeWrite: async (query) => { writes.push(query); return { rowsAffected: 1 }; },
       executeTransaction: async () => [],
       now: () => timestamp,
     });
 
-    await expect(repository.archiveWorkspace("workspace-a")).rejects.toThrow("at least one active Workspace");
-    expect(writes).toHaveLength(1);
-    expect(writes[0]).toContain("SELECT COUNT(*) FROM workspaces sibling");
+    await expect(repository.archiveWorkspace("workspace-a")).rejects.toThrow("at least one active compatible Workspace");
+    expect(writes).toEqual([]);
   });
 
-  it("allows SQLite Workspace archive when the atomic guard reports a remaining sibling", async () => {
+  it("keeps an atomic typed-Workspace archive guard in the SQLite write itself", async () => {
     const writes: string[] = [];
+    let selectCall = 0;
+    const conversationRow = { id: "workspace-a", profile_id: "profile-a", name: "Conversation", description: null, kind: "conversation", created_at: timestamp, updated_at: timestamp, last_opened_at: timestamp, archived_at: null };
+    const legacyRow = { ...conversationRow, id: "workspace-legacy", name: "Legacy", kind: "legacy_combined" };
     const repository = new SqliteWorkspacesConversationsRepository({
-      select: async <T>() => [{ id: "workspace-a" }] as T,
+      select: async <T>() => (++selectCall === 1 ? [conversationRow] : [conversationRow, legacyRow]) as T,
       executeWrite: async (query) => { writes.push(query); return { rowsAffected: 1 }; },
       executeTransaction: async () => [],
       now: () => timestamp,
@@ -128,7 +133,10 @@ describe("SQLite Workspaces and Conversations repository contract", () => {
     await repository.archiveWorkspace("workspace-a");
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain("UPDATE workspaces");
-    expect(writes[0]).toContain(") > 1");
+    expect(writes[0]).toContain("kind = 'conversation'");
+    expect(writes[0]).toContain("kind = 'rv'");
+    expect(writes[0]).toContain("kind = 'legacy_combined'");
+    expect(writes[0]).toContain("EXISTS (SELECT 1 FROM workspaces sibling");
   });
 
   it("persists new Conversations with a NULL legacy group reference", async () => {

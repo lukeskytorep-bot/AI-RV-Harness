@@ -8,7 +8,7 @@ import { RvSessionPanel } from "./index";
 
 const now = "2026-09-06T10:00:00.000Z";
 const profile: Profile = { id: "profile-1", name: "Orion", createdAt: now, updatedAt: now };
-const workspace: Workspace = { id: "workspace-1", profileId: profile.id, name: "RV Lab", createdAt: now, updatedAt: now, lastOpenedAt: now };
+const workspace: Workspace = { id: "workspace-1", profileId: profile.id, name: "RV Lab", kind: "rv", createdAt: now, updatedAt: now, lastOpenedAt: now };
 
 describe("RV Sessions feature", () => {
   it("renders the protected session choices through the public entry point without repository access", () => {

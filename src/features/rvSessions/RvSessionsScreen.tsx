@@ -60,7 +60,7 @@ export function RvSessionsScreen({
           ? <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} fixedMode="manual_rv" />
           : <RvSessionPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} />}
       </div>
-      {switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} onOpenWorkspace={onOpenWorkspace} onClose={() => setSwitcherOpen(false)} />}
+      {switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} kind="rv" onOpenWorkspace={onOpenWorkspace} onClose={() => setSwitcherOpen(false)} />}
     </>
   );
 }

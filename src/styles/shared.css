@@ -148,3 +148,19 @@
 
 .module-tabs { display: flex; gap: 5px; width: fit-content; margin-bottom: 15px; padding: 5px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); }
 .module-tab { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; padding: 0 13px; border: 0; border-radius: 9px; color: var(--muted); background: transparent; cursor: pointer; font-size: 11.5px; }
+
+/* Typed Workspaces */
+.profile-workspace-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 18px 0 14px; }
+.profile-workspace-section { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); overflow: visible; }
+.profile-workspace-section > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.profile-workspace-section > header > div { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.profile-workspace-section > header strong { font-size: 11px; text-transform: uppercase; letter-spacing: .055em; color: var(--muted-strong); }
+.profile-workspace-section > header small { color: var(--violet); font-size: 11px; font-weight: 800; }
+.profile-workspace-section .workspace-list { max-height: none; margin: 10px 0 0; padding: 10px 0 0; overflow: visible; }
+.profile-workspace-tile { overflow: visible; z-index: 1; }
+.profile-workspace-tile:has(details[open]) { z-index: 30; }
+.profile-workspace-tile.active > .workspace-tile { border-color: var(--violet); }
+.profile-workspace-actions { z-index: 40; }
+.profile-workspace-actions > div { z-index: 50; }
+.secondary-button.compact { min-height: 30px; padding: 0 9px; font-size: 10.5px; }
+@media (max-width: 760px) { .profile-workspace-sections { grid-template-columns: 1fr; } }

@@ -26,9 +26,9 @@ const migrationFiles = readdirSync(migrationDir)
   .filter((name) => /^\d{3}_.+\.sql$/.test(name))
   .sort();
 const migrationNumbers = migrationFiles.map((name) => Number(name.slice(0, 3)));
-const expectedNumbers = Array.from({ length: 25 }, (_, index) => index + 1);
+const expectedNumbers = Array.from({ length: 26 }, (_, index) => index + 1);
 if (JSON.stringify(migrationNumbers) !== JSON.stringify(expectedNumbers)) {
-  failures.push(`SQLite migrations must be contiguous 001-025; found: ${migrationFiles.join(", ")}`);
+  failures.push(`SQLite migrations must be contiguous 001-026; found: ${migrationFiles.join(", ")}`);
 }
 
 const tauriLib = read("src-tauri/src/lib.rs");
@@ -114,8 +114,12 @@ for (const marker of ["field_guide_settings", "field_guide_versions", "field_gui
 
 
 const migration025 = read("src-tauri/migrations/025_provider_continuation_state.sql");
+const migration026 = read("src-tauri/migrations/026_typed_workspaces.sql");
 for (const marker of ["chat_message_provider_state", "session_event_provider_state", "ON DELETE CASCADE", "payload_sha256", "payload_size_bytes"]) {
   if (!migration025.includes(marker)) failures.push(`provider-continuation persistence migration missing marker: ${marker}`);
+}
+for (const marker of ["ADD COLUMN kind", "legacy_combined", "conversation", "rv", "idx_workspaces_profile_kind_active"]) {
+  if (!migration026.includes(marker)) failures.push(`typed-workspace migration missing marker: ${marker}`);
 }
 
 const nativeCompatibility = join(root, "src-tauri", "src", "ux_data_compatibility.rs");
@@ -124,6 +128,7 @@ if (!tauriLib.includes("mod ux_data_compatibility;")) failures.push("native UX-D
 const nativeCompatibilitySource = read("src-tauri/src/ux_data_compatibility.rs");
 if (!nativeCompatibilitySource.includes("exact_green_v23_to_v24_preserves_existing_data_and_provenance")) failures.push("native compatibility gate must test exact green v23 -> v24 upgrade");
 if (!nativeCompatibilitySource.includes("exact_green_v24_to_v25_adds_provider_state_storage_without_mutating_existing_data")) failures.push("native compatibility gate must test exact green v24 -> v25 upgrade");
+if (!nativeCompatibilitySource.includes("exact_green_v25_to_v26_types_existing_workspaces_without_moving_history")) failures.push("native compatibility gate must test exact green v25 -> v26 typed Workspace upgrade");
 if (nativeCompatibilitySource.includes("legacy_fixture_manual_chain_through_024")) failures.push("native compatibility gate must not reintroduce a public-v0.7.12 -> v0.7.13 migration chain");
 
 if (failures.length) {
@@ -131,4 +136,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`UX-DATA compatibility verification passed: ${migrationFiles.length} migrations, flat Conversations, shared dialogs/model routes, unified lifecycle, Viewer Notes provenance, Field Guide schema 024, provider continuation schema 025, and native green-v23/v24 upgrade gates are present.`);
+console.log(`UX-DATA compatibility verification passed: ${migrationFiles.length} migrations, flat Conversations, shared dialogs/model routes, unified lifecycle, Viewer Notes provenance, Field Guide schema 024, provider continuation schema 025, typed Workspace schema 026, and native green-v23/v24/v25 upgrade gates are present.`);

@@ -72,6 +72,8 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
       ...(values.animations ? { animations: values.animations === "true" } : {}),
       ...(values.trainingDirectory !== undefined ? { trainingDirectory: values.trainingDirectory } : {}),
       ...(values.telepathicStarterPackVersion !== undefined ? { telepathicStarterPackVersion: values.telepathicStarterPackVersion } : {}),
+      ...(values.activeConversationWorkspaceId !== undefined ? { activeConversationWorkspaceId: values.activeConversationWorkspaceId } : {}),
+      ...(values.activeRvWorkspaceId !== undefined ? { activeRvWorkspaceId: values.activeRvWorkspaceId } : {}),
     };
   }
 
