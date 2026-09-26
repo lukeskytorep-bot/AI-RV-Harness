@@ -69,15 +69,11 @@ describe("ORP1 operation resource profiles", () => {
     }
   });
 
-  it("applies 4096/8192 learning-object floors without shrinking larger capacity-derived allowances", () => {
-    expect(learningObjectOutputAllowance(1024, 0)).toBe(4096);
-    expect(learningObjectOutputAllowance(1024, 1)).toBe(8192);
-    expect(learningObjectOutputAllowance(2048, 0)).toBe(4096);
-    expect(learningObjectOutputAllowance(2048, 1)).toBe(8192);
-    expect(learningObjectOutputAllowance(4096, 0)).toBe(5120);
-    expect(learningObjectOutputAllowance(4096, 1)).toBe(8192);
-    expect(learningObjectOutputAllowance(8192, 0)).toBe(9216);
-    expect(learningObjectOutputAllowance(8192, 1)).toBe(10240);
+  it("adds exactly 8192/16384 tokens of generation headroom above every supported learning-object capacity", () => {
+    for (const capacity of [1024, 2048, 4096, 8192]) {
+      expect(learningObjectOutputAllowance(capacity, 0)).toBe(capacity + 8192);
+      expect(learningObjectOutputAllowance(capacity, 1)).toBe(capacity + 16384);
+    }
   });
 
   it("maps provider operation IDs centrally and permits explicit Training/Research overrides", () => {

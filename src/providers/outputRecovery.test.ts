@@ -79,7 +79,7 @@ describe("analytical output recovery", () => {
     expect(physical).toHaveBeenCalledTimes(3);
   });
 
-  it("uses the centralized 4096 -> 8192 learning-object headroom instead of the generic analytical reserve", async () => {
+  it("uses capacity + 8192 first and capacity + 16384 once for learning-object output recovery", async () => {
     const budgets: number[] = [];
     const call = vi.fn(async (settings) => {
       budgets.push(settings.effective.maxOutputTokens ?? 0);
@@ -93,7 +93,7 @@ describe("analytical output recovery", () => {
       learningObjectCapacityTokens: 1024,
       call,
     });
-    expect(budgets).toEqual([4096, 8192]);
+    expect(budgets).toEqual([9216, 17408]);
     expect(result.attempt).toBe(1);
   });
 
@@ -107,14 +107,21 @@ describe("analytical output recovery", () => {
       attempt: 1,
     })).toBe(4096);
 
-    const exactCapacityRoute = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 8192 } };
+    const largeRoute = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 32_000 } };
     expect(analyticalOutputBudget({
-      model: exactCapacityRoute,
+      model: largeRoute,
       messages: [{ role: "user", content: "Update the Field Guide" }],
       operationKind: "field_guide_update",
       learningObjectCapacityTokens: 8192,
       attempt: 0,
-    })).toBe(8192);
+    })).toBe(16384);
+    expect(analyticalOutputBudget({
+      model: largeRoute,
+      messages: [{ role: "user", content: "Update the Field Guide" }],
+      operationKind: "field_guide_update",
+      learningObjectCapacityTokens: 8192,
+      attempt: 1,
+    })).toBe(24576);
 
     const tooSmallRoute = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 4096 } };
     expect(() => analyticalOutputBudget({

@@ -20,9 +20,46 @@ describe("TrainingScreen", () => {
     );
 
     expect(html).toContain("AI Training");
+    expect(html).toContain("How does AI Training work?");
     expect(html).toContain("84");
-    expect(html).toContain("Viewer Notes");
+    expect(html).toContain("Viewer model");
+    expect(html).toContain("Use Viewer Notes");
+    expect(html).toContain("Enabled by default");
+    expect(html).not.toContain("Experimental");
     expect(html).toContain("Recent training runs");
+  });
+
+
+  it("renders the collapsed educational panel in both UI languages without advertising future 8-session rounds yet", () => {
+    const en = renderToStaticMarkup(
+      <TrainingScreen copy={getCopy("en")} settings={createDefaultSettings()} profiles={[]} workspaces={[]} repository={null} />,
+    );
+    const plSettings = { ...createDefaultSettings(), interfaceLanguage: "pl" as const };
+    const pl = renderToStaticMarkup(
+      <TrainingScreen copy={getCopy("pl")} settings={plSettings} profiles={[]} workspaces={[]} repository={null} />,
+    );
+
+    expect(en).toContain('<details class="training-help-panel">');
+    expect(en).toContain("How does AI Training work?");
+    expect(en).toContain("84 factory targets");
+    expect(en).not.toContain("One Full Training round consists of 8 sessions");
+    expect(pl).toContain("Jak działa AI Training?");
+    expect(pl).toContain("84 cele fabryczne");
+    expect(pl).not.toContain("Jeden przebieg Full Training składa się z 8 sesji");
+    expect(pl).not.toContain("Eksperymentalne");
+  });
+
+  it("keeps the read-only Viewer route and Viewer Notes control in one desktop row and stacks it on small screens", () => {
+    const screenSource = fs.readFileSync(path.join(process.cwd(), "src/features/training/TrainingScreen.tsx"), "utf8");
+    const css = fs.readFileSync(path.join(process.cwd(), "src/styles/training-research.css"), "utf8");
+
+    expect(screenSource).toContain('className="training-viewer-row"');
+    expect(screenSource).toContain('className="training-viewer-model-card"');
+    expect(screenSource).toContain('className="training-viewer-notes-card"');
+    expect(screenSource).not.toContain("Experimental · enabled by default");
+    expect(screenSource).not.toContain("Eksperymentalne · domyślnie włączone");
+    expect(css).toMatch(/\.training-viewer-row\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)[^}]*\}/s);
+    expect(css).toMatch(/@media\s*\(max-width:\s*680px\)\s*\{[\s\S]*?\.training-viewer-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)[^}]*\}/);
   });
 
   it("keeps Show sessions, Save training and Archive in one non-wrapping desktop action container", () => {

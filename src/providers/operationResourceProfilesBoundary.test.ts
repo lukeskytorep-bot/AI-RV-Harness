@@ -70,12 +70,13 @@ describe("ORP1 operation-resource profile boundaries", () => {
     expect(consumers).toEqual(["src/providers/streamPresentation.ts"]);
   });
 
-  it("keeps the 4096/8192 learning-object floors owned only by the centralized operation-resource policy", () => {
+  it("keeps the capacity + 8192/+16384 learning-object headroom owned only by the centralized operation-resource policy", () => {
     const profiles = source("src/providers/operationResourceProfiles.ts");
-    expect(profiles).toContain("LEARNING_OBJECT_INITIAL_MINIMUM_ALLOWANCE_TOKENS = 4096");
-    expect(profiles).toContain("LEARNING_OBJECT_RECOVERY_MINIMUM_ALLOWANCE_TOKENS = 8192");
-    expect(profiles).toContain("Math.max(baseAllowance, LEARNING_OBJECT_INITIAL_MINIMUM_ALLOWANCE_TOKENS)");
-    expect(profiles).toContain("LEARNING_OBJECT_RECOVERY_MINIMUM_ALLOWANCE_TOKENS");
+    expect(profiles).toContain("LEARNING_OBJECT_INITIAL_HEADROOM_TOKENS = 8192");
+    expect(profiles).toContain("LEARNING_OBJECT_RECOVERY_HEADROOM_TOKENS = 16384");
+    expect(profiles).toContain("return capacity + (attempt === 0");
+    expect(profiles).not.toContain("LEARNING_OBJECT_STRUCTURED_OUTPUT_OVERHEAD_TOKENS");
+    expect(profiles).not.toContain("LEARNING_OBJECT_INITIAL_MINIMUM_ALLOWANCE_TOKENS");
 
     for (const relative of [
       "src/features/training/trainingExecution.ts",
@@ -85,8 +86,8 @@ describe("ORP1 operation-resource profile boundaries", () => {
       "src/providers/openRouterEndpointCapability.ts",
     ]) {
       const contents = source(relative);
-      expect(contents).not.toContain("LEARNING_OBJECT_INITIAL_MINIMUM_ALLOWANCE_TOKENS");
-      expect(contents).not.toContain("LEARNING_OBJECT_RECOVERY_MINIMUM_ALLOWANCE_TOKENS");
+      expect(contents).not.toContain("LEARNING_OBJECT_INITIAL_HEADROOM_TOKENS");
+      expect(contents).not.toContain("LEARNING_OBJECT_RECOVERY_HEADROOM_TOKENS");
     }
   });
 

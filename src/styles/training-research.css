@@ -1,7 +1,14 @@
-.training-pack-banner { display: flex; align-items: center; gap: 13px; margin-bottom: 15px; padding: 16px 18px; border: 1px solid rgba(23, 143, 167, .2); border-radius: 16px; color: var(--cyan); background: var(--cyan-soft); }
-.training-pack-banner > div { min-width: 0; flex: 1; }
-.training-pack-banner strong { display: block; font-size: 11px; }
-.training-pack-banner p { margin: 3px 0 0; color: var(--muted-strong); font-size: 11px; line-height: 1.5; }
+.training-help-panel { margin-bottom: 15px; overflow: hidden; border: 1px solid rgba(23, 143, 167, .2); border-radius: 14px; background: var(--cyan-soft); }
+.training-help-panel > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 10px 14px; color: var(--cyan); cursor: pointer; list-style-position: inside; }
+.training-help-panel > summary::marker { color: var(--muted); }
+.training-help-title { min-width: 0; display: inline-flex; align-items: center; gap: 9px; }
+.training-help-title svg { flex: 0 0 auto; }
+.training-help-title strong { font-size: 11px; }
+.training-help-content { display: grid; gap: 10px; padding: 0 16px 14px 38px; border-top: 1px solid color-mix(in srgb, var(--cyan) 18%, transparent); }
+.training-help-content > p { margin: 12px 0 0; color: var(--muted-strong); font-size: 11px; line-height: 1.55; }
+.training-help-content section { display: grid; gap: 3px; }
+.training-help-content h3 { margin: 0; color: var(--text); font-size: 11px; }
+.training-help-content section p { margin: 0; color: var(--muted-strong); font-size: 11px; line-height: 1.55; }
 .training-layout { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 15px; align-items: start; }
 .training-config { overflow: hidden; }
 .training-section { display: grid; gap: 9px; padding: 16px 19px; border-bottom: 1px solid var(--border); }
@@ -11,6 +18,17 @@
 .training-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .training-grid label, .training-source { display: grid; gap: 5px; color: var(--muted-strong); font-size: 11px; font-weight: 700; }
 .training-grid select, .training-source select { width: 100%; min-width: 0; }
+.training-viewer-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.training-viewer-model-card, .training-viewer-notes-card { min-width: 0; min-height: 62px; padding: 10px 11px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-soft); }
+.training-viewer-model-card { display: grid; align-content: center; gap: 3px; }
+.training-viewer-model-card > span { color: var(--muted); font-size: 11px; font-weight: 700; }
+.training-viewer-model-card strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.training-viewer-model-card small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.training-viewer-notes-card { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+.training-viewer-notes-card > input { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--violet); }
+.training-viewer-notes-card > span { display: grid; gap: 3px; }
+.training-viewer-notes-card strong { font-size: 11px; }
+.training-viewer-notes-card small { color: var(--muted); font-size: 11px; line-height: 1.35; }
 .training-choice-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .training-choice-row > button { min-height: 66px; display: flex; align-items: center; gap: 9px; padding: 10px 11px; border: 1px solid var(--border); border-radius: 11px; color: var(--muted-strong); background: var(--surface-soft); cursor: pointer; text-align: left; }
 .training-choice-row > button.active { color: var(--text); border-color: rgba(83,111,218,.35); background: linear-gradient(120deg, var(--violet-soft), var(--cyan-soft)); }
@@ -96,6 +114,11 @@
 .content-license-notice { display: flex; align-items: flex-start; gap: 9px; margin-top: 13px; padding: 11px; border: 1px solid rgba(23,143,167,.18); border-radius: 10px; color: var(--cyan); background: var(--cyan-soft); }
 .content-license-notice p { margin: 3px 0 0 !important; color: var(--muted-strong); font-size: 11px !important; line-height: 1.5; }
 .about-license { grid-template-columns: repeat(3, 1fr) !important; }
+
+@media (max-width: 680px) {
+  .training-viewer-row { grid-template-columns: minmax(0, 1fr); }
+  .training-help-content { padding-left: 16px; }
+}
 
 @media (max-width: 520px) {
   .training-run-actions { flex-wrap: wrap; }
