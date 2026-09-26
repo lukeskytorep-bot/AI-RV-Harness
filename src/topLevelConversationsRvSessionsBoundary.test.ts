@@ -16,7 +16,13 @@ describe("Stage 4 top-level Conversations / RV Sessions boundary", () => {
     const app = sourceFiles["./App.tsx"] ?? "";
     expect(app).not.toContain("WorkspaceScreen");
     expect(app).not.toContain("workspaceTab");
-    expect(app).not.toContain('page === "workspace"');
+    expect(app).not.toContain('setPage("workspace")');
+
+    const legacyWorkspaceComparisons = app.match(/page === "workspace"/g) ?? [];
+    expect(legacyWorkspaceComparisons).toHaveLength(1);
+    expect(app).toContain(
+      'if (page === "workspace") return "conversations";',
+    );
   });
 
   it("keeps the required top-level navigation order", () => {
