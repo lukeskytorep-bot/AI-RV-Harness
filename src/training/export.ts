@@ -5,6 +5,7 @@ import { localizedTargetTitle } from "../targets/localization";
 import { TRAINING_CATEGORY_LABELS, type TrainingCategory } from "../targets/bundled";
 import type { InterfaceLanguage } from "../types";
 import type { TrainingRunRecord } from "./types";
+import { FACTORY_PLANNER_VERSION, FACTORY_ROUND_SIZE } from "./curriculum";
 import { renderMarkdownExportDocument, type ExportMetadataField } from "../exports/document";
 import { renderCompleteSessionMarkdown } from "../exports/sessionDocument";
 
@@ -89,7 +90,7 @@ export async function exportTrainingRun(
     });
     resultRows.push({
       position: index + 1,
-      block: run.mode === "full" ? Math.floor(index / 7) + 1 : 1,
+      block: trainingGroupNumber(run, index),
       sessionCode: session.sessionCode,
       targetId,
       title,
@@ -111,6 +112,11 @@ export async function exportTrainingRun(
   const additionalMetadata: ExportMetadataField[] = [
     { label: language === "pl" ? "Numer treningu" : "Training run", value: run.runNumber },
     { label: language === "pl" ? "Postęp" : "Progress", value: `${run.completedTargetIds.length}/${run.targetIds.length}` },
+    ...(run.mode === "full" && run.plannerVersion === FACTORY_PLANNER_VERSION && run.roundSize === FACTORY_ROUND_SIZE ? [
+      { label: language === "pl" ? "Planner" : "Planner", value: run.plannerVersion },
+      { label: language === "pl" ? "Przebiegi" : "Rounds", value: `${run.roundCount ?? Math.ceil(run.targetIds.length / FACTORY_ROUND_SIZE)} × ${FACTORY_ROUND_SIZE}` },
+      { label: language === "pl" ? "Polityka powtórek" : "Repeat policy", value: run.targetRepeatPolicy ?? "—" },
+    ] : []),
     { label: language === "pl" ? "Łączna średnia AI Judge" : "Overall AI Judge mean", value: overallMean ?? "—" },
   ];
   const summary = renderMarkdownExportDocument({
@@ -150,4 +156,10 @@ function safeName(value: string): string {
 async function sha256Text(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function trainingGroupNumber(run: TrainingRunRecord, zeroBasedIndex: number): number {
+  if (run.mode !== "full") return 1;
+  const size = run.plannerVersion === FACTORY_PLANNER_VERSION && run.roundSize === FACTORY_ROUND_SIZE ? FACTORY_ROUND_SIZE : 7;
+  return Math.floor(zeroBasedIndex / size) + 1;
 }

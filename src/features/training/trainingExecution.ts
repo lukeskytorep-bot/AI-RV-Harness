@@ -13,6 +13,7 @@ import { runAutomaticRvLiteSession } from "../../sessions/rvLiteController";
 import type { AppRepository } from "../../storage/repository";
 import type { TargetRecord } from "../../targets/types";
 import type { TrainingFieldGuidePostUpdateCheckpoint, TrainingRunRecord, TrainingTargetCheckpoint } from "../../training/types";
+import { FACTORY_PLANNER_VERSION, FACTORY_ROUND_SIZE } from "../../training/curriculum";
 import type { AppSettings, InterfaceLanguage, Profile, ViewerSystemPromptSnapshot } from "../../types";
 
 type ExecutionSettings = Pick<AppSettings, "maxRetries" | "requestTimeoutMs" | "sessionCodePrefix" | "maxSessionCostUsd">;
@@ -67,10 +68,21 @@ export function firstPendingTrainingTargetIndex(run: TrainingRunRecord): number 
 }
 
 export function isTrainingBlockBoundary(run: TrainingRunRecord, zeroBasedIndex: number): boolean {
-  if (run.mode === "full") return (zeroBasedIndex + 1) % 7 === 0;
+  if (run.mode === "full") {
+    // Stage 3+ Full Training persists its own round contract. Historical 84/7 runs
+    // intentionally keep the legacy seven-session boundary on Resume.
+    if (run.plannerVersion === FACTORY_PLANNER_VERSION && run.roundSize === FACTORY_ROUND_SIZE) {
+      return (zeroBasedIndex + 1) % FACTORY_ROUND_SIZE === 0;
+    }
+    return (zeroBasedIndex + 1) % 7 === 0;
+  }
   const current = run.targetIds[zeroBasedIndex];
   const next = run.targetIds[zeroBasedIndex + 1];
   return !next || current.split("_").slice(0, 3).join("_") !== next.split("_").slice(0, 3).join("_");
+}
+
+export function shouldAutoPauseAfterTrainingTarget(run: TrainingRunRecord, zeroBasedIndex: number): boolean {
+  return Boolean(run.pauseAfterBlock && zeroBasedIndex + 1 < run.targetIds.length && isTrainingBlockBoundary(run, zeroBasedIndex));
 }
 
 async function currentTrainingRecord(repository: AppRepository, id: string, fallback: TrainingRunRecord): Promise<TrainingRunRecord> {
@@ -381,7 +393,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
       });
       input.onRunChange?.(working);
 
-      if (input.shouldPause?.() || (working.pauseAfterBlock && isTrainingBlockBoundary(working, index) && index + 1 < working.targetIds.length)) {
+      if (input.shouldPause?.() || shouldAutoPauseAfterTrainingTarget(working, index)) {
         working = { ...working, status: "Paused", updatedAt: now() };
         await input.repository.updateTrainingRun(working.id, { status: "Paused" });
         input.onRunChange?.(working);

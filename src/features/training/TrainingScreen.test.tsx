@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { getCopy } from "../../i18n";
 import { createDefaultSettings } from "../../startupDefaults";
 import { TrainingScreen } from "./index";
+import { factoryPackAllowsTrainingMode } from "./TrainingScreen";
 
 describe("TrainingScreen", () => {
   it("renders Training through its public feature entry point without repository access", () => {
@@ -22,7 +23,8 @@ describe("TrainingScreen", () => {
     expect(html).toContain("AI Training");
     expect(html).toContain("How does AI Training work?");
     expect(html).toContain("94/94");
-    expect(html).toContain("84");
+    expect(html).toContain("Number of rounds");
+    expect(html).toContain("1–10 rounds");
     expect(html).toContain("Viewer model");
     expect(html).toContain("Use Viewer Notes");
     expect(html).toContain("Enabled by default");
@@ -31,7 +33,14 @@ describe("TrainingScreen", () => {
   });
 
 
-  it("renders the collapsed educational panel in both UI languages without advertising future 8-session rounds yet", () => {
+
+  it("keeps Partial Training available when the factory pack is invalid", () => {
+    expect(factoryPackAllowsTrainingMode("partial", false)).toBe(true);
+    expect(factoryPackAllowsTrainingMode("full", false)).toBe(false);
+    expect(factoryPackAllowsTrainingMode("full", true)).toBe(true);
+  });
+
+  it("renders the canonical Stage 3 educational panel in both UI languages", () => {
     const en = renderToStaticMarkup(
       <TrainingScreen copy={getCopy("en")} settings={createDefaultSettings()} profiles={[]} workspaces={[]} repository={null} />,
     );
@@ -42,11 +51,13 @@ describe("TrainingScreen", () => {
 
     expect(en).toContain('<details class="training-help-panel">');
     expect(en).toContain("How does AI Training work?");
-    expect(en).toContain("84 factory targets");
-    expect(en).not.toContain("One Full Training round consists of 8 sessions");
+    expect(en).toContain("One Full Training round consists of 8 sessions");
+    expect(en).toContain("5 of 10 remaining");
+    expect(en).toContain("Pause and Resume");
     expect(pl).toContain("Jak działa AI Training?");
-    expect(pl).toContain("84 cele fabryczne");
-    expect(pl).not.toContain("Jeden przebieg Full Training składa się z 8 sesji");
+    expect(pl).toContain("Jeden przebieg Full Training składa się z 8 sesji");
+    expect(pl).toContain("Pozostało 5 z 10");
+    expect(pl).toContain("Pauza i Resume");
     expect(pl).not.toContain("Eksperymentalne");
   });
 

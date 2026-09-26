@@ -1,4 +1,5 @@
 import type { TrainingCategory } from "../targets/bundled";
+import type { TrainingTargetRepeatPolicy } from "./curriculum";
 import type { GenerationSettings } from "../providers/types";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
 import type { FieldGuideUpdateAuditRecord } from "../aiCenter/fieldGuideTypes";
@@ -54,6 +55,11 @@ export interface TrainingRunRecord {
   protocolVariant: "core" | "extended";
   curriculumId?: string;
   curriculumVersion?: string;
+  /** Stage 3+ Full Training planner contract. Legacy 84/7 runs omit these fields. */
+  plannerVersion?: string;
+  roundSize?: number;
+  roundCount?: number;
+  targetRepeatPolicy?: TrainingTargetRepeatPolicy;
   targetIds: string[];
   completedTargetIds: string[];
   /** Session ids follow the same order as completedTargetIds. */

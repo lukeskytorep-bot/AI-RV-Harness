@@ -5,7 +5,8 @@ import type { AppRepository } from "../../storage/repository";
 import type { TargetRecord } from "../../targets/types";
 import type { TrainingFieldGuidePostUpdateCheckpoint, TrainingRunRecord } from "../../training/types";
 import type { Profile } from "../../types";
-import { executeTrainingRun, firstPendingTrainingTargetIndex, type ExecuteTrainingRunInput } from "./trainingExecution";
+import { executeTrainingRun, firstPendingTrainingTargetIndex, isTrainingBlockBoundary, shouldAutoPauseAfterTrainingTarget, type ExecuteTrainingRunInput } from "./trainingExecution";
+import { FACTORY_PLANNER_VERSION, FACTORY_ROUND_SIZE } from "../../training/curriculum";
 import { supportedAutomaticPostRevealReviewRequests } from "../../sessions/postReveal";
 import { serializePostRevealTurn } from "../../sessions/postRevealTranscript";
 
@@ -200,6 +201,24 @@ function input(initial: TrainingRunRecord, testHarness: ReturnType<typeof harnes
   };
 }
 
+
+describe("Training round boundaries", () => {
+  it("uses 8-session boundaries for Stage 3 Full Training and suppresses the automatic pause after the final round", () => {
+    const modern = run({ mode: "full", pauseAfterBlock: true, targetIds: Array.from({ length: 24 }, (_, index) => `r${index + 1}`), plannerVersion: FACTORY_PLANNER_VERSION, roundSize: FACTORY_ROUND_SIZE, roundCount: 3 });
+    expect(isTrainingBlockBoundary(modern, 6)).toBe(false);
+    expect(shouldAutoPauseAfterTrainingTarget(modern, 7)).toBe(true);
+    expect(shouldAutoPauseAfterTrainingTarget(modern, 15)).toBe(true);
+    expect(isTrainingBlockBoundary(modern, 23)).toBe(true);
+    expect(shouldAutoPauseAfterTrainingTarget(modern, 23)).toBe(false);
+  });
+
+  it("preserves seven-session boundaries for historical 84-target Full Training runs", () => {
+    const legacy = run({ mode: "full", targetIds: Array.from({ length: 84 }, (_, index) => `legacy-${index + 1}`), curriculumVersion: "1.0.0" });
+    expect(isTrainingBlockBoundary(legacy, 6)).toBe(true);
+    expect(isTrainingBlockBoundary(legacy, 7)).toBe(false);
+    expect(isTrainingBlockBoundary(legacy, 13)).toBe(true);
+  });
+});
 describe("Training execution", () => {
   it("checkpoints every completed target and creates at most one Viewer Notes reflection per target", async () => {
     const testHarness = harness();

@@ -148,6 +148,25 @@ for (const [name, makeHarness] of [["browser", browserHarness], ["sqlite", sqlit
       });
     });
 
+    it("round-trips the Stage 3 Full Training planner contract and exact frozen order without a schema-specific column", async () => {
+      const harness = makeHarness();
+      const frozenOrder = Array.from({ length: 24 }, (_, index) => `target-${index + 1}`);
+      const created = await harness.repository.createTrainingRun({
+        ...input("Stage 3 Full"),
+        mode: "full",
+        curriculumId: "factory-training-curriculum",
+        curriculumVersion: "2.0.0",
+        plannerVersion: "full-rounds-v1",
+        roundSize: 8,
+        roundCount: 3,
+        targetRepeatPolicy: "avoid_profile",
+        targetIds: frozenOrder,
+      });
+      const listed = (await harness.repository.listTrainingRuns()).find((run) => run.id === created.id);
+      expect(listed).toMatchObject({ plannerVersion: "full-rounds-v1", roundSize: 8, roundCount: 3, targetRepeatPolicy: "avoid_profile" });
+      expect(listed?.targetIds).toEqual(frozenOrder);
+    });
+
     it("persists checkpoints and snapshots while appending new errors", async () => {
       const harness = makeHarness();
       harness.seed([record("run-a", 1, { errors: ["old error"] })]);
