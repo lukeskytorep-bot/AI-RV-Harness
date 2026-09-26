@@ -33,7 +33,7 @@ describe("browser Workspaces and Conversations repository contract", () => {
     const repository = new BrowserWorkspacesConversationsRepository({ storage, now: () => timestamp });
     const first = await repository.createWorkspace({ profileId: "profile-a", name: "First", kind: "conversation" });
 
-    await expect(repository.archiveWorkspace(first.id)).rejects.toThrow("at least one active Workspace");
+    await expect(repository.archiveWorkspace(first.id)).rejects.toThrow("active compatible Workspace of each required type");
     const second = await repository.createWorkspace({ profileId: "profile-a", name: "Second", kind: "conversation" });
     await repository.archiveWorkspace(first.id);
     expect((await repository.listWorkspaces("profile-a")).map((item) => item.id)).toEqual([second.id]);

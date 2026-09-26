@@ -59,9 +59,10 @@ describe("ProfilesScreen", () => {
   });
 
   it("disables Archive for the last active Workspace of a Profile", () => {
-    const html = renderToStaticMarkup(<ProfilesScreen {...makeProps({ profiles: [profile], workspaces: [workspace] })} />);
+    const props = makeProps({ profiles: [profile], workspaces: [workspace] });
+    const html = renderToStaticMarkup(<ProfilesScreen {...props} />);
 
-    expect(html).toContain('title="Each Profile must keep at least one active compatible Workspace of each required type."');
+    expect(html).toContain(`title="${props.copy.lastCompatibleWorkspaceRequired}"`);
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Archive/s);
   });
 });

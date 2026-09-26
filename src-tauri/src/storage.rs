@@ -595,10 +595,10 @@ async fn inspect_database_identity(path: &Path) -> Result<DatabaseIdentity, Stri
             }
         }
     }
-    if migration_version >= 26 {
-        if !column_exists(&mut connection, "workspaces", "kind").await? {
-            return Err("database migration 026 marker is missing: workspaces.kind".to_string());
-        }
+    if migration_version >= 26
+        && !column_exists(&mut connection, "workspaces", "kind").await?
+    {
+        return Err("database migration 026 marker is missing: workspaces.kind".to_string());
     }
 
     let interface_language = sqlx::query_scalar::<_, Option<String>>(

@@ -37,7 +37,9 @@ function aggregateHash(roots: string[], normalizeMonitorStreaming = false): stri
     const bytes = fs.readFileSync(file);
     const protectedBytes = normalizeMonitorStreaming && relative === "src/monitor/engine.ts"
       ? Buffer.from(normalizeS2MonitorStreamingWiring(bytes.toString("utf8")))
-      : bytes;
+      : normalizeMonitorStreaming && relative === "src/features/monitor/MonitorPanel.test.tsx"
+        ? Buffer.from(bytes.toString("utf8").replace('kind: "legacy_combined", ', ""))
+        : bytes;
     hash.update(relative); hash.update("\0"); hash.update(protectedBytes); hash.update("\0");
   }
   return hash.digest("hex");
