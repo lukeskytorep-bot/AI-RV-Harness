@@ -21,6 +21,7 @@ The private v0.7.13 modularization work adds the following living architecture r
 | [System Overview](SYSTEM_OVERVIEW.md) | High-level product structure, roles, workflows, storage model, provider layer, and current capabilities. |
 | [Engineering Design and Integrity Safeguards](ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md) | Stable engineering decisions protecting blinding, evidence, judging, Research, provider normalization, recovery, and persistence. |
 | [AI Center and Viewer Notes](AI_CENTER_AND_VIEWER_NOTES.md) | Identity scope, note lifecycle, immutable provenance, source-preservation behavior, Research controls, and controlled-purge integration. |
+| [Training, target pack, and typed Workspaces](TRAINING_TARGETS_AND_TYPED_WORKSPACES.md) | Current 94-target/eight-category curriculum, Full Training rounds, Viewer learning order, top-level Conversations/RV Sessions split, typed Workspaces, and schema 026 compatibility. |
 
 ## Documentation policy
 

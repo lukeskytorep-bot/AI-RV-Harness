@@ -1,7 +1,7 @@
 # AI RV Harness v0.7.13 — desktop runtime i release smoke
 
 **Status modularizacji:** Etapy 1–9 `COMPLETED — AUTOMATED GATES PASS`.  
-**Cel:** bieżąca ręczna bramka desktopowa przed akceptacją/release v0.7.13; zachowuje scenariusze modularizacji i obejmuje schema 25, Viewer Learning oraz provider-native continuation dla OpenRouter i Google native.  
+**Cel:** bieżąca ręczna bramka desktopowa przed akceptacją/release v0.7.13; zachowuje scenariusze modularizacji i obejmuje schema 26, Viewer Learning, typed Workspaces oraz provider-native continuation.
 **Wymagana baza:** dokładny aktualny zielony kandydat v0.7.13, nie historyczny ZIP Etapu 9.  
 **Zasada:** wykonywać na desktopowym buildzie Tauri z kopią danych testowych. Nie używać jedynej kopii realnej bazy użytkownika.
 
@@ -10,7 +10,7 @@
 - pełny GitHub Actions dla dokładnego aktualnego kandydata jest zielony;
 - `verify:source`, `verify:ux-data`, `verify:architecture`, pełny Vitest, typecheck, Vite, Rust/Tauri i Clippy przechodzą;
 - build uruchamia się z nowym, pustym profilem aplikacji;
-- dostępna jest osobna kopia dokładnej zielonej bazy schema 24 do kontrolowanego testu upgrade 24 → 25; natywne testy nadal osobno zachowują bramkę v23 → v24;
+- dostępna jest osobna kopia dokładnej zielonej bazy schema 25 do kontrolowanego testu upgrade 25 → 26; natywne testy nadal osobno zachowują bramki v23 → v24 i v24 → v25;
 - osobna baza legacy służy do sprawdzenia ekranu compatibility epoch; nie wolno pozwalać pluginowi SQL migrować jej automatycznie;
 - dla provider smoke używany jest testowy credential należący do użytkownika.
 
@@ -18,11 +18,11 @@
 
 | # | Scenariusz | Procedura minimalna | Wynik wymagany |
 | --- | --- | --- | --- |
-| 1 | Start na schema 25 | Uruchom aplikację na aktualnej bazie 25, zamknij i uruchom ponownie. | Start bez błędu, dane widoczne, brak ponownej/niekończącej się migracji. |
-| 2 | Kontrolowany upgrade i legacy epoch | Uruchom kopię dokładnej zielonej bazy 24, a osobno kopię legacy v1–20. | Zielona v24 przechodzi do v25 z zachowaniem danych i tworzy obie tabele continuation state. Legacy jest zatrzymana przed `Database.load()` i oferuje bezpieczne zachowanie/start fresh; nie jest automatycznie migrowana. |
+| 1 | Start na schema 26 | Uruchom aplikację na aktualnej bazie 26, zamknij i uruchom ponownie. | Start bez błędu, dane widoczne, brak ponownej/niekończącej się migracji. |
+| 2 | Kontrolowany upgrade i legacy epoch | Uruchom kopię dokładnej zielonej bazy 25, a osobno kopię legacy v1–20. | Zielona v25 przechodzi do v26 z zachowaniem danych; istniejące Workspace otrzymują `legacy_combined`, a historia nie jest przenoszona. Legacy jest zatrzymana przed `Database.load()` i oferuje bezpieczne zachowanie/start fresh; nie jest automatycznie migrowana. |
 | 3 | Lazy routes | Otwórz kolejno Research, Settings i AI Center/Monitor, wróć na Home i otwórz je ponownie. | Każda trasa renderuje się, fallback znika, brak pustego ekranu i błędu dynamic import. |
-| 4 | Zwykłe odczyty/zapisy | Utwórz/zmień nazwę Workspace lub Conversation, zapisz wiadomość/ustawienie i uruchom ponownie aplikację. | Odczyt i zapis działają; dane pozostają po restarcie. |
-| 5 | Training | Uruchom krótki testowy Training, doprowadź co najmniej jeden target do trwałego checkpointu; jeśli możliwe przerwij i użyj Resume. | Brak duplikatu ukończonego kroku; checkpoint i Resume zachowują się zgodnie z rekordem. |
+| 4 | Typed Workspaces i nawigacja | Dla nowego Profilu otwórz osobno Conversations i RV Sessions, utwórz dodatkowy Workspace obu typów, zmień nazwy i uruchom ponownie aplikację. Otwórz również Profil z `legacy_combined`. | Nowy Profil ma Conversation Workspace i RV Workspace; aktywne wybory są niezależne; typy nie mieszają się; `legacy_combined` działa w obu obszarach; Manual RV jest pod RV Sessions. |
+| 5 | Full Training i Resume | Uruchom jeden pełny przebieg (8 sesji), potwierdź osiem kategorii i zamrożoną kolejność; doprowadź co najmniej jeden target do trwałego checkpointu, przerwij i użyj Resume. | Run zapisuje `roundSize=8`, nie losuje ponownie po Resume i nie duplikuje ukończonego kroku. Training nie pokazuje selektora Workspace i używa technicznego RV/legacy Workspace. |
 | 6 | RV Sessions | Uruchom testową RV Session do Reveal/Post-Reveal i otwórz zapisaną sesję. | Evidence/Reveal/stan sesji są spójne, zapis otwiera się po restarcie. |
 | 7 | Provider + credential routing | Przetestuj połączenie na poprawnej konfiguracji; następnie sprawdź, że obcy/stary route albo zmieniony endpoint nie używa cudzego credentialu. | Poprawna konfiguracja działa; binding mismatch jest odrzucany czytelnym błędem. |
 | 8 | Import załącznika | Użyj natywnego pickera do importu małego TXT/MD i jednego obsługiwanego obrazu lub dokumentu. | Załącznik trafia do UI; ścieżka systemowa nie jest przekazywana ręcznie przez WebView; błędny format jest odrzucany. |

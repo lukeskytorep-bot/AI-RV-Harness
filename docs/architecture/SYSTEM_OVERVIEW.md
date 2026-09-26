@@ -44,17 +44,22 @@ No prior knowledge of the internal codebase is required for normal use. Research
 
 ### Information hierarchy
 
-The application organizes ordinary work as:
+The application organizes ordinary work through two typed Workspace paths:
 
-**Profile → Workspace → Conversation / Manual RV / Session / Research**
+- **Profile → Conversation Workspace → Conversation**
+- **Profile → RV Workspace → Manual RV / Automatic RV Session**
+
+Training and Research are Profile-scoped screens. When they require persisted session ownership, the application resolves a compatible RV Workspace deterministically without exposing a Workspace selector in those screens.
 
 | Object | Purpose |
 | --- | --- |
 | **Profile** | Stores the human and AI IS-BE identity labels, preferred model routes, prompts, and default generation settings. |
-| **Workspace** | A project container for conversations, sessions, sources, and related records. |
-| **Conversation / Manual RV / Session / Research** | Contains the actual messages, protocol events, evidence, research configuration, and results. |
+| **Conversation Workspace** | A project container for ordinary Conversations and their reusable Sources. |
+| **RV Workspace** | A project container for Manual RV and Automatic RV Session records. |
+| **legacy combined Workspace** | A compatibility type assigned to pre-separation Workspaces; it remains usable from both areas without moving historical records. |
+| **Conversation / Manual RV / Automatic RV Session / Research** | Contains messages, protocol events, evidence, research configuration, and results. |
 
-A Workspace can be created from the Workspaces screen or from a Profile. Conversation and Manual RV records are direct Workspace children. Legacy `ChatThreadGroup` metadata may remain in older stored data for compatibility, but it is not a current product parent and new conversations do not create it. Existing records remain associated with their original owner and Workspace.
+Workspace lifecycle is managed from Profiles. A new Profile is created with one Conversation Workspace and one RV Workspace, and additional Workspaces of either type may be added later. The application remembers separate active IDs for Conversation and RV work. Existing Workspaces are classified as `legacy_combined`; they remain visible in both compatible areas and are never physically split by migration. Conversation and Manual RV records are direct Workspace children. Legacy `ChatThreadGroup` metadata may remain in older stored data for compatibility, but it is not a current product parent and new conversations do not create it.
 
 ### AI roles
 
@@ -73,9 +78,10 @@ Viewer, Monitor, and Judge routes can be configured independently. Using differe
 | --- | --- |
 | **Home** | Entry points, recent activity, and project overview. |
 | **Profiles** | Identity labels, model defaults, system prompts, and role-specific settings. |
-| **Workspaces** | Project containers for conversations, sources, and RV work. |
+| **Conversations** | Ordinary model conversations in a Conversation Workspace. |
+| **RV Sessions** | Manual RV and Automatic RV in an RV Workspace. |
 | **Targets** | Bundled training targets and user-created targets with text or supported images. |
-| **Training** | Complete or partial target curricula with resumable progress and optional judging. |
+| **Training** | Full Training rounds or partial target selections with resumable progress, Viewer learning, and optional judging. |
 | **Research** | Controlled studies, locking, randomization, blinded judging, unblinding, and exports. |
 | **AI Center** | Profile-wide AI identities, AI Monitor access, Viewer Notes, immutable note history, capacity, and reflection records. |
 | **Settings** | Providers, credentials, model discovery, language, appearance, diagnostics, backup, and restore. |
@@ -92,7 +98,7 @@ If the user message is saved but the provider fails before returning an answer, 
 
 ### Manual RV Session
 
-Manual RV is an operator-led conversation for flexible RV work. A built-in or custom protocol can be attached as a reference, but the human operator decides when and how to send each instruction. This mode deliberately avoids pretending that an automated blind/reveal controller is active when it is not.
+Manual RV is the manual tab under RV Sessions. It is an operator-led conversation for flexible RV work. A built-in or custom protocol can be attached as a reference, but the human operator decides when and how to send each instruction. This mode deliberately avoids pretending that an automated blind/reveal controller is active when it is not.
 
 Manual RV supports attachments, sources, saved history, and **Retry response** for an unanswered turn.
 
@@ -166,7 +172,7 @@ Monitor calls use a larger output allowance suitable for reasoning models: an in
 
 ## AI Center and Viewer Notes
 
-AI Center is a top-level, Profile-wide area rather than a Workspace feature. It provides an overview of the exact AI identities used across all Workspaces owned by the active Profile, access to the existing AI Monitor area, and the Viewer Notes module.
+AI Center is a top-level, Profile-wide area rather than a Workspace feature. It provides an overview of the exact AI identities used across all Workspaces owned by the active Profile, access to the existing AI Monitor area, and Viewer Learning with separate Field Guide and Viewer Notes histories.
 
 A Viewer Notes identity is defined by **Profile + credential fingerprint + provider + exact model route + Viewer role**. Notes are never transferred between identities, even when two routes use the same display name. Raw credentials are not stored in note history.
 
@@ -219,7 +225,7 @@ The application distinguishes between bundled and user-created targets.
 
 ### Training Targets
 
-The built-in library contains 84 read-only Training Targets arranged into seven categories. They provide a stable curriculum and cannot be silently edited by ordinary application use.
+The built-in library contains 94 read-only Training Targets arranged into eight categories. The previously active 84 identifiers remain stable, and the ten added targets extend the pack without rewriting historical sessions. Factory targets provide a stable curriculum and cannot be silently edited by ordinary application use.
 
 ### My Targets
 
@@ -231,9 +237,9 @@ When image evaluation is required, the selected model route must support vision.
 
 ## Training
 
-Training can run the complete bundled curriculum or selected categories and user targets. Long runs use checkpoints so progress can be resumed without recreating already completed work.
+Full Training runs one to ten rounds. Each round contains one randomly selected target from every factory category, and the order of those eight sessions is randomized. The complete plan is frozen before execution, so Resume never selects a new target or changes the order. Partial Training uses explicit category counts and may include My Targets.
 
-Training records include configuration, target order, sessions, Reveal results, and optional independent Judge evaluations. Completed results can be reviewed and exported for further analysis.
+Training records include the curriculum/planner version, round boundaries, configuration, frozen target order, sessions, Reveal results, Viewer learning checkpoints, and optional independent Judge evaluations. Historical 84-target/seven-session curriculum runs retain their stored planner semantics. Completed results can be reviewed and exported for further analysis.
 
 Training is intended for practice and comparison. It should not be confused with a locked confirmatory Research study.
 
@@ -296,7 +302,7 @@ Workspace Sources allow reference material to be reused within the relevant Work
 
 ## Data storage, backup, and export
 
-The application uses a local SQLite database in WAL mode. Profiles, Workspaces, Conversation / Manual RV records, sessions, targets, training runs, research studies, AI identities, Viewer Notes versions and activations, reflection outcomes, audit events, and related metadata remain on the user's device unless the user exports or transmits them. Legacy Thread-group rows and `thread_group_id` values may remain in an upgraded database as compatibility metadata, but they are not active product parents.
+The application uses a local SQLite database in WAL mode. Profiles, typed Workspaces, Conversation / Manual RV records, sessions, targets, training runs, research studies, AI identities, Field Guide and Viewer Notes versions and activations, reflection outcomes, audit events, and related metadata remain on the user's device unless the user exports or transmits them. Schema 026 adds the Workspace kind while preserving earlier rows as `legacy_combined`. Legacy Thread-group rows and `thread_group_id` values may remain as compatibility metadata, but they are not active product parents.
 
 Database migrations create a protective backup and validate integrity before continuing. Settings provide backup and restore tools for local recovery. In the private v0.7.13 baseline, primary user records follow a unified lifecycle: **Active → Archived → Restore or Delete permanently**. Permanent Delete is available only from Archive and recovery, begins with a read-only Deletion Preview, and uses explicit controlled-purge use cases rather than ordinary CRUD. Sealed/frozen/locked guards remain active outside the dedicated purge transaction.
 
@@ -407,7 +413,7 @@ Passing tests reduces known risk but does not guarantee identical behavior for e
 - Local-first storage does not prevent selected session content from being transmitted to the configured remote provider.
 - Artifact attestations establish provenance, not software correctness or operating-system code signing.
 - The application is research and workflow software, not a scientific validation of Remote Viewing claims.
-- Viewer Notes are experimental; their presence does not establish that they improve a model's RV performance.
+- Field Guide and Viewer Notes effectiveness must be evaluated empirically; their presence does not establish that they improve a model's RV performance.
 
 ## Licenses and credits
 

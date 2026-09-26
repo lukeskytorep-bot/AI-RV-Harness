@@ -23,6 +23,7 @@ The current private development baseline is v0.7.13, built on the public v0.7.12
 - [System overview](architecture/SYSTEM_OVERVIEW.md)
 - [Engineering design and integrity safeguards](architecture/ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md)
 - [AI Center and Viewer Notes architecture](architecture/AI_CENTER_AND_VIEWER_NOTES.md)
+- [Training, target pack, and typed Workspaces](architecture/TRAINING_TARGETS_AND_TYPED_WORKSPACES.md)
 - [UX-DATA-6 Soft Archive / Restore implementation report](reports/UX_DATA_SOFT_ARCHIVE_LIFECYCLE_v0.7.13_PL.md)
 - [UX-DATA-7 Viewer Notes source preservation implementation report](reports/UX_DATA_VIEWER_NOTES_SOURCE_PRESERVATION_v0.7.13_PL.md)
 - [UX-DATA-8 Permanent Delete / controlled purge implementation report](reports/UX_DATA_CONTROLLED_PURGE_v0.7.13_PL.md)
@@ -35,8 +36,9 @@ The current private development baseline is v0.7.13, built on the public v0.7.12
 - [Viewer Learning 2 Training Field Guide update report](reports/VIEWER_LEARNING_2_TRAINING_FIELD_GUIDE_UPDATE_v0.7.13_PL.md)
 - [Viewer Learning 3 Research Field Guide controls report](reports/VIEWER_LEARNING_3_RESEARCH_FIELD_GUIDE_CONTROLS_v0.7.13_PL.md)
 - [Source package hygiene report](reports/SOURCE_PACKAGE_HYGIENE_1_v0.7.13_PL.md)
+- [Training/targets/typed Workspaces — Stage 6 closeout](reports/TRAINING_TARGETS_TYPED_WORKSPACES_STAGE_6_CLOSEOUT_v0.7.13_PL.md)
 
-The current SQLite boundary is schema **25**. The accepted current-epoch upgrade chain preserves the exact green schema 23 → 24 Viewer Learning transition and adds the exact green schema 24 → 25 provider-continuation persistence transition. Public/legacy schemas remain handled by the v0.7.13 database compatibility epoch gate and are not silently migrated into this chain.
+The current SQLite boundary is schema **26**. The accepted current-epoch upgrade chain preserves the exact green schema 23 → 24 Viewer Learning transition, exact green schema 24 → 25 provider-continuation persistence, and exact green schema 25 → 26 typed Workspace transition. Public/legacy schemas remain handled by the v0.7.13 database compatibility epoch gate and are not silently migrated into this chain.
 
 - [AI Center implementation plan](releases/v0.7.12/AI_CENTER_IMPLEMENTATION_PLAN_PL.md)
 - [AI Center wiki documentation](releases/v0.7.12/AI_CENTER_VIEWER_NOTES_WIKI_EN.md)
@@ -94,4 +96,4 @@ The authoritative project-level files remain in the repository root:
 
 ### Custom OpenAI wire parameter override
 
-Custom OpenAI-compatible connections keep `max_tokens` as the compatibility default. A connection may explicitly override only the maximum-output-token wire field to `max_completion_tokens`. The override is scoped to that Custom OpenAI provider configuration, stored in existing application settings, and never changes the built-in OpenRouter, OpenAI, Google, Anthropic, Z.AI, DeepSeek, Mistral, or Blackbox mappings. SQLite schema remains 25.
+Custom OpenAI-compatible connections keep `max_tokens` as the compatibility default. A connection may explicitly override only the maximum-output-token wire field to `max_completion_tokens`. The override is scoped to that Custom OpenAI provider configuration, stored in existing application settings, and never changes the built-in OpenRouter, OpenAI, Google, Anthropic, Z.AI, DeepSeek, Mistral, or Blackbox mappings. The override introduced no migration; the current SQLite schema later advanced to 26 for typed Workspaces.
