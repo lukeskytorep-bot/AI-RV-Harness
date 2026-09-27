@@ -295,8 +295,11 @@ struct OpenRouterReasoningDetailsAccumulator {
 impl OpenRouterReasoningDetailsAccumulator {
     fn ingest(&mut self, value: Option<&Value>) -> Result<(), &'static str> {
         let Some(value) = value else { return Ok(()); };
+        if value.is_null() {
+            return Ok(());
+        }
         let Value::Array(items) = value else {
-            return Err("provider streaming reasoning_details must be an array when present");
+            return Err("provider streaming reasoning_details must be an array or null when present");
         };
         self.field_seen = true;
         self.received_items = self.received_items.saturating_add(items.len() as u64);
@@ -328,7 +331,10 @@ fn compatible_identity_string(left: &Map<String, Value>, right: &Map<String, Val
     }
     match (left_value, right_value) {
         (Some(Value::String(a)), Some(Value::String(b))) => a == b,
-        (Some(Value::Null), Some(Value::String(_))) | (Some(Value::String(_)), Some(Value::Null)) => false,
+        (Some(Value::String(_)), None)
+        | (None, Some(Value::String(_)))
+        | (Some(Value::Null), Some(Value::String(_)))
+        | (Some(Value::String(_)), Some(Value::Null)) => false,
         _ => true,
     }
 }
@@ -636,6 +642,7 @@ fn first_semantic_chunk(delta: &Value, content: &str, reasoning: &str, reasoning
     !content.is_empty()
         || !reasoning.is_empty()
         || reasoning_details.is_some_and(|details| !details.is_empty())
+        || delta.get("reasoning_details").is_some_and(|value| !value.is_null() && !value.is_array())
         || delta.get("tool_calls").and_then(Value::as_array).is_some_and(|calls| !calls.is_empty())
 }
 

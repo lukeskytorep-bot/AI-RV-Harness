@@ -694,10 +694,17 @@ fn preserves_non_stream_openrouter_reasoning_details_presence_for_empty_and_none
     }), None).unwrap();
     assert!(missing.reasoning_details.is_none());
 
-    let invalid = parse_openai_compatible_response(json!({
+    let explicit_null = parse_openai_compatible_response(json!({
         "choices": [{ "message": { "reasoning_details": null, "content": "Final answer" }, "finish_reason": "stop" }]
     }), None).unwrap();
-    assert!(invalid.reasoning_details.is_none());
+    assert!(explicit_null.reasoning_details.is_none());
+
+    for invalid in [json!({}), json!("invalid"), json!(7), json!(true)] {
+        let error = parse_openai_compatible_response(json!({
+            "choices": [{ "message": { "reasoning_details": invalid, "content": "Final answer" }, "finish_reason": "stop" }]
+        }), None).unwrap_err();
+        assert_eq!(error, "provider response reasoning_details must be an array or null when present");
+    }
 }
 
 #[test]
@@ -1170,6 +1177,44 @@ fn stream_accumulator_merges_contiguous_text_and_late_signature_but_respects_dis
         Some(2)
     );
 
+    let mut missing_then_concrete_id = OpenRouterStreamAccumulator::default();
+    missing_then_concrete_id.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type": "reasoning.text", "text": "A", "format": "openai-responses-v1", "index": 0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    missing_then_concrete_id.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type": "reasoning.text", "text": "B", "id": "rt_late",
+            "format": "openai-responses-v1", "index": 0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    let missing_then_concrete_result = finish_accumulator(missing_then_concrete_id);
+    assert_eq!(
+        missing_then_concrete_result.payload.pointer("/choices/0/message/reasoning_details").and_then(Value::as_array).map(Vec::len),
+        Some(2)
+    );
+    assert!(missing_then_concrete_result.payload.pointer("/choices/0/message/reasoning_details/0/id").is_none());
+    assert_eq!(missing_then_concrete_result.payload.pointer("/choices/0/message/reasoning_details/1/id"), Some(&json!("rt_late")));
+
+    let mut concrete_then_missing_id = OpenRouterStreamAccumulator::default();
+    concrete_then_missing_id.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type": "reasoning.text", "text": "A", "id": "rt_first",
+            "format": "openai-responses-v1", "index": 0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    concrete_then_missing_id.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type": "reasoning.text", "text": "B", "format": "openai-responses-v1", "index": 0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    let concrete_then_missing_result = finish_accumulator(concrete_then_missing_id);
+    assert_eq!(
+        concrete_then_missing_result.payload.pointer("/choices/0/message/reasoning_details").and_then(Value::as_array).map(Vec::len),
+        Some(2)
+    );
+
     let mut repeated = OpenRouterStreamAccumulator::default();
     for _ in 0..2 {
         repeated.process_data_with_events(&json!({
@@ -1220,12 +1265,31 @@ fn stream_accumulator_preserves_missing_empty_and_nonempty_reasoning_details_sem
 }
 
 #[test]
-fn stream_accumulator_rejects_invalid_reasoning_details_field_type_without_marking_it_replayable() {
-    let mut accumulator = OpenRouterStreamAccumulator::default();
-    accumulator.process_data_with_events(&json!({
+fn stream_accumulator_treats_null_as_absent_and_invalid_non_null_as_semantic_fail_closed() {
+    let explicit_null = {
+        let mut accumulator = OpenRouterStreamAccumulator::default();
+        accumulator.process_data_with_events(&json!({
+            "choices": [{"delta": {"reasoning_details": null}}]
+        }).to_string(), "secret", None).unwrap();
+        finish_accumulator(accumulator)
+    };
+    assert!(explicit_null.payload.pointer("/choices/0/message/reasoning_details").is_none());
+    assert!(!explicit_null.continuation_diagnostics.reasoning_details_present);
+
+    for invalid in [json!({"unexpected": true}), json!("invalid"), json!(7), json!(true)] {
+        let mut accumulator = OpenRouterStreamAccumulator::default();
+        let error = accumulator.process_data_with_events(&json!({
+            "choices": [{"delta": {"reasoning_details": invalid}}]
+        }).to_string(), "secret", None).unwrap_err();
+        assert_eq!(error.code.as_ref(), "invalid_provider_json");
+        assert_eq!(error.semantic_output_started, Some(true));
+    }
+
+    let mut after_valid = OpenRouterStreamAccumulator::default();
+    after_valid.process_data_with_events(&json!({
         "choices": [{"delta": {"reasoning_details": [stream_reasoning_detail("r1", "ok", 0)]}}]
     }).to_string(), "secret", None).unwrap();
-    let error = accumulator.process_data_with_events(&json!({
+    let error = after_valid.process_data_with_events(&json!({
         "choices": [{"delta": {"reasoning_details": {"unexpected": true}}}]
     }).to_string(), "secret", None).unwrap_err();
     assert_eq!(error.code.as_ref(), "invalid_provider_json");

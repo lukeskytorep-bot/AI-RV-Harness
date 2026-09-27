@@ -25,7 +25,11 @@ pub(super) fn parse_openai_compatible_response(payload: Value, request_id: Optio
     let finish_reason = payload.pointer("/choices/0/finish_reason").and_then(Value::as_str).map(str::to_string);
     let message = payload.pointer("/choices/0/message").unwrap_or(&Value::Null);
     let raw_content = extract_openai_text(message.get("content"));
-    let reasoning_details = message.get("reasoning_details").and_then(Value::as_array).cloned();
+    let reasoning_details = match message.get("reasoning_details") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(details)) => Some(details.clone()),
+        Some(_) => return Err("provider response reasoning_details must be an array or null when present".to_string()),
+    };
     let (native_reasoning, native_source) = extract_openai_reasoning(message, reasoning_details.as_deref());
     let normalized = normalize_reasoning_response(raw_content, native_reasoning, native_source);
     let content = normalized.content;
