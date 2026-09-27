@@ -27,6 +27,15 @@ pub(super) struct StreamingChatResult {
     pub(super) payload: Value,
     pub(super) request_id: Option<String>,
     pub(super) semantic_output_started: bool,
+    pub(super) continuation_diagnostics: ProviderContinuationStreamDiagnostics,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub(super) struct ProviderContinuationStreamDiagnostics {
+    pub(super) raw_sse_events: u64,
+    pub(super) received_reasoning_detail_items: u64,
+    pub(super) logical_reasoning_blocks: u64,
+    pub(super) reasoning_details_present: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -277,10 +286,136 @@ fn longest_ascii_suffix_prefix(value: &str, candidates: &[&str]) -> usize {
 }
 
 #[derive(Default)]
+struct OpenRouterReasoningDetailsAccumulator {
+    details: Vec<Value>,
+    field_seen: bool,
+    received_items: u64,
+}
+
+impl OpenRouterReasoningDetailsAccumulator {
+    fn ingest(&mut self, value: Option<&Value>) -> Result<(), &'static str> {
+        let Some(value) = value else { return Ok(()); };
+        let Value::Array(items) = value else {
+            return Err("provider streaming reasoning_details must be an array when present");
+        };
+        self.field_seen = true;
+        self.received_items = self.received_items.saturating_add(items.len() as u64);
+        for detail in items {
+            if let Some(last) = self.details.last_mut() {
+                if merge_openrouter_reasoning_delta(last, detail) {
+                    continue;
+                }
+            }
+            self.details.push(detail.clone());
+        }
+        Ok(())
+    }
+}
+
+fn detail_has_only_known_keys(object: &Map<String, Value>, allowed: &[&str]) -> bool {
+    object.keys().all(|key| allowed.contains(&key.as_str()))
+}
+
+fn nullable_string_field(value: Option<&Value>) -> bool {
+    matches!(value, None | Some(Value::Null) | Some(Value::String(_)))
+}
+
+fn compatible_identity_string(left: &Map<String, Value>, right: &Map<String, Value>, key: &str) -> bool {
+    let left_value = left.get(key);
+    let right_value = right.get(key);
+    if !nullable_string_field(left_value) || !nullable_string_field(right_value) {
+        return false;
+    }
+    match (left_value, right_value) {
+        (Some(Value::String(a)), Some(Value::String(b))) => a == b,
+        (Some(Value::Null), Some(Value::String(_))) | (Some(Value::String(_)), Some(Value::Null)) => false,
+        _ => true,
+    }
+}
+
+fn compatible_fillable_string(left: &Map<String, Value>, right: &Map<String, Value>, key: &str) -> bool {
+    let left_value = left.get(key);
+    let right_value = right.get(key);
+    if !nullable_string_field(left_value) || !nullable_string_field(right_value) {
+        return false;
+    }
+    match (left_value, right_value) {
+        (Some(Value::String(a)), Some(Value::String(b))) if !a.is_empty() && !b.is_empty() => a == b,
+        _ => true,
+    }
+}
+
+fn merge_late_format(left: &mut Map<String, Value>, right: &Map<String, Value>) {
+    let left_missing = !matches!(left.get("format"), Some(Value::String(value)) if !value.is_empty());
+    if left_missing {
+        if let Some(Value::String(format)) = right.get("format") {
+            if !format.is_empty() {
+                left.insert("format".to_string(), Value::String(format.clone()));
+            }
+        }
+    }
+}
+
+fn merge_late_signature(left: &mut Map<String, Value>, right: &Map<String, Value>) {
+    let left_missing = !matches!(left.get("signature"), Some(Value::String(value)) if !value.is_empty());
+    if left_missing {
+        if let Some(Value::String(signature)) = right.get("signature") {
+            if !signature.is_empty() {
+                left.insert("signature".to_string(), Value::String(signature.clone()));
+            }
+        }
+    }
+}
+
+// OpenRouter stream canonicalization is intentionally narrow: only contiguous
+// summary/text deltas with compatible known identity/format fields may merge.
+// Stream `index` is preserved from the first delta but is not used as block identity.
+fn merge_openrouter_reasoning_delta(last: &mut Value, next: &Value) -> bool {
+    let (Some(last_object), Some(next_object)) = (last.as_object_mut(), next.as_object()) else {
+        return false;
+    };
+    let Some(last_type) = last_object.get("type").and_then(Value::as_str) else { return false; };
+    let Some(next_type) = next_object.get("type").and_then(Value::as_str) else { return false; };
+    if last_type != next_type || !matches!(last_type, "reasoning.summary" | "reasoning.text") {
+        return false;
+    }
+    let is_text = last_type == "reasoning.text";
+
+    let (payload_key, allowed): (&str, &[&str]) = if is_text {
+        ("text", &["type", "text", "signature", "id", "format", "index"])
+    } else {
+        ("summary", &["type", "summary", "id", "format", "index"])
+    };
+    if !detail_has_only_known_keys(last_object, allowed) || !detail_has_only_known_keys(next_object, allowed) {
+        return false;
+    }
+    if !compatible_identity_string(last_object, next_object, "id")
+        || !compatible_fillable_string(last_object, next_object, "format")
+    {
+        return false;
+    }
+    if is_text && !compatible_fillable_string(last_object, next_object, "signature") {
+        return false;
+    }
+    let next_fragment = match next_object.get(payload_key) {
+        Some(Value::String(fragment)) => fragment.as_str(),
+        None if is_text && matches!(next_object.get("signature"), Some(Value::String(value)) if !value.is_empty()) => "",
+        _ => return false,
+    };
+    let Some(Value::String(last_fragment)) = last_object.get_mut(payload_key) else { return false; };
+    last_fragment.push_str(next_fragment);
+    merge_late_format(last_object, next_object);
+    if is_text {
+        merge_late_signature(last_object, next_object);
+    }
+    true
+}
+
+#[derive(Default)]
 pub(super) struct OpenRouterStreamAccumulator {
     content: String,
     reasoning: String,
-    reasoning_details: Vec<Value>,
+    reasoning_details: OpenRouterReasoningDetailsAccumulator,
     finish_reason: Option<String>,
     native_finish_reason: Option<String>,
     actual_model: Option<String>,
@@ -289,6 +424,7 @@ pub(super) struct OpenRouterStreamAccumulator {
     usage: Option<Value>,
     openrouter_metadata: Option<Value>,
     accumulated_stream_data_bytes: usize,
+    raw_sse_events: u64,
     live_visible_content_filter: LiveVisibleContentFilter,
     done: bool,
     pub(super) semantic_output_started: bool,
@@ -303,6 +439,7 @@ impl OpenRouterStreamAccumulator {
     }
 
     pub(super) fn process_data_with_events(&mut self, data: &str, secret: &str, request_id: Option<&str>) -> Result<Vec<ProviderStreamEvent>, ProviderCallError> {
+        self.raw_sse_events = self.raw_sse_events.saturating_add(1);
         let Some(next_total) = self
             .accumulated_stream_data_bytes
             .checked_add(data.len())
@@ -400,7 +537,8 @@ impl OpenRouterStreamAccumulator {
                 (!value.is_empty()).then_some(value)
             })
             .unwrap_or_default();
-        let reasoning_details = delta.get("reasoning_details").and_then(Value::as_array);
+        let reasoning_details_value = delta.get("reasoning_details");
+        let reasoning_details = reasoning_details_value.and_then(Value::as_array);
         if first_semantic_chunk(delta, &content, &reasoning, reasoning_details.map(Vec::as_slice)) {
             self.semantic_output_started = true;
         }
@@ -415,9 +553,9 @@ impl OpenRouterStreamAccumulator {
         if !reasoning.is_empty() {
             self.reasoning.push_str(&reasoning);
         }
-        if let Some(details) = reasoning_details {
-            self.reasoning_details.extend(details.iter().cloned());
-        }
+        self.reasoning_details.ingest(reasoning_details_value).map_err(|message| {
+            self.error("invalid_provider_json", message, "parsing_body", request_id)
+        })?;
         Ok(events)
     }
 
@@ -450,8 +588,8 @@ impl OpenRouterStreamAccumulator {
         if !self.reasoning.is_empty() {
             message.insert("reasoning".into(), Value::String(self.reasoning));
         }
-        if !self.reasoning_details.is_empty() {
-            message.insert("reasoning_details".into(), Value::Array(self.reasoning_details));
+        if self.reasoning_details.field_seen {
+            message.insert("reasoning_details".into(), Value::Array(self.reasoning_details.details.clone()));
         }
         let mut choice = Map::new();
         choice.insert("index".into(), json!(0));
@@ -484,6 +622,12 @@ impl OpenRouterStreamAccumulator {
             payload: Value::Object(payload),
             request_id,
             semantic_output_started,
+            continuation_diagnostics: ProviderContinuationStreamDiagnostics {
+                raw_sse_events: self.raw_sse_events,
+                received_reasoning_detail_items: self.reasoning_details.received_items,
+                logical_reasoning_blocks: self.reasoning_details.details.len() as u64,
+                reasoning_details_present: self.reasoning_details.field_seen,
+            },
         })
     }
 }

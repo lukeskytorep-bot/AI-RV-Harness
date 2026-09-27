@@ -375,6 +375,36 @@ fn replays_openrouter_reasoning_details_only_on_the_bound_assistant_message() {
 }
 
 #[test]
+fn replays_explicit_empty_openrouter_reasoning_details_as_an_explicit_empty_array() {
+    let mut request = chat_request(ProviderKind::Openrouter, "openai/gpt-test");
+    request.messages = vec![ProviderMessage {
+        role: "assistant".to_string(),
+        content: "Answer".to_string(),
+        images: vec![],
+        continuation_state: Some(ProviderContinuationState::OpenRouter(OpenRouterContinuationState {
+            schema_version: 1,
+            transport: "openrouter".to_string(),
+            format: "openrouter-reasoning-details".to_string(),
+            replay_fingerprint: ProviderReplayFingerprint {
+                transport: "openrouter".to_string(),
+                normalized_endpoint: "https://openrouter.ai/api/v1".to_string(),
+                provider_config_id: "provider-config".to_string(),
+                credential_id: "credential".to_string(),
+                requested_model_id: "openai/gpt-test".to_string(),
+                actual_model_id: None,
+                state_format: "openrouter-reasoning-details".to_string(),
+                state_format_version: 1,
+            },
+            reasoning_details: vec![],
+        })),
+    }];
+    validate_chat_request(&request).unwrap();
+    validate_continuation_bindings(&request, "https://openrouter.ai/api/v1").unwrap();
+    let (_, body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
+    assert_eq!(body.pointer("/messages/0/reasoning_details"), Some(&json!([])));
+}
+
+#[test]
 fn replays_google_thought_signature_on_the_exact_model_part() {
     let signature = "R0VNSU5JXzNfVEhPVUdIVF9TSUdOQVRVUkU=";
     let mut request = chat_request(ProviderKind::Google, "gemini-3.8-flash");
@@ -567,6 +597,44 @@ fn rejects_openrouter_continuation_state_when_fingerprint_changes() {
 }
 
 #[test]
+fn rust_validation_keeps_the_64_logical_block_limit_for_openrouter() {
+    let mut request = chat_request(ProviderKind::Openrouter, "model-a");
+    let reasoning_details = (0..65)
+        .map(|index| json!({
+            "type": "reasoning.encrypted",
+            "data": "RklYVFVSRQ==",
+            "id": format!("opaque-{index}"),
+            "format": "openai-responses-v1",
+            "index": index,
+        }))
+        .collect::<Vec<_>>();
+    request.messages = vec![ProviderMessage {
+        role: "assistant".to_string(),
+        content: "Answer".to_string(),
+        images: vec![],
+        continuation_state: Some(ProviderContinuationState::OpenRouter(OpenRouterContinuationState {
+            schema_version: 1,
+            transport: "openrouter".to_string(),
+            format: "openrouter-reasoning-details".to_string(),
+            replay_fingerprint: ProviderReplayFingerprint {
+                transport: "openrouter".to_string(),
+                normalized_endpoint: "https://openrouter.ai/api/v1".to_string(),
+                provider_config_id: "provider-config".to_string(),
+                credential_id: "credential".to_string(),
+                requested_model_id: "model-a".to_string(),
+                actual_model_id: None,
+                state_format: "openrouter-reasoning-details".to_string(),
+                state_format_version: 1,
+            },
+            reasoning_details,
+        })),
+    }];
+    validate_chat_request(&request).unwrap();
+    let error = validate_continuation_bindings(&request, "https://openrouter.ai/api/v1").unwrap_err();
+    assert!(error.contains("block count"));
+}
+
+#[test]
 fn parses_openai_compatible_text_part_arrays() {
     let parsed = parse_openai_compatible_response(json!({
         "model": "array-model",
@@ -612,6 +680,24 @@ fn separates_openrouter_reasoning_from_final_content() {
     assert_eq!(parsed.reasoning_source.as_deref(), Some("openai_reasoning"));
     assert_eq!(parsed.reasoning_details.as_ref().map(Vec::len), Some(1));
     assert_eq!(parsed.usage.reasoning_tokens, Some(1200));
+}
+
+#[test]
+fn preserves_non_stream_openrouter_reasoning_details_presence_for_empty_and_nonempty_arrays() {
+    let explicit_empty = parse_openai_compatible_response(json!({
+        "choices": [{ "message": { "reasoning_details": [], "content": "Final answer" }, "finish_reason": "stop" }]
+    }), None).unwrap();
+    assert_eq!(explicit_empty.reasoning_details, Some(vec![]));
+
+    let missing = parse_openai_compatible_response(json!({
+        "choices": [{ "message": { "content": "Final answer" }, "finish_reason": "stop" }]
+    }), None).unwrap();
+    assert!(missing.reasoning_details.is_none());
+
+    let invalid = parse_openai_compatible_response(json!({
+        "choices": [{ "message": { "reasoning_details": null, "content": "Final answer" }, "finish_reason": "stop" }]
+    }), None).unwrap();
+    assert!(invalid.reasoning_details.is_none());
 }
 
 #[test]
@@ -981,6 +1067,219 @@ fn stream_reasoning_detail(id: &str, text: &str, index: u64) -> Value {
     })
 }
 
+fn openrouter_stream_canonicalization_fixture() -> Value {
+    serde_json::from_str(include_str!("../../../src/providers/continuation-fixtures/openrouter-stream-canonicalization.json"))
+        .expect("shared OpenRouter stream fixture must be valid JSON")
+}
+
+fn finish_accumulator(mut accumulator: OpenRouterStreamAccumulator) -> super::streaming::StreamingChatResult {
+    accumulator
+        .process_data_with_events(
+            &json!({"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}).to_string(),
+            "secret",
+            None,
+        )
+        .unwrap();
+    accumulator.process_data_with_events("[DONE]", "secret", None).unwrap();
+    accumulator.finish(None).unwrap()
+}
+
+#[test]
+fn stream_accumulator_canonicalizes_confirmed_summary_fragmentation_and_preserves_opaque_blocks() {
+    let fixture = openrouter_stream_canonicalization_fixture();
+    let deltas = fixture.get("summaryDeltas").and_then(Value::as_array).unwrap();
+    let expected = fixture.get("summaryExpected").and_then(Value::as_array).unwrap();
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    for detail in deltas {
+        accumulator.process_data_with_events(&json!({
+            "choices": [{"delta": {"reasoning_details": [detail]}, "finish_reason": null}]
+        }).to_string(), "secret", None).unwrap();
+    }
+    let result = finish_accumulator(accumulator);
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details"), Some(&Value::Array(expected.clone())));
+    assert_eq!(result.continuation_diagnostics.received_reasoning_detail_items, 4);
+    assert_eq!(result.continuation_diagnostics.logical_reasoning_blocks, 2);
+    assert!(result.continuation_diagnostics.reasoning_details_present);
+}
+
+#[test]
+fn stream_accumulator_merges_contiguous_text_and_late_signature_but_respects_distinct_ids() {
+    let fixture = openrouter_stream_canonicalization_fixture();
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    for detail in fixture.get("textDeltas").and_then(Value::as_array).unwrap() {
+        accumulator.process_data_with_events(&json!({
+            "choices": [{"delta": {"reasoning_details": [detail]}, "finish_reason": null}]
+        }).to_string(), "secret", None).unwrap();
+    }
+    let result = finish_accumulator(accumulator);
+    assert_eq!(
+        result.payload.pointer("/choices/0/message/reasoning_details"),
+        fixture.get("textExpected")
+    );
+
+    let mut distinct = OpenRouterStreamAccumulator::default();
+    for detail in fixture.get("distinctSameType").and_then(Value::as_array).unwrap() {
+        distinct.process_data_with_events(&json!({
+            "choices": [{"delta": {"reasoning_details": [detail]}, "finish_reason": null}]
+        }).to_string(), "secret", None).unwrap();
+    }
+    let distinct_result = finish_accumulator(distinct);
+    assert_eq!(
+        distinct_result.payload.pointer("/choices/0/message/reasoning_details").and_then(Value::as_array).map(Vec::len),
+        Some(2)
+    );
+
+    let mut signature_only = OpenRouterStreamAccumulator::default();
+    signature_only.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type": "reasoning.text", "text": "thinking", "signature": null,
+            "id": "rt_signature", "format": "anthropic-claude-v1", "index": 0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    signature_only.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type": "reasoning.text", "signature": "late-signature",
+            "id": "rt_signature", "format": "anthropic-claude-v1", "index": 0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    let signature_result = finish_accumulator(signature_only);
+    assert_eq!(
+        signature_result.payload.pointer("/choices/0/message/reasoning_details/0"),
+        Some(&json!({
+            "type": "reasoning.text", "text": "thinking", "signature": "late-signature",
+            "id": "rt_signature", "format": "anthropic-claude-v1", "index": 0
+        }))
+    );
+
+    let mut ambiguous_signature = OpenRouterStreamAccumulator::default();
+    ambiguous_signature.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type": "reasoning.text", "text": "thinking", "signature": null,
+            "id": "rt_a", "format": "anthropic-claude-v1", "index": 0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    ambiguous_signature.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type": "reasoning.text", "signature": "wrong-block",
+            "id": "rt_b", "format": "anthropic-claude-v1", "index": 0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    let ambiguous_result = finish_accumulator(ambiguous_signature);
+    assert_eq!(
+        ambiguous_result.payload.pointer("/choices/0/message/reasoning_details").and_then(Value::as_array).map(Vec::len),
+        Some(2)
+    );
+
+    let mut repeated = OpenRouterStreamAccumulator::default();
+    for _ in 0..2 {
+        repeated.process_data_with_events(&json!({
+            "choices": [{"delta": {"reasoning_details": [{
+                "type": "reasoning.summary", "summary": "same", "id": null,
+                "format": "openai-responses-v1", "index": 0
+            }]}}]
+        }).to_string(), "secret", None).unwrap();
+    }
+    let repeated_result = finish_accumulator(repeated);
+    assert_eq!(
+        repeated_result.payload.pointer("/choices/0/message/reasoning_details/0/summary"),
+        Some(&json!("samesame"))
+    );
+}
+
+#[test]
+fn stream_accumulator_preserves_missing_empty_and_nonempty_reasoning_details_semantics() {
+    let empty_only = {
+        let mut accumulator = OpenRouterStreamAccumulator::default();
+        accumulator.process_data_with_events(&json!({
+            "choices": [{"delta": {"reasoning_details": []}, "finish_reason": null}]
+        }).to_string(), "secret", None).unwrap();
+        finish_accumulator(accumulator)
+    };
+    assert_eq!(empty_only.payload.pointer("/choices/0/message/reasoning_details"), Some(&json!([])));
+    assert!(empty_only.continuation_diagnostics.reasoning_details_present);
+
+    let missing = finish_accumulator(OpenRouterStreamAccumulator::default());
+    assert!(missing.payload.pointer("/choices/0/message/reasoning_details").is_none());
+    assert!(!missing.continuation_diagnostics.reasoning_details_present);
+
+    let detail = stream_reasoning_detail("r1", "fragment", 0);
+    for order in ["empty_then_block", "block_then_empty", "block_then_missing"] {
+        let mut accumulator = OpenRouterStreamAccumulator::default();
+        if order == "empty_then_block" {
+            accumulator.process_data_with_events(&json!({"choices":[{"delta":{"reasoning_details":[]}}]}).to_string(), "secret", None).unwrap();
+        }
+        accumulator.process_data_with_events(&json!({"choices":[{"delta":{"reasoning_details":[detail.clone()]}}]}).to_string(), "secret", None).unwrap();
+        if order == "block_then_empty" {
+            accumulator.process_data_with_events(&json!({"choices":[{"delta":{"reasoning_details":[]}}]}).to_string(), "secret", None).unwrap();
+        } else if order == "block_then_missing" {
+            accumulator.process_data_with_events(&json!({"choices":[{"delta":{"content":""}}]}).to_string(), "secret", None).unwrap();
+        }
+        let result = finish_accumulator(accumulator);
+        assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details/0"), Some(&detail), "{order}");
+    }
+}
+
+#[test]
+fn stream_accumulator_rejects_invalid_reasoning_details_field_type_without_marking_it_replayable() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [stream_reasoning_detail("r1", "ok", 0)]}}]
+    }).to_string(), "secret", None).unwrap();
+    let error = accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": {"unexpected": true}}}]
+    }).to_string(), "secret", None).unwrap_err();
+    assert_eq!(error.code.as_ref(), "invalid_provider_json");
+    assert_eq!(error.semantic_output_started, Some(true));
+}
+
+#[test]
+fn stream_accumulator_collapses_many_confirmed_deltas_before_block_limit_validation() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    for index in 0..100 {
+        accumulator.process_data_with_events(&json!({
+            "choices": [{"delta": {"reasoning_details": [{
+                "type": "reasoning.summary",
+                "summary": format!("s{index}"),
+                "id": null,
+                "format": "openai-responses-v1",
+                "index": 0
+            }]}}]
+        }).to_string(), "secret", None).unwrap();
+    }
+    accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type": "reasoning.encrypted",
+            "data": "RklYVFVSRQ==",
+            "id": "opaque",
+            "format": "openai-responses-v1",
+            "index": 0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    let result = finish_accumulator(accumulator);
+    assert_eq!(result.continuation_diagnostics.received_reasoning_detail_items, 101);
+    assert_eq!(result.continuation_diagnostics.logical_reasoning_blocks, 2);
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details/0/summary").and_then(Value::as_str).map(str::len), Some(290));
+}
+
+#[test]
+fn stream_accumulator_does_not_merge_independent_opaque_blocks_even_when_stream_index_repeats() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    for index in 0..65 {
+        accumulator.process_data_with_events(&json!({
+            "choices": [{"delta": {"reasoning_details": [{
+                "type": "reasoning.encrypted",
+                "data": format!("opaque-{index}"),
+                "id": format!("e{index}"),
+                "format": "openai-responses-v1",
+                "index": 0
+            }]}}]
+        }).to_string(), "secret", None).unwrap();
+    }
+    let result = finish_accumulator(accumulator);
+    assert_eq!(result.continuation_diagnostics.logical_reasoning_blocks, 65);
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details").and_then(Value::as_array).map(Vec::len), Some(65));
+}
+
 #[test]
 fn sse_decoder_handles_chunk_boundaries_multiline_events_and_split_utf8() {
     let mut decoder = SseDecoder::default();
@@ -994,6 +1293,98 @@ fn sse_decoder_handles_chunk_boundaries_multiline_events_and_split_utf8() {
     assert!(matches!(&frames[0], SseFrame::Data(value) if value.contains("Zażółć")));
     assert_eq!(frames[1], SseFrame::Data("first\nsecond".to_string()));
     assert_eq!(frames[2], SseFrame::Comment);
+}
+
+fn canonical_reasoning_from_sse_chunks(wire: &[u8], chunk_lengths: &[usize]) -> (Value, u64) {
+    let mut decoder = SseDecoder::default();
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    let mut offset = 0usize;
+    for requested in chunk_lengths {
+        if offset >= wire.len() { break; }
+        let end = offset.saturating_add(*requested).min(wire.len());
+        for frame in decoder.push(&wire[offset..end]).unwrap() {
+            if let SseFrame::Data(data) = frame {
+                accumulator.process_data_with_events(&data, "secret", None).unwrap();
+            }
+        }
+        offset = end;
+    }
+    if offset < wire.len() {
+        for frame in decoder.push(&wire[offset..]).unwrap() {
+            if let SseFrame::Data(data) = frame {
+                accumulator.process_data_with_events(&data, "secret", None).unwrap();
+            }
+        }
+    }
+    for frame in decoder.finish().unwrap() {
+        if let SseFrame::Data(data) = frame {
+            accumulator.process_data_with_events(&data, "secret", None).unwrap();
+        }
+    }
+    let result = accumulator.finish(None).unwrap();
+    (
+        result.payload.pointer("/choices/0/message/reasoning_details").cloned().unwrap_or(Value::Null),
+        result.continuation_diagnostics.raw_sse_events,
+    )
+}
+
+#[test]
+fn canonicalization_is_independent_of_network_chunking_json_boundaries_and_split_utf8() {
+    let fixture = openrouter_stream_canonicalization_fixture();
+    let deltas = fixture.get("summaryDeltas").and_then(Value::as_array).unwrap();
+    let mut events = Vec::new();
+    for (index, detail) in deltas.iter().enumerate() {
+        let content = if index == 0 { "Zażółć" } else { "" };
+        events.push(format!(
+            "data: {}\n\n",
+            json!({"choices":[{"delta":{"content":content,"reasoning_details":[detail]},"finish_reason":null}]})
+        ));
+    }
+    events.push(format!(
+        "data: {}\n\n",
+        json!({"choices":[{"delta":{"content":""},"finish_reason":"stop"}]})
+    ));
+    events.push(format!("data: {}\n\n", json!({"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}})));
+    events.push("data: [DONE]\n\n".to_string());
+    let wire = events.concat().into_bytes();
+    let utf8_start = wire.windows("ż".len()).position(|window| window == "ż".as_bytes()).unwrap();
+    let split_inside_utf8 = utf8_start + 1;
+
+    let whole = canonical_reasoning_from_sse_chunks(&wire, &[wire.len()]);
+    let bytewise = canonical_reasoning_from_sse_chunks(&wire, &vec![1; wire.len()]);
+    let utf8_split = canonical_reasoning_from_sse_chunks(&wire, &[split_inside_utf8, 1, 7, 3, 11]);
+    let json_split = canonical_reasoning_from_sse_chunks(&wire, &[13, 5, 2, 17, 1, 29]);
+
+    assert_eq!(whole.0, Value::Array(fixture.get("summaryExpected").and_then(Value::as_array).unwrap().clone()));
+    assert_eq!(whole, bytewise);
+    assert_eq!(whole, utf8_split);
+    assert_eq!(whole, json_split);
+}
+
+#[test]
+fn partial_failed_stream_state_is_not_inherited_by_a_fresh_accumulator() {
+    let mut interrupted = OpenRouterStreamAccumulator::default();
+    interrupted.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type": "reasoning.summary", "summary": "partial", "id": null,
+            "format": "openai-responses-v1", "index": 0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    let failure = interrupted.finish(None).unwrap_err();
+    assert_eq!(failure.code.as_ref(), "response_body_read");
+    assert_eq!(failure.semantic_output_started, Some(true));
+
+    let mut fresh = OpenRouterStreamAccumulator::default();
+    fresh.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type": "reasoning.summary", "summary": "fresh", "id": null,
+            "format": "openai-responses-v1", "index": 0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    let result = finish_accumulator(fresh);
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details/0/summary"), Some(&json!("fresh")));
+    assert_eq!(result.continuation_diagnostics.received_reasoning_detail_items, 1);
+    assert_eq!(result.continuation_diagnostics.logical_reasoning_blocks, 1);
 }
 
 #[test]

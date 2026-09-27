@@ -151,15 +151,17 @@ export function captureSessionContinuationState(input: {
   const frozenRoute = input.route;
   if (!frozenRoute) return {};
   const route = requireSupportedSessionContinuationRoute(frozenRoute);
-  if (!input.response.reasoningDetails?.length) return {};
   if (route.transport === "openrouter") {
+    if (input.response.reasoningDetails === undefined) return {};
     return captureOpenRouterContinuationState({
       config: input.providerConfig,
       requestedModelId: input.model.modelId,
       normalizedEndpoint: route.normalizedEndpoint,
       reasoningDetails: input.response.reasoningDetails,
+      continuationDiagnostics: input.response.continuationDiagnostics,
     });
   }
+  if (!input.response.reasoningDetails?.length) return {};
   if (route.transport === "google-native") {
     return captureGoogleContinuationState({
       config: input.providerConfig,

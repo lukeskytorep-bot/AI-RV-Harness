@@ -1,4 +1,5 @@
 import {
+  CONTINUATION_LIMITS_V1,
   replayFingerprintsCompatible,
   validateContinuationRequestBudget,
   validateProviderContinuationState,
@@ -6,7 +7,8 @@ import {
   type ProviderContinuationState,
   type ProviderReplayFingerprint,
 } from "./continuationContract";
-import type { ProviderConfig } from "./types";
+import { detailedProviderDiagnosticsEnabled, recordProviderDebug } from "./debug";
+import type { ProviderConfig, ProviderContinuationDiagnostics } from "./types";
 
 export interface OpenRouterContinuationIssue {
   code: ContinuationValidationCode | "incompatible_replay";
@@ -14,9 +16,9 @@ export interface OpenRouterContinuationIssue {
 }
 
 export type OpenRouterContinuationCapture =
-  | { state: Extract<ProviderContinuationState, { transport: "openrouter" }>; issue?: never }
-  | { state?: never; issue: OpenRouterContinuationIssue }
-  | { state?: never; issue?: never };
+  | { state: Extract<ProviderContinuationState, { transport: "openrouter" }>; issue?: never; diagnostics: ProviderContinuationDiagnostics }
+  | { state?: never; issue: OpenRouterContinuationIssue; diagnostics: ProviderContinuationDiagnostics }
+  | { state?: never; issue?: never; diagnostics?: never };
 
 export function buildOpenRouterReplayFingerprint(input: {
   config: ProviderConfig;
@@ -40,24 +42,64 @@ export function captureOpenRouterContinuationState(input: {
   requestedModelId: string;
   normalizedEndpoint: string;
   reasoningDetails?: unknown[];
+  continuationDiagnostics?: ProviderContinuationDiagnostics;
 }): OpenRouterContinuationCapture {
-  if (input.config.provider !== "openrouter" || !input.reasoningDetails?.length) return {};
+  if (input.config.provider !== "openrouter" || input.reasoningDetails === undefined) return {};
   const replayFingerprint = buildOpenRouterReplayFingerprint(input);
   if (!replayFingerprint) return {};
-  const checked = validateProviderContinuationState({
+  const candidate = {
     schemaVersion: 1,
     transport: "openrouter",
     format: "openrouter-reasoning-details",
     replayFingerprint,
     reasoningDetails: input.reasoningDetails,
-  });
+  } as const;
+  const checked = validateProviderContinuationState(candidate);
+  const rawStateBytes = (() => {
+    try {
+      return new TextEncoder().encode(JSON.stringify(candidate)).byteLength;
+    } catch {
+      return undefined;
+    }
+  })();
+  const baseDiagnostics: ProviderContinuationDiagnostics = input.continuationDiagnostics ?? {
+    transport: "openrouter",
+    rawSseEvents: 0,
+    receivedReasoningDetailItems: input.reasoningDetails.length,
+    logicalReasoningBlocks: input.reasoningDetails.length,
+    reasoningDetailsPresent: true,
+  };
+  const diagnostics: ProviderContinuationDiagnostics = {
+    ...baseDiagnostics,
+    transport: "openrouter",
+    logicalReasoningBlocks: input.reasoningDetails.length,
+    reasoningDetailsPresent: true,
+    continuationStateBytes: checked.ok ? checked.sizeBytes : rawStateBytes,
+    blockLimit: CONTINUATION_LIMITS_V1.maxBlocksPerMessage,
+    stateByteLimit: CONTINUATION_LIMITS_V1.maxStateBytes,
+    ...(checked.ok ? {} : { rejectionStage: "capture_validation" as const }),
+  };
+  const recordDiagnostics = (status: "ok" | "error", error?: string) => {
+    if (!detailedProviderDiagnosticsEnabled()) return;
+    recordProviderDebug({
+      provider: "openrouter",
+      modelId: input.requestedModelId,
+      status,
+      continuation: diagnostics,
+      ...(error ? { error } : {}),
+    });
+  };
   if (checked.ok === false) {
-    return { issue: { code: checked.code, message: checked.message } };
+    recordDiagnostics("error", checked.message);
+    return { issue: { code: checked.code, message: checked.message }, diagnostics };
   }
   if (checked.value.transport !== "openrouter") {
-    return { issue: { code: "invalid_payload", message: "validated continuation state changed transport unexpectedly" } };
+    const issue = { code: "invalid_payload" as const, message: "validated continuation state changed transport unexpectedly" };
+    recordDiagnostics("error", issue.message);
+    return { issue, diagnostics: { ...diagnostics, rejectionStage: "capture_validation" } };
   }
-  return { state: checked.value };
+  recordDiagnostics("ok");
+  return { state: checked.value, diagnostics };
 }
 
 export function validateOpenRouterReplayForRequest(input: {

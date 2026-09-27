@@ -32,6 +32,12 @@ type NativeChatResponse = {
   };
   provider_request_id?: string | null;
   actual_provider?: string | null;
+  continuation_diagnostics?: {
+    raw_sse_events: number;
+    received_reasoning_detail_items: number;
+    logical_reasoning_blocks: number;
+    reasoning_details_present: boolean;
+  } | null;
   debug_payload?: {
     endpoint: string;
     request: unknown;
@@ -178,6 +184,13 @@ export async function providerChatAttempt(input: {
       characterCount: response.reasoning_content.length,
       detailCount: response.reasoning_details?.length ?? 0,
     } : undefined,
+    continuation: response.continuation_diagnostics ? {
+      transport: "openrouter",
+      rawSseEvents: response.continuation_diagnostics.raw_sse_events,
+      receivedReasoningDetailItems: response.continuation_diagnostics.received_reasoning_detail_items,
+      logicalReasoningBlocks: response.continuation_diagnostics.logical_reasoning_blocks,
+      reasoningDetailsPresent: response.continuation_diagnostics.reasoning_details_present,
+    } : undefined,
     ...(input.transportEnvelope ? { transport: structuredClone(input.transportEnvelope) } : {}),
   });
   return {
@@ -196,6 +209,13 @@ export async function providerChatAttempt(input: {
     },
     providerRequestId: response.provider_request_id ?? undefined,
     actualProvider: response.actual_provider ?? undefined,
+    continuationDiagnostics: response.continuation_diagnostics ? {
+      transport: "openrouter",
+      rawSseEvents: response.continuation_diagnostics.raw_sse_events,
+      receivedReasoningDetailItems: response.continuation_diagnostics.received_reasoning_detail_items,
+      logicalReasoningBlocks: response.continuation_diagnostics.logical_reasoning_blocks,
+      reasoningDetailsPresent: response.continuation_diagnostics.reasoning_details_present,
+    } : undefined,
   };
 }
 

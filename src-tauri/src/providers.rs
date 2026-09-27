@@ -21,7 +21,7 @@ use endpoint_capabilities::discover_openrouter_model_endpoints;
 use errors::provider_error_metadata;
 use request_builders::{build_chat_request, enable_openrouter_streaming};
 use response_parsers::parse_chat_response;
-use streaming::{send_openrouter_streaming_chat_request, ProviderStreamEvent};
+use streaming::{send_openrouter_streaming_chat_request, ProviderContinuationStreamDiagnostics, ProviderStreamEvent};
 use transport::{cancel_request, client, json_response, send_chat_request};
 use validation::validate_chat_request;
 
@@ -264,6 +264,7 @@ pub struct ProviderChatResponse {
     usage: ProviderUsage,
     provider_request_id: Option<String>,
     actual_provider: Option<String>,
+    continuation_diagnostics: Option<ProviderContinuationStreamDiagnostics>,
     debug_payload: Option<ProviderDebugPayload>,
 }
 
@@ -470,7 +471,7 @@ pub async fn provider_chat(
             builder
         }
     };
-    let (payload, request_id, semantic_output_started) = if use_streaming {
+    let (payload, request_id, semantic_output_started, continuation_diagnostics) = if use_streaming {
         let streamed = send_openrouter_streaming_chat_request(
             builder,
             request.request_id.as_deref(),
@@ -479,7 +480,12 @@ pub async fn provider_chat(
             emit_stream_events.then_some(&on_stream),
         )
         .await?;
-        (streamed.payload, streamed.request_id, streamed.semantic_output_started)
+        (
+            streamed.payload,
+            streamed.request_id,
+            streamed.semantic_output_started,
+            Some(streamed.continuation_diagnostics),
+        )
     } else {
         let (payload, request_id) = send_chat_request(
             builder.timeout(Duration::from_millis(timeout_policy.non_streaming_timeout_ms)),
@@ -487,7 +493,7 @@ pub async fn provider_chat(
             &secret,
         )
         .await?;
-        (payload, request_id, false)
+        (payload, request_id, false, None)
     };
     let debug_response = request.detailed_diagnostics.then(|| {
         let mut value = payload.clone();
@@ -512,6 +518,7 @@ pub async fn provider_chat(
         }
         failure
     })?;
+    parsed.continuation_diagnostics = continuation_diagnostics;
     parsed.debug_payload = Some(ProviderDebugPayload {
         endpoint: debug_endpoint,
         request: debug_request,

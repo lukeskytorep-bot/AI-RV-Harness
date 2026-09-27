@@ -58,6 +58,7 @@ pub(super) fn parse_openai_compatible_response(payload: Value, request_id: Optio
         },
         provider_request_id: request_id,
         actual_provider,
+        continuation_diagnostics: None,
         debug_payload: None,
     })
 }
@@ -138,6 +139,7 @@ pub(super) fn parse_google_response(payload: Value, request_id: Option<String>) 
         },
         provider_request_id: request_id,
         actual_provider: None,
+        continuation_diagnostics: None,
         debug_payload: None,
     })
 }
@@ -225,6 +227,7 @@ pub(super) fn parse_anthropic_response(payload: Value, request_id: Option<String
         },
         provider_request_id: request_id,
         actual_provider: None,
+        continuation_diagnostics: None,
         debug_payload: None,
     })
 }

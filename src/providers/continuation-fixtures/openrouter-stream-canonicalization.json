@@ -1,0 +1,25 @@
+{
+  "source": "Anonymized deterministic fixture based on OpenRouterTeam/ai-sdk-provider issue #519 and merged PR #520 (2026-07-21), plus synthetic boundary cases for text signatures and distinct block identities.",
+  "summaryDeltas": [
+    { "type": "reasoning.summary", "summary": " reading", "id": null, "index": 0 },
+    { "type": "reasoning.summary", "summary": " it", "id": null, "format": "openai-responses-v1", "index": 0 },
+    { "type": "reasoning.summary", "summary": ".", "id": null, "format": "openai-responses-v1", "index": 0 },
+    { "type": "reasoning.encrypted", "data": "RklYVFVSRV9PUEFRVUU=", "id": "rs_fixture", "format": "openai-responses-v1", "index": 0 }
+  ],
+  "summaryExpected": [
+    { "type": "reasoning.summary", "summary": " reading it.", "id": null, "index": 0, "format": "openai-responses-v1" },
+    { "type": "reasoning.encrypted", "data": "RklYVFVSRV9PUEFRVUU=", "id": "rs_fixture", "format": "openai-responses-v1", "index": 0 }
+  ],
+  "textDeltas": [
+    { "type": "reasoning.text", "text": "first", "signature": null, "id": "rt_fixture", "format": "anthropic-claude-v1", "index": 0 },
+    { "type": "reasoning.text", "text": " second", "signature": null, "id": "rt_fixture", "format": "anthropic-claude-v1", "index": 0 },
+    { "type": "reasoning.text", "text": "", "signature": "sig_fixture", "id": "rt_fixture", "format": "anthropic-claude-v1", "index": 0 }
+  ],
+  "textExpected": [
+    { "type": "reasoning.text", "text": "first second", "signature": "sig_fixture", "id": "rt_fixture", "format": "anthropic-claude-v1", "index": 0 }
+  ],
+  "distinctSameType": [
+    { "type": "reasoning.text", "text": "A", "signature": null, "id": "rt_a", "format": "anthropic-claude-v1", "index": 0 },
+    { "type": "reasoning.text", "text": "B", "signature": null, "id": "rt_b", "format": "anthropic-claude-v1", "index": 0 }
+  ]
+}

@@ -230,7 +230,10 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
     | ReturnType<typeof captureOpenRouterContinuationState>
     | ReturnType<typeof captureGoogleContinuationState>
     | undefined;
-  if (input.mode === "conversation" && response.reasoningDetails?.length && ["openrouter", "google"].includes(input.providerConfig.provider)) {
+  const continuationDetailsPresent = input.providerConfig.provider === "openrouter"
+    ? response.reasoningDetails !== undefined
+    : Boolean(response.reasoningDetails?.length);
+  if (input.mode === "conversation" && continuationDetailsPresent && ["openrouter", "google"].includes(input.providerConfig.provider)) {
     normalizedEndpoint ??= await (input.resolveBindingEndpoint ?? providerBindingEndpoint)(input.providerConfig);
     continuationCapture = input.providerConfig.provider === "openrouter"
       ? captureOpenRouterContinuationState({
@@ -238,6 +241,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
           requestedModelId: input.model.modelId,
           normalizedEndpoint,
           reasoningDetails: response.reasoningDetails,
+          continuationDiagnostics: response.continuationDiagnostics,
         })
       : captureGoogleContinuationState({
           config: input.providerConfig,

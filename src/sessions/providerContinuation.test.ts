@@ -126,6 +126,53 @@ describe("provider continuation session bridge", () => {
     expect(persisted.state.reasoningDetails).toEqual(reasoningDetails);
   });
 
+  it("persists, hydrates and replays an explicit empty OpenRouter reasoning_details array", async () => {
+    let storedState: ProviderContinuationState | undefined;
+    const appendSessionEvent = vi.fn(async () => undefined);
+    const appendSessionEventWithProviderState = vi.fn(async (_sessionId: string, event: SessionEventInput, state: ProviderContinuationState) => {
+      storedState = structuredClone(state);
+      return { ...event, id: "empty-event", sessionId: "session-1", sequenceNumber: 1, createdAt: "now" } as SessionEventRecord;
+    });
+    const route = snapshot().continuationRoute;
+    const persisted = await persistSessionAssistantResponse({
+      repository: { appendSessionEvent, appendSessionEventWithProviderState },
+      sessionId: "session-1",
+      event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: "answer" },
+      response: { content: "answer", reasoningDetails: [], usage: {} },
+      providerConfig: config,
+      model,
+      route,
+    });
+    expect(appendSessionEvent).not.toHaveBeenCalled();
+    expect(appendSessionEventWithProviderState).toHaveBeenCalledTimes(1);
+    expect(persisted.state?.transport).toBe("openrouter");
+    expect(persisted.state && "reasoningDetails" in persisted.state ? persisted.state.reasoningDetails : undefined).toEqual([]);
+    if (!storedState) throw new Error("Expected explicit empty continuation state to be persisted.");
+
+    const event: SessionEventRecord = {
+      id: "empty-event", sessionId: "session-1", sequenceNumber: 1, createdAt: "now",
+      eventType: "VIEWER_RESPONSE", role: "assistant", content: "answer",
+      metadata: { continuationState: { status: "stored", format: "openrouter-reasoning-details", version: 1 } },
+    };
+    const hydrated = await hydrateSessionMessageContinuation({
+      repository: { getSessionEventProviderState: vi.fn(async () => ({
+        ownerId: "empty-event",
+        format: storedState!.format,
+        formatVersion: storedState!.schemaVersion,
+        transport: storedState!.transport,
+        replayFingerprint: storedState!.replayFingerprint,
+        state: structuredClone(storedState!),
+        payloadSha256: "a".repeat(64),
+        payloadSizeBytes: JSON.stringify(storedState).length,
+        createdAt: "now",
+      })) },
+      snapshot: snapshot(), config, model, event,
+      message: { role: "assistant", content: "answer" },
+    });
+    expect(hydrated.continuationState?.transport).toBe("openrouter");
+    expect(hydrated.continuationState && "reasoningDetails" in hydrated.continuationState ? hydrated.continuationState.reasoningDetails : undefined).toEqual([]);
+  });
+
   it("fails closed when a persisted event says state was stored but the exact binding is missing", async () => {
     const event: SessionEventRecord = {
       id: "event-1", sessionId: "session-1", sequenceNumber: 1, createdAt: "now",

@@ -174,6 +174,18 @@ export interface ProviderUsage {
   costUsd?: number;
 }
 
+export interface ProviderContinuationDiagnostics {
+  transport: "openrouter";
+  rawSseEvents: number;
+  receivedReasoningDetailItems: number;
+  logicalReasoningBlocks: number;
+  reasoningDetailsPresent: boolean;
+  continuationStateBytes?: number;
+  blockLimit?: number;
+  stateByteLimit?: number;
+  rejectionStage?: "capture_validation";
+}
+
 export type ProviderStreamEvent =
   | { event: "started"; data: { providerRequestId?: string } }
   | { event: "contentDelta"; data: { content: string } }
@@ -189,6 +201,7 @@ export interface ProviderChatResponse {
   usage: ProviderUsage;
   providerRequestId?: string;
   actualProvider?: string;
+  continuationDiagnostics?: ProviderContinuationDiagnostics;
   execution?: {
     operationId: string;
     logicalRequestId: string;

@@ -172,6 +172,28 @@ describe("chat engine isolation", () => {
     expect(endpoint).toHaveBeenCalled();
   });
 
+  it("preserves explicit empty OpenRouter reasoning_details through Conversation persistence and replay", async () => {
+    const repository = repo([]);
+    const endpoint = async () => "https://openrouter.ai/api/v1";
+    await sendChatTurn({
+      repository, threadId: "empty-continuity", mode: "conversation", language: "en", providerConfig: provider, model, content: "First",
+      resolveBindingEndpoint: endpoint,
+      chat: async () => ({ content: "First answer", reasoningDetails: [], usage: {} }),
+    });
+
+    clearAllConversationContinuationMemoryForTests();
+    let replayed: Parameters<NonNullable<Parameters<typeof sendChatTurn>[0]["chat"]>>[0] | undefined;
+    await sendChatTurn({
+      repository, threadId: "empty-continuity", mode: "conversation", language: "en", providerConfig: provider, model, content: "Second",
+      resolveBindingEndpoint: endpoint,
+      chat: async (request) => { replayed = request; return { content: "Second answer", usage: {} }; },
+    });
+
+    const priorAssistant = replayed?.messages.find((message) => message.id === "m1");
+    expect(priorAssistant?.continuationState?.transport).toBe("openrouter");
+    expect(priorAssistant?.continuationState && "reasoningDetails" in priorAssistant.continuationState ? priorAssistant.continuationState.reasoningDetails : undefined).toEqual([]);
+  });
+
   it("rehydrates persisted OpenRouter continuation state after in-memory continuity is cleared", async () => {
     const repository = repo([]);
     const endpoint = async () => "https://openrouter.ai/api/v1";
