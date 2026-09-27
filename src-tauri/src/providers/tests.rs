@@ -759,10 +759,16 @@ fn openrouter_compatibility_v2_fixture_matches_native_validation_and_non_stream_
         let reason = entry.get("reason").and_then(Value::as_str).unwrap();
         let error = validate_openrouter_reasoning_detail(detail, 0).unwrap_err();
         assert!(error.contains(reason), "{name}: {error}");
-        let parser_error = parse_chat_response(ProviderKind::Openrouter, json!({
-            "choices": [{ "message": { "reasoning_details": [detail.clone()], "content": "Final answer" }, "finish_reason": "stop" }]
-        }), None).unwrap_err();
-        assert!(parser_error.contains(reason), "{name}: {parser_error}");
+        // Response parsing must preserve a completed answer and its opaque continuation candidate.
+        // Replay readiness is decided later by the capture/replay contract so an invalid
+        // continuation cannot erase an already completed/provider-billed response.
+        let parsed = parse_chat_response(ProviderKind::Openrouter, json!({
+            "choices": [{ "message": { "reasoning_details": [detail.clone()], "content": "Final answer" }, "finish_reason": "stop" }],
+            "usage": { "prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6 }
+        }), None).unwrap_or_else(|error| panic!("{name}: parser lost completed response: {error}"));
+        assert_eq!(parsed.content, "Final answer", "{name}");
+        assert_eq!(parsed.reasoning_details, Some(vec![detail.clone()]), "{name}");
+        assert_eq!(parsed.usage.total_tokens, Some(6), "{name}");
     }
 }
 
@@ -1450,6 +1456,63 @@ fn stream_accumulator_merges_signature_only_delta_with_null_text_into_compatible
     assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details").and_then(Value::as_array).map(Vec::len), Some(1));
 }
 
+
+#[test]
+fn stream_accumulator_preserves_late_signature_after_visible_content_without_duplicate_ui_content() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    let reasoning_events = accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type":"reasoning.text","text":"thinking","id":"rt-late-after-content","format":"anthropic-claude-v1","index":0
+        }]}, "finish_reason": null}]
+    }).to_string(), "secret", None).unwrap();
+    assert!(reasoning_events.is_empty());
+
+    let content_events = accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"content":"Visible answer"}, "finish_reason": null}]
+    }).to_string(), "secret", None).unwrap();
+    assert_eq!(content_events.len(), 1);
+    assert!(matches!(&content_events[0], ProviderStreamEvent::ContentDelta { content } if content == "Visible answer"));
+
+    let signature_events = accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type":"reasoning.text","text":null,"signature":"late-signature-after-content",
+            "id":"rt-late-after-content","format":"anthropic-claude-v1","index":0
+        }]}, "finish_reason": null}]
+    }).to_string(), "secret", None).unwrap();
+    assert!(signature_events.is_empty(), "late continuation metadata must not duplicate visible UI content");
+
+    accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {}, "finish_reason":"stop"}]
+    }).to_string(), "secret", None).unwrap();
+    accumulator.process_data_with_events("[DONE]", "secret", None).unwrap();
+    let result = accumulator.finish(None).unwrap();
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details/0/text"), Some(&json!("thinking")));
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details/0/signature"), Some(&json!("late-signature-after-content")));
+    assert_eq!(result.payload.pointer("/choices/0/message/content"), Some(&json!("Visible answer")));
+}
+
+#[test]
+fn stream_metadata_only_reasoning_fragment_survives_transport_but_remains_fail_closed_for_replay() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type":"reasoning.text","id":"rt-metadata-only","format":"anthropic-claude-v1","index":0
+        }]}, "finish_reason": null}]
+    }).to_string(), "secret", None).unwrap();
+    accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"content":"Visible answer"}, "finish_reason":"stop"}],
+        "usage": {"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}
+    }).to_string(), "secret", None).unwrap();
+    accumulator.process_data_with_events("[DONE]", "secret", None).unwrap();
+    let streamed = accumulator.finish(None).unwrap();
+    let parsed = parse_chat_response(ProviderKind::Openrouter, streamed.payload, None).unwrap();
+    assert_eq!(parsed.content, "Visible answer");
+    let detail = parsed.reasoning_details.as_ref().and_then(|items| items.first()).unwrap();
+    let replay_error = validate_openrouter_reasoning_detail(detail, 0).unwrap_err();
+    assert!(replay_error.contains("missing_replay_data"));
+    assert_eq!(parsed.usage.total_tokens, Some(4));
+}
+
 #[test]
 fn stream_accumulator_does_not_merge_independent_opaque_blocks_even_when_stream_index_repeats() {
     let mut accumulator = OpenRouterStreamAccumulator::default();
@@ -2010,13 +2073,33 @@ fn openrouter_cross_language_bridge_emit_from_rust_stream() {
         Value::Array(reasoning_details.clone()),
         bridge.get("expectedReasoningDetails").cloned().unwrap()
     );
+    let invalid_payload = bridge.get("invalidProviderResponse").cloned().expect("bridge invalidProviderResponse fixture is required");
+    let invalid = parse_chat_response(ProviderKind::Openrouter, invalid_payload, Some("bridge-invalid-request".to_string()))
+        .expect("completed OpenRouter response must survive invalid continuation metadata");
     let output = json!({
         "content": parsed.content,
         "reasoningDetails": reasoning_details,
         "modelId": bridge.get("modelId").unwrap(),
         "normalizedEndpoint": bridge.get("normalizedEndpoint").unwrap(),
         "providerConfigId": bridge.get("providerConfigId").unwrap(),
-        "credentialId": bridge.get("credentialId").unwrap()
+        "credentialId": bridge.get("credentialId").unwrap(),
+        "invalidResponse": {
+            "content": invalid.content,
+            "reasoningContent": invalid.reasoning_content,
+            "reasoningDetails": invalid.reasoning_details,
+            "reasoningSource": invalid.reasoning_source,
+            "finishReason": invalid.finish_reason,
+            "actualModel": invalid.actual_model,
+            "usage": {
+                "inputTokens": invalid.usage.input_tokens,
+                "outputTokens": invalid.usage.output_tokens,
+                "reasoningTokens": invalid.usage.reasoning_tokens,
+                "totalTokens": invalid.usage.total_tokens,
+                "costUsd": invalid.usage.cost_usd
+            },
+            "providerRequestId": invalid.provider_request_id,
+            "actualProvider": invalid.actual_provider
+        }
     });
     std::fs::write(output_path, serde_json::to_vec_pretty(&output).unwrap()).unwrap();
 }

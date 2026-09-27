@@ -332,6 +332,33 @@
         "id": "rt_bridge",
         "index": 0
       }
-    ]
+    ],
+    "invalidProviderResponse": {
+      "model": "z-ai/glm-5.3-flash-20260826",
+      "provider": "Relace",
+      "choices": [
+        {
+          "message": {
+            "role": "assistant",
+            "content": "Visible answer survives",
+            "reasoning_details": [
+              {
+                "type": "reasoning.text",
+                "text": "synthetic reasoning",
+                "format": "future-format-v9"
+              }
+            ]
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 11,
+        "completion_tokens": 7,
+        "reasoning_tokens": 3,
+        "total_tokens": 18,
+        "cost": 0.001
+      }
+    }
   }
 }
