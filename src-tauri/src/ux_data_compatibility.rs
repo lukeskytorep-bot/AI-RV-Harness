@@ -125,8 +125,8 @@ async fn exact_green_v23_to_v24_preserves_existing_data_and_provenance() {
         .expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 26);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(26));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 27);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(27));
 }
 
 #[tokio::test]
@@ -215,8 +215,8 @@ async fn exact_green_v24_to_v25_adds_provider_state_storage_without_mutating_exi
     assert_eq!(chat_state, 0, "Conversation provider state should cascade with its message");
     assert_eq!(session_state, 0, "Session provider state should cascade with its event");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 26);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(26));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 27);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(27));
 }
 
 
@@ -236,5 +236,120 @@ async fn exact_green_v25_to_v26_types_existing_workspaces_without_moving_history
     let integrity = sqlx::query_scalar::<_, String>("PRAGMA integrity_check").fetch_one(&mut connection).await.expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 26);
+    assert_eq!(CURRENT_MIGRATION_VERSION, 27);
+}
+
+
+#[tokio::test]
+async fn exact_green_v26_to_v27_repairs_factory_classification_without_unlocking_history() {
+    let mut connection = SqliteConnection::connect("sqlite::memory:")
+        .await
+        .expect("in-memory SQLite should open");
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut connection)
+        .await
+        .expect("foreign keys should be enabled");
+
+    for migration in &MIGRATION_SPECS[..26] {
+        apply_sql(&mut connection, migration.sql).await;
+    }
+
+    sqlx::query("INSERT INTO profiles(id, display_name, created_at, updated_at) VALUES ('profile-v26', 'Profile v26', '2026-09-26T00:00:00Z', '2026-09-26T00:00:00Z')")
+        .execute(&mut connection)
+        .await
+        .expect("profile fixture should insert");
+    sqlx::query("INSERT INTO workspaces(id, profile_id, name, created_at, updated_at, last_opened_at, kind) VALUES ('workspace-v26', 'profile-v26', 'RV Workspace', '2026-09-26T00:00:00Z', '2026-09-26T00:00:00Z', '2026-09-26T00:00:00Z', 'rv')")
+        .execute(&mut connection)
+        .await
+        .expect("workspace fixture should insert");
+
+    let original_metadata = r#"{"origin":"bundled_factory_training_pack","packId":"factory-training-targets-84","category":"mountain_structure_contrast","categoryOrder":6,"subtype":"structure","sourceLegacyId":"target_0032.md"}"#;
+    let original_title = "Historical factory target";
+    let original_reveal = "Historical reveal must remain byte-identical";
+    let original_hash = "historical-content-hash";
+    sqlx::query(
+        "INSERT INTO targets(id, collection, title, reveal_text, tags_json, source_metadata_json, content_hash, created_at, updated_at) VALUES (?, 'training', ?, ?, '[\"factory-training\",\"mountain_structure_contrast\",\"structure\"]', ?, ?, '2026-09-26T00:00:00Z', '2026-09-26T00:00:00Z')",
+    )
+    .bind("factory_training_01_06")
+    .bind(original_title)
+    .bind(original_reveal)
+    .bind(original_metadata)
+    .bind(original_hash)
+    .execute(&mut connection)
+    .await
+    .expect("historical factory target should insert");
+
+    sqlx::query("INSERT INTO target_usage(id, target_id, profile_id, session_id, used_at) VALUES ('usage-v26', 'factory_training_01_06', 'profile-v26', 'session-v26', '2026-09-26T00:00:01Z')")
+        .execute(&mut connection)
+        .await
+        .expect("target usage fixture should insert");
+    sqlx::query("INSERT INTO rv_sessions(id, workspace_id, profile_id, session_code, state, run_type, target_id, target_id_snapshot, created_at, updated_at) VALUES ('session-v26', 'workspace-v26', 'profile-v26', 'V26-001', 'Completed', 'automatic', 'factory_training_01_06', 'factory_training_01_06', '2026-09-26T00:00:01Z', '2026-09-26T00:00:01Z')")
+        .execute(&mut connection)
+        .await
+        .expect("historical RV Session fixture should insert");
+
+    let usage_before = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM target_usage WHERE target_id = 'factory_training_01_06'")
+        .fetch_one(&mut connection)
+        .await
+        .expect("usage count should query");
+    let session_before = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM rv_sessions WHERE target_id = 'factory_training_01_06'")
+        .fetch_one(&mut connection)
+        .await
+        .expect("session count should query");
+
+    apply_sql(&mut connection, MIGRATION_SPECS[26].sql).await;
+
+    let row = sqlx::query("SELECT id, title, reveal_text, source_metadata_json, content_hash, created_at, updated_at FROM targets WHERE id = 'factory_training_01_06'")
+        .fetch_one(&mut connection)
+        .await
+        .expect("upgraded factory target should remain readable");
+    assert_eq!(row.get::<String, _>("id"), "factory_training_01_06");
+    assert_eq!(row.get::<String, _>("title"), original_title);
+    assert_eq!(row.get::<String, _>("reveal_text"), original_reveal);
+    assert_eq!(row.get::<String, _>("content_hash"), original_hash);
+    assert_eq!(row.get::<String, _>("created_at"), "2026-09-26T00:00:00Z");
+    assert_eq!(row.get::<String, _>("updated_at"), "2026-09-26T00:00:00Z");
+
+    let metadata: Value = serde_json::from_str(&row.get::<String, _>("source_metadata_json"))
+        .expect("upgraded metadata should remain valid JSON");
+    assert_eq!(metadata["origin"], "bundled_factory_training_pack");
+    assert_eq!(metadata["packId"], "factory-training-targets-84");
+    assert_eq!(metadata["sourceLegacyId"], "target_0032.md");
+    assert_eq!(metadata["category"], "structures");
+    assert_eq!(metadata["categoryOrder"], 2);
+    assert_eq!(metadata["subtype"], "structure");
+
+    let usage_after = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM target_usage WHERE target_id = 'factory_training_01_06'")
+        .fetch_one(&mut connection)
+        .await
+        .expect("usage count should remain queryable");
+    let session_after = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM rv_sessions WHERE target_id = 'factory_training_01_06'")
+        .fetch_one(&mut connection)
+        .await
+        .expect("session count should remain queryable");
+    assert_eq!(usage_after, usage_before);
+    assert_eq!(session_after, session_before);
+
+    let error = sqlx::query("UPDATE targets SET source_metadata_json = ? WHERE id = 'factory_training_01_06'")
+        .bind(r#"{"category":"changed-after-upgrade"}"#)
+        .execute(&mut connection)
+        .await
+        .expect_err("migration 027 must restore immutable target UPDATE guards");
+    let database_error = error.as_database_error().expect("SQLite should return a database error");
+    assert_eq!(database_error.code().as_deref(), Some("1811"));
+    assert!(
+        database_error.message().contains("used targets are locked")
+            || database_error.message().contains("training targets are read-only"),
+        "unexpected trigger message: {}",
+        database_error.message(),
+    );
+
+    let integrity = sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
+        .fetch_one(&mut connection)
+        .await
+        .expect("integrity_check should execute");
+    assert_eq!(integrity, "ok");
+    assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
+    assert_eq!(CURRENT_MIGRATION_VERSION, 27);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(27));
 }
