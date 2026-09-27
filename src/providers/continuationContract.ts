@@ -36,8 +36,8 @@ export interface ProviderReplayFingerprint {
 }
 
 interface OpenRouterReasoningCommon {
-  id: string | null;
-  format: OpenRouterReasoningFormat;
+  id?: string | null;
+  format?: OpenRouterReasoningFormat | null;
   index?: number;
 }
 
@@ -53,7 +53,7 @@ export interface OpenRouterReasoningEncrypted extends OpenRouterReasoningCommon 
 
 export interface OpenRouterReasoningText extends OpenRouterReasoningCommon {
   type: "reasoning.text";
-  text: string;
+  text?: string | null;
   signature?: string | null;
 }
 
@@ -166,7 +166,6 @@ const nonEmptyString = (value: unknown, max: number = CONTINUATION_LIMITS_V1.max
   typeof value === "string" && value.length > 0 && value.length <= max;
 const optionalString = (value: unknown, max: number = CONTINUATION_LIMITS_V1.maxIdentifierChars): value is string | undefined =>
   value === undefined || nonEmptyString(value, max);
-const nullableId = (value: unknown): value is string | null => value === null || nonEmptyString(value);
 const optionalIndex = (value: unknown): value is number | undefined => value === undefined || (Number.isInteger(value) && (value as number) >= 0);
 const canonicalBase64 = (value: string): boolean => {
   if (value.length === 0 || value.length % 4 !== 0) return false;
@@ -283,32 +282,80 @@ function validateBlockCountAndSize(blocks: unknown[]): ContinuationValidationRes
   return null;
 }
 
-function parseOpenRouterDetail(value: unknown): OpenRouterReasoningDetail | null {
-  if (!isObject(value) || typeof value.type !== "string") return null;
-  const commonOk = nullableId(value.id)
-    && typeof value.format === "string"
-    && OR_FORMATS.has(value.format as OpenRouterReasoningFormat)
-    && optionalIndex(value.index);
-  if (!commonOk) return null;
-  const common = {
-    id: value.id as string | null,
-    format: value.format as OpenRouterReasoningFormat,
-    ...(value.index === undefined ? {} : { index: value.index as number }),
+type OpenRouterDetailParseResult =
+  | { ok: true; value: OpenRouterReasoningDetail }
+  | { ok: false; message: string };
+
+function openRouterDetailError(path: string, field: string | undefined, reason: string): OpenRouterDetailParseResult {
+  return { ok: false, message: `${path}${field ? `.${field}` : ""} / ${reason}` };
+}
+
+function parseOpenRouterDetail(value: unknown, index: number): OpenRouterDetailParseResult {
+  const path = `reasoningDetails[${index}]`;
+  if (!isObject(value)) return openRouterDetailError(path, undefined, "unexpected_type");
+  if (typeof value.type !== "string") return openRouterDetailError(path, "type", value.type === undefined ? "missing_required" : "unexpected_type");
+
+  const kind = value.type;
+  const allowed = kind === "reasoning.summary"
+    ? ["type", "summary", "id", "format", "index"]
+    : kind === "reasoning.encrypted"
+      ? ["type", "data", "id", "format", "index"]
+      : kind === "reasoning.text"
+        ? ["type", "text", "signature", "id", "format", "index"]
+        : null;
+  if (!allowed) return openRouterDetailError(path, "type", "unexpected_value");
+  if (!exactKeys(value, allowed)) return openRouterDetailError(path, undefined, "unexpected_field");
+
+  const common: OpenRouterReasoningCommon = {};
+  if (Object.prototype.hasOwnProperty.call(value, "id")) {
+    if (value.id === null) common.id = null;
+    else if (typeof value.id === "string") {
+      if (value.id.length > CONTINUATION_LIMITS_V1.maxIdentifierChars) return openRouterDetailError(path, "id", "too_long");
+      common.id = value.id;
+    } else if (value.id !== undefined) return openRouterDetailError(path, "id", "unexpected_type");
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "format")) {
+    if (value.format === null) common.format = null;
+    else if (typeof value.format === "string") {
+      if (!OR_FORMATS.has(value.format as OpenRouterReasoningFormat)) return openRouterDetailError(path, "format", "unexpected_value");
+      common.format = value.format as OpenRouterReasoningFormat;
+    } else if (value.format !== undefined) return openRouterDetailError(path, "format", "unexpected_type");
+  }
+  if (!optionalIndex(value.index)) return openRouterDetailError(path, "index", "unexpected_type");
+  if (value.index !== undefined) common.index = value.index as number;
+
+  if (kind === "reasoning.summary") {
+    if (typeof value.summary !== "string") return openRouterDetailError(path, "summary", value.summary === undefined ? "missing_required" : "unexpected_type");
+    return { ok: true, value: { type: "reasoning.summary", summary: value.summary, ...common } };
+  }
+  if (kind === "reasoning.encrypted") {
+    if (typeof value.data !== "string") return openRouterDetailError(path, "data", value.data === undefined ? "missing_required" : "unexpected_type");
+    return { ok: true, value: { type: "reasoning.encrypted", data: value.data, ...common } };
+  }
+
+  let text: string | null | undefined;
+  if (Object.prototype.hasOwnProperty.call(value, "text")) {
+    if (value.text === null) text = null;
+    else if (typeof value.text === "string") text = value.text;
+    else if (value.text !== undefined) return openRouterDetailError(path, "text", "unexpected_type");
+  }
+  let signature: string | null | undefined;
+  if (Object.prototype.hasOwnProperty.call(value, "signature")) {
+    if (value.signature === null) signature = null;
+    else if (typeof value.signature === "string") signature = value.signature;
+    else if (value.signature !== undefined) return openRouterDetailError(path, "signature", "unexpected_type");
+  }
+  const hasReplayData = typeof text === "string" || (typeof signature === "string" && signature.length > 0);
+  if (!hasReplayData) return openRouterDetailError(path, undefined, "missing_replay_data");
+  return {
+    ok: true,
+    value: {
+      type: "reasoning.text",
+      ...(text === undefined ? {} : { text }),
+      ...(signature === undefined ? {} : { signature }),
+      ...common,
+    },
   };
-  if (value.type === "reasoning.summary") {
-    if (!exactKeys(value, ["type", "summary", "id", "format", "index"]) || typeof value.summary !== "string") return null;
-    return { type: "reasoning.summary", summary: value.summary, ...common };
-  }
-  if (value.type === "reasoning.encrypted") {
-    if (!exactKeys(value, ["type", "data", "id", "format", "index"]) || !nonEmptyString(value.data, CONTINUATION_LIMITS_V1.maxBlockBytes)) return null;
-    return { type: "reasoning.encrypted", data: value.data, ...common };
-  }
-  if (value.type === "reasoning.text") {
-    if (!exactKeys(value, ["type", "text", "signature", "id", "format", "index"]) || typeof value.text !== "string") return null;
-    if (value.signature !== undefined && value.signature !== null && !nonEmptyString(value.signature, CONTINUATION_LIMITS_V1.maxBlockBytes)) return null;
-    return { type: "reasoning.text", text: value.text, ...(value.signature === undefined ? {} : { signature: value.signature as string | null }), ...common };
-  }
-  return null;
 }
 
 function parseGooglePart(value: unknown): GoogleThoughtPart | null {
@@ -356,9 +403,14 @@ function validateProviderContinuationStateInternal(input: unknown): Continuation
     if (!fingerprint) return { ok: false, code: "invalid_fingerprint", message: "invalid replay fingerprint" };
     if (!Array.isArray(input.reasoningDetails)) return { ok: false, code: "invalid_payload", message: "reasoningDetails must be an array" };
     const limitError = validateBlockCountAndSize(input.reasoningDetails); if (limitError) return limitError;
-    const reasoningDetails = input.reasoningDetails.map(parseOpenRouterDetail);
-    if (reasoningDetails.some((item) => item === null)) return { ok: false, code: "invalid_payload", message: "invalid OpenRouter reasoning detail" };
-    value = { schemaVersion: 1, transport: "openrouter", format: "openrouter-reasoning-details", replayFingerprint: fingerprint, reasoningDetails: reasoningDetails as OpenRouterReasoningDetail[] };
+    const parsedDetails = input.reasoningDetails.map((detail, index) => parseOpenRouterDetail(detail, index));
+    const invalidDetail = parsedDetails.find((item) => !item.ok);
+    if (invalidDetail && !invalidDetail.ok) return { ok: false, code: "invalid_payload", message: `continuation_validation / ${invalidDetail.message}` };
+    const reasoningDetails = parsedDetails.map((item) => {
+      if (!item.ok) throw new Error("unreachable OpenRouter detail parse state");
+      return item.value;
+    });
+    value = { schemaVersion: 1, transport: "openrouter", format: "openrouter-reasoning-details", replayFingerprint: fingerprint, reasoningDetails };
   } else if (input.transport === "google-native") {
     if (input.format !== "google-thought-parts") return { ok: false, code: "unknown_format", message: "unsupported Google continuation format" };
     if (!exactKeys(input, ["schemaVersion", "transport", "format", "replayFingerprint", "parts"])) return { ok: false, code: "invalid_payload", message: "Google continuation state contains unapproved fields" };

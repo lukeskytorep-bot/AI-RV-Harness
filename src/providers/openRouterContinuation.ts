@@ -20,6 +20,12 @@ export type OpenRouterContinuationCapture =
   | { state?: never; issue: OpenRouterContinuationIssue; diagnostics: ProviderContinuationDiagnostics }
   | { state?: never; issue?: never; diagnostics?: never };
 
+function continuationValidationMessageForStage(message: string, stage: "capture_validation" | "replay_validation"): string {
+  return message.startsWith("continuation_validation / ")
+    ? `${stage} / ${message.slice("continuation_validation / ".length)}`
+    : `${stage} / ${message}`;
+}
+
 export function buildOpenRouterReplayFingerprint(input: {
   config: ProviderConfig;
   requestedModelId: string;
@@ -77,7 +83,10 @@ export function captureOpenRouterContinuationState(input: {
     continuationStateBytes: checked.ok ? checked.sizeBytes : rawStateBytes,
     blockLimit: CONTINUATION_LIMITS_V1.maxBlocksPerMessage,
     stateByteLimit: CONTINUATION_LIMITS_V1.maxStateBytes,
-    ...(checked.ok ? {} : { rejectionStage: "capture_validation" as const }),
+    ...(checked.ok ? {} : {
+      rejectionStage: "capture_validation" as const,
+      rejectionReason: continuationValidationMessageForStage(checked.message, "capture_validation"),
+    }),
   };
   const recordDiagnostics = (status: "ok" | "error", error?: string) => {
     if (!detailedProviderDiagnosticsEnabled()) return;
@@ -90,13 +99,14 @@ export function captureOpenRouterContinuationState(input: {
     });
   };
   if (checked.ok === false) {
-    recordDiagnostics("error", checked.message);
-    return { issue: { code: checked.code, message: checked.message }, diagnostics };
+    const message = continuationValidationMessageForStage(checked.message, "capture_validation");
+    recordDiagnostics("error", message);
+    return { issue: { code: checked.code, message }, diagnostics: { ...diagnostics, rejectionReason: message } };
   }
   if (checked.value.transport !== "openrouter") {
     const issue = { code: "invalid_payload" as const, message: "validated continuation state changed transport unexpectedly" };
     recordDiagnostics("error", issue.message);
-    return { issue, diagnostics: { ...diagnostics, rejectionStage: "capture_validation" } };
+    return { issue, diagnostics: { ...diagnostics, rejectionStage: "capture_validation", rejectionReason: issue.message } };
   }
   recordDiagnostics("ok");
   return { state: checked.value, diagnostics };
@@ -109,7 +119,10 @@ export function validateOpenRouterReplayForRequest(input: {
   normalizedEndpoint: string;
 }): { ok: true; state: Extract<ProviderContinuationState, { transport: "openrouter" }> } | { ok: false; issue: OpenRouterContinuationIssue } {
   const checked = validateProviderContinuationState(input.state);
-  if (checked.ok === false) return { ok: false, issue: { code: checked.code, message: checked.message } };
+  if (checked.ok === false) return {
+    ok: false,
+    issue: { code: checked.code, message: continuationValidationMessageForStage(checked.message, "replay_validation") },
+  };
   if (checked.value.transport !== "openrouter" || input.config.provider !== "openrouter") {
     return { ok: false, issue: { code: "incompatible_replay", message: "continuation state belongs to a different provider transport" } };
   }
@@ -126,6 +139,9 @@ export function validateOpenRouterReplayForRequest(input: {
 
 export function validateOpenRouterReplayBudget(states: readonly ProviderContinuationState[]): { ok: true } | { ok: false; issue: OpenRouterContinuationIssue } {
   const checked = validateContinuationRequestBudget(states);
-  if (checked.ok === false) return { ok: false, issue: { code: checked.code, message: checked.message } };
+  if (checked.ok === false) return {
+    ok: false,
+    issue: { code: checked.code, message: continuationValidationMessageForStage(checked.message, "replay_validation") },
+  };
   return { ok: true };
 }

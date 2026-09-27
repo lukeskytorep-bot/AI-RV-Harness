@@ -46,6 +46,35 @@ describe("OPENROUTER-CONTINUITY-IN-MEMORY-1 contract bridge", () => {
     expect(captured.state?.replayFingerprint.actualModelId).toBeUndefined();
   });
 
+
+  it("captures OpenRouter text without id/format and signature-only replay blocks", () => {
+    const optionalDetails = [
+      { type: "reasoning.text", text: "minimal" },
+      { type: "reasoning.text", signature: "late-signature" },
+      { type: "reasoning.summary", summary: "summary" },
+    ];
+    const captured = captureOpenRouterContinuationState({
+      config,
+      requestedModelId: "z-ai/glm-5.3-flash-20260826",
+      normalizedEndpoint: "https://openrouter.ai/api/v1",
+      reasoningDetails: optionalDetails,
+    });
+    expect(captured.issue).toBeUndefined();
+    expect(captured.state?.reasoningDetails).toEqual(optionalDetails);
+  });
+
+  it("reports a precise known-field reason without logging reasoning content", () => {
+    const captured = captureOpenRouterContinuationState({
+      config,
+      requestedModelId: "model-a",
+      normalizedEndpoint: "https://openrouter.ai/api/v1",
+      reasoningDetails: [{ type: "reasoning.text", text: "private", format: "future-format-v9" }],
+    });
+    expect(captured.issue).toMatchObject({ code: "invalid_payload" });
+    expect(captured.issue?.message).toContain("capture_validation / reasoningDetails[0].format / unexpected_value");
+    expect(captured.issue?.message).not.toContain("private");
+  });
+
   it("requires the same provider config, credential, requested model and normalized endpoint", () => {
     const captured = captureOpenRouterContinuationState({
       config,

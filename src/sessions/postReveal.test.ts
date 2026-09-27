@@ -104,7 +104,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
       config,
       requestedModelId: model.modelId,
       normalizedEndpoint: "https://openrouter.ai/api/v1",
-      reasoningDetails: [{ type: "reasoning.encrypted", data: "RklYVFVSRQ==", id: "prior", format: "openai-responses-v1", index: 0 }],
+      reasoningDetails: [{ type: "reasoning.text", text: "prior state without id or format", index: 0 }],
     });
     if (!prior.state) throw new Error("Expected prior state.");
     const existingTranscript = `${serializePostRevealTurn("user", "First post-Reveal question")}${serializePostRevealTurn("assistant", "First answer")}`;
@@ -138,7 +138,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
       expect(priorAssistant?.continuationState).toEqual(prior.state);
       return {
         content: "Second answer",
-        reasoningDetails: [{ type: "reasoning.encrypted", data: "TkVXU1RBVEU=", id: "next", format: "openai-responses-v1", index: 0 }],
+        reasoningDetails: [{ type: "reasoning.text", signature: "sig-post-reveal", text: null }],
         usage: {},
       };
     });
@@ -260,7 +260,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
     };
     const malformedChat = vi.fn().mockResolvedValue({
       content: "Visible answer survives",
-      reasoningDetails: [{ type: "reasoning.encrypted", data: "", id: "broken", format: "openai-responses-v1", index: 0 }],
+      reasoningDetails: [{ type: "reasoning.text", text: "private", format: "future-format-v9", index: 0 }],
       usage: {},
     });
     await expect(sendPostRevealTurn({ repository: repository as never, sessionId: "s", existingTranscript: "", providerConfig: config, model, content: "First question", chat: malformedChat as never }))

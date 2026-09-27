@@ -240,11 +240,11 @@ describe("durable session replay", () => {
     const config: ProviderConfig = { id: "pc", provider: "openrouter", label: "OpenRouter", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
     const saved = captureOpenRouterContinuationState({
       config, requestedModelId: "m", normalizedEndpoint: "https://openrouter.ai/api/v1",
-      reasoningDetails: [{ type: "reasoning.summary", summary: "saved-A", id: "a", format: "openai-responses-v1", index: 0 }],
+      reasoningDetails: [{ type: "reasoning.summary", summary: "saved-A", index: 0 }],
     });
     const resumed = captureOpenRouterContinuationState({
       config, requestedModelId: "m", normalizedEndpoint: "https://openrouter.ai/api/v1",
-      reasoningDetails: [{ type: "reasoning.summary", summary: "live-B", id: "b", format: "openai-responses-v1", index: 0 }],
+      reasoningDetails: [{ type: "reasoning.text", signature: "sig-live-B", text: null }],
     });
     if (!saved.state || !resumed.state) throw new Error("Expected OpenRouter continuation fixtures.");
     const savedState = saved.state;

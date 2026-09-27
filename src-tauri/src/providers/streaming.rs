@@ -405,7 +405,8 @@ fn merge_openrouter_reasoning_delta(last: &mut Value, next: &Value) -> bool {
     }
     let next_fragment = match next_object.get(payload_key) {
         Some(Value::String(fragment)) => fragment.as_str(),
-        None if is_text && matches!(next_object.get("signature"), Some(Value::String(value)) if !value.is_empty()) => "",
+        None | Some(Value::Null)
+            if is_text && matches!(next_object.get("signature"), Some(Value::String(value)) if !value.is_empty()) => "",
         _ => return false,
     };
     let Some(Value::String(last_fragment)) = last_object.get_mut(payload_key) else { return false; };

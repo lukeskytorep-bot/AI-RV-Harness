@@ -102,59 +102,88 @@ pub(super) fn validate_chat_request(request: &ProviderChatRequest) -> Result<(),
 
 
 
-fn validate_openrouter_reasoning_detail(detail: &serde_json::Value) -> bool {
-    let Some(object) = detail.as_object() else { return false; };
-    let Some(kind) = object.get("type").and_then(serde_json::Value::as_str) else { return false; };
-    let id_ok = match object.get("id") {
-        Some(serde_json::Value::Null) => true,
-        Some(serde_json::Value::String(value)) => !value.is_empty() && value.len() <= 512,
-        _ => false,
+pub(super) fn validate_openrouter_reasoning_detail(detail: &Value, index: usize) -> Result<(), String> {
+    const MAX_IDENTIFIER_CHARS: usize = 512;
+    let path = format!("reasoningDetails[{index}]");
+    let Some(object) = detail.as_object() else {
+        return Err(format!("{path} / unexpected_type"));
     };
-    if !id_ok { return false; }
-    let format_ok = object
-        .get("format")
-        .and_then(serde_json::Value::as_str)
-        .map(|value| matches!(
-            value,
-            "unknown"
-                | "openai-responses-v1"
-                | "azure-openai-responses-v1"
-                | "bedrock-openai-responses-v1"
-                | "bedrock-xai-responses-v1"
-                | "xai-responses-v1"
-                | "meta-responses-v1"
-                | "anthropic-claude-v1"
-                | "google-gemini-v1"
-        ))
-        .unwrap_or(false);
-    if !format_ok { return false; }
-    if let Some(index) = object.get("index") {
-        if index.as_u64().is_none() { return false; }
+    let kind = match object.get("type") {
+        Some(Value::String(value)) => value.as_str(),
+        None => return Err(format!("{path}.type / missing_required")),
+        Some(_) => return Err(format!("{path}.type / unexpected_type")),
+    };
+    let allowed: &[&str] = match kind {
+        "reasoning.summary" => &["type", "summary", "id", "format", "index"],
+        "reasoning.encrypted" => &["type", "data", "id", "format", "index"],
+        "reasoning.text" => &["type", "text", "signature", "id", "format", "index"],
+        _ => return Err(format!("{path}.type / unexpected_value")),
+    };
+    if !object.keys().all(|key| allowed.contains(&key.as_str())) {
+        return Err(format!("{path} / unexpected_field"));
     }
 
-    let allowed = |keys: &[&str]| object.keys().all(|key| keys.contains(&key.as_str()));
+    if let Some(id) = object.get("id") {
+        match id {
+            Value::Null => {}
+            Value::String(value) if value.encode_utf16().count() <= MAX_IDENTIFIER_CHARS => {}
+            Value::String(_) => return Err(format!("{path}.id / too_long")),
+            _ => return Err(format!("{path}.id / unexpected_type")),
+        }
+    }
+    if let Some(format) = object.get("format") {
+        match format {
+            Value::Null => {}
+            Value::String(value) if matches!(
+                value.as_str(),
+                "unknown"
+                    | "openai-responses-v1"
+                    | "azure-openai-responses-v1"
+                    | "bedrock-openai-responses-v1"
+                    | "bedrock-xai-responses-v1"
+                    | "xai-responses-v1"
+                    | "meta-responses-v1"
+                    | "anthropic-claude-v1"
+                    | "google-gemini-v1"
+            ) => {}
+            Value::String(_) => return Err(format!("{path}.format / unexpected_value")),
+            _ => return Err(format!("{path}.format / unexpected_type")),
+        }
+    }
+    if let Some(index_value) = object.get("index") {
+        if index_value.as_u64().is_none() {
+            return Err(format!("{path}.index / unexpected_type"));
+        }
+    }
+
     match kind {
-        "reasoning.summary" => {
-            allowed(&["type", "summary", "id", "format", "index"])
-                && object.get("summary").and_then(serde_json::Value::as_str).is_some()
-        }
-        "reasoning.encrypted" => {
-            allowed(&["type", "data", "id", "format", "index"])
-                && object.get("data").and_then(serde_json::Value::as_str).is_some_and(|value| !value.is_empty())
-        }
+        "reasoning.summary" => match object.get("summary") {
+            Some(Value::String(_)) => Ok(()),
+            None => Err(format!("{path}.summary / missing_required")),
+            Some(_) => Err(format!("{path}.summary / unexpected_type")),
+        },
+        "reasoning.encrypted" => match object.get("data") {
+            Some(Value::String(_)) => Ok(()),
+            None => Err(format!("{path}.data / missing_required")),
+            Some(_) => Err(format!("{path}.data / unexpected_type")),
+        },
         "reasoning.text" => {
-            if !allowed(&["type", "text", "signature", "id", "format", "index"])
-                || object.get("text").and_then(serde_json::Value::as_str).is_none()
-            {
-                return false;
+            let text = match object.get("text") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(value)) => Some(value.as_str()),
+                Some(_) => return Err(format!("{path}.text / unexpected_type")),
+            };
+            let signature = match object.get("signature") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(value)) => Some(value.as_str()),
+                Some(_) => return Err(format!("{path}.signature / unexpected_type")),
+            };
+            if text.is_none() && !signature.is_some_and(|value| !value.is_empty()) {
+                return Err(format!("{path} / missing_replay_data"));
             }
-            match object.get("signature") {
-                None | Some(serde_json::Value::Null) => true,
-                Some(serde_json::Value::String(value)) => !value.is_empty(),
-                _ => false,
-            }
+            Ok(())
         }
-        _ => false,
+        _ => unreachable!("OpenRouter detail kind checked above"),
     }
 }
 
@@ -225,10 +254,9 @@ pub(super) fn validate_continuation_bindings(request: &ProviderChatRequest, norm
                 if state.reasoning_details.len() > MAX_BLOCKS {
                     return Err("OpenRouter continuation state exceeds block count limit".to_string());
                 }
-                for detail in &state.reasoning_details {
-                    if !validate_openrouter_reasoning_detail(detail) {
-                        return Err("invalid OpenRouter continuation detail".to_string());
-                    }
+                for (index, detail) in state.reasoning_details.iter().enumerate() {
+                    validate_openrouter_reasoning_detail(detail, index)
+                        .map_err(|reason| format!("replay_validation / {reason}"))?;
                     let bytes = serde_json::to_vec(detail).map_err(|_| "invalid OpenRouter continuation detail".to_string())?.len();
                     if bytes > MAX_BLOCK_BYTES {
                         return Err("OpenRouter continuation state contains an oversized block".to_string());

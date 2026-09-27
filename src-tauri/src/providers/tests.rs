@@ -19,7 +19,7 @@ use super::streaming::{
     MAX_ACCUMULATED_STREAM_DATA_BYTES, MAX_PENDING_SSE_EVENT_BYTES,
 };
 use super::transport::retry_after_value_ms_at;
-use super::validation::{validate_chat_request, validate_continuation_bindings, validate_request_id};
+use super::validation::{validate_chat_request, validate_continuation_bindings, validate_openrouter_reasoning_detail, validate_request_id};
 
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -375,6 +375,40 @@ fn replays_openrouter_reasoning_details_only_on_the_bound_assistant_message() {
 }
 
 #[test]
+fn replays_openrouter_optional_metadata_without_inventing_id_or_format() {
+    let mut request = chat_request(ProviderKind::Openrouter, "z-ai/glm-5.3-flash-20260826");
+    request.messages = vec![ProviderMessage {
+        role: "assistant".to_string(),
+        content: "answer".to_string(),
+        images: vec![],
+        continuation_state: Some(ProviderContinuationState::OpenRouter(OpenRouterContinuationState {
+            schema_version: 1,
+            transport: "openrouter".to_string(),
+            format: "openrouter-reasoning-details".to_string(),
+            replay_fingerprint: ProviderReplayFingerprint {
+                transport: "openrouter".to_string(),
+                normalized_endpoint: "https://openrouter.ai/api/v1".to_string(),
+                provider_config_id: "provider-config".to_string(),
+                credential_id: "credential".to_string(),
+                requested_model_id: "z-ai/glm-5.3-flash-20260826".to_string(),
+                actual_model_id: None,
+                state_format: "openrouter-reasoning-details".to_string(),
+                state_format_version: 1,
+            },
+            reasoning_details: vec![
+                json!({"type":"reasoning.summary","summary":"summary"}),
+                json!({"type":"reasoning.text","signature":"sig-only"}),
+            ],
+        })),
+    }];
+    validate_continuation_bindings(&request, "https://openrouter.ai/api/v1").unwrap();
+    let (_, body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
+    let details = body.pointer("/messages/0/reasoning_details").and_then(Value::as_array).unwrap();
+    assert_eq!(details[0], json!({"type":"reasoning.summary","summary":"summary"}));
+    assert_eq!(details[1], json!({"type":"reasoning.text","signature":"sig-only"}));
+}
+
+#[test]
 fn replays_explicit_empty_openrouter_reasoning_details_as_an_explicit_empty_array() {
     let mut request = chat_request(ProviderKind::Openrouter, "openai/gpt-test");
     request.messages = vec![ProviderMessage {
@@ -705,6 +739,58 @@ fn preserves_non_stream_openrouter_reasoning_details_presence_for_empty_and_none
         }), None).unwrap_err();
         assert_eq!(error, "provider response reasoning_details must be an array or null when present");
     }
+}
+
+#[test]
+fn openrouter_compatibility_v2_fixture_matches_native_validation_and_non_stream_parser() {
+    let fixture: Value = serde_json::from_str(include_str!("../../../src/providers/continuation-fixtures/openrouter-compatibility-v2.json")).unwrap();
+    for entry in fixture.get("accepted").and_then(Value::as_array).unwrap() {
+        let name = entry.get("name").and_then(Value::as_str).unwrap();
+        let detail = entry.get("detail").unwrap();
+        assert!(validate_openrouter_reasoning_detail(detail, 0).is_ok(), "{name}");
+        let parsed = parse_chat_response(ProviderKind::Openrouter, json!({
+            "choices": [{ "message": { "reasoning_details": [detail.clone()], "content": "Final answer" }, "finish_reason": "stop" }]
+        }), None).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(parsed.reasoning_details, Some(vec![detail.clone()]), "{name}");
+    }
+    for entry in fixture.get("rejected").and_then(Value::as_array).unwrap() {
+        let name = entry.get("name").and_then(Value::as_str).unwrap();
+        let detail = entry.get("detail").unwrap();
+        let reason = entry.get("reason").and_then(Value::as_str).unwrap();
+        let error = validate_openrouter_reasoning_detail(detail, 0).unwrap_err();
+        assert!(error.contains(reason), "{name}: {error}");
+        let parser_error = parse_chat_response(ProviderKind::Openrouter, json!({
+            "choices": [{ "message": { "reasoning_details": [detail.clone()], "content": "Final answer" }, "finish_reason": "stop" }]
+        }), None).unwrap_err();
+        assert!(parser_error.contains(reason), "{name}: {parser_error}");
+    }
+}
+
+#[test]
+fn openrouter_non_stream_validation_does_not_change_other_openai_compatible_providers() {
+    let parsed = parse_chat_response(ProviderKind::Blackbox, json!({
+        "choices": [{
+            "message": {
+                "reasoning_details": [{ "type": "reasoning.text", "text": "detail", "future": "kept" }],
+                "content": "Final answer"
+            },
+            "finish_reason": "stop"
+        }]
+    }), None).unwrap();
+    assert_eq!(parsed.content, "Final answer");
+    assert_eq!(parsed.reasoning_details.as_ref().map(Vec::len), Some(1));
+}
+
+#[test]
+fn non_stream_openrouter_preserves_two_full_blocks_without_merging() {
+    let details = vec![
+        json!({"type":"reasoning.text","text":"first"}),
+        json!({"type":"reasoning.text","text":"second"}),
+    ];
+    let parsed = parse_chat_response(ProviderKind::Openrouter, json!({
+        "choices": [{ "message": { "reasoning_details": details.clone(), "content": "Final answer" }, "finish_reason": "stop" }]
+    }), None).unwrap();
+    assert_eq!(parsed.reasoning_details, Some(details));
 }
 
 #[test]
@@ -1299,7 +1385,7 @@ fn stream_accumulator_treats_null_as_absent_and_invalid_non_null_as_semantic_fai
 #[test]
 fn stream_accumulator_collapses_many_confirmed_deltas_before_block_limit_validation() {
     let mut accumulator = OpenRouterStreamAccumulator::default();
-    for index in 0..100 {
+    for index in 0..1000 {
         accumulator.process_data_with_events(&json!({
             "choices": [{"delta": {"reasoning_details": [{
                 "type": "reasoning.summary",
@@ -1320,9 +1406,48 @@ fn stream_accumulator_collapses_many_confirmed_deltas_before_block_limit_validat
         }]}}]
     }).to_string(), "secret", None).unwrap();
     let result = finish_accumulator(accumulator);
-    assert_eq!(result.continuation_diagnostics.received_reasoning_detail_items, 101);
+    assert_eq!(result.continuation_diagnostics.received_reasoning_detail_items, 1001);
     assert_eq!(result.continuation_diagnostics.logical_reasoning_blocks, 2);
-    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details/0/summary").and_then(Value::as_str).map(str::len), Some(290));
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details/0/summary").and_then(Value::as_str).map(str::len), Some(3890));
+}
+
+#[test]
+fn stream_accumulator_preserves_type_boundaries_when_summary_and_encrypted_share_index_zero() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    for detail in [
+        json!({"type":"reasoning.summary","summary":"first","index":0}),
+        json!({"type":"reasoning.encrypted","data":"opaque","index":0}),
+        json!({"type":"reasoning.summary","summary":"second","index":0}),
+    ] {
+        accumulator.process_data_with_events(&json!({
+            "choices": [{"delta": {"reasoning_details": [detail]}, "finish_reason": null}]
+        }).to_string(), "secret", None).unwrap();
+    }
+    let result = finish_accumulator(accumulator);
+    let details = result.payload.pointer("/choices/0/message/reasoning_details").and_then(Value::as_array).unwrap();
+    assert_eq!(details.len(), 3);
+    assert_eq!(details[0].get("summary"), Some(&json!("first")));
+    assert_eq!(details[1].get("data"), Some(&json!("opaque")));
+    assert_eq!(details[2].get("summary"), Some(&json!("second")));
+}
+
+#[test]
+fn stream_accumulator_merges_signature_only_delta_with_null_text_into_compatible_text_block() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type":"reasoning.text","text":"thinking","id":"rt","format":"anthropic-claude-v1","index":0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    accumulator.process_data_with_events(&json!({
+        "choices": [{"delta": {"reasoning_details": [{
+            "type":"reasoning.text","text":null,"signature":"sig","id":"rt","format":"anthropic-claude-v1","index":0
+        }]}}]
+    }).to_string(), "secret", None).unwrap();
+    let result = finish_accumulator(accumulator);
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details/0/text"), Some(&json!("thinking")));
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details/0/signature"), Some(&json!("sig")));
+    assert_eq!(result.payload.pointer("/choices/0/message/reasoning_details").and_then(Value::as_array).map(Vec::len), Some(1));
 }
 
 #[test]
@@ -1863,4 +1988,60 @@ async fn user_cancellation_aborts_an_active_stream() {
     let error = task.await.unwrap().unwrap_err();
     assert_eq!(error.code.as_ref(), "cancelled");
     server.await.unwrap();
+}
+
+#[test]
+#[ignore = "orchestrated by verify:openrouter-continuation-bridge"]
+fn openrouter_cross_language_bridge_emit_from_rust_stream() {
+    let output_path = std::env::var("AI_RV_BRIDGE_RUST_OUT").expect("AI_RV_BRIDGE_RUST_OUT is required");
+    let fixture: Value = serde_json::from_str(include_str!("../../../src/providers/continuation-fixtures/openrouter-compatibility-v2.json")).unwrap();
+    let bridge = fixture.get("bridge").unwrap();
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    for event in bridge.get("sseDataEvents").and_then(Value::as_array).unwrap() {
+        accumulator
+            .process_data_with_events(&serde_json::to_string(event).unwrap(), "secret", Some("bridge-request"))
+            .unwrap();
+    }
+    accumulator.process_data_with_events("[DONE]", "secret", Some("bridge-request")).unwrap();
+    let streamed = accumulator.finish(Some("bridge-request".to_string())).unwrap();
+    let parsed = parse_chat_response(ProviderKind::Openrouter, streamed.payload, streamed.request_id).unwrap();
+    let reasoning_details = parsed.reasoning_details.expect("bridge response must carry reasoning_details");
+    assert_eq!(
+        Value::Array(reasoning_details.clone()),
+        bridge.get("expectedReasoningDetails").cloned().unwrap()
+    );
+    let output = json!({
+        "content": parsed.content,
+        "reasoningDetails": reasoning_details,
+        "modelId": bridge.get("modelId").unwrap(),
+        "normalizedEndpoint": bridge.get("normalizedEndpoint").unwrap(),
+        "providerConfigId": bridge.get("providerConfigId").unwrap(),
+        "credentialId": bridge.get("credentialId").unwrap()
+    });
+    std::fs::write(output_path, serde_json::to_vec_pretty(&output).unwrap()).unwrap();
+}
+
+#[test]
+#[ignore = "orchestrated by verify:openrouter-continuation-bridge"]
+fn openrouter_cross_language_bridge_replays_ts_restored_state_in_rust_request_builder() {
+    let input_path = std::env::var("AI_RV_BRIDGE_TS_OUT").expect("AI_RV_BRIDGE_TS_OUT is required");
+    let output_path = std::env::var("AI_RV_BRIDGE_RUST_REPLAY_OUT").expect("AI_RV_BRIDGE_RUST_REPLAY_OUT is required");
+    let input: Value = serde_json::from_slice(&std::fs::read(input_path).unwrap()).unwrap();
+    let state: ProviderContinuationState = serde_json::from_value(input.get("state").cloned().unwrap()).unwrap();
+    let expected_details = input.pointer("/state/reasoningDetails").cloned().unwrap();
+    let model_id = input.get("modelId").and_then(Value::as_str).unwrap();
+    let endpoint = input.get("normalizedEndpoint").and_then(Value::as_str).unwrap();
+
+    let mut request = chat_request(ProviderKind::Openrouter, model_id);
+    request.messages = vec![ProviderMessage {
+        role: "assistant".to_string(),
+        content: "Visible answer.".to_string(),
+        images: vec![],
+        continuation_state: Some(state),
+    }];
+    validate_continuation_bindings(&request, endpoint).unwrap();
+    let (_, body) = build_openai_compatible_request(&request, endpoint);
+    let replayed = body.pointer("/messages/0/reasoning_details").cloned().unwrap();
+    assert_eq!(replayed, expected_details);
+    std::fs::write(output_path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
 }

@@ -3,16 +3,37 @@ use serde_json::Value;
 use super::{ProviderChatResponse, ProviderKind, ProviderUsage};
 use super::adapters::{provider_family, ProviderFamily};
 use super::reasoning::{empty_response_error_with_reasoning, extract_openai_reasoning, extract_openai_text, normalize_reasoning_response};
+use super::validation::validate_openrouter_reasoning_detail;
 
 pub(super) fn parse_chat_response(
     provider: ProviderKind,
     payload: Value,
     request_id: Option<String>,
 ) -> Result<ProviderChatResponse, String> {
+    if matches!(provider, ProviderKind::Openrouter) {
+        validate_openrouter_response_reasoning_details(&payload)?;
+    }
     match provider_family(provider) {
         ProviderFamily::Google => parse_google_response(payload, request_id),
         ProviderFamily::Anthropic => parse_anthropic_response(payload, request_id),
         ProviderFamily::OpenaiCompatible => parse_openai_compatible_response(payload, request_id),
+    }
+}
+
+fn validate_openrouter_response_reasoning_details(payload: &Value) -> Result<(), String> {
+    let Some(value) = payload.pointer("/choices/0/message/reasoning_details") else {
+        return Ok(());
+    };
+    match value {
+        Value::Null => Ok(()),
+        Value::Array(details) => {
+            for (index, detail) in details.iter().enumerate() {
+                validate_openrouter_reasoning_detail(detail, index)
+                    .map_err(|reason| format!("provider_response_validation / {reason}"))?;
+            }
+            Ok(())
+        }
+        _ => Err("provider_response_validation / reasoning_details / unexpected_type".to_string()),
     }
 }
 

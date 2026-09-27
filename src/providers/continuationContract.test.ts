@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import openRouterFixture from "./continuation-fixtures/openrouter-reasoning-details.json";
+import openRouterCompatibilityFixture from "./continuation-fixtures/openrouter-compatibility-v2.json";
 import googleFixture from "./continuation-fixtures/google-thought-signature.json";
 import anthropicFixture from "./continuation-fixtures/anthropic-thinking-blocks.json";
 import {
@@ -22,6 +23,31 @@ describe("CONTINUATION-CONTRACT-0-R1", () => {
     for (const fixture of [openRouterFixture, googleFixture, anthropicFixture]) {
       const result = validateProviderContinuationState(fixture.continuationState);
       expect(result.ok).toBe(true);
+    }
+  });
+
+
+  it("accepts the pinned OpenRouter 2.1.1 optional/nullable metadata matrix and preserves exact known fields", () => {
+    for (const entry of openRouterCompatibilityFixture.accepted) {
+      const base: any = structuredClone(openRouterFixture.continuationState);
+      base.reasoningDetails = [structuredClone(entry.detail)];
+      const result = validateProviderContinuationState(base);
+      expect(result.ok, entry.name).toBe(true);
+      if (!result.ok || result.value.transport !== "openrouter") continue;
+      expect(result.value.reasoningDetails[0], entry.name).toEqual(entry.detail);
+    }
+  });
+
+  it("fails closed for unsupported OpenRouter fields and non-replayable known shapes with a precise reason", () => {
+    for (const entry of openRouterCompatibilityFixture.rejected) {
+      const base: any = structuredClone(openRouterFixture.continuationState);
+      base.reasoningDetails = [structuredClone(entry.detail)];
+      const result = validateProviderContinuationState(base);
+      expect(result.ok, entry.name).toBe(false);
+      if (result.ok) continue;
+      expect(result.code, entry.name).toBe("invalid_payload");
+      expect(result.message, entry.name).toContain(entry.reason);
+      expect(result.message, entry.name).toContain("reasoningDetails[0]");
     }
   });
 

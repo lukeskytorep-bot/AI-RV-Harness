@@ -60,6 +60,35 @@ describe("OPENROUTER-CONTINUITY-PERSISTENCE-1", () => {
       .rejects.toThrow(/hash check failed/);
   });
 
+
+  it("round-trips legacy v1 plus optional OpenRouter metadata without inventing id or format", async () => {
+    const base = openRouterState();
+    if (base.transport !== "openrouter") throw new Error("Expected OpenRouter fixture");
+    const candidate: ProviderContinuationState = {
+      ...base,
+      reasoningDetails: [
+        { type: "reasoning.summary", summary: "summary" },
+        { type: "reasoning.text", signature: "sig-only", text: null, id: null, format: null },
+      ],
+    };
+    const prepared = await prepareProviderContinuationState(candidate);
+    const restored = await restoreProviderContinuationState({
+      ownerId: "assistant-optional",
+      format: prepared.format,
+      formatVersion: prepared.formatVersion,
+      transport: prepared.transport,
+      replayFingerprintJson: prepared.replayFingerprintJson,
+      payloadJson: prepared.payloadJson,
+      payloadSha256: prepared.payloadSha256,
+      payloadSizeBytes: prepared.payloadSizeBytes,
+      createdAt: timestamp,
+    });
+    expect(restored.state).toEqual(candidate);
+    if (restored.state.transport !== "openrouter") throw new Error("Unexpected transport");
+    expect(restored.state.reasoningDetails[0]).not.toHaveProperty("id");
+    expect(restored.state.reasoningDetails[0]).not.toHaveProperty("format");
+  });
+
   it("persists Browser Conversation assistant message and state atomically and restores exact state", async () => {
     const storage = new MemoryStorage();
     const repository = new BrowserWorkspacesConversationsRepository({ storage, now: () => timestamp });

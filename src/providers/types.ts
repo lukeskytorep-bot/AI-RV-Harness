@@ -184,6 +184,7 @@ export interface ProviderContinuationDiagnostics {
   blockLimit?: number;
   stateByteLimit?: number;
   rejectionStage?: "capture_validation";
+  rejectionReason?: string;
 }
 
 export type ProviderStreamEvent =
