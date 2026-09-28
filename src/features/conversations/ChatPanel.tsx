@@ -11,7 +11,7 @@ import { estimateContextBudget } from "../../chat/contextBudget";
 import { ConversationContinuationBreakError, estimateConversationContinuationMemoryBytes } from "../../chat/continuationMemory";
 import { buildChatProviderMessages, retryChatTurn, sendChatTurn } from "../../chat/engine";
 import { buildChatMarkdownExport } from "../../chat/export";
-import { clampChatOutputTokens, defaultChatOutputTokens, loadChatOutputTokens, saveChatOutputTokens } from "../../chat/outputPreference";
+import { defaultChatOutputTokens } from "../../chat/outputPreference";
 import { clearPendingChatTurn, loadPendingChatTurn, savePendingChatTurn, type PendingChatTurn } from "../../chat/pendingTurn";
 import { conversationViewerContextKey, defaultConversationViewerLearningEnabled, loadConversationViewerLearningPreference, loadExistingConversationViewerLearningSnapshot, saveConversationViewerLearningPreference, type ConversationViewerLearningSnapshot } from "../../chat/viewerLearning";
 import { resolveSessionLanguage } from "../../domain/localization";
@@ -57,7 +57,6 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [manualProtocol, setManualProtocol] = useState<"none" | "rcp" | "lite-core" | "lite-extended" | "telepathic">("none");
   const [manualViewerNotesEnabled, setManualViewerNotesEnabled] = useState(true);
-  const [maxOutputTokens, setMaxOutputTokens] = useState(String(settings.defaultMaxOutputTokens));
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [sending, setSending] = useState(false);
   const [streamingAssistant, setStreamingAssistant] = useState("");
@@ -155,13 +154,6 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   }, [selectedModel?.modelId]);
 
   useEffect(() => {
-    if (!selectedModel) return;
-    const fallback = defaultChatOutputTokens(settings.defaultMaxOutputTokens, selectedModel.capabilities.maxOutputTokens);
-    const next = threadId ? loadChatOutputTokens(threadId, fallback, selectedModel.capabilities.maxOutputTokens) : fallback;
-    setMaxOutputTokens(String(next));
-  }, [threadId, selectedModel?.modelId, selectedModel?.capabilities.maxOutputTokens, settings.defaultMaxOutputTokens]);
-
-  useEffect(() => {
     setPendingRetry(threadId ? loadPendingChatTurn(threadId, messages) : null);
   }, [threadId, messages]);
 
@@ -170,11 +162,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   }, [threadId, mode]);
 
   const selectedSources = sources.filter((source) => activeSourceIds.includes(source.id));
-  const effectiveMaxOutputTokens = (() => {
-    const parsed = Number(maxOutputTokens);
-    const fallback = defaultChatOutputTokens(settings.defaultMaxOutputTokens, selectedModel?.capabilities.maxOutputTokens);
-    return Number.isInteger(parsed) && parsed > 0 ? clampChatOutputTokens(parsed, selectedModel?.capabilities.maxOutputTokens) : fallback;
-  })();
+  const configuredOutputTokens = mode === "conversation" ? settings.conversationMaxOutputTokens : settings.rvSessionMaxOutputTokens;
+  const effectiveMaxOutputTokens = defaultChatOutputTokens(configuredOutputTokens, selectedModel?.capabilities.maxOutputTokens);
   const attachedProtocol = mode === "manual_rv" && manualProtocol !== "none"
     ? manualProtocol === "rcp"
       ? getFullRcp(language).content
@@ -340,12 +329,6 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
     setChatImageNames((current) => current.filter((_, itemIndex) => itemIndex !== index));
   };
 
-  const commitMaxOutputTokens = () => {
-    const next = threadId
-      ? saveChatOutputTokens(threadId, effectiveMaxOutputTokens, selectedModel?.capabilities.maxOutputTokens)
-      : effectiveMaxOutputTokens;
-    setMaxOutputTokens(String(next));
-  };
 
   const handleVisibleStreamEvent = (event: ProviderStreamEvent) => {
     if (event.event === "started") {
@@ -590,7 +573,6 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         </select>
         {!viewerIdentities.length && <small>{settings.interfaceLanguage === "pl" ? "Dodaj model Viewera w Profilu lub rozpocznij Training. Conversation nie tworzy nowej tożsamości automatycznie." : "Add a Viewer model in Profile or start Training. Conversation does not create a new identity automatically."}</small>}
         {mode === "conversation" && <label className="manual-notes-toggle" title={settings.interfaceLanguage === "pl" ? "Dołącz read-only Field Guide i Viewer Notes dokładnie wybranej tożsamości." : "Attach the exact selected identity's read-only Field Guide and Viewer Notes."}><span>{settings.interfaceLanguage === "pl" ? "Użyj Viewer Learning" : "Use Viewer Learning"}</span><input type="checkbox" checked={viewerLearningEnabled} disabled={sending || !viewerLearningSnapshot} onChange={(event) => { const enabled = event.target.checked; setViewerLearningEnabled(enabled); if (threadId) saveConversationViewerLearningPreference(threadId, enabled); }} /></label>}
-        <label className="chat-output-limit"><span>{copy.maxOutputTokens}</span><input type="number" min={1} max={selectedModel?.capabilities.maxOutputTokens ?? 262144} value={maxOutputTokens} disabled={!selectedModel || sending} onChange={(event) => setMaxOutputTokens(event.target.value)} onBlur={commitMaxOutputTokens} /></label>
         <span className={`chat-context-meter ${contextBudget.level}`} title={contextBudget.contextLimit === undefined
           ? `${copy.estimatedContext}: ~${contextBudget.estimatedInputTokens.toLocaleString()} + ${contextBudget.reservedOutputTokens.toLocaleString()} output tokens`
           : `${copy.estimatedContext}: ~${contextBudget.estimatedInputTokens.toLocaleString()} + ${contextBudget.reservedOutputTokens.toLocaleString()} output; ${contextBudget.remainingTokens?.toLocaleString()} remaining of ${contextBudget.contextLimit.toLocaleString()}`}>

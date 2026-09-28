@@ -1,5 +1,5 @@
 import { Check, RadioTower, X } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { PageHeader } from "../../components/PageHeader";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
@@ -35,6 +35,8 @@ export function ConversationsScreen({
   onDismissCreatedNotice,
 }: ConversationsScreenProps) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const switcherButtonRef = useRef<HTMLButtonElement>(null);
+  const closeSwitcher = () => { setSwitcherOpen(false); requestAnimationFrame(() => switcherButtonRef.current?.focus()); };
 
   return (
     <>
@@ -42,12 +44,12 @@ export function ConversationsScreen({
         <PageHeader
           title={copy.conversationsNav}
           subtitle={`${workspace.name} · ${profile ? aiIsBeDisplayName(profile) : "—"}`}
-          action={<button className="secondary-button" onClick={() => setSwitcherOpen(true)}><RadioTower size={15} />{copy.switchWorkspace}</button>}
+          action={<button ref={switcherButtonRef} className="secondary-button" onClick={() => setSwitcherOpen(true)}><RadioTower size={15} />{copy.switchWorkspace}</button>}
         />
         {createdNotice && <div className="workspace-created-notice"><Check size={16} /><span><strong>{copy.workspaceCreated}</strong><small>{createdNotice.profileName} → {createdNotice.workspaceName}</small></span><button className="icon-button" onClick={onDismissCreatedNotice}><X size={14} /></button></div>}
         <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} fixedMode="conversation" />
       </div>
-      {switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} kind="conversation" onOpenWorkspace={onOpenWorkspace} onClose={() => setSwitcherOpen(false)} />}
+      {switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} kind="conversation" activeWorkspaceId={workspace.id} onOpenWorkspace={onOpenWorkspace} onClose={closeSwitcher} />}
     </>
   );
 }

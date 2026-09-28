@@ -13,11 +13,12 @@ export interface WorkspaceSwitcherDialogProps {
   profiles: Profile[];
   workspaces: Workspace[];
   kind: NewWorkspaceKind;
+  activeWorkspaceId?: string;
   onOpenWorkspace: (workspace: Workspace) => void;
   onClose: () => void;
 }
 
-export function WorkspaceSwitcherDialog({ copy, profiles, workspaces, kind, onOpenWorkspace, onClose }: WorkspaceSwitcherDialogProps) {
+export function WorkspaceSwitcherDialog({ copy, profiles, workspaces, kind, activeWorkspaceId, onOpenWorkspace, onClose }: WorkspaceSwitcherDialogProps) {
   const [query, setQuery] = useState("");
   const compatible = useMemo(() => workspaces.filter((workspace) => isWorkspaceCompatible(workspace, kind)), [workspaces, kind]);
   const groups = useMemo(() => filterWorkspaceDirectory(compatible, profiles, query), [compatible, profiles, query]);
@@ -33,9 +34,9 @@ export function WorkspaceSwitcherDialog({ copy, profiles, workspaces, kind, onOp
                 <section key={group.profile.id}>
                   <header><span className="avatar tiny">{initials(aiIsBeDisplayName(group.profile))}</span><div><strong>{aiIsBeDisplayName(group.profile)}</strong><small>{group.workspaces.length} {copy.workspacesCount}</small></div></header>
                   <div>{group.workspaces.map((workspace) => (
-                    <div className="workspace-directory-tile" key={workspace.id}>
-                      <button className="workspace-open-button" onClick={() => { onClose(); onOpenWorkspace(workspace); }}>
-                        <span><RadioTower size={16} /><span><strong>{workspace.name}</strong><small>{workspace.description || (workspace.kind === "legacy_combined" ? copy.legacyCombinedWorkspace : workspace.kind === "conversation" ? copy.conversationWorkspace : copy.rvWorkspace)}</small></span></span><ArrowRight size={15} />
+                    <div className={`workspace-directory-tile${workspace.id === activeWorkspaceId ? " active" : ""}`} key={workspace.id}>
+                      <button className="workspace-open-button" aria-current={workspace.id === activeWorkspaceId ? "page" : undefined} aria-label={`${workspace.name} · ${kind === "conversation" ? copy.conversationWorkspace : copy.rvWorkspace}`} onClick={() => { onClose(); onOpenWorkspace(workspace); }}>
+                        <span><RadioTower size={16} /><span><strong title={workspace.name}>{workspace.name}</strong><small>{workspace.description ? `${workspace.description} · ${kind === "conversation" ? copy.conversationWorkspace : copy.rvWorkspace}` : (kind === "conversation" ? copy.conversationWorkspace : copy.rvWorkspace)}</small></span></span><ArrowRight size={15} />
                       </button>
                     </div>
                   ))}</div>

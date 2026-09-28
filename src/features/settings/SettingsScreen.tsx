@@ -30,10 +30,11 @@ import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 import { clearProviderDebug, detailedProviderDiagnosticsEnabled, listProviderDebug, setDetailedProviderDiagnostics } from "../../providers/debug";
 import { PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER } from "../../providers/service";
 import { getFullRcp, getRvLite, getTelepathicProtocol, type ProtocolResource, type RvLiteProtocolResource, type TelepathicProtocolResource } from "../../resources/protocolRegistry";
+import { PRIVACY_POLICY_RESOURCES, PRIVACY_POLICY_UPDATED, PRIVACY_POLICY_URL } from "../../resources/privacy/privacyRegistry";
 import { getFactoryPromptResources, type FactoryPromptResource } from "../../resources/systemPrompts";
 import { isTauriRuntime } from "../../storage";
 import { createPortableStorageBackup, restorePortableStorageBackup } from "../../storage/maintenance";
-import { chooseDirectory, openDataFolder, saveTextFile } from "../../storage/native";
+import { chooseDirectory, openDataFolder, openProjectUrl, saveTextFile } from "../../storage/native";
 import type { AppRepository } from "../../storage/repository";
 import type { DeletionPreview, PurgeEntityKind } from "../../storage/controlledPurge";
 import { userTargetKind } from "../../targets/service";
@@ -58,6 +59,7 @@ export function SettingsScreen({ copy, settings, workspaces, repository, onDataC
   const [tab, setTab] = useState<"providers" | "models" | "storage" | "targets" | "sessions" | "appearance" | "advanced" | "about">("providers");
   const [protocolResource, setProtocolResource] = useState<ProtocolResource | RvLiteProtocolResource | TelepathicProtocolResource | null>(null);
   const [promptResource, setPromptResource] = useState<FactoryPromptResource | null>(null);
+  const [privacyLanguage, setPrivacyLanguage] = useState<"pl" | "en" | null>(null);
   const tabs = [
     ["providers", copy.providersApi], ["models", copy.models], ["storage", copy.storage], ["targets", copy.targets], ["sessions", copy.sessions], ["appearance", copy.appearance], ["advanced", copy.advanced], ["about", copy.aboutProtocols],
   ] as const;
@@ -85,20 +87,22 @@ export function SettingsScreen({ copy, settings, workspaces, repository, onDataC
           <SettingRow label={copy.animations} icon={<Sparkles size={18} />}><select value={settings.animations ? "on" : "off"} onChange={(event) => onChange({ animations: event.target.value === "on" })}><option value="on">{copy.enabled}</option><option value="off">{copy.disabled}</option></select></SettingRow>
         </section>}
         {tab === "advanced" && <AdvancedSettingsCard copy={copy} repository={repository} />}
-        {tab === "about" && <AboutProtocolsCard copy={copy} onOpen={setProtocolResource} onOpenPrompt={setPromptResource} />}
+        {tab === "about" && <AboutProtocolsCard copy={copy} onOpen={setProtocolResource} onOpenPrompt={setPromptResource} onOpenPrivacy={setPrivacyLanguage} />}
       </div>
       {protocolResource && <ProtocolDialog copy={copy} resource={protocolResource} onClose={() => setProtocolResource(null)} />}
       {promptResource && <PromptResourceDialog copy={copy} resource={promptResource} onClose={() => setPromptResource(null)} />}
+      {privacyLanguage && <PrivacyPolicyDialog copy={copy} language={privacyLanguage} onClose={() => setPrivacyLanguage(null)} />}
     </div>
   );
 }
 
-export function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: ReturnType<typeof getCopy>; onOpen: (resource: ProtocolResource | RvLiteProtocolResource | TelepathicProtocolResource) => void; onOpenPrompt: (resource: FactoryPromptResource) => void }) {
+export function AboutProtocolsCard({ copy, onOpen, onOpenPrompt, onOpenPrivacy = () => undefined }: { copy: ReturnType<typeof getCopy>; onOpen: (resource: ProtocolResource | RvLiteProtocolResource | TelepathicProtocolResource) => void; onOpenPrompt: (resource: FactoryPromptResource) => void; onOpenPrivacy?: (language: "pl" | "en") => void }) {
   const [documents, setDocuments] = useState<BuiltinDocumentManifest[]>([]);
   const [openDocument, setOpenDocument] = useState<{ manifest: BuiltinDocumentManifest; content: string } | null>(null);
   const [documentBusy, setDocumentBusy] = useState(false);
   const [documentMessage, setDocumentMessage] = useState<string | null>(null);
   const [documentError, setDocumentError] = useState<string | null>(null);
+  const [privacyLinkError, setPrivacyLinkError] = useState<string | null>(null);
   useEffect(() => {
     if (!isTauriRuntime()) return;
     void listBuiltinDocuments().then(setDocuments).catch((cause) => setDocumentError(cause instanceof Error ? cause.message : String(cause)));
@@ -110,6 +114,14 @@ export function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: Retur
       setOpenDocument({ manifest, content: parsed.content });
     } catch (cause) { setDocumentError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setDocumentBusy(false); }
+  };
+  const openPrivacyPolicyOnline = async () => {
+    setPrivacyLinkError(null);
+    try {
+      await openProjectUrl(PRIVACY_POLICY_URL);
+    } catch (cause) {
+      setPrivacyLinkError(cause instanceof Error ? cause.message : String(cause));
+    }
   };
   const saveDocument = async (manifest: BuiltinDocumentManifest) => {
     setDocumentBusy(true); setDocumentError(null); setDocumentMessage(null);
@@ -133,6 +145,7 @@ export function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: Retur
   ] as const).map(({ id, name }) => ({ id, name, pl: prompts.find((item) => item.id === id && item.language === "pl")!, en: prompts.find((item) => item.id === id && item.language === "en")! }));
   return <div className="about-settings-grid">
     <section className="panel about-protocol-card"><PanelHeader title={copy.protocolLibrary} icon={<FileCheck2 size={18} />} /><div className="about-card-body"><p>{copy.protocolLibraryLead}</p><div className="about-protocol-list">{protocolCards.map((protocol) => <article key={protocol.id}><span className="resource-orb"><FileCheck2 size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{protocol.name}</strong><code>v{protocol.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpen(protocol.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpen(protocol.en)}>{copy.readEnglish}</button></div></article>)}{promptCards.map((prompt) => <article key={prompt.id}><span className="resource-orb"><BrainCircuit size={18} /></span><div><small>{copy.readOnly} · CC BY 4.0</small><strong>{prompt.name}</strong><code>v{prompt.pl.version}</code></div><div className="about-protocol-actions"><button className="secondary-button" onClick={() => onOpenPrompt(prompt.pl)}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpenPrompt(prompt.en)}>{copy.readEnglish}</button></div></article>)}{documents.map((document) => <article key={document.id}><span className="resource-orb"><BookOpen size={18} /></span><div><small>DOCX · {document.language.toUpperCase()} · SHA-256</small><strong>{document.title}</strong><code>{document.sha256.slice(0, 16)}…</code></div><div className="about-protocol-actions"><button className="secondary-button" disabled={documentBusy} onClick={() => void readDocument(document)}>{copy.home === "Home" ? "Read" : "Czytaj"}</button><button className="secondary-button" disabled={documentBusy} onClick={() => void saveDocument(document)}><Download size={13} />{copy.home === "Home" ? "Save DOCX" : "Zapisz DOCX"}</button></div></article>)}</div>{documentMessage && <div className="storage-success"><Check size={14} />{documentMessage}</div>}{documentError && <div className="provider-error">{documentError}</div>}<div className="content-license-notice"><ShieldCheck size={16} /><div><strong>{copy.home === "Home" ? "Two-license model" : "Model dwóch licencji"}</strong><p>{copy.home === "Home" ? "Source code is licensed under the MIT License. Documentation, bundled prompts, training content, and other non-code visual assets are licensed under CC BY 4.0." : "Kod źródłowy jest objęty licencją MIT. Dokumentacja, dołączone prompty, materiały treningowe i inne niekodowe zasoby wizualne są objęte licencją CC BY 4.0."}</p></div></div></div></section>
+    <section className="panel about-protocol-card privacy-policy-card"><PanelHeader title={copy.home === "Home" ? "Privacy Policy" : "Polityka prywatności"} icon={<ShieldCheck size={18} />} /><div className="about-card-body"><p>{copy.home === "Home" ? "Local read-only copies remain available offline." : "Lokalne kopie tylko do odczytu są dostępne również offline."}</p><div className="privacy-policy-meta"><strong>{copy.home === "Home" ? "Last updated: September 27, 2026" : "Ostatnia aktualizacja: 27 września 2026"}</strong><code>{PRIVACY_POLICY_UPDATED}</code></div><div className="about-protocol-actions privacy-policy-actions"><button className="secondary-button" onClick={() => onOpenPrivacy("pl")}>{copy.readPolish}</button><button className="secondary-button" onClick={() => onOpenPrivacy("en")}>{copy.readEnglish}</button><button className="secondary-button" onClick={() => void openPrivacyPolicyOnline()}>{copy.home === "Home" ? "Open current online policy" : "Otwórz aktualną wersję online"}</button></div>{privacyLinkError && <div className="provider-error">{privacyLinkError}</div>}<div className="hash-grid"><code>PL SHA-256<br />{PRIVACY_POLICY_RESOURCES.pl.sha256}</code><code>EN SHA-256<br />{PRIVACY_POLICY_RESOURCES.en.sha256}</code></div></div></section>
     <CreditsCard copy={copy} />
     {openDocument && <BuiltinDocumentDialog copy={copy} document={openDocument} busy={documentBusy} onSave={() => void saveDocument(openDocument.manifest)} onClose={() => setOpenDocument(null)} />}
   </div>;
@@ -140,6 +153,20 @@ export function AboutProtocolsCard({ copy, onOpen, onOpenPrompt }: { copy: Retur
 
 function BuiltinDocumentDialog({ copy, document, busy, onSave, onClose }: { copy: ReturnType<typeof getCopy>; document: { manifest: BuiltinDocumentManifest; content: string }; busy: boolean; onSave: () => void; onClose: () => void }) {
   return <ResourceViewerDialogShell eyebrow={<>DOCX · {document.manifest.language.toUpperCase()}</>} title={document.manifest.title} meta={<>{document.manifest.fileName} · {formatBytes(document.manifest.sizeBytes)}</>} onClose={onClose} actions={<><button className="secondary-button" disabled={busy} onClick={onSave}><Download size={14} />{copy.home === "Home" ? "Save original DOCX" : "Zapisz oryginalny DOCX"}</button><button className="primary-button" onClick={onClose}>{copy.close}</button></>}><div className="hash-grid"><code>SHA-256<br />{document.manifest.sha256}</code><code>{copy.wordCount}<br />{wordCount(document.content).toLocaleString()}</code></div><pre className="protocol-text">{document.content}</pre></ResourceViewerDialogShell>;
+}
+
+function PrivacyPolicyDialog({ copy, language, onClose }: { copy: ReturnType<typeof getCopy>; language: "pl" | "en"; onClose: () => void }) {
+  const resource = PRIVACY_POLICY_RESOURCES[language];
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const openOnline = async () => {
+    setLinkError(null);
+    try {
+      await openProjectUrl(PRIVACY_POLICY_URL);
+    } catch (cause) {
+      setLinkError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+  return <ResourceViewerDialogShell eyebrow={copy.home === "Home" ? "Privacy Policy" : "Polityka prywatności"} title={resource.title} meta={<>{copy.readOnly} · SHA-256 {resource.sha256.slice(0, 16)}…</>} onClose={onClose} actions={<><button className="secondary-button" onClick={() => void openOnline()}>{copy.home === "Home" ? "Open online" : "Otwórz online"}</button><button className="primary-button" onClick={onClose}>{copy.close}</button></>}><>{linkError && <div className="provider-error">{linkError}</div>}<div className="hash-grid"><code>SHA-256<br />{resource.sha256}</code><code>{copy.home === "Home" ? "Last updated" : "Ostatnia aktualizacja"}<br />{language === "pl" ? "27 września 2026" : "September 27, 2026"}</code></div><pre className="protocol-text privacy-policy-text">{resource.content}</pre></></ResourceViewerDialogShell>;
 }
 
 function TargetSettingsCard({ copy, settings, repository, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; repository: AppRepository | null; onChange: (settings: Partial<AppSettings>) => void }) {
@@ -383,7 +410,7 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
 }
 
 function SessionSettingsCard({ copy, settings, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; onChange: (settings: Partial<AppSettings>) => void }) {
-  return <section className="panel session-settings-card"><PanelHeader title={copy.sessions} icon={<CircleStop size={18} />} /><div className="session-settings-body"><label><span>{copy.sessionLanguage}</span><select value={settings.sessionLanguage} onChange={(event) => onChange({ sessionLanguage: event.target.value as SessionLanguageSetting })}><option value="same">{copy.sameAsInterface}</option><option value="pl">Polski</option><option value="en">English</option></select></label><label><span>{copy.requestTimeout}</span><div><input type="number" min={1} max={600} value={Math.round(settings.requestTimeoutMs / 1000)} onChange={(event) => onChange({ requestTimeoutMs: Math.max(1, Math.min(600, Number(event.target.value) || 120)) * 1000 })} /><small>s</small></div></label><label><span>{copy.retryPolicy}</span><select value={settings.maxRetries} onChange={(event) => onChange({ maxRetries: Number(event.target.value) })}>{[0, 1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label><label><span>{copy.defaultMaxOutput}</span><input type="number" min={1} max={262144} value={settings.defaultMaxOutputTokens} onChange={(event) => onChange({ defaultMaxOutputTokens: Math.max(1, Number(event.target.value) || 8192) })} /></label><label><span>{copy.hardSessionCostLimit}</span><div><input type="number" min={0} step="0.01" value={settings.maxSessionCostUsd} onChange={(event) => onChange({ maxSessionCostUsd: Math.max(0, Number(event.target.value) || 0) })} /><small>USD · {settings.maxSessionCostUsd > 0 ? copy.enabled : copy.disabled}</small></div></label><label><span>{copy.defaultReveal}</span><select value={settings.defaultRevealSource} onChange={(event) => onChange({ defaultRevealSource: event.target.value as AppSettings["defaultRevealSource"] })}><option value="external">{copy.externalBlind}</option><option value="automatic">{copy.automaticTarget}</option></select></label><div className="mandatory-autosave"><ShieldCheck size={16} /><div><strong>{copy.mandatoryAutosave}</strong><p>{copy.sessionRules}</p></div></div></div></section>;
+  return <section className="panel session-settings-card"><PanelHeader title={copy.sessions} icon={<CircleStop size={18} />} /><div className="session-settings-body"><label><span>{copy.sessionLanguage}</span><select value={settings.sessionLanguage} onChange={(event) => onChange({ sessionLanguage: event.target.value as SessionLanguageSetting })}><option value="same">{copy.sameAsInterface}</option><option value="pl">Polski</option><option value="en">English</option></select></label><label><span>{copy.requestTimeout}</span><div><input type="number" min={1} max={600} value={Math.round(settings.requestTimeoutMs / 1000)} onChange={(event) => onChange({ requestTimeoutMs: Math.max(1, Math.min(600, Number(event.target.value) || 120)) * 1000 })} /><small>s</small></div></label><label><span>{copy.retryPolicy}</span><select value={settings.maxRetries} onChange={(event) => onChange({ maxRetries: Number(event.target.value) })}>{[0, 1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label><label><span>{copy.conversationOutputTokens}</span><input type="number" min={1} max={262144} value={settings.conversationMaxOutputTokens} onChange={(event) => onChange({ conversationMaxOutputTokens: Math.max(1, Number(event.target.value) || 8192) })} /></label><label><span>{copy.rvSessionOutputTokens}</span><input type="number" min={1} max={262144} value={settings.rvSessionMaxOutputTokens} onChange={(event) => onChange({ rvSessionMaxOutputTokens: Math.max(1, Number(event.target.value) || 8192) })} /></label><label><span>{copy.hardSessionCostLimit}</span><div><input type="number" min={0} step="0.01" value={settings.maxSessionCostUsd} onChange={(event) => onChange({ maxSessionCostUsd: Math.max(0, Number(event.target.value) || 0) })} /><small>USD · {settings.maxSessionCostUsd > 0 ? copy.enabled : copy.disabled}</small></div></label><label><span>{copy.defaultReveal}</span><select value={settings.defaultRevealSource} onChange={(event) => onChange({ defaultRevealSource: event.target.value as AppSettings["defaultRevealSource"] })}><option value="external">{copy.externalBlind}</option><option value="automatic">{copy.automaticTarget}</option></select></label><div className="mandatory-autosave"><ShieldCheck size={16} /><div><strong>{copy.mandatoryAutosave}</strong><p>{copy.sessionRules}</p></div></div></div></section>;
 }
 
 function PromptResourceDialog({ copy, resource, onClose }: { copy: ReturnType<typeof getCopy>; resource: FactoryPromptResource; onClose: () => void }) {

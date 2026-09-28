@@ -25,9 +25,10 @@ const INCOMPLETE_DATA_EPOCH: &str = "v0.7.13-incomplete";
 const LEGACY_DATA_EPOCH: &str = "v0.7.12-or-earlier";
 const INITIALIZATION_MARKER_FILE_NAME: &str = "rv_harness.initializing-v0.7.13.json";
 const DATABASE_PRESERVATION_COLLISION_LIMIT: usize = 100;
-const ALLOWED_PROJECT_URLS: [&str; 6] = [
+const ALLOWED_PROJECT_URLS: [&str; 7] = [
     "https://github.com/lukeskytorep-bot",
     "https://github.com/lukeskytorep-bot/AI-RV-Harness/blob/main/CREDITS.md",
+    "https://lukeskytorep-bot.github.io/AI-RV-Harness/privacy.html",
     "https://presence-beyond-form.blogspot.com/",
     "https://echoofpresence.substack.com/",
     "https://archive.org/details/resonant-contact-protocol-ai-is-be-v-1.5a",
@@ -1470,6 +1471,14 @@ mod tests {
     fn complete_project_credits_url_is_allowed() {
         assert!(validate_project_url(
             "https://github.com/lukeskytorep-bot/AI-RV-Harness/blob/main/CREDITS.md"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn privacy_policy_project_url_is_allowed() {
+        assert!(validate_project_url(
+            "https://lukeskytorep-bot.github.io/AI-RV-Harness/privacy.html"
         )
         .is_ok());
     }

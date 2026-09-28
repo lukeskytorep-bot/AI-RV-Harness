@@ -34,6 +34,8 @@ export interface AppSettings {
   requestTimeoutMs: number;
   maxRetries: number;
   defaultMaxOutputTokens: number;
+  conversationMaxOutputTokens: number;
+  rvSessionMaxOutputTokens: number;
   maxSessionCostUsd: number;
   defaultRevealSource: "external" | "automatic";
   targetRepeatPolicy: "allow" | "avoid_profile";

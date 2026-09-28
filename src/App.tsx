@@ -144,6 +144,13 @@ export default function App() {
           repo.listWorkspaces(),
         ]);
         let nextSettings = { ...createDefaultSettings(), ...storedSettings };
+        const outputSettingsNeedUpgrade = storedSettings.conversationMaxOutputTokens === undefined || storedSettings.rvSessionMaxOutputTokens === undefined;
+        if (outputSettingsNeedUpgrade) {
+          const legacyOutput = storedSettings.defaultMaxOutputTokens ?? nextSettings.defaultMaxOutputTokens;
+          nextSettings = { ...nextSettings, conversationMaxOutputTokens: legacyOutput, rvSessionMaxOutputTokens: legacyOutput };
+          stage = "output-token-settings.upgrade";
+          await repo.saveSettings(nextSettings);
+        }
         if (storedSettings.telepathicStarterPackVersion !== TELEPATHIC_STARTER_PACK_VERSION) {
           stage = "telepathic-user-targets.seed";
           await seedBundledTelepathicTargets(repo);

@@ -103,7 +103,6 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   const [monitorModelKey, setMonitorModelKey] = useState("");
   const [reasoning, setReasoning] = useState<"" | ReasoningEffort>("");
   const [temperature, setTemperature] = useState("");
-  const [maxOutputTokens, setMaxOutputTokens] = useState(String(settings.defaultMaxOutputTokens));
   const [progress, setProgress] = useState<SessionProgress | null>(null);
   const [streamPreview, setStreamPreview] = useState<SessionStreamPreview | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -143,7 +142,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   const monitorProvider = monitorModel ? providerConfigs.find((item) => item.id === monitorModel.providerConfigId) ?? null : null;
   const eligibleTargets = targets.filter((target) => targetIsEligibleForProtocol(target, protocol));
   const batchPool = eligibleTargets;
-  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, aiIdentityId: selectedIdentity?.identity.id ?? null, modelId: selectedModel?.modelId ?? null, protocol, liteVariant, specialTaskOptions, specialTaskText, telepathicQuestionMode, telepathicQuestions, customProtocolVersionId, runType, viewerNotesEnabled, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
+  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, aiIdentityId: selectedIdentity?.identity.id ?? null, modelId: selectedModel?.modelId ?? null, protocol, liteVariant, specialTaskOptions, specialTaskText, telepathicQuestionMode, telepathicQuestions, customProtocolVersionId, runType, viewerNotesEnabled, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens: selectedModel ? Math.min(settings.rvSessionMaxOutputTokens, selectedModel.capabilities.maxOutputTokens ?? settings.rvSessionMaxOutputTokens) : settings.rvSessionMaxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
   const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : protocol === "telepathic" ? 9 : 6;
   const running = sessionRunning || batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
@@ -214,12 +213,10 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
 
   useEffect(() => {
     if (!selectedModel) return;
-    const limit = selectedModel.capabilities.maxOutputTokens;
     const profileDefaults = profileGenerationDefaults(profile, selectedModel);
-    setMaxOutputTokens(String(limit ? Math.min(limit, settings.defaultMaxOutputTokens) : settings.defaultMaxOutputTokens));
     setReasoning(profileDefaults.reasoningEffort ?? "");
     setTemperature(profileDefaults.temperature === undefined ? "" : String(profileDefaults.temperature));
-  }, [selectedIdentity?.identity.id, selectedModel?.modelId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, settings.defaultMaxOutputTokens]);
+  }, [selectedIdentity?.identity.id, selectedModel?.modelId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature]);
 
   useEffect(() => {
     if (protocol !== "telepathic") return;
@@ -237,7 +234,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
     if (protocol === "custom" && !selectedCustomProtocol) failures.push(copy.noCustomProtocols);
     if (!isRunModeCompatible(runType, protocol)) failures.push(copy.rvLiteUnavailable);
     if (runType === "monitor" && (!monitorModel || !monitorProvider)) failures.push(copy.monitorModel);
-    if (!Number.isFinite(Number(maxOutputTokens)) || Number(maxOutputTokens) <= 0) failures.push(copy.maxOutputTokens);
+    if (!Number.isFinite(settings.rvSessionMaxOutputTokens) || settings.rvSessionMaxOutputTokens <= 0) failures.push(copy.maxOutputTokens);
     if (protocol === "telepathic" && telepathicQuestionMode === "predefined" && telepathicQuestions.length === 0) failures.push(settings.interfaceLanguage === "pl" ? "Wpisz pytania po Kroku 8" : "Enter Step 8 questions");
     if (protocol === "telepathic" && runType === "monitor" && telepathicQuestions.length > 5) failures.push(settings.interfaceLanguage === "pl" ? "AI Monitor może zadać najwyżej 5 pytań" : "AI Monitor may ask at most 5 questions");
     if (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") failures.push(settings.interfaceLanguage === "pl" ? "Tryb ręcznych pytań nie jest dostępny w batchu" : "Manual questions are unavailable in batch mode");
@@ -348,7 +345,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
     const requestedSettings = {
       ...(reasoning ? { reasoningEffort: reasoning } : {}),
       ...(temperature.trim() ? { temperature: Number(temperature) } : {}),
-      ...(maxOutputTokens.trim() ? { maxOutputTokens: Number(maxOutputTokens) } : {}),
+      maxOutputTokens: selectedModel?.capabilities.maxOutputTokens ? Math.min(settings.rvSessionMaxOutputTokens, selectedModel.capabilities.maxOutputTokens) : settings.rvSessionMaxOutputTokens,
     };
     const runOne = async (target: TargetRecord | null) => {
       const viewerNotes = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: viewerNotesEnabled, aiIdentityId: selectedIdentity.identity.id });
@@ -818,7 +815,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
         </ConfigBlock>
         <ConfigBlock label="Viewer Notes">
           <label className="viewer-notes-toggle" title={settings.interfaceLanguage === "pl" ? "Dołącz aktywne Viewer Notes tej tożsamości jako pomocniczą pamięć proceduralną. Zwykłe RV Sessions nigdy ich nie aktualizują; nowe wersje powstają wyłącznie podczas Training." : "Attach this identity's active Viewer Notes as auxiliary procedural memory. Ordinary RV Sessions never update them; new versions are created only during Training."}>
-            <span><strong>{settings.interfaceLanguage === "pl" ? "Użyj Viewer Notes" : "Use Viewer Notes"}</strong><small>{settings.interfaceLanguage === "pl" ? "Eksperymentalne · domyślnie włączone" : "Experimental · enabled by default"}</small></span>
+            <span><strong>{settings.interfaceLanguage === "pl" ? "Użyj Viewer Notes" : "Use Viewer Notes"}</strong><small>{settings.interfaceLanguage === "pl" ? "Domyślnie włączone · sesje RV używają notatek tylko do odczytu" : "Enabled by default · RV sessions use the notes read-only"}</small></span>
             <input type="checkbox" checked={viewerNotesEnabled} onChange={(event) => setViewerNotesEnabled(event.target.checked)} />
           </label>
         </ConfigBlock>
@@ -857,7 +854,6 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
           <div className="generation-grid">
             <label><span>{copy.reasoning}</span><select value={reasoning} onChange={(event) => setReasoning(event.target.value as "" | ReasoningEffort)}><option value="">{copy.providerDefault}</option>{reasoningOptions(selectedModel.capabilities.reasoning).map((option) => <option key={option.value} value={option.value}>{reasoningOptionLabel(copy, option)}</option>)}</select><small>{reasoningCapabilityLead(copy, selectedModel)}</small></label>
             <label><span>{copy.temperature}</span><input type="number" step="0.1" value={temperature} onChange={(event) => setTemperature(event.target.value)} placeholder={copy.providerDefault} disabled={!selectedModel.capabilities.temperature.supported} min={selectedModel.capabilities.temperature.min} max={selectedModel.capabilities.temperature.max} /></label>
-            <label><span>{copy.maxOutputTokens}</span><input type="number" min={1} max={selectedModel.capabilities.maxOutputTokens} value={maxOutputTokens} onChange={(event) => setMaxOutputTokens(event.target.value)} /></label>
           </div>
         </ConfigBlock>}
         <ConfigBlock label={copy.sessionLanguage}>
@@ -878,7 +874,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
           {eligibleTargets.length ? <select className="session-language-select" value={selectedTargetId} onChange={(event) => setSelectedTargetId(event.target.value)}><option value="__random__">🎲 {copy.randomTarget}</option>{eligibleTargets.map((target) => <option key={target.id} value={target.id}>{copy.myTargets} · {localizedTargetTitle(target, resolvedLanguage)}</option>)}</select> : <div className="route-summary target-empty-warning"><Crosshair size={16} /><span><strong>{copy.noEligibleTargets}</strong><small>{copy.noEligibleTargetsLead}</small></span></div>}
         </ConfigBlock>}</> : <ConfigBlock label={copy.targetPool}><div className="batch-config"><label><span>{copy.targetPool}</span><strong>{copy.myTargets}</strong></label><label><span>{copy.batchCount}</span><input type="number" min={1} max={Math.max(1, batchPool.length)} value={batchCount} onChange={(event) => setBatchCount(Math.max(1, Number(event.target.value) || 1))} /></label><small>{copy.eligibleTargets}: {batchPool.length}</small>{batchPool.length === 0 && <small className="target-source-error">{copy.noEligibleTargetsLead}</small>}<div className="batch-preflight-actions"><button className="secondary-button" onClick={preflightBatch}>{copy.runPreflight}</button>{batchPreflightSignature === batchConfigSignature && <span className="status-chip ready"><Check size={12} />{copy.preflightPassed}</span>}</div></div></ConfigBlock>}
         <div className="start-block">
-          <button className="primary-button start-button" disabled={!isTauriRuntime() || !activeProvider || !selectedModel || !maxOutputTokens || Number(maxOutputTokens) <= 0 || (runType === "monitor" && (!canSelectMonitor(protocol) || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (protocol === "telepathic" && telepathicQuestionMode === "predefined" && (!telepathicQuestions.length || (runType === "monitor" && telepathicQuestions.length > 5))) || (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
+          <button className="primary-button start-button" disabled={!isTauriRuntime() || !activeProvider || !selectedModel || settings.rvSessionMaxOutputTokens <= 0 || (runType === "monitor" && (!canSelectMonitor(protocol) || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (protocol === "telepathic" && telepathicQuestionMode === "predefined" && (!telepathicQuestions.length || (runType === "monitor" && telepathicQuestions.length > 5))) || (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
           <p>{activeProvider ? copy.controllerReady : copy.configureProviderFirst}</p>
         </div>
         </>}

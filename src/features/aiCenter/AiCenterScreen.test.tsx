@@ -25,7 +25,8 @@ describe("AiCenterScreen", () => {
     />);
 
     expect(html).toContain("AI Center");
-    expect(html).toContain("Viewer Notes are experimental");
+    expect(html).toContain("Auxiliary procedural memory for this Viewer identity");
+    expect(html).not.toContain("Viewer Notes are experimental");
     expect(html).toContain("How AI Center works");
   });
   it("presents Viewer Learning as separate Field Guide and Viewer Notes tabs", () => {

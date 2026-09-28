@@ -111,7 +111,7 @@ export function ProfilesScreen({ copy, profiles, workspaces, onCreateProfile, on
 
 function WorkspaceSection({ copy, title, kind, items, allOwned, activeId, onCreate, onOpen, onRename, onArchive }: { copy: ReturnType<typeof getCopy>; title: string; kind: NewWorkspaceKind; items: Workspace[]; allOwned: Workspace[]; activeId: string | null; onCreate: () => void; onOpen: (workspace: Workspace) => void; onRename: (workspace: Workspace) => Promise<void>; onArchive: (workspace: Workspace) => Promise<void> }) {
   return <section className="profile-workspace-section">
-    <header><div><strong>{title}</strong><small>{items.length}</small></div><button className="secondary-button compact" onClick={onCreate}><Plus size={14} />{copy.createWorkspace}</button></header>
+    <header><div><strong>{title}</strong><small>{items.length}</small></div><button className="workspace-add-button" type="button" aria-label={kind === "conversation" ? (copy.home === "Home" ? "Add Conversation Workspace" : "Dodaj Workspace konwersacji") : (copy.home === "Home" ? "Add RV Session Workspace" : "Dodaj Workspace sesji RV")} title={kind === "conversation" ? (copy.home === "Home" ? "Add Conversation Workspace" : "Dodaj Workspace konwersacji") : (copy.home === "Home" ? "Add RV Session Workspace" : "Dodaj Workspace sesji RV")} onClick={onCreate}><Plus size={16} /></button></header>
     <div className="workspace-list workspace-tile-grid">
       {items.length === 0 ? <p className="muted">{copy.noCompatibleWorkspace}</p> : items.map((workspace) => <ProfileWorkspaceTile key={`${kind}:${workspace.id}`} copy={copy} workspace={workspace} active={workspace.id === activeId} canArchive={canArchiveWorkspace(workspace, allOwned)} onOpen={() => onOpen(workspace)} onRename={() => onRename(workspace)} onArchive={() => onArchive(workspace)} />)}
     </div>
@@ -124,7 +124,7 @@ function ProfileWorkspaceTile({ copy, workspace, active, canArchive, onOpen, onR
   const runAction = async (action: () => Promise<void>) => { await action(); closeMenu(); };
   const typeLabel = workspace.kind === "legacy_combined" ? copy.legacyCombinedWorkspace : workspace.kind === "conversation" ? copy.conversationWorkspace : copy.rvWorkspace;
   return <div className={`profile-workspace-tile${active ? " active" : ""}`}>
-    <button className="workspace-tile" onClick={onOpen}><span><RadioTower size={17} /><span><strong>{workspace.name}</strong><small>{workspace.description || typeLabel}</small></span></span><ChevronRight size={16} /></button>
+    <button className="workspace-tile" onClick={onOpen}><span><RadioTower size={17} /><span><strong title={workspace.name}>{workspace.name}</strong><small>{workspace.description || typeLabel}</small></span></span><ChevronRight size={16} /></button>
     <details ref={detailsRef} className="workspace-actions profile-workspace-actions" onClick={(event) => event.stopPropagation()}>
       <summary aria-label={copy.home === "Home" ? `Workspace actions: ${workspace.name}` : `Akcje Workspace: ${workspace.name}`} onClick={(event) => event.stopPropagation()}><EllipsisVertical size={18} /></summary>
       <div role="menu" onClick={(event) => event.stopPropagation()}><button role="menuitem" onClick={() => void runAction(onRename)}><Pencil size={14} />{copy.home === "Home" ? "Rename" : "Zmień nazwę"}</button><button role="menuitem" disabled={!canArchive} title={!canArchive ? copy.lastCompatibleWorkspaceRequired : undefined} onClick={() => void runAction(onArchive)}><Archive size={14} />{copy.home === "Home" ? "Archive" : "Archiwizuj"}</button></div>
