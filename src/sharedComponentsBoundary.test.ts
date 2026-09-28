@@ -44,7 +44,10 @@ describe("STAGE-7B shared component boundaries", () => {
     const shell = read("components/ResourceViewerDialogShell.tsx");
 
     expect(settings).toContain('from "../../components/ResourceViewerDialogShell"');
-    expect(settings.match(/<ResourceViewerDialogShell/g)?.length).toBe(2);
+    expect(settings).toContain("function BuiltinDocumentDialog");
+    expect(settings).toContain("function PrivacyPolicyDialog");
+    expect(settings).toContain("function PromptResourceDialog");
+    expect(settings.match(/<ResourceViewerDialogShell/g)?.length).toBe(3);
     expect(protocolDialog).toContain('from "./ResourceViewerDialogShell"');
     expect(protocolDialog).toContain("<ResourceViewerDialogShell");
     expect(shell).toContain('className="modal-backdrop"');
