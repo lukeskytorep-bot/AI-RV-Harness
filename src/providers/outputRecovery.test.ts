@@ -247,13 +247,17 @@ describe("analytical output recovery", () => {
     expect(result.attempt).toBe(1);
     expect(dispatched[0]).toMatchObject({ output: 8192, required: 8192 });
     expect(dispatched[1]).toMatchObject({ output: 16384, required: 16384, routing: ["large-route"] });
-    expect(endpointDiscovery).toHaveBeenCalledTimes(2);
+    // Endpoint metadata stay fresh-cached between the two analytical attempts.
+    // Recovery reclassifies the cached snapshot for the larger budget; it must
+    // not require a second discovery network call.
+    expect(endpointDiscovery).toHaveBeenCalledTimes(1);
   });
 
   it("routes learning-object recovery capacity+16384 past model-level capacity+8192", async () => {
     const learningModel = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 10240 } };
     const config: ProviderConfig = { id: "pc-learning-routing", provider: "openrouter", label: "OR", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
     const endpointDiscovery = vi.fn(async () => ({ data: { endpoints: [
+      { tag: "small-route", context_length: 65536, max_completion_tokens: 10240 },
       { tag: "large-route", context_length: 131072, max_completion_tokens: 32768 },
     ] } }));
     const outputs: number[] = [];
@@ -318,7 +322,7 @@ describe("analytical output recovery", () => {
     expect(result.attempt).toBe(1);
     expect(physical).toBe(2);
     expect(dispatchedBudgets).toEqual([8192, 16384]);
-    expect(endpointDiscovery).toHaveBeenCalledTimes(2);
+    expect(endpointDiscovery).toHaveBeenCalledTimes(1);
   });
 
   it("still local-stops analytical recovery when every allowed OpenRouter endpoint is PROVEN_NO", async () => {
@@ -350,7 +354,7 @@ describe("analytical output recovery", () => {
     })).rejects.toMatchObject({ name: "ProviderCallError", details: { code: "configuration", phase: "before_dispatch" } });
     expect(physical).toBe(1);
     expect(dispatchedBudgets).toEqual([8192]);
-    expect(endpointDiscovery).toHaveBeenCalledTimes(2);
+    expect(endpointDiscovery).toHaveBeenCalledTimes(1);
   });
 
   it("keeps all three recovery operation profiles on capacity-protected routing", () => {
