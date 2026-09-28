@@ -106,6 +106,14 @@ describe("Browser AI Center repository contract", () => {
     expect(storage.getItem("rvh.dev.ai_note_settings")).not.toBeNull();
   });
 
+  it("reads existing Viewer Notes without bootstrapping missing Browser settings", async () => {
+    const { repository, storage } = browserHarness();
+    const identity = await repository.ensureAiIdentity(identityInput());
+    storage.removeItem("rvh.dev.ai_note_settings");
+    expect(await repository.getExistingViewerNoteBundle(identity.id)).toBeNull();
+    expect(storage.getItem("rvh.dev.ai_note_settings")).toBeNull();
+  });
+
   it("creates the first Viewer Notes version, activation and active pointer exactly once", async () => {
     const { repository } = browserHarness();
     const identity = await repository.ensureAiIdentity(identityInput());

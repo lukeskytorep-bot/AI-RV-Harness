@@ -19,6 +19,7 @@ import {
   Sun,
   Users,
 } from "lucide-react";
+import { ensureProfileViewerIdentity } from "./aiCenter/viewerIdentitySelection";
 import rosehipLogo from "./assets/rosehip-logo.png";
 import {
   Component,
@@ -269,6 +270,7 @@ export default function App() {
   const createProfile = async (name: string, humanName: string | undefined, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => {
     if (!repository) return;
     const { profile, conversationWorkspace, rvWorkspace } = await createProfileWithInitialWorkspaces(repository, { name, humanName, note, aiConfiguration });
+    await ensureProfileViewerIdentity({ repository, profileId: profile.id, credentialId: aiConfiguration.credentialId, modelId: aiConfiguration.defaultViewerModelId });
     const [nextProfiles, nextWorkspaces] = await Promise.all([repository.listProfiles(), repository.listWorkspaces()]);
     setProfiles(nextProfiles);
     setWorkspaces(nextWorkspaces);
@@ -525,6 +527,13 @@ function FirstRunSetup({
         initialConversationWorkspace = created.conversationWorkspace;
         initialRvWorkspace = created.rvWorkspace;
       }
+      const viewerIdentity = await ensureProfileViewerIdentity({
+        repository,
+        profileId: profile.id,
+        credentialId: aiConfiguration.credentialId,
+        modelId: aiConfiguration.defaultViewerModelId,
+      });
+      if (!viewerIdentity) throw new Error("Viewer identity could not be created for the selected Profile setup route.");
       await onComplete(profile, initialConversationWorkspace, initialRvWorkspace);
     } catch (cause) {
       setSaveError(cause instanceof Error ? cause.message : String(cause));

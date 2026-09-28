@@ -10,6 +10,7 @@ import {
 } from "../resources/systemPrompts";
 import type { AppRepository } from "../storage/repository";
 import type { AiIdentity } from "./types";
+import { requireExistingViewerIdentity } from "./viewerIdentitySelection";
 import type { InterfaceLanguage, Profile, ViewerSystemPromptSnapshot } from "../types";
 import { buildViewerIdentityInput } from "./viewerNotes";
 import type {
@@ -96,13 +97,16 @@ export async function prepareFieldGuideForSession(input: {
   model: ProviderModel;
   language: InterfaceLanguage;
   now?: () => string;
+  aiIdentityId?: string;
 }): Promise<FieldGuideSessionSnapshot> {
-  const identity = await ensureViewerIdentity({
-    repository: input.repository,
-    profileId: input.profile.id,
-    providerConfig: input.providerConfig,
-    model: input.model,
-  });
+  const identity = input.aiIdentityId
+    ? await requireExistingViewerIdentity({ repository: input.repository, profileId: input.profile.id, identityId: input.aiIdentityId, providerConfig: input.providerConfig, model: input.model })
+    : await ensureViewerIdentity({
+      repository: input.repository,
+      profileId: input.profile.id,
+      providerConfig: input.providerConfig,
+      model: input.model,
+    });
   let bundle = await input.repository.getFieldGuideBundle(identity.id, input.language);
   const now = input.now ?? (() => new Date().toISOString());
 

@@ -144,6 +144,10 @@ export class SqliteAiCenterRepository implements AiCenterRepository {
       activationEvents: await this.listViewerNoteActivationEvents(aiIdentityId), reflectionRuns: await this.listViewerNoteReflectionRuns(aiIdentityId) };
   }
 
+  async getExistingViewerNoteBundle(aiIdentityId: string): Promise<ViewerNoteBundle | null> {
+    return this.getViewerNoteBundle(aiIdentityId);
+  }
+
   async listViewerNoteVersions(aiIdentityId: string): Promise<ViewerNoteVersion[]> {
     const rows = await this.dependencies.select<ViewerNoteVersionRow[]>("SELECT * FROM ai_note_versions WHERE ai_identity_id = $1 ORDER BY version_number DESC", [aiIdentityId]);
     return rows.map(mapViewerNoteVersion);

@@ -20,6 +20,9 @@ describe("profile operations", () => {
     const repository = {
       updateProfile: vi.fn(async () => { order.push("profile"); }),
       setProfileAiConfiguration: vi.fn(async () => { order.push("ai"); }),
+      listProviderConfigs: vi.fn(async () => [{ id: "provider-1", provider: "openrouter", label: "OpenRouter", credentialId: "credential-1", credentialFingerprint: "fp-1", enabled: true, createdAt: "now", updatedAt: "now" }]),
+      listProviderModels: vi.fn(async () => [{ providerConfigId: "provider-1", provider: "openrouter", modelId: "model-1", displayName: "Model 1", route: "openrouter:model-1", capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "provider_metadata" }, temperature: { supported: true, confidence: "provider_metadata" }, supportedParameters: [], source: "provider", capturedAt: "now" }, pricing: {}, recommended: false, rawMetadata: {}, refreshedAt: "now" }]),
+      ensureAiIdentity: vi.fn(async () => { order.push("identity"); return {} as never; }),
     } as unknown as AppRepository;
     const close = vi.fn(() => { order.push("close"); });
     const refresh = vi.fn(async () => { order.push("refresh"); });
@@ -29,6 +32,6 @@ describe("profile operations", () => {
 
     expect(repository.updateProfile).toHaveBeenCalledWith("profile-1", { name: "Orion", humanName: "Luke", note: "note" });
     expect(repository.setProfileAiConfiguration).toHaveBeenCalledWith("profile-1", aiConfiguration);
-    expect(order).toEqual(["profile", "ai", "close", "refresh"]);
+    expect(order).toEqual(["profile", "ai", "identity", "close", "refresh"]);
   });
 });

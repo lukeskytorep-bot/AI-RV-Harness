@@ -89,6 +89,7 @@ export interface AppRepository {
   ensureAiIdentity(input: EnsureAiIdentityInput): Promise<AiIdentity>;
   listAiIdentities(profileId: string): Promise<AiIdentity[]>;
   getViewerNoteBundle(aiIdentityId: string): Promise<ViewerNoteBundle | null>;
+  getExistingViewerNoteBundle(aiIdentityId: string): Promise<ViewerNoteBundle | null>;
   listViewerNoteVersions(aiIdentityId: string): Promise<ViewerNoteVersion[]>;
   listViewerNoteActivationEvents(aiIdentityId: string): Promise<ViewerNoteActivationEvent[]>;
   listViewerNoteReflectionRuns(aiIdentityId: string): Promise<ViewerNoteReflectionRun[]>;

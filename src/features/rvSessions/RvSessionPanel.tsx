@@ -47,7 +47,7 @@ import { ProtocolDialog } from "../../components/ProtocolDialog";
 import { parsePostRevealTranscript } from "../../sessions/postRevealTranscript";
 import { exportSessionRecord } from "../../exports/session";
 import { AsyncRunGuard } from "../../sessions/runGuard";
-import { findCredentialScopedModelByRouteKey, resolveRoleDefault, resolveViewerDefault } from "../../modelRoutes";
+import { findCredentialScopedModelByRouteKey, resolveRoleDefault } from "../../modelRoutes";
 import { ModelRouteSelect } from "../../components/ModelRouteSelect";
 import { useAppDialogs } from "../../components/AppDialogProvider";
 import { profileGenerationDefaults } from "../../profileViewerDefaults";
@@ -67,6 +67,7 @@ import {
 } from "../../sessions/telepathicController";
 import { prepareViewerNotesForSession } from "../../aiCenter/viewerNotes";
 import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
+import { listEligibleViewerIdentities, preferredViewerIdentityId, viewerIdentityLabel, type EligibleViewerIdentity } from "../../aiCenter/viewerIdentitySelection";
 import { reasoningCapabilityLead, reasoningOptionLabel } from "../../providers/reasoningPresentation";
 import { BatchEvaluation, JudgeEvaluation } from "../judge";
 
@@ -90,15 +91,15 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   const [sessionLanguage, setSessionLanguage] = useState<SessionLanguageSetting>(settings.sessionLanguage);
   const [resourceOpen, setResourceOpen] = useState(false);
   const [providerConfigs, setProviderConfigs] = useState<ProviderConfig[]>([]);
-  const [models, setModels] = useState<ProviderModel[]>([]);
   const [allModels, setAllModels] = useState<ProviderModel[]>([]);
+  const [viewerIdentities, setViewerIdentities] = useState<EligibleViewerIdentity[]>([]);
   const [targets, setTargets] = useState<TargetRecord[]>([]);
   const [customProtocols, setCustomProtocols] = useState<CustomProtocolVersion[]>([]);
   const [customProtocolVersionId, setCustomProtocolVersionId] = useState("");
   const [customBuilderOpen, setCustomBuilderOpen] = useState(false);
   const [customBuilderNew, setCustomBuilderNew] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState("__random__");
-  const [modelId, setModelId] = useState("");
+  const [viewerIdentityId, setViewerIdentityId] = useState("");
   const [monitorModelKey, setMonitorModelKey] = useState("");
   const [reasoning, setReasoning] = useState<"" | ReasoningEffort>("");
   const [temperature, setTemperature] = useState("");
@@ -135,13 +136,14 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   const telepathic = getTelepathicProtocol(resolvedLanguage);
   const telepathicQuestions = telepathicQuestionsText.split(/\r?\n/).map((question) => question.trim()).filter(Boolean);
   const specialTask: SpecialTaskInput | undefined = specialTaskOptions.length || specialTaskText.trim() ? { selectedOptions: specialTaskOptions, ...(specialTaskText.trim() ? { customText: specialTaskText.trim() } : {}) } : undefined;
-  const activeProvider = providerConfigs.find((item) => item.credentialId === profile?.credentialId) ?? null;
-  const selectedModel = models.find((item) => item.modelId === modelId) ?? null;
+  const selectedIdentity = viewerIdentities.find((item) => item.identity.id === viewerIdentityId) ?? null;
+  const activeProvider = selectedIdentity?.providerConfig ?? null;
+  const selectedModel = selectedIdentity?.model ?? null;
   const monitorModel = findCredentialScopedModelByRouteKey(monitorModelKey, profile?.credentialId, providerConfigs, allModels);
   const monitorProvider = monitorModel ? providerConfigs.find((item) => item.id === monitorModel.providerConfigId) ?? null : null;
   const eligibleTargets = targets.filter((target) => targetIsEligibleForProtocol(target, protocol));
   const batchPool = eligibleTargets;
-  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, modelId, protocol, liteVariant, specialTaskOptions, specialTaskText, telepathicQuestionMode, telepathicQuestions, customProtocolVersionId, runType, viewerNotesEnabled, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
+  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, aiIdentityId: selectedIdentity?.identity.id ?? null, modelId: selectedModel?.modelId ?? null, protocol, liteVariant, specialTaskOptions, specialTaskText, telepathicQuestionMode, telepathicQuestions, customProtocolVersionId, runType, viewerNotesEnabled, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
   const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : protocol === "telepathic" ? 9 : 6;
   const running = sessionRunning || batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
@@ -154,23 +156,22 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
       const configs = await repository.listProviderConfigs();
       if (cancelled) return;
       setProviderConfigs(configs);
-      const bound = configs.find((item) => item.credentialId === profile?.credentialId);
-      const [nextModels, everyModel, targetCatalog, sessionHistory] = await Promise.all([
-        bound ? repository.listProviderModels(bound.id) : Promise.resolve([]),
+      const [everyModel, targetCatalog, sessionHistory] = await Promise.all([
         repository.listProviderModels(),
         repository.listTargets(),
         repository.listRvSessions(workspace.id),
       ]);
+      const eligible = profile ? await listEligibleViewerIdentities({ repository, profileId: profile.id, language: resolvedLanguage, providerConfigs: configs, models: everyModel }) : [];
       if (cancelled) return;
-      setModels(nextModels);
+      setViewerIdentities(eligible);
       setAllModels(everyModel);
       setTargets(targetCatalog);
       setRecentSessions(sessionHistory.filter((session) => !session.researchProjectId));
-      setModelId(resolveViewerDefault(profile, bound ?? null, nextModels));
+      setViewerIdentityId(preferredViewerIdentityId(eligible, profile?.defaultViewerModelId));
       setMonitorModelKey(resolveRoleDefault(profile, "monitor", configs, everyModel));
     })();
     return () => { cancelled = true; };
-  }, [repository, profile?.credentialId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profile?.defaultMonitorProviderConfigId, profile?.defaultMonitorModelId, workspace.id]);
+  }, [repository, profile?.id, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profile?.defaultMonitorProviderConfigId, profile?.defaultMonitorModelId, workspace.id, resolvedLanguage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -218,7 +219,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
     setMaxOutputTokens(String(limit ? Math.min(limit, settings.defaultMaxOutputTokens) : settings.defaultMaxOutputTokens));
     setReasoning(profileDefaults.reasoningEffort ?? "");
     setTemperature(profileDefaults.temperature === undefined ? "" : String(profileDefaults.temperature));
-  }, [selectedModel?.modelId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, settings.defaultMaxOutputTokens]);
+  }, [selectedIdentity?.identity.id, selectedModel?.modelId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, settings.defaultMaxOutputTokens]);
 
   useEffect(() => {
     if (protocol !== "telepathic") return;
@@ -321,7 +322,8 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
     const batchTargets = executionScope === "batch" ? selectBatchTargets(batchPool, batchCount) : [];
     let rvSystemPrompt;
     try {
-      const fieldGuide = await prepareFieldGuideForSession({ repository, profile, providerConfig: activeProvider, model: selectedModel, language: resolvedLanguage });
+      if (!selectedIdentity) throw new Error(settings.interfaceLanguage === "pl" ? "Wybrana tożsamość Viewera nie jest dostępna." : "The selected Viewer identity is unavailable.");
+      const fieldGuide = await prepareFieldGuideForSession({ repository, profile, providerConfig: activeProvider, model: selectedModel, language: resolvedLanguage, aiIdentityId: selectedIdentity.identity.id });
       rvSystemPrompt = await viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
     } catch (cause) { setRunError(cause instanceof Error ? cause.message : String(cause)); return; }
     if (!runGuardRef.current.tryAcquire()) return;
@@ -349,7 +351,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
       ...(maxOutputTokens.trim() ? { maxOutputTokens: Number(maxOutputTokens) } : {}),
     };
     const runOne = async (target: TargetRecord | null) => {
-      const viewerNotes = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: viewerNotesEnabled });
+      const viewerNotes = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: viewerNotesEnabled, aiIdentityId: selectedIdentity.identity.id });
       if (protocol === "lite") {
         const result = await runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, ...(settings.maxSessionCostUsd > 0 ? { maxSessionCostUsd: settings.maxSessionCostUsd } : {}), streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
         await finishRevealedSession(result);
@@ -845,10 +847,11 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
           <div className="route-summary">{activeProvider ? <><KeyRound size={16} /><span><strong>{activeProvider.label}</strong><small>{activeProvider.credentialHint ?? "••••••••"}</small></span></> : <><KeyRound size={16} /><span><strong>{copy.credentialPending}</strong><small>{copy.configureProviderFirst}</small></span></>}</div>
         </ConfigBlock>
         <ConfigBlock label={copy.viewerModel}>
-          <select value={modelId} onChange={(event) => setModelId(event.target.value)} disabled={!activeProvider || models.length === 0}>
-            <option value="">{models.length ? copy.selectModel : copy.noCachedModels}</option>
-            {models.map((model) => <option key={model.modelId} value={model.modelId}>{model.recommended ? "★ " : ""}{model.displayName}</option>)}
+          <select value={viewerIdentityId} onChange={(event) => setViewerIdentityId(event.target.value)} disabled={!viewerIdentities.length}>
+            <option value="">{viewerIdentities.length ? copy.selectModel : (settings.interfaceLanguage === "pl" ? "Brak tożsamości Viewera" : "No Viewer identity")}</option>
+            {viewerIdentities.map((item) => <option key={item.identity.id} value={item.identity.id}>{viewerIdentityLabel(item, settings.interfaceLanguage)}</option>)}
           </select>
+          {!viewerIdentities.length && <small>{settings.interfaceLanguage === "pl" ? "Dodaj model Viewera w Profilu lub rozpocznij Training. RV Sessions nie tworzą nowej tożsamości automatycznie." : "Add a Viewer model in Profile or start Training. RV Sessions do not create a new identity automatically."}</small>}
         </ConfigBlock>
         {selectedModel && <ConfigBlock label="Generation">
           <div className="generation-grid">

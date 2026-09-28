@@ -20,6 +20,7 @@ import type {
 import { loadRevealImageForJudge } from "../artifacts/native";
 import { analyticalOutputBudget, callWithAnalyticalOutputRecovery } from "../providers/outputRecovery";
 import { assertViewerNoteBasePair, viewerNoteBaseFromSnapshot } from "./baseVersion";
+import { requireExistingViewerIdentity } from "./viewerIdentitySelection";
 
 export const VIEWER_NOTES_ESTIMATOR_VERSION = "conservative-char-v1" as const;
 export const VIEWER_NOTES_CAPACITIES = [1024, 2048, 4096, 8192] as const;
@@ -62,11 +63,17 @@ export async function prepareViewerNotesForSession(input: {
   providerConfig: ProviderConfig;
   model: ProviderModel;
   enabled: boolean;
+  aiIdentityId?: string;
 }): Promise<ViewerNotesSessionSnapshot> {
-  let secureFingerprint: string | undefined;
-  try { secureFingerprint = await credentialIdentityFingerprint(input.providerConfig.credentialId); }
-  catch { secureFingerprint = input.providerConfig.credentialFingerprint; }
-  const identity = await input.repository.ensureAiIdentity(buildViewerIdentityInput(input.profileId, input.providerConfig, input.model, secureFingerprint));
+  let identity: AiIdentity;
+  if (input.aiIdentityId) {
+    identity = await requireExistingViewerIdentity({ repository: input.repository, profileId: input.profileId, identityId: input.aiIdentityId, providerConfig: input.providerConfig, model: input.model });
+  } else {
+    let secureFingerprint: string | undefined;
+    try { secureFingerprint = await credentialIdentityFingerprint(input.providerConfig.credentialId); }
+    catch { secureFingerprint = input.providerConfig.credentialFingerprint; }
+    identity = await input.repository.ensureAiIdentity(buildViewerIdentityInput(input.profileId, input.providerConfig, input.model, secureFingerprint));
+  }
   const bundle = await input.repository.getViewerNoteBundle(identity.id);
   const active = bundle?.activeVersion;
   const content = input.enabled ? active?.content ?? "" : "";

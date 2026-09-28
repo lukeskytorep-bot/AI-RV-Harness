@@ -1,5 +1,6 @@
 import type { AppRepository } from "../../storage/repository";
 import type { ProfileAiConfigurationInput } from "../../types";
+import { ensureProfileViewerIdentity } from "../../aiCenter/viewerIdentitySelection";
 
 export async function archiveProfileAndRefresh(
   repository: AppRepository,
@@ -18,7 +19,10 @@ export async function saveProfileAndRefresh(
   onSaved?: () => void,
 ): Promise<void> {
   await repository.updateProfile(profileId, { name: values.name, humanName: values.humanName, note: values.note });
-  if (values.aiConfiguration) await repository.setProfileAiConfiguration(profileId, values.aiConfiguration);
+  if (values.aiConfiguration) {
+    await repository.setProfileAiConfiguration(profileId, values.aiConfiguration);
+    await ensureProfileViewerIdentity({ repository, profileId, credentialId: values.aiConfiguration.credentialId, modelId: values.aiConfiguration.defaultViewerModelId });
+  }
   onSaved?.();
   await onProfilesChanged();
 }

@@ -2,6 +2,7 @@ import { Archive, ArrowRight, Crosshair, Download, FileCheck2, KeyRound, LockKey
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { prepareViewerNotesForSession, viewerNotesSystemBlock } from "../../aiCenter/viewerNotes";
+import { listEligibleViewerIdentities, preferredViewerIdentityId, requireExistingViewerIdentity, viewerIdentityLabel, type EligibleViewerIdentity } from "../../aiCenter/viewerIdentitySelection";
 import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
 import { chooseAndImportAttachments } from "../../attachments/native";
 import { ChatMessageList } from "../../chat/ChatMessageList";
@@ -14,7 +15,6 @@ import { clampChatOutputTokens, defaultChatOutputTokens, loadChatOutputTokens, s
 import { clearPendingChatTurn, loadPendingChatTurn, savePendingChatTurn, type PendingChatTurn } from "../../chat/pendingTurn";
 import { resolveSessionLanguage } from "../../domain/localization";
 import { getCopy } from "../../i18n";
-import { resolveViewerDefault } from "../../profileModelDefaults";
 import { profileGenerationDefaults } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderImageInput, ProviderModel, ProviderStreamEvent } from "../../providers/types";
 import { getFullRcp, getRvLite, getTelepathicProtocol } from "../../resources/protocolRegistry";
@@ -44,11 +44,12 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [providerConfigs, setProviderConfigs] = useState<ProviderConfig[]>([]);
   const [models, setModels] = useState<ProviderModel[]>([]);
+  const [viewerIdentities, setViewerIdentities] = useState<EligibleViewerIdentity[]>([]);
   const [sources, setSources] = useState<WorkspaceSource[]>([]);
   const [activeSourceIds, setActiveSourceIds] = useState<string[]>([]);
   const [chatImages, setChatImages] = useState<ProviderImageInput[]>([]);
   const [chatImageNames, setChatImageNames] = useState<string[]>([]);
-  const [modelId, setModelId] = useState("");
+  const [viewerIdentityId, setViewerIdentityId] = useState("");
   const [input, setInput] = useState("");
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [manualProtocol, setManualProtocol] = useState<"none" | "rcp" | "lite-core" | "lite-extended" | "telepathic">("none");
@@ -62,8 +63,9 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   const [continuationFallback, setContinuationFallback] = useState<"send" | "retry" | null>(null);
   const dialogs = useAppDialogs();
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
-  const activeProvider = providerConfigs.find((item) => item.credentialId === profile?.credentialId) ?? null;
-  const selectedModel = models.find((item) => item.modelId === modelId) ?? null;
+  const selectedIdentity = viewerIdentities.find((item) => item.identity.id === viewerIdentityId) ?? null;
+  const activeProvider = selectedIdentity?.providerConfig ?? null;
+  const selectedModel = selectedIdentity?.model ?? null;
 
   useEffect(() => {
     if (fixedMode) setMode(fixedMode);
@@ -79,18 +81,19 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       ]);
       if (cancelled) return;
       setProviderConfigs(configs);
-      const bound = configs.find((item) => item.credentialId === profile?.credentialId);
-      const nextModels = bound ? await repository.listProviderModels(bound.id) : [];
+      const nextModels = await repository.listProviderModels();
+      const eligible = profile ? await listEligibleViewerIdentities({ repository, profileId: profile.id, language, providerConfigs: configs, models: nextModels }) : [];
       if (cancelled) return;
       setModels(nextModels);
+      setViewerIdentities(eligible);
       setSources(nextSources);
       setChatImages([]);
       setChatImageNames([]);
-      setModelId(resolveViewerDefault(profile, bound ?? null, nextModels));
+      setViewerIdentityId(preferredViewerIdentityId(eligible, profile?.defaultViewerModelId));
       setError(null);
     })();
     return () => { cancelled = true; };
-  }, [repository, workspace.id, profile?.credentialId, profile?.defaultViewerModelId]);
+  }, [repository, workspace.id, profile?.id, profile?.defaultViewerModelId, language]);
 
   useEffect(() => {
     let cancelled = false;
@@ -344,11 +347,12 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
     let effectiveRvSystemPrompt = rvSystemPrompt;
     try {
       if (mode === "manual_rv" && profile) {
-        const fieldGuide = await prepareFieldGuideForSession({ repository, profile, providerConfig: activeProvider, model: selectedModel, language });
+        if (!selectedIdentity) throw new Error(settings.interfaceLanguage === "pl" ? "Wybrana tożsamość Viewera nie jest dostępna." : "The selected Viewer identity is unavailable.");
+        const fieldGuide = await prepareFieldGuideForSession({ repository, profile, providerConfig: activeProvider, model: selectedModel, language, aiIdentityId: selectedIdentity.identity.id });
         const promptSnapshot = await viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
         effectiveRvSystemPrompt = promptSnapshot.content;
         if (manualViewerNotesEnabled) {
-          const snapshot = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: true });
+          const snapshot = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: true, aiIdentityId: selectedIdentity.identity.id });
           const notesBlock = viewerNotesSystemBlock(snapshot, language);
           if (notesBlock) effectiveRvSystemPrompt = [effectiveRvSystemPrompt, notesBlock].filter(Boolean).join("\n\n");
         }
@@ -365,6 +369,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       language,
       providerConfigId: activeProvider.id,
       modelId: selectedModel.modelId,
+      modelRoute: selectedModel.route,
+      aiIdentityId: selectedIdentity?.identity.id,
       content,
       requestedSettings: { ...profileGenerationDefaults(profile, selectedModel), maxOutputTokens: effectiveMaxOutputTokens },
       ...(effectiveRvSystemPrompt ? { rvSystemPrompt: effectiveRvSystemPrompt } : {}),
@@ -425,10 +431,18 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   const retryPendingResponse = async (allowTextOnlyContinuation = false) => {
     if (!repository || !pendingRetry || sending) return;
     const providerConfig = providerConfigs.find((item) => item.id === pendingRetry.providerConfigId);
-    const model = models.find((item) => item.providerConfigId === pendingRetry.providerConfigId && item.modelId === pendingRetry.modelId);
+    const model = models.find((item) => item.providerConfigId === pendingRetry.providerConfigId && item.modelId === pendingRetry.modelId && (!pendingRetry.modelRoute || item.route === pendingRetry.modelRoute));
     if (!providerConfig || !model) {
       setError(settings.interfaceLanguage === "pl" ? "Zapisany model lub połączenie nie jest obecnie dostępne. Przywróć je, aby ponowić odpowiedź." : "The saved model or connection is currently unavailable. Restore it to retry the response.");
       return;
+    }
+    if (pendingRetry.aiIdentityId && profile) {
+      try {
+        await requireExistingViewerIdentity({ repository, profileId: profile.id, identityId: pendingRetry.aiIdentityId, providerConfig, model });
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        return;
+      }
     }
     setSending(true);
     setStreamingAssistant("");
@@ -528,10 +542,11 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       </div>
       <div className="chat-model-bar">
         <span><KeyRound size={14} />{activeProvider?.label ?? copy.credentialPending}</span>
-        <select value={modelId} onChange={(event) => setModelId(event.target.value)} disabled={!activeProvider || !models.length || sending}>
-          <option value="">{models.length ? copy.selectModel : copy.noCachedModels}</option>
-          {models.map((model) => <option key={model.modelId} value={model.modelId}>{model.recommended ? "★ " : ""}{model.displayName}</option>)}
+        <select value={viewerIdentityId} onChange={(event) => setViewerIdentityId(event.target.value)} disabled={!viewerIdentities.length || sending}>
+          <option value="">{viewerIdentities.length ? copy.selectModel : (settings.interfaceLanguage === "pl" ? "Brak tożsamości Viewera" : "No Viewer identity")}</option>
+          {viewerIdentities.map((item) => <option key={item.identity.id} value={item.identity.id}>{viewerIdentityLabel(item, settings.interfaceLanguage)}</option>)}
         </select>
+        {!viewerIdentities.length && <small>{settings.interfaceLanguage === "pl" ? "Dodaj model Viewera w Profilu lub rozpocznij Training. Conversation nie tworzy nowej tożsamości automatycznie." : "Add a Viewer model in Profile or start Training. Conversation does not create a new identity automatically."}</small>}
         <label className="chat-output-limit"><span>{copy.maxOutputTokens}</span><input type="number" min={1} max={selectedModel?.capabilities.maxOutputTokens ?? 262144} value={maxOutputTokens} disabled={!selectedModel || sending} onChange={(event) => setMaxOutputTokens(event.target.value)} onBlur={commitMaxOutputTokens} /></label>
         <span className={`chat-context-meter ${contextBudget.level}`} title={contextBudget.contextLimit === undefined
           ? `${copy.estimatedContext}: ~${contextBudget.estimatedInputTokens.toLocaleString()} + ${contextBudget.reservedOutputTokens.toLocaleString()} output tokens`

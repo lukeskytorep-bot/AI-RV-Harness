@@ -138,6 +138,7 @@ export class SqliteRepository implements AppRepository {
   ensureAiIdentity: AppRepository["ensureAiIdentity"] = (input) => this.aiCenterRepository.ensureAiIdentity(input);
   listAiIdentities: AppRepository["listAiIdentities"] = (profileId) => this.aiCenterRepository.listAiIdentities(profileId);
   getViewerNoteBundle: AppRepository["getViewerNoteBundle"] = (aiIdentityId) => this.aiCenterRepository.getViewerNoteBundle(aiIdentityId);
+  getExistingViewerNoteBundle: AppRepository["getExistingViewerNoteBundle"] = (aiIdentityId) => this.aiCenterRepository.getExistingViewerNoteBundle(aiIdentityId);
   listViewerNoteVersions: AppRepository["listViewerNoteVersions"] = (aiIdentityId) => this.aiCenterRepository.listViewerNoteVersions(aiIdentityId);
   listViewerNoteActivationEvents: AppRepository["listViewerNoteActivationEvents"] = (aiIdentityId) => this.aiCenterRepository.listViewerNoteActivationEvents(aiIdentityId);
   listViewerNoteReflectionRuns: AppRepository["listViewerNoteReflectionRuns"] = (aiIdentityId) => this.aiCenterRepository.listViewerNoteReflectionRuns(aiIdentityId);

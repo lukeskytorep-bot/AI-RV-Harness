@@ -4,7 +4,7 @@ import contract from "./repository.ts?raw";
 import sqliteFacade from "./sqliteRepository.ts?raw";
 
 const methods = [
-  "ensureAiIdentity", "listAiIdentities", "getViewerNoteBundle", "listViewerNoteVersions", "listViewerNoteActivationEvents",
+  "ensureAiIdentity", "listAiIdentities", "getViewerNoteBundle", "getExistingViewerNoteBundle", "listViewerNoteVersions", "listViewerNoteActivationEvents",
   "listViewerNoteReflectionRuns", "setViewerNoteCapacity", "setViewerNotesDefaultEnabled", "beginViewerNoteReflection",
   "failViewerNoteReflection", "commitViewerNoteReflection", "restoreViewerNoteVersion", "detachViewerNoteSourceReferences",
 ] as const;

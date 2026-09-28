@@ -7,6 +7,8 @@ export interface PendingChatTurn {
   language: InterfaceLanguage;
   providerConfigId: string;
   modelId: string;
+  modelRoute?: string;
+  aiIdentityId?: string;
   content: string;
   requestedSettings: GenerationSettings;
   rvSystemPrompt?: string;

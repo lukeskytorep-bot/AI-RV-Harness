@@ -144,15 +144,22 @@ export class BrowserAiCenterRepository implements AiCenterRepository {
   }
 
   async getViewerNoteBundle(aiIdentityId: string): Promise<ViewerNoteBundle | null> {
+    const existing = await this.getExistingViewerNoteBundle(aiIdentityId);
+    if (existing) return existing;
     const identity = this.read<AiIdentity[]>(AI_IDENTITIES_KEY, []).find((item) => item.id === aiIdentityId);
     if (!identity) return null;
-    let settings = this.read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []).find((item) => item.aiIdentityId === aiIdentityId);
-    if (!settings) {
-      settings = { aiIdentityId, noteType: "viewer_self_notes", capacityTokens: 1024, defaultEnabled: true, experimentalStatus: "experimental", updatedAt: this.now() };
-      this.write(AI_NOTE_SETTINGS_KEY, [...this.read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []), settings]);
-    }
+    const settings: ViewerNoteSettings = { aiIdentityId, noteType: "viewer_self_notes", capacityTokens: 1024, defaultEnabled: true, experimentalStatus: "experimental", updatedAt: this.now() };
+    this.write(AI_NOTE_SETTINGS_KEY, [...this.read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []), settings]);
+    return this.getExistingViewerNoteBundle(aiIdentityId);
+  }
+
+  async getExistingViewerNoteBundle(aiIdentityId: string): Promise<ViewerNoteBundle | null> {
+    const identity = this.read<AiIdentity[]>(AI_IDENTITIES_KEY, []).find((item) => item.id === aiIdentityId);
+    if (!identity) return null;
+    const settings = this.read<ViewerNoteSettings[]>(AI_NOTE_SETTINGS_KEY, []).find((item) => item.aiIdentityId === aiIdentityId);
+    if (!settings) return null;
     const versions = await this.listViewerNoteVersions(aiIdentityId);
-    return { identity, settings, activeVersion: versions.find((item) => item.id === settings?.activeVersionId), versions, activationEvents: await this.listViewerNoteActivationEvents(aiIdentityId), reflectionRuns: await this.listViewerNoteReflectionRuns(aiIdentityId) };
+    return { identity, settings, activeVersion: versions.find((item) => item.id === settings.activeVersionId), versions, activationEvents: await this.listViewerNoteActivationEvents(aiIdentityId), reflectionRuns: await this.listViewerNoteReflectionRuns(aiIdentityId) };
   }
 
   async listViewerNoteVersions(aiIdentityId: string): Promise<ViewerNoteVersion[]> {
