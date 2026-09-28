@@ -1,5 +1,6 @@
 import type { GenerationSettings, ProviderImageInput } from "../providers/types";
 import type { ChatMessage, ChatMode, InterfaceLanguage } from "../types";
+import type { ConversationViewerLearningSnapshot } from "./viewerLearning";
 
 export interface PendingChatTurn {
   threadId: string;
@@ -9,6 +10,8 @@ export interface PendingChatTurn {
   modelId: string;
   modelRoute?: string;
   aiIdentityId?: string;
+  viewerLearning?: ConversationViewerLearningSnapshot;
+  conversationContextKey?: string;
   content: string;
   requestedSettings: GenerationSettings;
   rvSystemPrompt?: string;

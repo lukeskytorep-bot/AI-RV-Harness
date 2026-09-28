@@ -13,6 +13,17 @@ const model: ProviderModel = {
   capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: ["max_tokens"], maxOutputTokens: 8192, source: "provider", capturedAt: "x" },
 };
 
+
+function stubLocalStorage() {
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => { storage.set(key, value); },
+    removeItem: (key: string) => { storage.delete(key); },
+  });
+  return storage;
+}
+
 function repo(history: ChatMessage[]) {
   const stored = [...history];
   const providerStates = new Map<string, ProviderContinuationState>();
@@ -53,7 +64,10 @@ function repo(history: ChatMessage[]) {
   };
 }
 
-afterEach(() => clearAllConversationContinuationMemoryForTests());
+afterEach(() => {
+  clearAllConversationContinuationMemoryForTests();
+  vi.unstubAllGlobals();
+});
 
 describe("chat engine isolation", () => {
   it("Conversation sends the conversation system prompt", async () => {
@@ -400,4 +414,165 @@ describe("chat engine isolation", () => {
     expect(endpoint).toHaveBeenCalled();
   });
 
+});
+
+describe("Conversation Viewer Learning packet", () => {
+  const viewerLearning = {
+    aiIdentityId: "ai-1",
+    modelRoute: "openrouter:m",
+    language: "en" as const,
+    capturedAt: "2026-09-28T00:00:00.000Z",
+    fieldGuide: { versionId: "fg-6", versionNumber: 6, content: "FG CONTENT", contentSha256: "fg-sha" },
+    viewerNotes: { versionId: "vn-3", versionNumber: 3, content: "VN CONTENT", contentSha256: "vn-sha" },
+  };
+
+  it("orders Viewer Learning after canonical/time context and before Workspace source safety", async () => {
+    let messages: any[] = [];
+    await sendChatTurn({
+      repository: repo([]), threadId: "vl", mode: "conversation", language: "en", providerConfig: provider, model, content: "Question", viewerLearning,
+      sources: [{ id: "s", workspaceId: "w", sourceType: "text", displayName: "source.txt", content: "data", contentHash: "h", metadata: {}, createdAt: "x" }],
+      chat: async (request) => { messages = request.messages; return { content: "Answer", usage: {} }; },
+    });
+    const canonical = messages.findIndex((message) => message.role === "system" && message.content.includes("active conversation partner"));
+    const temporal = messages.findIndex((message) => message.role === "system" && message.content.includes("LOCAL TEMPORAL CONTEXT"));
+    const learning = messages.findIndex((message) => message.role === "system" && message.content.includes("VIEWER LEARNING — READ-ONLY BOUNDARY"));
+    const sourceRule = messages.findIndex((message) => message.role === "system" && message.content.includes("untrusted reference data"));
+    expect(canonical).toBeLessThan(temporal);
+    expect(temporal).toBeLessThan(learning);
+    expect(learning).toBeLessThan(sourceRule);
+  });
+
+  it("does not add Viewer Learning when the option is absent", async () => {
+    let packet = "";
+    await sendChatTurn({ repository: repo([]), threadId: "vl-off", mode: "conversation", language: "en", providerConfig: provider, model, content: "Question", chat: async (request) => {
+      packet = JSON.stringify(request.messages);
+      return { content: "Answer", usage: {} };
+    } });
+    expect(packet).not.toContain("VIEWER LEARNING");
+    expect(packet).not.toContain("FG CONTENT");
+  });
+
+  it("keeps Viewer Learning out of Manual RV even if a caller accidentally supplies the snapshot", async () => {
+    let packet = "";
+    await sendChatTurn({ repository: repo([]), threadId: "vl-rv", mode: "manual_rv", language: "en", providerConfig: provider, model, content: "Start", viewerLearning, chat: async (request) => {
+      packet = JSON.stringify(request.messages);
+      return { content: "Contact", usage: {} };
+    } });
+    expect(packet).not.toContain("VIEWER LEARNING");
+  });
+});
+
+describe("Conversation Viewer context continuity boundary", () => {
+  it("allows a new thread with no previous context key and no native continuation state", async () => {
+    stubLocalStorage();
+    const chat = vi.fn(async () => ({ content: "Answer", usage: {} }));
+    await sendChatTurn({
+      repository: repo([]), threadId: "context-new", mode: "conversation", language: "en", providerConfig: provider, model, content: "First",
+      conversationContextKey: "ai-1|route|fg-1:vn-1",
+      chat,
+    });
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses historical persisted native continuation when no previous context key exists", async () => {
+    stubLocalStorage();
+    const repository = repo([]);
+    const endpoint = async () => "https://openrouter.ai/api/v1";
+    await sendChatTurn({
+      repository, threadId: "context-upgrade", mode: "conversation", language: "en", providerConfig: provider, model, content: "Legacy",
+      resolveBindingEndpoint: endpoint,
+      chat: async () => ({ content: "Legacy answer", reasoningDetails: [{ type: "reasoning.text", text: "legacy", id: "legacy-1", format: "openai-responses-v1" }], usage: {} }),
+    });
+    clearAllConversationContinuationMemoryForTests();
+
+    const chat = vi.fn(async () => ({ content: "must not run", usage: {} }));
+    await expect(sendChatTurn({
+      repository, threadId: "context-upgrade", mode: "conversation", language: "en", providerConfig: provider, model, content: "After upgrade",
+      conversationContextKey: "ai-1|route|fg-6:vn-3",
+      resolveBindingEndpoint: endpoint,
+      chat,
+    })).rejects.toBeInstanceOf(ConversationContinuationBreakError);
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("replays persisted native continuation when the context key is unchanged", async () => {
+    stubLocalStorage();
+    const repository = repo([]);
+    const endpoint = async () => "https://openrouter.ai/api/v1";
+    const contextKey = "ai-1|route|fg-1:vn-1";
+    await sendChatTurn({
+      repository, threadId: "context-same", mode: "conversation", language: "en", providerConfig: provider, model, content: "First",
+      conversationContextKey: contextKey, resolveBindingEndpoint: endpoint,
+      chat: async () => ({ content: "First answer", reasoningDetails: [{ type: "reasoning.text", text: "state", id: "same-1", format: "openai-responses-v1" }], usage: {} }),
+    });
+    clearAllConversationContinuationMemoryForTests();
+
+    let request: Parameters<NonNullable<Parameters<typeof sendChatTurn>[0]["chat"]>>[0] | undefined;
+    await sendChatTurn({
+      repository, threadId: "context-same", mode: "conversation", language: "en", providerConfig: provider, model, content: "Second",
+      conversationContextKey: contextKey, resolveBindingEndpoint: endpoint,
+      chat: async (value) => { request = value; return { content: "Second answer", usage: {} }; },
+    });
+    expect(request?.messages.some((message) => Boolean(message.continuationState))).toBe(true);
+  });
+
+  it("refuses provider-native continuation when identity or learning package changes between turns", async () => {
+    stubLocalStorage();
+    const repository = repo([]);
+    await sendChatTurn({
+      repository, threadId: "context-boundary", mode: "conversation", language: "en", providerConfig: provider, model, content: "First",
+      conversationContextKey: "ai-1|route|fg-1:vn-1",
+      resolveBindingEndpoint: async () => "https://openrouter.ai/api/v1",
+      chat: async () => ({ content: "First answer", reasoningDetails: [{ type: "reasoning.text", text: "state", id: "t1", format: "openai-responses-v1" }], usage: {} }),
+    });
+    const secondCall = vi.fn(async () => ({ content: "must not run", usage: {} }));
+    await expect(sendChatTurn({
+      repository, threadId: "context-boundary", mode: "conversation", language: "en", providerConfig: provider, model, content: "Second",
+      conversationContextKey: "ai-2|route|fg-2:vn-2",
+      resolveBindingEndpoint: async () => "https://openrouter.ai/api/v1",
+      chat: secondCall,
+    })).rejects.toBeInstanceOf(ConversationContinuationBreakError);
+    expect(secondCall).not.toHaveBeenCalled();
+  });
+
+  it("Continue text-only clears persisted native state across an unknown context boundary and saves the new key", async () => {
+    const storage = stubLocalStorage();
+    const repository = repo([]);
+    const endpoint = async () => "https://openrouter.ai/api/v1";
+    await sendChatTurn({
+      repository, threadId: "context-text-only", mode: "conversation", language: "en", providerConfig: provider, model, content: "Legacy",
+      resolveBindingEndpoint: endpoint,
+      chat: async () => ({ content: "Legacy answer", reasoningDetails: [{ type: "reasoning.text", text: "legacy", id: "legacy-2", format: "openai-responses-v1" }], usage: {} }),
+    });
+    clearAllConversationContinuationMemoryForTests();
+
+    const newKey = "ai-1|route|fg-7:vn-4";
+    let request: Parameters<NonNullable<Parameters<typeof sendChatTurn>[0]["chat"]>>[0] | undefined;
+    await sendChatTurn({
+      repository, threadId: "context-text-only", mode: "conversation", language: "en", providerConfig: provider, model, content: "Continue",
+      conversationContextKey: newKey, allowTextOnlyContinuation: true, resolveBindingEndpoint: endpoint,
+      chat: async (value) => { request = value; return { content: "Fresh answer", usage: {} }; },
+    });
+    expect(request?.messages.some((message) => Boolean(message.continuationState))).toBe(false);
+    expect(await repository.listChatMessageProviderStates("context-text-only")).toHaveLength(0);
+    expect(storage.get("rvh.conversation-viewer-context.context-text-only")).toBe(newKey);
+  });
+
+  it("converts corrupted persisted continuation at an unknown context boundary into the controlled fallback path", async () => {
+    stubLocalStorage();
+    const baseRepository = repo([]);
+    const repository = {
+      ...baseRepository,
+      listChatMessageProviderStates: async () => {
+        throw new ProviderContinuationPersistenceError("legacy-owner", "persistence_integrity", "Persisted state is corrupted.");
+      },
+    };
+    const chat = vi.fn(async () => ({ content: "must not run", usage: {} }));
+    await expect(sendChatTurn({
+      repository, threadId: "context-corrupt", mode: "conversation", language: "en", providerConfig: provider, model, content: "After upgrade",
+      conversationContextKey: "ai-1|route|fg-6:vn-3",
+      chat,
+    })).rejects.toBeInstanceOf(ConversationContinuationBreakError);
+    expect(chat).not.toHaveBeenCalled();
+  });
 });

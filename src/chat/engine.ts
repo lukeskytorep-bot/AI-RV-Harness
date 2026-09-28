@@ -22,6 +22,7 @@ import type { ChatMessage, ChatMode, InterfaceLanguage } from "../types";
 import type { WorkspaceSource } from "../sources/types";
 import { DEFAULT_UNKNOWN_OUTPUT_LIMIT, estimateContextBudget } from "./contextBudget";
 import { buildLocalTemporalContext } from "./temporalContext";
+import { loadConversationViewerContextKey, saveConversationViewerContextKey, viewerLearningSystemMessages, type ConversationViewerLearningSnapshot } from "./viewerLearning";
 
 type ChatRepository = Pick<AppRepository,
   | "listChatMessages"
@@ -42,6 +43,7 @@ export function buildChatProviderMessages(input: {
   attachedProtocol?: string;
   sources?: WorkspaceSource[];
   images?: ProviderImageInput[];
+  viewerLearning?: ConversationViewerLearningSnapshot;
   now?: Date;
 }): ProviderMessage[] {
   const scopedHistory: ScopedChatMessage[] = input.history.map((message) => ({
@@ -64,7 +66,8 @@ export function buildChatProviderMessages(input: {
       });
 
   if (input.mode === "conversation") {
-    messages = [messages[0], { role: "system", content: buildLocalTemporalContext(input.language, input.now) }, ...messages.slice(1)];
+    const learning = input.viewerLearning ? viewerLearningSystemMessages(input.viewerLearning, input.language) : [];
+    messages = [messages[0], { role: "system", content: buildLocalTemporalContext(input.language, input.now) }, ...learning, ...messages.slice(1)];
   }
 
   if (input.sources?.length) {
@@ -110,6 +113,8 @@ export async function sendChatTurn(input: {
   attachedProtocol?: string;
   sources?: WorkspaceSource[];
   images?: ProviderImageInput[];
+  viewerLearning?: ConversationViewerLearningSnapshot;
+  conversationContextKey?: string;
   maxRetries?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -159,11 +164,29 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
 
   const storedHistory = await input.repository.listChatMessages(input.threadId);
   if (input.mode === "conversation") {
+    // Hydrate through the existing guarded persistence path first. This ensures
+    // malformed persisted continuation is converted into the normal controlled
+    // ConversationContinuationBreakError / Continue text-only flow instead of
+    // leaking a raw persistence error from a boundary preflight read.
     await hydrateConversationContinuationPersistence({
       repository: input.repository,
       threadId: input.threadId,
       allowTextOnlyContinuation: input.allowTextOnlyContinuation,
     });
+
+    if (input.conversationContextKey) {
+      const previousContextKey = loadConversationViewerContextKey(input.threadId);
+      const contextBoundaryChanged = previousContextKey !== input.conversationContextKey;
+      const nativeContinuityPresent = hasConversationContinuationMemory(input.threadId);
+      if (contextBoundaryChanged && nativeContinuityPresent) {
+        if (!input.allowTextOnlyContinuation) {
+          throw new ConversationContinuationBreakError("request", { code: "incompatible_replay", message: "Conversation Viewer identity or Viewer Learning package changed or its prior context is unknown; provider-native continuation cannot be replayed across this context boundary." });
+        }
+        await input.repository.resetChatMessageProviderStates(input.threadId);
+        clearConversationContinuationMemory(input.threadId);
+        suppressConversationContinuationPersistenceHydration(input.threadId);
+      }
+    }
   }
   const history = appendUser ? storedHistory : storedHistory.slice(0, -1);
   let messages = buildChatProviderMessages({
@@ -175,6 +198,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
     attachedProtocol: input.attachedProtocol,
     sources: input.sources,
     images: input.images,
+    viewerLearning: input.viewerLearning,
   });
   if (input.images?.length) {
     if (!input.model.capabilities.supportsVision || !input.model.capabilities.inputModalities.includes("image")) throw new Error("Selected model route does not advertise image input support.");
@@ -256,6 +280,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
     : await input.repository.appendChatMessage(input.threadId, "assistant", response.content);
   if (continuationCapture?.state) rememberConversationContinuationState(input.threadId, assistant.id, continuationCapture.state);
   else if (continuationCapture?.issue) rememberConversationContinuationIssue(input.threadId, assistant.id, continuationCapture.issue);
+  if (input.mode === "conversation" && input.conversationContextKey) saveConversationViewerContextKey(input.threadId, input.conversationContextKey);
   return { user, assistant, response };
 }
 

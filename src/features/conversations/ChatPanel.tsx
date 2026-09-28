@@ -13,6 +13,7 @@ import { buildChatProviderMessages, retryChatTurn, sendChatTurn } from "../../ch
 import { buildChatMarkdownExport } from "../../chat/export";
 import { clampChatOutputTokens, defaultChatOutputTokens, loadChatOutputTokens, saveChatOutputTokens } from "../../chat/outputPreference";
 import { clearPendingChatTurn, loadPendingChatTurn, savePendingChatTurn, type PendingChatTurn } from "../../chat/pendingTurn";
+import { conversationViewerContextKey, defaultConversationViewerLearningEnabled, loadConversationViewerLearningPreference, loadExistingConversationViewerLearningSnapshot, saveConversationViewerLearningPreference, type ConversationViewerLearningSnapshot } from "../../chat/viewerLearning";
 import { resolveSessionLanguage } from "../../domain/localization";
 import { getCopy } from "../../i18n";
 import { profileGenerationDefaults } from "../../profileViewerDefaults";
@@ -50,6 +51,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   const [chatImages, setChatImages] = useState<ProviderImageInput[]>([]);
   const [chatImageNames, setChatImageNames] = useState<string[]>([]);
   const [viewerIdentityId, setViewerIdentityId] = useState("");
+  const [viewerLearningEnabled, setViewerLearningEnabled] = useState(false);
+  const [viewerLearningSnapshot, setViewerLearningSnapshot] = useState<ConversationViewerLearningSnapshot | null>(null);
   const [input, setInput] = useState("");
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [manualProtocol, setManualProtocol] = useState<"none" | "rcp" | "lite-core" | "lite-extended" | "telepathic">("none");
@@ -94,6 +97,22 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
     })();
     return () => { cancelled = true; };
   }, [repository, workspace.id, profile?.id, profile?.defaultViewerModelId, language]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (!repository || mode !== "conversation" || !selectedIdentity) {
+        if (!cancelled) { setViewerLearningSnapshot(null); setViewerLearningEnabled(false); }
+        return;
+      }
+      const snapshot = await loadExistingConversationViewerLearningSnapshot({ repository, identity: selectedIdentity, language });
+      if (cancelled) return;
+      setViewerLearningSnapshot(snapshot);
+      const saved = threadId ? loadConversationViewerLearningPreference(threadId) : undefined;
+      setViewerLearningEnabled(defaultConversationViewerLearningEnabled({ saved, packageAvailable: Boolean(snapshot), trained: selectedIdentity.trained }));
+    })().catch((cause) => { if (!cancelled) { setViewerLearningSnapshot(null); setViewerLearningEnabled(false); setError(cause instanceof Error ? cause.message : String(cause)); } });
+    return () => { cancelled = true; };
+  }, [repository, mode, threadId, selectedIdentity?.identity.id, selectedIdentity?.trained, language]);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,7 +183,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         : getRvLite(language, manualProtocol === "lite-core" ? "core" : "extended").content
     : undefined;
   const rvSystemPrompt = mode === "manual_rv" ? buildEffectiveViewerPrompt(language, stripKnownLockedBaseVocabulary(localizedViewerEditablePrompt(profile?.defaultViewerSystemPrompt, language))) : undefined;
-  const previewMessages = buildChatProviderMessages({ mode, language, history: messages, content: input.trim(), rvSystemPrompt, attachedProtocol, sources: selectedSources, images: chatImages });
+  const previewMessages = buildChatProviderMessages({ mode, language, history: messages, content: input.trim(), rvSystemPrompt, attachedProtocol, sources: selectedSources, images: chatImages, ...(mode === "conversation" && viewerLearningEnabled && viewerLearningSnapshot ? { viewerLearning: viewerLearningSnapshot } : {}) });
   const inMemoryContinuationBytes = mode === "conversation" && threadId ? estimateConversationContinuationMemoryBytes(threadId) : 0;
   const contextBudget = estimateContextBudget(previewMessages, selectedModel?.capabilities.contextTokens, effectiveMaxOutputTokens, {
     additionalContinuationStateBytes: inMemoryContinuationBytes,
@@ -363,6 +382,23 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       setSending(false);
       return;
     }
+    let frozenViewerLearning: ConversationViewerLearningSnapshot | undefined;
+    try {
+      if (mode === "conversation" && viewerLearningEnabled && selectedIdentity) {
+        const snapshot = await loadExistingConversationViewerLearningSnapshot({ repository, identity: selectedIdentity, language });
+        if (!snapshot) throw new Error(settings.interfaceLanguage === "pl" ? "Pakiet Viewer Learning tej tożsamości nie jest obecnie dostępny." : "This Viewer identity's Viewer Learning package is not currently available.");
+        frozenViewerLearning = snapshot;
+        setViewerLearningSnapshot(snapshot);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setInput(content);
+      setSending(false);
+      return;
+    }
+    const frozenConversationContextKey = mode === "conversation" && selectedIdentity
+      ? conversationViewerContextKey(selectedIdentity.identity.id, selectedModel.route, frozenViewerLearning)
+      : undefined;
     const pending: PendingChatTurn = {
       threadId,
       mode,
@@ -371,6 +407,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       modelId: selectedModel.modelId,
       modelRoute: selectedModel.route,
       aiIdentityId: selectedIdentity?.identity.id,
+      ...(frozenViewerLearning ? { viewerLearning: frozenViewerLearning } : {}),
+      ...(frozenConversationContextKey ? { conversationContextKey: frozenConversationContextKey } : {}),
       content,
       requestedSettings: { ...profileGenerationDefaults(profile, selectedModel), maxOutputTokens: effectiveMaxOutputTokens },
       ...(effectiveRvSystemPrompt ? { rvSystemPrompt: effectiveRvSystemPrompt } : {}),
@@ -396,6 +434,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         ...(effectiveRvSystemPrompt ? { rvSystemPrompt: effectiveRvSystemPrompt } : {}),
         sources: selectedSources,
         images: chatImages,
+        ...(frozenViewerLearning ? { viewerLearning: frozenViewerLearning } : {}),
+        ...(frozenConversationContextKey ? { conversationContextKey: frozenConversationContextKey } : {}),
         maxRetries: settings.maxRetries,
         timeoutMs: settings.requestTimeoutMs,
         ...(attachedProtocol ? { attachedProtocol } : {}),
@@ -461,6 +501,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         ...(pendingRetry.attachedProtocol ? { attachedProtocol: pendingRetry.attachedProtocol } : {}),
         sources: sources.filter((source) => pendingRetry.sourceIds.includes(source.id)),
         images: pendingRetry.images,
+        ...(pendingRetry.viewerLearning ? { viewerLearning: pendingRetry.viewerLearning } : {}),
+        ...(pendingRetry.conversationContextKey ? { conversationContextKey: pendingRetry.conversationContextKey } : {}),
         maxRetries: settings.maxRetries,
         timeoutMs: settings.requestTimeoutMs,
         onStreamEvent: handleVisibleStreamEvent,
@@ -547,6 +589,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
           {viewerIdentities.map((item) => <option key={item.identity.id} value={item.identity.id}>{viewerIdentityLabel(item, settings.interfaceLanguage)}</option>)}
         </select>
         {!viewerIdentities.length && <small>{settings.interfaceLanguage === "pl" ? "Dodaj model Viewera w Profilu lub rozpocznij Training. Conversation nie tworzy nowej tożsamości automatycznie." : "Add a Viewer model in Profile or start Training. Conversation does not create a new identity automatically."}</small>}
+        {mode === "conversation" && <label className="manual-notes-toggle" title={settings.interfaceLanguage === "pl" ? "Dołącz read-only Field Guide i Viewer Notes dokładnie wybranej tożsamości." : "Attach the exact selected identity's read-only Field Guide and Viewer Notes."}><span>{settings.interfaceLanguage === "pl" ? "Użyj Viewer Learning" : "Use Viewer Learning"}</span><input type="checkbox" checked={viewerLearningEnabled} disabled={sending || !viewerLearningSnapshot} onChange={(event) => { const enabled = event.target.checked; setViewerLearningEnabled(enabled); if (threadId) saveConversationViewerLearningPreference(threadId, enabled); }} /></label>}
         <label className="chat-output-limit"><span>{copy.maxOutputTokens}</span><input type="number" min={1} max={selectedModel?.capabilities.maxOutputTokens ?? 262144} value={maxOutputTokens} disabled={!selectedModel || sending} onChange={(event) => setMaxOutputTokens(event.target.value)} onBlur={commitMaxOutputTokens} /></label>
         <span className={`chat-context-meter ${contextBudget.level}`} title={contextBudget.contextLimit === undefined
           ? `${copy.estimatedContext}: ~${contextBudget.estimatedInputTokens.toLocaleString()} + ${contextBudget.reservedOutputTokens.toLocaleString()} output tokens`

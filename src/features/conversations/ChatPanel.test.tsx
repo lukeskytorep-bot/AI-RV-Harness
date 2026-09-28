@@ -30,6 +30,7 @@ describe("Conversations feature", () => {
     expect(html).toContain(copy.systemActive);
     expect(html).toContain(copy.conversationTitle);
     expect(html).not.toContain(copy.manualTitle);
+    expect(html).toContain("Use Viewer Learning");
     expect(html).not.toContain('class="segmented large-segmented"');
   });
 
@@ -40,6 +41,7 @@ describe("Conversations feature", () => {
     expect(html).toContain(copy.viewerSystemActive);
     expect(html).toContain(copy.manualTitle);
     expect(html).not.toContain(copy.conversationTitle);
+    expect(html).not.toContain("Use Viewer Learning");
     expect(html).not.toContain('class="segmented large-segmented"');
   });
 
