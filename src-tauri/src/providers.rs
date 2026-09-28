@@ -149,6 +149,7 @@ pub struct ProviderChatRequest {
     model_id: String,
     messages: Vec<ProviderMessage>,
     reasoning_effort: Option<String>,
+    reasoning_max_tokens: Option<u32>,
     reasoning_transport_kind: Option<String>,
     reasoning_transport_value: Option<String>,
     temperature: Option<f64>,

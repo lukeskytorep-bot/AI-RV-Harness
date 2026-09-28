@@ -73,6 +73,7 @@ export interface ReasoningCapability {
   verifiedAt?: string;
   verificationSource?: string;
   providerEfforts?: ReasoningEffort[];
+  supportsMaxTokens?: boolean;
 }
 
 export interface TemperatureCapability {
@@ -121,12 +122,13 @@ export interface GenerationSettings {
   reasoningEffort?: ReasoningEffort;
   temperature?: number;
   maxOutputTokens?: number;
+  reasoningMaxTokens?: number;
 }
 
 export interface EffectiveGenerationSettings {
   requested: GenerationSettings;
   effective: GenerationSettings;
-  omitted: Array<"reasoningEffort" | "temperature" | "maxOutputTokens">;
+  omitted: Array<"reasoningEffort" | "temperature" | "maxOutputTokens" | "reasoningMaxTokens">;
   reasoningResolution?: {
     selected: ReasoningEffort;
     label: string;

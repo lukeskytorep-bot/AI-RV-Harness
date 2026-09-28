@@ -72,6 +72,17 @@ pub(super) fn validate_chat_request(request: &ProviderChatRequest) -> Result<(),
             return Err("invalid reasoning effort".to_string());
         }
     }
+    if let Some(value) = request.reasoning_max_tokens {
+        if !matches!(request.provider, super::ProviderKind::Openrouter) {
+            return Err("exact reasoning token budget is supported only for OpenRouter requests".to_string());
+        }
+        if value == 0 {
+            return Err("reasoning max tokens must be positive".to_string());
+        }
+        if request.reasoning_effort.is_some() || request.reasoning_transport_kind.is_some() || request.reasoning_transport_value.is_some() {
+            return Err("reasoning max tokens cannot be combined with reasoning effort transport".to_string());
+        }
+    }
     if let Some(kind) = request.reasoning_transport_kind.as_deref() {
         if !matches!(kind, "effort" | "enabled_boolean" | "thinking_level") {
             return Err("invalid reasoning transport kind".to_string());

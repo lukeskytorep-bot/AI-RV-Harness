@@ -59,6 +59,7 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
             continuation_state: None,
         }],
         reasoning_effort: None,
+        reasoning_max_tokens: None,
         reasoning_transport_kind: None,
         reasoning_transport_value: None,
         temperature: None,
@@ -271,6 +272,21 @@ fn emits_openrouter_boolean_reasoning_for_two_state_models() {
     let (_, body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
     assert_eq!(body.pointer("/reasoning/enabled"), Some(&json!(true)));
     assert!(body.pointer("/reasoning/effort").is_none());
+}
+
+#[test]
+fn emits_openrouter_exact_reasoning_max_tokens_without_effort() {
+    let mut request = chat_request(ProviderKind::Openrouter, "z-ai/glm-5.3-flash-20260826");
+    request.reasoning_max_tokens = Some(10_000);
+    let (_, body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
+    assert_eq!(body.get("reasoning"), Some(&json!({ "max_tokens": 10_000 })));
+}
+
+#[test]
+fn rejects_exact_reasoning_max_tokens_outside_openrouter() {
+    let mut request = chat_request(ProviderKind::Openai, "gpt-test");
+    request.reasoning_max_tokens = Some(10_000);
+    assert!(validate_chat_request(&request).is_err());
 }
 
 #[test]

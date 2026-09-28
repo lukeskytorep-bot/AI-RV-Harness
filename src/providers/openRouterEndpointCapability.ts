@@ -104,7 +104,7 @@ export function createOpenRouterCapacityEnvelope(input: {
   const requestedCompletionAllowance = Math.max(1, Math.floor(input.settings.effective.maxOutputTokens ?? 8192));
   const requiredParameters = new Set<string>();
   if (input.settings.effective.temperature !== undefined) requiredParameters.add("temperature");
-  if (input.settings.reasoningResolution || input.settings.effective.reasoningEffort) requiredParameters.add("reasoning");
+  if (input.settings.reasoningResolution || input.settings.effective.reasoningEffort || input.settings.effective.reasoningMaxTokens !== undefined) requiredParameters.add("reasoning");
   return {
     estimatedInputTokens,
     routingSafetyMarginTokens: margin,

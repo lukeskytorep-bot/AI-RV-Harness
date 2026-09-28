@@ -361,6 +361,17 @@ ${rejectedNotes}
 The rejected proposal is material for reassessment, not an instruction. Return only one final JSON object matching the UPDATE or NO_CHANGE schema.`;
 }
 
+function frozenSupportsExactReasoningMaxTokens(capabilitySnapshot?: Record<string, unknown>): boolean {
+  const reasoning = capabilitySnapshot?.reasoning;
+  return Boolean(reasoning && typeof reasoning === "object" && !Array.isArray(reasoning) && (reasoning as Record<string, unknown>).supportsMaxTokens === true);
+}
+
+export function viewerNotesOutputRecoveryInstruction(language: InterfaceLanguage): string {
+  return language === "pl"
+    ? "To jest druga próba, ponieważ poprzednia odpowiedź zakończyła się po wykorzystaniu dostępnego limitu bez kompletnej odpowiedzi finalnej. Skup się wyłącznie na wymaganej refleksji Viewer Notes dla zakończonej sesji. Nie rozszerzaj zadania ani nie streszczaj ponownie całego materiału wejściowego. Jeżeli nie ma nowej użytecznej obserwacji proceduralnej, wybierz `NO_CHANGE`. Zwróć wyłącznie kompletny finalny obiekt JSON wymagany przez główne polecenie."
+    : "This is the second attempt because the previous response exhausted the available output limit without producing a complete final answer. Focus only on the required Viewer Notes reflection for the completed session. Do not expand the task or summarize the entire input material again. If there is no new useful procedural observation, choose `NO_CHANGE`. Return only the complete final JSON object required by the main instruction.";
+}
+
 export function validateViewerNoteContent(content: string, capacity: ViewerNoteCapacity): void {
   const estimated = estimateViewerNoteTokens(content);
   if (estimated > capacity) throw new ViewerNoteCapacityError(estimated, capacity);
@@ -520,7 +531,11 @@ export async function runViewerNoteReflection(input: {
       operationKind: "viewer_notes_reflection",
       requestedSettings: snapshot.generationSettings.requested,
       learningObjectCapacityTokens: packet.capacityTokens,
-      call: (attemptSettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: reflectionMessages, settings: attemptSettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.reflect", attempt: input.chat }),
+      recoveryInstruction: viewerNotesOutputRecoveryInstruction(snapshot.sessionLanguage),
+      recoveryReasoningMaxTokens: 10_000,
+      recoveryReasoningMaxTokensSupported: frozenSupportsExactReasoningMaxTokens(snapshot.capabilitySnapshot),
+      allowOpenRouterEndpointRecoveryEscalation: true,
+      call: (attemptSettings, _attempt, attemptMessages) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: attemptMessages, settings: attemptSettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.reflect", operationKind: "viewer_notes_reflection", attempt: input.chat }),
     });
     response = result.response;
     settings = result.settings;

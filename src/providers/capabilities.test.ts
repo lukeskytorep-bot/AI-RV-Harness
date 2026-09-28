@@ -67,6 +67,7 @@ describe("dynamic provider capabilities", () => {
     expect(model.capabilities.reasoning.options).toEqual([]);
     expect(model.capabilities.reasoning.mandatory).toBe(true);
     expect(model.capabilities.reasoning.registryStatus).toBe("unknown");
+    expect(model.capabilities.reasoning.supportsMaxTokens).toBeUndefined();
 
     const resolved = resolveGenerationSettings(model.capabilities, { reasoningEffort: "high" });
     expect(resolved.effective.reasoningEffort).toBeUndefined();
@@ -112,6 +113,12 @@ describe("dynamic provider capabilities", () => {
     expect(model.capabilities.reasoning.efforts).toEqual([]);
     expect(model.capabilities.reasoning.options).toEqual([]);
     expect(model.capabilities.reasoning.registryStatus).toBe("unknown");
+    expect(model.capabilities.reasoning.supportsMaxTokens).toBe(true);
+
+    const exact = resolveGenerationSettings(model.capabilities, { reasoningEffort: "high", reasoningMaxTokens: 10_000 });
+    expect(exact.effective.reasoningMaxTokens).toBe(10_000);
+    expect(exact.effective.reasoningEffort).toBeUndefined();
+    expect(exact.omitted).toContain("reasoningEffort");
 
     const resolved = resolveGenerationSettings(model.capabilities, { reasoningEffort: "high" });
     expect(resolved.effective.reasoningEffort).toBeUndefined();

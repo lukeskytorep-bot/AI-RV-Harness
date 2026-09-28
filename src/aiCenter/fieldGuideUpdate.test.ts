@@ -17,6 +17,7 @@ import {
   buildFieldGuideRepairPrompt,
   buildFieldGuideUpdatePrompt,
   FieldGuideCapacityError,
+  fieldGuideOutputRecoveryInstruction,
   parseFieldGuideUpdate,
   runFieldGuideUpdate,
   stableFieldGuideUpdatePacket,
@@ -105,6 +106,13 @@ describe("Field Guide Update", () => {
     expect(p.lexicon.id).toBe(`ai-field-perception-lexicon.${language}`);
     expect(prompt).not.toContain(fieldPerceptionLexicon(language === "pl" ? "en" : "pl").content.slice(0, 120));
     expect(prompt).toContain('{"decision":"NO_CHANGE","fieldGuide":null,"changeSummary":');
+  });
+
+  it("uses the owner-approved Field Guide analytical recovery instruction in both languages", () => {
+    expect(fieldGuideOutputRecoveryInstruction("pl")).toContain("Słownik Percepcji Pola jest wyłącznie materiałem referencyjnym");
+    expect(fieldGuideOutputRecoveryInstruction("pl")).toContain("`NO_CHANGE`");
+    expect(fieldGuideOutputRecoveryInstruction("en")).toContain("The AI Field Perception Lexicon is reference material, not a checklist");
+    expect(fieldGuideOutputRecoveryInstruction("en")).toContain("complete final JSON object");
   });
 
   it("keeps packet serialization deterministic and includes identity/provenance hashes", () => {

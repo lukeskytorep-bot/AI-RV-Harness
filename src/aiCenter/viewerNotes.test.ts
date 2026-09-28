@@ -10,7 +10,7 @@ import type { SessionSnapshot } from "../sessions/types";
 import type { AppRepository } from "../storage/repository";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { sha256Text } from "../application/sha256";
-import { buildCapacityRetryPrompt, buildReflectionPrompt, buildViewerNoteSourceSnapshot, buildReflectionRepairPrompt, estimateViewerNoteTokens, parseViewerNoteReflection, runViewerNoteReflection, stableViewerNotePacket, validateViewerNoteContent, viewerNoteReflectionCompletesStage, viewerNotesSystemBlock, type ViewerNoteReflectionPacket } from "./viewerNotes";
+import { buildCapacityRetryPrompt, buildReflectionPrompt, buildViewerNoteSourceSnapshot, buildReflectionRepairPrompt, estimateViewerNoteTokens, parseViewerNoteReflection, runViewerNoteReflection, stableViewerNotePacket, validateViewerNoteContent, viewerNoteReflectionCompletesStage, viewerNotesSystemBlock, viewerNotesOutputRecoveryInstruction, type ViewerNoteReflectionPacket } from "./viewerNotes";
 
 const packet: ViewerNoteReflectionPacket = {
   packetVersion: "viewer-notes-reflection-v2",
@@ -48,6 +48,13 @@ const packet: ViewerNoteReflectionPacket = {
 describe("Viewer Notes", () => {
   it("uses the approved conservative estimator", () => {
     expect(estimateViewerNoteTokens("a".repeat(350))).toBe(115);
+  });
+
+  it("uses a focused Viewer Notes recovery instruction without Lexicon guidance", () => {
+    expect(viewerNotesOutputRecoveryInstruction("pl")).toContain("druga próba");
+    expect(viewerNotesOutputRecoveryInstruction("en")).toContain("second attempt");
+    expect(viewerNotesOutputRecoveryInstruction("en")).toContain("complete final JSON object");
+    expect(viewerNotesOutputRecoveryInstruction("en")).not.toContain("Lexicon");
   });
 
   it("accepts UPDATE and NO_CHANGE final JSON while ignoring fenced envelopes", () => {

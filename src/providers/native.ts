@@ -138,6 +138,7 @@ export async function providerChatAttempt(input: {
         modelId: input.modelId,
         messages: input.messages,
         reasoningEffort: input.settings.effective.reasoningEffort,
+        reasoningMaxTokens: input.settings.effective.reasoningMaxTokens,
         reasoningTransportKind: input.settings.reasoningResolution?.transport.kind,
         reasoningTransportValue: input.settings.reasoningResolution?.transport.value,
         temperature: input.settings.effective.temperature,

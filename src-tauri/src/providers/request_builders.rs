@@ -21,15 +21,19 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
     if let Some(value) = request.max_output_tokens {
         body.insert(openai_compatible_output_token_field(request).into(), json!(value));
     }
-    if let Some(value) = request.reasoning_transport_value.as_deref().or(request.reasoning_effort.as_deref()) {
-        let kind = request.reasoning_transport_kind.as_deref().unwrap_or("effort");
-        if matches!(request.provider, ProviderKind::Openrouter) && kind == "enabled_boolean" {
-            body.insert("reasoning".into(), json!({ "enabled": value == "true" }));
-        } else if matches!(request.provider, ProviderKind::Openrouter) {
-            body.insert("reasoning".into(), json!({ "effort": value }));
-        } else {
-            body.insert("reasoning_effort".into(), json!(value));
+    if matches!(request.provider, ProviderKind::Openrouter) {
+        if let Some(value) = request.reasoning_max_tokens {
+            body.insert("reasoning".into(), json!({ "max_tokens": value }));
+        } else if let Some(value) = request.reasoning_transport_value.as_deref().or(request.reasoning_effort.as_deref()) {
+            let kind = request.reasoning_transport_kind.as_deref().unwrap_or("effort");
+            if kind == "enabled_boolean" {
+                body.insert("reasoning".into(), json!({ "enabled": value == "true" }));
+            } else {
+                body.insert("reasoning".into(), json!({ "effort": value }));
+            }
         }
+    } else if let Some(value) = request.reasoning_transport_value.as_deref().or(request.reasoning_effort.as_deref()) {
+        body.insert("reasoning_effort".into(), json!(value));
     }
     if matches!(request.provider, ProviderKind::Openrouter) {
         if let Some(routing) = request.provider_routing.as_ref() {

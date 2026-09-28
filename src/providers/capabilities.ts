@@ -90,6 +90,7 @@ function normalizeOpenRouter(raw: Record<string, unknown>, capturedAt: string): 
         efforts: reasoningEfforts,
         mandatory: reasoningMandatory,
         defaultEffort: effortArray([reasoning.default_effort])[0],
+        supportsMaxTokens: boolValue(reasoning.supports_max_tokens),
         confidence: reasoningAdvertised ? "provider_metadata" : "unknown",
       },
       temperature: {
@@ -247,8 +248,18 @@ export function resolveGenerationSettings(capabilities: ModelCapabilities, reque
   const omitted: EffectiveGenerationSettings["omitted"] = [];
   let reasoningResolution: EffectiveGenerationSettings["reasoningResolution"];
 
+  if (requested.reasoningMaxTokens !== undefined) {
+    if (capabilities.reasoning.supportsMaxTokens === true && requested.reasoningMaxTokens > 0) {
+      effective.reasoningMaxTokens = Math.floor(requested.reasoningMaxTokens);
+    } else {
+      omitted.push("reasoningMaxTokens");
+    }
+  }
+
   if (requested.reasoningEffort !== undefined) {
-    if (capabilities.reasoning.supported && capabilities.reasoning.efforts.includes(requested.reasoningEffort)) {
+    if (effective.reasoningMaxTokens !== undefined) {
+      omitted.push("reasoningEffort");
+    } else if (capabilities.reasoning.supported && capabilities.reasoning.efforts.includes(requested.reasoningEffort)) {
       effective.reasoningEffort = requested.reasoningEffort;
       const option = findReasoningOption(capabilities.reasoning, requested.reasoningEffort);
       reasoningResolution = {

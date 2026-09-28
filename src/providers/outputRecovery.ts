@@ -37,9 +37,18 @@ export function analyticalOutputBudget(input: {
   attempt: 0 | 1;
   learningObjectCapacityTokens?: number;
   minimumUsefulTokens?: number;
+  allowOpenRouterEndpointRecoveryEscalation?: boolean;
 }): number {
   const preferred = preferredAnalyticalOutputTokens(input);
-  const routeMaximum = input.model.capabilities.maxOutputTokens ?? preferred;
+  // OpenRouter analytical recovery must reach endpoint-level capacity discovery
+  // before a generic model-level maxOutputTokens value can reject a larger route.
+  // The first attempt and every non-OpenRouter provider retain the existing hard cap.
+  const deferRecoveryOutputLimitToEndpointDiscovery = input.attempt === 1
+    && input.model.provider === "openrouter"
+    && input.allowOpenRouterEndpointRecoveryEscalation === true;
+  const routeMaximum = deferRecoveryOutputLimitToEndpointDiscovery
+    ? preferred
+    : input.model.capabilities.maxOutputTokens ?? preferred;
   const estimatedInput = estimateProviderMessageTokens(input.messages);
   const context = input.model.capabilities.contextTokens;
   const contextMaximum = context === undefined
@@ -81,26 +90,53 @@ export async function callWithAnalyticalOutputRecovery(input: {
   requestedSettings?: GenerationSettings;
   learningObjectCapacityTokens?: number;
   minimumUsefulTokens?: number;
-  call: (settings: EffectiveGenerationSettings, attempt: 0 | 1) => Promise<ProviderChatResponse>;
+  recoveryInstruction?: string;
+  recoveryReasoningMaxTokens?: number;
+  recoveryReasoningMaxTokensSupported?: boolean;
+  allowOpenRouterEndpointRecoveryEscalation?: boolean;
+  call: (settings: EffectiveGenerationSettings, attempt: 0 | 1, messages: ProviderMessage[]) => Promise<ProviderChatResponse>;
 }): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; attempt: 0 | 1 }> {
   let firstBudget = 0;
   for (const attempt of [0, 1] as const) {
+    const attemptMessages = attempt === 1 && input.recoveryInstruction?.trim()
+      ? input.messages.map((message, index) => index === input.messages.length - 1 && message.role === "user"
+        ? { ...message, content: `${message.content}\n\n[ANALYTICAL OUTPUT RECOVERY]\n${input.recoveryInstruction!.trim()}` }
+        : message)
+      : input.messages;
     const budget = analyticalOutputBudget({
       model: input.model,
-      messages: input.messages,
+      messages: attemptMessages,
       operationKind: input.operationKind,
       attempt,
       learningObjectCapacityTokens: input.learningObjectCapacityTokens,
       minimumUsefulTokens: input.minimumUsefulTokens,
+      allowOpenRouterEndpointRecoveryEscalation: input.allowOpenRouterEndpointRecoveryEscalation,
     });
     if (attempt === 1 && budget <= firstBudget) throw new Error(`Provider exhausted the available analytical output budget; this route cannot increase beyond ${firstBudget} tokens.`);
     if (attempt === 0) firstBudget = budget;
-    const settings = resolveGenerationSettings(input.model.capabilities, { ...input.requestedSettings, maxOutputTokens: budget });
+    const requestedSettings: GenerationSettings = { ...input.requestedSettings, maxOutputTokens: budget };
+    const useExactReasoningCap = attempt === 1 && input.recoveryReasoningMaxTokens && input.recoveryReasoningMaxTokensSupported === true;
+    if (useExactReasoningCap) {
+      delete requestedSettings.reasoningEffort;
+      requestedSettings.reasoningMaxTokens = input.recoveryReasoningMaxTokens;
+    }
+    const capabilities = useExactReasoningCap
+      ? { ...input.model.capabilities, reasoning: { ...input.model.capabilities.reasoning, supportsMaxTokens: true } }
+      : input.model.capabilities;
+    const settingsCapabilities = attempt === 1
+      && input.model.provider === "openrouter"
+      && input.allowOpenRouterEndpointRecoveryEscalation === true
+      ? { ...capabilities, maxOutputTokens: undefined }
+      : capabilities;
+    const settings = resolveGenerationSettings(settingsCapabilities, requestedSettings);
     if (!settings.effective.maxOutputTokens || settings.omitted.includes("maxOutputTokens")) {
       throw new Error("Model route rejected the required analytical output budget.");
     }
+    if (requestedSettings.reasoningMaxTokens !== undefined && (settings.effective.reasoningMaxTokens !== requestedSettings.reasoningMaxTokens || settings.omitted.includes("reasoningMaxTokens"))) {
+      throw new Error("Model route rejected the exact reasoning token budget required for analytical recovery.");
+    }
     try {
-      const response = await input.call(settings, attempt);
+      const response = await input.call(settings, attempt, attemptMessages);
       assertCompleteAnalyticalResponse(response);
       return { response, settings, attempt };
     } catch (cause) {

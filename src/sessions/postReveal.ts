@@ -15,6 +15,18 @@ type PostRevealContinuationRepository = Pick<AppRepository, "appendPostRevealTur
 type PostRevealRepository = Pick<AppRepository, "appendPostRevealTurn" | "getReveal" | "getSessionSnapshot" | "getViewerEvidence" | "listTargetClarifications">
   & Partial<PostRevealContinuationRepository>;
 
+
+function frozenSupportsExactReasoningMaxTokens(capabilitySnapshot?: Record<string, unknown>): boolean {
+  const reasoning = capabilitySnapshot?.reasoning;
+  return Boolean(reasoning && typeof reasoning === "object" && !Array.isArray(reasoning) && (reasoning as Record<string, unknown>).supportsMaxTokens === true);
+}
+
+function postRevealOutputRecoveryInstruction(language: InterfaceLanguage): string {
+  return language === "pl"
+    ? "To jest druga próba, ponieważ poprzednia odpowiedź zakończyła się po wykorzystaniu dostępnego limitu bez kompletnej odpowiedzi finalnej. Skup się wyłącznie na wymaganej analizie zakończonej sesji i zwróć kompletną odpowiedź finalną. Nie rozszerzaj analizy o dodatkowe zadania ani nie przepisuj zapieczętowanego materiału blind."
+    : "This is the second attempt because the previous response exhausted the available output limit without producing a complete final answer. Focus only on the required analysis of the completed session and return a complete final answer. Do not expand the analysis into additional tasks or rewrite the sealed blind material.";
+}
+
 export async function sendPostRevealTurn(input: {
   repository: PostRevealRepository;
   sessionId: string;
@@ -100,20 +112,23 @@ export async function sendPostRevealTurn(input: {
   validateSessionContinuationBudget(messages);
   analyticalOutputBudget({ model: input.model, messages, operationKind: "post_reveal_viewer", attempt: 0 });
   await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
+  const automaticTrainingReview = supportedAutomaticPostRevealReviewRequests(language).includes(content);
   const response = (await callWithAnalyticalOutputRecovery({
     model: input.model,
     messages,
     operationKind: "post_reveal_viewer",
     requestedSettings: snapshot.generationSettings?.requested,
-    call: (settings) => executeProviderChat({
+    ...(automaticTrainingReview ? { recoveryInstruction: postRevealOutputRecoveryInstruction(language), recoveryReasoningMaxTokens: 10_000, recoveryReasoningMaxTokensSupported: frozenSupportsExactReasoningMaxTokens(snapshot.capabilitySnapshot), allowOpenRouterEndpointRecoveryEscalation: true } : {}),
+    call: (settings, _attempt, attemptMessages) => executeProviderChat({
       config: input.providerConfig,
       modelId: input.model.modelId,
-      messages,
+      messages: attemptMessages,
       settings,
       timeoutMs: input.timeoutMs,
       signal: input.signal,
       configuredRetries: input.maxRetries,
       operationId: "post-reveal.viewer",
+      ...(automaticTrainingReview ? { operationKind: "post_reveal_viewer" as const } : {}),
       streamWorkflowContext: input.streamWorkflowContext,
       attempt: input.chat,
     }),

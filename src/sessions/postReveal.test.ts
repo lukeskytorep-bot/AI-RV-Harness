@@ -76,6 +76,39 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
     const incompleteNearMatch = `${serializePostRevealTurn("user", `${currentRequest.slice(0, -1)}?`)}${serializePostRevealTurn("assistant", "Must not match")}`;
     expect(findCompletedAutomaticViewerReview(incompleteNearMatch, language)).toBeNull();
   });
+  it("applies exact reasoning max only to automatic Review recovery when the route advertises support", async () => {
+    let transcript = "";
+    const recoveryModel: ProviderModel = {
+      ...model,
+      capabilities: {
+        ...model.capabilities,
+        maxOutputTokens: 32_768,
+        reasoning: { supported: true, efforts: ["high"], supportsMaxTokens: true, confidence: "provider_metadata" },
+      },
+    };
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ providerConfigId: "pc", modelId: "viewer", sessionLanguage: "en", capabilitySnapshot: { reasoning: { supportsMaxTokens: true } }, generationSettings: { requested: { reasoningEffort: "high" }, effective: {}, omitted: [] } }),
+      getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Stone lighthouse", hash: "h" }),
+      getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
+      listTargetClarifications: vi.fn().mockResolvedValue([]),
+      appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant" | "monitor", content: string) => {
+        transcript += `${JSON.stringify({ role, content })}\n`;
+        return transcript;
+      }),
+    };
+    const chat = vi.fn()
+      .mockResolvedValueOnce({ content: "", reasoningContent: "long reasoning", finishReason: "length", usage: {} })
+      .mockResolvedValueOnce({ content: "Complete review", finishReason: "stop", usage: {} });
+    await sendPostRevealTurn({ repository, sessionId: "s", existingTranscript: "", providerConfig: config, model: recoveryModel, content: automaticPostRevealReviewRequest("en"), chat });
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(chat.mock.calls[0][0].settings.effective).toMatchObject({ reasoningEffort: "high", maxOutputTokens: 8192 });
+    expect(chat.mock.calls[0][0].settings.effective.reasoningMaxTokens).toBeUndefined();
+    expect(chat.mock.calls[1][0].settings.effective).toMatchObject({ reasoningMaxTokens: 10_000, maxOutputTokens: 16_384 });
+    expect(chat.mock.calls[1][0].settings.effective.reasoningEffort).toBeUndefined();
+    expect(chat.mock.calls[1][0].messages.at(-1)?.content).toContain("[ANALYTICAL OUTPUT RECOVERY]");
+    expect(chat.mock.calls[1][0].messages.at(-1)?.content).toContain("Focus only on the required analysis");
+  });
+
   it("persists after-feedback turns separately and labels sealed evidence read-only", async () => {
     let transcript = "";
     const repository = {
