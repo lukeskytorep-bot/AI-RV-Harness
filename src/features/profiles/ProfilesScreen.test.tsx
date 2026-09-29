@@ -35,6 +35,23 @@ describe("ProfilesScreen", () => {
     expect(html).toContain(props.copy.createProfile);
   });
 
+  it("shows the Human IS-BE name without credential text when the optional Profile note is empty in EN and PL", () => {
+    for (const language of ["en", "pl"] as const) {
+      const copy = getCopy(language);
+      const html = renderToStaticMarkup(<ProfilesScreen {...makeProps({ copy, profiles: [profile] })} />);
+      expect(html).toContain(">Luke</p>");
+      expect(html).not.toContain(`Luke · ${copy.credentialPending}`);
+      expect(html).not.toContain("Luke · </p>");
+      expect(html).toContain(copy.aiDefaultsIncomplete);
+    }
+  });
+
+  it("shows the optional Profile note after the Human IS-BE name", () => {
+    const noted = { ...profile, note: "Training profile" };
+    const html = renderToStaticMarkup(<ProfilesScreen {...makeProps({ profiles: [noted] })} />);
+    expect(html).toContain("Luke · Training profile");
+  });
+
   it("renders every active Workspace owned by the Profile and exposes its action menu", () => {
     const second: Workspace = { ...workspace, id: "workspace-2", name: "Research Lab", kind: "rv" };
     const html = renderToStaticMarkup(<ProfilesScreen {...makeProps({ profiles: [profile], workspaces: [workspace, second] })} />);
