@@ -42,6 +42,9 @@ describe("RvSessionsScreen", () => {
     expect(html).toContain(copy.manualTitle);
     expect(html).not.toContain(copy.conversationTitle);
     expect(html).not.toContain('class="segmented large-segmented"');
+    expect(html).toContain("How do RV Sessions work?");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("RV Sessions</strong> provides two ways of working");
   });
 
   it("uses the existing automatic RV panel for Automatic RV", () => {

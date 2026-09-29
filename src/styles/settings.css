@@ -1,6 +1,7 @@
 .settings-tab-content { display: grid; gap: 14px; }
 .settings-card.wide { grid-column: 1 / -1; }
 .about-settings-grid { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 14px; align-items: start; }
+.about-side-stack { min-width: 0; display: grid; gap: 14px; align-content: start; }
 .about-protocol-card, .about-credits-card { overflow: hidden; }
 .about-card-body { display: grid; gap: 12px; padding: 15px 18px 18px; }
 .about-card-body > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }

@@ -33,5 +33,8 @@ describe("ConversationsScreen", () => {
     expect(html).not.toContain(copy.manualTitle);
     expect(html).not.toContain(copy.manualRvTab);
     expect(html).not.toContain(copy.automaticRvTab);
+    expect(html).toContain("How does Conversation work?");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("Conversation lets you hold an ordinary dialogue");
   });
 });
