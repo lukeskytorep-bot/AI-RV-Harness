@@ -6,22 +6,40 @@ import { describe, expect, it } from "vitest";
 
 const source = (relative: string) => fs.readFileSync(path.join(process.cwd(), relative), "utf8");
 
+const readOpenedSource = (target: string) => {
+  const descriptor = fs.openSync(target, "r");
+  try {
+    return fs.readFileSync(descriptor, "utf8");
+  } finally {
+    fs.closeSync(descriptor);
+  }
+};
+
+const inspectProductionFile = (target: string, offenders: string[]) => {
+  if (!/\.tsx?$/.test(target) || target.includes(".test.")) return;
+  if (/\.createProfile\s*\(/.test(readOpenedSource(target))) {
+    offenders.push(path.relative(process.cwd(), target));
+  }
+};
+
+const visitProductionDirectory = (directory: string, offenders: string[]) => {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      visitProductionDirectory(target, offenders);
+    } else if (entry.isFile()) {
+      inspectProductionFile(target, offenders);
+    }
+  }
+};
+
 describe("UX-DATA-4 Profile + Workspace boundaries", () => {
   it("routes product-level Profile creation through the initial-Workspace use case", () => {
     const app = source("src/App.tsx");
     expect(app).toContain("createProfileWithInitialWorkspaces");
-    const productionRoots = ["src/App.tsx", "src/features"];
     const offenders: string[] = [];
-    const visit = (target: string) => {
-      const stat = fs.statSync(target);
-      if (stat.isDirectory()) {
-        for (const entry of fs.readdirSync(target)) visit(path.join(target, entry));
-        return;
-      }
-      if (!/\.tsx?$/.test(target) || target.includes(".test.")) return;
-      if (/\.createProfile\s*\(/.test(fs.readFileSync(target, "utf8"))) offenders.push(path.relative(process.cwd(), target));
-    };
-    for (const relative of productionRoots) visit(path.join(process.cwd(), relative));
+    inspectProductionFile(path.join(process.cwd(), "src/App.tsx"), offenders);
+    visitProductionDirectory(path.join(process.cwd(), "src/features"), offenders);
     expect(offenders).toEqual([]);
   });
 

@@ -24,7 +24,7 @@ describe("SettingsScreen", () => {
     const html = renderToStaticMarkup(<SettingsScreen {...props} />);
 
     expect(html).toContain(props.copy.settings);
-    expect(html).toContain(props.copy.providersApi.replace("&", "&amp;"));
+    expect(html).toContain(props.copy.providersApi.replaceAll("&", "&amp;"));
     expect(html).toContain(props.copy.models);
     expect(html).toContain(props.copy.storage);
     expect(html).toContain(props.copy.appearance);
