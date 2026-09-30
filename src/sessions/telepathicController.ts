@@ -1,17 +1,17 @@
 import { evaluateMonitor, isIncompleteMonitorResponse, type MonitorDecision } from "../monitor/engine";
 import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
 import { resolveGenerationSettings } from "../providers/capabilities";
-import { providerChat as nativeProviderChat } from "../providers/native";
-import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderUsage } from "../providers/types";
-import { shouldRetryProviderError, waitBeforeProviderRetry } from "../providers/retry";
+import { createProviderChatExecutor, providerChatOnce } from "../providers/requestExecutor";
+import type { StreamWorkflowContext } from "../providers/streamPresentation";
+import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderStreamEvent, ProviderUsage } from "../providers/types";
 import type { TelepathicProtocolResource } from "../resources/protocolRegistry";
 import {
   buildEffectiveTelepathicMonitorPrompt,
-  lockedActivityDefinition,
   lockedTelepathicMonitorExecution,
   lockedViewerIdentity,
-  LOCKED_ACTIVITY_VERSION,
+  lockedViewerBaseVocabulary,
   LOCKED_IDENTITY_VERSION,
+  LOCKED_BASE_VOCABULARY_VERSION,
   LOCKED_TELEPATHIC_MONITOR_EXECUTION_VERSION,
 } from "../resources/systemPrompts";
 import type { AppRepository } from "../storage/repository";
@@ -32,10 +32,12 @@ import {
   telepathicQuestionPrompt,
   telepathicStepPrompt,
 } from "./telepathicControllerPrompts";
-import type { RvSession, RvSessionState, SessionEventRecord, SessionSnapshot } from "./types";
+import type { RvSession, RvSessionState, SessionContinuationRouteSnapshot, SessionEventRecord, SessionSnapshot } from "./types";
 import { politeRevealTransition, politeSessionGreeting } from "./courtesy";
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
+import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
+import { ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON, appendAssistantMessageWithContinuation, captureSessionContinuationRoute, hydrateSessionMessageContinuation, persistSessionAssistantResponse, requiresAnthropicContinuationStopAfterContentMutation, SessionContinuationError, validateFrozenSessionContinuationRoute, validateSessionContinuationBudget } from "./providerContinuation";
 
 type TelepathicSessionRepository = Pick<
   AppRepository,
@@ -49,9 +51,9 @@ type TelepathicSessionRepository = Pick<
   | "recordTargetUsage"
   | "createMonitorRun"
   | "appendMonitorIntervention"
->;
+> & Partial<Pick<AppRepository, "appendSessionEventWithProviderState">>;
 
-type TelepathicResumeRepository = TelepathicSessionRepository & Pick<AppRepository, "getSessionSnapshot" | "listSessionEvents">;
+type TelepathicResumeRepository = TelepathicSessionRepository & Pick<AppRepository, "getSessionSnapshot" | "listSessionEvents" | "getSessionEventProviderState">;
 
 export type TelepathicQuestionMode = "predefined" | "manual" | "monitor";
 
@@ -75,6 +77,7 @@ export interface AutomaticTelepathicRunInput {
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
   viewerNotes?: ViewerNotesSessionSnapshot;
   resumeSession?: RvSession;
+  resumeContinuationRoute?: SessionContinuationRouteSnapshot;
   automaticTarget?: TargetRecord;
   step8Questions: {
     mode: TelepathicQuestionMode;
@@ -89,6 +92,8 @@ export interface AutomaticTelepathicRunInput {
   signal?: AbortSignal;
   maxRetries?: number;
   requestTimeoutMs?: number;
+  streamWorkflowContext?: StreamWorkflowContext;
+  onStreamPreview?: (preview: SessionStreamPreview | null) => void;
   maxSessionCostUsd?: number;
   sessionCodePrefix?: string;
   chat?: (input: {
@@ -98,6 +103,7 @@ export interface AutomaticTelepathicRunInput {
     settings: ReturnType<typeof resolveGenerationSettings>;
     timeoutMs?: number;
     signal?: AbortSignal;
+    onStreamEvent?: (event: ProviderStreamEvent) => void;
   }) => Promise<ProviderChatResponse>;
   onManualQuestionStage?: (handle: TelepathicManualQuestionHandle | null) => void;
   onProgress?: (progress: SessionProgress) => void;
@@ -122,6 +128,8 @@ export interface ResumeTelepathicManualStageInput {
   signal?: AbortSignal;
   maxRetries?: number;
   requestTimeoutMs?: number;
+  streamWorkflowContext?: StreamWorkflowContext;
+  onStreamPreview?: (preview: SessionStreamPreview | null) => void;
   maxSessionCostUsd?: number;
   chat?: AutomaticTelepathicRunInput["chat"];
   onManualQuestionStage: (handle: TelepathicManualQuestionHandle | null) => void;
@@ -135,13 +143,15 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
   const effectiveSettings = resolveGenerationSettings(input.model.capabilities, input.requestedSettings);
   if (effectiveSettings.omitted.length) throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
   const costGuard = new SessionCostGuard(input.maxSessionCostUsd);
+  const continuationRoute = input.resumeSession ? input.resumeContinuationRoute : captureSessionContinuationRoute(input.providerConfig, input.model);
   costGuard.validateModel(input.model);
   if (input.monitor) costGuard.validateModel(input.monitor.model);
 
   const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
-  const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
+  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.telepathic", streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code } }) });
+  const rawChat = (request: Parameters<typeof chat>[0]) => providerChatOnce(request, input.chat);
   const messages: ProviderMessage[] = [
     { role: "system", content: input.protocol.content },
     ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
@@ -167,7 +177,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
   await input.repository.updateRvSessionState(sessionId, "Preflight");
 
   const snapshot: SessionSnapshot = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     sessionId,
     sessionCode,
     profileId: input.profileId,
@@ -182,6 +192,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     provider: input.providerConfig.provider,
     modelId: input.model.modelId,
     modelRoute: input.model.route,
+    ...(continuationRoute ? { continuationRoute } : {}),
     capabilitySnapshot: JSON.parse(JSON.stringify(input.model.capabilities)) as Record<string, unknown>,
     capabilityCapturedAt: input.model.capabilities.capturedAt,
     generationSettings: effectiveSettings,
@@ -214,7 +225,6 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
         effectivePrompt: effectiveMonitorPrompt,
         effectivePromptSha256: await sha256Text(effectiveMonitorPrompt!),
         lockedBlocks: [
-          { id: "locked-activity-definition", version: LOCKED_ACTIVITY_VERSION, contentSha256: await sha256Text(lockedActivityDefinition(input.sessionLanguage)), fullContent: lockedActivityDefinition(input.sessionLanguage) },
           { id: "locked-telepathic-monitor-execution", version: LOCKED_TELEPATHIC_MONITOR_EXECUTION_VERSION, contentSha256: await sha256Text(lockedTelepathicMonitorExecution(input.sessionLanguage)), fullContent: lockedTelepathicMonitorExecution(input.sessionLanguage) },
         ],
       },
@@ -228,8 +238,9 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
         fullContent: input.rvSystemPrompt.content,
         lockedBlocks: [
           { id: "locked-viewer-identity", version: LOCKED_IDENTITY_VERSION, contentSha256: await sha256Text(lockedViewerIdentity(input.sessionLanguage)), fullContent: lockedViewerIdentity(input.sessionLanguage) },
-          { id: "locked-activity-definition", version: LOCKED_ACTIVITY_VERSION, contentSha256: await sha256Text(lockedActivityDefinition(input.sessionLanguage)), fullContent: lockedActivityDefinition(input.sessionLanguage) },
+          { id: "locked-viewer-base-vocabulary", version: LOCKED_BASE_VOCABULARY_VERSION, contentSha256: await sha256Text(lockedViewerBaseVocabulary(input.sessionLanguage)), fullContent: lockedViewerBaseVocabulary(input.sessionLanguage) },
         ],
+        ...(input.rvSystemPrompt.fieldGuide ? { fieldGuide: input.rvSystemPrompt.fieldGuide } : {}),
       },
     } : {}),
     ...(input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),
@@ -255,6 +266,8 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     notify(input, sessionId, sessionCode, "Interrupted", transcript, undefined, metrics, startedAtMs, reason);
     return { sessionId, sessionCode, state: "Interrupted", transcript, stopReason: reason };
   };
+  let pendingAnthropicSanitizedTurnStop = false;
+  let deferredManualAnthropicSanitizedTurnStop = false;
 
   const viewerCall = async (prompt: string, metadata: Record<string, unknown>): Promise<ProviderChatResponse> => {
     if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
@@ -263,10 +276,12 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     let response: ProviderChatResponse | null = null;
     let lastError = "";
     let responseDurationMs = 0;
-    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    {
+      const attempt = 0;
       if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
       let authorization;
       try {
+        validateSessionContinuationBudget(messages);
         authorization = costGuard.authorize(input.model, messages, effectiveSettings);
       } catch (cause) {
         if (cause instanceof CostGuardStop) throw new TelepathicRunStop(cause.message);
@@ -274,32 +289,39 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
       }
       const requestStartedAt = Date.now();
       try {
-        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal });
+        const phase = typeof metadata.step === "number" ? metadata.step : undefined;
+        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent: createSessionStreamPreviewHandler({ role: "viewer", phase, source: typeof metadata.source === "string" ? metadata.source : undefined, emit: input.onStreamPreview }) });
         response = { ...response, usage: authorization.success(response.usage) };
         responseDurationMs = Date.now() - requestStartedAt;
         metrics = recordProviderRequest(metrics, response.usage, responseDurationMs);
         if (!response.content.trim()) throw new Error("empty provider response");
-        break;
       } catch (cause) {
         authorization.failure();
         if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
         if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { ...metadata, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
+        input.onStreamPreview?.(null);
         response = null;
-        if (shouldRetryProviderError(cause, attempt, maxRetries)) await waitBeforeProviderRetry(attempt, input.signal, cause);
-        else break;
       }
     }
     if (!response) throw new TelepathicRunStop(`AUTO-STOP: repeated Viewer provider failures${lastError ? ` — ${lastError}` : ""}`);
     const raw = response.content;
     const sanitized = sanitizeRepetitiveOutput(raw, input.sessionLanguage);
     response = { ...response, content: sanitized.content };
+    const stopAfterSanitizedAnthropicTurn = requiresAnthropicContinuationStopAfterContentMutation(continuationRoute, raw, response.content);
     if (sanitized.truncated) {
       await input.repository.appendSessionEvent(sessionId, { eventType: "OUTPUT_TRUNCATED_LOOP", role: "controller", content: sanitized.finding?.fragment, metadata: { ...metadata, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(raw) } });
     }
-    messages.push({ role: "assistant", content: response.content });
-    await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs } });
+    try {
+      const persisted = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } });
+      appendAssistantMessageWithContinuation(messages, response.content, persisted.state);
+      if (stopAfterSanitizedAnthropicTurn) pendingAnthropicSanitizedTurnStop = true;
+    } catch (cause) {
+      if (cause instanceof SessionContinuationError) throw new TelepathicRunStop(`AUTO-STOP: ${cause.message}`);
+      throw cause;
+    }
+    input.onStreamPreview?.(null);
     return response;
   };
 
@@ -307,6 +329,10 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     transcript = nextTranscript;
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, step, metrics, startedAtMs, undefined, awaitingStep8Questions, questionCount);
+    if (pendingAnthropicSanitizedTurnStop) {
+      pendingAnthropicSanitizedTurnStop = false;
+      throw new TelepathicRunStop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
+    }
     if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) {
       throw new TelepathicRunStop("AUTO-STOP: configured session cost limit exceeded");
     }
@@ -332,7 +358,8 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     for (let exchangeNumber = 1; exchangeNumber <= 5; exchangeNumber += 1) {
       let decision: MonitorDecision | null = null;
       let monitorError = "";
-      for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      {
+        const attempt = 0;
         try {
           decision = await evaluateMonitor({
           providerConfig: input.monitor.providerConfig,
@@ -345,6 +372,16 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
           effectiveSystemPrompt: effectiveMonitorPrompt,
           packetOptions: { stageKind: "step", protocolName: "Telepathic Protocol v1.1", wholeSessionScope: step === 8 },
           requestTimeoutMs: input.requestTimeoutMs,
+          maxRetries,
+          signal: input.signal,
+          streamWorkflowContext: input.streamWorkflowContext ?? "rv_session",
+          onStreamEvent: createSessionStreamPreviewHandler({ role: "monitor", phase: step, exchangeNumber, source: "live_monitor", emit: input.onStreamPreview }),
+          onOutputRecovery: async (cause) => {
+            await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_PROVIDER_ERROR", role: "controller", content: cause.message, metadata: { step, exchangeNumber, attempt: 1, recovery: "output_budget" } });
+          },
+          onTransportAttemptFailure: async (cause, context) => {
+            await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_PROVIDER_ERROR", role: "controller", content: cause.message, metadata: { step, exchangeNumber, attempt: context.physicalAttempt, logicalRequestId: context.logicalRequestId, recovery: "transport" } });
+          },
           chat: async (request) => {
             let authorization;
             try {
@@ -355,7 +392,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
             }
             const requestStartedAt = Date.now();
             try {
-              const raw = await chat({ ...request, signal: input.signal });
+              const raw = await rawChat({ ...request, signal: input.signal });
               const response = { ...raw, usage: authorization.success(raw.usage) };
               const requestDurationMs = Date.now() - requestStartedAt;
               metrics = recordProviderRequest(metrics, response.usage, requestDurationMs);
@@ -368,14 +405,13 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
             }
           },
           });
-          break;
+          input.onStreamPreview?.(null);
         } catch (cause) {
           if (cause instanceof TelepathicRunStop) throw cause;
           if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
           monitorError = cause instanceof Error ? cause.message : String(cause);
           await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_PROVIDER_ERROR", role: "controller", content: monitorError, metadata: { step, exchangeNumber, attempt: attempt + 1 } });
-          if (shouldRetryProviderError(cause, attempt, maxRetries)) await waitBeforeProviderRetry(attempt, input.signal, cause);
-          else break;
+          input.onStreamPreview?.(null);
         }
       }
       if (!decision) throw new TelepathicRunStop(`AUTO-STOP: Monitor provider failure — ${monitorError}`);
@@ -433,6 +469,12 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
               try {
                 questionCount += 1;
                 await runQuestion(question, questionCount, "operator");
+              } catch (cause) {
+                if (cause instanceof TelepathicRunStop && cause.message === ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON) {
+                  deferredManualAnthropicSanitizedTurnStop = true;
+                  finishRequested = true;
+                }
+                throw cause;
               } finally {
                 inFlight = false;
                 if (finishRequested) finish();
@@ -448,6 +490,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
           await waiting;
           input.signal?.removeEventListener("abort", abort);
           input.onManualQuestionStage?.(null);
+          if (deferredManualAnthropicSanitizedTurnStop) throw new TelepathicRunStop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
           if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
           await input.repository.appendSessionEvent(sessionId, { eventType: "TELEPATHIC_QUESTIONS_COMPLETED", role: "controller", metadata: { step: 8, questionCount } });
           notify(input, sessionId, sessionCode, "BlindRunning", transcript, 8, metrics, startedAtMs, undefined, false, questionCount);
@@ -499,12 +542,13 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
   if (input.automaticTarget && !targetIsEligibleForProtocol(input.automaticTarget, "telepathic")) throw new Error("The captured target is not classified as telepathic.");
 
   const events = await input.repository.listSessionEvents(input.session.id);
+  validateFrozenSessionContinuationRoute(snapshot, input.providerConfig, input.model);
   const recoveryState = telepathicManualRecoveryState(events);
   if (!recoveryState) throw new Error("No durable Step 8 telepathic recovery checkpoint was found.");
 
-  const chat = input.chat ?? nativeProviderChat;
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
-  const messages = rebuildViewerMessages(snapshot, events);
+  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.telepathic-resume", streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(input.session.id, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, resumed: true } }) });
+  const messages = await rebuildViewerMessages(input.repository, snapshot, events, input.providerConfig, input.model);
   const startedAtMs = Date.now();
   let metrics = rebuildViewerMetrics(events);
   const costGuard = new SessionCostGuard(input.maxSessionCostUsd, metrics.costUsd ?? 0);
@@ -535,10 +579,16 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
     notifyResume("Interrupted", undefined, reason);
     return { sessionId: input.session.id, sessionCode: input.session.sessionCode, state: "Interrupted", transcript, stopReason: reason };
   };
+  let pendingAnthropicSanitizedTurnStop = false;
+  let deferredManualAnthropicSanitizedTurnStop = false;
   const persist = async (nextTranscript: string, phase: number, awaitingQuestions = false): Promise<void> => {
     transcript = nextTranscript;
     await input.repository.updatePreRevealTranscript(input.session.id, transcript);
     notifyResume("BlindRunning", phase, undefined, awaitingQuestions);
+    if (pendingAnthropicSanitizedTurnStop) {
+      pendingAnthropicSanitizedTurnStop = false;
+      throw new TelepathicRunStop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
+    }
     if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) {
       throw new TelepathicRunStop("AUTO-STOP: configured session cost limit exceeded");
     }
@@ -550,10 +600,12 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
     let response: ProviderChatResponse | null = null;
     let lastError = "";
     let responseDurationMs = 0;
-    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    {
+      const attempt = 0;
       if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
       let authorization;
       try {
+        validateSessionContinuationBudget(messages);
         authorization = costGuard.authorize(input.model, messages, snapshot.generationSettings);
       } catch (cause) {
         if (cause instanceof CostGuardStop) throw new TelepathicRunStop(cause.message);
@@ -561,32 +613,39 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
       }
       const requestStartedAt = Date.now();
       try {
-        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: snapshot.generationSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal });
+        const phase = typeof metadata.step === "number" ? metadata.step : undefined;
+        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: snapshot.generationSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent: createSessionStreamPreviewHandler({ role: "viewer", phase, source: typeof metadata.source === "string" ? metadata.source : "resume", emit: input.onStreamPreview }) });
         response = { ...response, usage: authorization.success(response.usage) };
         responseDurationMs = Date.now() - requestStartedAt;
         metrics = recordProviderRequest(metrics, response.usage, responseDurationMs);
         if (!response.content.trim()) throw new Error("empty provider response");
-        break;
       } catch (cause) {
         authorization.failure();
         if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
         if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
         lastError = cause instanceof Error ? cause.message : String(cause);
         await input.repository.appendSessionEvent(input.session.id, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { ...metadata, resumed: true, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
+        input.onStreamPreview?.(null);
         response = null;
-        if (shouldRetryProviderError(cause, attempt, maxRetries)) await waitBeforeProviderRetry(attempt, input.signal, cause);
-        else break;
       }
     }
     if (!response) throw new TelepathicRunStop(`AUTO-STOP: repeated Viewer provider failures${lastError ? ` — ${lastError}` : ""}`);
     const raw = response.content;
     const sanitized = sanitizeRepetitiveOutput(raw, snapshot.sessionLanguage);
     response = { ...response, content: sanitized.content };
+    const stopAfterSanitizedAnthropicTurn = requiresAnthropicContinuationStopAfterContentMutation(snapshot.continuationRoute, raw, response.content);
     if (sanitized.truncated) {
       await input.repository.appendSessionEvent(input.session.id, { eventType: "OUTPUT_TRUNCATED_LOOP", role: "controller", content: sanitized.finding?.fragment, metadata: { ...metadata, resumed: true, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(raw) } });
     }
-    messages.push({ role: "assistant", content: response.content });
-    await input.repository.appendSessionEvent(input.session.id, { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, resumed: true, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs } });
+    try {
+      const persisted = await persistSessionAssistantResponse({ repository: input.repository, sessionId: input.session.id, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : snapshot.continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, resumed: true, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } });
+      appendAssistantMessageWithContinuation(messages, response.content, persisted.state);
+      if (stopAfterSanitizedAnthropicTurn) pendingAnthropicSanitizedTurnStop = true;
+    } catch (cause) {
+      if (cause instanceof SessionContinuationError) throw new TelepathicRunStop(`AUTO-STOP: ${cause.message}`);
+      throw cause;
+    }
+    input.onStreamPreview?.(null);
     return response;
   };
   const runQuestion = async (question: string): Promise<void> => {
@@ -619,8 +678,15 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
           if (finished) throw new Error("The Step 8 question stage is already closed.");
           if (inFlight) throw new Error("Wait for the current answer before asking another question.");
           inFlight = true;
-          try { await runQuestion(question); }
-          finally {
+          try {
+            await runQuestion(question);
+          } catch (cause) {
+            if (cause instanceof TelepathicRunStop && cause.message === ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON) {
+              deferredManualAnthropicSanitizedTurnStop = true;
+              finishRequested = true;
+            }
+            throw cause;
+          } finally {
             inFlight = false;
             if (finishRequested) finish();
           }
@@ -634,6 +700,7 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
       await waiting;
       input.signal?.removeEventListener("abort", abort);
       input.onManualQuestionStage(null);
+      if (deferredManualAnthropicSanitizedTurnStop) throw new TelepathicRunStop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
       if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
       await input.repository.appendSessionEvent(input.session.id, { eventType: "TELEPATHIC_QUESTIONS_COMPLETED", role: "controller", metadata: { step: 8, questionCount, resumed: true } });
     }
@@ -692,14 +759,23 @@ export function appendTelepathicMonitorTranscript(current: string, step: number,
   return current ? `${current}\n\n${block}` : block;
 }
 
-function rebuildViewerMessages(snapshot: SessionSnapshot, events: SessionEventRecord[]): ProviderMessage[] {
+async function rebuildViewerMessages(
+  repository: Pick<AppRepository, "getSessionEventProviderState">,
+  snapshot: SessionSnapshot,
+  events: SessionEventRecord[],
+  providerConfig: ProviderConfig,
+  model: ProviderModel,
+): Promise<ProviderMessage[]> {
   const messages: ProviderMessage[] = [
     { role: "system", content: snapshot.protocol.fullContent },
     ...(snapshot.rvSystemPrompt?.fullContent.trim() ? [{ role: "system" as const, content: snapshot.rvSystemPrompt.fullContent.trim() }] : []),
+    ...(viewerNotesSystemBlock(snapshot.viewerNotes, snapshot.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(snapshot.viewerNotes, snapshot.sessionLanguage)! }] : []),
   ];
   for (const event of [...events].sort((left, right) => left.sequenceNumber - right.sequenceNumber)) {
     if (event.eventType === "CONTROLLER_STEP" && event.content?.trim()) messages.push({ role: "user", content: event.content });
-    if (event.eventType === "VIEWER_RESPONSE" && event.content?.trim()) messages.push({ role: "assistant", content: event.content });
+    if (event.eventType === "VIEWER_RESPONSE" && event.content?.trim()) {
+      messages.push(await hydrateSessionMessageContinuation({ repository, snapshot, config: providerConfig, model, event, message: { role: "assistant", content: event.content } }));
+    }
   }
   return messages;
 }

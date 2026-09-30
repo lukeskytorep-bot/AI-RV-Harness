@@ -1,3 +1,4 @@
+import type { FieldGuideSessionSnapshot } from "./aiCenter/fieldGuideTypes";
 import type { ReasoningEffort } from "./providers/types";
 
 export type InterfaceLanguage = "pl" | "en";
@@ -5,20 +6,11 @@ export type SessionLanguageSetting = "same" | InterfaceLanguage;
 export type Theme = "blue" | "aurora" | "light" | "dark" | "green";
 export type ChatMode = "conversation" | "manual_rv";
 
-export interface ChatThreadGroup {
-  id: string;
-  workspaceId: string;
-  mode: ChatMode;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  archivedAt?: string;
-}
-
 export interface ChatThread {
   id: string;
   workspaceId: string;
   mode: ChatMode;
+  /** Legacy group reference from pre-UX-DATA-5 data. New records leave it undefined. */
   threadGroupId?: string;
   title: string;
   formalRvState?: "BLIND" | "REVEALED" | "INTERRUPTED" | "FAILED";
@@ -42,6 +34,8 @@ export interface AppSettings {
   requestTimeoutMs: number;
   maxRetries: number;
   defaultMaxOutputTokens: number;
+  conversationMaxOutputTokens: number;
+  rvSessionMaxOutputTokens: number;
   maxSessionCostUsd: number;
   defaultRevealSource: "external" | "automatic";
   targetRepeatPolicy: "allow" | "avoid_profile";
@@ -50,6 +44,8 @@ export interface AppSettings {
   animations: boolean;
   trainingDirectory?: string;
   telepathicStarterPackVersion?: string;
+  activeConversationWorkspaceId: string;
+  activeRvWorkspaceId: string;
 }
 
 export interface Profile {
@@ -92,13 +88,18 @@ export interface ViewerSystemPromptSnapshot {
   version: string;
   content: string;
   contentSha256: string;
+  fieldGuide?: FieldGuideSessionSnapshot;
 }
+
+export type WorkspaceKind = "conversation" | "rv" | "legacy_combined";
+export type NewWorkspaceKind = Exclude<WorkspaceKind, "legacy_combined">;
 
 export interface Workspace {
   id: string;
   profileId: string;
   name: string;
   description?: string;
+  kind: WorkspaceKind;
   createdAt: string;
   updatedAt: string;
   lastOpenedAt: string;
@@ -122,4 +123,5 @@ export interface CreateWorkspaceInput {
   profileId: string;
   name: string;
   description?: string;
+  kind: NewWorkspaceKind;
 }

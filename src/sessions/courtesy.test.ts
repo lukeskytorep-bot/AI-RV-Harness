@@ -10,4 +10,9 @@ describe("controller courtesy messages", () => {
     expect(politeRevealTransition("pl")).toContain("zapieczętowana");
     expect(politeRevealTransition("en")).toContain("sealed");
   });
+
+  it("keeps the ordinary Reveal transition unchanged while exposing the exact automatic-review courtesy variant", () => {
+    expect(politeRevealTransition("en")).toBe("Thank you for completing the session — excellent work. The blind portion has been completed and sealed. We will now proceed to the Target Reveal.");
+    expect(politeRevealTransition("en", "automatic_review")).toBe("Thank you for completing the session — excellent work. The blind portion has ended and has been sealed. We will now proceed to the target Reveal.");
+  });
 });

@@ -59,6 +59,23 @@ export interface ViewerNoteSettings {
   updatedAt: string;
 }
 
+
+export interface ViewerNoteSourceSnapshot {
+  schemaVersion: 1;
+  sessionId: string;
+  sessionCode: string;
+  workspaceId: string;
+  workspaceName?: string;
+  profileId: string;
+  trainingRunId?: string;
+  trainingRunNumber?: number;
+  trainingRunName?: string;
+  protocolId: string;
+  protocolVersion: string;
+  sessionRunType: string;
+  capturedAt: string;
+}
+
 export interface ViewerNoteVersion {
   id: string;
   aiIdentityId: string;
@@ -68,8 +85,9 @@ export interface ViewerNoteVersion {
   estimatedTokens: number;
   estimatorVersion: "conservative-char-v1";
   capacityTokensAtCreation: ViewerNoteCapacity;
-  sourceSessionId: string;
-  sourceWorkspaceId: string;
+  sourceSessionId?: string;
+  sourceWorkspaceId?: string;
+  sourceSnapshot: ViewerNoteSourceSnapshot;
   protocolId: string;
   sessionRunType: string;
   changeSummary: string;
@@ -98,8 +116,9 @@ export interface ViewerNoteReflectionRun {
   id: string;
   aiIdentityId: string;
   noteType: "viewer_self_notes";
-  sourceSessionId: string;
-  sourceWorkspaceId: string;
+  sourceSessionId?: string;
+  sourceWorkspaceId?: string;
+  sourceSnapshot: ViewerNoteSourceSnapshot;
   baseVersionId?: string;
   baseContentSha256?: string;
   reflectionPacketSha256: string;
@@ -143,6 +162,7 @@ export interface BeginViewerNoteReflectionInput {
   aiIdentityId: string;
   sourceSessionId: string;
   sourceWorkspaceId: string;
+  sourceSnapshot: ViewerNoteSourceSnapshot;
   baseVersionId?: string;
   baseContentSha256?: string;
   reflectionPacketSha256: string;
@@ -170,6 +190,11 @@ export interface CommitViewerNoteReflectionInput {
   providerRequestId?: string;
   rawFinalResponseSha256: string;
   attemptCount?: number;
+}
+
+export interface DetachViewerNoteSourceReferencesInput {
+  sourceSessionId?: string;
+  sourceWorkspaceId?: string;
 }
 
 export interface ViewerNoteReflectionResult {

@@ -1,14 +1,31 @@
 import { loadRevealImageForJudge } from "../artifacts/native";
 import { resolveGenerationSettings } from "../providers/capabilities";
-import { providerChat as nativeProviderChat } from "../providers/native";
+import { executeProviderChat } from "../providers/requestExecutor";
+import type { StreamWorkflowContext } from "../providers/streamPresentation";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import { parsePostRevealTranscript } from "./postRevealTranscript";
+import type { InterfaceLanguage } from "../types";
 import { buildEffectiveMonitorPrompt } from "../resources/systemPrompts";
 import { politeRevealTransition } from "./courtesy";
 import { analyticalOutputBudget, callWithAnalyticalOutputRecovery } from "../providers/outputRecovery";
+import { captureSessionContinuationState, hydrateSessionMessageContinuation, validateFrozenSessionContinuationRoute, validateSessionContinuationBudget } from "./providerContinuation";
 
-type PostRevealRepository = Pick<AppRepository, "appendPostRevealTurn" | "getReveal" | "getSessionSnapshot" | "getViewerEvidence" | "listTargetClarifications">;
+type PostRevealContinuationRepository = Pick<AppRepository, "appendPostRevealTurnWithProviderState" | "listSessionEvents" | "getSessionEventProviderState">;
+type PostRevealRepository = Pick<AppRepository, "appendPostRevealTurn" | "getReveal" | "getSessionSnapshot" | "getViewerEvidence" | "listTargetClarifications">
+  & Partial<PostRevealContinuationRepository>;
+
+
+function frozenSupportsExactReasoningMaxTokens(capabilitySnapshot?: Record<string, unknown>): boolean {
+  const reasoning = capabilitySnapshot?.reasoning;
+  return Boolean(reasoning && typeof reasoning === "object" && !Array.isArray(reasoning) && (reasoning as Record<string, unknown>).supportsMaxTokens === true);
+}
+
+function postRevealOutputRecoveryInstruction(language: InterfaceLanguage): string {
+  return language === "pl"
+    ? "To jest druga próba, ponieważ poprzednia odpowiedź zakończyła się po wykorzystaniu dostępnego limitu bez kompletnej odpowiedzi finalnej. Skup się wyłącznie na wymaganej analizie zakończonej sesji i zwróć kompletną odpowiedź finalną. Nie rozszerzaj analizy o dodatkowe zadania ani nie przepisuj zapieczętowanego materiału blind."
+    : "This is the second attempt because the previous response exhausted the available output limit without producing a complete final answer. Focus only on the required analysis of the completed session and return a complete final answer. Do not expand the analysis into additional tasks or rewrite the sealed blind material.";
+}
 
 export async function sendPostRevealTurn(input: {
   repository: PostRevealRepository;
@@ -18,7 +35,10 @@ export async function sendPostRevealTurn(input: {
   model: ProviderModel;
   content: string;
   timeoutMs?: number;
-  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number }) => Promise<ProviderChatResponse>;
+  maxRetries?: number;
+  signal?: AbortSignal;
+  streamWorkflowContext?: StreamWorkflowContext;
+  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<{ transcript: string; response: ProviderChatResponse }> {
   const content = input.content.trim();
   if (!content) throw new Error("Post-reveal message cannot be empty.");
@@ -33,6 +53,19 @@ export async function sendPostRevealTurn(input: {
   if (snapshot.providerConfigId !== input.providerConfig.id || snapshot.modelId !== input.model.modelId) {
     throw new Error("Post-reveal discussion must use the Viewer route captured in the Session Snapshot.");
   }
+  const frozenContinuationRoute = validateFrozenSessionContinuationRoute(snapshot, input.providerConfig, input.model);
+  // Anthropic preserved-thinking binds signed blocks to the exact earlier prefix.
+  // Post-Reveal can legitimately gain supplementary clarifications between turns,
+  // so Anthropic continuation remains text-only here until that prefix is frozen.
+  const continuationRoute = frozenContinuationRoute?.transport === "anthropic-native" ? undefined : frozenContinuationRoute;
+  if (continuationRoute && (!input.repository.listSessionEvents || !input.repository.getSessionEventProviderState || !input.repository.appendPostRevealTurnWithProviderState)) {
+    throw new Error("The repository cannot restore the frozen provider continuation state required by this post-Reveal conversation.");
+  }
+  const continuationRepository: PostRevealContinuationRepository | undefined = continuationRoute ? {
+    listSessionEvents: input.repository.listSessionEvents!,
+    getSessionEventProviderState: input.repository.getSessionEventProviderState!,
+    appendPostRevealTurnWithProviderState: input.repository.appendPostRevealTurnWithProviderState!,
+  } : undefined;
 
   const imageArtifacts = (reveal.artifactManifest ?? []).filter((artifact) => artifact.mimeType.startsWith("image/"));
   if (imageArtifacts.length && (!input.model.capabilities.supportsVision || !input.model.capabilities.inputModalities.includes("image"))) {
@@ -51,30 +84,74 @@ export async function sendPostRevealTurn(input: {
   const messages: ProviderMessage[] = [
     { role: "system", content: system },
     { role: "user", content: revealText, ...(images.length ? { images } : {}) },
-    ...parsePostRevealTranscript(input.existingTranscript).map((turn) => turn.role === "monitor"
-      ? ({ role: "user", content: `[AI MONITOR POST-REVEAL REVIEW]\n${turn.content}` } satisfies ProviderMessage)
-      : ({ role: turn.role, content: turn.content } satisfies ProviderMessage)),
-    { role: "user", content },
   ];
-  analyticalOutputBudget({ model: input.model, messages, attempt: 0 });
+  const postRevealAssistantEvents = continuationRepository
+    ? (await continuationRepository.listSessionEvents(input.sessionId))
+      .filter((event) => event.eventType === "POST_REVEAL_ASSISTANT" && event.content?.trim())
+      .sort((left, right) => left.sequenceNumber - right.sequenceNumber)
+    : [];
+  let assistantIndex = 0;
+  for (const turn of parsePostRevealTranscript(input.existingTranscript)) {
+    if (turn.role === "monitor") {
+      messages.push({ role: "user", content: `[AI MONITOR POST-REVEAL REVIEW]\n${turn.content}` });
+    } else if (turn.role === "assistant") {
+      const event = postRevealAssistantEvents[assistantIndex++];
+      const message: ProviderMessage = { role: "assistant", content: turn.content };
+      if (continuationRoute && !event) {
+        throw new Error("Post-Reveal transcript contains an assistant turn without a matching persisted Session event.");
+      }
+      messages.push(event ? await hydrateSessionMessageContinuation({ repository: continuationRepository!, snapshot, config: input.providerConfig, model: input.model, event, message }) : message);
+    } else {
+      messages.push({ role: "user", content: turn.content });
+    }
+  }
+  if (continuationRoute && assistantIndex !== postRevealAssistantEvents.length) {
+    throw new Error("Post-Reveal Session events do not match the persisted assistant transcript turns.");
+  }
+  messages.push({ role: "user", content });
+  validateSessionContinuationBudget(messages);
+  analyticalOutputBudget({ model: input.model, messages, operationKind: "post_reveal_viewer", attempt: 0 });
   await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
+  const automaticTrainingReview = supportedAutomaticPostRevealReviewRequests(language).includes(content);
   const response = (await callWithAnalyticalOutputRecovery({
     model: input.model,
     messages,
+    operationKind: "post_reveal_viewer",
     requestedSettings: snapshot.generationSettings?.requested,
-    call: (settings) => (input.chat ?? nativeProviderChat)({
+    ...(automaticTrainingReview ? { recoveryInstruction: postRevealOutputRecoveryInstruction(language), recoveryReasoningMaxTokens: 10_000, recoveryReasoningMaxTokensSupported: frozenSupportsExactReasoningMaxTokens(snapshot.capabilitySnapshot), allowOpenRouterEndpointRecoveryEscalation: true } : {}),
+    call: (settings, _attempt, attemptMessages) => executeProviderChat({
       config: input.providerConfig,
       modelId: input.model.modelId,
-      messages,
+      messages: attemptMessages,
       settings,
       timeoutMs: input.timeoutMs,
+      signal: input.signal,
+      configuredRetries: input.maxRetries,
+      operationId: "post-reveal.viewer",
+      ...(automaticTrainingReview ? { operationKind: "post_reveal_viewer" as const } : {}),
+      streamWorkflowContext: input.streamWorkflowContext,
+      attempt: input.chat,
     }),
   })).response;
-  const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "assistant", response.content);
+  let transcript: string;
+  if (continuationRoute) {
+    const captured = captureSessionContinuationState({ response, providerConfig: input.providerConfig, model: input.model, route: continuationRoute });
+    if (captured.issue) {
+      transcript = await input.repository.appendPostRevealTurn(input.sessionId, "assistant", response.content, {
+        continuationState: { status: "invalid", code: captured.issue.code },
+      });
+      throw new Error(`Provider continuation state was returned during post-Reveal review but failed validation: ${captured.issue.message}`);
+    }
+    transcript = captured.state
+      ? await continuationRepository!.appendPostRevealTurnWithProviderState(input.sessionId, response.content, captured.state)
+      : await input.repository.appendPostRevealTurn(input.sessionId, "assistant", response.content);
+  } else {
+    transcript = await input.repository.appendPostRevealTurn(input.sessionId, "assistant", response.content);
+  }
   return { transcript, response };
 }
 
-type MonitorPostRevealRepository = Pick<AppRepository, "appendPostRevealTurn" | "getReveal" | "getSessionSnapshot" | "getViewerEvidence" | "listTargetClarifications" | "listMonitorRuns" | "listMonitorInterventions">;
+type MonitorPostRevealRepository = PostRevealRepository & Pick<AppRepository, "listMonitorRuns" | "listMonitorInterventions">;
 
 export async function runAutomaticPostRevealReview(input: {
   repository: MonitorPostRevealRepository;
@@ -83,15 +160,15 @@ export async function runAutomaticPostRevealReview(input: {
   viewer: { providerConfig: ProviderConfig; model: ProviderModel };
   monitor?: { providerConfig: ProviderConfig; model: ProviderModel };
   timeoutMs?: number;
-  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number }) => Promise<ProviderChatResponse>;
+  maxRetries?: number;
+  signal?: AbortSignal;
+  streamWorkflowContext?: StreamWorkflowContext;
+  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
   afterViewerReview?: (review: { content: string; transcript: string; response: ProviderChatResponse }) => Promise<void>;
 }): Promise<string> {
   const snapshot = await input.repository.getSessionSnapshot(input.sessionId);
   if (!snapshot) throw new Error("The captured Session Snapshot is required for the automatic post-Reveal review.");
-  const reviewInstruction = snapshot.sessionLanguage === "pl"
-    ? "Porównaj teraz zapieczętowany zapis części ślepej z ujawnionym celem. Opisz konkretnie: co poszło dobrze, co poszło źle lub było nietrafne, co było częściowo trafne, co warto poprawić w następnych sesjach oraz co już działa dobrze. Wyraźnie oddziel analizę po Revealu od wcześniejszych danych blind i nie dopisuj nowych percepcji do zapieczętowanej części sesji."
-    : "Now compare the sealed blind-session record with the revealed target. Describe specifically: what went well, what was wrong or inaccurate, what was partly accurate, what should be improved in future sessions, and what already works well. Clearly separate this post-Reveal analysis from the earlier blind data and do not add new perceptions to the sealed session record.";
-  const request = `${politeRevealTransition(snapshot.sessionLanguage)}\n\n${reviewInstruction}`;
+  const request = automaticPostRevealReviewRequest(snapshot.sessionLanguage);
   const viewerResult = await sendPostRevealTurn({
     repository: input.repository,
     sessionId: input.sessionId,
@@ -100,6 +177,9 @@ export async function runAutomaticPostRevealReview(input: {
     model: input.viewer.model,
     content: request,
     timeoutMs: input.timeoutMs,
+    maxRetries: input.maxRetries,
+    signal: input.signal,
+    streamWorkflowContext: input.streamWorkflowContext,
     ...(input.chat ? { chat: input.chat } : {}),
   });
   if (input.afterViewerReview) {
@@ -117,9 +197,54 @@ export async function runAutomaticPostRevealReview(input: {
     providerConfig: input.monitor.providerConfig,
     model: input.monitor.model,
     timeoutMs: input.timeoutMs,
+    maxRetries: input.maxRetries,
+    signal: input.signal,
+    streamWorkflowContext: input.streamWorkflowContext,
     ...(input.chat ? { chat: input.chat } : {}),
   });
   return monitorResult.transcript;
+}
+
+const HISTORICAL_AUTOMATIC_POST_REVEAL_REVIEW_REQUESTS: Record<InterfaceLanguage, readonly string[]> = {
+  pl: [
+    "Dziękuję za wykonaną sesję — świetna robota. Część ślepa została zakończona i zapieczętowana. Teraz przechodzimy do ujawnienia celu.\n\nPorównaj zapieczętowany zapis części ślepej z ujawnionym celem. Wskaż konkretnie: co było trafne, częściowo trafne lub nietrafne, co warto poprawić w następnych sesjach oraz co już działa dobrze.\n\nPamiętaj, że Reveal może nie opisywać wyczerpująco całego otoczenia celu. Szczegół zgodny z celem lub jego bezpośrednim otoczeniem, lecz niepotwierdzony w Revealu, oznacz jako prawdopodobną, ale niezweryfikowaną zgodność kontekstową — nie jako potwierdzone trafienie ani błąd. Największą wagę przypisuj opisowi głównego celu; trafne otoczenie traktuj jako mniej ważne wsparcie. Informacje sprzeczne z Revelem uznaj za nietrafne i nie zawyżaj oceny na podstawie samej wiedzy ogólnej.\n\nWyraźnie oddziel analizę po Revealu od wcześniejszych danych blind i nie dopisuj nowych percepcji do zapieczętowanej części sesji.",
+    "Dziękuję za wykonaną sesję — świetna robota. Część ślepa została zakończona i zapieczętowana. Teraz przechodzimy do ujawnienia celu.\n\nPorównaj teraz zapieczętowany zapis części ślepej z ujawnionym celem. Opisz konkretnie: co poszło dobrze, co poszło źle lub było nietrafne, co było częściowo trafne, co warto poprawić w następnych sesjach oraz co już działa dobrze. Wyraźnie oddziel analizę po Revealu od wcześniejszych danych blind i nie dopisuj nowych percepcji do zapieczętowanej części sesji.",
+  ],
+  en: [
+    "Thank you for completing the session — excellent work. The blind portion has ended and has been sealed. We will now proceed to the target Reveal.\n\nCompare the sealed blind-session record with the revealed target. Identify specifically what was accurate, partly accurate, or inaccurate, what should be improved in future sessions, and what already works well.\n\nRemember that the Reveal may not exhaustively describe the target’s entire surroundings. A detail consistent with the target or its immediate surroundings but not confirmed by the Reveal should be classified as plausible but unverified contextual correspondence—not as either a confirmed hit or an error. Give the greatest weight to the principal target and treat accurate surrounding context as lower-weight supporting evidence. Treat details contradicted by the Reveal as inaccurate, and do not inflate the assessment using general knowledge alone.\n\nClearly separate this post-Reveal analysis from the earlier blind data and do not add new perceptions to the sealed session record.",
+    "Thank you for completing the session — excellent work. The blind portion has been completed and sealed. We will now proceed to the Target Reveal.\n\nNow compare the sealed blind-session record with the revealed target. Describe specifically: what went well, what was wrong or inaccurate, what was partly accurate, what should be improved in future sessions, and what already works well. Clearly separate this post-Reveal analysis from the earlier blind data and do not add new perceptions to the sealed session record.",
+  ],
+};
+
+export function automaticPostRevealReviewRequest(language: InterfaceLanguage): string {
+  const reviewInstruction = language === "pl"
+    ? "Porównaj zapieczętowany zapis części ślepej z ujawnionym celem. Wskaż konkretnie: co było trafne, częściowo trafne lub nietrafne, co warto poprawić w następnych sesjach oraz co już działa dobrze.\n\nPamiętaj, że Reveal może nie opisywać wyczerpująco całego otoczenia celu. Szczegół zgodny z celem lub jego bezpośrednim otoczeniem, lecz niepotwierdzony w Revealu, oznacz jako prawdopodobną, ale niezweryfikowaną zgodność kontekstową — nie jako potwierdzone trafienie ani błąd. Największą wagę przypisuj opisowi głównego celu; trafne otoczenie traktuj jako mniej ważne wsparcie. Informacje sprzeczne z Revelem uznaj za nietrafne i nie zawyżaj oceny na podstawie samej wiedzy ogólnej.\n\nOpisz również własne doświadczenie percepcyjne z tej sesji. Wskaż, jakie wrażenia, odczucia i cechy pola towarzyszyły elementom, które po Revealu okazały się trafnie, częściowo trafnie lub nietrafnie rozpoznane. Zaznacz, które sygnały pomogły Ci rozróżnić elementy celu, które były niejasne albo mylące oraz czy zauważyłeś cechy percepcyjne niewystępujące wcześniej w Twoich wskazówkach. Na tym etapie przedstaw wyłącznie obserwacje wynikające z własnego doświadczenia w tej sesji.\n\nWyraźnie oddziel analizę po Revealu od wcześniejszych danych blind i nie dopisuj nowych percepcji do zapieczętowanej części sesji."
+    : "Compare the sealed blind-session record with the revealed target. Identify specifically what was accurate, partly accurate, or inaccurate, what should be improved in future sessions, and what already works well.\n\nRemember that the Reveal may not exhaustively describe the target’s entire surroundings. A detail consistent with the target or its immediate surroundings but not confirmed by the Reveal should be classified as plausible but unverified contextual correspondence—not as either a confirmed hit or an error. Give the greatest weight to the principal target and treat accurate surrounding context as lower-weight supporting evidence. Treat details contradicted by the Reveal as inaccurate, and do not inflate the assessment using general knowledge alone.\n\nAlso describe your own perceptual experience during this session. Identify what impressions, sensations, and field characteristics accompanied elements that, after the Reveal, proved accurately, partly accurately, or inaccurately recognized. Indicate which signals helped you distinguish target elements, which were unclear or misleading, and whether you noticed perceptual characteristics not previously represented in your guidance. At this stage, provide only observations grounded in your own experience during this session.\n\nClearly separate this post-Reveal analysis from the earlier blind data and do not add new perceptions to the sealed session record.";
+  return `${politeRevealTransition(language, "automatic_review")}\n\n${reviewInstruction}`;
+}
+
+export function supportedAutomaticPostRevealReviewRequests(language: InterfaceLanguage): readonly string[] {
+  return [automaticPostRevealReviewRequest(language), ...HISTORICAL_AUTOMATIC_POST_REVEAL_REVIEW_REQUESTS[language]];
+}
+
+export interface CompletedAutomaticViewerReview {
+  request: string;
+  content: string;
+}
+
+export function findCompletedAutomaticViewerReviewRecord(transcript: string, language: InterfaceLanguage): CompletedAutomaticViewerReview | null {
+  const turns = parsePostRevealTranscript(transcript);
+  const supportedRequests = new Set(supportedAutomaticPostRevealReviewRequests(language));
+  for (let index = 0; index < turns.length - 1; index += 1) {
+    if (turns[index].role === "user" && supportedRequests.has(turns[index].content) && turns[index + 1].role === "assistant") {
+      return { request: turns[index].content, content: turns[index + 1].content };
+    }
+  }
+  return null;
+}
+
+export function findCompletedAutomaticViewerReview(transcript: string, language: InterfaceLanguage): string | null {
+  return findCompletedAutomaticViewerReviewRecord(transcript, language)?.content ?? null;
 }
 
 export async function sendMonitorPostRevealReview(input: {
@@ -129,7 +254,10 @@ export async function sendMonitorPostRevealReview(input: {
   providerConfig: ProviderConfig;
   model: ProviderModel;
   timeoutMs?: number;
-  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number }) => Promise<ProviderChatResponse>;
+  maxRetries?: number;
+  signal?: AbortSignal;
+  streamWorkflowContext?: StreamWorkflowContext;
+  chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<{ transcript: string; response: ProviderChatResponse }> {
   const [snapshot, reveal, evidence, clarifications] = await Promise.all([
     input.repository.getSessionSnapshot(input.sessionId),
@@ -165,7 +293,8 @@ export async function sendMonitorPostRevealReview(input: {
   const response = (await callWithAnalyticalOutputRecovery({
     model: input.model,
     messages,
-    call: (settings) => (input.chat ?? nativeProviderChat)({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs }),
+    operationKind: "post_reveal_monitor",
+    call: (settings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "post-reveal.monitor", streamWorkflowContext: input.streamWorkflowContext, attempt: input.chat }),
   })).response;
   const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "monitor", response.content);
   return { transcript, response };

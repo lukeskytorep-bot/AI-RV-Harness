@@ -2,13 +2,15 @@
 
 AI RV Harness is a local-first desktop workspace for blind AI Remote Viewing sessions and controlled RV research. The desktop stack is Tauri 2 + React/TypeScript + Rust + SQLite, with Windows as the primary release platform.
 
-## Current development baseline — 0.7.12
+## Current development baseline — 0.7.13 (private test branch)
 
-Version 0.7.12 is the development baseline built on the complete v0.7.11 Windows and Linux release. It introduces a separate **AI Center** for Profile-wide AI roles and an experimental, versioned Viewer Notes system.
+Version 0.7.13 is the private development and test baseline built on the public v0.7.12 release. It retains AI Center and Viewer Notes, adds the versioned Viewer Field Guide learning layer, integrates the centralized provider transport/retry architecture, and includes the staged UX-DATA lifecycle work through controlled purge plus its final compatibility gate. The current baseline also separates Conversations from RV Sessions, introduces typed Conversation/RV Workspaces with safe `legacy_combined` compatibility, expands the factory Training pack to 94 targets in eight categories, and plans Full Training as one to ten frozen eight-session rounds. Version 0.7.12 remains the latest public release until the next tested release is published.
 
 Viewer Notes belong to one exact Profile + credential identity + provider + model route + Viewer role. They are shared across that Profile's Workspaces but never transferred between models or roles. Notes are frozen before each supported session, supplied as a separate read-only system data block, and may be replaced only by the same Viewer after Reveal and its own post-Reveal review. Monitor opinions, Judge results and later operator discussion are excluded. Every version is immutable, capacity is enforced without truncation, stale concurrent updates are blocked, and a human restoration of an earlier version is explicitly audited.
 
-AI Center is a top-level navigation destination with Overview, the existing AI Monitor, Viewer Notes and AI Identities. RV Session, Training and Manual RV provide a simple Viewer Notes switch enabled by default. Research adds a blinded **Viewer Notes Impact** design comparing `No Notes` with one of the five most recent immutable `Frozen Notes` versions under Experiment Lock.
+AI Center is a top-level navigation destination with Overview, the existing AI Monitor, Viewer Learning and AI Identities. Viewer Learning keeps **Viewer Notes** and the trainable **Field Guide** as separate versioned histories. The effective Viewer prompt is composed from Locked Core Identity, Locked Base Vocabulary and the optional current Field Guide. Only completed Training targets may create new Viewer Notes or Field Guide versions; ordinary RV and Research consume frozen snapshots read-only.
+
+Research provides independent **Viewer Notes OFF/CURRENT** and **Field Guide OFF/CURRENT** controls. Viewer Notes Impact compares `No Notes` with frozen current notes while holding one common frozen Field Guide setting across both conditions. Prompt Research can compare either manual prompt variants or two to four selected versions from the six most recent Field Guide versions for the exact Viewer identity and language. Experiment Lock freezes all selected content and Resume reuses only those snapshots.
 
 Provider reasoning and final assistant content are now normalized separately across supported OpenAI-compatible, Google and Anthropic response shapes. The Harness preserves a model's final instruction while keeping provider reasoning out of Viewer evidence, Monitor interventions and normal transcripts. Incomplete reasoning-only responses are treated as recoverable provider failures instead of valid protocol instructions.
 
@@ -18,13 +20,14 @@ Release documentation is organized under [`docs/releases/`](docs/releases/). The
 
 Implemented end to end:
 
-- Polish/English UI, Profiles, Workspaces, Chat, RV Session, AI Monitor, Targets, Research and all eight Settings tabs;
+- Polish/English UI, Profiles, separate Conversations and RV Sessions areas, typed Workspaces, AI Monitor, Targets, Training, Research and all eight Settings tabs;
 - verified OS-native credential storage and native adapters for OpenRouter, Google, OpenAI, Anthropic, Z.AI, DeepSeek, Mistral and custom OpenAI-compatible endpoints;
 - dynamic model/capability discovery, a versioned exact-model reasoning registry, explicit AUTO/OFF/effort semantics, provider-specific reasoning payloads, Profile-level reasoning and temperature defaults, requested/effective generation settings, recommended seeds and persistent model Favorites;
-- strict Conversation / Manual RV context separation, a Workspace → Thread → Conversation hierarchy, optional `AI IS-BE` and `Human IS-BE` display names, a Profile-level Viewer System Prompt, and per-conversation Workspace Source selection with context-limit blocking;
+- strict Conversation / Manual RV context separation, separate active Conversation and RV Workspace selections, a flat Workspace → record hierarchy, optional `AI IS-BE` and `Human IS-BE` display names, a Profile-level Viewer System Prompt, and per-conversation Workspace Source selection with context-limit blocking;
+- unified Active → Archived → Restore / Delete permanently lifecycle for Profiles, Workspaces, Conversations, ordinary RV Sessions, Training, Research and My Targets, with Deletion Preview, protected Viewer Notes provenance and controlled purge instead of ordinary destructive CRUD;
 - Full RCP v1.5a and RV Lite v1.1.0 Core/Extended automatic execution, Custom Protocol versioning/Dry Run, ordinary randomized batch runs, STOP/retry/cost safeguards and response autosave;
 - approved RV Lite PL/EN resources with exactly four Viewer calls; Prompt 3 includes mandatory Deepening, Prompt 4 is Functional Sketches, and the Profile greeting omits the AI name cleanly when none is set;
-- 84 bundled project-provided, read-only Training Targets in seven categories, separate unlimited My Targets, a fixed 84-session curriculum, partial Training runs that can mix category counts with an explicit My Targets count, resumable checkpoints, exports and optional 1–3 AI Judges;
+- 94 bundled project-provided, read-only Training Targets in eight categories, separate unlimited My Targets, Full Training with one to ten frozen rounds of eight category-balanced sessions, partial Training with explicit category/My Targets counts, profile-scoped repeat avoidance, resumable checkpoints, exports and optional 1–3 AI Judges;
 - autonomous blind AI Monitor with natural-language instructions, at most five deepenings after Phases 2–6, editable full prompt with visible locked rules, Special Tasks, post-Reveal review and exportable Monitor history;
 - external/automatic text or image Reveal, immutable sealed pre-reveal evidence, automatic Viewer self-review (and Monitor review when present), plus an optional two-way post-Reveal conversation stored in a separate evidence domain;
 - independent 1–3 AI Judges using sanitized allowlist packets and frozen 3+3+2+2 scores;
@@ -33,7 +36,7 @@ Implemented end to end:
 - safe Markdown/ASCII rendering throughout human-readable AI output, a searchable all-Workspace directory and direct Workspace switching;
 - redacted in-memory provider raw-payload diagnostics and capability cache controls.
 
-The former ten-target starter pack is retired non-destructively during migration and replaced by the validated factory Training library of 84 targets. Historical sessions that referenced the old rows remain intact.
+The former ten-target starter pack is retired non-destructively. The current validated factory Training library contains 94 targets in eight categories while preserving the stable identifiers and historical snapshots of the earlier 84-target pack. Historical sessions and legacy seven-session Training curricula remain readable and resumable according to their stored planner version.
 
 Checkpoint 0.7.1 follows the first native Windows installation test. It grants the webview the explicit SQLite execute permission required to seed the bundled Training Targets, replaces the indefinite startup spinner with a recoverable diagnostic state, and makes Aurora a distinct soft multicolor theme instead of a second dark variant. New installations now open in English with Aurora as the default theme, while the native window uses a matching light background before the web interface is ready.
 
@@ -63,7 +66,7 @@ After every automatic Reveal the Viewer now receives the Reveal and produces a s
 
 `.github/workflows/release-windows.yml` and `.github/workflows/release-linux.yml` run manually from `main`, prevent overlapping releases, require the reviewed and committed `src-tauri/Cargo.lock`, run the relevant quality gates, create/update a draft GitHub Release and attest the generated packages. CI never commits or pushes repository changes.
 
-The package version is now 0.7.12. The included `src-tauri/Cargo.lock` carries the matching root package version and must be verified by Rust CI. If dependency resolution reports it as stale, use the manual `Prepare Cargo lockfile` workflow for v0.7.12, review the generated lockfile and commit it separately. Normal CI and release workflows intentionally refuse to continue when the required lockfile is missing or stale.
+The private development package version is now 0.7.13. The included `src-tauri/Cargo.lock` carries the matching root package version and must be verified by Rust CI. If dependency resolution reports it as stale, use the manual `Prepare Cargo lockfile` workflow for v0.7.13, review the generated lockfile and commit it separately. Normal CI and release workflows intentionally refuse to continue when the required lockfile is missing or stale.
 
 ## Windows installer trust
 

@@ -1,0 +1,364 @@
+{
+  "fixtureVersion": 1,
+  "sourceKind": "upstream-schema-2.1.1-plus-synthetic-boundaries",
+  "upstreamPackage": "@openrouter/ai-sdk-provider@2.1.1",
+  "upstreamSchemaUrl": "https://app.unpkg.com/@openrouter/ai-sdk-provider@2.1.1/files/dist/index.d.mts",
+  "verifiedAt": "2026-09-27",
+  "accepted": [
+    {
+      "name": "minimal-text-no-id-no-format",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "test"
+      }
+    },
+    {
+      "name": "signature-only-no-text",
+      "detail": {
+        "type": "reasoning.text",
+        "signature": "sig-001"
+      }
+    },
+    {
+      "name": "null-text-with-signature",
+      "detail": {
+        "type": "reasoning.text",
+        "text": null,
+        "signature": "sig-002",
+        "id": null,
+        "format": null
+      }
+    },
+    {
+      "name": "empty-text-is-preserved",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "",
+        "signature": ""
+      }
+    },
+    {
+      "name": "summary-no-id-no-format",
+      "detail": {
+        "type": "reasoning.summary",
+        "summary": "summary",
+        "index": 0
+      }
+    },
+    {
+      "name": "encrypted-null-metadata",
+      "detail": {
+        "type": "reasoning.encrypted",
+        "data": "opaque-state",
+        "id": null,
+        "format": null,
+        "index": 0
+      }
+    },
+    {
+      "name": "empty-id-is-preserved",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "text",
+        "id": "",
+        "format": "unknown"
+      }
+    },
+    {
+      "name": "empty-encrypted-data",
+      "detail": {
+        "type": "reasoning.encrypted",
+        "data": ""
+      }
+    },
+    {
+      "name": "text-null-signature-null-with-empty-text-string-separate",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "value",
+        "signature": null
+      }
+    },
+    {
+      "name": "text-with-empty-signature",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "value",
+        "signature": ""
+      }
+    },
+    {
+      "name": "text-with-null-id",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "value",
+        "id": null
+      }
+    },
+    {
+      "name": "text-with-null-format",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "value",
+        "format": null
+      }
+    },
+    {
+      "name": "known-format",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "value",
+        "format": "openai-responses-v1"
+      }
+    }
+  ],
+  "rejected": [
+    {
+      "name": "text-without-replay-data",
+      "detail": {
+        "type": "reasoning.text"
+      },
+      "reason": "missing_replay_data"
+    },
+    {
+      "name": "null-text-empty-signature",
+      "detail": {
+        "type": "reasoning.text",
+        "text": null,
+        "signature": ""
+      },
+      "reason": "missing_replay_data"
+    },
+    {
+      "name": "empty-format",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "text",
+        "format": ""
+      },
+      "reason": "format / unexpected_value"
+    },
+    {
+      "name": "unknown-format",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "text",
+        "format": "future-format-v9"
+      },
+      "reason": "format / unexpected_value"
+    },
+    {
+      "name": "wrong-id-type",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "text",
+        "id": 7
+      },
+      "reason": "id / unexpected_type"
+    },
+    {
+      "name": "unknown-field",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "text",
+        "future": "opaque"
+      },
+      "reason": "unexpected_field"
+    },
+    {
+      "name": "wrong-text-type",
+      "detail": {
+        "type": "reasoning.text",
+        "text": 7
+      },
+      "reason": "text / unexpected_type"
+    },
+    {
+      "name": "wrong-signature-type",
+      "detail": {
+        "type": "reasoning.text",
+        "text": "value",
+        "signature": 7
+      },
+      "reason": "signature / unexpected_type"
+    },
+    {
+      "name": "null-text-null-signature",
+      "detail": {
+        "type": "reasoning.text",
+        "text": null,
+        "signature": null
+      },
+      "reason": "missing_replay_data"
+    },
+    {
+      "name": "missing-type",
+      "detail": {
+        "text": "value"
+      },
+      "reason": "type / missing_required"
+    },
+    {
+      "name": "unknown-type",
+      "detail": {
+        "type": "reasoning.future",
+        "text": "value"
+      },
+      "reason": "type / unexpected_value"
+    }
+  ],
+  "bridge": {
+    "modelId": "z-ai/glm-5.3-flash-20260826",
+    "normalizedEndpoint": "https://openrouter.ai/api/v1",
+    "providerConfigId": "provider-config",
+    "credentialId": "credential",
+    "sseDataEvents": [
+      {
+        "id": "gen-bridge",
+        "model": "z-ai/glm-5.3-flash-20260826",
+        "provider": "Relace",
+        "choices": [
+          {
+            "delta": {
+              "reasoning_details": [
+                {
+                  "type": "reasoning.summary",
+                  "summary": "Part ",
+                  "index": 0
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      },
+      {
+        "choices": [
+          {
+            "delta": {
+              "reasoning_details": [
+                {
+                  "type": "reasoning.summary",
+                  "summary": "two",
+                  "index": 0
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      },
+      {
+        "choices": [
+          {
+            "delta": {
+              "reasoning_details": [
+                {
+                  "type": "reasoning.encrypted",
+                  "data": "opaque-bridge-state",
+                  "id": null,
+                  "format": null,
+                  "index": 0
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      },
+      {
+        "choices": [
+          {
+            "delta": {
+              "reasoning_details": [
+                {
+                  "type": "reasoning.text",
+                  "text": "Thought ",
+                  "id": "rt_bridge",
+                  "index": 0
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      },
+      {
+        "choices": [
+          {
+            "delta": {
+              "reasoning_details": [
+                {
+                  "type": "reasoning.text",
+                  "text": "body",
+                  "signature": "sig-bridge",
+                  "id": "rt_bridge",
+                  "index": 0
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      },
+      {
+        "choices": [
+          {
+            "delta": {
+              "content": "Visible answer."
+            },
+            "finish_reason": "stop"
+          }
+        ]
+      }
+    ],
+    "expectedReasoningDetails": [
+      {
+        "type": "reasoning.summary",
+        "summary": "Part two",
+        "index": 0
+      },
+      {
+        "type": "reasoning.encrypted",
+        "data": "opaque-bridge-state",
+        "id": null,
+        "format": null,
+        "index": 0
+      },
+      {
+        "type": "reasoning.text",
+        "text": "Thought body",
+        "signature": "sig-bridge",
+        "id": "rt_bridge",
+        "index": 0
+      }
+    ],
+    "invalidProviderResponse": {
+      "model": "z-ai/glm-5.3-flash-20260826",
+      "provider": "Relace",
+      "choices": [
+        {
+          "message": {
+            "role": "assistant",
+            "content": "Visible answer survives",
+            "reasoning_details": [
+              {
+                "type": "reasoning.text",
+                "text": "synthetic reasoning",
+                "format": "future-format-v9"
+              }
+            ]
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 11,
+        "completion_tokens": 7,
+        "reasoning_tokens": 3,
+        "total_tokens": 18,
+        "cost": 0.001
+      }
+    }
+  }
+}

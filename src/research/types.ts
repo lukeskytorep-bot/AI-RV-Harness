@@ -2,6 +2,8 @@ import type { JudgeComponentScores } from "../domain/scoring";
 import type { EffectiveGenerationSettings, GenerationSettings, ModelCapabilities } from "../providers/types";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
+import type { FieldGuideSessionSnapshot, FieldGuideSourceSnapshot } from "../aiCenter/fieldGuideTypes";
+import type { ProviderKind } from "../providers/types";
 import type { ResearchTargetSelectionMode, ResearchTargetSource } from "./targetSelection";
 
 export const RESEARCH_TEMPLATE_TYPES = [
@@ -20,6 +22,45 @@ export type ResearchState = "Draft" | "Preflight" | "Locked" | "Running" | "Sess
 
 export type ResearchSystemPromptSnapshot = ViewerSystemPromptSnapshot;
 
+export type ResearchFieldGuideMode = "off" | "current" | "history";
+export type ResearchFieldGuideSource = "none" | "active" | "history";
+export type ResearchPromptResearchSource = "manual" | "field_guide_history";
+
+export interface ResearchFieldGuideIdentitySnapshot {
+  aiIdentityId: string;
+  profileId: string;
+  credentialFingerprint: string;
+  providerConfigId: string;
+  provider: ProviderKind;
+  normalizedBaseUrl?: string;
+  modelId: string;
+  modelRoute: string;
+}
+
+export interface ResearchFieldGuideSnapshot extends FieldGuideSessionSnapshot {
+  versionCreatedAt: string;
+  capacityTokensAtCreation: 2048 | 4096 | 8192;
+  sourceTrainingRunId?: string;
+  sourceSessionId?: string;
+  sourceSnapshot: FieldGuideSourceSnapshot;
+  identity: ResearchFieldGuideIdentitySnapshot;
+}
+
+export interface ResearchFieldGuideControl {
+  mode: ResearchFieldGuideMode;
+  source: ResearchFieldGuideSource;
+  language: InterfaceLanguage;
+  lockedCoreIdentityVersion: string;
+  lockedBaseVocabularyVersion: string;
+  identityId?: string;
+  selectedVersionIds?: string[];
+}
+
+export interface ResearchViewerNotesControl {
+  mode: "off" | "current" | "experiment";
+}
+
+
 export interface ResearchConditionDefinition {
   key: string;
   label: string;
@@ -33,8 +74,12 @@ export interface ResearchConditionDefinition {
   conditionInstruction?: ResearchSystemPromptSnapshot;
   practiceOrder?: "FIRST" | "SECOND";
   customValue?: string;
-  /** Immutable notes snapshot captured before Experiment Lock. */
+  /** Immutable Viewer Notes snapshot captured for and frozen by Experiment Lock. */
   viewerNotes?: ViewerNotesSessionSnapshot;
+  /** Immutable trained Field Guide snapshot. Research never mutates it. */
+  fieldGuide?: ResearchFieldGuideSnapshot;
+  /** Makes manual prompt vs trained Field Guide provenance explicit in stored conditions. */
+  promptSource?: "locked_only" | "active_field_guide" | "historical_field_guide" | "manual_research_prompt" | "legacy";
 }
 
 export interface ResearchJudgeDefinition {
@@ -46,7 +91,7 @@ export interface ResearchViewerControl {
   model: { mode: "fixed" | "condition_variable"; modelId?: string };
   systemPrompt: {
     mode: "fixed" | "condition_variable";
-    source?: "profile" | "custom";
+    source?: "profile" | "custom" | "locked_only" | "field_guide_current" | "field_guide_history" | "research_manual";
     contentSha256?: string;
   };
   reasoning: {
@@ -60,13 +105,17 @@ export interface ResearchViewerControl {
   maxOutputTokens: number;
 }
 
+export type ResearchProtocolSelection =
+  | { id: "full-rcp"; version: "1.5a"; contentSha256?: string }
+  | { id: "rv-lite"; version: "1.1.0"; variant: "extended"; contentSha256: string };
+
 export interface ResearchConfig {
   schemaVersion: 1;
   name: string;
   workspaceId: string;
   templateType: ResearchTemplateType;
   sessionLanguage: InterfaceLanguage;
-  protocol: { id: "full-rcp"; version: "1.5a" };
+  protocol: ResearchProtocolSelection;
   targetIds: string[];
   targetSelection?: { source: ResearchTargetSource; mode: ResearchTargetSelectionMode; requestedCount?: number };
   repetitions: number;
@@ -79,6 +128,9 @@ export interface ResearchConfig {
     sessionCodePrefix: string;
   };
   viewerControl?: ResearchViewerControl;
+  fieldGuideControl?: ResearchFieldGuideControl;
+  viewerNotesControl?: ResearchViewerNotesControl;
+  promptResearchSource?: ResearchPromptResearchSource;
   conditions: ResearchConditionDefinition[];
   evaluationMode?: "save_only" | "ai_judges";
   judges: ResearchJudgeDefinition[];
@@ -98,6 +150,7 @@ export interface ResearchProjectRecord {
   unblindedAt?: string;
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
 }
 
 export interface ResearchConditionRecord {
@@ -161,6 +214,10 @@ export interface UnblindedSessionResult extends JudgeComponentScores {
   judgeCount: number;
   judgeTotalRange: number;
   judgeTotalStdDev: number;
+  /** Exact frozen Field Guide provenance used by this session, when enabled. */
+  fieldGuideVersionId?: string;
+  fieldGuideVersionNumber?: number;
+  fieldGuideContentSha256?: string;
 }
 
 export interface ConditionStatistics {

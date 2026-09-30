@@ -3,9 +3,9 @@
 > **Project:** AI RV Harness  
 > **Document type:** Implemented engineering decisions and integrity safeguards  
 > **Implementation status:** Implemented  
-> **Current reference release:** AI RV Harness v0.7.12  
+> **Current reference:** public AI RV Harness v0.7.12 + private v0.7.13 development baseline  
 > **Repository:** [lukeskytorep-bot/AI-RV-Harness](https://github.com/lukeskytorep-bot/AI-RV-Harness)  
-> **Scope:** Foundational safeguards and decisions implemented through v0.7.12
+> **Scope:** Foundational safeguards through v0.7.12 plus explicitly documented v0.7.13 modularization, UX-DATA lifecycle, Viewer Learning, frozen Training planning, provider continuation, and typed Workspace safeguards
 
 ## Purpose
 
@@ -690,6 +690,7 @@ Model and provider names identify the systems used and do not imply endorsement 
 - [AI RV Harness repository](https://github.com/lukeskytorep-bot/AI-RV-Harness)
 - [AI RV Harness releases](https://github.com/lukeskytorep-bot/AI-RV-Harness/releases)
 - [AI Center and Viewer Notes](AI_CENTER_AND_VIEWER_NOTES.md)
+- [Training, target pack, and typed Workspaces](TRAINING_TARGETS_AND_TYPED_WORKSPACES.md)
 - Project Wiki Home — add a link here after the Wiki is published
 - Installation and Updates — planned Wiki page
 - Sessions and Protocols — planned Wiki page
@@ -699,3 +700,43 @@ Model and provider names identify the systems used and do not imply endorsement 
 ---
 
 This page documents implemented safeguards in the referenced release. If a later release changes an invariant or boundary, its release notes and updated source code take precedence.
+
+## Decision 20 — Permanent Delete is an explicit controlled purge, not ordinary CRUD
+
+### Problem
+
+The Harness intentionally protects sealed evidence, immutable Session Snapshots, frozen Judge results, locked Research structures, Research Results, supplementary target clarifications and append-only Viewer Notes. A naive permanent-delete feature would either fail on those guards or, worse, weaken them globally.
+
+### Decision
+
+Normal CRUD remains subject to every integrity guard. Permanent deletion is exposed only after Archive and is implemented through explicit repository `purge*` use cases preceded by a read-only Deletion Preview.
+
+SQLite uses a transaction-scoped `controlled_purge_context`. The context exists only while a dedicated purge transaction is executing and is removed before commit. Selected delete guards recognize that context; ordinary update/delete paths do not. Bundled Training Targets remain protected even in the controlled context. Browser storage stages all affected keys and restores their previous raw values if a write fails.
+
+Used user targets preserve their historical identity through `target_id_snapshot` fields when their live FK is intentionally detached. Viewer Notes preserve immutable source snapshots when Session/Workspace live references disappear. Profile purge is the one lifecycle operation that removes the Profile's own AI identities and Viewer Notes history.
+
+### Invariant
+
+> Archiving makes a record eligible for explicit deletion; it does not weaken evidence integrity. Outside a dedicated controlled-purge transaction, sealed, frozen, locked and append-only protections behave exactly as before.
+
+### Compatibility gate
+
+UX-DATA-9 and the later Viewer Learning, provider-continuation, and typed-Workspace extensions turn the accepted UX/data invariants into permanent build checks. `npm run verify:ux-data` verifies the contiguous migration registry through 026, flat Conversation product boundary, shared dialog/model-route boundaries, unified lifecycle surface, Viewer Notes/target preservation markers, Field Guide schema markers, provider-continuation tables, and Workspace-kind markers. Native Rust tests preserve the accepted exact-green v23 → v24 Viewer Learning upgrade, exact-green v24 → v25 provider-state transition, and exact-green v25 → v26 typed-Workspace transition without moving historical records. Older public/legacy databases are handled by the compatibility epoch gate rather than silently entering this controlled upgrade path.
+
+## Decision 21 — Training plans and Workspace purposes are frozen explicitly
+
+### Problem
+
+Recomputing a long Training plan during Resume could select different targets, change their order, or reinterpret an historical seven-session curriculum as the current eight-session round. Likewise, one undifferentiated active Workspace could allow an ordinary Conversation selection to redirect RV, Training, or Research ownership.
+
+### Decision
+
+Full Training creates a complete versioned plan before its first session. It stores the flattened target IDs, planner/curriculum version, `roundSize = 8`, and round count. Resume consumes those stored values and never samples the target pool again. Historical runs retain their original planner semantics.
+
+Workspace purpose is explicit as `conversation`, `rv`, or `legacy_combined`. The application stores separate active Conversation and RV Workspace IDs. Migration 026 marks existing rows `legacy_combined` rather than guessing how to split their records. New Profiles create one Workspace of each current type atomically.
+
+Training and Research resolve a compatible RV or `legacy_combined` Workspace internally. They do not expose an ineffective Workspace selector and cannot use a `conversation` Workspace as technical session ownership.
+
+### Invariant
+
+> Resume replays the exact persisted Training plan, and RV workflows never derive their technical owner from the active Conversation Workspace.

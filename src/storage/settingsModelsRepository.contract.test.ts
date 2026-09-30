@@ -1,0 +1,242 @@
+import { describe, expect, it, vi } from "vitest";
+import type { ProviderConfig, ProviderModel } from "../providers/types";
+import { createDefaultSettings } from "../startupDefaults";
+import { BrowserSettingsModelsRepository } from "./browser/settingsModelsRepository";
+import { SqliteSettingsModelsRepository } from "./sqlite/settingsModelsRepository";
+import type { DatabaseTransactionStatement } from "./databaseNative";
+
+class MemoryStorage implements Storage {
+  private readonly values = new Map<string, string>();
+  get length() { return this.values.size; }
+  clear() { this.values.clear(); }
+  getItem(key: string) { return this.values.get(key) ?? null; }
+  key(index: number) { return [...this.values.keys()][index] ?? null; }
+  removeItem(key: string) { this.values.delete(key); }
+  setItem(key: string, value: string) { this.values.set(key, value); }
+}
+
+const timestamp = "2026-09-08T00:00:00.000Z";
+
+function provider(id: string, updatedAt: string): ProviderConfig {
+  return { id, provider: "openai", label: id, credentialId: `credential-${id}`, enabled: true, createdAt: updatedAt, updatedAt };
+}
+
+function model(providerConfigId: string, modelId: string, displayName: string, favorite = false): ProviderModel {
+  return {
+    providerConfigId, provider: "openai", modelId, displayName, route: modelId,
+    capabilities: {
+      inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true,
+      reasoning: { supported: false, efforts: [], confidence: "verified" },
+      temperature: { supported: true, confidence: "verified" }, supportedParameters: [], source: "provider", capturedAt: timestamp,
+    },
+    pricing: {}, recommended: false, favorite, rawMetadata: {}, refreshedAt: timestamp,
+  };
+}
+
+describe("browser Settings and models repository contract", () => {
+  it("round-trips settings without changing the serialized storage key", async () => {
+    const storage = new MemoryStorage();
+    const repository = new BrowserSettingsModelsRepository({ storage, clearProfileReferences: () => undefined });
+    const settings = { ...createDefaultSettings(), interfaceLanguage: "pl" as const, maxRetries: 4 };
+    await repository.saveSettings(settings);
+    expect(await repository.loadSettings()).toEqual(settings);
+    expect(storage.getItem("rvh.dev.settings")).toBe(JSON.stringify(settings));
+  });
+
+  it("keeps provider ordering, model filtering and favorites stable", async () => {
+    const storage = new MemoryStorage();
+    storage.setItem("rvh.dev.providers", JSON.stringify([provider("old", "2026-09-07T00:00:00.000Z"), provider("new", timestamp)]));
+    storage.setItem("rvh.dev.models", JSON.stringify([model("old", "b", "Beta", true), model("new", "a", "Alpha")]));
+    const repository = new BrowserSettingsModelsRepository({ storage, clearProfileReferences: () => undefined });
+    expect((await repository.listProviderConfigs()).map((item) => item.id)).toEqual(["new", "old"]);
+    expect((await repository.listProviderModels("old")).map((item) => item.modelId)).toEqual(["b"]);
+    await repository.replaceProviderModels("old", [model("old", "b", "Beta")]);
+    expect((await repository.listProviderModels("old"))[0].favorite).toBe(true);
+  });
+
+  it("removes a provider and its models and explicitly requests profile-reference cleanup", async () => {
+    const storage = new MemoryStorage();
+    const removed = provider("remove", timestamp);
+    storage.setItem("rvh.dev.providers", JSON.stringify([removed, provider("keep", timestamp)]));
+    storage.setItem("rvh.dev.models", JSON.stringify([model("remove", "a", "A"), model("keep", "b", "B")]));
+    const clearProfileReferences = vi.fn();
+    const repository = new BrowserSettingsModelsRepository({ storage, now: () => timestamp, clearProfileReferences });
+    await repository.deleteProviderConfig("remove");
+    expect((await repository.listProviderConfigs()).map((item) => item.id)).toEqual(["keep"]);
+    expect((await repository.listProviderModels()).map((item) => item.providerConfigId)).toEqual(["keep"]);
+    expect(clearProfileReferences).toHaveBeenCalledWith(removed, timestamp);
+  });
+
+  it("keeps credential mutations unavailable in browser preview", async () => {
+    const repository = new BrowserSettingsModelsRepository({ storage: new MemoryStorage(), clearProfileReferences: () => undefined });
+    await expect(repository.createProviderConfig({ id: "p", provider: "openai", label: "P", credentialId: "c" })).rejects.toThrow("desktop runtime");
+    await expect(repository.updateProviderCredentialMetadata("p", "…1234", "hash")).rejects.toThrow("desktop runtime");
+  });
+
+  it("keeps the Custom OpenAI wire override isolated to Custom OpenAI configs in browser preview data", async () => {
+    const storage = new MemoryStorage();
+    storage.setItem("rvh.dev.providers", JSON.stringify([{ ...provider("custom", timestamp), provider: "custom_openai" }]));
+    const repository = new BrowserSettingsModelsRepository({ storage, clearProfileReferences: () => undefined, now: () => timestamp });
+    await repository.updateProviderCustomOutputTokenField("custom", "max_completion_tokens");
+    expect((await repository.listProviderConfigs())[0]?.customOutputTokenField).toBe("max_completion_tokens");
+    await repository.updateProviderCustomOutputTokenField("custom");
+    expect((await repository.listProviderConfigs())[0]?.customOutputTokenField).toBeUndefined();
+  });
+
+  it("persists provider status, favorites and cache clearing with their existing browser semantics", async () => {
+    const storage = new MemoryStorage();
+    storage.setItem("rvh.dev.providers", JSON.stringify([provider("provider-a", "2026-09-07T00:00:00.000Z")]));
+    storage.setItem("rvh.dev.models", JSON.stringify([model("provider-a", "model-a", "Model A")]));
+    const repository = new BrowserSettingsModelsRepository({ storage, clearProfileReferences: () => undefined, now: () => timestamp });
+
+    await repository.updateProviderConnectionStatus("provider-a", "error", "offline");
+    expect((await repository.listProviderConfigs())[0]).toMatchObject({ lastTestedAt: timestamp, lastStatus: "error", lastError: "offline", updatedAt: timestamp });
+
+    await repository.setProviderModelFavorite("provider-a", "model-a", true);
+    expect((await repository.listProviderModels("provider-a"))[0]?.favorite).toBe(true);
+    await repository.clearProviderModelCache();
+    expect(await repository.listProviderModels()).toEqual([]);
+  });
+});
+
+describe("SQLite Settings and models repository contract", () => {
+  it("loads typed settings and saves the complete update as one transaction", async () => {
+    const transactions: DatabaseTransactionStatement[][] = [];
+    const executeTransaction = async (statements: DatabaseTransactionStatement[]) => { transactions.push(statements); return []; };
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [
+        { key: "interfaceLanguage", value: "pl" }, { key: "maxRetries", value: "5" }, { key: "animations", value: "false" },
+        { key: "activeConversationWorkspaceId", value: "workspace-conversation" }, { key: "activeRvWorkspaceId", value: "workspace-rv" },
+      ] as T,
+      executeWrite: async () => ({ rowsAffected: 1 }), executeTransaction, now: () => timestamp,
+    });
+    expect(await repository.loadSettings()).toEqual({
+      interfaceLanguage: "pl", maxRetries: 5, animations: false,
+      activeConversationWorkspaceId: "workspace-conversation", activeRvWorkspaceId: "workspace-rv",
+    });
+    await repository.saveSettings(createDefaultSettings());
+    expect(transactions).toHaveLength(1);
+    expect(transactions[0]).toHaveLength(Object.keys(createDefaultSettings()).length);
+  });
+
+  it("creates provider and credential metadata atomically", async () => {
+    const transactions: DatabaseTransactionStatement[][] = [];
+    const executeTransaction = async (statements: DatabaseTransactionStatement[]) => { transactions.push(statements); return []; };
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [] as T, executeWrite: async () => ({ rowsAffected: 1 }), executeTransaction, now: () => timestamp,
+    });
+    const created = await repository.createProviderConfig({ id: "provider-a", provider: "openai", label: "  Primary  ", credentialId: "credential-a", credentialHint: "…1234", fingerprint: "hash" });
+    expect(created).toMatchObject({ id: "provider-a", label: "Primary", credentialFingerprint: "hash" });
+    const statements = transactions[0]!;
+    expect(statements).toHaveLength(2);
+    expect(statements[0].query).toContain("INSERT INTO credentials_metadata");
+    expect(statements[1].query).toContain("INSERT INTO provider_configs");
+  });
+
+  it("rejects a Custom OpenAI wire override on built-in provider creation", async () => {
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [] as T, executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async () => [], now: () => timestamp,
+    });
+    await expect(repository.createProviderConfig({
+      id: "provider-openai", provider: "openai", label: "OpenAI", credentialId: "credential-openai",
+      customOutputTokenField: "max_completion_tokens",
+    })).rejects.toThrow("only for Custom OpenAI-compatible");
+  });
+
+  it("stores a Custom OpenAI output-token wire override in existing app_settings without changing schema", async () => {
+    const transactions: DatabaseTransactionStatement[][] = [];
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [] as T, executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async (statements) => { transactions.push(statements); return []; }, now: () => timestamp,
+    });
+    const created = await repository.createProviderConfig({
+      id: "provider-custom", provider: "custom_openai", label: "Custom", credentialId: "credential-custom",
+      customOutputTokenField: "max_completion_tokens",
+    });
+    expect(created.customOutputTokenField).toBe("max_completion_tokens");
+    expect(transactions[0]).toHaveLength(3);
+    expect(transactions[0]?.[2].query).toContain("INSERT INTO app_settings");
+    expect(transactions[0]?.[2].values).toEqual(["provider.customOutputTokenField.provider-custom", "max_completion_tokens", timestamp]);
+  });
+
+  it("deletes provider metadata and clears profile references in one transaction", async () => {
+    const transactions: DatabaseTransactionStatement[][] = [];
+    const executeTransaction = async (statements: DatabaseTransactionStatement[]) => { transactions.push(statements); return []; };
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [{ credential_id: "credential-a" }] as T,
+      executeWrite: async () => ({ rowsAffected: 1 }), executeTransaction, now: () => timestamp,
+    });
+    await repository.deleteProviderConfig("provider-a");
+    const statements = transactions[0]!;
+    expect(statements.map((item: { query: string }) => item.query)).toEqual([
+      expect.stringContaining("UPDATE profiles"),
+      expect.stringContaining("DELETE FROM app_settings"),
+      expect.stringContaining("DELETE FROM provider_configs"),
+      expect.stringContaining("DELETE FROM credentials_metadata"),
+    ]);
+  });
+
+  it("updates or clears the Custom OpenAI wire override atomically", async () => {
+    const transactions: DatabaseTransactionStatement[][] = [];
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [{ provider: "custom_openai" }] as T, executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async (statements) => { transactions.push(statements); return []; }, now: () => timestamp,
+    });
+    await repository.updateProviderCustomOutputTokenField("provider-a", "max_completion_tokens");
+    expect(transactions[0]?.[0].query).toContain("INSERT INTO app_settings");
+    await repository.updateProviderCustomOutputTokenField("provider-a");
+    expect(transactions[1]?.[0].query).toContain("DELETE FROM app_settings");
+  });
+
+  it("replaces a provider model registry atomically and preserves saved favorites", async () => {
+    const transactions: DatabaseTransactionStatement[][] = [];
+    const executeTransaction = async (statements: DatabaseTransactionStatement[]) => { transactions.push(statements); return []; };
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [{ model_id: "model-a" }] as T,
+      executeWrite: async () => ({ rowsAffected: 1 }), executeTransaction,
+    });
+    await repository.replaceProviderModels("provider-a", [model("provider-a", "model-a", "Model A")]);
+    const statements = transactions[0]!;
+    expect(statements[0].query).toContain("DELETE FROM model_registry");
+    expect(statements[1].query).toContain("INSERT INTO model_registry");
+    expect(statements[1].values![8]).toBe(1);
+  });
+
+  it("updates credential metadata atomically and resets the previous connection result", async () => {
+    const transactions: DatabaseTransactionStatement[][] = [];
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [{ credential_id: "credential-a" }] as T,
+      executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async (statements) => { transactions.push(statements); return []; },
+      now: () => timestamp,
+    });
+
+    await repository.updateProviderCredentialMetadata("provider-a", "…5678", "new-hash");
+    expect(transactions[0]).toHaveLength(2);
+    expect(transactions[0]?.[0].query).toContain("last_status = NULL");
+    expect(transactions[0]?.[0].values).toEqual(["…5678", timestamp, "provider-a"]);
+    expect(transactions[0]?.[1].query).toContain("UPDATE credentials_metadata");
+    expect(transactions[0]?.[1].values).toEqual(["new-hash", timestamp, "credential-a"]);
+  });
+
+  it("delegates status, favorite and cache mutations to their exact SQLite writes", async () => {
+    const writes: Array<{ query: string; values?: unknown[] }> = [];
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [] as T,
+      executeWrite: async (query, values) => { writes.push({ query, values }); return { rowsAffected: 1 }; },
+      executeTransaction: async () => [],
+      now: () => timestamp,
+    });
+
+    await repository.updateProviderConnectionStatus("provider-a", "ok");
+    await repository.setProviderModelFavorite("provider-a", "model-a", true);
+    await repository.clearProviderModelCache();
+
+    expect(writes[0]?.query).toContain("last_tested_at");
+    expect(writes[0]?.values).toEqual([timestamp, "ok", null, "provider-a"]);
+    expect(writes[1]?.query).toContain("UPDATE model_registry SET favorite");
+    expect(writes[1]?.values).toEqual([1, "provider-a", "model-a"]);
+    expect(writes[2]?.query).toBe("DELETE FROM model_registry");
+  });
+});

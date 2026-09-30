@@ -1,7 +1,7 @@
 import type { AppRepository } from "../storage/repository";
 import { createId } from "../storage/repository";
-import { deleteCredentialSecret, discoverModels, hasCredentialSecret, storeCredentialSecret } from "./native";
-import type { ProviderConfig, ProviderKind, ProviderModel } from "./types";
+import { deleteCredentialSecret, discoverModels, hasCredentialSecret, rebindCredentialSecret, storeCredentialSecret } from "./native";
+import type { CustomOpenAiOutputTokenField, ProviderConfig, ProviderKind, ProviderModel } from "./types";
 
 export const PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER = 2000;
 
@@ -21,17 +21,18 @@ export async function credentialFingerprint(secret: string): Promise<string> {
 
 export async function addProvider(
   repository: AppRepository,
-  input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string },
+  input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string; customOutputTokenField?: CustomOpenAiOutputTokenField },
 ): Promise<ProviderConfig> {
   const apiKey = input.apiKey.trim();
   const label = input.label.trim();
   if (!label) throw new Error("Provider label is required.");
   if (!apiKey) throw new Error("API key is required.");
   if (input.provider === "custom_openai" && !input.baseUrl?.trim()) throw new Error("Custom provider requires a base URL.");
+  if (input.provider !== "custom_openai" && input.customOutputTokenField) throw new Error("Output-token wire override is available only for Custom OpenAI-compatible providers.");
 
   const credentialId = createId("credential");
   const providerId = createId("provider");
-  await storeCredentialSecret(credentialId, apiKey);
+  await storeCredentialSecret(credentialId, apiKey, input.provider, input.baseUrl?.trim() || undefined);
   try {
     return await repository.createProviderConfig({
       id: providerId,
@@ -40,6 +41,7 @@ export async function addProvider(
       credentialId,
       credentialHint: credentialHint(apiKey),
       baseUrl: input.baseUrl?.trim() || undefined,
+      ...(input.provider === "custom_openai" && input.customOutputTokenField ? { customOutputTokenField: input.customOutputTokenField } : {}),
       fingerprint: await credentialFingerprint(apiKey),
     });
   } catch (error) {
@@ -62,6 +64,32 @@ export async function refreshProviderModels(repository: AppRepository, config: P
     await repository.updateProviderConnectionStatus(config.id, "error", message);
     throw error;
   }
+}
+
+export async function rebindProviderCredential(
+  repository: AppRepository,
+  config: ProviderConfig,
+  apiKeyInput: string,
+): Promise<void> {
+  const apiKey = apiKeyInput.trim();
+  if (!apiKey) throw new Error("API key is required.");
+  await rebindCredentialSecret(config.credentialId, apiKey, config.provider, config.baseUrl);
+  await repository.updateProviderCredentialMetadata(
+    config.id,
+    credentialHint(apiKey),
+    await credentialFingerprint(apiKey),
+  );
+  await refreshProviderModels(repository, config);
+}
+
+
+export async function updateCustomOpenAiOutputTokenField(
+  repository: AppRepository,
+  config: ProviderConfig,
+  field?: CustomOpenAiOutputTokenField,
+): Promise<void> {
+  if (config.provider !== "custom_openai") throw new Error("Output-token wire override is available only for Custom OpenAI-compatible providers.");
+  await repository.updateProviderCustomOutputTokenField(config.id, field);
 }
 
 export async function removeProvider(repository: AppRepository, config: ProviderConfig): Promise<void> {

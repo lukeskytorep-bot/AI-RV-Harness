@@ -10,5 +10,7 @@ describe("first-run defaults", () => {
     expect(settings.interfaceLanguage).toBe("en");
     expect(settings.sessionLanguage).toBe("same");
     expect(settings.theme).toBe("blue");
+    expect(settings.activeConversationWorkspaceId).toBe("");
+    expect(settings.activeRvWorkspaceId).toBe("");
   });
 });

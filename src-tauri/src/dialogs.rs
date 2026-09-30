@@ -25,8 +25,10 @@ pub async fn choose_directory(
     .map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-pub async fn choose_attachments(app: tauri::AppHandle, title: String) -> Result<Vec<String>, String> {
+pub(crate) async fn choose_attachment_paths(
+    app: tauri::AppHandle,
+    title: String,
+) -> Result<Vec<PathBuf>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
@@ -38,7 +40,7 @@ pub async fn choose_attachments(app: tauri::AppHandle, title: String) -> Result<
             .blocking_pick_files()
             .unwrap_or_default()
             .into_iter()
-            .map(path_string)
+            .map(|path| path.into_path().map_err(|error| error.to_string()))
             .collect()
     })
     .await

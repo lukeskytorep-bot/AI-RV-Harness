@@ -1,3 +1,5 @@
+import type { ProviderContinuationState } from "./continuationContract";
+
 export const PROVIDER_KINDS = [
   "openrouter",
   "google",
@@ -11,6 +13,7 @@ export const PROVIDER_KINDS = [
 ] as const;
 
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
+export type CustomOpenAiOutputTokenField = "max_tokens" | "max_completion_tokens";
 
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type CapabilityConfidence = "provider_metadata" | "verified" | "unknown";
@@ -37,6 +40,7 @@ export interface ProviderConfig {
   credentialHint?: string;
   credentialFingerprint?: string;
   baseUrl?: string;
+  customOutputTokenField?: CustomOpenAiOutputTokenField;
   enabled: boolean;
   lastTestedAt?: string;
   lastStatus?: "ok" | "error";
@@ -52,6 +56,7 @@ export interface CreateProviderConfigInput {
   credentialId: string;
   credentialHint?: string;
   baseUrl?: string;
+  customOutputTokenField?: CustomOpenAiOutputTokenField;
   fingerprint?: string;
 }
 
@@ -68,6 +73,7 @@ export interface ReasoningCapability {
   verifiedAt?: string;
   verificationSource?: string;
   providerEfforts?: ReasoningEffort[];
+  supportsMaxTokens?: boolean;
 }
 
 export interface TemperatureCapability {
@@ -116,12 +122,13 @@ export interface GenerationSettings {
   reasoningEffort?: ReasoningEffort;
   temperature?: number;
   maxOutputTokens?: number;
+  reasoningMaxTokens?: number;
 }
 
 export interface EffectiveGenerationSettings {
   requested: GenerationSettings;
   effective: GenerationSettings;
-  omitted: Array<"reasoningEffort" | "temperature" | "maxOutputTokens">;
+  omitted: Array<"reasoningEffort" | "temperature" | "maxOutputTokens" | "reasoningMaxTokens">;
   reasoningResolution?: {
     selected: ReasoningEffort;
     label: string;
@@ -131,14 +138,23 @@ export interface EffectiveGenerationSettings {
 }
 
 export interface ProviderMessage {
+  id?: string;
   role: "system" | "user" | "assistant";
   content: string;
   images?: ProviderImageInput[];
+  continuationState?: ProviderContinuationState;
 }
 
 export interface ProviderImageInput {
   mimeType: string;
   dataBase64: string;
+}
+
+export interface OpenRouterProviderRouting {
+  order?: string[];
+  only?: string[];
+  ignore?: string[];
+  allowFallbacks?: boolean;
 }
 
 export interface ProviderChatRequest {
@@ -149,6 +165,7 @@ export interface ProviderChatRequest {
   modelId: string;
   messages: ProviderMessage[];
   settings: EffectiveGenerationSettings;
+  providerRouting?: OpenRouterProviderRouting;
 }
 
 export interface ProviderUsage {
@@ -159,6 +176,24 @@ export interface ProviderUsage {
   costUsd?: number;
 }
 
+export interface ProviderContinuationDiagnostics {
+  transport: "openrouter";
+  rawSseEvents: number;
+  receivedReasoningDetailItems: number;
+  logicalReasoningBlocks: number;
+  reasoningDetailsPresent: boolean;
+  continuationStateBytes?: number;
+  blockLimit?: number;
+  stateByteLimit?: number;
+  rejectionStage?: "capture_validation";
+  rejectionReason?: string;
+}
+
+export type ProviderStreamEvent =
+  | { event: "started"; data: { providerRequestId?: string } }
+  | { event: "contentDelta"; data: { content: string } }
+  | { event: "finished"; data: { finishReason?: string } };
+
 export interface ProviderChatResponse {
   content: string;
   reasoningContent?: string;
@@ -168,6 +203,16 @@ export interface ProviderChatResponse {
   actualModel?: string;
   usage: ProviderUsage;
   providerRequestId?: string;
+  actualProvider?: string;
+  continuationDiagnostics?: ProviderContinuationDiagnostics;
+  execution?: {
+    operationId: string;
+    logicalRequestId: string;
+    physicalAttempts: number;
+    elapsedMs: number;
+    recoveredFrom?: string;
+    ambiguousBillingAttempts: number;
+  };
 }
 
 export interface ProviderConnectionResult {

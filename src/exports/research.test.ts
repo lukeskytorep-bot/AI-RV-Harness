@@ -27,7 +27,10 @@ describe("save-only Research export", () => {
       listRvSessions: vi.fn().mockResolvedValue([{ id: "session", workspaceId: "workspace", profileId: "profile", sessionCode: "RVH-1", state: "Completed", runType: "automatic", preRevealTranscript: "private transcript", postRevealTranscript: "", targetId: "target", researchProjectId: "research", createdAt: "now", updatedAt: "now" }]),
       getReveal: vi.fn().mockResolvedValue({ source: "automatic_target", text: "Reveal text", artifactManifest: [{ artifactId: "image", path: "/managed/image.png", originalFileName: "image.png", mimeType: "image/png", size: 12, sha256: "a".repeat(64) }], hash: "reveal-hash" }),
       getViewerEvidence: vi.fn().mockResolvedValue("blind Viewer evidence"),
-      getSessionSnapshot: vi.fn().mockResolvedValue({ modelId: "viewer-a", providerConfigId: "provider" }),
+      getSessionSnapshot: vi.fn().mockResolvedValue({
+        schemaVersion: 4, modelId: "viewer-a", providerConfigId: "provider",
+        continuationRoute: { transport: "openrouter", normalizedEndpoint: "https://openrouter.ai/api/v1", providerConfigId: "provider", credentialId: "credential-secret-ref", requestedModelId: "viewer-a", stateFormat: "openrouter-reasoning-details", stateFormatVersion: 1 },
+      }),
       listJudgeScores: vi.fn().mockResolvedValue([]),
       listTargetClarifications: vi.fn().mockResolvedValue([]),
       recordExport,
@@ -50,6 +53,10 @@ describe("save-only Research export", () => {
     expect(publicContent).not.toContain("Secret condition A");
     expect(publicContent).not.toContain("viewer-a");
     expect(publicContent).toContain("BlindSession_ABCDEF123456_artifacts/artifact_1.png");
+    const allExportedText = request.files.map((file) => file.content).join("\n");
+    expect(allExportedText).not.toContain("continuationRoute");
+    expect(allExportedText).not.toContain("credential-secret-ref");
+    expect(allExportedText).not.toContain("openrouter-reasoning-details");
     expect(request.artifactCopies).toEqual([{ sourcePath: "/managed/image.png", relativePath: "external_evaluation/BlindSession_ABCDEF123456_artifacts/artifact_1.png" }]);
     expect(recordExport).toHaveBeenCalledWith("workspace", "research", "research_save_only_package", "/exports/research", expect.stringMatching(/^[a-f0-9]{64}$/));
   });

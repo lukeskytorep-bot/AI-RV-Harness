@@ -32,6 +32,7 @@ describe("Viewer Notes first-version bootstrap", () => {
       aiIdentityId: identity.id,
       sourceSessionId: "session",
       sourceWorkspaceId: "workspace",
+      sourceSnapshot: { schemaVersion: 1, sessionId: "session", sessionCode: "RV-1", workspaceId: "workspace", profileId: "profile", protocolId: "rv-lite-core", protocolVersion: "1.0", sessionRunType: "automatic", capturedAt: "2026-09-09T00:00:00.000Z" },
       reflectionPacketSha256: "packet-hash",
       packetJson: "{}",
     });
@@ -68,6 +69,7 @@ describe("Viewer Notes first-version bootstrap", () => {
       aiIdentityId: "identity",
       sourceSessionId: "session",
       sourceWorkspaceId: "workspace",
+      sourceSnapshot: { schemaVersion: 1, sessionId: "session", sessionCode: "RV-1", workspaceId: "workspace", profileId: "profile", protocolId: "rv-lite-core", protocolVersion: "1.0", sessionRunType: "automatic", capturedAt: "2026-09-09T00:00:00.000Z" },
       baseContentSha256: "orphan-hash",
       reflectionPacketSha256: "packet-hash",
       packetJson: "{}",

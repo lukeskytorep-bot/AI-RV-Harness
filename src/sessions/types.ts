@@ -1,6 +1,7 @@
 import type { InterfaceLanguage } from "../types";
 import type { EffectiveGenerationSettings, ProviderKind } from "../providers/types";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
+import type { FieldGuideSessionSnapshot } from "../aiCenter/fieldGuideTypes";
 
 export type RvSessionState =
   | "Draft"
@@ -28,6 +29,7 @@ export interface RvSession {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  archivedAt?: string;
 }
 
 export interface CreateRvSessionInput {
@@ -68,8 +70,38 @@ export interface LockedPromptBlockSnapshot {
   fullContent: string;
 }
 
+export type SessionContinuationRouteSnapshot =
+  | {
+      transport: "openrouter";
+      normalizedEndpoint: string;
+      providerConfigId: string;
+      credentialId: string;
+      requestedModelId: string;
+      stateFormat: "openrouter-reasoning-details";
+      stateFormatVersion: 1;
+    }
+  | {
+      transport: "google-native";
+      normalizedEndpoint: string;
+      providerConfigId: string;
+      credentialId: string;
+      requestedModelId: string;
+      stateFormat: "google-thought-parts";
+      stateFormatVersion: 1;
+    }
+  | {
+      transport: "anthropic-native";
+      normalizedEndpoint: string;
+      providerConfigId: string;
+      credentialId: string;
+      requestedModelId: string;
+      stateFormat: "anthropic-thinking-blocks";
+      stateFormatVersion: 1;
+      prefixPolicy: "append-only";
+    };
+
 export interface SessionSnapshot {
-  schemaVersion: 1 | 2 | 3;
+  schemaVersion: 1 | 2 | 3 | 4;
   sessionId: string;
   sessionCode: string;
   profileId: string;
@@ -84,6 +116,7 @@ export interface SessionSnapshot {
   provider: ProviderKind;
   modelId: string;
   modelRoute: string;
+  continuationRoute?: SessionContinuationRouteSnapshot;
   capabilitySnapshot: Record<string, unknown>;
   capabilityCapturedAt: string;
   generationSettings: EffectiveGenerationSettings;
@@ -120,6 +153,7 @@ export interface SessionSnapshot {
     contentSha256: string;
     fullContent: string;
     lockedBlocks?: LockedPromptBlockSnapshot[];
+    fieldGuide?: FieldGuideSessionSnapshot;
   };
   viewerNotes?: ViewerNotesSessionSnapshot;
   researchConditionInstruction?: {
@@ -140,6 +174,7 @@ export interface SessionSnapshot {
   };
   revealSource: "external" | "automatic";
   targetId?: string;
+  automaticRevealHash?: string;
   researchProjectId?: string;
   applicationVersion: string;
   createdAt: string;

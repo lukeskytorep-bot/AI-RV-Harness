@@ -63,11 +63,12 @@ describe("automatic Telepathic Protocol controller", () => {
 
   it("invokes AI Monitor after Steps 2–8 only and uses the telepathic whole-session scope after Step 8", async () => {
     const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
     let viewerCalls = 0;
     let monitorCalls = 0;
     const monitorPackets: string[] = [];
     const result = await runAutomaticTelepathicSession({
-      repository: repository(log), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      repository: repository(log, snapshots), workspaceId: "w", profileId: "p", providerConfig: config, model,
       protocol: getTelepathicProtocol("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
       step8Questions: { mode: "monitor" }, monitor: { providerConfig: config, model },
       chat: async ({ messages }) => {
@@ -86,6 +87,7 @@ describe("automatic Telepathic Protocol controller", () => {
     expect(monitorCalls).toBe(7);
     expect(monitorPackets.map((packet) => packet.match(/CURRENT STEP: (\d+)/)?.[1])).toEqual(["2", "3", "4", "5", "6", "7", "8"]);
     expect(monitorPackets.at(-1)).toContain("SCOPE: You may formulate a T9 question");
+    expect(snapshots[0].monitor?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-telepathic-monitor-execution"]);
   });
 
   it("keeps Monitor reasoning out of the Viewer path and does not duplicate Step 8", async () => {

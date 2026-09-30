@@ -1,7 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { isTauriRuntime } from "../storage";
 import { normalizeModelDiscovery } from "./capabilities";
+import type { EffectiveRequestEnvelope } from "./effectiveRequestEnvelope";
 import { detailedProviderDiagnosticsEnabled, recordProviderDebug } from "./debug";
+import { normalizeProviderCallError } from "./providerError";
 import type {
   EffectiveGenerationSettings,
   ProviderChatResponse,
@@ -9,7 +11,10 @@ import type {
   ProviderKind,
   ProviderMessage,
   ProviderModel,
+  ProviderStreamEvent,
+  OpenRouterProviderRouting,
 } from "./types";
+import type { ProviderTimeoutPolicy } from "./streamingPolicy";
 
 type NativeChatResponse = {
   content: string;
@@ -26,6 +31,13 @@ type NativeChatResponse = {
     cost_usd?: number | null;
   };
   provider_request_id?: string | null;
+  actual_provider?: string | null;
+  continuation_diagnostics?: {
+    raw_sse_events: number;
+    received_reasoning_detail_items: number;
+    logical_reasoning_blocks: number;
+    reasoning_details_present: boolean;
+  } | null;
   debug_payload?: {
     endpoint: string;
     request: unknown;
@@ -37,9 +49,24 @@ function requireDesktop(): void {
   if (!isTauriRuntime()) throw new Error("Provider operations require the desktop runtime.");
 }
 
-export async function storeCredentialSecret(credentialId: string, secret: string): Promise<void> {
+export async function storeCredentialSecret(
+  credentialId: string,
+  secret: string,
+  provider: ProviderKind,
+  baseUrl?: string,
+): Promise<void> {
   requireDesktop();
-  await invoke("store_credential", { credentialId, secret });
+  await invoke("store_credential", { credentialId, secret, provider, baseUrl });
+}
+
+export async function rebindCredentialSecret(
+  credentialId: string,
+  secret: string,
+  provider: ProviderKind,
+  baseUrl?: string,
+): Promise<void> {
+  requireDesktop();
+  await invoke("rebind_credential", { credentialId, secret, provider, baseUrl });
 }
 
 export async function deleteCredentialSecret(credentialId: string): Promise<void> {
@@ -57,6 +84,12 @@ export async function credentialIdentityFingerprint(credentialId: string): Promi
   return invoke<string>("credential_identity_fingerprint", { credentialId });
 }
 
+
+export async function providerBindingEndpoint(config: ProviderConfig): Promise<string> {
+  requireDesktop();
+  return invoke<string>("provider_binding_endpoint", { provider: config.provider, baseUrl: config.baseUrl });
+}
+
 export async function discoverModels(config: ProviderConfig): Promise<ProviderModel[]> {
   requireDesktop();
   const payload = await invoke<unknown>("provider_discover_models", {
@@ -65,13 +98,26 @@ export async function discoverModels(config: ProviderConfig): Promise<ProviderMo
   return normalizeModelDiscovery(config, payload);
 }
 
-export async function providerChat(input: {
+export async function discoverOpenRouterModelEndpoints(config: ProviderConfig, modelId: string): Promise<unknown> {
+  requireDesktop();
+  if (config.provider !== "openrouter") throw new Error("Endpoint capability discovery is available only for OpenRouter.");
+  return invoke<unknown>("provider_discover_model_endpoints", {
+    request: { ...nativeConfig(config), modelId },
+  });
+}
+
+/** One physical HTTP attempt. Domain code must use requestExecutor instead. */
+export async function providerChatAttempt(input: {
   config: ProviderConfig;
   modelId: string;
   messages: ProviderMessage[];
   settings: EffectiveGenerationSettings;
   timeoutMs?: number;
+  timeoutPolicy?: ProviderTimeoutPolicy;
   signal?: AbortSignal;
+  providerRouting?: OpenRouterProviderRouting;
+  onStreamEvent?: (event: ProviderStreamEvent) => void;
+  transportEnvelope?: EffectiveRequestEnvelope;
 }): Promise<ProviderChatResponse> {
   requireDesktop();
   if (input.signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
@@ -80,31 +126,42 @@ export async function providerChat(input: {
     void invoke("cancel_provider_request", { requestId }).catch(() => undefined);
   };
   input.signal?.addEventListener("abort", cancel, { once: true });
+  const onStream = new Channel<ProviderStreamEvent>();
+  onStream.onmessage = input.onStreamEvent ?? (() => {});
   let response: NativeChatResponse;
   try {
     response = await invoke<NativeChatResponse>("provider_chat", {
       request: {
         ...nativeConfig(input.config),
+        providerConfigId: input.config.id,
         requestId,
         modelId: input.modelId,
         messages: input.messages,
         reasoningEffort: input.settings.effective.reasoningEffort,
+        reasoningMaxTokens: input.settings.effective.reasoningMaxTokens,
         reasoningTransportKind: input.settings.reasoningResolution?.transport.kind,
         reasoningTransportValue: input.settings.reasoningResolution?.transport.value,
         temperature: input.settings.effective.temperature,
         maxOutputTokens: input.settings.effective.maxOutputTokens,
+        ...(input.config.provider === "custom_openai" && input.config.customOutputTokenField ? { customOutputTokenField: input.config.customOutputTokenField } : {}),
         timeoutMs: input.timeoutMs,
+        timeoutPolicy: input.timeoutPolicy,
         detailedDiagnostics: detailedProviderDiagnosticsEnabled(),
+        providerRouting: input.providerRouting,
       },
+      onStream,
+      emitStreamEvents: Boolean(input.onStreamEvent),
     });
   } catch (cause) {
+    const normalized = normalizeProviderCallError(cause);
     recordProviderDebug({
       provider: input.config.provider,
       modelId: input.modelId,
       status: "error",
-      error: cause instanceof Error ? cause.message : String(cause),
+      error: normalized.message,
+      ...(input.transportEnvelope ? { transport: structuredClone(input.transportEnvelope) } : {}),
     });
-    throw cause;
+    throw normalized;
   } finally {
     input.signal?.removeEventListener("abort", cancel);
   }
@@ -128,6 +185,14 @@ export async function providerChat(input: {
       characterCount: response.reasoning_content.length,
       detailCount: response.reasoning_details?.length ?? 0,
     } : undefined,
+    continuation: response.continuation_diagnostics ? {
+      transport: "openrouter",
+      rawSseEvents: response.continuation_diagnostics.raw_sse_events,
+      receivedReasoningDetailItems: response.continuation_diagnostics.received_reasoning_detail_items,
+      logicalReasoningBlocks: response.continuation_diagnostics.logical_reasoning_blocks,
+      reasoningDetailsPresent: response.continuation_diagnostics.reasoning_details_present,
+    } : undefined,
+    ...(input.transportEnvelope ? { transport: structuredClone(input.transportEnvelope) } : {}),
   });
   return {
     content: response.content,
@@ -144,6 +209,14 @@ export async function providerChat(input: {
       costUsd: response.usage?.cost_usd ?? undefined,
     },
     providerRequestId: response.provider_request_id ?? undefined,
+    actualProvider: response.actual_provider ?? undefined,
+    continuationDiagnostics: response.continuation_diagnostics ? {
+      transport: "openrouter",
+      rawSseEvents: response.continuation_diagnostics.raw_sse_events,
+      receivedReasoningDetailItems: response.continuation_diagnostics.received_reasoning_detail_items,
+      logicalReasoningBlocks: response.continuation_diagnostics.logical_reasoning_blocks,
+      reasoningDetailsPresent: response.continuation_diagnostics.reasoning_details_present,
+    } : undefined,
   };
 }
 

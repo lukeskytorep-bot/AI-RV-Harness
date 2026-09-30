@@ -1,15 +1,19 @@
 {
   "name": "ai-rv-harness",
   "private": true,
-  "version": "0.7.12",
+  "version": "0.7.13",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/report-vite-bundle.mjs",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
+    "verify:source": "node scripts/verify-source-integrity-selftest.mjs && node scripts/verify-source-integrity.mjs .",
+    "verify:ux-data": "node scripts/verify-ux-data-compatibility.mjs .",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "verify:architecture": "node scripts/verify-architecture-selftest.mjs && node scripts/verify-architecture.mjs",
+    "verify:openrouter-continuation-bridge": "node scripts/verify-openrouter-continuation-cross-language.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
@@ -21,6 +25,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@babel/parser": "^7.28.4",
     "@tauri-apps/cli": "2.11.4",
     "@types/node": "26.2.0",
     "@types/react": "19.2.18",

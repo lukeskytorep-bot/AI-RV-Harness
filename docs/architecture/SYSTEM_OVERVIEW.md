@@ -1,18 +1,19 @@
 # AI RV Harness
 
-> Current project documentation for AI RV Harness v0.7.12  
-> Last updated: August 2026
+> Current architecture reference: public v0.7.12 + private v0.7.13 development baseline  
+> Last updated: 10 September 2026
 
 AI RV Harness is a local-first desktop environment for AI-assisted Remote Viewing sessions, structured training, controlled research, and blinded evaluation. It combines repeatable protocols, multiple AI roles, evidence-preserving session flows, target management, and reproducible research tools in one application.
 
 The project is designed to make AI-assisted RV work easier to organize, inspect, repeat, and evaluate. It does not claim that Remote Viewing has been scientifically proven, that a particular model possesses anomalous perception, or that generated material is accurate. The Harness provides controlled procedures and records; interpretation of results remains the responsibility of the user and researcher.
 
 - **Source repository:** [lukeskytorep-bot/AI-RV-Harness](https://github.com/lukeskytorep-bot/AI-RV-Harness)
-- **Current release:** AI RV Harness v0.7.12
+- **Current public release:** AI RV Harness v0.7.12
+- **Current private development baseline:** AI RV Harness v0.7.13
 - **Platforms:** Windows and Linux
 - **Application source license:** MIT
 
-This page describes implemented behavior in v0.7.12. Release notes document version-specific changes; this page documents the project as a whole.
+This page describes the current implemented architecture. Public-release notes remain authoritative for shipped v0.7.12 behavior, while explicitly identified v0.7.13 sections document the private development baseline before the next public release.
 
 ## Project goals
 
@@ -43,18 +44,22 @@ No prior knowledge of the internal codebase is required for normal use. Research
 
 ### Information hierarchy
 
-The application organizes ordinary work as:
+The application organizes ordinary work through two typed Workspace paths:
 
-**Profile → Workspace → Thread → Conversation or Session**
+- **Profile → Conversation Workspace → Conversation**
+- **Profile → RV Workspace → Manual RV / Automatic RV Session**
+
+Training and Research are Profile-scoped screens. When they require persisted session ownership, the application resolves a compatible RV Workspace deterministically without exposing a Workspace selector in those screens.
 
 | Object | Purpose |
 | --- | --- |
 | **Profile** | Stores the human and AI IS-BE identity labels, preferred model routes, prompts, and default generation settings. |
-| **Workspace** | A project container for conversations, sessions, sources, and related records. |
-| **Thread** | Groups a continuing line of work inside a Workspace. |
-| **Conversation or Session** | Contains the actual messages, protocol events, evidence, and results. |
+| **Conversation Workspace** | A project container for ordinary Conversations and their reusable Sources. |
+| **RV Workspace** | A project container for Manual RV and Automatic RV Session records. |
+| **legacy combined Workspace** | A compatibility type assigned to pre-separation Workspaces; it remains usable from both areas without moving historical records. |
+| **Conversation / Manual RV / Automatic RV Session / Research** | Contains messages, protocol events, evidence, research configuration, and results. |
 
-A Workspace can be created from the Workspaces screen or from a Profile. Existing records remain associated with their original owner and Workspace.
+Workspace lifecycle is managed from Profiles. A new Profile is created with one Conversation Workspace and one RV Workspace, and additional Workspaces of either type may be added later. The application remembers separate active IDs for Conversation and RV work. Existing Workspaces are classified as `legacy_combined`; they remain visible in both compatible areas and are never physically split by migration. Conversation and Manual RV records are direct Workspace children. Legacy `ChatThreadGroup` metadata may remain in older stored data for compatibility, but it is not a current product parent and new conversations do not create it.
 
 ### AI roles
 
@@ -73,9 +78,10 @@ Viewer, Monitor, and Judge routes can be configured independently. Using differe
 | --- | --- |
 | **Home** | Entry points, recent activity, and project overview. |
 | **Profiles** | Identity labels, model defaults, system prompts, and role-specific settings. |
-| **Workspaces** | Project containers for conversations, sources, and RV work. |
+| **Conversations** | Ordinary model conversations in a Conversation Workspace. |
+| **RV Sessions** | Manual RV and Automatic RV in an RV Workspace. |
 | **Targets** | Bundled training targets and user-created targets with text or supported images. |
-| **Training** | Complete or partial target curricula with resumable progress and optional judging. |
+| **Training** | Full Training rounds or partial target selections with resumable progress, Viewer learning, and optional judging. |
 | **Research** | Controlled studies, locking, randomization, blinded judging, unblinding, and exports. |
 | **AI Center** | Profile-wide AI identities, AI Monitor access, Viewer Notes, immutable note history, capacity, and reflection records. |
 | **Settings** | Providers, credentials, model discovery, language, appearance, diagnostics, backup, and restore. |
@@ -92,7 +98,7 @@ If the user message is saved but the provider fails before returning an answer, 
 
 ### Manual RV Session
 
-Manual RV is an operator-led conversation for flexible RV work. A built-in or custom protocol can be attached as a reference, but the human operator decides when and how to send each instruction. This mode deliberately avoids pretending that an automated blind/reveal controller is active when it is not.
+Manual RV is the manual tab under RV Sessions. It is an operator-led conversation for flexible RV work. A built-in or custom protocol can be attached as a reference, but the human operator decides when and how to send each instruction. This mode deliberately avoids pretending that an automated blind/reveal controller is active when it is not.
 
 Manual RV supports attachments, sources, saved history, and **Retry response** for an unanswered turn.
 
@@ -107,7 +113,7 @@ An automatic session can run:
 - without a Monitor, advancing according to its protocol controller; or
 - with an AI Monitor, which reviews blind responses and may allow the protocol to continue or provide an intervention.
 
-When Viewer Notes are ON, the session freezes the current notes version before the first Viewer call. After the blind evidence is sealed, Reveal is shown, and the Viewer completes its own post-Reveal review, the same Viewer may keep or replace its notes. In monitored sessions this reflection occurs before the Monitor's post-Reveal review.
+When Viewer Notes are ON, an ordinary automatic session freezes the current notes version before the first Viewer call and uses it read-only. After blind evidence is sealed and Reveal is shown, the Viewer completes its post-Reveal review, but ordinary RV never creates or replaces Viewer Notes. Only the deliberate Training workflow may update Viewer learning records.
 
 Interrupted sessions preserve their records. When a safe checkpoint exists, **Continue session** reconstructs the completed portion and resumes at the first missing provider call. **Start again** preserves the interrupted record and creates a new session from the beginning.
 
@@ -166,13 +172,13 @@ Monitor calls use a larger output allowance suitable for reasoning models: an in
 
 ## AI Center and Viewer Notes
 
-AI Center is a top-level, Profile-wide area rather than a Workspace feature. It provides an overview of the exact AI identities used across all Workspaces owned by the active Profile, access to the existing AI Monitor area, and the Viewer Notes module.
+AI Center is a top-level, Profile-wide area rather than a Workspace feature. It provides an overview of the exact AI identities used across all Workspaces owned by the active Profile, access to the existing AI Monitor area, and Viewer Learning with separate Field Guide and Viewer Notes histories.
 
 A Viewer Notes identity is defined by **Profile + credential fingerprint + provider + exact model route + Viewer role**. Notes are never transferred between identities, even when two routes use the same display name. Raw credentials are not stored in note history.
 
 Viewer Notes are the model's own general working guidance. The current version is read-only to the operator; every model-approved update creates a complete immutable version with provenance, capacity, source session, and a model-written change summary. An older version may be restored as a new auditable activation, while direct human text editing is intentionally unavailable.
 
-The session control is deliberately simple and defaults to ON. The selected snapshot is frozen before the session begins. A qualifying automatic or Training session may ask the same Viewer to reflect only after Reveal and its own post-Reveal assessment, but before any Monitor review. Monitor opinions, Judge output, later discussion, and other models' notes are excluded. Manual RV can use a snapshot but does not perform an automatic notes update.
+The session control is deliberately simple and defaults to ON. The selected snapshot is frozen before the session begins. Ordinary automatic, monitored and Manual RV may use the snapshot only as read-only context and never create a notes version. Only a completed Training target may ask the same Viewer to update its learning records after Reveal and its own post-Reveal assessment. The durable order is **Viewer Review → Field Guide Update → Viewer Notes Reflection**. Monitor opinions, Judge output, later discussion, and other models' notes are excluded.
 
 Capacity uses a conservative shared estimate and selectable limits from 1,024 to 8,192 tokens. A limit may be reduced only when the current notes already fit; the Harness never truncates notes to satisfy a lower setting.
 
@@ -219,7 +225,7 @@ The application distinguishes between bundled and user-created targets.
 
 ### Training Targets
 
-The built-in library contains 84 read-only Training Targets arranged into seven categories. They provide a stable curriculum and cannot be silently edited by ordinary application use.
+The built-in library contains 94 read-only Training Targets arranged into eight categories. The previously active 84 identifiers remain stable, and the ten added targets extend the pack without rewriting historical sessions. Factory targets provide a stable curriculum and cannot be silently edited by ordinary application use.
 
 ### My Targets
 
@@ -231,9 +237,9 @@ When image evaluation is required, the selected model route must support vision.
 
 ## Training
 
-Training can run the complete bundled curriculum or selected categories and user targets. Long runs use checkpoints so progress can be resumed without recreating already completed work.
+Full Training runs one to ten rounds. Each round contains one randomly selected target from every factory category, and the order of those eight sessions is randomized. The complete plan is frozen before execution, so Resume never selects a new target or changes the order. Partial Training uses explicit category counts and may include My Targets.
 
-Training records include configuration, target order, sessions, Reveal results, and optional independent Judge evaluations. Completed results can be reviewed and exported for further analysis.
+Training records include the curriculum/planner version, round boundaries, configuration, frozen target order, sessions, Reveal results, Viewer learning checkpoints, and optional independent Judge evaluations. Historical 84-target/seven-session curriculum runs retain their stored planner semantics. Completed results can be reviewed and exported for further analysis.
 
 Training is intended for practice and comparison. It should not be confused with a locked confirmatory Research study.
 
@@ -253,7 +259,11 @@ Core safeguards include:
 - recorded unblinding and reproducibility exports;
 - an in-application guide explaining the research workflow.
 
-The Viewer Notes Impact design compares **No Notes** with a locked **Frozen Viewer Notes** snapshot. Notes cannot update during the experiment. The exact version, text hash, identity, and selection method are frozen at Experiment Lock, while AI Judge remains unaware of the condition.
+The Viewer Notes Impact design compares **No Notes** with a locked **Frozen Viewer Notes** snapshot. Notes cannot update during the experiment. One common Field Guide setting is frozen across both conditions so that the trainable Field Guide cannot become an unintended second variable.
+
+Private v0.7.13 Research also has independent **Viewer Notes OFF/CURRENT** and **Field Guide OFF/CURRENT** controls for ordinary studies. `Field Guide OFF` removes only the trainable Field Guide; Locked Core Identity, Locked Base Vocabulary and protocol rules remain in force. Enabled current Viewer Notes and Field Guide content are captured as immutable Research snapshots at Experiment Lock. Active Profile drift after Lock never replaces those snapshots and does not block Resume.
+
+Prompt Research keeps the existing **Manual prompt variants** source and adds **Trained Field Guide history** as a separate source. History mode lists the six most recent versions for the exact Viewer identity and language and requires the operator to select two to four. The comparison freezes each selected trainable Field Guide and composes it with the same frozen locked Viewer blocks, so the selected Field Guide version is the intended experimental variable. Manual prompts are not saved as Field Guide versions. Research itself remains read-only for both Field Guide and Viewer Notes.
 
 Research preserves the distinction between exploratory choices made during design and results examined after the lock. The quality of a study still depends on target construction, sample size, controls, independence assumptions, and the operator's analysis plan.
 
@@ -292,9 +302,9 @@ Workspace Sources allow reference material to be reused within the relevant Work
 
 ## Data storage, backup, and export
 
-The application uses a local SQLite database in WAL mode. Profiles, Workspaces, threads, conversations, sessions, targets, training runs, research studies, AI identities, Viewer Notes versions and activations, reflection outcomes, audit events, and related metadata remain on the user's device unless the user exports or transmits them.
+The application uses a local SQLite database in WAL mode. Profiles, typed Workspaces, Conversation / Manual RV records, sessions, targets, training runs, research studies, AI identities, Field Guide and Viewer Notes versions and activations, reflection outcomes, audit events, and related metadata remain on the user's device unless the user exports or transmits them. Schema 026 adds the Workspace kind while preserving earlier rows as `legacy_combined`. Legacy Thread-group rows and `thread_group_id` values may remain as compatibility metadata, but they are not active product parents.
 
-Database migrations create a protective backup and validate integrity before continuing. Settings provide backup and restore tools for local recovery.
+Database migrations create a protective backup and validate integrity before continuing. Settings provide backup and restore tools for local recovery. In the private v0.7.13 baseline, primary user records follow a unified lifecycle: **Active → Archived → Restore or Delete permanently**. Permanent Delete is available only from Archive and recovery, begins with a read-only Deletion Preview, and uses explicit controlled-purge use cases rather than ordinary CRUD. Sealed/frozen/locked guards remain active outside the dedicated purge transaction.
 
 Depending on the feature, exports can include readable Markdown, HTML, CSV, JSON, and research-oriented reproducibility material. Exported files may contain sensitive prompts, evidence, targets, or model output; users should review them before sharing.
 
@@ -305,6 +315,8 @@ AI RV Harness is local-first, but it is not offline when a remote AI provider is
 Key safeguards include:
 
 - API credentials stored through the operating system's native credential store rather than in the project database;
+- native credential records bind the secret to the credential ID, provider kind and normalized endpoint before provider transport may retrieve it; legacy secret-only entries are recognized but require explicit API-key re-entry before provider use;
+- `provider_configs` remains UI/persistence metadata and is not sufficient to authorize native credential routing;
 - credentials excluded from ordinary logs and exports;
 - a local keyed credential fingerprint for identity scoping without storing the raw key in AI Center history;
 - bounded and redacted diagnostics;
@@ -330,9 +342,9 @@ AI RV Harness is a Tauri 2 desktop application:
 | **Persistence** | SQLite with migrations, constraints, audit records, backups, and integrity checks. |
 | **Build system** | Vite, TypeScript, Cargo, GitHub Actions, Vitest, Rust tests, and Clippy. |
 
-The provider layer normalizes vendor-specific responses into one internal contract. Controllers for Conversation, RV protocols, Monitor, Judge, Training, and Research consume that contract instead of parsing provider payloads independently.
+The provider layer normalizes vendor-specific responses into one internal contract. Controllers for Conversation, RV protocols, Monitor, Judge, Training, and Research consume that contract instead of parsing provider payloads independently. On the native side, `src-tauri/src/providers.rs` is the thin Tauri command facade; it also resolves the canonical provider endpoint used for credential binding before any secret is released from `secrets.rs`. `providers/adapters.rs` owns provider-family routing, endpoint validation/normalization and authentication, `request_builders.rs` owns wire-format requests, `response_parsers.rs` owns normalized responses, `reasoning.rs` owns reasoning/final-content separation, `errors.rs` owns shared native error mapping, `validation.rs` owns request validation, and `transport.rs` owns the single physical HTTP attempt plus cancellation.
 
-This separation is especially important for reasoning models: internal thinking and final assistant content are classified once at the provider boundary and remain distinct throughout the application.
+This separation is especially important for reasoning models: internal thinking and final assistant content are classified once at the provider boundary and remain distinct throughout the application. Transport retry remains exclusively in the TypeScript request executor; the Rust transport performs one physical attempt per native call.
 
 ## Installation and updates
 
@@ -385,7 +397,7 @@ The release was validated with:
 - 74 Vitest files and 207 tests;
 - a production Vite build;
 - a dependency audit with no reported known vulnerabilities at release time;
-- 20 SQLite migrations and negative checks for the v0.7.12 integrity triggers.
+- 23 SQLite migrations, including the closed UX-DATA compatibility layer, plus negative checks for the integrity and lifecycle guards.
 
 Rust checks and platform packaging remain release-workflow gates. Practical AI Center sessions should complement automated validation before the experimental feature is treated as proven useful.
 
@@ -401,7 +413,7 @@ Passing tests reduces known risk but does not guarantee identical behavior for e
 - Local-first storage does not prevent selected session content from being transmitted to the configured remote provider.
 - Artifact attestations establish provenance, not software correctness or operating-system code signing.
 - The application is research and workflow software, not a scientific validation of Remote Viewing claims.
-- Viewer Notes are experimental; their presence does not establish that they improve a model's RV performance.
+- Field Guide and Viewer Notes effectiveness must be evaluated empirically; their presence does not establish that they improve a model's RV performance.
 
 ## Licenses and credits
 

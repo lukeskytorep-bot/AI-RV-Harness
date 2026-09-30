@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import type { EffectiveGenerationSettings } from "../providers/types";
 import { runResearchPreflight } from "./preflight";
+import { buildResearchLockPlan } from "./planner";
 import type { ResearchConfig } from "./types";
 
 const capabilities = {
@@ -48,4 +49,79 @@ describe("Viewer Notes Research", () => {
     expect(result.ok).toBe(false);
     expect(result.checks).toContainEqual(expect.objectContaining({ id: "viewer_notes_design", level: "fail" }));
   });
+
+  it("accepts ordinary Research with Viewer Notes disabled across all conditions", () => {
+    const ordinary = config();
+    ordinary.templateType = "model";
+    ordinary.viewerControl!.model = { mode: "condition_variable" };
+    ordinary.conditions = ordinary.conditions.map(({ viewerNotes: _viewerNotes, ...condition }, index) => ({ ...condition, key: `model_${index}`, label: `Model ${index}` }));
+    const result = runResearchPreflight(ordinary, inventory);
+    expect(result.ok).toBe(true);
+    expect(result.checks).toContainEqual(expect.objectContaining({ id: "viewer_notes_control", level: "pass" }));
+  });
+
+  it("accepts one identical current Viewer Notes snapshot as an ordinary study-wide constant", () => {
+    const ordinary = config();
+    ordinary.templateType = "model";
+    ordinary.viewerControl!.model = { mode: "condition_variable" };
+    ordinary.conditions = ordinary.conditions.map((condition, index) => ({ ...condition, key: `model_${index}`, label: `Model ${index}`, viewerNotes: structuredClone(frozen) }));
+    const result = runResearchPreflight(ordinary, inventory);
+    expect(result.ok).toBe(true);
+    expect(result.checks).toContainEqual(expect.objectContaining({ id: "viewer_notes_control", level: "pass" }));
+  });
+
+  it("accepts identity-specific current Viewer Notes for Profile comparison only when routes match", () => {
+    const profileStudy = config();
+    profileStudy.templateType = "profile";
+    profileStudy.conditions = profileStudy.conditions.map((condition, index) => ({
+      ...condition,
+      key: `profile_${index}`,
+      label: `Profile ${index}`,
+      profileId: `profile-${index}`,
+      viewerNotes: { ...structuredClone(frozen), aiIdentityId: `ai-${index}`, versionId: `v-${index}`, modelRoute: "openrouter:m" },
+    }));
+    expect(runResearchPreflight(profileStudy, inventory).checks).toContainEqual(expect.objectContaining({ id: "viewer_notes_control", level: "pass" }));
+
+    profileStudy.conditions[1].viewerNotes!.modelRoute = "openrouter:other";
+    expect(runResearchPreflight(profileStudy, inventory).checks).toContainEqual(expect.objectContaining({ id: "viewer_notes_control", level: "fail" }));
+  });
+
+  it("rejects ordinary Research when Viewer Notes are missing, empty, or drift between conditions", () => {
+    const drifting = config();
+    drifting.templateType = "model";
+    drifting.viewerControl!.model = { mode: "condition_variable" };
+    drifting.conditions = drifting.conditions.map((condition, index) => ({ ...condition, key: `model_${index}`, label: `Model ${index}`, viewerNotes: structuredClone(frozen) }));
+    drifting.conditions[1].viewerNotes = { ...frozen, versionId: "v6", versionNumber: 6, contentSha256: "b".repeat(64) };
+    expect(runResearchPreflight(drifting, inventory).checks).toContainEqual(expect.objectContaining({ id: "viewer_notes_control", level: "fail" }));
+
+    const empty = structuredClone(drifting);
+    empty.conditions[1].viewerNotes = { ...frozen, content: "", contentSha256: "e".repeat(64) };
+    expect(runResearchPreflight(empty, inventory).checks).toContainEqual(expect.objectContaining({ id: "viewer_notes_control", level: "fail" }));
+  });
+
+  it("includes Viewer Notes content in the Viewer cost estimate", () => {
+    const pricedInventory = structuredClone(inventory);
+    pricedInventory.models[0].pricing = { promptPerToken: 0.000001, completionPerToken: 0.000002 };
+    const without = config();
+    without.templateType = "model";
+    without.viewerControl!.model = { mode: "condition_variable" };
+    without.conditions = without.conditions.map(({ viewerNotes: _viewerNotes, ...condition }, index) => ({ ...condition, key: `model_${index}`, label: `Model ${index}` }));
+    const withNotes = structuredClone(without);
+    const largeNotes = { ...frozen, content: "procedural memory ".repeat(500), contentSha256: "c".repeat(64), estimatedTokens: 2500 };
+    withNotes.conditions = withNotes.conditions.map((condition) => ({ ...condition, viewerNotes: structuredClone(largeNotes) }));
+    const baselineCost = runResearchPreflight(without, pricedInventory).estimatedCostUsd!;
+    const notesCost = runResearchPreflight(withNotes, pricedInventory).estimatedCostUsd!;
+    expect(notesCost).toBeGreaterThan(baselineCost);
+  });
+
+  it("copies the frozen Viewer Notes snapshot into the immutable Experiment Lock plan", async () => {
+    const lockedConfig = config();
+    const originalContent = lockedConfig.conditions[1].viewerNotes!.content;
+    const plan = await buildResearchLockPlan("research-notes", lockedConfig);
+    const frozenRecord = plan.conditions.find((condition) => condition.conditionKey === "frozen_notes")!;
+    expect(frozenRecord.config.viewerNotes).toEqual(frozen);
+    lockedConfig.conditions[1].viewerNotes!.content = "mutated after lock planning";
+    expect(frozenRecord.config.viewerNotes?.content).toBe(originalContent);
+  });
+
 });

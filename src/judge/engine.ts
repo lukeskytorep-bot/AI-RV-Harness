@@ -1,7 +1,8 @@
 import { buildJudgePacket } from "../domain/judgePacket";
 import { aggregateJudgeScores, computeJudgeTotal, validateJudgeScores, type JudgeComponentScores } from "../domain/scoring";
 import { resolveGenerationSettings } from "../providers/capabilities";
-import { providerChat as nativeProviderChat } from "../providers/native";
+import { executeProviderChat } from "../providers/requestExecutor";
+import type { StreamWorkflowContext } from "../providers/streamPresentation";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { ProviderImageInput } from "../providers/types";
 import type { RevealInput } from "../sessions/types";
@@ -31,6 +32,10 @@ export interface RunJudgingInput {
   judges: JudgeSelection[];
   anonymousSessionId?: string;
   loadImage?: (artifact: RevealArtifactRecord) => Promise<ProviderImageInput>;
+  maxRetries?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  streamWorkflowContext?: StreamWorkflowContext;
   chat?: (request: {
     config: ProviderConfig;
     modelId: string;
@@ -81,7 +86,15 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
   });
   const packetWire = JSON.stringify(packet);
   const packetHash = await sha256Text(packetWire);
-  const chat = input.chat ?? nativeProviderChat;
+  const chat = (request: Parameters<NonNullable<RunJudgingInput["chat"]>>[0]) => executeProviderChat({
+    ...request,
+    timeoutMs: input.timeoutMs,
+    signal: input.signal,
+    configuredRetries: input.maxRetries,
+    operationId: "judge.evaluate",
+    streamWorkflowContext: input.streamWorkflowContext,
+    attempt: input.chat,
+  });
   const scores: JudgeScoreRecord[] = [...existing];
   const pending: Array<{ judge: JudgeSelection; parsed: ParsedJudgeOutput; judgeIndex: number }> = [];
 
@@ -99,6 +112,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
     const initial = await callWithAnalyticalOutputRecovery({
       model: judge.model,
       messages,
+      operationKind: "judge",
       call: (settings) => chat({
         config: judge.providerConfig,
         modelId: judge.model.modelId,
@@ -119,6 +133,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
       const repaired = await callWithAnalyticalOutputRecovery({
         model: judge.model,
         messages: repairMessages,
+        operationKind: "judge",
         call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: repairMessages, settings }),
       });
       response = repaired.response;
@@ -133,6 +148,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
       response = (await callWithAnalyticalOutputRecovery({
         model: judge.model,
         messages: correctionMessages,
+        operationKind: "judge",
         call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: correctionMessages, settings }),
       })).response;
       parsed = parseJudgeOutput(response.content);

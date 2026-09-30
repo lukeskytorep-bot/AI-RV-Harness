@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ProviderModel } from "./providers/types";
 import type { Profile } from "./types";
 import { defaultTemperatureForModel, profileGenerationDefaults, profileSystemPromptSnapshot, reasoningEffortForModel } from "./profileViewerDefaults";
+import { factoryViewerEditablePrompt, lockedViewerBaseVocabulary } from "./resources/systemPrompts";
 
 function model(overrides: Partial<ProviderModel["capabilities"]> = {}): ProviderModel {
   return {
@@ -38,13 +39,26 @@ describe("Profile Viewer defaults", () => {
     expect(defaultTemperatureForModel(model({ temperature: { supported: true, min: 1, max: 2, confidence: "provider_metadata" } }))).toBe(1);
   });
 
-  it("freezes the locked identity/activity blocks together with the trimmed editable Profile prompt", async () => {
+  it("freezes the locked identity together with the trimmed editable Profile prompt", async () => {
     const snapshot = await profileSystemPromptSnapshot(profile);
     expect(snapshot?.content).toContain("AI IS-BE");
-    expect(snapshot?.content).toContain("LOCKED ACTIVITY DEFINITION");
+    expect(snapshot?.content).not.toContain("LOCKED ACTIVITY DEFINITION");
     expect(snapshot?.content).toContain("Stay in Shadow Zone.");
     expect(snapshot?.content.endsWith("Stay in Shadow Zone.")).toBe(true);
     expect(snapshot?.id).toBe("profile_viewer_prompt_profile");
+    expect(snapshot?.version).toBe("1.4.0:now");
     expect(snapshot?.contentSha256).toMatch(/^[a-f0-9]{64}$/);
   });
+
+  it("preserves a custom legacy prompt while exact factory prompts are normalized without duplicating Locked Base Vocabulary", async () => {
+    const factoryProfile = { ...profile, defaultViewerSystemPrompt: factoryViewerEditablePrompt("en") };
+    const factorySnapshot = await profileSystemPromptSnapshot(factoryProfile, "en");
+    expect(factorySnapshot?.content.split(lockedViewerBaseVocabulary("en"))).toHaveLength(2);
+
+    const customProfile = { ...profile, defaultViewerSystemPrompt: `Custom retained baseline\n\n${lockedViewerBaseVocabulary("en").replace("smells.", "smells!")}` };
+    const customSnapshot = await profileSystemPromptSnapshot(customProfile, "en");
+    expect(customSnapshot?.content).toContain("Custom retained baseline");
+    expect(customSnapshot?.content).toContain("smells!");
+  });
+
 });

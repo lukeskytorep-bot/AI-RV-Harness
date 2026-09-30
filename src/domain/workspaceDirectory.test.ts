@@ -7,9 +7,9 @@ const profiles = [
   { id: "p2", name: "Nemo", createdAt: "1", updatedAt: "1" },
 ] satisfies Profile[];
 const workspaces = [
-  { id: "w1", profileId: "p1", name: "Książka", createdAt: "1", updatedAt: "1", lastOpenedAt: "3" },
-  { id: "w2", profileId: "p1", name: "Calibration", createdAt: "1", updatedAt: "1", lastOpenedAt: "2" },
-  { id: "w3", profileId: "p2", name: "Blind sessions", createdAt: "1", updatedAt: "1", lastOpenedAt: "1" },
+  { id: "w1", profileId: "p1", name: "Książka", kind: "conversation", createdAt: "1", updatedAt: "1", lastOpenedAt: "3" },
+  { id: "w2", profileId: "p1", name: "Calibration", kind: "rv", createdAt: "1", updatedAt: "1", lastOpenedAt: "2" },
+  { id: "w3", profileId: "p2", name: "Blind sessions", kind: "legacy_combined", createdAt: "1", updatedAt: "1", lastOpenedAt: "1" },
 ] satisfies Workspace[];
 
 describe("workspace directory", () => {

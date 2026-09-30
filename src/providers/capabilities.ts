@@ -67,9 +67,11 @@ function normalizeOpenRouter(raw: Record<string, unknown>, capturedAt: string): 
   const reasoning = asRecord(raw.reasoning);
   const pricingRaw = asRecord(raw.pricing);
   const supportedParameters = stringArray(raw.supported_parameters);
-  const unrestrictedEfforts = Object.prototype.hasOwnProperty.call(reasoning, "supported_efforts") && reasoning.supported_efforts === null;
   const reasoningMandatory = boolValue(reasoning.mandatory);
-  const reasoningEfforts = (unrestrictedEfforts ? [...REASONING_EFFORTS] : effortArray(reasoning.supported_efforts))
+  // Only expose exact effort levels published by the provider. `null`/missing is not
+  // treated as "all levels": for an unknown model it means provider-default/AUTO
+  // until a verified registry entry supplies an exact contract.
+  const reasoningEfforts = effortArray(reasoning.supported_efforts)
     .filter((effort) => !(reasoningMandatory && effort === "none"));
   const reasoningAdvertised = supportedParameters.includes("reasoning") || supportedParameters.includes("reasoning_effort");
   const inputModalities = stringArray(architecture.input_modalities);
@@ -88,6 +90,7 @@ function normalizeOpenRouter(raw: Record<string, unknown>, capturedAt: string): 
         efforts: reasoningEfforts,
         mandatory: reasoningMandatory,
         defaultEffort: effortArray([reasoning.default_effort])[0],
+        supportsMaxTokens: boolValue(reasoning.supports_max_tokens),
         confidence: reasoningAdvertised ? "provider_metadata" : "unknown",
       },
       temperature: {
@@ -245,8 +248,18 @@ export function resolveGenerationSettings(capabilities: ModelCapabilities, reque
   const omitted: EffectiveGenerationSettings["omitted"] = [];
   let reasoningResolution: EffectiveGenerationSettings["reasoningResolution"];
 
+  if (requested.reasoningMaxTokens !== undefined) {
+    if (capabilities.reasoning.supportsMaxTokens === true && requested.reasoningMaxTokens > 0) {
+      effective.reasoningMaxTokens = Math.floor(requested.reasoningMaxTokens);
+    } else {
+      omitted.push("reasoningMaxTokens");
+    }
+  }
+
   if (requested.reasoningEffort !== undefined) {
-    if (capabilities.reasoning.supported && capabilities.reasoning.efforts.includes(requested.reasoningEffort)) {
+    if (effective.reasoningMaxTokens !== undefined) {
+      omitted.push("reasoningEffort");
+    } else if (capabilities.reasoning.supported && capabilities.reasoning.efforts.includes(requested.reasoningEffort)) {
       effective.reasoningEffort = requested.reasoningEffort;
       const option = findReasoningOption(capabilities.reasoning, requested.reasoningEffort);
       reasoningResolution = {

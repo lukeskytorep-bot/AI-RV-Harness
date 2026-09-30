@@ -1,0 +1,173 @@
+# AI RV Harness code map
+
+**Status:** current private development map for v0.7.13  
+**Purpose:** identify the current primary owner of each major product capability and the accepted v0.7.13 boundaries.
+
+This document maps responsibilities, not every source file. Historical release records remain under `docs/releases/`.
+
+## Application composition
+
+| Responsibility | Current primary location | Direction |
+| --- | --- | --- |
+| Application bootstrap, active Profile, separate active Conversation/RV Workspace IDs and top-level navigation | `src/App.tsx` | Top-level shell/composition root. Conversations and RV Sessions are separate destinations. PERF-UI-1 keeps Home, Profiles, Conversations, Training, Targets and RV Sessions eager while loading Research, Settings and AI Center through route-level `React.lazy` boundaries. |
+| Home screen | `src/features/home/` | First extracted feature; keep its public import through `src/features/home/index.ts`. |
+| Settings screen | `src/features/settings/` | Extracted feature; import through `src/features/settings/index.ts`. Loaded lazily from the application shell in PERF-UI-1. |
+| Profiles screen and profile-specific forms | `src/features/profiles/` | Extracted feature; import through `src/features/profiles/index.ts`. |
+| Profile + initial typed Workspaces creation | `src/application/profileWorkspace.ts` | Cross-domain application use case used by all product-level new-Profile flows. Creates one Conversation Workspace and one RV Workspace atomically; compensating cleanup prevents a partially created active Profile. |
+| Targets screen, dialogs and target-library operations | `src/features/targets/` | Extracted feature; import through `src/features/targets/index.ts`. |
+| Workspace switching dialog | `src/features/workspaces/` | Public switcher only; daily Workspace lifecycle management lives in Profiles. |
+| Conversation orchestration and reusable chat engine | `src/features/conversations/` | `ConversationsScreen` owns ordinary Conversations. `ChatPanel` remains the shared engine imported through the public entry point for Manual RV; message construction and chat use cases remain in `src/chat/`. |
+| RV Sessions screen and UI orchestration | `src/features/rvSessions/` | Owns the Manual RV / Automatic RV tabs and imports `ChatPanel` through the Conversations public entry point. Protocol controllers and protected transition rules remain in `src/sessions/`. |
+| Training screen and long-run orchestration | `src/features/training/` | Extracted feature; import through `src/features/training/index.ts`. |
+| Research screen and builder | `src/features/research/` | Extracted feature; import through `src/features/research/index.ts`. Loaded lazily from the application shell in PERF-UI-1. |
+| AI Center interface | `src/features/aiCenter/` | Extracted presentation feature. `AiCenterRoute` composes the Monitor through public feature entry points and is loaded lazily by the application shell; identity and Viewer Notes domain rules remain in `src/aiCenter/`. |
+| AI Monitor history, prompt editor and export UI | `src/features/monitor/` | Extracted feature; decisions and intervention rules remain in `src/monitor/`. |
+| Shared safe rendering | `src/components/SafeMarkdown.tsx` | Shared UI infrastructure; must remain the path for AI-authored Markdown. |
+| Shared role/model selector | `src/components/ModelRouteSelect.tsx`, `src/modelRoutes.ts` | Canonical Viewer/Monitor/Judge route-key, active-Profile credential scope, current-role defaults and shared route selection. Historical snapshots remain read-only consumers of stored routes. |
+| Shared application dialogs | `src/components/AppDialogProvider.tsx` | Canonical Confirm/TextInput/Information/Destructive modal host. Feature modules request dialogs through `useAppDialogs`; browser-native confirm/prompt/alert stay private fallback only. |
+| Shared page headers | `src/components/PageHeader.tsx` | Canonical simple page title/subtitle/action header used by standard screens; AI Center keeps its specialized header because it adds an eyebrow, Profile selector and dedicated layout. |
+| Shared resource viewer shell | `src/components/ResourceViewerDialogShell.tsx` | Small visual/semantic shell for compatible read-only resource dialogs only. Resource data, save logic, hashes, filenames and types remain owned by their feature/component callers. |
+
+## AI execution and protected workflows
+
+| Capability | Primary owner | Important boundary |
+| --- | --- | --- |
+| One physical provider request | `src/providers/native.ts`, `src-tauri/src/providers.rs`, `src-tauri/src/providers/transport.rs` | TypeScript domain code must not call the native attempt directly. Rust `providers.rs` is the Tauri command facade; transport owns the single HTTP attempt/cancellation path. |
+| Rust provider wire-format routing | `src-tauri/src/providers/adapters.rs`, `request_builders.rs`, `response_parsers.rs`, `reasoning.rs`, `errors.rs`, `validation.rs` | `adapters.rs` maps provider kinds to OpenAI-compatible/Google/Anthropic families and authentication; builders/parsers own wire formats; `errors.rs` and `validation.rs` hold shared cross-cutting validation/error metadata without coupling builders to transport or transport to parsers; reasoning normalization is independent of transport retry. |
+| Transport retry and attempt accounting | `src/providers/requestExecutor.ts` | The only transport-retry owner. |
+| Error classification and retry policy | `src/providers/providerError.ts`, `src/providers/retry.ts` | Must not absorb output or domain recovery. |
+| Output-length recovery | `src/providers/outputRecovery.ts` | A new logical request, separate from transport retry. |
+| Full RCP automatic execution | `src/sessions/controller.ts` | Protect protocol order, sealed evidence, Reveal and Resume. |
+| RV Lite execution | `src/sessions/rvLiteController.ts` | Protect the four-call protocol contract. |
+| Telepathic execution | `src/sessions/telepathicController.ts` | Protect protocol steps, questions, Reveal and Resume. |
+| Custom protocol execution | `src/sessions/customController.ts` | Execute the captured immutable protocol version. |
+| Post-Reveal reviews | `src/sessions/postReveal.ts` | Viewer review precedes Monitor review; not blind evidence. |
+| AI Monitor decisions | `src/monitor/engine.ts` | Monitor never rewrites Viewer evidence. |
+| AI Monitor workflow UI | `src/features/monitor/` | History, prompt editing, intervention presentation and export initiation through the public entry point. |
+| AI Judge execution | `src/judge/engine.ts` | Receives only the sanitized allowlist packet and freezes scores without UI ownership. |
+| AI Judge workflow UI | `src/features/judge/` | Extracted feature; owns single-session and batch evaluation controls through `src/features/judge/index.ts`. |
+| Shared AI Judge result presentation | `src/components/JudgeResults.tsx` | Canonical complete score presentation used by live RV and stored-session inspection in Training/Research. |
+| Complete session and Judge Markdown | `src/exports/sessionDocument.ts` | Canonical section order and complete frozen-score rendering used by RV Session, Training and Research exporters. |
+| Read-only AI Judge prompt resource | `src/judge/prompt.ts`, exposed through `src/resources/systemPrompts.ts` | About & Protocols displays and saves the exact runtime PL/EN prompt rather than a copied UI string. |
+| Viewer Notes | `src/aiCenter/viewerNotes.ts` | Training-only update policy and immutable version history. |
+| Viewer Field Guide | `src/aiCenter/fieldGuide.ts`, `src/aiCenter/fieldGuideUpdate.ts`, `src/aiCenter/fieldGuideTypes.ts` | Exact-identity/language prompt composition, immutable Field Guide versions, capacity recovery and the Training-only update stage. |
+| Training orchestration and curriculum | `src/features/training/trainingExecution.ts`, `src/training/` | `curriculum.ts` owns the 94-target/eight-category planner, one-to-ten frozen rounds and versioned legacy boundaries. Durable checkpoints select the first unfinished target; the post-Reveal order is Viewer Review → Field Guide Update → Viewer Notes Reflection. |
+| Workspace kind compatibility and technical resolution | `src/domain/workspaceKind.ts`, `src/application/technicalWorkspace.ts` | `conversation`, `rv`, and `legacy_combined` compatibility; Training/Research resolve only RV-compatible technical ownership and expose no selector. |
+
+## Data and infrastructure
+
+| Capability | Current primary location | Direction |
+| --- | --- | --- |
+| Public repository contract | `src/storage/repository.ts` and exports under `src/storage/` | Stable `AppRepository` facade; callers do not import domain implementations. |
+| Profiles persistence contract | `src/storage/contracts/profilesRepository.ts` | Shared internal contract for Profile-only reads and writes. Archive/restore remain facade-owned because they also change Workspaces. |
+| Targets persistence contract | `src/storage/contracts/targetsRepository.ts` | Shared internal contract for target listing, user CRUD and usage records. Cross-domain mutation guards remain explicit. |
+| Settings and model-registry persistence contract | `src/storage/contracts/settingsModelsRepository.ts` | Shared internal contract for application settings, provider metadata and cached model registry. Native secrets remain outside repository storage. |
+| Workspaces and Conversations persistence contract | `src/storage/contracts/workspacesConversationsRepository.ts` | Shared internal contract for Workspace lifecycle plus flat Conversation/Manual RV records and messages. C2 adds atomic assistant-message + provider-continuation-state persistence and validated state reload for Conversation. Legacy `thread_group_id` is read-only compatibility metadata; new records are direct Workspace children. Workspace Sources remain intentionally facade-owned as an accepted compatibility/cross-domain boundary. |
+| RV Sessions persistence contract | `src/storage/contracts/sessionsRepository.ts` | Shared internal contract for RV session records, events, immutable snapshots, sealed evidence, Reveal, post-Reveal transcript, target clarifications and the bounded cross-Workspace recent-session read used by Home. C2 provides atomic Session-event + provider-state persistence keyed to the exact event ID; workflow controllers do not use it until C3. The Research frozen-score check is supplied explicitly through `ResearchRepository`. |
+| AI Center persistence contract | `src/storage/contracts/aiCenterRepository.ts` | Shared internal contract for AI identities, Viewer Notes and Field Guide settings, immutable versions, activation history, reflection/update audit records and legacy Field Guide baselines. |
+| AI Monitor persistence contract | `src/storage/contracts/monitorRepository.ts` | Shared internal contract for Monitor runs and ordered interventions. Browser session lookup is injected explicitly; SQLite preserves the existing session join. |
+| AI Judge persistence contract | `src/storage/contracts/judgeRepository.ts` | Shared internal contract for frozen Judge run/score writes and ordered score reads. SQLite preserves atomic batch transactions and immutable-score triggers. |
+| Research persistence contract | `src/storage/contracts/researchRepository.ts` | Shared internal contract for projects, Experiment Lock, conditions, assignments, Blinding Key mappings, state transitions and immutable Research results. |
+| Export audit persistence contract | `src/storage/contracts/exportRepository.ts` | Shared cross-domain ledger for exported Training, Session, Monitor and Research artifacts; it is not owned by Research execution. |
+| Desktop SQLite implementation | `src/storage/sqliteRepository.ts`, `src/storage/databaseWriteOperations.ts`, `src-tauri/src/database.rs`, delegating under `src/storage/sqlite/` | SECURITY-IPC-1C-R1 removes plugin-SQL select/execute from production. Reads use a native SQLite connection opened `read_only(true)` with `query_only`; writes cross IPC only as named operations with fixed Rust-owned SQL. Plugin SQL is retained only for load/close lifecycle. Snapshot and controlled purge use dedicated native commands. |
+| Browser preview implementation | `src/storage/browserRepository.ts`, delegating under `src/storage/browser/` | Preserve contracts and local-storage keys; the facade supplies explicit cross-domain callbacks where required. |
+| Database migrations and native transactions | `src-tauri/src/migrations.rs`, `src-tauri/src/database.rs` and `src-tauri/src/storage.rs` | `migrations.rs` is the single ordered 001–026 registry and current-version source. The current epoch retains exact-green v23 → v24 Viewer Learning and v24 → v25 continuation-state gates, then adds exact-green v25 → v26 typed Workspaces; older public/legacy schemas are stopped by the compatibility epoch gate before plugin migration. Transactions and database validation remain with their focused native owners. |
+| Credentials and route binding | `src-tauri/src/secrets.rs`, `src-tauri/src/providers.rs`, `src/providers/native.ts`, `src/providers/service.ts` | Secrets remain in the OS credential store. New/rebound credentials are stored as versioned records bound to credential ID, provider kind and normalized provider endpoint; provider calls retrieve a secret only after that native binding matches. SQLite `provider_configs` is metadata, not the authorization source for credential routing. |
+| Profile/credential model-route resolution | `src/modelRoutes.ts` | New/current Viewer/Monitor/Judge choices are scoped through the active Profile credential. Feature modules must not reconstruct `providerConfigId::modelId` or independently widen the scope to the global model cache. |
+| Human-readable and research exports | `src/exports/`, `src/artifacts/` | Preserve evidence-domain separation and existing formats. |
+| Sources and attachments | `src/sources/`, `src/attachments/`, `src-tauri/src/documents.rs` and `src-tauri/src/dialogs.rs` | Never leak Reveal or target material into blind messages. Desktop attachment selection and import are one native operation so filesystem paths are not exposed back to the WebView. |
+| PL/EN text | `src/i18n.ts`, domain dictionaries under `src/i18n/`, versioned resources under `src/resources/` | `src/i18n.ts` is the stable facade; domain dictionaries own UI copy without changing wording or runtime translation behavior. |
+
+## Frontend extractions completed
+
+`HomeScreen` has been moved from `src/App.tsx` into `src/features/home/`. The module owns its presentational components, accepts data and callbacks through `HomeScreenProps`, and does not own navigation, provider calls, persistence transactions or session state. Regression tests cover empty and populated rendering plus callback delegation.
+
+`SettingsScreen` has been moved into `src/features/settings/` together with its private settings cards and dialogs. It owns tab selection and settings-specific UI state, while `App.tsx` continues to own the canonical `AppSettings` state and passes updates through `SettingsScreenProps.onChange`. The reusable read-only protocol dialog now lives in `src/components/ProtocolDialog.tsx`, because RV Sessions and Settings both use it.
+
+`ProfilesScreen` has been moved into `src/features/profiles/` together with profile creation and editing dialogs, Viewer-default controls, calibration-history rendering and the ordered persistence operations for edit/archive. `App.tsx` continues to own the canonical profile list, top-level navigation, first-run flow and repository initialization. Shared page/dialog primitives live under `src/components/`, while reasoning capability labels live under `src/providers/`.
+
+`TargetsScreen` has been moved into `src/features/targets/` together with its create/edit dialogs, pure grouping and lock-state view model, and repository-backed target-library operations. `App.tsx` retains top-level navigation and passes only settings plus the repository contract. The existing target domain service remains the owner of normalization, hashing and protocol eligibility, while the feature coordinates UI-specific loading and persistence.
+
+`AiCenterScreen` has been moved into `src/features/aiCenter/` behind a public entry point. The feature owns AI Center navigation, profile-scoped presentation, Viewer Notes capacity/restore controls and read-only history rendering. Viewer identity, versioning and Training-only update policy remain owned by `src/aiCenter/` and the repository contract. PERF-UI-1 adds `AiCenterRoute`, which composes the Workspace-specific Monitor panel inside the lazy AI Center route so Monitor-only code is not pulled into the initial application path.
+
+`ResearchScreen` and its builder have been moved into `src/features/research/` behind a public entry point. The feature owns Research configuration, preflight/lock presentation, project execution controls, scoring/unblinding presentation and package-export coordination. Research planning, target sampling, study controls, execution, persistence contracts and export construction remain in their existing domain/application modules under `src/research/`, `src/storage/` and `src/exports/`.
+
+`TrainingScreen` and its long-running execution use case have been moved into `src/features/training/` behind a public entry point. The screen owns Training configuration and presentation. The post-Etap-5 UX campaign bounds the Training Run directory with its own scroll area so long histories no longer push the selected-run/session details arbitrarily far down the page. `trainingExecution.ts` owns target sequencing, durable per-target checkpoints, Resume from the first unfinished target, pause/cancellation propagation, post-Reveal review, optional judging and the Training-only Viewer Notes reflection trigger. Curriculum and export formats remain in `src/training/`; session, Judge and Viewer Notes domain rules remain with their existing owners.
+
+Daily Workspace management is consolidated in `src/features/profiles/ProfilesScreen.tsx`: each Profile card presents separate Conversation Workspaces and RV Workspaces sections and exposes create, open, rename and archive actions. The reusable switcher filters by required kind. Ordered rename/archive coordination remains owned by `src/application/workspaceManagement.ts`, while `src/domain/workspaceKind.ts` protects the last compatible Workspace per purpose. `ChatPanel` lives in `src/features/conversations/` as the shared conversation engine; `ConversationsScreen` uses it for ordinary chat and `RvSessionsScreen` uses it for its Manual RV tab. `App.tsx` composes both destinations and remembers separate active Conversation/RV Workspace IDs.
+
+`JudgeEvaluation` and `BatchEvaluation` have been moved from `App.tsx` into `src/features/judge/`. The interactive feature keeps the existing evaluation engine, model-route recovery, score freezing and add-another-Judge behavior. `JudgeResults` is a genuinely shared presentation component used by the live RV flow, expanded batch results and by `SessionInspection`, which is shared by Training and Research. Complete-session Markdown is assembled by `src/exports/sessionDocument.ts`; ordinary RV, Training and Research retain their package/blinding adapters but no longer maintain competing Judge layouts.
+
+`MonitorPanel` has been moved from `App.tsx` into `src/features/monitor/` behind a public entry point. The feature owns Monitor history, prompt editing, saved-run inspection and export initiation. Monitor decisions, prompts, persistence, blinding rules and provider execution keep their existing owners.
+
+`RvSessionPanel` and its private Custom Protocol dialog have been moved from `App.tsx` into `src/features/rvSessions/` behind a public entry point. The feature owns session configuration, live progress, Reveal/Post-Reveal presentation, recovery controls, recent-session presentation and orchestration of the established use cases. Full RCP, RV Lite, Custom and Telepathic controllers, Monitor/Judge engines, persistence, exports, target rules and provider transport retain their existing owners. `App.tsx` now remains the Workspace shell and supplies only the active Profile, Workspace, settings and repository contract.
+
+The first Etap 5 persistence split keeps `AppRepository`, the SQLite schema and browser storage keys unchanged. Profile-only CRUD and configuration calls delegate to matching browser and SQLite implementations through `ProfilesRepository`. Profile archive/restore deliberately remain in the compatibility facades because each operation atomically changes both the Profile and its active Workspaces. A shared contract suite runs against both internal adapters.
+
+The second Etap 5 split delegates target listing, user-target CRUD and usage persistence through `TargetsRepository`. Browser storage receives its cross-domain used-target check from the compatibility facade; SQLite keeps the existing target-integrity triggers. No target record, storage key, query result or public caller contract changes.
+
+The third Etap 5 split delegates application settings, provider-connection metadata and the cached model registry through `SettingsModelsRepository`. Browser preview retains its established inability to create or rotate credentials. SQLite keeps provider creation, credential-metadata updates, model replacement and provider deletion transactional; deletion still clears matching Profile defaults in the same transaction. Actual API secrets remain owned by native credential commands and never enter this repository contract.
+
+The fourth Etap 5 split originally delegated Workspace lifecycle plus the then-current Thread-group hierarchy. UX-DATA-5 later removed `ChatThreadGroup` from the product contract without changing the SQLite schema: `WorkspacesConversationsRepository` now owns Workspace lifecycle plus flat Conversation/Manual RV records and messages. Existing `thread_group_id` values are mapped only as legacy metadata, new records write `NULL`, and restoring a Conversation depends only on its Workspace. Workspace Sources remain a separate persistence surface.
+
+The fifth Etap 5 split delegates the RV Session persistence surface through `SessionsRepository`: session creation/state, ordered events, pre-Reveal transcript, immutable snapshot, sealing, atomic Reveal, sealed-evidence reads, post-Reveal transcript, session listing and target clarifications. Browser storage keeps its existing explicit Research frozen-score guards; SQLite continues to rely on the existing database triggers for atomic Reveal, target-clarification protection and append-only post-Reveal enforcement, while the facade supplies the Research-score lookup used by the preflight check. Monitor, Judge, Research project persistence and custom protocols remain outside this focused split. No schema, migration, storage-key or serialized-record change is introduced.
+
+The sixth Etap 5 split delegates Training-run persistence through `TrainingRepository`: run creation and numbering, durable run updates, per-target checkpoints, frozen execution snapshots, ordered session-id linkage, error accumulation and run listing. The execution workflow remains owned by `src/features/training/trainingExecution.ts`; RV Sessions, Judge results and Viewer Notes persistence remain with their existing repositories. The existing `training_runs` table continues to store the canonical `TrainingRunRecord` in `record_json` with mirrored `status` and `run_number` columns. No schema, migration, browser key or serialized-record change is introduced.
+
+The seventh Etap 5 split delegates AI identity and Viewer Notes persistence through `AiCenterRepository` and AI Monitor run/intervention persistence through a separate `MonitorRepository`. Viewer Notes keep the migration-020 append-only, identity and stale-base guards; commit remains a single four-statement transaction in SQLite. Monitor stays a separate persistence boundary even though it is surfaced inside AI Center. Judge and Research persistence remain for the final Etap 5 split. No schema, migration, browser key or serialized-record change is introduced.
+
+## Updating this map
+
+Update this file when ownership changes. A moved capability must have one clear current owner and, when shared across modules, a documented public entry point.
+
+The first post-Etap-5 UX/data foundation change adds one bounded recent-session query for Home. `App.tsx` now asks the public repository for `listRecentRvSessions(8)` instead of loading every active Workspace session list and merging them in memory. The compatibility facade resolves the currently active Workspace set and delegates one bounded read to `SessionsRepository`; Browser storage filters/sorts one shared session collection, while SQLite performs one `ORDER BY updated_at ... LIMIT` query. Session execution, Workspace-local history and Research/Training consumers continue to use `listRvSessions(workspaceId)` unchanged.
+
+## Etap 8 — architecture enforcement (completed)
+
+The achieved modular boundaries are now guarded by a small executable architecture verifier:
+
+- `scripts/verify-architecture.mjs` — production import-graph and structural checks;
+- `scripts/verify-architecture-selftest.mjs` — negative/positive fixtures for the verifier itself;
+- `scripts/architecture-boundaries.json` — exact exception configuration; empty in the accepted Etap 8 baseline;
+- `src/architecture/architectureEnforcement.test.ts` — Vitest coverage for the required negative cases;
+- `src/application/sha256.ts` — small pure hashing helper introduced to remove the only runtime cycle found by the Etap 8 inventory while preserving the existing `sessions/controller.ts` re-export.
+
+The architecture gate is wired into the main CI, Windows Release and Linux Release workflows as `npm run verify:architecture`. It does not change runtime behavior, storage schema, migrations, provider retry ownership, protocol execution, Reveal/Resume, Viewer Notes, Research, Training or Judge behavior.
+
+
+## Viewer Learning 3 — Research Field Guide controls
+
+The private v0.7.13 Research integration for Viewer Learning is owned by:
+
+- `src/research/fieldGuidePolicy.ts` — exact Viewer-identity lookup, read-only active/history Field Guide capture, 6-version history limit, 2–4 manual selection validation, locked-only prompt construction and frozen snapshot signatures;
+- `src/research/types.ts` — frozen Research Field Guide mode/source/snapshot contracts and Prompt Research source metadata;
+- `src/research/preflight.ts` — lock-time invariants for independent Viewer Notes/Field Guide controls, locked Core Identity/Base Vocabulary versions, history-only variable control and legacy Research compatibility;
+- `src/research/engine.ts` — execution/Resume consumption of the frozen prompt/Field Guide snapshot and exact result provenance;
+- `src/features/research/ResearchBuilder.tsx` — ordinary Notes/Field Guide controls plus Prompt Research `MANUAL` / `HISTORY` selection UI and frozen-status presentation;
+- `src/storage/contracts/fieldGuideRepository.ts` with Browser/SQLite implementations — explicit read-only `getExistingFieldGuideBundle` path used by Research so reads never bootstrap settings or create versions;
+- `src/exports/research.ts` — exact Field Guide version/hash columns in Research result exports.
+
+Research does not call Field Guide Update or Viewer Notes Reflection. It cannot create new learning versions. The existing Research lifecycle, Judge scoring/frozen scores, target ownership, provider retry, credential routing and controlled purge remain outside Viewer Learning 3 except for storing the necessary immutable snapshot inside the existing frozen Research JSON. That feature introduced no migration; the current application schema later advanced to 026 through provider-continuation persistence and typed Workspaces.
+
+## Training targets and typed Workspaces closeout
+
+The accepted stages after the earlier modularization closeout are documented in [Training, target pack, and typed Workspaces](TRAINING_TARGETS_AND_TYPED_WORKSPACES.md). The current product boundaries are:
+
+- 94 factory targets in eight categories;
+- one to ten frozen Full Training rounds of eight sessions;
+- separate Conversations and RV Sessions top-level destinations;
+- Manual RV presented under RV Sessions while reusing the public Conversation chat engine;
+- Workspace kinds `conversation`, `rv`, and `legacy_combined`;
+- separate active Conversation/RV Workspace IDs;
+- SQLite schema 026.
+
+
+## Etap 9 — final validation
+
+The final modularization gate does not introduce a new product subsystem. Its owners are documentation and acceptance evidence:
+
+- `docs/reports/STAGE_9_FINAL_MODULARIZATION_VALIDATION_v0.7.13_PL.md` — final audit of Etapy 1–8, architecture boundaries, migration compatibility and acceptance state;
+- `docs/architecture/FINAL_RUNTIME_SMOKE_v0.7.13_PL.md` — canonical desktop runtime smoke checklist;
+- `docs/architecture/CODE_MAP.md` and `MODULE_BOUNDARIES.md` — living architecture records synchronized with the accepted Stage 8 baseline.
+
+Stage 9 treats legacy Thread-group metadata, Workspace Sources, Custom Protocol version persistence and explicit cross-domain lifecycle operations as documented compatibility/facade ownership, not temporary architecture exceptions. The architecture allowlist remains empty.

@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ProviderContinuationState } from "../providers/continuationContract";
+import anthropicFixture from "../providers/continuation-fixtures/anthropic-thinking-blocks.json";
+import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getRvLite } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import type { TargetRecord } from "../targets/types";
 import { runAutomaticRvLiteSession } from "./rvLiteController";
-import type { SessionSnapshot } from "./types";
+import type { SessionEventInput, SessionSnapshot } from "./types";
 
 const config: ProviderConfig = { id: "p", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
 const model: ProviderModel = {
@@ -18,12 +21,13 @@ function repository(log: string[], snapshots: SessionSnapshot[] = []) {
     createRvSession: async () => ({} as never),
     updateRvSessionState: async (_id: string, state: string) => { log.push(`state:${state}`); },
     appendSessionEvent: async (_id: string, event: { eventType: string }) => { log.push(event.eventType); },
+    appendSessionEventWithProviderState: async (_id: string, event: { eventType: string }) => ({ ...event, id: "event", sessionId: "session", sequenceNumber: 1, createdAt: "now" } as never),
     updatePreRevealTranscript: async () => { log.push("saved"); },
     saveSessionSnapshot: async (_id: string, snapshot: SessionSnapshot) => { snapshots.push(snapshot); },
     sealPreReveal: async () => { log.push("sealed"); },
     acceptReveal: async () => { log.push("reveal"); },
     recordTargetUsage: async () => undefined,
-  } as unknown as Pick<AppRepository, "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage">;
+  } as unknown as Pick<AppRepository, "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "appendSessionEventWithProviderState" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage">;
 }
 
 describe("automatic RV Lite controller", () => {
@@ -35,7 +39,10 @@ describe("automatic RV Lite controller", () => {
     const result = await runAutomaticRvLiteSession({
       repository: repository(log, snapshots), workspaceId: "w", profileId: "profile", profileName: "Leo", providerConfig: config, model,
       protocol: getRvLite("pl"), sessionLanguage: "pl", requestedSettings: { maxOutputTokens: 1024 }, automaticTarget: target,
-      rvSystemPrompt: { id: "profile_prompt", version: "1", content: "FIXED PROFILE VIEWER PROMPT", contentSha256: "a".repeat(64) },
+      rvSystemPrompt: {
+        id: "viewer_prompt_identity_en", version: "1.5.0:field-guide:fg-v1", content: "FIXED PROFILE VIEWER PROMPT", contentSha256: "a".repeat(64),
+        fieldGuide: { aiIdentityId: "identity", language: "en", versionId: "fg-v1", versionNumber: 1, content: "FIELD GUIDE", contentSha256: "f".repeat(64), estimatedTokens: 10, estimatorVersion: "conservative-char-v1", capacityTokens: 2048, modelRoute: model.route, capturedAt: "now", sourceKind: "factory-baseline" },
+      },
       chat: async ({ messages }) => {
         calls += 1;
         if (calls > 1) expect(log.filter((item) => item === "saved")).toHaveLength(calls - 1);
@@ -54,7 +61,182 @@ describe("automatic RV Lite controller", () => {
     expect(log.indexOf("sealed")).toBeLessThan(log.indexOf("reveal"));
     expect(result.state).toBe("Revealed");
     expect(snapshots[0].rvSystemPrompt).toEqual(expect.objectContaining({ contentSha256: "a".repeat(64), fullContent: "FIXED PROFILE VIEWER PROMPT" }));
-    expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity", "locked-activity-definition"]);
+    expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity", "locked-viewer-base-vocabulary"]);
+    expect(snapshots[0].rvSystemPrompt?.fieldGuide).toMatchObject({ versionId: "fg-v1", content: "FIELD GUIDE", capacityTokens: 2048 });
+    expect(snapshots[0].automaticRevealHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("persists OpenRouter continuation state on the exact response event and replays it on later Viewer calls", async () => {
+    const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
+    const repo = repository(log, snapshots);
+    const persisted: Array<{ event: { eventType: string; content?: string; metadata?: Record<string, unknown> }; state: unknown }> = [];
+    repo.appendSessionEventWithProviderState = vi.fn(async (_sessionId: string, event: SessionEventInput, state: ProviderContinuationState) => {
+      persisted.push({ event, state });
+      return { ...event, id: `event-${persisted.length}`, sessionId: "session", sequenceNumber: persisted.length, createdAt: "now" };
+    });
+    let calls = 0;
+    await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "profile", providerConfig: config, model,
+      protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+      chat: async ({ messages }) => {
+        calls += 1;
+        if (calls > 1) {
+          const previousAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+          expect(previousAssistant?.continuationState).toBeDefined();
+          expect(previousAssistant?.continuationState?.transport).toBe("openrouter");
+        }
+        return {
+          content: `Evidence ${calls}`,
+          reasoningDetails: [{ type: "reasoning.encrypted", data: "RklYVFVSRQ==", id: `r${calls}`, format: "openai-responses-v1", index: 0 }],
+          usage: {},
+        };
+      },
+    });
+    expect(calls).toBe(4);
+    expect(persisted).toHaveLength(4);
+    expect(persisted.every(({ event }) => event.eventType === "VIEWER_RESPONSE")).toBe(true);
+    expect(snapshots[0].continuationRoute).toMatchObject({
+      transport: "openrouter", providerConfigId: "p", credentialId: "c", requestedModelId: "m",
+    });
+  });
+
+  it("persists and replays Google native thoughtSignature across all RV Lite Viewer calls", async () => {
+    const googleConfig: ProviderConfig = { ...config, id: "google-p", provider: "google", label: "Google" };
+    const googleModel: ProviderModel = { ...model, providerConfigId: googleConfig.id, provider: "google", modelId: "gemini-3.8-flash", route: "google:gemini-3.8-flash" };
+    const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
+    const repo = repository(log, snapshots);
+    const persisted: ProviderContinuationState[] = [];
+    repo.appendSessionEventWithProviderState = vi.fn(async (_sessionId: string, event: SessionEventInput, state: ProviderContinuationState) => {
+      persisted.push(structuredClone(state));
+      return { ...event, id: `google-event-${persisted.length}`, sessionId: "session", sequenceNumber: persisted.length, createdAt: "now" };
+    });
+    const parts = structuredClone(googleFixture.providerResponse.candidates[0].content.parts);
+    let calls = 0;
+    await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "profile", providerConfig: googleConfig, model: googleModel,
+      protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+      chat: async ({ messages }) => {
+        calls += 1;
+        if (calls > 1) {
+          const previousAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+          expect(previousAssistant?.continuationState?.transport).toBe("google-native");
+          expect(previousAssistant?.continuationState && "parts" in previousAssistant.continuationState ? previousAssistant.continuationState.parts : undefined).toEqual(parts);
+        }
+        return { content: "Visible fixture answer.", reasoningDetails: parts, reasoningSource: "google_thought_parts", usage: {} };
+      },
+    });
+    expect(calls).toBe(4);
+    expect(persisted).toHaveLength(4);
+    expect(persisted.every((state) => state.transport === "google-native")).toBe(true);
+    expect(snapshots[0].continuationRoute).toMatchObject({ transport: "google-native", providerConfigId: "google-p", credentialId: "c", requestedModelId: "gemini-3.8-flash", stateFormat: "google-thought-parts" });
+  });
+
+  it("persists and replays Anthropic thinking blocks across all RV Lite Viewer calls on an append-only route", async () => {
+    const anthropicConfig: ProviderConfig = { ...config, id: "anthropic-p", provider: "anthropic", label: "Anthropic" };
+    const anthropicModel: ProviderModel = { ...model, providerConfigId: anthropicConfig.id, provider: "anthropic", modelId: "claude-fixture", route: "anthropic:claude-fixture" };
+    const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
+    const repo = repository(log, snapshots);
+    const persisted: ProviderContinuationState[] = [];
+    repo.appendSessionEventWithProviderState = vi.fn(async (_sessionId: string, event: SessionEventInput, state: ProviderContinuationState) => {
+      persisted.push(structuredClone(state));
+      return { ...event, id: `anthropic-event-${persisted.length}`, sessionId: "session", sequenceNumber: persisted.length, createdAt: "now" };
+    });
+    const blocks = structuredClone(anthropicFixture.continuationState.blocks);
+    let calls = 0;
+    await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "profile", providerConfig: anthropicConfig, model: anthropicModel,
+      protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+      chat: async ({ messages }) => {
+        calls += 1;
+        if (calls > 1) {
+          const previousAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+          expect(previousAssistant?.continuationState?.transport).toBe("anthropic-native");
+          expect(previousAssistant?.continuationState && "blocks" in previousAssistant.continuationState ? previousAssistant.continuationState.blocks : undefined).toEqual(blocks);
+        }
+        return { content: "Visible fixture answer.", reasoningDetails: blocks, reasoningSource: "anthropic_thinking_blocks", usage: {} };
+      },
+    });
+    expect(calls).toBe(4);
+    expect(persisted).toHaveLength(4);
+    expect(persisted.every((state) => state.transport === "anthropic-native")).toBe(true);
+    expect(snapshots[0].continuationRoute).toMatchObject({ transport: "anthropic-native", providerConfigId: "anthropic-p", credentialId: "c", requestedModelId: "claude-fixture", stateFormat: "anthropic-thinking-blocks", prefixPolicy: "append-only" });
+  });
+
+  it("auto-stops before replay when repetition sanitization changes an Anthropic signed turn", async () => {
+    const anthropicConfig: ProviderConfig = { ...config, id: "anthropic-p", provider: "anthropic", label: "Anthropic" };
+    const anthropicModel: ProviderModel = { ...model, providerConfigId: anthropicConfig.id, provider: "anthropic", modelId: "claude-fixture", route: "anthropic:claude-fixture" };
+    const log: string[] = [];
+    const repo = repository(log);
+    const events: SessionEventInput[] = [];
+    repo.appendSessionEvent = vi.fn(async (_sessionId: string, event: SessionEventInput) => {
+      events.push(structuredClone(event));
+      log.push(event.eventType);
+      return { ...event, id: `event-${events.length}`, sessionId: "session", sequenceNumber: events.length, createdAt: "now" } as never;
+    });
+    const persistWithProviderState = vi.fn(repo.appendSessionEventWithProviderState);
+    repo.appendSessionEventWithProviderState = persistWithProviderState;
+    const blocks = structuredClone(anthropicFixture.continuationState.blocks);
+    const runaway = `Useful perceptual evidence before the provider loop.\n${"X".repeat(650)}`;
+    let calls = 0;
+
+    const result = await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "profile", providerConfig: anthropicConfig, model: anthropicModel,
+      protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+      chat: async ({ messages }) => {
+        calls += 1;
+        expect(messages.some((message) => Boolean(message.continuationState))).toBe(false);
+        return { content: runaway, reasoningDetails: blocks, reasoningSource: "anthropic_thinking_blocks", usage: {} };
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(result.state).toBe("Interrupted");
+    expect(result.stopReason).toContain("Anthropic continuation");
+    expect(result.transcript).toContain("Useful perceptual evidence");
+    expect(result.transcript).toContain("OUTPUT TRUNCATED");
+    expect(persistWithProviderState).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({
+      eventType: "VIEWER_RESPONSE",
+      role: "assistant",
+      metadata: expect.objectContaining({ continuationState: { status: "suppressed", code: "signed_turn_content_modified" } }),
+    }));
+    expect(events).toContainEqual(expect.objectContaining({ eventType: "SESSION_STOPPED", content: expect.stringContaining("Anthropic continuation") }));
+  });
+
+  it("preserves Research ownership, assignment linkage and locked condition instruction", async () => {
+    const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
+    const repo = repository(log, snapshots);
+    const createRvSession = vi.fn(async () => ({} as never));
+    const recordTargetUsage = vi.fn(async () => undefined);
+    repo.createRvSession = createRvSession;
+    repo.recordTargetUsage = recordTargetUsage;
+    const onSessionCreated = vi.fn(async () => undefined);
+    let calls = 0;
+    await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "profile", profileName: "Viewer", providerConfig: config, model,
+      protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, automaticTarget: target,
+      researchProjectId: "research-1",
+      researchConditionInstruction: { id: "condition-a", version: "1", content: "LOCKED VARIABLE A", contentSha256: "c".repeat(64) },
+      onSessionCreated,
+      chat: async ({ messages }) => {
+        calls += 1;
+        expect(JSON.stringify(messages)).toContain("[LOCKED RESEARCH CONDITION INSTRUCTION]");
+        expect(JSON.stringify(messages)).toContain("LOCKED VARIABLE A");
+        return { content: `Evidence ${calls}`, usage: {} };
+      },
+    });
+    expect(calls).toBe(4);
+    expect(createRvSession).toHaveBeenCalledWith(expect.objectContaining({ researchProjectId: "research-1" }));
+    expect(onSessionCreated).toHaveBeenCalledTimes(1);
+    expect(recordTargetUsage).toHaveBeenCalledWith(expect.objectContaining({ researchProjectId: "research-1" }));
+    expect(snapshots[0]).toMatchObject({
+      researchProjectId: "research-1",
+      researchConditionInstruction: { id: "condition-a", version: "1", fullContent: "LOCKED VARIABLE A" },
+    });
   });
 
   it("runs the Special Viewer Task in a separate call after Step 3 and appends the visible response", async () => {

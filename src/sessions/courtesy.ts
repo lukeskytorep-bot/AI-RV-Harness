@@ -7,7 +7,12 @@ export function politeSessionGreeting(language: InterfaceLanguage, aiName?: stri
     : `Hello, ${name}. How are you feeling today? I have a small task for you.`;
 }
 
-export function politeRevealTransition(language: InterfaceLanguage): string {
+export function politeRevealTransition(language: InterfaceLanguage, context: "session" | "automatic_review" = "session"): string {
+  if (context === "automatic_review") {
+    return language === "pl"
+      ? "Dziękuję za wykonaną sesję — świetna robota. Część ślepa została zakończona i zapieczętowana. Teraz przechodzimy do ujawnienia celu."
+      : "Thank you for completing the session — excellent work. The blind portion has ended and has been sealed. We will now proceed to the target Reveal.";
+  }
   return language === "pl"
     ? "Dziękuję za wykonaną sesję — świetna robota. Część ślepa została zakończona i zapieczętowana. Teraz przechodzimy do ujawnienia celu."
     : "Thank you for completing the session — excellent work. The blind portion has been completed and sealed. We will now proceed to the Target Reveal.";

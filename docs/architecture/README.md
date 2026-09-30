@@ -1,6 +1,18 @@
 # AI RV Harness architecture documentation
 
-These documents describe the implemented architecture and integrity model of AI RV Harness v0.7.12. Release-specific plans, reports, manifests, and verification records remain under [`docs/releases/`](../releases/).
+These documents describe the implemented architecture and integrity model of AI RV Harness. The latest public release remains v0.7.12; the private v0.7.13 development baseline extends it through the modularization and UX-DATA campaign. Release-specific plans, reports, manifests, and verification records remain under [`docs/releases/`](../releases/) or [`docs/reports/`](../reports/) for private-development work.
+
+The private v0.7.13 modularization work adds the following living architecture records. Stages 1–9 and the modularization campaign are closed after their accepted automated gates. The desktop checklist remains active as the v0.7.13 release/runtime regression gate; it no longer changes the historical modularization status:
+
+- [Code map](CODE_MAP.md)
+- [Module boundaries](MODULE_BOUNDARIES.md)
+- [ADR-0001: Modular monolith](decisions/ADR-0001-MODULAR_MONOLITH.md)
+- [ADR-0003: Stable storage facade and domain repositories](decisions/ADR-0003-STORAGE_FACADE.md)
+- [Central provider retry architecture](PROVIDER_RETRY_ARCHITECTURE_FINAL_PL.md)
+- [Native Rust provider module boundaries](MODULE_BOUNDARIES.md#native-rust-provider-modules-after-etap-6)
+- [UX-DATA compatibility gate](UX_DATA_COMPATIBILITY_GATE.md)
+- [Final modularization runtime smoke](FINAL_RUNTIME_SMOKE_v0.7.13_PL.md)
+- [Stage 9 modularization closeout](../reports/MODULARIZATION_STAGE_9_CLOSEOUT_v0.7.13_PL.md)
 
 ## Documents
 
@@ -8,7 +20,8 @@ These documents describe the implemented architecture and integrity model of AI 
 | --- | --- |
 | [System Overview](SYSTEM_OVERVIEW.md) | High-level product structure, roles, workflows, storage model, provider layer, and current capabilities. |
 | [Engineering Design and Integrity Safeguards](ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md) | Stable engineering decisions protecting blinding, evidence, judging, Research, provider normalization, recovery, and persistence. |
-| [AI Center and Viewer Notes](AI_CENTER_AND_VIEWER_NOTES.md) | Identity scope, note lifecycle, version history, session timing, Research controls, and UI behavior introduced in v0.7.12. |
+| [AI Center and Viewer Notes](AI_CENTER_AND_VIEWER_NOTES.md) | Identity scope, note lifecycle, immutable provenance, source-preservation behavior, Research controls, and controlled-purge integration. |
+| [Training, target pack, and typed Workspaces](TRAINING_TARGETS_AND_TYPED_WORKSPACES.md) | Current 94-target/eight-category curriculum, Full Training rounds, Viewer learning order, top-level Conversations/RV Sessions split, typed Workspaces, and schema 026 compatibility. |
 
 ## Documentation policy
 
@@ -16,4 +29,4 @@ These documents describe the implemented architecture and integrity model of AI 
 - Version-specific implementation evidence belongs in `docs/releases/vX.Y.Z/`.
 - Historical specifications and checkpoints remain historical records and are not silently rewritten.
 - Material changes to blinding, scoring, AI identity, provider normalization, persistence, or Research controls must update the relevant architecture document in the same change.
-- A future source-code modularization may add a code map here; it should complement these decision records rather than duplicate them.
+- The code map and module-boundary documents are living records and must be updated whenever ownership or a protected boundary changes.

@@ -6,8 +6,10 @@ import providers from "../src-tauri/src/providers.rs?raw";
 import storage from "../src-tauri/src/storage.rs?raw";
 
 describe("native CI compatibility guards", () => {
-  it("declares the Tauri plugin configuration type explicitly", () => {
-    expect(nativeLibrary).toContain('tauri::plugin::Builder::<_, ()>::new("pre-migration-backup")');
+  it("keeps database compatibility inspection ahead of SQL migration loading", () => {
+    expect(nativeLibrary).not.toContain('tauri::plugin::Builder::<_, ()>::new("pre-migration-backup")');
+    expect(nativeLibrary).toContain("storage::inspect_database_compatibility");
+    expect(nativeLibrary).toContain("storage::prepare_database_for_load");
   });
 
   it("keeps the Rust warning fixes required by the release CI", () => {

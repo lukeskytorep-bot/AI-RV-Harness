@@ -1,0 +1,67 @@
+{
+  "fixtureVersion": 2,
+  "sourceKind": "live-harness-observed-anonymized",
+  "observedAt": "2026-09-25",
+  "provider": "google-native",
+  "model": "gemini-3.8-flash",
+  "note": "Structure verified against a live AI RV Harness Google-native REST response and its following request. Text and signature bytes are anonymized; field placement and replay semantics are preserved.",
+  "providerResponse": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Visible fixture answer.",
+              "thoughtSignature": "R0VNSU5JXzNfVEhPVUdIVF9TSUdOQVRVUkU="
+            }
+          ]
+        },
+        "finishReason": "STOP"
+      }
+    ],
+    "modelVersion": "gemini-3.8-flash"
+  },
+  "observedPreC4NextRequest": {
+    "contents": [
+      { "role": "user", "parts": [{ "text": "Fixture question." }] },
+      { "role": "model", "parts": [{ "text": "Visible fixture answer." }] },
+      { "role": "user", "parts": [{ "text": "Fixture follow-up." }] }
+    ]
+  },
+  "continuationState": {
+    "schemaVersion": 1,
+    "transport": "google-native",
+    "format": "google-thought-parts",
+    "replayFingerprint": {
+      "transport": "google-native",
+      "normalizedEndpoint": "https://generativelanguage.googleapis.com/v1beta",
+      "providerConfigId": "provider-config-fixture",
+      "credentialId": "credential-fixture",
+      "requestedModelId": "gemini-3.8-flash",
+      "stateFormat": "google-thought-parts",
+      "stateFormatVersion": 1
+    },
+    "parts": [
+      {
+        "text": "Visible fixture answer.",
+        "thoughtSignature": "R0VNSU5JXzNfVEhPVUdIVF9TSUdOQVRVUkU="
+      }
+    ]
+  },
+  "nextRequest": {
+    "contents": [
+      { "role": "user", "parts": [{ "text": "Fixture question." }] },
+      {
+        "role": "model",
+        "parts": [
+          {
+            "text": "Visible fixture answer.",
+            "thoughtSignature": "R0VNSU5JXzNfVEhPVUdIVF9TSUdOQVRVUkU="
+          }
+        ]
+      },
+      { "role": "user", "parts": [{ "text": "Fixture follow-up." }] }
+    ]
+  }
+}

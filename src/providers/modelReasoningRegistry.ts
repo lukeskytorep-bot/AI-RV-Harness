@@ -1,8 +1,6 @@
 import registryJson from "../resources/modelReasoningRegistry.json";
 import type { ProviderKind, ProviderModel, ReasoningCapability, ReasoningEffort, ReasoningOption, ReasoningTransport } from "./types";
 
-export const STANDARD_REASONING_EFFORTS: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
-
 type RegistryTransport = { kind: ReasoningTransport["kind"]; value: string };
 type RegistryOption = { value: ReasoningEffort; label: string; transports: Record<string, RegistryTransport> };
 type RegistryEntry = { id: string; aliases: string[]; mandatory: boolean; source: string; options: RegistryOption[] };
@@ -39,16 +37,19 @@ export function applyModelReasoningRegistry(provider: ProviderKind, modelId: str
     };
   }
 
-  const efforts = STANDARD_REASONING_EFFORTS.filter((effort) => !(discovered.mandatory && effort === "none"));
+  // Unknown models must never gain controls that neither the provider nor the registry advertised.
+  // This keeps reasoning capability discovery separate from manual reasoning control: a model may
+  // support provider-default reasoning while exposing no safe effort selector to the Harness.
+  const efforts = discovered.supported ? providerEfforts : [];
   const options = efforts.map((effort): ReasoningOption => ({
     value: effort,
     label: effort.toUpperCase(),
-    verification: providerEfforts.includes(effort) ? "provider_metadata" : "unverified",
+    verification: "provider_metadata",
     transport: defaultTransport(provider, effort),
   }));
   return {
     ...discovered,
-    supported: true,
+    supported: discovered.supported,
     efforts,
     options,
     registryStatus: "unknown",

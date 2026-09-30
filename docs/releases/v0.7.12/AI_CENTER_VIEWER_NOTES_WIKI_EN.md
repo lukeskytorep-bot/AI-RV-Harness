@@ -14,7 +14,7 @@ A Viewer Notes owner is one exact combination of Profile, pseudonymous credentia
 
 Viewer Notes are enabled by default in supported RV and Training sessions and can be disabled with one switch. The application freezes an immutable notes snapshot before the session begins and inserts it as a separately delimited, read-only system data block. Notes are auxiliary procedural memory; they do not replace the Viewer System Prompt or protocol.
 
-After the blind evidence has been sealed and the target revealed, the Viewer first reviews its own session. The same Viewer route may then return either a complete replacement note document (`UPDATE`) or `NO_CHANGE`. This reflection happens before an AI Monitor review. Monitor opinions, Judge results, and later operator discussion are excluded.
+Ordinary, Manual, and Monitored RV Sessions may consume the current Viewer Notes snapshot as read-only context, but they never create a new notes version. New Viewer Notes versions are created only by completed Training targets. During Training, after the blind evidence has been sealed and the target revealed, the Viewer first reviews its own session. The same Viewer route may then return either a complete replacement note document (`UPDATE`) or `NO_CHANGE`. This reflection happens before an AI Monitor review. Monitor opinions, Judge results, and later operator discussion are excluded.
 
 The application does not offer manual note editing. Earlier immutable versions may be restored only after a warning; that action is recorded as a human restoration rather than a model decision.
 

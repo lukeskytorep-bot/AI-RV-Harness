@@ -1,12 +1,12 @@
 # AI Center and Viewer Notes
 
-> **Status:** Implemented in AI RV Harness v0.7.12  
-> **Design baseline:** AI RV Harness v0.7.11  
-> **Implementation release:** AI RV Harness v0.7.12
+> **Status:** Implemented in v0.7.12; Viewer Learning and Research Field Guide controls extended in private v0.7.13
+> **Design baseline:** AI RV Harness v0.7.11
+> **Reference:** public v0.7.12 core + private v0.7.13 UX-DATA and VIEWER-LEARNING lifecycle extensions
 
 AI Center is a top-level area of AI RV Harness for inspecting and managing AI roles, their histories, and carefully controlled experimental features. Its first experiment is **Viewer Notes**: private, versioned working guidance created and revised only by the same Viewer identity after qualifying completed RV sessions.
 
-This page describes the behavior implemented in v0.7.12 and identifies later extensions separately as future work.
+This page describes the implemented Viewer Notes architecture and the private v0.7.13 Viewer Learning extension. The core Viewer Notes capability was introduced in v0.7.12; source preservation, controlled purge, the versioned trainable Field Guide, and frozen Research controls are private v0.7.13 development features.
 
 ## Why AI Center is a top-level section
 
@@ -46,7 +46,17 @@ They are not:
 - fine-tuning, LoRA, or a change to model weights;
 - a place to preserve the identity of a specific target.
 
-Only the same Viewer identity may create or revise its notes. A person cannot edit the text of an individual version. Human-authored guidance belongs in the System Prompt. The owner of the local data may still disable notes, export them, or restore an older immutable version with a warning. Permanent deletion is reserved for a later data-management update.
+Only the same Viewer identity may create or revise its notes. A person cannot edit the text of an individual version. Human-authored guidance belongs in the System Prompt. The owner of the local data may still disable notes, export them, restore an older immutable version with a warning, or use the dedicated controlled-purge lifecycle where deletion is permitted.
+
+## Legacy Field Guide baseline statuses
+
+Migration 024 preserves an existing custom Profile Viewer prompt as a legacy baseline without guessing its Viewer identity or language. Its status values are intentional:
+
+- `unresolved` — preserved content still awaits an explicit identity and language decision;
+- `resolved` — the user explicitly linked the content and it became a versioned Field Guide;
+- `factory-equivalent` — terminal reserved compatibility state for a preserved legacy value that was verified as equivalent to the historical factory default and therefore must not be offered for linking.
+
+The current production flow creates `unresolved` records and can transition them only to `resolved`. `factory-equivalent` is retained for compatibility with already classified records and is deliberately treated as non-actionable. It is not a pending feature and must not be converted automatically into a trained Field Guide.
 
 ## Simple session control
 
@@ -167,7 +177,8 @@ The Viewer Notes module shows:
 - the current read-only notes;
 - capacity and current estimated use;
 - immutable version history and model-written change summaries;
-- the source session and Workspace for each version;
+- an immutable source snapshot for each version and reflection run, including the source session code, Workspace identity/name when available, Training identity when applicable, Profile, protocol and run type;
+- live source references while the underlying Session/Workspace still exists; when controlled purge removes the source, the live reference may detach while the immutable source snapshot remains readable;
 - sessions that used each snapshot;
 - frozen Research snapshots;
 - reflection outcomes such as `UPDATE`, `NO_CHANGE`, or a technical failure;
@@ -176,18 +187,43 @@ The Viewer Notes module shows:
 
 The Overview guide explains Profile-wide ownership, the role boundary between Viewer, Monitor, and Judge, the ON/OFF behavior, Training-only updates, the post-Reveal update order, immutable versions, Research snapshots, and the difference between Viewer Notes and the System Prompt.
 
+## Viewer Learning: Viewer Notes and Field Guide
+
+Private v0.7.13 separates two trainable Viewer layers:
+
+- **Viewer Notes** — the Viewer-owned reflective notes introduced in v0.7.12;
+- **Field Guide** — a versioned trainable guidance layer owned by one exact Viewer identity and one language.
+
+The Field Guide never replaces the Viewer protocol foundation. Effective normal Viewer prompts are composed from three conceptual layers: **Locked Core Identity**, **Locked Base Vocabulary**, and the optional trainable **Field Guide**. Disabling the trained Field Guide removes only that third layer. The locked identity, base vocabulary, and protocol rules remain present.
+
+Field Guide versions are immutable and carry an exact content hash, identity, language, capacity, source Training/session provenance, and creation time. Training may update the Field Guide according to its dedicated post-Training update flow. Ordinary Research is read-only and cannot create either Field Guide versions or Viewer Notes versions.
+
 ## Research design
 
-The first controlled experiment compares:
+Ordinary Research exposes two independent controls:
+
+- **Viewer Notes:** `OFF` or `CURRENT`;
+- **Field Guide:** `OFF` or `CURRENT`.
+
+The four combinations are valid independently. At **Experiment Lock**, every enabled current layer is frozen as an exact snapshot. Later Training may change the active Profile state, but it cannot replace the snapshot of a locked, running, resumed, or completed Research project. Drift may be shown informationally; Resume uses only the frozen configuration.
+
+The existing Viewer Notes Impact experiment remains a two-condition comparison:
 
 - **Condition A — No Notes**;
 - **Condition B — Frozen Viewer Notes**.
 
-Both conditions keep the same Profile, API identity, provider, exact model route, System Prompt, protocol, reasoning settings, temperature, output limits, target design, and session rules.
+One common Field Guide setting is frozen for both conditions so that the Field Guide cannot become an unintended second variable. No historical Viewer Notes selector is added.
 
-Condition B normally uses the latest active version. An advanced control may select one of the five most recent valid immutable versions. Experiment Lock stores the complete selected text, version, hash, and whether selection was `latest` or `manual_recent`. Manual selection is disclosed in exports to prevent hidden cherry-picking.
+Prompt Research retains two explicitly different sources:
 
-Notes cannot update during the locked experiment, and no catch-up update runs afterward. The AI Judge receives an anonymous allowlisted evidence packet and does not learn which condition was used. Scores are frozen before unblinding.
+1. **Manual prompt variants** — the existing free-form experimental prompt variants. They remain standalone prompt material and are never written into Field Guide history.
+2. **Trained Field Guide history** — the most recent six Field Guide versions for the exact Viewer identity and language are shown; the operator manually selects two to four versions. Each selected trainable Field Guide snapshot is frozen at Experiment Lock and composed at execution with the same frozen Locked Core Identity and Locked Base Vocabulary.
+
+A Field Guide history comparison therefore changes only the selected trainable Field Guide version. Viewer/model, provider route, generation settings, protocol, compatible targets/randomization, locked identity/base-vocabulary blocks, and one common Viewer Notes setting remain controlled. Historical whole prompts with different Core Identity versions are not compared.
+
+The frozen Research config records Field Guide mode/source, exact version ID, content SHA-256, complete content snapshot, exact identity, language, capacity/provenance, Locked Core Identity version, Locked Base Vocabulary version, Viewer Notes mode, and the existing generation settings. Research results and reproducibility exports identify the exact Field Guide version/hash used for each condition.
+
+The AI Judge receives an anonymous allowlisted evidence packet and does not learn which condition was used. Scores are frozen before unblinding.
 
 The standard `3 + 3 + 2 + 2` rubric remains unchanged:
 
@@ -212,6 +248,15 @@ The implementation includes safeguards informed by open-source agent-memory syst
 
 These safeguards validate provenance and structure. They are not editorial censorship: multi-sentence, unconventional, or operator-disagreed advice remains valid when it belongs to the same Viewer, fits the capacity, and does not identify the specific target.
 
+### Source preservation boundary
+
+Viewer Notes history must not depend on the continued existence of its source records. Migration `022_viewer_notes_source_preservation` therefore separates two concepts:
+
+- **live references** to the current source Session and Workspace, which are nullable and may detach when the source is later removed by a dedicated purge use case;
+- an **immutable source snapshot**, stored with both reflection runs and note versions, which remains part of the append-only provenance record.
+
+The snapshot records stable source metadata captured at reflection time, including source identifiers, session code, Workspace context, Profile, Training identity when applicable, protocol identity/version, run type and capture time. Detaching a live reference is not allowed to rewrite note content, hashes, change summaries, activation history or the source snapshot. UX-DATA-7 introduces only this preservation capability; it does not itself delete Sessions, Workspaces, Training or Research records.
+
 ## Possible future extensions
 
 ### Assisted Notes Reflection
@@ -234,4 +279,8 @@ Monitor Notes would require a separate identity, history, timing rule, and contr
 - **Project direction:** Edward
 - **Engineering design and documentation:** Orion via Active Model — GPT-5.6-Sol, OpenAI, ChatGPT web interface
 
-This design was implemented in AI RV Harness v0.7.12. It remains experimental and should continue to be evaluated through automated checks and practical sessions before its effect on RV performance is treated as established.
+The Viewer Notes core was implemented in AI RV Harness v0.7.12 and its source-preservation lifecycle was extended in private v0.7.13. It remains experimental and should continue to be evaluated through automated checks and practical sessions before its effect on RV performance is treated as established.
+
+### Controlled purge integration (UX-DATA-8)
+
+Viewer Notes source preservation is consumed by the permanent-delete lifecycle rather than bypassed by it. Purging a source Session or Workspace detaches nullable live references and leaves `source_snapshot_json`, versions, reflection runs and activation history intact. Purging an entire Profile is different: the Profile's own AI identities and Viewer Notes are part of that Profile subtree and are removed by the explicit controlled-purge use case. Viewer Notes belonging to other identities remain preserved even when their source record is deleted.

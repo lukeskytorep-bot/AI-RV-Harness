@@ -1,8 +1,14 @@
+import {
+  CONTINUATION_BYTES_PER_TOKEN,
+  CONTINUATION_TOKEN_SAFETY_FACTOR,
+  IMAGE_TOKEN_RESERVE,
+  TOKENIZER_SAFETY_FACTOR,
+  estimateProviderInputTokens,
+} from "../providers/inputTokenEstimate";
 import type { ProviderMessage } from "../providers/types";
 
 export const DEFAULT_UNKNOWN_OUTPUT_LIMIT = 8192;
-export const IMAGE_TOKEN_RESERVE = 2048;
-export const TOKENIZER_SAFETY_FACTOR = 1.15;
+export { IMAGE_TOKEN_RESERVE, TOKENIZER_SAFETY_FACTOR, CONTINUATION_BYTES_PER_TOKEN, CONTINUATION_TOKEN_SAFETY_FACTOR };
 
 export interface ContextBudget {
   estimatedInputTokens: number;
@@ -14,34 +20,37 @@ export interface ContextBudget {
   level: "unknown" | "safe" | "warning" | "critical" | "exceeded";
   exceeded: boolean;
   imageCount: number;
+  continuationStateBytes: number;
+  estimatedContinuationTokens: number;
+}
+
+export interface ContextBudgetOptions {
+  additionalContinuationStateBytes?: number;
 }
 
 export function estimateContextBudget(
   messages: ProviderMessage[],
   contextLimit: number | undefined,
   reservedOutputTokens: number,
+  options: ContextBudgetOptions = {},
 ): ContextBudget {
-  const textCharacters = messages.reduce((total, message) => total + message.content.length, 0);
-  const imageCount = messages.reduce((total, message) => total + (message.images?.length ?? 0), 0);
-  const textTokens = Math.ceil((textCharacters / 3.5 + messages.length * 6) * TOKENIZER_SAFETY_FACTOR);
-  const estimatedInputTokens = textTokens + imageCount * IMAGE_TOKEN_RESERVE;
+  const input = estimateProviderInputTokens(messages, options);
   const reserved = Math.max(1, Math.floor(reservedOutputTokens));
-  const estimatedTotalTokens = estimatedInputTokens + reserved;
+  const estimatedTotalTokens = input.estimatedInputTokens + reserved;
   if (!contextLimit || contextLimit <= 0) {
     return {
-      estimatedInputTokens,
+      ...input,
       reservedOutputTokens: reserved,
       estimatedTotalTokens,
       level: "unknown",
       exceeded: false,
-      imageCount,
     };
   }
   const percent = Math.ceil((estimatedTotalTokens / contextLimit) * 100);
   const exceeded = estimatedTotalTokens > contextLimit;
   const level = exceeded ? "exceeded" : percent >= 90 ? "critical" : percent >= 75 ? "warning" : "safe";
   return {
-    estimatedInputTokens,
+    ...input,
     reservedOutputTokens: reserved,
     estimatedTotalTokens,
     contextLimit,
@@ -49,6 +58,5 @@ export function estimateContextBudget(
     percent,
     level,
     exceeded,
-    imageCount,
   };
 }

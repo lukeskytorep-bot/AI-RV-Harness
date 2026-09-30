@@ -3,11 +3,14 @@ import capabilities from "../../src-tauri/capabilities/default.json";
 import tauriConfig from "../../src-tauri/tauri.conf.json";
 
 describe("native startup configuration", () => {
-  it("allows the main window to open, read and seed the SQLite database", () => {
+  it("keeps only plugin lifecycle permissions on the main window", () => {
     expect(capabilities.windows).toContain("main");
     expect(capabilities.permissions).toEqual(
-      expect.arrayContaining(["sql:default", "sql:allow-execute"]),
+      expect.arrayContaining(["sql:allow-load", "sql:allow-close"]),
     );
+    expect(capabilities.permissions).not.toContain("sql:default");
+    expect(capabilities.permissions).not.toContain("sql:allow-select");
+    expect(capabilities.permissions).not.toContain("sql:allow-execute");
   });
 
   it("keeps the capability label and Windows bundle icon aligned", () => {

@@ -167,21 +167,41 @@ pub fn write_export_package(app: tauri::AppHandle, request: WriteExportRequest) 
     }
     let export_root = export_root(&app, request.destination.as_deref(), request.base_directory.as_deref())?;
     fs::create_dir_all(&export_root).map_err(|error| error.to_string())?;
-    let directory = if request.overwrite_existing {
+
+    if request.overwrite_existing {
         if request.destination.as_deref() != Some("training") {
             return Err("only Training exports may update an existing package".to_string());
         }
         let directory = export_root.join(&request.export_id);
-        if directory.exists() && !directory.is_dir() {
-            return Err("Training export path is not a directory".to_string());
+        if directory.exists() {
+            let metadata = fs::symlink_metadata(&directory).map_err(|error| error.to_string())?;
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err("Training export path is not a safe directory".to_string());
+            }
         }
-        fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-        directory
-    } else {
-        let directory = unique_export_directory(&export_root, &request.export_id)?;
-        fs::create_dir(&directory).map_err(|error| error.to_string())?;
-        directory
-    };
+
+        let staging = unique_export_directory(&export_root, &format!("{}_pending", request.export_id))?;
+        fs::create_dir(&staging).map_err(|error| error.to_string())?;
+        if let Err(error) = write_export_contents(&app, &request, &staging) {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+
+        let backup = unique_export_directory(&export_root, &format!("{}_previous", request.export_id))?;
+        replace_directory_atomically(&directory, &staging, &backup)?;
+        return Ok(WriteExportResponse { directory: directory.to_string_lossy().to_string() });
+    }
+
+    let directory = unique_export_directory(&export_root, &request.export_id)?;
+    fs::create_dir(&directory).map_err(|error| error.to_string())?;
+    if let Err(error) = write_export_contents(&app, &request, &directory) {
+        let _ = fs::remove_dir_all(&directory);
+        return Err(error);
+    }
+    Ok(WriteExportResponse { directory: directory.to_string_lossy().to_string() })
+}
+
+fn write_export_contents(app: &tauri::AppHandle, request: &WriteExportRequest, directory: &Path) -> Result<(), String> {
     let mut total_text_bytes = 0usize;
     for file in &request.files {
         total_text_bytes = total_text_bytes.saturating_add(file.content.len());
@@ -190,24 +210,51 @@ pub fn write_export_package(app: tauri::AppHandle, request: WriteExportRequest) 
         }
         let relative = safe_relative_path(&file.relative_path)?;
         let destination = directory.join(relative);
-        reject_symlink_path(&directory, &destination)?;
-        if let Some(parent) = destination.parent() { fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
+        reject_symlink_path(directory, &destination)?;
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
         fs::write(destination, file.content.as_bytes()).map_err(|error| error.to_string())?;
     }
     if !request.artifact_copies.is_empty() {
-        let managed_root = managed_artifact_root(&app)?;
+        let managed_root = managed_artifact_root(app)?;
         let canonical_managed_root = fs::canonicalize(managed_root).map_err(|error| error.to_string())?;
         for copy in &request.artifact_copies {
             let source = fs::canonicalize(PathBuf::from(&copy.source_path)).map_err(|_| "export artifact does not exist".to_string())?;
-            if !source.starts_with(&canonical_managed_root) { return Err("export artifact is outside managed storage".to_string()); }
+            if !source.starts_with(&canonical_managed_root) {
+                return Err("export artifact is outside managed storage".to_string());
+            }
             let relative = safe_relative_path(&copy.relative_path)?;
             let destination = directory.join(relative);
-            reject_symlink_path(&directory, &destination)?;
-            if let Some(parent) = destination.parent() { fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
+            reject_symlink_path(directory, &destination)?;
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
             fs::copy(source, destination).map_err(|error| error.to_string())?;
         }
     }
-    Ok(WriteExportResponse { directory: directory.to_string_lossy().to_string() })
+    Ok(())
+}
+
+fn replace_directory_atomically(directory: &Path, staging: &Path, backup: &Path) -> Result<(), String> {
+    let had_previous = directory.exists();
+    if had_previous {
+        fs::rename(directory, backup).map_err(|error| {
+            let _ = fs::remove_dir_all(staging);
+            error.to_string()
+        })?;
+    }
+    if let Err(error) = fs::rename(staging, directory) {
+        if had_previous {
+            let _ = fs::rename(backup, directory);
+        }
+        let _ = fs::remove_dir_all(staging);
+        return Err(error.to_string());
+    }
+    if had_previous {
+        let _ = fs::remove_dir_all(backup);
+    }
+    Ok(())
 }
 
 fn export_root(app: &tauri::AppHandle, destination: Option<&str>, base_directory: Option<&str>) -> Result<PathBuf, String> {
@@ -330,5 +377,31 @@ fn extension_for_mime(mime: &str) -> &'static str {
         "image/webp" => "webp",
         "image/gif" => "gif",
         _ => "bin",
+    }
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn replaces_a_training_export_only_after_the_staged_package_is_complete() {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("rvh-export-swap-{nonce}"));
+        let directory = root.join("Training_001");
+        let staging = root.join("Training_001_pending");
+        let backup = root.join("Training_001_previous");
+        fs::create_dir_all(&directory).unwrap();
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(directory.join("summary.md"), "old").unwrap();
+        fs::write(staging.join("summary.md"), "new").unwrap();
+
+        replace_directory_atomically(&directory, &staging, &backup).unwrap();
+
+        assert_eq!(fs::read_to_string(directory.join("summary.md")).unwrap(), "new");
+        assert!(!staging.exists());
+        assert!(!backup.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }

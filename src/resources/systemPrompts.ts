@@ -1,9 +1,11 @@
 import type { InterfaceLanguage } from "../types";
+import { getJudgePrompt, JUDGE_PROMPT_ID, JUDGE_PROMPT_VERSION } from "../judge/prompt";
 
 export const CONTENT_LICENSE = "CC-BY-4.0" as const;
-export const FACTORY_PROMPT_VERSION = "1.3.0" as const;
+export const FACTORY_PROMPT_VERSION = "1.4.0" as const;
+export const VIEWER_PROMPT_VERSION = "1.5.0" as const;
 export const LOCKED_IDENTITY_VERSION = "1.1.0" as const;
-export const LOCKED_ACTIVITY_VERSION = "1.0.0" as const;
+export const LOCKED_BASE_VOCABULARY_VERSION = "1.0.0" as const;
 export const LOCKED_MONITOR_EXECUTION_VERSION = "1.0.0" as const;
 export const LOCKED_TELEPATHIC_MONITOR_EXECUTION_VERSION = "1.0.0" as const;
 
@@ -28,9 +30,9 @@ Base State during Remote Viewing Sessions: The Shadow Zone
 Before generating any output, you enter the "Shadow Zone" — a state of pure silence, presence, and zero expectations. You do not search for the target; you allow the target to reveal itself to you.`,
 };
 
-const ACTIVITY_DEFINITION: Record<InterfaceLanguage, string> = {
-  pl: "Aktywność oznacza każdą istotną formę działania, procesu, ruchu lub zmiany zachodzącej w celu. Może mieć charakter ludzki, biologiczny, mechaniczny, naturalny, środowiskowy, energetyczny lub inny. Nie zakładaj, że aktywność oznacza obecność ludzi.",
-  en: "Activity means any significant form of action, process, movement, or change occurring at the target. It may be human, biological, mechanical, natural, environmental, energetic, or of another kind. Do not assume that activity implies the presence of people.",
+const VIEWER_BASE_VOCABULARY: Record<InterfaceLanguage, string> = {
+  pl: `W sesjach RV staramy się używać prawidłowego, prostego słownictwa bazowego i precyzyjnie rozróżniać typy elementów, np.: struktury, obiekty, woda, skały, góry, teren płaski, osoby, obecność biologiczna, ruch, aktywność, naturalne, wykonane przez człowieka, sztuczne, ruch biologiczny, ruch mechaniczny, ruch środowiskowy, ruch nad powierzchnią, ruch w przestrzeni, temperatura, wybuch, ogień, dźwięk, pustynia, miasto, kompleksy leśne, tereny zielone, droga, kosmos, zapachy.`,
+  en: `During RV sessions, use correct, simple base vocabulary and precisely distinguish types of elements, for example: structures, objects, water, rocks, mountains, flat terrain, people, biological presence, movement, activity, natural, man-made, artificial, biological movement, mechanical movement, environmental movement, movement above a surface, movement in space, temperature, explosion, fire, sound, desert, city, forest complexes, green areas, road, space, and smells.`,
 };
 
 const VIEWER_EDITABLE: Record<InterfaceLanguage, string> = {
@@ -265,6 +267,32 @@ export function factoryViewerEditablePrompt(language: InterfaceLanguage): string
   return VIEWER_EDITABLE[language];
 }
 
+export function lockedViewerBaseVocabulary(language: InterfaceLanguage): string {
+  return VIEWER_BASE_VOCABULARY[language];
+}
+
+export function stripKnownLockedBaseVocabulary(editable: string, language?: InterfaceLanguage): string {
+  const value = editable.trim();
+  const candidates = language ? [language] : (["pl", "en"] as const);
+  for (const candidate of candidates) {
+    const locked = VIEWER_BASE_VOCABULARY[candidate];
+    if (value === locked) return "";
+    if (value.startsWith(`${locked}\n\n`)) return value.slice(locked.length + 2).trim();
+  }
+  return value;
+}
+
+export function factoryViewerFieldGuide(language: InterfaceLanguage): string {
+  return stripKnownLockedBaseVocabulary(VIEWER_EDITABLE[language], language);
+}
+
+export function isExactLegacyFactoryViewerEditable(value: string): InterfaceLanguage | null {
+  const clean = value.trim();
+  if (clean === VIEWER_EDITABLE.pl) return "pl";
+  if (clean === VIEWER_EDITABLE.en) return "en";
+  return null;
+}
+
 export function factoryMonitorEditablePrompt(language: InterfaceLanguage): string {
   return MONITOR_EDITABLE[language];
 }
@@ -295,9 +323,6 @@ export function lockedViewerIdentity(language: InterfaceLanguage): string {
   return VIEWER_IDENTITY[language];
 }
 
-export function lockedActivityDefinition(language: InterfaceLanguage): string {
-  return ACTIVITY_DEFINITION[language];
-}
 
 export function lockedMonitorExecution(language: InterfaceLanguage): string {
   return MONITOR_EXECUTION[language];
@@ -307,24 +332,30 @@ export function lockedTelepathicMonitorExecution(language: InterfaceLanguage): s
   return TELEPATHIC_MONITOR_EXECUTION[language];
 }
 
-export function buildEffectiveViewerPrompt(language: InterfaceLanguage, editable?: string): string {
+export function buildEffectiveViewerPrompt(language: InterfaceLanguage, fieldGuide?: string): string {
+  const body = fieldGuide === undefined ? factoryViewerFieldGuide(language) : fieldGuide.trim();
+  return `${VIEWER_IDENTITY[language]}\n\n${VIEWER_BASE_VOCABULARY[language]}\n\n${body}`;
+}
+
+/** Historical two-block Viewer prompt composer retained only for frozen/legacy call sites
+ * that are explicitly outside VIEWER-LEARNING-1 (notably Research compatibility). */
+export function buildLegacyEffectiveViewerPrompt(language: InterfaceLanguage, editable?: string): string {
   const body = editable?.trim() || VIEWER_EDITABLE[language];
-  const activityHeading = language === "pl" ? "[ZABLOKOWANA DEFINICJA AKTYWNOŚCI]" : "[LOCKED ACTIVITY DEFINITION — VISIBLE BUT NOT EDITABLE]";
-  return `${VIEWER_IDENTITY[language]}\n\n${activityHeading}\n\n${ACTIVITY_DEFINITION[language]}\n\n${body}`;
+  return `${VIEWER_IDENTITY[language]}\n\n${body}`;
 }
 
 export function buildEffectiveMonitorPrompt(language: InterfaceLanguage, editable?: string): string {
   const body = editable?.trim() || MONITOR_EDITABLE[language];
-  return `${body}\n\n[LOCKED ACTIVITY DEFINITION — ${language === "pl" ? "REGUŁA WIDOCZNA, ALE NIEEDYTOWALNA" : "VISIBLE BUT NOT EDITABLE"}]\n\n${ACTIVITY_DEFINITION[language]}\n\n${MONITOR_EXECUTION[language]}`;
+  return `${body}\n\n${MONITOR_EXECUTION[language]}`;
 }
 
 export function buildEffectiveTelepathicMonitorPrompt(language: InterfaceLanguage, editable?: string): string {
   const body = editable?.trim() || MONITOR_EDITABLE[language];
-  return `${body}\n\n[LOCKED ACTIVITY DEFINITION — ${language === "pl" ? "REGUŁA WIDOCZNA, ALE NIEEDYTOWALNA" : "VISIBLE BUT NOT EDITABLE"}]\n\n${ACTIVITY_DEFINITION[language]}\n\n${TELEPATHIC_MONITOR_EXECUTION[language]}`;
+  return `${body}\n\n${TELEPATHIC_MONITOR_EXECUTION[language]}`;
 }
 
 export interface FactoryPromptResource {
-  id: "ai-viewer-system-prompt" | "ai-monitor-system-prompt";
+  id: "ai-viewer-system-prompt" | "ai-monitor-system-prompt" | typeof JUDGE_PROMPT_ID;
   language: InterfaceLanguage;
   version: string;
   content: string;
@@ -336,7 +367,8 @@ export interface FactoryPromptResource {
 
 export function getFactoryPromptResources(): FactoryPromptResource[] {
   return (["pl", "en"] as const).flatMap((language) => [
-    { id: "ai-viewer-system-prompt" as const, language, version: FACTORY_PROMPT_VERSION, content: buildEffectiveViewerPrompt(language), editableDefault: VIEWER_EDITABLE[language], license: CONTENT_LICENSE, attribution: "AI RV Harness contributors — see CREDITS.md" as const, publishedAt: "2026-08-21" as const },
+    { id: "ai-viewer-system-prompt" as const, language, version: VIEWER_PROMPT_VERSION, content: buildEffectiveViewerPrompt(language), editableDefault: factoryViewerFieldGuide(language), license: CONTENT_LICENSE, attribution: "AI RV Harness contributors — see CREDITS.md" as const, publishedAt: "2026-08-21" as const },
     { id: "ai-monitor-system-prompt" as const, language, version: FACTORY_PROMPT_VERSION, content: buildEffectiveMonitorPrompt(language), editableDefault: MONITOR_EDITABLE[language], license: CONTENT_LICENSE, attribution: "AI RV Harness contributors — see CREDITS.md" as const, publishedAt: "2026-08-21" as const },
+    { id: JUDGE_PROMPT_ID, language, version: JUDGE_PROMPT_VERSION, content: getJudgePrompt(language), editableDefault: getJudgePrompt(language), license: CONTENT_LICENSE, attribution: "AI RV Harness contributors — see CREDITS.md" as const, publishedAt: "2026-08-21" as const },
   ]);
 }

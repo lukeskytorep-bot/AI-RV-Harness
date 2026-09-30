@@ -2,15 +2,18 @@ import { aggregateJudgeScores } from "../domain/scoring";
 import { runBlindJudging, selectMissingJudgeSelections, type JudgeSelection } from "../judge/engine";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { resolveGenerationSettings } from "../providers/capabilities";
-import { getFullRcp } from "../resources/protocolRegistry";
 import { runAutomaticRcpSession, type AutomaticRcpRunInput, type AutomaticRcpRunResult, type SessionProgress } from "../sessions/controller";
-import { runAutomaticPostRevealReview } from "../sessions/postReveal";
+import { runAutomaticRvLiteSession, type AutomaticRvLiteRunInput } from "../sessions/rvLiteController";
 import type { AppRepository } from "../storage/repository";
 import { buildResearchLockPlan, stableStringify } from "./planner";
 import { runResearchPreflight, type ResearchPreflightInventory } from "./preflight";
 import { computeConditionStatistics, computePairwiseStatistics } from "./statistics";
 import type { ResearchConfig, ResearchPreflightResult, ResearchProjectRecord, ResearchResults, UnblindedSessionResult } from "./types";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "../domain/isBeIdentity";
+import { modelRouteKey } from "../modelRoutes";
+import { viewerNotesSnapshotSignature } from "./viewerNotesPolicy";
+import { fieldGuideSnapshotSignature } from "./fieldGuidePolicy";
+import { resolveResearchProtocol } from "./protocolPolicy";
 
 type ResearchRepository = AppRepository;
 
@@ -35,10 +38,18 @@ export async function executeResearchSessions(input: {
   projectId: string;
   signal?: AbortSignal;
   sessionRunner?: (input: AutomaticRcpRunInput) => Promise<AutomaticRcpRunResult>;
+  rvLiteSessionRunner?: (input: AutomaticRvLiteRunInput) => ReturnType<typeof runAutomaticRvLiteSession>;
   onProgress?: (progress: { completed: number; total: number; anonymousSessionId: string; session?: SessionProgress }) => void;
 }): Promise<void> {
   const project = await requireProject(input.repository, input.projectId);
   if (!["Locked", "Running", "Interrupted"].includes(project.state)) throw new Error(`Research sessions cannot run from state ${project.state}.`);
+  let protocol;
+  try {
+    protocol = resolveResearchProtocol(project.config.protocol, project.config.sessionLanguage);
+  } catch (cause) {
+    await input.repository.setResearchProjectState(project.id, "Interrupted");
+    throw cause;
+  }
   const [assignments, mappings, conditions, targets, providers, models, profiles] = await Promise.all([
     input.repository.listResearchAssignments(project.id),
     input.repository.listBlindingMappings(project.id),
@@ -50,11 +61,30 @@ export async function executeResearchSessions(input: {
   ]);
   const mappingByAnonymous = new Map(mappings.map((mapping) => [mapping.anonymousSessionId, mapping]));
   const conditionById = new Map(conditions.map((condition) => [condition.id, condition]));
+  const lockedConditionByKey = new Map(project.config.conditions.map((condition) => [condition.key, condition]));
+  if (conditions.length !== project.config.conditions.length) {
+    await input.repository.setResearchProjectState(project.id, "Interrupted");
+    throw new Error("Locked Research condition set is incomplete; Research stopped before Resume could continue.");
+  }
+  for (const stored of conditions) {
+    const locked = lockedConditionByKey.get(stored.conditionKey);
+    if (!locked || viewerNotesSnapshotSignature(stored.config.viewerNotes) !== viewerNotesSnapshotSignature(locked.viewerNotes)) {
+      await input.repository.setResearchProjectState(project.id, "Interrupted");
+      throw new Error("Viewer Notes snapshot drift detected after Experiment Lock; Research stopped instead of loading current notes.");
+    }
+    if (fieldGuideSnapshotSignature(stored.config.fieldGuide) !== fieldGuideSnapshotSignature(locked.fieldGuide)) {
+      await input.repository.setResearchProjectState(project.id, "Interrupted");
+      throw new Error("Field Guide snapshot drift detected inside the frozen Research records; Research stopped instead of loading the active guide.");
+    }
+    if (stableStringify(stored.config.systemPrompt ?? null) !== stableStringify(locked.systemPrompt ?? null)) {
+      await input.repository.setResearchProjectState(project.id, "Interrupted");
+      throw new Error("Frozen Viewer prompt composition drift detected after Experiment Lock.");
+    }
+  }
   const targetById = new Map(targets.map((target) => [target.id, target]));
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
-  const modelByKey = new Map(models.map((model) => [`${model.providerConfigId}::${model.modelId}`, model]));
+  const modelByKey = new Map(models.map((model) => [modelRouteKey(model.providerConfigId, model.modelId), model]));
   const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
-  const run = input.sessionRunner ?? runAutomaticRcpSession;
   let completed = assignments.filter((assignment) => assignment.status === "SessionComplete" || assignment.status === "Judged").length;
   await input.repository.setResearchProjectState(project.id, "Running");
 
@@ -74,7 +104,7 @@ export async function executeResearchSessions(input: {
     const target = targetById.get(assignment.targetId);
     if (!mapping || !condition || !target) throw new Error("Locked Research plan is incomplete.");
     const provider = providerById.get(condition.providerConfigId);
-    const model = modelByKey.get(`${condition.providerConfigId}::${condition.modelId}`);
+    const model = modelByKey.get(modelRouteKey(condition.providerConfigId, condition.modelId));
     const sessionProfile = profileById.get(condition.profileId);
     if (!provider || !model) throw new Error("A locked Viewer route is no longer present in the current model registry.");
     if (!condition.capabilitySnapshot || capabilityMethodSignature(condition.capabilitySnapshot) !== capabilityMethodSignature(model.capabilities)) {
@@ -87,19 +117,23 @@ export async function executeResearchSessions(input: {
       throw new Error("Requested/effective settings no longer match Experiment Lock.");
     }
     let linkedSessionId: string | undefined;
-    const result = await run({
+    const onSessionCreated = async (sessionId: string) => {
+      linkedSessionId = sessionId;
+      await input.repository.updateResearchAssignment(assignment.id, sessionId, "Running");
+    };
+    const onProgress = (session: SessionProgress) => input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId, session });
+    const common = {
       repository: input.repository,
       workspaceId: project.workspaceId,
       profileId: condition.profileId,
-      aiIsBeDisplayName: sessionProfile ? aiIsBeDisplayName(sessionProfile) : "AI IS-BE",
-      humanIsBeDisplayName: sessionProfile ? humanIsBeDisplayName(sessionProfile) : "Human IS-BE",
       providerConfig: provider,
       model,
-      protocol: getFullRcp(project.config.sessionLanguage),
       sessionLanguage: project.config.sessionLanguage,
       requestedSettings: condition.requestedSettings,
       maxRetries: project.config.sessionPolicy?.maxRetries,
       requestTimeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
+      operationKind: "research_viewer" as const,
+      streamWorkflowContext: "research" as const,
       sessionCodePrefix: project.config.sessionPolicy?.sessionCodePrefix,
       ...(project.config.sessionPolicy?.maxSessionCostUsd && project.config.sessionPolicy.maxSessionCostUsd > 0 ? { maxSessionCostUsd: project.config.sessionPolicy.maxSessionCostUsd } : {}),
       automaticTarget: target,
@@ -108,24 +142,26 @@ export async function executeResearchSessions(input: {
       ...(condition.conditionInstruction ? { researchConditionInstruction: condition.conditionInstruction } : {}),
       ...(condition.viewerNotes ? { viewerNotes: condition.viewerNotes } : {}),
       signal: input.signal,
-      onSessionCreated: async (sessionId) => {
-        linkedSessionId = sessionId;
-        await input.repository.updateResearchAssignment(assignment.id, sessionId, "Running");
-      },
-      onProgress: (session) => input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId, session }),
-    });
+      onSessionCreated,
+      onProgress,
+    };
+    const result = protocol.id === "full-rcp"
+      ? await (input.sessionRunner ?? runAutomaticRcpSession)({
+          ...common,
+          aiIsBeDisplayName: sessionProfile ? aiIsBeDisplayName(sessionProfile) : "AI IS-BE",
+          humanIsBeDisplayName: sessionProfile ? humanIsBeDisplayName(sessionProfile) : "Human IS-BE",
+          protocol,
+        })
+      : await (input.rvLiteSessionRunner ?? runAutomaticRvLiteSession)({
+          ...common,
+          profileName: sessionProfile ? aiIsBeDisplayName(sessionProfile) : "AI IS-BE",
+          humanIsBeDisplayName: sessionProfile ? humanIsBeDisplayName(sessionProfile) : "Human IS-BE",
+          protocol,
+        });
     if (result.state !== "Revealed") {
       await input.repository.updateResearchAssignment(assignment.id, linkedSessionId ?? result.sessionId, "Interrupted");
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       return;
-    }
-    if (!input.sessionRunner) {
-      await runAutomaticPostRevealReview({
-        repository: input.repository,
-        sessionId: result.sessionId,
-        viewer: { providerConfig: provider, model },
-        timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
-      });
     }
     await input.repository.updateResearchAssignment(assignment.id, result.sessionId, "SessionComplete");
     completed += 1;
@@ -150,6 +186,7 @@ export async function prepareInterruptedResearchRetry(repository: ResearchReposi
 export async function judgeResearch(input: {
   repository: ResearchRepository;
   projectId: string;
+  signal?: AbortSignal;
   onProgress?: (progress: { completed: number; total: number; anonymousSessionId: string }) => void;
 }): Promise<void> {
   const project = await requireProject(input.repository, input.projectId);
@@ -180,6 +217,10 @@ export async function judgeResearch(input: {
       language: project.config.sessionLanguage,
       judges: missingJudges,
       anonymousSessionId: assignment.anonymousSessionId,
+      maxRetries: project.config.sessionPolicy?.maxRetries,
+      timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
+      signal: input.signal,
+      streamWorkflowContext: "research",
     });
     const frozen = await input.repository.listJudgeScores(assignment.sessionId);
     if (frozen.length !== judgeSelections.length || frozen.some((score) => !score.frozenAt)) throw new Error("Judge score freeze verification failed.");
@@ -241,6 +282,11 @@ export async function unblindAndComputeResearch(repository: ResearchRepository, 
       judgeCount: aggregate.judgeCount,
       judgeTotalRange: aggregate.totalRange,
       judgeTotalStdDev: aggregate.totalStdDev,
+      ...(condition.config.fieldGuide ? {
+        fieldGuideVersionId: condition.config.fieldGuide.versionId,
+        fieldGuideVersionNumber: condition.config.fieldGuide.versionNumber,
+        fieldGuideContentSha256: condition.config.fieldGuide.contentSha256,
+      } : {}),
     });
   }
   const results: ResearchResults = {

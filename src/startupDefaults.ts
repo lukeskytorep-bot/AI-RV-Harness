@@ -11,11 +11,15 @@ export function createDefaultSettings(): AppSettings {
     requestTimeoutMs: 120_000,
     maxRetries: 2,
     defaultMaxOutputTokens: 8192,
+    conversationMaxOutputTokens: 8192,
+    rvSessionMaxOutputTokens: 8192,
     maxSessionCostUsd: 0,
     defaultRevealSource: "external",
     targetRepeatPolicy: "avoid_profile",
     sessionCodePrefix: "RVH",
     textScale: "large",
     animations: true,
+    activeConversationWorkspaceId: "",
+    activeRvWorkspaceId: "",
   };
 }

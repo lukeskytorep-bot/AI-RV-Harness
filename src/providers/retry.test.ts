@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { isRetryableProviderError, providerRetryAllowance, providerRetryCategory, providerRetryDelayMs, shouldRetryProviderError } from "./retry";
+import { ProviderCallError } from "./providerError";
+import { isRetryableProviderError, isStandardRetryHttpStatus, providerRetryAllowance, providerRetryCategory, providerRetryDelayMs, STANDARD_RETRY_HTTP_STATUSES } from "./retry";
 
 describe("provider retry policy", () => {
+  it("centralizes the complete standard HTTP retry status policy, including 524 and 529", () => {
+    expect(STANDARD_RETRY_HTTP_STATUSES).toEqual([408, 425, 429, 500, 502, 503, 504, 524, 529]);
+    for (const status of STANDARD_RETRY_HTTP_STATUSES) expect(isStandardRetryHttpStatus(status)).toBe(true);
+    for (const status of [400, 401, 403, 404, 409, 422, 501]) expect(isStandardRetryHttpStatus(status)).toBe(false);
+
+    for (const status of [524, 529]) {
+      expect(providerRetryCategory(new ProviderCallError({ code: "http_status", message: `status ${status}`, phase: "reading_body", httpStatus: status }))).toBe("standard");
+      expect(providerRetryCategory(new Error(`provider request failed (${status}): transient`))).toBe("standard");
+      expect(providerRetryCategory(new Error(`provider error payload code=${status} type=upstream_unavailable: retry`))).toBe("standard");
+    }
+  });
   it("automatically retries only explicit not-yet-processed and throttling responses", () => {
     expect(isRetryableProviderError(new Error("network connection reset"))).toBe(true);
     expect(isRetryableProviderError(new Error("provider request failed (429): rate limit"))).toBe(true);
@@ -9,21 +21,55 @@ describe("provider retry policy", () => {
     expect(isRetryableProviderError(new Error("provider request failed (503): unavailable"))).toBe(true);
   });
 
+  it("keeps the existing transient retry window open before the first semantic chunk", () => {
+    const error = new ProviderCallError({
+      code: "timeout",
+      message: "first-event timeout before semantic output",
+      phase: "reading_body",
+    });
+    expect(providerRetryCategory(error)).toBe("standard");
+    expect(providerRetryAllowance(error, 2)).toBe(2);
+  });
+
+  it("never retries a stream that exceeded a local bounded-buffer guard", () => {
+    for (const semanticOutputStarted of [undefined, true]) {
+      const error = new ProviderCallError({
+        code: "response_body_too_large",
+        message: "provider streaming response exceeded the maximum accumulated data size",
+        phase: "reading_body",
+        ...(semanticOutputStarted ? { semanticOutputStarted } : {}),
+      });
+      expect(providerRetryCategory(error)).toBe("never");
+      expect(providerRetryAllowance(error, 5)).toBe(0);
+    }
+  });
+
+  it("never retries a streaming failure after the first semantic chunk", () => {
+    const error = new ProviderCallError({
+      code: "timeout",
+      message: "idle timeout after partial output",
+      phase: "reading_body",
+      semanticOutputStarted: true,
+    });
+    expect(providerRetryCategory(error)).toBe("never");
+    expect(providerRetryAllowance(error, 5)).toBe(0);
+  });
+
   it("limits ambiguous transport recovery to one retry", () => {
     const error = new Error("error decoding response body");
     expect(providerRetryCategory(error)).toBe("single_recovery");
     expect(providerRetryAllowance(error, 5)).toBe(1);
-    expect(shouldRetryProviderError(error, 0, 5)).toBe(true);
-    expect(shouldRetryProviderError(error, 1, 5)).toBe(false);
-    expect(providerRetryCategory(new Error("provider returned reasoning without a final assistant response [finish-reason=length]"))).toBe("single_recovery");
-    expect(providerRetryCategory(new Error("provider returned an incomplete assistant response [finish-reason=max_tokens]"))).toBe("single_recovery");
+    expect(0).toBeLessThan(providerRetryAllowance(error, 5));
+    expect(1).not.toBeLessThan(providerRetryAllowance(error, 5));
+    expect(providerRetryCategory(new Error("provider returned reasoning without a final assistant response [finish-reason=length]"))).toBe("never");
+    expect(providerRetryCategory(new Error("provider returned an incomplete assistant response [finish-reason=max_tokens]"))).toBe("never");
   });
 
   it("retries transient gateway statuses according to the configured count", () => {
     const error = new Error("provider request failed (504): gateway timeout");
     expect(providerRetryAllowance(error, 3)).toBe(3);
-    expect(shouldRetryProviderError(error, 2, 3)).toBe(true);
-    expect(shouldRetryProviderError(error, 3, 3)).toBe(false);
+    expect(2).toBeLessThan(providerRetryAllowance(error, 3));
+    expect(3).not.toBeLessThan(providerRetryAllowance(error, 3));
     expect(providerRetryAllowance(new Error("provider error payload code=503 type=upstream_unavailable: try again"), 2)).toBe(2);
   });
 
@@ -39,9 +85,11 @@ describe("provider retry policy", () => {
     expect(isRetryableProviderError(new Error("invalid model id"))).toBe(false);
   });
 
-  it("uses bounded exponential backoff", () => {
-    expect([0, 1, 2, 8].map(providerRetryDelayMs)).toEqual([150, 300, 600, 2000]);
+  it("uses bounded full-jitter exponential backoff", () => {
+    expect([0, 1, 2, 8].map((attempt) => providerRetryDelayMs(attempt, undefined, () => 1))).toEqual([500, 1000, 2000, 8000]);
+    expect(providerRetryDelayMs(2, undefined, () => 0.25)).toBe(500);
     expect(providerRetryDelayMs(0, new Error("provider request failed (429) [retry-after-ms=4500]: wait"))).toBe(4500);
     expect(providerRetryDelayMs(0, new Error("provider request failed (429) [retry-after-ms=999999]: wait"))).toBe(30_000);
+    expect(providerRetryDelayMs(0, new ProviderCallError({ code: "http_status", message: "retry now", phase: "reading_body", httpStatus: 429, retryAfterMs: 0 }))).toBe(0);
   });
 });

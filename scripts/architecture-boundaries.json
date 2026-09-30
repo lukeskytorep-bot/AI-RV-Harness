@@ -1,0 +1,27 @@
+{
+  "allowlist": [],
+  "featureEntryPoints": [
+    "aiCenter",
+    "conversations",
+    "home",
+    "judge",
+    "monitor",
+    "profiles",
+    "research",
+    "rvSessions",
+    "settings",
+    "targets",
+    "training",
+    "workspaces"
+  ],
+  "canonicalComponents": [
+    "PageHeader",
+    "EmptyState",
+    "FormDialog",
+    "ModelRouteSelect",
+    "JudgeResults",
+    "ProtocolDialog",
+    "SafeMarkdown",
+    "ResourceViewerDialogShell"
+  ]
+}

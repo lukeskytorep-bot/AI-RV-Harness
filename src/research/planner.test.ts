@@ -48,4 +48,29 @@ describe("Research lock planner", () => {
     const legacy: ResearchConfig = { ...config, judges: [] };
     expect(() => validateConfig(legacy)).toThrow(/Legacy Research configuration requires/);
   });
+  it("freezes the exact Field Guide snapshot into Experiment Lock and includes it in the config hash", async () => {
+    const fieldGuide = {
+      aiIdentityId: "identity", language: "en" as const, versionId: "fg-v4", versionNumber: 4, versionCreatedAt: "2026-09-18T10:00:00Z", content: "trained guide", contentSha256: "f".repeat(64), estimatedTokens: 3,
+      estimatorVersion: "conservative-char-v1" as const, capacityTokens: 4096 as const, capacityTokensAtCreation: 2048 as const, modelRoute: "openrouter:m", capturedAt: "lock", sourceKind: "training-reflection" as const, sourceTrainingRunId: "training-4", sourceSessionId: "session-4",
+      sourceSnapshot: { schemaVersion: 1 as const, sourceKind: "training-reflection" as const, profileId: "p", capturedAt: "source", sourceTrainingRunId: "training-4", sourceSessionId: "session-4" },
+      identity: { aiIdentityId: "identity", profileId: "p", credentialFingerprint: "fp", providerConfigId: "pc", provider: "openrouter" as const, modelId: "m", modelRoute: "openrouter:m" },
+    };
+    const lockedConfig: ResearchConfig = {
+      ...config,
+      fieldGuideControl: { mode: "current", source: "active", language: "en", lockedCoreIdentityVersion: "1.1.0", lockedBaseVocabularyVersion: "1.0.0" },
+      viewerNotesControl: { mode: "off" },
+      conditions: config.conditions.map((condition) => ({ ...condition, fieldGuide: structuredClone(fieldGuide), promptSource: "active_field_guide" })),
+    };
+    const plan = await buildResearchLockPlan("research_fg", lockedConfig);
+    expect(plan.conditions.every((condition) => condition.config.fieldGuide?.versionId === "fg-v4")).toBe(true);
+    expect(plan.conditions[0].config.fieldGuide).toEqual(fieldGuide);
+    fieldGuide.content = "mutated after lock";
+    expect(plan.conditions[0].config.fieldGuide?.content).toBe("trained guide");
+
+    const changedVersion = structuredClone(lockedConfig);
+    changedVersion.conditions.forEach((condition) => { condition.fieldGuide!.versionId = "fg-v5"; });
+    const changedPlan = await buildResearchLockPlan("research_fg_2", changedVersion);
+    expect(changedPlan.configHash).not.toBe(plan.configHash);
+  });
+
 });
