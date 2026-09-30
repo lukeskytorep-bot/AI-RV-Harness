@@ -3,7 +3,7 @@
 > **Project:** AI RV Harness  
 > **Document type:** Implemented engineering decisions and integrity safeguards  
 > **Implementation status:** Implemented  
-> **Current reference:** public AI RV Harness v0.7.12 + private v0.7.13 development baseline  
+> **Current reference:** public AI RV Harness v0.7.13 Windows/Linux release
 > **Repository:** [lukeskytorep-bot/AI-RV-Harness](https://github.com/lukeskytorep-bot/AI-RV-Harness)  
 > **Scope:** Foundational safeguards through v0.7.12 plus explicitly documented v0.7.13 modularization, UX-DATA lifecycle, Viewer Learning, frozen Training planning, provider continuation, and typed Workspace safeguards
 
@@ -661,7 +661,7 @@ The most transferable engineering lessons are:
 | Safe automatic-session continuation | Implemented by v0.7.10 and compatible with v0.7.11 normalization |
 | Native credential storage | Implemented |
 | Database-level integrity triggers | Implemented across schema migrations through v0.7.12 |
-| AI Center identity and Viewer Notes lifecycle | Implemented experimentally in v0.7.12 |
+| AI Center identity, Field Guide, and Viewer Notes lifecycle | Released in v0.7.13; learning effectiveness remains subject to empirical evaluation |
 | Atomic Judge group and missing-route resume | Strengthened in v0.7.12 |
 | Recoverable post-transition Research unblinding | Strengthened in v0.7.12 |
 
@@ -691,11 +691,11 @@ Model and provider names identify the systems used and do not imply endorsement 
 - [AI RV Harness releases](https://github.com/lukeskytorep-bot/AI-RV-Harness/releases)
 - [AI Center and Viewer Notes](AI_CENTER_AND_VIEWER_NOTES.md)
 - [Training, target pack, and typed Workspaces](TRAINING_TARGETS_AND_TYPED_WORKSPACES.md)
-- Project Wiki Home — add a link here after the Wiki is published
-- Installation and Updates — planned Wiki page
-- Sessions and Protocols — planned Wiki page
-- Research and AI Judge — planned Wiki page
-- Providers and Reasoning Models — planned Wiki page
+- [Project Wiki Home](https://github.com/lukeskytorep-bot/AI-RV-Harness/wiki)
+- [Quick Start and Installation](https://github.com/lukeskytorep-bot/AI-RV-Harness/wiki/Quick-Start-and-Installation)
+- [Sessions and Protocols](https://github.com/lukeskytorep-bot/AI-RV-Harness/wiki/Sessions-and-Protocols)
+- [Research and AI Judge](https://github.com/lukeskytorep-bot/AI-RV-Harness/wiki/Research-and-AI-Judge)
+- [Providers, Models and AI Monitor](https://github.com/lukeskytorep-bot/AI-RV-Harness/wiki/Providers-Models-and-AI-Monitor)
 
 ---
 
@@ -721,7 +721,7 @@ Used user targets preserve their historical identity through `target_id_snapshot
 
 ### Compatibility gate
 
-UX-DATA-9 and the later Viewer Learning, provider-continuation, and typed-Workspace extensions turn the accepted UX/data invariants into permanent build checks. `npm run verify:ux-data` verifies the contiguous migration registry through 026, flat Conversation product boundary, shared dialog/model-route boundaries, unified lifecycle surface, Viewer Notes/target preservation markers, Field Guide schema markers, provider-continuation tables, and Workspace-kind markers. Native Rust tests preserve the accepted exact-green v23 → v24 Viewer Learning upgrade, exact-green v24 → v25 provider-state transition, and exact-green v25 → v26 typed-Workspace transition without moving historical records. Older public/legacy databases are handled by the compatibility epoch gate rather than silently entering this controlled upgrade path.
+UX-DATA-9 and the later Viewer Learning, provider-continuation, typed-Workspace, and factory Training extensions turn the accepted UX/data invariants into permanent build checks. `npm run verify:ux-data` verifies the contiguous migration registry through 027, flat Conversation product boundary, shared dialog/model-route boundaries, unified lifecycle surface, Viewer Notes/target preservation markers, Field Guide schema markers, provider-continuation tables, Workspace-kind markers, and factory-target classification markers. Native Rust tests preserve the accepted exact-green v23 → v24 Viewer Learning upgrade, exact-green v24 → v25 provider-state transition, exact-green v25 → v26 typed-Workspace transition, and exact-green v26 → v27 factory Training classification transition without moving historical records. Older public/legacy databases are handled by the compatibility epoch gate rather than silently entering this controlled upgrade path.
 
 ## Decision 21 — Training plans and Workspace purposes are frozen explicitly
 

@@ -12,12 +12,17 @@ This directory contains project documentation that is useful for development, re
 | [`specifications/`](specifications/) | As-built functional and technical specifications. |
 | [`requirements/`](requirements/) | Historical requirements, accepted correction sets and test-derived change lists. |
 | [`prompts/`](prompts/) | Design records for bundled prompt packages. Runtime prompt resources remain in source/resource directories. |
-| [`reports/`](reports/) | Current private-development implementation and audit reports, including the UX-DATA campaign. |
+| [`reports/`](reports/) | Implementation and audit reports, including the completed v0.7.13 UX-DATA campaign. |
 | [`credits/`](credits/) | Credit history, attribution policy and technical-reference records supporting the root `CREDITS.md` and `CITATION.cff`. |
 
 ## Current release documentation
 
-The current private development baseline is v0.7.13, built on the public v0.7.12 release. The v0.7.12 records below remain the historical implementation and release documentation:
+The current public release is v0.7.13 for Windows and Linux. Its exact release notes, verification record, checksums and source identity are stored under [`releases/v0.7.13/`](releases/v0.7.13/). The living architecture documents below describe the released v0.7.13 baseline, while older reports remain historical evidence of the stages that produced it:
+
+- [Public release notes](releases/v0.7.13/RELEASE_NOTES_v0.7.13.md)
+- [Release verification](releases/v0.7.13/RELEASE_VERIFICATION_v0.7.13.md)
+- [Release checksums](releases/v0.7.13/SHA256SUMS.txt)
+- [Release source identity](releases/v0.7.13/SOURCE_IDENTITY.txt)
 
 - [Architecture documentation index](architecture/README.md)
 - [System overview](architecture/SYSTEM_OVERVIEW.md)
@@ -38,7 +43,9 @@ The current private development baseline is v0.7.13, built on the public v0.7.12
 - [Source package hygiene report](reports/SOURCE_PACKAGE_HYGIENE_1_v0.7.13_PL.md)
 - [Training/targets/typed Workspaces — Stage 6 closeout](reports/TRAINING_TARGETS_TYPED_WORKSPACES_STAGE_6_CLOSEOUT_v0.7.13_PL.md)
 
-The current SQLite boundary is schema **26**. The accepted current-epoch upgrade chain preserves the exact green schema 23 → 24 Viewer Learning transition, exact green schema 24 → 25 provider-continuation persistence, and exact green schema 25 → 26 typed Workspace transition. Public/legacy schemas remain handled by the v0.7.13 database compatibility epoch gate and are not silently migrated into this chain.
+The current SQLite boundary is schema **27**. The accepted current-epoch upgrade chain preserves the exact-green schema 23 → 24 Viewer Learning transition, schema 24 → 25 provider-continuation persistence, schema 25 → 26 typed Workspace transition, and schema 26 → 27 factory Training classification upgrade. Public/legacy schemas remain handled by the v0.7.13 database compatibility epoch gate and are not silently migrated into this chain.
+
+The v0.7.12 records below remain historical implementation and release documentation:
 
 - [AI Center implementation plan](releases/v0.7.12/AI_CENTER_IMPLEMENTATION_PLAN_PL.md)
 - [AI Center wiki documentation](releases/v0.7.12/AI_CENTER_VIEWER_NOTES_WIKI_EN.md)
@@ -96,4 +103,4 @@ The authoritative project-level files remain in the repository root:
 
 ### Custom OpenAI wire parameter override
 
-Custom OpenAI-compatible connections keep `max_tokens` as the compatibility default. A connection may explicitly override only the maximum-output-token wire field to `max_completion_tokens`. The override is scoped to that Custom OpenAI provider configuration, stored in existing application settings, and never changes the built-in OpenRouter, OpenAI, Google, Anthropic, Z.AI, DeepSeek, Mistral, or Blackbox mappings. The override introduced no migration; the current SQLite schema later advanced to 26 for typed Workspaces.
+Custom OpenAI-compatible connections keep `max_tokens` as the compatibility default. A connection may explicitly override only the maximum-output-token wire field to `max_completion_tokens`. The override is scoped to that Custom OpenAI provider configuration, stored in existing application settings, and never changes the built-in OpenRouter, OpenAI, Google, Anthropic, Z.AI, DeepSeek, Mistral, or Blackbox mappings. The override introduced no migration; the current SQLite schema later advanced through typed Workspaces (026) to the factory Training classification boundary (027).

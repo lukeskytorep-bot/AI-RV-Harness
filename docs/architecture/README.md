@@ -1,8 +1,8 @@
 # AI RV Harness architecture documentation
 
-These documents describe the implemented architecture and integrity model of AI RV Harness. The latest public release remains v0.7.12; the private v0.7.13 development baseline extends it through the modularization and UX-DATA campaign. Release-specific plans, reports, manifests, and verification records remain under [`docs/releases/`](../releases/) or [`docs/reports/`](../reports/) for private-development work.
+These documents describe the implemented architecture and integrity model of AI RV Harness v0.7.13, the current public Windows and Linux release. Release-specific notes and verification records remain under [`docs/releases/`](../releases/); historical implementation and audit reports remain under [`docs/reports/`](../reports/).
 
-The private v0.7.13 modularization work adds the following living architecture records. Stages 1–9 and the modularization campaign are closed after their accepted automated gates. The desktop checklist remains active as the v0.7.13 release/runtime regression gate; it no longer changes the historical modularization status:
+The completed v0.7.13 modularization work adds the following living architecture records. Stages 1–9 and the modularization campaign are closed after their accepted automated gates. The desktop checklist is retained as the release/runtime regression procedure and is accompanied by the final v0.7.13 release verification record:
 
 - [Code map](CODE_MAP.md)
 - [Module boundaries](MODULE_BOUNDARIES.md)
@@ -21,7 +21,7 @@ The private v0.7.13 modularization work adds the following living architecture r
 | [System Overview](SYSTEM_OVERVIEW.md) | High-level product structure, roles, workflows, storage model, provider layer, and current capabilities. |
 | [Engineering Design and Integrity Safeguards](ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md) | Stable engineering decisions protecting blinding, evidence, judging, Research, provider normalization, recovery, and persistence. |
 | [AI Center and Viewer Notes](AI_CENTER_AND_VIEWER_NOTES.md) | Identity scope, note lifecycle, immutable provenance, source-preservation behavior, Research controls, and controlled-purge integration. |
-| [Training, target pack, and typed Workspaces](TRAINING_TARGETS_AND_TYPED_WORKSPACES.md) | Current 94-target/eight-category curriculum, Full Training rounds, Viewer learning order, top-level Conversations/RV Sessions split, typed Workspaces, and schema 026 compatibility. |
+| [Training, target pack, and typed Workspaces](TRAINING_TARGETS_AND_TYPED_WORKSPACES.md) | Current 94-target/eight-category curriculum, Full Training rounds, Viewer learning order, top-level Conversations/RV Sessions split, typed Workspaces, and schema 027 compatibility. |
 
 ## Documentation policy
 

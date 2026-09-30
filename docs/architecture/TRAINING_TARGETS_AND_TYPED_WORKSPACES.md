@@ -1,7 +1,7 @@
 # Training, target pack, and typed Workspaces
 
-> **Status:** implemented in the private v0.7.13 baseline  
-> **Schema:** 026  
+> **Status:** implemented in the released v0.7.13 baseline
+> **Introduced typed-Workspace schema:** 026; **current application schema:** 027
 > **Scope:** Training stages 1–3 and navigation/Workspace stages 4–5
 
 This page is the living description of the current Training and Workspace model. Historical requirements and candidate reports may describe the earlier 84-target curriculum, seven-session blocks, or one shared Workspace selection; those documents remain historical evidence and do not define current runtime behavior.
@@ -94,12 +94,13 @@ Training and Research do not expose a Workspace selector. When a technical Works
 
 ## Compatibility and validation
 
-The current SQLite registry is contiguous through migration 026. The accepted chain retains:
+The current SQLite registry is contiguous through migration 027. The accepted chain retains:
 
 - exact-green v23 → v24 Viewer Learning compatibility;
 - exact-green v24 → v25 provider-continuation persistence;
 - exact-green v25 → v26 typed Workspace migration;
-- fresh 001 → 026 validation;
+- exact-green v26 → v27 factory Training classification upgrade;
+- fresh 001 → 027 validation;
 - `integrity_check=ok` and `foreign_key_check=0`.
 
 Public/legacy schemas outside the accepted v0.7.13 epoch remain governed by the database compatibility gate and are not silently promoted through an unverified migration chain.
