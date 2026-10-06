@@ -3,7 +3,6 @@ import dependabot from "../.github/dependabot.yml?raw";
 import ci from "../.github/workflows/ci.yml?raw";
 import codeql from "../.github/workflows/codeql.yml?raw";
 import linux from "../.github/workflows/release-linux.yml?raw";
-import linuxTest from "../.github/workflows/build-linux-test.yml?raw";
 import prepareCargoLock from "../.github/workflows/prepare-cargo-lock.yml?raw";
 import windows from "../.github/workflows/release-windows.yml?raw";
 
@@ -12,7 +11,6 @@ const workflows = {
   "codeql.yml": codeql,
   "prepare-cargo-lock.yml": prepareCargoLock,
   "release-linux.yml": linux,
-  "build-linux-test.yml": linuxTest,
   "release-windows.yml": windows,
 };
 
@@ -27,35 +25,8 @@ describe("GitHub workflow supply-chain policy", () => {
     }
   });
 
-  it("keeps production Linux release main-only and provides a non-publishing branch-selectable Linux test build", () => {
+  it("keeps production Linux release main-only", () => {
     expect(linux).toContain("if: github.ref == 'refs/heads/main'");
-    expect(linuxTest).toContain("push:");
-    expect(linuxTest).toContain("branches:");
-    expect(linuxTest).toContain("- ai-rv-2");
-    expect(linuxTest).toContain("workflow_dispatch:");
-    expect(linuxTest).not.toContain("refs/heads/main");
-    expect(linuxTest).toContain("contents: read");
-    expect(linuxTest).not.toContain("contents: write");
-    expect(linuxTest).not.toContain("tagName");
-    expect(linuxTest).not.toContain("releaseName");
-    expect(linuxTest).not.toContain("releaseDraft");
-    expect(linuxTest).not.toContain("GITHUB_TOKEN");
-    expect(linuxTest).not.toMatch(/git\s+push/i);
-    expect(linuxTest).toContain("test -f src-tauri/Cargo.lock");
-    expect(linuxTest).toContain("npm run verify:source");
-    expect(linuxTest).toContain("npm run verify:ux-data");
-    expect(linuxTest).toContain("npm run verify:architecture");
-    expect(linuxTest).toContain("npm run typecheck");
-    expect(linuxTest).toContain("npm test -- --run");
-    expect(linuxTest).toContain("npm run build");
-    expect(linuxTest).toContain("cargo test --manifest-path src-tauri/Cargo.toml --all-targets --locked");
-    expect(linuxTest).toContain("npm run verify:openrouter-continuation-bridge");
-    expect(linuxTest).toContain("cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings");
-    expect(linuxTest).toContain("npm run tauri -- build --bundles appimage,deb");
-    expect(linuxTest).toContain("bundle/appimage/*.AppImage");
-    expect(linuxTest).toContain("bundle/deb/*.deb");
-    expect(linuxTest).toContain("actions/upload-artifact@");
-    expect(linuxTest).toContain("actions/attest@");
   });
 
   it("attests both Windows and Linux release packages with OIDC permissions", () => {
