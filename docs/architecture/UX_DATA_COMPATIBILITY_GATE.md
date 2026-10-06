@@ -1,6 +1,6 @@
 # UX-DATA compatibility gate
 
-**Status:** current private v0.7.13 architecture guard  
+**Status:** current released v0.7.13 architecture guard
 **Introduced:** UX-DATA-9, 10 September 2026
 
 ## Purpose
@@ -13,7 +13,7 @@ The gate is intentionally conservative. It does **not** remove dormant legacy sc
 
 `npm run verify:ux-data` runs `scripts/verify-ux-data-compatibility.mjs` and checks that:
 
-- migrations remain contiguous and registered through `026_typed_workspaces.sql`;
+- migrations remain contiguous and registered through `027_factory_training_classification_upgrade.sql`;
 - browser-native Confirm/Prompt/Alert calls remain private to the shared `AppDialogProvider` fallback;
 - `ChatThreadGroup` lifecycle does not return to production code;
 - the SQLite Conversation adapter still reads legacy `thread_group_id` while new rows store `NULL` and do not operate on `chat_thread_groups`;
@@ -21,7 +21,7 @@ The gate is intentionally conservative. It does **not** remove dormant legacy sc
 - Archive/Restore and Permanent Delete use cases remain exposed for the primary lifecycle domains;
 - Archive and recovery keeps Deletion Preview and strong destructive confirmation;
 - Viewer Notes source-preservation markers from migration 022 and target-history snapshots from migration 023 remain present;
-- the Field Guide schema markers, provider-continuation schema 025 markers, typed-Workspace schema 026 markers, and native exact-green-v23 → v24, v24 → v25, and v25 → v26 upgrade tests remain wired into the Rust test build;
+- the Field Guide schema markers, provider-continuation schema 025 markers, typed-Workspace schema 026 markers, factory Training schema 027 markers, and native exact-green-v23 → v24, v24 → v25, v25 → v26, and v26 → v27 upgrade tests remain wired into the Rust test build;
 - Workspace kinds remain limited to `conversation`, `rv`, and `legacy_combined`; historical rows become `legacy_combined` without moving their records;
 - the compatibility gate does not reintroduce an automatic public-v0.7.12/legacy → v0.7.13 migration chain.
 
@@ -29,7 +29,7 @@ The main CI and both release workflows execute this gate immediately after `veri
 
 ## Native legacy-database gate
 
-`src-tauri/src/ux_data_compatibility.rs` is compiled only for tests. Its compatibility chain preserves the accepted green v23 → v24 Viewer Learning upgrade, the exact-green-v24 → v25 provider-continuation persistence gate, and the exact-green-v25 → v26 typed-Workspace gate. Public v0.7.12/legacy databases at schema 1–20 are classified by the database compatibility epoch gate and are not silently migrated into v0.7.13.
+`src-tauri/src/ux_data_compatibility.rs` is compiled only for tests. Its compatibility chain preserves the accepted green v23 → v24 Viewer Learning upgrade, the exact-green-v24 → v25 provider-continuation persistence gate, the exact-green-v25 → v26 typed-Workspace gate, and the exact-green-v26 → v27 factory Training classification gate. Public v0.7.12/legacy databases at schema 1–20 are classified by the database compatibility epoch gate and are not silently migrated into v0.7.13.
 
 The exact-green-v23 fixture contains:
 

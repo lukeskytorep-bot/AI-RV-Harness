@@ -1,16 +1,17 @@
 # AI RV Harness v0.7.13 — desktop runtime i release smoke
 
 **Status modularizacji:** Etapy 1–9 `COMPLETED — AUTOMATED GATES PASS`.  
-**Cel:** bieżąca ręczna bramka desktopowa przed akceptacją/release v0.7.13; zachowuje scenariusze modularizacji i obejmuje schema 26, Viewer Learning, typed Workspaces oraz provider-native continuation.
-**Wymagana baza:** dokładny aktualny zielony kandydat v0.7.13, nie historyczny ZIP Etapu 9.  
+**Status wydania:** `RELEASED — WINDOWS AND LINUX ARTIFACTS VERIFIED`; wynik końcowy opisuje `docs/releases/v0.7.13/RELEASE_VERIFICATION_v0.7.13.md`.
+**Cel:** zachowana procedura regresyjnego smoke dla v0.7.13; obejmuje schema 027, Viewer Learning, typed Workspaces oraz provider-native continuation.
+**Wymagana baza:** dokładny build z badanego commita, nie historyczny ZIP Etapu 9.
 **Zasada:** wykonywać na desktopowym buildzie Tauri z kopią danych testowych. Nie używać jedynej kopii realnej bazy użytkownika.
 
 ## Warunki wejścia
 
-- pełny GitHub Actions dla dokładnego aktualnego kandydata jest zielony;
+- pełny GitHub Actions dla dokładnego badanego commita jest zielony;
 - `verify:source`, `verify:ux-data`, `verify:architecture`, pełny Vitest, typecheck, Vite, Rust/Tauri i Clippy przechodzą;
 - build uruchamia się z nowym, pustym profilem aplikacji;
-- dostępna jest osobna kopia dokładnej zielonej bazy schema 25 do kontrolowanego testu upgrade 25 → 26; natywne testy nadal osobno zachowują bramki v23 → v24 i v24 → v25;
+- dostępna jest osobna kopia dokładnej zielonej bazy schema 26 do kontrolowanego testu upgrade 26 → 27; natywne testy nadal osobno zachowują bramki v23 → v24, v24 → v25 i v25 → v26;
 - osobna baza legacy służy do sprawdzenia ekranu compatibility epoch; nie wolno pozwalać pluginowi SQL migrować jej automatycznie;
 - dla provider smoke używany jest testowy credential należący do użytkownika.
 
@@ -18,8 +19,8 @@
 
 | # | Scenariusz | Procedura minimalna | Wynik wymagany |
 | --- | --- | --- | --- |
-| 1 | Start na schema 26 | Uruchom aplikację na aktualnej bazie 26, zamknij i uruchom ponownie. | Start bez błędu, dane widoczne, brak ponownej/niekończącej się migracji. |
-| 2 | Kontrolowany upgrade i legacy epoch | Uruchom kopię dokładnej zielonej bazy 25, a osobno kopię legacy v1–20. | Zielona v25 przechodzi do v26 z zachowaniem danych; istniejące Workspace otrzymują `legacy_combined`, a historia nie jest przenoszona. Legacy jest zatrzymana przed `Database.load()` i oferuje bezpieczne zachowanie/start fresh; nie jest automatycznie migrowana. |
+| 1 | Start na schema 27 | Uruchom aplikację na aktualnej bazie 27, zamknij i uruchom ponownie. | Start bez błędu, dane widoczne, brak ponownej/niekończącej się migracji. |
+| 2 | Kontrolowany upgrade i legacy epoch | Uruchom kopię dokładnej zielonej bazy 26, a osobno kopię legacy v1–20. | Zielona v26 przechodzi do v27 z zachowaniem danych i uzupełnieniem klasyfikacji fabrycznego Training; wcześniejsze typed Workspaces pozostają zachowane. Legacy jest zatrzymana przed `Database.load()` i oferuje bezpieczne zachowanie/start fresh; nie jest automatycznie migrowana. |
 | 3 | Lazy routes | Otwórz kolejno Research, Settings i AI Center/Monitor, wróć na Home i otwórz je ponownie. | Każda trasa renderuje się, fallback znika, brak pustego ekranu i błędu dynamic import. |
 | 4 | Typed Workspaces i nawigacja | Dla nowego Profilu otwórz osobno Conversations i RV Sessions, utwórz dodatkowy Workspace obu typów, zmień nazwy i uruchom ponownie aplikację. Otwórz również Profil z `legacy_combined`. | Nowy Profil ma Conversation Workspace i RV Workspace; aktywne wybory są niezależne; typy nie mieszają się; `legacy_combined` działa w obu obszarach; Manual RV jest pod RV Sessions. |
 | 5 | Full Training i Resume | Uruchom jeden pełny przebieg (8 sesji), potwierdź osiem kategorii i zamrożoną kolejność; doprowadź co najmniej jeden target do trwałego checkpointu, przerwij i użyj Resume. | Run zapisuje `roundSize=8`, nie losuje ponownie po Resume i nie duplikuje ukończonego kroku. Training nie pokazuje selektora Workspace i używa technicznego RV/legacy Workspace. |
@@ -40,6 +41,6 @@
 
 ## Kryterium zaliczenia
 
-Aktualny kandydat v0.7.13 można zaakceptować do wydania wyłącznie wtedy, gdy wszystkie scenariusze mają wynik `PASS` albo scenariusz został jawnie oznaczony `N/A` z technicznym uzasadnieniem, które nie omija wymagania produktu. Brak credentialu lub brak interaktywnego desktop runtime nie jest `PASS`; oznacza, że release smoke pozostaje niewykonany.
+Kolejny build v0.7.13 można zaakceptować jako równoważny wyłącznie wtedy, gdy wymagane scenariusze mają wynik `PASS` albo scenariusz został jawnie oznaczony `N/A` z technicznym uzasadnieniem, które nie omija wymagania produktu. Brak credentialu lub brak interaktywnego desktop runtime nie jest `PASS`.
 
-Historycznego raportu kandydata Stage 9 nie należy przepisywać. Wynik każdego aktualnego smoke należy zapisać jako osobny, datowany raport odbioru wskazujący dokładny commit/source-tree i build Windows.
+Historycznego raportu kandydata Stage 9 nie należy przepisywać. Wynik każdego przyszłego smoke należy zapisać jako osobny, datowany raport odbioru wskazujący dokładny commit/source-tree i platformę. Dla publicznego wydania v0.7.13 takim dokumentem jest `docs/releases/v0.7.13/RELEASE_VERIFICATION_v0.7.13.md`.

@@ -1,19 +1,18 @@
 # AI RV Harness
 
-> Current architecture reference: public v0.7.12 + private v0.7.13 development baseline  
-> Last updated: 10 September 2026
+> Current architecture reference: public AI RV Harness v0.7.13 Windows/Linux release
+> Last updated: 30 September 2026
 
 AI RV Harness is a local-first desktop environment for AI-assisted Remote Viewing sessions, structured training, controlled research, and blinded evaluation. It combines repeatable protocols, multiple AI roles, evidence-preserving session flows, target management, and reproducible research tools in one application.
 
 The project is designed to make AI-assisted RV work easier to organize, inspect, repeat, and evaluate. It does not claim that Remote Viewing has been scientifically proven, that a particular model possesses anomalous perception, or that generated material is accurate. The Harness provides controlled procedures and records; interpretation of results remains the responsibility of the user and researcher.
 
 - **Source repository:** [lukeskytorep-bot/AI-RV-Harness](https://github.com/lukeskytorep-bot/AI-RV-Harness)
-- **Current public release:** AI RV Harness v0.7.12
-- **Current private development baseline:** AI RV Harness v0.7.13
+- **Current public release:** AI RV Harness v0.7.13
 - **Platforms:** Windows and Linux
 - **Application source license:** MIT
 
-This page describes the current implemented architecture. Public-release notes remain authoritative for shipped v0.7.12 behavior, while explicitly identified v0.7.13 sections document the private development baseline before the next public release.
+This page describes the current implemented and released v0.7.13 architecture. The public release notes and exact GitHub Release assets remain authoritative for the shipped binaries.
 
 ## Project goals
 
@@ -261,7 +260,7 @@ Core safeguards include:
 
 The Viewer Notes Impact design compares **No Notes** with a locked **Frozen Viewer Notes** snapshot. Notes cannot update during the experiment. One common Field Guide setting is frozen across both conditions so that the trainable Field Guide cannot become an unintended second variable.
 
-Private v0.7.13 Research also has independent **Viewer Notes OFF/CURRENT** and **Field Guide OFF/CURRENT** controls for ordinary studies. `Field Guide OFF` removes only the trainable Field Guide; Locked Core Identity, Locked Base Vocabulary and protocol rules remain in force. Enabled current Viewer Notes and Field Guide content are captured as immutable Research snapshots at Experiment Lock. Active Profile drift after Lock never replaces those snapshots and does not block Resume.
+v0.7.13 Research also has independent **Viewer Notes OFF/CURRENT** and **Field Guide OFF/CURRENT** controls for ordinary studies. `Field Guide OFF` removes only the trainable Field Guide; Locked Core Identity, Locked Base Vocabulary and protocol rules remain in force. Enabled current Viewer Notes and Field Guide content are captured as immutable Research snapshots at Experiment Lock. Active Profile drift after Lock never replaces those snapshots and does not block Resume.
 
 Prompt Research keeps the existing **Manual prompt variants** source and adds **Trained Field Guide history** as a separate source. History mode lists the six most recent versions for the exact Viewer identity and language and requires the operator to select two to four. The comparison freezes each selected trainable Field Guide and composes it with the same frozen locked Viewer blocks, so the selected Field Guide version is the intended experimental variable. Manual prompts are not saved as Field Guide versions. Research itself remains read-only for both Field Guide and Viewer Notes.
 
@@ -304,7 +303,7 @@ Workspace Sources allow reference material to be reused within the relevant Work
 
 The application uses a local SQLite database in WAL mode. Profiles, typed Workspaces, Conversation / Manual RV records, sessions, targets, training runs, research studies, AI identities, Field Guide and Viewer Notes versions and activations, reflection outcomes, audit events, and related metadata remain on the user's device unless the user exports or transmits them. Schema 026 adds the Workspace kind while preserving earlier rows as `legacy_combined`. Legacy Thread-group rows and `thread_group_id` values may remain as compatibility metadata, but they are not active product parents.
 
-Database migrations create a protective backup and validate integrity before continuing. Settings provide backup and restore tools for local recovery. In the private v0.7.13 baseline, primary user records follow a unified lifecycle: **Active → Archived → Restore or Delete permanently**. Permanent Delete is available only from Archive and recovery, begins with a read-only Deletion Preview, and uses explicit controlled-purge use cases rather than ordinary CRUD. Sealed/frozen/locked guards remain active outside the dedicated purge transaction.
+Database migrations create a protective backup and validate integrity before continuing. Settings provide backup and restore tools for local recovery. In the released v0.7.13 baseline, primary user records follow a unified lifecycle: **Active → Archived → Restore or Delete permanently**. Permanent Delete is available only from Archive and recovery, begins with a read-only Deletion Preview, and uses explicit controlled-purge use cases rather than ordinary CRUD. Sealed/frozen/locked guards remain active outside the dedicated purge transaction.
 
 Depending on the feature, exports can include readable Markdown, HTML, CSV, JSON, and research-oriented reproducibility material. Exported files may contain sensitive prompts, evidence, targets, or model output; users should review them before sharing.
 
@@ -397,9 +396,9 @@ The release was validated with:
 - 74 Vitest files and 207 tests;
 - a production Vite build;
 - a dependency audit with no reported known vulnerabilities at release time;
-- 23 SQLite migrations, including the closed UX-DATA compatibility layer, plus negative checks for the integrity and lifecycle guards.
+- 27 SQLite migrations, including the closed UX-DATA compatibility layer and current schema 027 factory Training classification boundary, plus negative checks for integrity and lifecycle guards.
 
-Rust checks and platform packaging remain release-workflow gates. Practical AI Center sessions should complement automated validation before the experimental feature is treated as proven useful.
+Rust checks and platform packaging remain release-workflow gates. Practical AI Center sessions should complement automated validation before the learning effect is treated as empirically proven.
 
 Passing tests reduces known risk but does not guarantee identical behavior for every provider route or future model revision.
 

@@ -1,12 +1,12 @@
 # AI Center and Viewer Notes
 
-> **Status:** Implemented in v0.7.12; Viewer Learning and Research Field Guide controls extended in private v0.7.13
+> **Status:** Implemented and released in v0.7.13
 > **Design baseline:** AI RV Harness v0.7.11
-> **Reference:** public v0.7.12 core + private v0.7.13 UX-DATA and VIEWER-LEARNING lifecycle extensions
+> **Reference:** public v0.7.13 Viewer Learning, UX-DATA and Research lifecycle
 
-AI Center is a top-level area of AI RV Harness for inspecting and managing AI roles, their histories, and carefully controlled experimental features. Its first experiment is **Viewer Notes**: private, versioned working guidance created and revised only by the same Viewer identity after qualifying completed RV sessions.
+AI Center is a top-level area of AI RV Harness for inspecting and managing AI roles, their histories, and carefully controlled learning features. **Viewer Notes** are private, versioned working guidance created and revised only by the same Viewer identity after qualifying completed Training sessions.
 
-This page describes the implemented Viewer Notes architecture and the private v0.7.13 Viewer Learning extension. The core Viewer Notes capability was introduced in v0.7.12; source preservation, controlled purge, the versioned trainable Field Guide, and frozen Research controls are private v0.7.13 development features.
+This page describes the released v0.7.13 Viewer Notes and Field Guide architecture. The core Viewer Notes capability was introduced in v0.7.12; source preservation, controlled purge, the versioned trainable Field Guide, and frozen Research controls are part of the public v0.7.13 release.
 
 ## Why AI Center is a top-level section
 
@@ -189,7 +189,7 @@ The Overview guide explains Profile-wide ownership, the role boundary between Vi
 
 ## Viewer Learning: Viewer Notes and Field Guide
 
-Private v0.7.13 separates two trainable Viewer layers:
+v0.7.13 separates two trainable Viewer layers:
 
 - **Viewer Notes** — the Viewer-owned reflective notes introduced in v0.7.12;
 - **Field Guide** — a versioned trainable guidance layer owned by one exact Viewer identity and one language.
@@ -279,7 +279,7 @@ Monitor Notes would require a separate identity, history, timing rule, and contr
 - **Project direction:** Edward
 - **Engineering design and documentation:** Orion via Active Model — GPT-5.6-Sol, OpenAI, ChatGPT web interface
 
-The Viewer Notes core was implemented in AI RV Harness v0.7.12 and its source-preservation lifecycle was extended in private v0.7.13. It remains experimental and should continue to be evaluated through automated checks and practical sessions before its effect on RV performance is treated as established.
+The Viewer Notes core was implemented in AI RV Harness v0.7.12 and its source-preservation lifecycle was extended in v0.7.13 together with the trainable Field Guide. The feature is part of the released application, but its effect on RV performance remains a research question and must not be treated as established merely because the software implementation is complete.
 
 ### Controlled purge integration (UX-DATA-8)
 

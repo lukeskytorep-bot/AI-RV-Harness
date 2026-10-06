@@ -1,0 +1,7 @@
+AI RV Harness release: 0.7.13
+Git ref: main
+Git commit: b13fcc19245bbdc0f334d2ce22815a8c54444607
+SQLite schema: 027
+Data epoch: v0.7.13
+Windows attestation: https://github.com/lukeskytorep-bot/AI-RV-Harness/attestations/51409244
+Linux attestation: https://github.com/lukeskytorep-bot/AI-RV-Harness/attestations/51414231

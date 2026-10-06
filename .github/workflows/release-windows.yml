@@ -1,24 +1,24 @@
-name: Build Windows Test Artifacts
+name: Release Windows
 
 on:
   workflow_dispatch:
 
 concurrency:
-  group: windows-test-build-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build-windows:
+    if: github.ref == 'refs/heads/main'
     permissions:
-      contents: read
+      contents: write
       id-token: write
       attestations: write
       artifact-metadata: write
-
     runs-on: windows-latest
 
     steps:
-      - name: Checkout selected branch
+      - name: Checkout main
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
@@ -38,7 +38,7 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: "./src-tauri -> target"
+          workspaces: './src-tauri -> target'
 
       - name: Require the committed Rust lockfile
         shell: bash
@@ -68,11 +68,22 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 
-      - name: Build Windows MSI and EXE
+      - name: Build Windows installers and update the draft release
         id: tauri_build
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: --bundles nsis,msi
+          tagName: app-v__VERSION__
+          releaseName: 'AI RV Harness v__VERSION__'
+          releaseBody: |
+            Windows and Linux desktop release of AI RV Harness.
+
+            Verify each downloaded asset with GitHub Artifact Attestations before installation.
+            `gh attestation verify "PATH_TO_ASSET" --repo lukeskytorep-bot/AI-RV-Harness`
+          releaseDraft: true
+          prerelease: false
 
       - name: Require the expected Windows installers
         shell: pwsh
@@ -90,7 +101,7 @@ jobs:
           Write-Host "MSI installers:"
           $msi | ForEach-Object { Write-Host $_.FullName }
 
-      - name: Upload Windows installers
+      - name: Upload Windows installers as workflow artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ai-rv-harness-windows-${{ github.sha }}

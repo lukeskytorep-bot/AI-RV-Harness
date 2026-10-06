@@ -1,6 +1,6 @@
 # AI RV Harness module boundaries
 
-**Status:** initial enforceable boundaries for private v0.7.13  
+**Status:** enforceable boundaries for released v0.7.13
 **Architecture:** modular monolith
 
 ## Dependency direction
@@ -207,9 +207,9 @@ Architecture exceptions, if ever required, live in `scripts/architecture-boundar
 
 ## Stage 9 closeout and continuing runtime boundary
 
-The accepted Stage 9 candidate closed the modularization after the automated architecture and compatibility gates passed with an empty architecture allowlist. The desktop checklist remains a mandatory release/runtime regression gate for v0.7.13:
+The accepted Stage 9 result closed the modularization after the automated architecture and compatibility gates passed with an empty architecture allowlist. The desktop checklist remains the reusable release/runtime regression procedure for v0.7.13:
 
 1. static/automated architecture and compatibility gates must remain green with an empty architecture allowlist;
-2. the current desktop runtime checklist in `FINAL_RUNTIME_SMOKE_v0.7.13_PL.md` must pass on an actual Tauri build before release acceptance.
+2. the desktop runtime checklist in `FINAL_RUNTIME_SMOKE_v0.7.13_PL.md` records the required actual-Tauri checks; the final Windows/Linux result is recorded in `docs/releases/v0.7.13/RELEASE_VERIFICATION_v0.7.13.md`.
 
 Static evidence, CI and source inspection do not replace interactive runtime validation. Conversely, documented compatibility surfaces such as legacy `chat_thread_groups/thread_group_id` are not architectural exceptions and did not require removal to close Stage 9.

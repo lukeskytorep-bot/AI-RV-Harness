@@ -1,9 +1,9 @@
 # AI RV Harness v0.7.13 — Provider Continuation Contract v1
 
 **Etap bazowy:** `CONTINUATION-CONTRACT-0-R1`
-**Aktualny etap runtime:** `ANTHROPIC-CONTINUITY-1` (`C5`, session-safe candidate)
-**Status:** OpenRouter i Google native działają w swoich dotychczasowych zakresach; C5 aktywuje Anthropic `anthropic-thinking-blocks` wyłącznie na zamrożonych, append-only trasach Session/Resume. Zwykła Conversation i post-Reveal pozostają dla Anthropic text-only, ponieważ dynamiczny kontekst czasu/workspace albo post-Reveal clarifications mogą zmieniać signed prefix.
-**Zweryfikowano:** 2026-09-25
+**Aktualny etap runtime:** `ANTHROPIC-CONTINUITY-1` (`C5`, released session-safe scope)
+**Status:** wydane w v0.7.13. OpenRouter i Google native działają w swoich zakontraktowanych zakresach; C5 aktywuje Anthropic `anthropic-thinking-blocks` wyłącznie na zamrożonych, append-only trasach Session/Resume. Zwykła Conversation i post-Reveal pozostają dla Anthropic text-only, ponieważ dynamiczny kontekst czasu/workspace albo post-Reveal clarifications mogą zmieniać signed prefix.
+**Zweryfikowano:** 2026-09-30
 
 ## Cel
 
@@ -174,7 +174,7 @@ C4 aktywuje wyłącznie potwierdzony kontrakt Google native `generateContent` dl
 
 C5 opiera się na bieżącym kontrakcie Anthropic **Preserved thinking**. Signed thinking block jest związany nie tylko z własnym podpisem, lecz na nowszych modelach/kontach także z wcześniejszym prefixem requestu: top-level `system`, tools i wszystkimi wiadomościami przed blokiem. Dlatego replay jest bezpieczny tylko wtedy, gdy prefix pozostaje identyczny, a historia jest rozszerzana append-only.
 
-Zakres C5 candidate:
+Zakres C5 wydany w v0.7.13:
 
 1. Rust parser zachowuje dokładne, wspierane bloki `thinking` oraz `redacted_thinking` w kolejności; `redacted_thinking.data` nie jest zastępowane placeholderem.
 2. W v1 wspierany układ to zero lub więcej thinking/redacted blocks, a następnie dokładnie jeden widoczny `text` block. Nieznany/mieszany układ z continuation state jest odrzucany fail-closed. Tool/function blocks pozostają poza v1.
