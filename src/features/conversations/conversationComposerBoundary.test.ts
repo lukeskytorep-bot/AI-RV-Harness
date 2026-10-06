@@ -35,9 +35,9 @@ describe("CONVERSATION-COMPOSER-1 integration boundary", () => {
 
   it("keeps disabled state, attachments and send actions unchanged while allowing vertical manual resize", () => {
     const textarea = composerTextareaMarkup();
-    expect(textarea).toContain("disabled={!selectedModel || sending || Boolean(pendingRetry)}");
+    expect(textarea).toContain("disabled={!viewerRouteReady || !selectedModel || sending || Boolean(pendingRetry)}");
     expect(chatPanel).toContain("composer-attachment-button");
-    expect(chatPanel).toContain("disabled={!selectedModel || !input.trim() || sending || contextExceeded || Boolean(pendingRetry)}");
+    expect(chatPanel).toContain("disabled={!viewerRouteReady || !selectedModel || !input.trim() || sending || contextExceeded || Boolean(pendingRetry)}");
     expect(composerCss).toContain("resize: vertical;");
   });
 
