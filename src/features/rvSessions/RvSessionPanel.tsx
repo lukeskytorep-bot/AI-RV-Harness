@@ -67,11 +67,11 @@ import {
 } from "../../sessions/telepathicController";
 import { prepareViewerNotesForSession } from "../../aiCenter/viewerNotes";
 import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
-import { listEligibleViewerIdentities, preferredViewerIdentityId, viewerIdentityLabel, type EligibleViewerIdentity } from "../../aiCenter/viewerIdentitySelection";
+import { listEligibleViewerIdentities, preferredViewerIdentityId, requireWorkspaceViewerRoute, viewerIdentityLabel, type EligibleViewerIdentity } from "../../aiCenter/viewerIdentitySelection";
 import { reasoningCapabilityLead, reasoningOptionLabel } from "../../providers/reasoningPresentation";
 import { BatchEvaluation, JudgeEvaluation } from "../judge";
 
-export function RvSessionPanel({ copy, settings, profile, workspace, repository }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; repository: AppRepository | null }) {
+export function RvSessionPanel({ copy, settings, profile, workspace, repository, onBusyChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; repository: AppRepository | null; onBusyChange?: (busy: boolean) => void }) {
   const dialogs = useAppDialogs();
   const [executionScope, setExecutionScope] = useState<"single" | "batch">("single");
   const [runType, setRunType] = useState<"automatic" | "monitor">("automatic");
@@ -100,6 +100,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   const [customBuilderNew, setCustomBuilderNew] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState("__random__");
   const [viewerIdentityId, setViewerIdentityId] = useState("");
+  const [viewerRouteReadyKey, setViewerRouteReadyKey] = useState<string | null>(null);
   const [monitorModelKey, setMonitorModelKey] = useState("");
   const [reasoning, setReasoning] = useState<"" | ReasoningEffort>("");
   const [temperature, setTemperature] = useState("");
@@ -138,6 +139,8 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   const selectedIdentity = viewerIdentities.find((item) => item.identity.id === viewerIdentityId) ?? null;
   const activeProvider = selectedIdentity?.providerConfig ?? null;
   const selectedModel = selectedIdentity?.model ?? null;
+  const viewerRouteKey = `${workspace.id}:${profile?.id ?? "missing"}`;
+  const viewerRouteReady = viewerRouteReadyKey === viewerRouteKey && workspace.profileId === profile?.id;
   const monitorModel = findCredentialScopedModelByRouteKey(monitorModelKey, profile?.credentialId, providerConfigs, allModels);
   const monitorProvider = monitorModel ? providerConfigs.find((item) => item.id === monitorModel.providerConfigId) ?? null : null;
   const eligibleTargets = targets.filter((target) => targetIsEligibleForProtocol(target, protocol));
@@ -146,12 +149,16 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
   const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : protocol === "telepathic" ? 9 : 6;
   const running = sessionRunning || batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
+  useEffect(() => { onBusyChange?.(sessionRunning || batchRunning); return () => onBusyChange?.(false); }, [sessionRunning, batchRunning, onBusyChange]);
   const recoveryInspectionKey = recentSessions.map((session) => `${session.id}:${session.state}:${session.updatedAt}`).join("|");
 
   useEffect(() => {
     let cancelled = false;
+    setViewerRouteReadyKey(null);
+    setViewerIdentityId("");
+    setViewerIdentities([]);
     void (async () => {
-      if (!repository) return;
+      if (!repository || !profile || workspace.profileId !== profile.id) return;
       const configs = await repository.listProviderConfigs();
       if (cancelled) return;
       setProviderConfigs(configs);
@@ -160,17 +167,37 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
         repository.listTargets(),
         repository.listRvSessions(workspace.id),
       ]);
-      const eligible = profile ? await listEligibleViewerIdentities({ repository, profileId: profile.id, language: resolvedLanguage, providerConfigs: configs, models: everyModel }) : [];
+      const eligible = await listEligibleViewerIdentities({ repository, profileId: profile.id, language: resolvedLanguage, providerConfigs: configs, models: everyModel });
       if (cancelled) return;
       setViewerIdentities(eligible);
       setAllModels(everyModel);
       setTargets(targetCatalog);
       setRecentSessions(sessionHistory.filter((session) => !session.researchProjectId));
-      setViewerIdentityId(preferredViewerIdentityId(eligible, profile?.defaultViewerModelId));
+      setViewerIdentityId(preferredViewerIdentityId(eligible, profile.defaultViewerModelId));
+      setViewerRouteReadyKey(`${workspace.id}:${profile.id}`);
       setMonitorModelKey(resolveRoleDefault(profile, "monitor", configs, everyModel));
     })();
     return () => { cancelled = true; };
   }, [repository, profile?.id, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profile?.defaultMonitorProviderConfigId, profile?.defaultMonitorModelId, workspace.id, resolvedLanguage]);
+
+  useEffect(() => {
+    setProgress(null);
+    setStreamPreview(null);
+    setRunError(null);
+    setRecentSessions([]);
+    setActiveTargetId(null);
+    setRevealText("");
+    setRevealArtifacts([]);
+    setAcceptedRevealText("");
+    setAcceptedRevealArtifacts([]);
+    setPostRevealTranscript("");
+    setPostRevealText("");
+    setSessionExportPath(null);
+    setBatchResults([]);
+    setBatchProgress(null);
+    setManualQuestionHandle(null);
+    setManualQuestionText("");
+  }, [workspace.id, profile?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -304,7 +331,13 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   };
 
   const start = async () => {
-    if (!repository || !profile || !activeProvider || !selectedModel) return;
+    if (!repository || !profile || !selectedIdentity || !activeProvider || !selectedModel || !viewerRouteReady) return;
+    try {
+      await requireWorkspaceViewerRoute({ repository, workspace, profile, identityId: selectedIdentity.identity.id, providerConfig: activeProvider, model: selectedModel });
+    } catch (cause) {
+      setRunError(cause instanceof Error ? cause.message : String(cause));
+      return;
+    }
     if (protocol === "custom" && !selectedCustomProtocol) return;
     if (!isRunModeCompatible(runType, protocol)) return;
     if (runType === "monitor" && (!monitorModel || !monitorProvider)) return;
@@ -317,14 +350,22 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
     if (executionScope === "single" && revealSource === "automatic" && !automaticTarget) return;
     if (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature)) return;
     const batchTargets = executionScope === "batch" ? selectBatchTargets(batchPool, batchCount) : [];
+    if (!runGuardRef.current.tryAcquire()) return;
+    setSessionRunning(true);
+    onBusyChange?.(true);
     let rvSystemPrompt;
     try {
       if (!selectedIdentity) throw new Error(settings.interfaceLanguage === "pl" ? "Wybrana tożsamość Viewera nie jest dostępna." : "The selected Viewer identity is unavailable.");
+      await requireWorkspaceViewerRoute({ repository, workspace, profile, identityId: selectedIdentity.identity.id, providerConfig: activeProvider, model: selectedModel });
       const fieldGuide = await prepareFieldGuideForSession({ repository, profile, providerConfig: activeProvider, model: selectedModel, language: resolvedLanguage, aiIdentityId: selectedIdentity.identity.id });
       rvSystemPrompt = await viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
-    } catch (cause) { setRunError(cause instanceof Error ? cause.message : String(cause)); return; }
-    if (!runGuardRef.current.tryAcquire()) return;
-    setSessionRunning(true);
+    } catch (cause) {
+      setRunError(cause instanceof Error ? cause.message : String(cause));
+      runGuardRef.current.release();
+      setSessionRunning(false);
+      onBusyChange?.(false);
+      return;
+    }
     setActiveTargetId(executionScope === "single" ? automaticTarget?.id ?? null : null);
     setRunError(null);
     setStreamPreview(null);
@@ -435,6 +476,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
       runGuardRef.current.release();
       setSessionRunning(false);
       setBatchRunning(false);
+      onBusyChange?.(false);
       setManualQuestionHandle(null);
       abortRef.current = null;
       try {
@@ -503,24 +545,29 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   };
 
   const loadStoredSession = async (session: RvSession) => {
+    if (!repository || !profile) return;
+    if (session.workspaceId !== workspace.id || session.profileId !== profile.id) {
+      setRunError(settings.interfaceLanguage === "pl" ? "Ta sesja należy do innego Workspace lub Profilu i nie może zostać otwarta w bieżącym widoku." : "This session belongs to a different Workspace or Profile and cannot be opened in the current view.");
+      return;
+    }
     setExecutionScope("single");
     setProgress({ sessionId: session.id, sessionCode: session.sessionCode, state: session.state, transcript: session.preRevealTranscript });
     setActiveTargetId(session.targetId ?? null);
     setRunError(null); setRevealText(""); setRevealArtifacts([]); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setTargetSaved(false); setPostRevealTranscript(session.postRevealTranscript); setPostRevealText(""); setSessionExportPath(null);
-    if (!repository) return;
     const storedReveal = await repository.getReveal(session.id);
     setAcceptedRevealText(storedReveal?.text ?? "");
     setAcceptedRevealArtifacts(storedReveal?.artifactManifest ?? []);
   };
 
   const resumeTelepathicSession = async (session: RvSession) => {
-    if (!repository || !runGuardRef.current.tryAcquire()) return;
+    if (!repository || !profile || !viewerRouteReady || session.workspaceId !== workspace.id || session.profileId !== profile.id || !runGuardRef.current.tryAcquire()) return;
     setRunError(null);
     setStreamPreview(null);
     setProtocol("telepathic");
     setRunType("automatic");
     setExecutionScope("single");
     setSessionRunning(true);
+    onBusyChange?.(true);
     setManualQuestionHandle(null);
     setManualQuestionText("");
     const controller = new AbortController();
@@ -562,6 +609,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
     } finally {
       runGuardRef.current.release();
       setSessionRunning(false);
+      onBusyChange?.(false);
       setManualQuestionHandle(null);
       abortRef.current = null;
       try {
@@ -573,11 +621,12 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
   };
 
   const runCapturedSession = async (session: RvSession, resume: boolean) => {
-    if (!repository || !profile || !runGuardRef.current.tryAcquire()) return;
+    if (!repository || !profile || !viewerRouteReady || session.workspaceId !== workspace.id || session.profileId !== profile.id || !runGuardRef.current.tryAcquire()) return;
     setRunError(null);
     setStreamPreview(null);
     setExecutionScope("single");
     setSessionRunning(true);
+    onBusyChange?.(true);
     setManualQuestionHandle(null);
     setManualQuestionText("");
     const controller = new AbortController();
@@ -655,6 +704,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
     } finally {
       runGuardRef.current.release();
       setSessionRunning(false);
+      onBusyChange?.(false);
       setManualQuestionHandle(null);
       abortRef.current = null;
       try { setRecentSessions((await repository.listRvSessions(workspace.id)).filter((item) => !item.researchProjectId)); }
@@ -844,7 +894,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
           <div className="route-summary">{activeProvider ? <><KeyRound size={16} /><span><strong>{activeProvider.label}</strong><small>{activeProvider.credentialHint ?? "••••••••"}</small></span></> : <><KeyRound size={16} /><span><strong>{copy.credentialPending}</strong><small>{copy.configureProviderFirst}</small></span></>}</div>
         </ConfigBlock>
         <ConfigBlock label={copy.viewerModel}>
-          <select value={viewerIdentityId} onChange={(event) => setViewerIdentityId(event.target.value)} disabled={!viewerIdentities.length}>
+          <select value={viewerIdentityId} onChange={(event) => setViewerIdentityId(event.target.value)} disabled={!viewerRouteReady || !viewerIdentities.length}>
             <option value="">{viewerIdentities.length ? copy.selectModel : (settings.interfaceLanguage === "pl" ? "Brak tożsamości Viewera" : "No Viewer identity")}</option>
             {viewerIdentities.map((item) => <option key={item.identity.id} value={item.identity.id}>{viewerIdentityLabel(item, settings.interfaceLanguage)}</option>)}
           </select>
@@ -874,7 +924,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository 
           {eligibleTargets.length ? <select className="session-language-select" value={selectedTargetId} onChange={(event) => setSelectedTargetId(event.target.value)}><option value="__random__">🎲 {copy.randomTarget}</option>{eligibleTargets.map((target) => <option key={target.id} value={target.id}>{copy.myTargets} · {localizedTargetTitle(target, resolvedLanguage)}</option>)}</select> : <div className="route-summary target-empty-warning"><Crosshair size={16} /><span><strong>{copy.noEligibleTargets}</strong><small>{copy.noEligibleTargetsLead}</small></span></div>}
         </ConfigBlock>}</> : <ConfigBlock label={copy.targetPool}><div className="batch-config"><label><span>{copy.targetPool}</span><strong>{copy.myTargets}</strong></label><label><span>{copy.batchCount}</span><input type="number" min={1} max={Math.max(1, batchPool.length)} value={batchCount} onChange={(event) => setBatchCount(Math.max(1, Number(event.target.value) || 1))} /></label><small>{copy.eligibleTargets}: {batchPool.length}</small>{batchPool.length === 0 && <small className="target-source-error">{copy.noEligibleTargetsLead}</small>}<div className="batch-preflight-actions"><button className="secondary-button" onClick={preflightBatch}>{copy.runPreflight}</button>{batchPreflightSignature === batchConfigSignature && <span className="status-chip ready"><Check size={12} />{copy.preflightPassed}</span>}</div></div></ConfigBlock>}
         <div className="start-block">
-          <button className="primary-button start-button" disabled={!isTauriRuntime() || !activeProvider || !selectedModel || settings.rvSessionMaxOutputTokens <= 0 || (runType === "monitor" && (!canSelectMonitor(protocol) || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (protocol === "telepathic" && telepathicQuestionMode === "predefined" && (!telepathicQuestions.length || (runType === "monitor" && telepathicQuestions.length > 5))) || (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
+          <button className="primary-button start-button" disabled={!viewerRouteReady || !isTauriRuntime() || !activeProvider || !selectedModel || settings.rvSessionMaxOutputTokens <= 0 || (runType === "monitor" && (!canSelectMonitor(protocol) || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (protocol === "telepathic" && telepathicQuestionMode === "predefined" && (!telepathicQuestions.length || (runType === "monitor" && telepathicQuestions.length > 5))) || (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
           <p>{activeProvider ? copy.controllerReady : copy.configureProviderFirst}</p>
         </div>
         </>}

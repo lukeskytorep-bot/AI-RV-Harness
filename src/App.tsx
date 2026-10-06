@@ -26,6 +26,7 @@ import {
   Component,
   Suspense,
   lazy,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -116,7 +117,10 @@ export default function App() {
   const [databaseCompatibilityBusy, setDatabaseCompatibilityBusy] = useState(false);
   const [databaseCompatibilityActionError, setDatabaseCompatibilityActionError] = useState<string | null>(null);
   const [initializationAttempt, setInitializationAttempt] = useState(0);
+  const criticalOperationBusyRef = useRef(false);
   const settingsSaveQueueRef = useRef<{ repository: AppRepository; queue: SettingsSaveQueue } | null>(null);
+
+  const setCriticalOperationBusy = useCallback((busy: boolean) => { criticalOperationBusyRef.current = busy; }, []);
 
   const copy = getCopy(settings.interfaceLanguage);
   const activeConversationWorkspace = workspaces.find((item) => item.id === activeConversationWorkspaceId && isWorkspaceCompatible(item, "conversation")) ?? null;
@@ -242,6 +246,7 @@ export default function App() {
   };
 
   const navigate = (destination: LegacyPage) => {
+    if (criticalOperationBusyRef.current) return;
     const normalized = normalizePage(destination);
     if (normalized === "ai-center") setAiCenterView("overview");
     if (normalized === "conversations") {
@@ -262,6 +267,7 @@ export default function App() {
     destination: "conversations" | "rv-sessions" = workspace.kind === "rv" ? "rv-sessions" : "conversations",
     rvView: RvSessionsView = "automatic",
   ) => {
+    if (criticalOperationBusyRef.current) return;
     const requiredKind: NewWorkspaceKind = destination === "rv-sessions" ? "rv" : "conversation";
     if (!isWorkspaceCompatible(workspace, requiredKind)) return;
     rememberActiveWorkspace(requiredKind, workspace.id);
@@ -452,6 +458,7 @@ export default function App() {
                 onOpenWorkspace={(workspace) => void openWorkspace(workspace, "conversations")}
                 createdNotice={workspaceCreatedNotice?.workspaceId === activeConversationWorkspace.id ? workspaceCreatedNotice : null}
                 onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
+                onOperationBusyChange={setCriticalOperationBusy}
               />
             ) : <EmptyCard><p>{copy.noCompatibleWorkspace}</p>{activeProfileId && <button className="primary-button" onClick={() => setWorkspaceDialogFor({ profileId: activeProfileId, kind: "conversation" })}>{copy.createWorkspace}</button>}</EmptyCard>
           ) : page === "rv-sessions" ? (
@@ -469,6 +476,7 @@ export default function App() {
                 onOpenWorkspace={(workspace) => void openWorkspace(workspace, "rv-sessions", rvSessionsView)}
                 createdNotice={workspaceCreatedNotice?.workspaceId === activeRvWorkspace.id ? workspaceCreatedNotice : null}
                 onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
+                onOperationBusyChange={setCriticalOperationBusy}
               />
             ) : <EmptyCard><p>{copy.noCompatibleWorkspace}</p>{activeProfileId && <button className="primary-button" onClick={() => setWorkspaceDialogFor({ profileId: activeProfileId, kind: "rv" })}>{copy.createWorkspace}</button>}</EmptyCard>
           ) : (

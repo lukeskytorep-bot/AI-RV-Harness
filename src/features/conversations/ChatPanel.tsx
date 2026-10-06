@@ -2,7 +2,7 @@ import { Archive, ArrowRight, Crosshair, Download, FileCheck2, KeyRound, LockKey
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { prepareViewerNotesForSession, viewerNotesSystemBlock } from "../../aiCenter/viewerNotes";
-import { listEligibleViewerIdentities, preferredViewerIdentityId, requireExistingViewerIdentity, viewerIdentityLabel, type EligibleViewerIdentity } from "../../aiCenter/viewerIdentitySelection";
+import { listEligibleViewerIdentities, preferredViewerIdentityId, requireWorkspaceViewerRoute, viewerIdentityLabel, type EligibleViewerIdentity } from "../../aiCenter/viewerIdentitySelection";
 import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
 import { chooseAndImportAttachments } from "../../attachments/native";
 import { ChatMessageList } from "../../chat/ChatMessageList";
@@ -22,6 +22,7 @@ import { getFullRcp, getRvLite, getTelepathicProtocol } from "../../resources/pr
 import { buildEffectiveViewerPrompt, localizedViewerEditablePrompt, stripKnownLockedBaseVocabulary } from "../../resources/systemPrompts";
 import { createImportedWorkspaceSource, estimateTextTokens } from "../../sources/service";
 import type { WorkspaceSource } from "../../sources/types";
+import { AsyncRunGuard } from "../../sessions/runGuard";
 import { saveTextFile } from "../../storage/native";
 import { autosizeConversationComposer } from "./composerSizing";
 import type { AppRepository } from "../../storage/repository";
@@ -34,9 +35,10 @@ export interface ChatPanelProps {
   workspace: Workspace;
   repository: AppRepository | null;
   fixedMode?: ChatMode;
+  onBusyChange?: (busy: boolean) => void;
 }
 
-export function ChatPanel({ copy, settings, profile, workspace, repository, fixedMode }: ChatPanelProps) {
+export function ChatPanel({ copy, settings, profile, workspace, repository, fixedMode, onBusyChange }: ChatPanelProps) {
   const [mode, setMode] = useState<ChatMode>(fixedMode ?? "conversation");
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -51,6 +53,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   const [chatImages, setChatImages] = useState<ProviderImageInput[]>([]);
   const [chatImageNames, setChatImageNames] = useState<string[]>([]);
   const [viewerIdentityId, setViewerIdentityId] = useState("");
+  const [viewerRouteReadyKey, setViewerRouteReadyKey] = useState<string | null>(null);
   const [viewerLearningEnabled, setViewerLearningEnabled] = useState(false);
   const [viewerLearningSnapshot, setViewerLearningSnapshot] = useState<ConversationViewerLearningSnapshot | null>(null);
   const [input, setInput] = useState("");
@@ -63,11 +66,16 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   const [error, setError] = useState<string | null>(null);
   const [pendingRetry, setPendingRetry] = useState<PendingChatTurn | null>(null);
   const [continuationFallback, setContinuationFallback] = useState<"send" | "retry" | null>(null);
+  const operationGuardRef = useRef(new AsyncRunGuard());
   const dialogs = useAppDialogs();
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
   const selectedIdentity = viewerIdentities.find((item) => item.identity.id === viewerIdentityId) ?? null;
   const activeProvider = selectedIdentity?.providerConfig ?? null;
   const selectedModel = selectedIdentity?.model ?? null;
+  const viewerRouteKey = `${workspace.id}:${profile?.id ?? "missing"}`;
+  const viewerRouteReady = viewerRouteReadyKey === viewerRouteKey && workspace.profileId === profile?.id;
+
+  useEffect(() => { onBusyChange?.(sending); return () => onBusyChange?.(false); }, [sending, onBusyChange]);
 
   useEffect(() => {
     if (fixedMode) setMode(fixedMode);
@@ -75,8 +83,11 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
 
   useEffect(() => {
     let cancelled = false;
+    setViewerRouteReadyKey(null);
+    setViewerIdentityId("");
+    setViewerIdentities([]);
     void (async () => {
-      if (!repository) return;
+      if (!repository || !profile || workspace.profileId !== profile.id) return;
       const [configs, nextSources] = await Promise.all([
         repository.listProviderConfigs(),
         repository.listWorkspaceSources(workspace.id),
@@ -84,14 +95,15 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       if (cancelled) return;
       setProviderConfigs(configs);
       const nextModels = await repository.listProviderModels();
-      const eligible = profile ? await listEligibleViewerIdentities({ repository, profileId: profile.id, language, providerConfigs: configs, models: nextModels }) : [];
+      const eligible = await listEligibleViewerIdentities({ repository, profileId: profile.id, language, providerConfigs: configs, models: nextModels });
       if (cancelled) return;
       setModels(nextModels);
       setViewerIdentities(eligible);
       setSources(nextSources);
       setChatImages([]);
       setChatImageNames([]);
-      setViewerIdentityId(preferredViewerIdentityId(eligible, profile?.defaultViewerModelId));
+      setViewerIdentityId(preferredViewerIdentityId(eligible, profile.defaultViewerModelId));
+      setViewerRouteReadyKey(`${workspace.id}:${profile.id}`);
       setError(null);
     })();
     return () => { cancelled = true; };
@@ -340,9 +352,19 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
 
   const send = async (allowTextOnlyContinuation = false) => {
     const content = input.trim();
-    if (!repository || !threadId || !activeProvider || !selectedModel || !content || sending) return;
-    setInput("");
+    if (!repository || !threadId || !profile || !selectedIdentity || !activeProvider || !selectedModel || !content || sending || !viewerRouteReady || !operationGuardRef.current.tryAcquire()) return;
     setSending(true);
+    onBusyChange?.(true);
+    try {
+      await requireWorkspaceViewerRoute({ repository, workspace, profile, identityId: selectedIdentity.identity.id, providerConfig: activeProvider, model: selectedModel });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setSending(false);
+      operationGuardRef.current.release();
+      onBusyChange?.(false);
+      return;
+    }
+    setInput("");
     setStreamingAssistant("");
     setError(null);
     if (!allowTextOnlyContinuation) setContinuationFallback(null);
@@ -363,6 +385,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       setError(cause instanceof Error ? cause.message : String(cause));
       setInput(content);
       setSending(false);
+      operationGuardRef.current.release();
+      onBusyChange?.(false);
       return;
     }
     let frozenViewerLearning: ConversationViewerLearningSnapshot | undefined;
@@ -377,6 +401,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       setError(cause instanceof Error ? cause.message : String(cause));
       setInput(content);
       setSending(false);
+      operationGuardRef.current.release();
+      onBusyChange?.(false);
       return;
     }
     const frozenConversationContextKey = mode === "conversation" && selectedIdentity
@@ -448,26 +474,40 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       setStreamingAssistant("");
       setThreads(await repository.listChatThreads(workspace.id, mode));
       setSending(false);
+      operationGuardRef.current.release();
+      onBusyChange?.(false);
     }
   };
 
   const retryPendingResponse = async (allowTextOnlyContinuation = false) => {
-    if (!repository || !pendingRetry || sending) return;
+    if (!repository || !profile || !pendingRetry || sending || !viewerRouteReady || pendingRetry.threadId !== threadId || !operationGuardRef.current.tryAcquire()) return;
+    setSending(true);
+    onBusyChange?.(true);
+    if (!pendingRetry.aiIdentityId) {
+      setError(settings.interfaceLanguage === "pl" ? "Tego starszego zapisu ponowienia nie można bezpiecznie powiązać z bieżącą tożsamością Viewera. Wyślij wiadomość ponownie jako nową turę." : "This legacy retry record cannot be safely bound to the current Viewer identity. Send the message again as a new turn.");
+      setSending(false);
+      operationGuardRef.current.release();
+      onBusyChange?.(false);
+      return;
+    }
     const providerConfig = providerConfigs.find((item) => item.id === pendingRetry.providerConfigId);
     const model = models.find((item) => item.providerConfigId === pendingRetry.providerConfigId && item.modelId === pendingRetry.modelId && (!pendingRetry.modelRoute || item.route === pendingRetry.modelRoute));
     if (!providerConfig || !model) {
       setError(settings.interfaceLanguage === "pl" ? "Zapisany model lub połączenie nie jest obecnie dostępne. Przywróć je, aby ponowić odpowiedź." : "The saved model or connection is currently unavailable. Restore it to retry the response.");
+      setSending(false);
+      operationGuardRef.current.release();
+      onBusyChange?.(false);
       return;
     }
-    if (pendingRetry.aiIdentityId && profile) {
-      try {
-        await requireExistingViewerIdentity({ repository, profileId: profile.id, identityId: pendingRetry.aiIdentityId, providerConfig, model });
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause));
-        return;
-      }
+    try {
+      await requireWorkspaceViewerRoute({ repository, workspace, profile, identityId: pendingRetry.aiIdentityId, providerConfig, model });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setSending(false);
+      operationGuardRef.current.release();
+      onBusyChange?.(false);
+      return;
     }
-    setSending(true);
     setStreamingAssistant("");
     setError(null);
     if (!allowTextOnlyContinuation) setContinuationFallback(null);
@@ -506,6 +546,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       setStreamingAssistant("");
       setThreads(await repository.listChatThreads(workspace.id, mode));
       setSending(false);
+      operationGuardRef.current.release();
+      onBusyChange?.(false);
     }
   };
 
@@ -567,7 +609,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       </div>
       <div className="chat-model-bar">
         <span><KeyRound size={14} />{activeProvider?.label ?? copy.credentialPending}</span>
-        <select value={viewerIdentityId} onChange={(event) => setViewerIdentityId(event.target.value)} disabled={!viewerIdentities.length || sending}>
+        <select value={viewerIdentityId} onChange={(event) => setViewerIdentityId(event.target.value)} disabled={!viewerRouteReady || !viewerIdentities.length || sending}>
           <option value="">{viewerIdentities.length ? copy.selectModel : (settings.interfaceLanguage === "pl" ? "Brak tożsamości Viewera" : "No Viewer identity")}</option>
           {viewerIdentities.map((item) => <option key={item.identity.id} value={item.identity.id}>{viewerIdentityLabel(item, settings.interfaceLanguage)}</option>)}
         </select>
@@ -599,12 +641,12 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         emptyState={<div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div>}
       />
       {error && <div className="provider-error chat-error">{error}</div>}
-      {continuationFallback && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Natywna ciągłość providera nie pasuje już do bieżącego połączenia lub modelu. Możesz świadomie kontynuować tylko z historią tekstową." : "Provider-native continuity no longer matches the current connection or model. You can explicitly continue with text history only."}</span><button className="secondary-button" disabled={sending} onClick={() => void (continuationFallback === "retry" ? retryPendingResponse(true) : send(true))}>{settings.interfaceLanguage === "pl" ? "Kontynuuj tylko tekstowo" : "Continue text-only"}</button></div>}
-      {pendingRetry && !continuationFallback && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Ostatnia wiadomość nie otrzymała odpowiedzi AI." : "The last message did not receive an AI response."}</span><button className="secondary-button" disabled={sending} onClick={() => void retryPendingResponse()}>{settings.interfaceLanguage === "pl" ? "Ponów odpowiedź" : "Retry response"}</button></div>}
+      {continuationFallback && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Natywna ciągłość providera nie pasuje już do bieżącego połączenia lub modelu. Możesz świadomie kontynuować tylko z historią tekstową." : "Provider-native continuity no longer matches the current connection or model. You can explicitly continue with text history only."}</span><button className="secondary-button" disabled={sending || !viewerRouteReady} onClick={() => void (continuationFallback === "retry" ? retryPendingResponse(true) : send(true))}>{settings.interfaceLanguage === "pl" ? "Kontynuuj tylko tekstowo" : "Continue text-only"}</button></div>}
+      {pendingRetry && !continuationFallback && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Ostatnia wiadomość nie otrzymała odpowiedzi AI." : "The last message did not receive an AI response."}</span><button className="secondary-button" disabled={sending || !viewerRouteReady} onClick={() => void retryPendingResponse()}>{settings.interfaceLanguage === "pl" ? "Ponów odpowiedź" : "Retry response"}</button></div>}
       {(selectedSources.length > 0 || chatImageNames.length > 0) && <div className="attachment-chips">{selectedSources.map((source) => <button type="button" key={source.id} title={copy.removeSource} onClick={() => void toggleSource(source.id)}><FileCheck2 size={12} /><span>{source.displayName} · {source.sourceType.toUpperCase()} · {settings.interfaceLanguage === "pl" ? "aktywne" : "active"} · ~{estimateTextTokens(source.content).toLocaleString()} tokens</span><X size={11} /></button>)}{chatImageNames.map((name, index) => <button type="button" key={`${name}-${index}`} onClick={() => removeChatImage(index)}><span>{name} · IMAGE · {settings.interfaceLanguage === "pl" ? "następna tura" : "next turn"} · ~2,048 tokens</span><X size={11} /></button>)}</div>}
       <div className="composer">
-        <textarea ref={composerTextareaRef} rows={2} placeholder={copy.messagePlaceholder} value={input} onChange={(event) => setInput(event.target.value)} disabled={!selectedModel || sending || Boolean(pendingRetry)} />
-        <div className="composer-actions"><button type="button" className="composer-attachment-button" title={settings.interfaceLanguage === "pl" ? "Dołącz dokumenty lub obrazy" : "Attach documents or images"} disabled={!repository || !threadId || sending || attachmentBusy || Boolean(pendingRetry)} onClick={() => void attachFiles()}><Paperclip size={17} /></button><button disabled={!selectedModel || !input.trim() || sending || contextExceeded || Boolean(pendingRetry)} onClick={() => void send()}>{sending ? copy.sending : copy.send}<ArrowRight size={15} /></button></div>
+        <textarea ref={composerTextareaRef} rows={2} placeholder={copy.messagePlaceholder} value={input} onChange={(event) => setInput(event.target.value)} disabled={!viewerRouteReady || !selectedModel || sending || Boolean(pendingRetry)} />
+        <div className="composer-actions"><button type="button" className="composer-attachment-button" title={settings.interfaceLanguage === "pl" ? "Dołącz dokumenty lub obrazy" : "Attach documents or images"} disabled={!viewerRouteReady || !repository || !threadId || sending || attachmentBusy || Boolean(pendingRetry)} onClick={() => void attachFiles()}><Paperclip size={17} /></button><button disabled={!viewerRouteReady || !selectedModel || !input.trim() || sending || contextExceeded || Boolean(pendingRetry)} onClick={() => void send()}>{sending ? copy.sending : copy.send}<ArrowRight size={15} /></button></div>
       </div>
     </section>
   );

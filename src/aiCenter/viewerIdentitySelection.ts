@@ -4,6 +4,7 @@ import { credentialIdentityFingerprint } from "../providers/native";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { isTauriRuntime } from "../storage";
 import type { AppRepository } from "../storage/repository";
+import type { Profile, Workspace } from "../types";
 
 export interface EligibleViewerIdentity {
   identity: AiIdentity;
@@ -122,6 +123,27 @@ export async function requireExistingViewerIdentity(input: {
     throw new Error("The selected Viewer identity is no longer available for this Profile and exact provider route.");
   }
   return identity;
+}
+
+
+export async function requireWorkspaceViewerRoute(input: {
+  repository: AppRepository;
+  workspace: Workspace;
+  profile: Profile | null;
+  identityId: string;
+  providerConfig: ProviderConfig;
+  model: ProviderModel;
+}): Promise<AiIdentity> {
+  if (!input.profile || input.workspace.profileId !== input.profile.id) {
+    throw new Error("The selected Workspace no longer belongs to the active Profile.");
+  }
+  return requireExistingViewerIdentity({
+    repository: input.repository,
+    profileId: input.profile.id,
+    identityId: input.identityId,
+    providerConfig: input.providerConfig,
+    model: input.model,
+  });
 }
 
 export async function ensureProfileViewerIdentity(input: {
