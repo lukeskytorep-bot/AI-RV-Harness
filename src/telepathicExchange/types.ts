@@ -16,7 +16,10 @@ export interface TelepathicAiRouteSnapshot {
   profileId: string;
   profileName: string;
   workspaceId: string;
+  aiIdentityId: string;
   providerConfigId: string;
+  credentialId: string;
+  credentialFingerprint: string;
   modelId: string;
   route: string;
 }
@@ -44,6 +47,7 @@ export type TelepathicSenderPolicy =
 export interface TelepathicSeriesConfig {
   schemaVersion: 1;
   seriesId: string;
+  seriesWorkspaceId: string;
   mode: TelepathicMode;
   language: TelepathicLanguage;
   participants: TelepathicParticipant[];
@@ -63,6 +67,7 @@ export interface TelepathicRoundAssignment {
 export interface TelepathicSeriesPlan {
   schemaVersion: 1;
   seriesId: string;
+  seriesWorkspaceId: string;
   mode: TelepathicMode;
   rounds: TelepathicRoundAssignment[];
 }
@@ -162,4 +167,48 @@ export function telepathicRoundScopeKey(scope: Pick<TelepathicProviderScope, "se
 
 export function telepathicProviderScopeKey(scope: TelepathicProviderScope): string {
   return `${telepathicRoundScopeKey(scope)}:stage:${scope.callStage}`;
+}
+
+
+export type TelepathicProviderCallStatus = "prepared" | "dispatched" | "succeeded" | "failed" | "uncertain";
+
+export interface TelepathicProviderCallRecord {
+  id: string;
+  seriesId: string;
+  roundId: string;
+  participantId: string;
+  callStage: string;
+  technicalAttempt: number;
+  status: TelepathicProviderCallStatus;
+  scopeKey: string;
+  requestSha256: string;
+  providerRequestId?: string;
+  responseText?: string;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TelepathicRoundState {
+  assignment: TelepathicRoundAssignment;
+  status: "pending" | "preparing_target" | "blind" | "revealed" | "reflections" | "sharing" | "completed" | "cancelled" | "blocked";
+  target?: TelepathicLockedTarget;
+  blindByParticipant: Record<string, TelepathicBlindSubmission>;
+  reflectionsByParticipant: Record<string, TelepathicReflectionRecord>;
+  revealedAt?: string;
+  completedAt?: string;
+  blockedReason?: string;
+}
+
+export interface TelepathicSeriesState {
+  schemaVersion: 1;
+  config: TelepathicSeriesConfig;
+  plan: TelepathicSeriesPlan;
+  currentRoundIndex: number;
+  status: "ready" | "running" | "paused" | "completed" | "cancelled" | "blocked";
+  rounds: TelepathicRoundState[];
+  providerCalls: TelepathicProviderCallRecord[];
+  finalReflections: Record<string, string>;
+  createdAt: string;
+  updatedAt: string;
 }

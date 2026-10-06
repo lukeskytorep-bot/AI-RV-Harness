@@ -30,7 +30,10 @@ const ai = (id: string): TelepathicParticipant => ({
     profileId: `profile-${id}`,
     profileName: id.toUpperCase(),
     workspaceId: `workspace-${id}`,
+    aiIdentityId: `identity-${id}`,
     providerConfigId: `provider-${id}`,
+    credentialId: `credential-${id}`,
+    credentialFingerprint: `fingerprint-${id}`,
     modelId: `model-${id}`,
     route: `openrouter:model-${id}`,
   },
@@ -39,6 +42,7 @@ const ai = (id: string): TelepathicParticipant => ({
 const baseConfig = (overrides: Partial<TelepathicSeriesConfig> = {}): TelepathicSeriesConfig => ({
   schemaVersion: 1,
   seriesId: "series-1",
+  seriesWorkspaceId: "workspace-leo",
   mode: "ai_ai_training",
   language: "en",
   participants: [ai("leo"), ai("nemo"), ai("aura")],

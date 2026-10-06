@@ -12,6 +12,15 @@ function assertUniqueParticipants(participants: TelepathicParticipant[]): void {
 
 function validateConfig(config: TelepathicSeriesConfig): void {
   assertUniqueParticipants(config.participants);
+  if (!config.seriesWorkspaceId.trim()) throw new Error("Telepathic series requires an owning Conversation Workspace.");
+  for (const participant of config.participants) {
+    if (participant.kind === "ai") {
+      const route = participant.ai;
+      if (!route || !route.profileId || !route.workspaceId || !route.aiIdentityId || !route.providerConfigId || !route.credentialId || !route.credentialFingerprint || !route.modelId || !route.route) {
+        throw new Error(`AI participant ${participant.id} requires a complete Profile/Workspace/identity/provider/model route snapshot.`);
+      }
+    }
+  }
   if (!Number.isInteger(config.roundCount) || config.roundCount < 1) {
     throw new Error("Telepathic round count must be a positive integer.");
   }
@@ -69,5 +78,5 @@ export function planTelepathicSeries(config: TelepathicSeriesConfig): Telepathic
       receiverParticipantIds: config.participants.filter((participant) => participant.id !== sender.id).map((participant) => participant.id),
     };
   });
-  return { schemaVersion: 1, seriesId: config.seriesId, mode: config.mode, rounds };
+  return { schemaVersion: 1, seriesId: config.seriesId, seriesWorkspaceId: config.seriesWorkspaceId, mode: config.mode, rounds };
 }
