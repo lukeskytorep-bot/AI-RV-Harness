@@ -3,6 +3,7 @@ import { createTelepathicSeriesState } from "../telepathicExchange/engine";
 import type { TelepathicSeriesConfig } from "../telepathicExchange/types";
 import { BrowserTelepathicExchangeRepository } from "./browser/telepathicExchangeRepository";
 import { SqliteTelepathicExchangeRepository } from "./sqlite/telepathicExchangeRepository";
+import type { DatabaseTransactionStatement } from "./databaseNative";
 
 class MemoryStorage implements Storage {
   private readonly data = new Map<string, string>();
@@ -62,7 +63,7 @@ describe("telepathic exchange persistence contract", () => {
         if (query.startsWith("SELECT round_id, content_sha256 FROM telepathic_targets")) return [] as T;
         throw new Error(`unexpected select: ${query}`);
       },
-      executeTransaction: async (items) => { statements.push(...items); return []; },
+      executeTransaction: async (items: DatabaseTransactionStatement[]) => { statements.push(...items); return []; },
     });
     await repository.saveTelepathicSeries(createTelepathicSeriesState(config, "2026-10-06T21:00:00.000Z"));
     const sql = statements.map((item) => item.query).join("\n");
