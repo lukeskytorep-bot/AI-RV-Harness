@@ -228,6 +228,31 @@ describe("TELEPATHIC STEP 3A audit fixes", () => {
     expect(attempt).not.toHaveBeenCalled();
   });
 
+  it("rejects two concurrent starts or resumes for the same series before a duplicate provider dispatch can occur", async () => {
+    const cfg = series(1);
+    const store = new InMemoryTelepathicExchangeStore();
+    await store.saveTelepathicSeries(createTelepathicSeriesState(cfg, capturedAt));
+
+    let releaseFirst!: () => void;
+    const firstDispatchStarted = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let unblockProvider!: () => void;
+    const providerGate = new Promise<void>((resolve) => { unblockProvider = resolve; });
+    const attempt = vi.fn<ProviderChatAttempt>(async () => {
+      releaseFirst();
+      await providerGate;
+      return { content: "TARGET", usage: {} };
+    });
+    const deps = { store, providerAttempt: attempt, resolveRoute: async (p: TelepathicParticipant) => routeFor(p) };
+
+    const firstRun = runNextTelepathicAiRound(deps, cfg.seriesId);
+    await firstDispatchStarted;
+    await expect(runNextTelepathicAiRound(deps, cfg.seriesId)).rejects.toThrow(/already running/);
+    expect(attempt).toHaveBeenCalledTimes(1);
+
+    unblockProvider();
+    await firstRun.catch(() => undefined);
+  });
+
   it("blocks an oversized final-series packet before provider dispatch and never truncates rounds", async () => {
     const cfg = series(1);
     const store = new InMemoryTelepathicExchangeStore();

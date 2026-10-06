@@ -14,6 +14,7 @@ import migration024 from "../src-tauri/migrations/024_viewer_learning_field_guid
 import migration025 from "../src-tauri/migrations/025_provider_continuation_state.sql?raw";
 import migration026 from "../src-tauri/migrations/026_typed_workspaces.sql?raw";
 import migration027 from "../src-tauri/migrations/027_factory_training_classification_upgrade.sql?raw";
+import migration028 from "../src-tauri/migrations/028_telepathic_exchange_series.sql?raw";
 import migrationRegistry from "../src-tauri/src/migrations.rs?raw";
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -97,11 +98,12 @@ describe("DATABASE-COMPATIBILITY-EPOCH-1-R1 boundaries", () => {
     expect(sha256(migration022)).toBe("7fcec7326bbd8083efa830155ada3552fabeabf99ac92dab1b972260854aa4d4");
     expect(sha256(migration023)).toBe("1a9d300daa180a4507c01497b52deaf84722bd710ed4617f84058932dc7838a4");
     expect(sha256(migration024)).toBe("637d33319c0c1abcb85a4b565b16c4c3c2343b7e45a392079d73eaa1ce410837");
-    expect(migrationRegistry).toContain("(1_i64..=27)");
+    expect(migrationRegistry).toContain("(1_i64..=28)");
     expect(migrationRegistry).toContain('include_str!("../migrations/024_viewer_learning_field_guide.sql")');
     expect(migrationRegistry).toContain('include_str!("../migrations/025_provider_continuation_state.sql")');
     expect(migrationRegistry).toContain('include_str!("../migrations/026_typed_workspaces.sql")');
     expect(migrationRegistry).toContain('include_str!("../migrations/027_factory_training_classification_upgrade.sql")');
+    expect(migrationRegistry).toContain('include_str!("../migrations/028_telepathic_exchange_series.sql")');
     expect(migration024).toContain("CREATE TABLE field_guide_versions");
     expect(migration025).toContain("CREATE TABLE chat_message_provider_state");
     expect(migration025).toContain("CREATE TABLE session_event_provider_state");
@@ -109,5 +111,7 @@ describe("DATABASE-COMPATIBILITY-EPOCH-1-R1 boundaries", () => {
     expect(migration027).toContain("DROP TRIGGER IF EXISTS prevent_training_target_update");
     expect(migration027).toContain("factory_training_01_10");
     expect(migration027).toContain("CREATE TRIGGER IF NOT EXISTS prevent_used_target_update");
+    expect(migration028).toContain("CREATE TABLE IF NOT EXISTS telepathic_series");
+    expect(migration028).toContain("telepathic_target_content_immutable");
   });
 });

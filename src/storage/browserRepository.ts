@@ -9,6 +9,7 @@ import { BrowserSettingsModelsRepository } from "./browser/settingsModelsReposit
 import { BrowserWorkspacesConversationsRepository } from "./browser/workspacesConversationsRepository";
 import { BrowserSessionsRepository } from "./browser/sessionsRepository";
 import { BrowserTrainingRepository } from "./browser/trainingRepository";
+import { BrowserTelepathicExchangeRepository } from "./browser/telepathicExchangeRepository";
 import { BrowserAiCenterRepository } from "./browser/aiCenterRepository";
 import { BrowserFieldGuideRepository } from "./browser/fieldGuideRepository";
 import { BrowserMonitorRepository } from "./browser/monitorRepository";
@@ -45,6 +46,7 @@ export class BrowserRepository implements AppRepository {
     isResearchScoresFrozen: (projectId) => this.researchRepository.isScoresFrozen(projectId),
   });
   private readonly trainingRepository = new BrowserTrainingRepository();
+  private readonly telepathicExchangeRepository = new BrowserTelepathicExchangeRepository();
   private readonly aiCenterRepository = new BrowserAiCenterRepository();
   private readonly fieldGuideRepository = new BrowserFieldGuideRepository();
   private readonly monitorRepository = new BrowserMonitorRepository({
@@ -109,6 +111,8 @@ export class BrowserRepository implements AppRepository {
   updateTrainingRun: AppRepository["updateTrainingRun"] = (id, input) => this.trainingRepository.updateTrainingRun(id, input);
   listTrainingRuns: AppRepository["listTrainingRuns"] = () => this.trainingRepository.listTrainingRuns();
   listArchivedTrainingRuns: AppRepository["listArchivedTrainingRuns"] = () => this.trainingRepository.listArchivedTrainingRuns();
+  getTelepathicSeries: AppRepository["getTelepathicSeries"] = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeries(seriesId);
+  saveTelepathicSeries: AppRepository["saveTelepathicSeries"] = (state) => this.telepathicExchangeRepository.saveTelepathicSeries(state);
 
   async archiveTrainingRun(id: string): Promise<void> {
     const run = (await this.trainingRepository.listTrainingRuns()).find((item) => item.id === id);

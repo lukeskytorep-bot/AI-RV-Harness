@@ -12,6 +12,7 @@ import { SqliteSettingsModelsRepository } from "./sqlite/settingsModelsRepositor
 import { SqliteWorkspacesConversationsRepository } from "./sqlite/workspacesConversationsRepository";
 import { SqliteSessionsRepository } from "./sqlite/sessionsRepository";
 import { SqliteTrainingRepository } from "./sqlite/trainingRepository";
+import { SqliteTelepathicExchangeRepository } from "./sqlite/telepathicExchangeRepository";
 import { SqliteAiCenterRepository } from "./sqlite/aiCenterRepository";
 import { SqliteFieldGuideRepository } from "./sqlite/fieldGuideRepository";
 import { SqliteMonitorRepository } from "./sqlite/monitorRepository";
@@ -43,6 +44,7 @@ export class SqliteRepository implements AppRepository {
   private readonly researchRepository: SqliteResearchRepository;
   private readonly sessionsRepository: SqliteSessionsRepository;
   private readonly trainingRepository: SqliteTrainingRepository;
+  private readonly telepathicExchangeRepository: SqliteTelepathicExchangeRepository;
   private readonly aiCenterRepository: SqliteAiCenterRepository;
   private readonly fieldGuideRepository: SqliteFieldGuideRepository;
   private readonly monitorRepository: SqliteMonitorRepository;
@@ -83,6 +85,10 @@ export class SqliteRepository implements AppRepository {
     this.trainingRepository = new SqliteTrainingRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
+    });
+    this.telepathicExchangeRepository = new SqliteTelepathicExchangeRepository({
+      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
+      executeTransaction: (statements) => this.executeTransaction(statements),
     });
     this.aiCenterRepository = new SqliteAiCenterRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
@@ -163,6 +169,8 @@ export class SqliteRepository implements AppRepository {
   updateTrainingRun: AppRepository["updateTrainingRun"] = (id, input) => this.trainingRepository.updateTrainingRun(id, input);
   listTrainingRuns: AppRepository["listTrainingRuns"] = () => this.trainingRepository.listTrainingRuns();
   listArchivedTrainingRuns: AppRepository["listArchivedTrainingRuns"] = () => this.trainingRepository.listArchivedTrainingRuns();
+  getTelepathicSeries: AppRepository["getTelepathicSeries"] = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeries(seriesId);
+  saveTelepathicSeries: AppRepository["saveTelepathicSeries"] = (state) => this.telepathicExchangeRepository.saveTelepathicSeries(state);
 
   async archiveTrainingRun(id: string): Promise<void> {
     const run = (await this.trainingRepository.listTrainingRuns()).find((item) => item.id === id);

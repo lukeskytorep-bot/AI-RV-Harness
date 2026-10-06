@@ -84,6 +84,14 @@ export type DatabaseWriteOperation =
   | "training_update_training_runs_01"
   | "training_update_training_runs_02"
   | "training_update_training_runs_03"
+  | "telepathic_upsert_series_01"
+  | "telepathic_upsert_participant_01"
+  | "telepathic_upsert_round_01"
+  | "telepathic_insert_target_01"
+  | "telepathic_advance_target_01"
+  | "telepathic_upsert_blind_01"
+  | "telepathic_upsert_reflection_01"
+  | "telepathic_upsert_call_01"
   | "workspaces_conversations_insert_workspaces_01"
   | "workspaces_conversations_update_workspaces_01"
   | "workspaces_conversations_update_workspaces_02"
@@ -193,6 +201,14 @@ const WRITE_OPERATIONS = new Map<string, DatabaseWriteOperation>([
   ["UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL", "training_update_training_runs_01"],
   ["UPDATE training_runs SET record_json = $1, archived_at = $2, updated_at = $2 WHERE id = $3 AND archived_at IS NULL", "training_update_training_runs_02"],
   ["UPDATE training_runs SET record_json = $1, archived_at = NULL, updated_at = $2 WHERE id = $3 AND archived_at IS NOT NULL", "training_update_training_runs_03"],
+  ["INSERT INTO telepathic_series (id, series_workspace_id, mode, language, status, current_round_index, config_json, plan_json, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_round_index=excluded.current_round_index, config_json=excluded.config_json, plan_json=excluded.plan_json, updated_at=excluded.updated_at", "telepathic_upsert_series_01"],
+  ["INSERT INTO telepathic_participants (series_id, participant_id, kind, display_name, profile_id, workspace_id, ai_identity_id, provider_config_id, credential_id, model_id, model_route, route_snapshot_json, field_guide_snapshot_json, viewer_notes_snapshot_json, final_reflection_text) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(series_id, participant_id) DO UPDATE SET display_name=excluded.display_name, field_guide_snapshot_json=excluded.field_guide_snapshot_json, viewer_notes_snapshot_json=excluded.viewer_notes_snapshot_json, final_reflection_text=excluded.final_reflection_text", "telepathic_upsert_participant_01"],
+  ["INSERT INTO telepathic_rounds (id, series_id, round_number, sender_participant_id, status, revealed_at, completed_at, blocked_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET status=excluded.status, revealed_at=excluded.revealed_at, completed_at=excluded.completed_at, blocked_reason=excluded.blocked_reason", "telepathic_upsert_round_01"],
+  ["INSERT OR IGNORE INTO telepathic_targets (round_id, sender_participant_id, content, assets_manifest_json, content_sha256, status, locked_at, transmission_ready_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", "telepathic_insert_target_01"],
+  ["UPDATE telepathic_targets SET status='transmission_ready', transmission_ready_at=$1 WHERE round_id=$2 AND status='locked'", "telepathic_advance_target_01"],
+  ["INSERT INTO telepathic_blind_submissions (round_id, participant_id, status, first_text, second_text, provider_attempt_count, content_sha256, sealed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(round_id, participant_id) DO UPDATE SET status=excluded.status, first_text=excluded.first_text, second_text=excluded.second_text, provider_attempt_count=excluded.provider_attempt_count, content_sha256=excluded.content_sha256, sealed_at=excluded.sealed_at WHERE telepathic_blind_submissions.status NOT IN ('sealed','no_submission')", "telepathic_upsert_blind_01"],
+  ["INSERT INTO telepathic_reflections (round_id, participant_id, role, reflection_text, share_others_consent, shared_answers_comment) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(round_id, participant_id) DO UPDATE SET reflection_text=excluded.reflection_text, share_others_consent=excluded.share_others_consent, shared_answers_comment=excluded.shared_answers_comment", "telepathic_upsert_reflection_01"],
+  ["INSERT INTO telepathic_provider_calls (id, series_id, round_id, participant_id, call_stage, technical_attempt, status, scope_key, request_sha256, provider_request_id, response_text, error_message, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(id) DO UPDATE SET status=excluded.status, provider_request_id=excluded.provider_request_id, response_text=excluded.response_text, error_message=excluded.error_message, updated_at=excluded.updated_at", "telepathic_upsert_call_01"],
   ["INSERT INTO workspaces (id, profile_id, name, description, kind, created_at, updated_at, last_opened_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", "workspaces_conversations_insert_workspaces_01"],
   ["UPDATE workspaces SET name = $1, updated_at = $2 WHERE id = $3", "workspaces_conversations_update_workspaces_01"],
   ["UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL AND ((kind = 'conversation' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('conversation', 'legacy_combined'))) OR (kind = 'rv' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('rv', 'legacy_combined'))) OR (kind = 'legacy_combined' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('conversation', 'legacy_combined')) AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('rv', 'legacy_combined'))))", "workspaces_conversations_update_workspaces_02"],

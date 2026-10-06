@@ -143,6 +143,11 @@ pub(crate) const MIGRATION_SPECS: &[MigrationSpec] = &[
         description: "factory_training_classification_upgrade",
         sql: include_str!("../migrations/027_factory_training_classification_upgrade.sql"),
     },
+    MigrationSpec {
+        version: 28,
+        description: "telepathic_exchange_series",
+        sql: include_str!("../migrations/028_telepathic_exchange_series.sql"),
+    },
 ];
 
 pub(crate) const CURRENT_MIGRATION_VERSION: i64 =
@@ -165,13 +170,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_is_contiguous_and_current_version_is_027() {
+    fn registry_is_contiguous_and_current_version_is_028() {
         let versions = MIGRATION_SPECS
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>();
-        assert_eq!(versions, (1_i64..=27).collect::<Vec<_>>());
-        assert_eq!(CURRENT_MIGRATION_VERSION, 27);
+        assert_eq!(versions, (1_i64..=28).collect::<Vec<_>>());
+        assert_eq!(CURRENT_MIGRATION_VERSION, 28);
         assert_eq!(registered_migrations().len(), MIGRATION_SPECS.len());
     }
 }

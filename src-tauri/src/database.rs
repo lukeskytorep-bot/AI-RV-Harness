@@ -176,6 +176,22 @@ pub enum DatabaseWriteOperation {
     TrainingUpdateTrainingRuns02,
     #[serde(rename = "training_update_training_runs_03")]
     TrainingUpdateTrainingRuns03,
+    #[serde(rename = "telepathic_upsert_series_01")]
+    TelepathicUpsertSeries01,
+    #[serde(rename = "telepathic_upsert_participant_01")]
+    TelepathicUpsertParticipant01,
+    #[serde(rename = "telepathic_upsert_round_01")]
+    TelepathicUpsertRound01,
+    #[serde(rename = "telepathic_insert_target_01")]
+    TelepathicInsertTarget01,
+    #[serde(rename = "telepathic_advance_target_01")]
+    TelepathicAdvanceTarget01,
+    #[serde(rename = "telepathic_upsert_blind_01")]
+    TelepathicUpsertBlind01,
+    #[serde(rename = "telepathic_upsert_reflection_01")]
+    TelepathicUpsertReflection01,
+    #[serde(rename = "telepathic_upsert_call_01")]
+    TelepathicUpsertCall01,
     #[serde(rename = "workspaces_conversations_insert_workspaces_01")]
     WorkspacesConversationsInsertWorkspaces01,
     #[serde(rename = "workspaces_conversations_update_workspaces_01")]
@@ -313,6 +329,14 @@ impl DatabaseWriteOperation {
             Self::TrainingUpdateTrainingRuns01 => "UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL",
             Self::TrainingUpdateTrainingRuns02 => "UPDATE training_runs SET record_json = $1, archived_at = $2, updated_at = $2 WHERE id = $3 AND archived_at IS NULL",
             Self::TrainingUpdateTrainingRuns03 => "UPDATE training_runs SET record_json = $1, archived_at = NULL, updated_at = $2 WHERE id = $3 AND archived_at IS NOT NULL",
+            Self::TelepathicUpsertSeries01 => "INSERT INTO telepathic_series (id, series_workspace_id, mode, language, status, current_round_index, config_json, plan_json, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_round_index=excluded.current_round_index, config_json=excluded.config_json, plan_json=excluded.plan_json, updated_at=excluded.updated_at",
+            Self::TelepathicUpsertParticipant01 => "INSERT INTO telepathic_participants (series_id, participant_id, kind, display_name, profile_id, workspace_id, ai_identity_id, provider_config_id, credential_id, model_id, model_route, route_snapshot_json, field_guide_snapshot_json, viewer_notes_snapshot_json, final_reflection_text) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(series_id, participant_id) DO UPDATE SET display_name=excluded.display_name, field_guide_snapshot_json=excluded.field_guide_snapshot_json, viewer_notes_snapshot_json=excluded.viewer_notes_snapshot_json, final_reflection_text=excluded.final_reflection_text",
+            Self::TelepathicUpsertRound01 => "INSERT INTO telepathic_rounds (id, series_id, round_number, sender_participant_id, status, revealed_at, completed_at, blocked_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET status=excluded.status, revealed_at=excluded.revealed_at, completed_at=excluded.completed_at, blocked_reason=excluded.blocked_reason",
+            Self::TelepathicInsertTarget01 => "INSERT OR IGNORE INTO telepathic_targets (round_id, sender_participant_id, content, assets_manifest_json, content_sha256, status, locked_at, transmission_ready_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+            Self::TelepathicAdvanceTarget01 => "UPDATE telepathic_targets SET status='transmission_ready', transmission_ready_at=$1 WHERE round_id=$2 AND status='locked'",
+            Self::TelepathicUpsertBlind01 => "INSERT INTO telepathic_blind_submissions (round_id, participant_id, status, first_text, second_text, provider_attempt_count, content_sha256, sealed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(round_id, participant_id) DO UPDATE SET status=excluded.status, first_text=excluded.first_text, second_text=excluded.second_text, provider_attempt_count=excluded.provider_attempt_count, content_sha256=excluded.content_sha256, sealed_at=excluded.sealed_at WHERE telepathic_blind_submissions.status NOT IN ('sealed','no_submission')",
+            Self::TelepathicUpsertReflection01 => "INSERT INTO telepathic_reflections (round_id, participant_id, role, reflection_text, share_others_consent, shared_answers_comment) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(round_id, participant_id) DO UPDATE SET reflection_text=excluded.reflection_text, share_others_consent=excluded.share_others_consent, shared_answers_comment=excluded.shared_answers_comment",
+            Self::TelepathicUpsertCall01 => "INSERT INTO telepathic_provider_calls (id, series_id, round_id, participant_id, call_stage, technical_attempt, status, scope_key, request_sha256, provider_request_id, response_text, error_message, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(id) DO UPDATE SET status=excluded.status, provider_request_id=excluded.provider_request_id, response_text=excluded.response_text, error_message=excluded.error_message, updated_at=excluded.updated_at",
             Self::WorkspacesConversationsInsertWorkspaces01 => "INSERT INTO workspaces (id, profile_id, name, description, kind, created_at, updated_at, last_opened_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             Self::WorkspacesConversationsUpdateWorkspaces01 => "UPDATE workspaces SET name = $1, updated_at = $2 WHERE id = $3",
             Self::WorkspacesConversationsUpdateWorkspaces02 => "UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL AND ((kind = 'conversation' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('conversation', 'legacy_combined'))) OR (kind = 'rv' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('rv', 'legacy_combined'))) OR (kind = 'legacy_combined' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('conversation', 'legacy_combined')) AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('rv', 'legacy_combined'))))",
@@ -972,6 +996,111 @@ mod tests {
         std::fs::remove_dir_all(directory).expect("test directory should be removed");
     }
 
+    #[tokio::test]
+    async fn telepathic_named_writes_round_trip_on_real_sqlite_028_schema() {
+        let mut connection = SqliteConnection::connect("sqlite::memory:")
+            .await
+            .expect("in-memory telepathic fixture should open");
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut connection)
+            .await
+            .expect("foreign keys should enable");
+        sqlx::query("CREATE TABLE workspaces (id TEXT PRIMARY KEY NOT NULL)")
+            .execute(&mut connection)
+            .await
+            .expect("minimal workspace fixture should be created");
+        sqlx::query("INSERT INTO workspaces (id) VALUES ('workspace-series')")
+            .execute(&mut connection)
+            .await
+            .expect("workspace fixture should be inserted");
+        sqlx::raw_sql(include_str!("../migrations/028_telepathic_exchange_series.sql"))
+            .execute(&mut connection)
+            .await
+            .expect("migration 028 should apply on a real SQLite connection");
+
+        let mut tx = connection.begin().await.expect("telepathic transaction should begin");
+        let statements = vec![
+            DatabaseWriteStatement {
+                operation: DatabaseWriteOperation::TelepathicUpsertSeries01,
+                values: vec![
+                    JsonValue::from("series-1"), JsonValue::from("workspace-series"), JsonValue::from("conversation_exchange"), JsonValue::from("en"),
+                    JsonValue::from("running"), JsonValue::from(0), JsonValue::from("{\"seriesId\":\"series-1\"}"), JsonValue::from("{\"rounds\":[]}"),
+                    JsonValue::from("2026-10-07T00:00:00.000Z"), JsonValue::from("2026-10-07T00:00:00.000Z"),
+                ],
+            },
+            DatabaseWriteStatement {
+                operation: DatabaseWriteOperation::TelepathicUpsertParticipant01,
+                values: vec![
+                    JsonValue::from("series-1"), JsonValue::from("nemo"), JsonValue::from("ai"), JsonValue::from("Nemo"),
+                    JsonValue::Null, JsonValue::Null, JsonValue::Null, JsonValue::Null, JsonValue::Null, JsonValue::Null, JsonValue::Null,
+                    JsonValue::Null, JsonValue::Null, JsonValue::Null, JsonValue::Null,
+                ],
+            },
+            DatabaseWriteStatement {
+                operation: DatabaseWriteOperation::TelepathicUpsertRound01,
+                values: vec![
+                    JsonValue::from("round-1"), JsonValue::from("series-1"), JsonValue::from(1), JsonValue::from("nemo"),
+                    JsonValue::from("blind"), JsonValue::Null, JsonValue::Null, JsonValue::Null,
+                ],
+            },
+            DatabaseWriteStatement {
+                operation: DatabaseWriteOperation::TelepathicInsertTarget01,
+                values: vec![
+                    JsonValue::from("round-1"), JsonValue::from("nemo"), JsonValue::from("LOCKED TARGET"), JsonValue::from("[]"),
+                    JsonValue::from("sha256-target"), JsonValue::from("locked"), JsonValue::from("2026-10-07T00:00:01.000Z"), JsonValue::Null,
+                ],
+            },
+            DatabaseWriteStatement {
+                operation: DatabaseWriteOperation::TelepathicAdvanceTarget01,
+                values: vec![JsonValue::from("2026-10-07T00:00:02.000Z"), JsonValue::from("round-1")],
+            },
+            DatabaseWriteStatement {
+                operation: DatabaseWriteOperation::TelepathicUpsertBlind01,
+                values: vec![
+                    JsonValue::from("round-1"), JsonValue::from("nemo"), JsonValue::from("sealed"), JsonValue::from("first"), JsonValue::from("second"),
+                    JsonValue::from(1), JsonValue::from("sha256-blind"), JsonValue::from("2026-10-07T00:00:03.000Z"),
+                ],
+            },
+            DatabaseWriteStatement {
+                operation: DatabaseWriteOperation::TelepathicUpsertReflection01,
+                values: vec![
+                    JsonValue::from("round-1"), JsonValue::from("nemo"), JsonValue::from("sender"), JsonValue::from("reflection"), JsonValue::from("no"), JsonValue::Null,
+                ],
+            },
+            DatabaseWriteStatement {
+                operation: DatabaseWriteOperation::TelepathicUpsertCall01,
+                values: vec![
+                    JsonValue::from("call-1"), JsonValue::from("series-1"), JsonValue::from("round-1"), JsonValue::from("nemo"), JsonValue::from("sender_target"),
+                    JsonValue::from(1), JsonValue::from("succeeded"), JsonValue::from("scope-1"), JsonValue::from("request-sha"), JsonValue::from("provider-request-1"),
+                    JsonValue::from("response"), JsonValue::Null, JsonValue::from("2026-10-07T00:00:00.000Z"), JsonValue::from("2026-10-07T00:00:04.000Z"),
+                ],
+            },
+        ];
+        for statement in statements {
+            execute_statement(&mut tx, statement)
+                .await
+                .expect("registered telepathic write should execute on SQLite");
+        }
+        tx.commit().await.expect("telepathic transaction should commit");
+
+        let target: (String, String) = sqlx::query_as("SELECT content, status FROM telepathic_targets WHERE round_id = 'round-1'")
+            .fetch_one(&mut connection)
+            .await
+            .expect("persisted target should be readable");
+        assert_eq!(target.0, "LOCKED TARGET");
+        assert_eq!(target.1, "transmission_ready");
+        let call_status: String = sqlx::query_scalar("SELECT status FROM telepathic_provider_calls WHERE id = 'call-1'")
+            .fetch_one(&mut connection)
+            .await
+            .expect("persisted provider ledger should be readable");
+        assert_eq!(call_status, "succeeded");
+        let blind_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepathic_blind_submissions WHERE round_id = 'round-1' AND status = 'sealed'")
+            .fetch_one(&mut connection)
+            .await
+            .expect("persisted blind should be readable");
+        assert_eq!(blind_count, 1);
+    }
+
     #[test]
     fn every_named_write_has_static_sql_and_expected_arity() {
         let operations = [
@@ -981,9 +1110,17 @@ mod tests {
             DatabaseWriteOperation::FieldGuideUpdateSettings01,
             DatabaseWriteOperation::FieldGuideUpdateLegacyBaselines01,
             DatabaseWriteOperation::FieldGuideUpdateSettings02,
-            DatabaseWriteOperation::AiCenterUpdateAiIdentities01,            DatabaseWriteOperation::AiCenterInsertAiIdentities01,            DatabaseWriteOperation::AiCenterInsertAiNoteSettings01,            DatabaseWriteOperation::AiCenterUpdateAiNoteSettings01,            DatabaseWriteOperation::AiCenterUpdateAiNoteSettings02,            DatabaseWriteOperation::AiCenterInsertAiNoteReflectionRuns01,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns01,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns02,            DatabaseWriteOperation::AiCenterInsertAiNoteVersions01,            DatabaseWriteOperation::AiCenterInsertAiNoteActivationEvents01,            DatabaseWriteOperation::AiCenterUpdateAiNoteSettings03,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns03,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns04,            DatabaseWriteOperation::AiCenterInsertAiNoteActivationEvents02,            DatabaseWriteOperation::AiCenterUpdateAiNoteVersions01,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns05,            DatabaseWriteOperation::AiCenterUpdateAiNoteActivationEvents01,            DatabaseWriteOperation::AiCenterUpdateAiNoteVersions02,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns06,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns07,            DatabaseWriteOperation::AiCenterUpdateAiNoteActivationEvents02,            DatabaseWriteOperation::ExportInsertExports01,            DatabaseWriteOperation::JudgeInsertJudgeRuns01,            DatabaseWriteOperation::JudgeInsertJudgeScores01,            DatabaseWriteOperation::MonitorInsertMonitorRuns01,            DatabaseWriteOperation::MonitorInsertMonitorInterventions01,            DatabaseWriteOperation::ProfilesInsertProfiles01,            DatabaseWriteOperation::ProfilesUpdateProfiles01,            DatabaseWriteOperation::ProfilesUpdateProfiles02,            DatabaseWriteOperation::ProfilesUpdateProfiles03,            DatabaseWriteOperation::ProfilesUpdateProfiles04,            DatabaseWriteOperation::ResearchInsertResearchProjects01,            DatabaseWriteOperation::ResearchUpdateResearchProjects01,            DatabaseWriteOperation::ResearchUpdateResearchProjects02,            DatabaseWriteOperation::ResearchUpdateResearchProjects03,            DatabaseWriteOperation::ResearchInsertResearchConditions01,            DatabaseWriteOperation::ResearchInsertResearchAssignments01,            DatabaseWriteOperation::ResearchInsertBlindingMappings01,            DatabaseWriteOperation::ResearchUpdateResearchProjects04,            DatabaseWriteOperation::ResearchUpdateResearchAssignments01,            DatabaseWriteOperation::ResearchInsertResearchResults01,            DatabaseWriteOperation::SessionsInsertRvSessions01,            DatabaseWriteOperation::SessionsUpdateRvSessions01,            DatabaseWriteOperation::SessionsUpdateRvSessions02,            DatabaseWriteOperation::SessionsInsertSessionEvents01,            DatabaseWriteOperation::SessionsUpdateRvSessions03,            DatabaseWriteOperation::SessionsInsertSessionSnapshots01,            DatabaseWriteOperation::SessionsUpdateRvSessions04,            DatabaseWriteOperation::SessionsInsertReveals01,            DatabaseWriteOperation::SessionsUpdateRvSessions05,            DatabaseWriteOperation::SessionsUpdateRvSessions06,            DatabaseWriteOperation::SessionsInsertTargetClarifications01,            DatabaseWriteOperation::SettingsModelsInsertAppSettings01,            DatabaseWriteOperation::SettingsModelsDeleteAppSettings01,            DatabaseWriteOperation::SettingsModelsInsertCredentialsMetadata01,            DatabaseWriteOperation::SettingsModelsInsertProviderConfigs01,            DatabaseWriteOperation::SettingsModelsUpdateProviderConfigs01,            DatabaseWriteOperation::SettingsModelsUpdateCredentialsMetadata01,            DatabaseWriteOperation::SettingsModelsUpdateProfiles01,            DatabaseWriteOperation::SettingsModelsDeleteProviderConfigs01,            DatabaseWriteOperation::SettingsModelsDeleteCredentialsMetadata01,            DatabaseWriteOperation::SettingsModelsUpdateProviderConfigs02,            DatabaseWriteOperation::SettingsModelsDeleteModelRegistry01,            DatabaseWriteOperation::SettingsModelsInsertModelRegistry01,            DatabaseWriteOperation::SettingsModelsUpdateModelRegistry01,            DatabaseWriteOperation::SettingsModelsDeleteModelRegistry02,            DatabaseWriteOperation::TargetsInsertTargets01,            DatabaseWriteOperation::TargetsUpdateTargets01,            DatabaseWriteOperation::TargetsUpdateTargets02,            DatabaseWriteOperation::TargetsUpdateTargets03,            DatabaseWriteOperation::TargetsUpdateTargets04,            DatabaseWriteOperation::TargetsInsertTargetUsage01,            DatabaseWriteOperation::TrainingInsertTrainingRuns01,            DatabaseWriteOperation::TrainingUpdateTrainingRuns01,            DatabaseWriteOperation::TrainingUpdateTrainingRuns02,            DatabaseWriteOperation::TrainingUpdateTrainingRuns03,            DatabaseWriteOperation::WorkspacesConversationsInsertWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces02,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces03,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces04,            DatabaseWriteOperation::WorkspacesConversationsInsertChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads02,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads03,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads04,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads05,            DatabaseWriteOperation::WorkspacesConversationsInsertChatMessages01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads06,            DatabaseWriteOperation::ContinuationInsertChatMessageProviderState01,            DatabaseWriteOperation::ContinuationDeleteChatMessageProviderState01,            DatabaseWriteOperation::ContinuationInsertSessionEventProviderState01,            DatabaseWriteOperation::SqliteUpdateWorkspaces01,            DatabaseWriteOperation::SqliteUpdateProfiles01,            DatabaseWriteOperation::SqliteUpdateProfiles02,            DatabaseWriteOperation::SqliteUpdateWorkspaces02,            DatabaseWriteOperation::SqliteInsertWorkspaceSources01,            DatabaseWriteOperation::SqliteDeleteWorkspaceSources01,            DatabaseWriteOperation::SqliteInsertChatThreadSources01,            DatabaseWriteOperation::SqliteInsertProtocols01,            DatabaseWriteOperation::SqliteInsertProtocolVersions01
+            DatabaseWriteOperation::AiCenterUpdateAiIdentities01,            DatabaseWriteOperation::AiCenterInsertAiIdentities01,            DatabaseWriteOperation::AiCenterInsertAiNoteSettings01,            DatabaseWriteOperation::AiCenterUpdateAiNoteSettings01,            DatabaseWriteOperation::AiCenterUpdateAiNoteSettings02,            DatabaseWriteOperation::AiCenterInsertAiNoteReflectionRuns01,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns01,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns02,            DatabaseWriteOperation::AiCenterInsertAiNoteVersions01,            DatabaseWriteOperation::AiCenterInsertAiNoteActivationEvents01,            DatabaseWriteOperation::AiCenterUpdateAiNoteSettings03,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns03,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns04,            DatabaseWriteOperation::AiCenterInsertAiNoteActivationEvents02,            DatabaseWriteOperation::AiCenterUpdateAiNoteVersions01,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns05,            DatabaseWriteOperation::AiCenterUpdateAiNoteActivationEvents01,            DatabaseWriteOperation::AiCenterUpdateAiNoteVersions02,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns06,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns07,            DatabaseWriteOperation::AiCenterUpdateAiNoteActivationEvents02,            DatabaseWriteOperation::ExportInsertExports01,            DatabaseWriteOperation::JudgeInsertJudgeRuns01,            DatabaseWriteOperation::JudgeInsertJudgeScores01,            DatabaseWriteOperation::MonitorInsertMonitorRuns01,            DatabaseWriteOperation::MonitorInsertMonitorInterventions01,            DatabaseWriteOperation::ProfilesInsertProfiles01,            DatabaseWriteOperation::ProfilesUpdateProfiles01,            DatabaseWriteOperation::ProfilesUpdateProfiles02,            DatabaseWriteOperation::ProfilesUpdateProfiles03,            DatabaseWriteOperation::ProfilesUpdateProfiles04,            DatabaseWriteOperation::ResearchInsertResearchProjects01,            DatabaseWriteOperation::ResearchUpdateResearchProjects01,            DatabaseWriteOperation::ResearchUpdateResearchProjects02,            DatabaseWriteOperation::ResearchUpdateResearchProjects03,            DatabaseWriteOperation::ResearchInsertResearchConditions01,            DatabaseWriteOperation::ResearchInsertResearchAssignments01,            DatabaseWriteOperation::ResearchInsertBlindingMappings01,            DatabaseWriteOperation::ResearchUpdateResearchProjects04,            DatabaseWriteOperation::ResearchUpdateResearchAssignments01,            DatabaseWriteOperation::ResearchInsertResearchResults01,            DatabaseWriteOperation::SessionsInsertRvSessions01,            DatabaseWriteOperation::SessionsUpdateRvSessions01,            DatabaseWriteOperation::SessionsUpdateRvSessions02,            DatabaseWriteOperation::SessionsInsertSessionEvents01,            DatabaseWriteOperation::SessionsUpdateRvSessions03,            DatabaseWriteOperation::SessionsInsertSessionSnapshots01,            DatabaseWriteOperation::SessionsUpdateRvSessions04,            DatabaseWriteOperation::SessionsInsertReveals01,            DatabaseWriteOperation::SessionsUpdateRvSessions05,            DatabaseWriteOperation::SessionsUpdateRvSessions06,            DatabaseWriteOperation::SessionsInsertTargetClarifications01,            DatabaseWriteOperation::SettingsModelsInsertAppSettings01,            DatabaseWriteOperation::SettingsModelsDeleteAppSettings01,            DatabaseWriteOperation::SettingsModelsInsertCredentialsMetadata01,            DatabaseWriteOperation::SettingsModelsInsertProviderConfigs01,            DatabaseWriteOperation::SettingsModelsUpdateProviderConfigs01,            DatabaseWriteOperation::SettingsModelsUpdateCredentialsMetadata01,            DatabaseWriteOperation::SettingsModelsUpdateProfiles01,            DatabaseWriteOperation::SettingsModelsDeleteProviderConfigs01,            DatabaseWriteOperation::SettingsModelsDeleteCredentialsMetadata01,            DatabaseWriteOperation::SettingsModelsUpdateProviderConfigs02,            DatabaseWriteOperation::SettingsModelsDeleteModelRegistry01,            DatabaseWriteOperation::SettingsModelsInsertModelRegistry01,            DatabaseWriteOperation::SettingsModelsUpdateModelRegistry01,            DatabaseWriteOperation::SettingsModelsDeleteModelRegistry02,            DatabaseWriteOperation::TargetsInsertTargets01,            DatabaseWriteOperation::TargetsUpdateTargets01,            DatabaseWriteOperation::TargetsUpdateTargets02,            DatabaseWriteOperation::TargetsUpdateTargets03,            DatabaseWriteOperation::TargetsUpdateTargets04,            DatabaseWriteOperation::TargetsInsertTargetUsage01,            DatabaseWriteOperation::TrainingInsertTrainingRuns01,            DatabaseWriteOperation::TrainingUpdateTrainingRuns01,            DatabaseWriteOperation::TrainingUpdateTrainingRuns02,            DatabaseWriteOperation::TrainingUpdateTrainingRuns03,
+            DatabaseWriteOperation::TelepathicUpsertSeries01,
+            DatabaseWriteOperation::TelepathicUpsertParticipant01,
+            DatabaseWriteOperation::TelepathicUpsertRound01,
+            DatabaseWriteOperation::TelepathicInsertTarget01,
+            DatabaseWriteOperation::TelepathicAdvanceTarget01,
+            DatabaseWriteOperation::TelepathicUpsertBlind01,
+            DatabaseWriteOperation::TelepathicUpsertReflection01,
+            DatabaseWriteOperation::TelepathicUpsertCall01,            DatabaseWriteOperation::WorkspacesConversationsInsertWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces02,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces03,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces04,            DatabaseWriteOperation::WorkspacesConversationsInsertChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads02,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads03,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads04,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads05,            DatabaseWriteOperation::WorkspacesConversationsInsertChatMessages01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads06,            DatabaseWriteOperation::ContinuationInsertChatMessageProviderState01,            DatabaseWriteOperation::ContinuationDeleteChatMessageProviderState01,            DatabaseWriteOperation::ContinuationInsertSessionEventProviderState01,            DatabaseWriteOperation::SqliteUpdateWorkspaces01,            DatabaseWriteOperation::SqliteUpdateProfiles01,            DatabaseWriteOperation::SqliteUpdateProfiles02,            DatabaseWriteOperation::SqliteUpdateWorkspaces02,            DatabaseWriteOperation::SqliteInsertWorkspaceSources01,            DatabaseWriteOperation::SqliteDeleteWorkspaceSources01,            DatabaseWriteOperation::SqliteInsertChatThreadSources01,            DatabaseWriteOperation::SqliteInsertProtocols01,            DatabaseWriteOperation::SqliteInsertProtocolVersions01
         ];
-        assert_eq!(operations.len(), 107);
+        assert_eq!(operations.len(), 115);
         for operation in operations {
             assert!(!operation.sql().trim().is_empty());
             assert!(!operation.sql().contains("{"));

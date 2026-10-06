@@ -13,6 +13,7 @@ import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput 
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, DetachViewerNoteSourceReferencesInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteVersion } from "../aiCenter/types";
 import type { DeletionPreview, PurgeEntityKind } from "./controlledPurge";
 import type { CreateFieldGuideVersionInput, FieldGuideActivationEvent, FieldGuideBundle, FieldGuideCapacity, FieldGuideLegacyBaseline, FieldGuideVersion, ResolveLegacyFieldGuideBaselineInput } from "../aiCenter/fieldGuideTypes";
+import type { TelepathicSeriesState } from "../telepathicExchange/types";
 
 
 export interface AppRepository {
@@ -84,6 +85,8 @@ export interface AppRepository {
   updateTrainingRun(id: string, input: UpdateTrainingRunInput): Promise<void>;
   listTrainingRuns(): Promise<TrainingRunRecord[]>;
   listArchivedTrainingRuns(): Promise<TrainingRunRecord[]>;
+  getTelepathicSeries(seriesId: string): Promise<TelepathicSeriesState | null>;
+  saveTelepathicSeries(state: TelepathicSeriesState): Promise<void>;
   archiveTrainingRun(id: string): Promise<void>;
   restoreTrainingRun(id: string): Promise<void>;
   ensureAiIdentity(input: EnsureAiIdentityInput): Promise<AiIdentity>;

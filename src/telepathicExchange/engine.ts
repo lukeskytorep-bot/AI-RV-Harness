@@ -25,6 +25,21 @@ import type {
 import type { TelepathicExchangeStore } from "./store";
 import { lockTelepathicTarget, markTelepathicTargetTransmissionReady } from "./target";
 
+
+const activeSeriesRuns = new Set<string>();
+
+async function withTelepathicSeriesRunLock<T>(seriesId: string, task: () => Promise<T>): Promise<T> {
+  if (activeSeriesRuns.has(seriesId)) {
+    throw new Error("Telepathic series is already running in this application instance. Wait for the active operation to finish before starting or resuming it again.");
+  }
+  activeSeriesRuns.add(seriesId);
+  try {
+    return await task();
+  } finally {
+    activeSeriesRuns.delete(seriesId);
+  }
+}
+
 export interface TelepathicExchangeEngineDependencies {
   store: TelepathicExchangeStore;
   resolveRoute(participant: TelepathicParticipant): Promise<ResolvedTelepathicAiRoute>;
@@ -348,6 +363,7 @@ async function ensureSharing(
  * sent again. `uncertain`/dispatched calls remain a manual-resolution barrier.
  */
 export async function runNextTelepathicAiRound(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState> {
+  return withTelepathicSeriesRunLock(seriesId, async () => {
   const state = await deps.store.getTelepathicSeries(seriesId);
   if (!state) throw new Error("Telepathic series not found.");
   if (state.status === "completed" || state.status === "cancelled") return state;
@@ -380,9 +396,12 @@ export async function runNextTelepathicAiRound(deps: TelepathicExchangeEngineDep
     await saveCheckpoint(deps, state);
     throw error;
   }
+
+  });
 }
 
 export async function runTelepathicFinalReflections(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState> {
+  return withTelepathicSeriesRunLock(seriesId, async () => {
   const state = await deps.store.getTelepathicSeries(seriesId);
   if (!state) throw new Error("Telepathic series not found.");
   if (state.status !== "completed") throw new Error("Final series reflection requires all rounds to be complete.");
@@ -403,4 +422,6 @@ export async function runTelepathicFinalReflections(deps: TelepathicExchangeEngi
     await saveCheckpoint(deps, state);
   }
   return structuredClone(state);
+
+  });
 }

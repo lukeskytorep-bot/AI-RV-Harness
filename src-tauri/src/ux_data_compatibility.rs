@@ -125,8 +125,8 @@ async fn exact_green_v23_to_v24_preserves_existing_data_and_provenance() {
         .expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 27);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(27));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 28);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(28));
 }
 
 #[tokio::test]
@@ -215,8 +215,8 @@ async fn exact_green_v24_to_v25_adds_provider_state_storage_without_mutating_exi
     assert_eq!(chat_state, 0, "Conversation provider state should cascade with its message");
     assert_eq!(session_state, 0, "Session provider state should cascade with its event");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 27);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(27));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 28);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(28));
 }
 
 
@@ -236,7 +236,7 @@ async fn exact_green_v25_to_v26_types_existing_workspaces_without_moving_history
     let integrity = sqlx::query_scalar::<_, String>("PRAGMA integrity_check").fetch_one(&mut connection).await.expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 27);
+    assert_eq!(CURRENT_MIGRATION_VERSION, 28);
 }
 
 
@@ -350,6 +350,73 @@ async fn exact_green_v26_to_v27_repairs_factory_classification_without_unlocking
         .expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 27);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(27));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 28);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(28));
+}
+
+#[tokio::test]
+async fn exact_green_v27_to_v28_adds_telepathic_exchange_storage_without_moving_existing_data() {
+    let mut connection = SqliteConnection::connect("sqlite::memory:")
+        .await
+        .expect("in-memory SQLite should open");
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut connection)
+        .await
+        .expect("foreign keys should be enabled");
+
+    for migration in &MIGRATION_SPECS[..23] {
+        apply_sql(&mut connection, migration.sql).await;
+    }
+    apply_sql(&mut connection, GREEN_V23_FIXTURE).await;
+    for migration in &MIGRATION_SPECS[23..27] {
+        apply_sql(&mut connection, migration.sql).await;
+    }
+
+    let message_before = sqlx::query_scalar::<_, String>("SELECT content FROM chat_messages WHERE id = 'message-green'")
+        .fetch_one(&mut connection)
+        .await
+        .expect("green message should exist before migration 028");
+    let workspace_before = sqlx::query_scalar::<_, String>("SELECT id FROM workspaces WHERE id = 'workspace-green'")
+        .fetch_one(&mut connection)
+        .await
+        .expect("green workspace should exist before migration 028");
+
+    apply_sql(&mut connection, MIGRATION_SPECS[27].sql).await;
+
+    let message_after = sqlx::query_scalar::<_, String>("SELECT content FROM chat_messages WHERE id = 'message-green'")
+        .fetch_one(&mut connection)
+        .await
+        .expect("green message should survive migration 028");
+    let workspace_after = sqlx::query_scalar::<_, String>("SELECT id FROM workspaces WHERE id = 'workspace-green'")
+        .fetch_one(&mut connection)
+        .await
+        .expect("green workspace should survive migration 028");
+    assert_eq!(message_after, message_before);
+    assert_eq!(workspace_after, workspace_before);
+
+    for table in [
+        "telepathic_series",
+        "telepathic_participants",
+        "telepathic_rounds",
+        "telepathic_targets",
+        "telepathic_blind_submissions",
+        "telepathic_reflections",
+        "telepathic_provider_calls",
+    ] {
+        let query = format!("SELECT COUNT(*) FROM {table}");
+        let count = sqlx::query_scalar::<_, i64>(&query)
+            .fetch_one(&mut connection)
+            .await
+            .expect("telepathic exchange table should be queryable");
+        assert_eq!(count, 0, "migration 028 must not synthesize telepathic exchange data");
+    }
+
+    let integrity = sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
+        .fetch_one(&mut connection)
+        .await
+        .expect("integrity_check should execute");
+    assert_eq!(integrity, "ok");
+    assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
+    assert_eq!(CURRENT_MIGRATION_VERSION, 28);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(28));
 }
