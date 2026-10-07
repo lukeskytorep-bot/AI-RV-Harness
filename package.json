@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "tauri": "tauri",
     "verify:architecture": "node scripts/verify-architecture-selftest.mjs && node scripts/verify-architecture.mjs",
+    "verify:v0.7.14-release-gate": "node scripts/verify-v0.7.14-release-gate.mjs",
     "verify:openrouter-continuation-bridge": "node scripts/verify-openrouter-continuation-cross-language.mjs"
   },
   "dependencies": {

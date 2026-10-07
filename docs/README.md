@@ -37,6 +37,8 @@ The current public release is v0.7.13 for Windows and Linux. Its exact release n
 - [Etap 6 Rust provider modularization report](reports/MODULARIZATION_RUST_PROVIDERS_SPLIT_v0.7.13_PL.md)
 - [Stage 9 modularization closeout](reports/MODULARIZATION_STAGE_9_CLOSEOUT_v0.7.13_PL.md)
 - [Current desktop runtime and release smoke](architecture/FINAL_RUNTIME_SMOKE_v0.7.13_PL.md)
+- [v0.7.14 development final runtime/release smoke](architecture/FINAL_RUNTIME_SMOKE_v0.7.14_PL.md)
+- [v0.7.14 Step 6 final release gate](reports/STEP6_V0714_FINAL_RELEASE_GATE_PL.md)
 - [Viewer Learning 1 Field Guide foundation report](reports/VIEWER_LEARNING_1_FIELD_GUIDE_FOUNDATION_R1_v0.7.13_PL.md)
 - [Viewer Learning 2 Training Field Guide update report](reports/VIEWER_LEARNING_2_TRAINING_FIELD_GUIDE_UPDATE_v0.7.13_PL.md)
 - [Viewer Learning 3 Research Field Guide controls report](reports/VIEWER_LEARNING_3_RESEARCH_FIELD_GUIDE_CONTROLS_v0.7.13_PL.md)

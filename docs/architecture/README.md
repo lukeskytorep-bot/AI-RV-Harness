@@ -12,6 +12,7 @@ The completed v0.7.13 modularization work adds the following living architecture
 - [Native Rust provider module boundaries](MODULE_BOUNDARIES.md#native-rust-provider-modules-after-etap-6)
 - [UX-DATA compatibility gate](UX_DATA_COMPATIBILITY_GATE.md)
 - [Final modularization runtime smoke](FINAL_RUNTIME_SMOKE_v0.7.13_PL.md)
+- [v0.7.14 development final runtime/release smoke](FINAL_RUNTIME_SMOKE_v0.7.14_PL.md)
 - [Stage 9 modularization closeout](../reports/MODULARIZATION_STAGE_9_CLOSEOUT_v0.7.13_PL.md)
 
 ## Documents
