@@ -78,6 +78,10 @@ describe("telepathic exchange persistence contract", () => {
   it("uses an atomic SQLite lease across separate repository instances", async () => {
     let leaseOwner: string | null = null;
     const executeWrite = async (query: string, values: unknown[] = []) => {
+      if (query.startsWith("UPDATE telepathic_series SET run_lease_owner=NULL")) {
+        if (leaseOwner === String(values[1])) { leaseOwner = null; return { rowsAffected: 1 }; }
+        return { rowsAffected: 0 };
+      }
       if (query.startsWith("UPDATE telepathic_series SET run_lease_owner=")) {
         if (leaseOwner !== null) return { rowsAffected: 0 };
         leaseOwner = String(values[0]);
@@ -85,10 +89,6 @@ describe("telepathic exchange persistence contract", () => {
       }
       if (query.startsWith("UPDATE telepathic_series SET run_lease_expires_at=")) {
         return { rowsAffected: leaseOwner === String(values[2]) ? 1 : 0 };
-      }
-      if (query.startsWith("UPDATE telepathic_series SET run_lease_owner=NULL")) {
-        if (leaseOwner === String(values[1])) { leaseOwner = null; return { rowsAffected: 1 }; }
-        return { rowsAffected: 0 };
       }
       throw new Error(`unexpected write: ${query}`);
     };

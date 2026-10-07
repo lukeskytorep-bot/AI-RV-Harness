@@ -430,7 +430,7 @@ async fn exact_green_v28_to_v29_adds_cross_instance_telepathic_run_lease_without
     sqlx::query("PRAGMA foreign_keys = ON").execute(&mut connection).await.expect("foreign keys should be enabled");
     for migration in &MIGRATION_SPECS[..28] { apply_sql(&mut connection, migration.sql).await; }
 
-    sqlx::query("INSERT INTO profiles (id,name,created_at,updated_at) VALUES ('p-lease','P','2026-10-07T00:00:00Z','2026-10-07T00:00:00Z')")
+    sqlx::query("INSERT INTO profiles (id,display_name,created_at,updated_at) VALUES ('p-lease','P','2026-10-07T00:00:00Z','2026-10-07T00:00:00Z')")
         .execute(&mut connection).await.expect("profile insert");
     sqlx::query("INSERT INTO workspaces (id,profile_id,name,kind,created_at,updated_at,last_opened_at) VALUES ('w-lease','p-lease','W','conversation','2026-10-07T00:00:00Z','2026-10-07T00:00:00Z','2026-10-07T00:00:00Z')")
         .execute(&mut connection).await.expect("workspace insert");
