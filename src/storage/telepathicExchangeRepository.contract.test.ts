@@ -67,6 +67,7 @@ describe("telepathic exchange persistence contract", () => {
       },
       executeWrite: async () => ({ rowsAffected: 1 }),
       executeTransaction: async (items: DatabaseTransactionStatement[]) => { statements.push(...items); return []; },
+      executeFencedTransaction: async ({ statements: items }) => { statements.push(...items); return []; },
     });
     await repository.saveTelepathicSeries(createTelepathicSeriesState(config, "2026-10-06T21:00:00.000Z"));
     const sql = statements.map((item) => item.query).join("\n");
