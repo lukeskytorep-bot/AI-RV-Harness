@@ -4,6 +4,7 @@ import googleFixture from "../providers/continuation-fixtures/google-thought-sig
 import type { ProviderContinuationState } from "../providers/continuationContract";
 import type { ChatMessage } from "../types";
 import { ProviderContinuationPersistenceError } from "../storage/providerContinuationState";
+import { ProviderCallError } from "../providers/providerError";
 import { ConversationContinuationBreakError, clearAllConversationContinuationMemoryForTests, estimateConversationContinuationMemoryBytes } from "./continuationMemory";
 import { retryChatTurn, sendChatTurn } from "./engine";
 
@@ -39,6 +40,12 @@ function repo(history: ChatMessage[]) {
       const message = await appendChatMessage(threadId, "assistant", content);
       providerStates.set(message.id, structuredClone(state));
       return message;
+    },
+    updateChatMessageMetadata: async (messageId: string, metadata: ChatMessage["metadata"]) => {
+      const index = stored.findIndex((message) => message.id === messageId);
+      if (index < 0) throw new Error("message not found");
+      stored[index] = { ...stored[index], metadata: metadata ? structuredClone(metadata) : undefined };
+      return structuredClone(stored[index]);
     },
     listChatMessageProviderStates: async (threadId: string) => stored
       .filter((message) => message.threadId === threadId && providerStates.has(message.id))
@@ -575,4 +582,68 @@ describe("Conversation Viewer context continuity boundary", () => {
     })).rejects.toBeInstanceOf(ConversationContinuationBreakError);
     expect(chat).not.toHaveBeenCalled();
   });
+
+  it("persists image metadata only after a successful provider attempt and keeps source metadata on the same user message", async () => {
+    const repository = repo([]);
+    const visionModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, inputModalities: ["text", "image"], supportsVision: true } };
+    let sawImage = false;
+    await sendChatTurn({
+      repository, threadId: "attachments-success", mode: "conversation", language: "en", providerConfig: provider, model: visionModel, content: "Look",
+      sources: [{ id: "s1", workspaceId: "w", sourceType: "pdf", displayName: "notes.pdf", content: "source", contentHash: "h", metadata: {}, createdAt: "x" }],
+      images: [{ mimeType: "image/png", dataBase64: "AAAA" }], imageNames: ["target.png"],
+      chat: async (request) => {
+        sawImage = Boolean(request.messages.at(-1)?.images?.length);
+        const inFlightUser = (await repository.listChatMessages("attachments-success"))[0];
+        expect(inFlightUser.metadata?.attachmentAttempts?.[0].images[0].state).toBe("prepared");
+        return { content: "ok", usage: {} };
+      },
+    });
+    expect(sawImage).toBe(true);
+    const user = (await repository.listChatMessages("attachments-success"))[0];
+    expect(user.metadata?.attachmentAttempts).toHaveLength(1);
+    expect(user.metadata?.attachmentAttempts?.[0]).toMatchObject({
+      attemptNumber: 1,
+      sources: [{ id: "s1", name: "notes.pdf", type: "pdf", included: true }],
+      images: [{ name: "target.png", mimeType: "image/png", state: "included_in_request" }],
+    });
+    expect(JSON.stringify(user.metadata)).not.toContain("AAAA");
+  });
+
+  it("marks an image not included when provider execution stops before dispatch", async () => {
+    const repository = repo([]);
+    const visionModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, inputModalities: ["text", "image"], supportsVision: true } };
+    await expect(sendChatTurn({
+      repository, threadId: "attachments-before-dispatch", mode: "conversation", language: "en", providerConfig: provider, model: visionModel, content: "Look",
+      images: [{ mimeType: "image/jpeg", dataBase64: "BBBB" }], imageNames: ["target.jpg"],
+      chat: async () => { throw new ProviderCallError({ code: "configuration", message: "local stop", phase: "before_dispatch" }); },
+      maxRetries: 0,
+    })).rejects.toThrow("local stop");
+    const user = (await repository.listChatMessages("attachments-before-dispatch"))[0];
+    expect(user.metadata?.attachmentAttempts?.[0].images[0]).toMatchObject({ name: "target.jpg", mimeType: "image/jpeg", state: "not_included" });
+  });
+
+  it("marks an image uncertain after a dispatched attempt fails and appends retry metadata to the same user message", async () => {
+    const repository = repo([]);
+    const visionModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, inputModalities: ["text", "image"], supportsVision: true } };
+    await expect(sendChatTurn({
+      repository, threadId: "attachments-uncertain", mode: "conversation", language: "en", providerConfig: provider, model: visionModel, content: "Look",
+      images: [{ mimeType: "image/webp", dataBase64: "CCCC" }], imageNames: ["target.webp"],
+      chat: async () => { throw new ProviderCallError({ code: "timeout", message: "timed out", phase: "awaiting_headers" }); },
+      maxRetries: 0,
+    })).rejects.toThrow("timed out");
+    let messages = await repository.listChatMessages("attachments-uncertain");
+    expect(messages).toHaveLength(1);
+    expect(messages[0].metadata?.attachmentAttempts?.[0].images[0].state).toBe("uncertain");
+
+    await retryChatTurn({
+      repository, threadId: "attachments-uncertain", mode: "conversation", language: "en", providerConfig: provider, model: visionModel,
+      images: [], imageNames: ["target.webp"], imageMimeTypes: ["image/webp"],
+      chat: async () => ({ content: "text-only retry", usage: {} }),
+    });
+    messages = await repository.listChatMessages("attachments-uncertain");
+    expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(messages[0].metadata?.attachmentAttempts).toHaveLength(2);
+    expect(messages[0].metadata?.attachmentAttempts?.[1].images[0]).toMatchObject({ name: "target.webp", mimeType: "image/webp", state: "not_included" });
+  });
+
 });

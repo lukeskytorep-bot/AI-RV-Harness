@@ -8,7 +8,7 @@ import { createId, nowIso } from "../repository";
 type WriteResult = { rowsAffected: number };
 type WorkspaceRow = { id: string; profile_id: string; name: string; description: string | null; kind: WorkspaceKind; created_at: string; updated_at: string; last_opened_at: string; archived_at: string | null };
 type ChatThreadRow = { id: string; workspace_id: string; mode: ChatMode; thread_group_id: string | null; title: string; formal_rv_state: ChatThread["formalRvState"] | null; created_at: string; updated_at: string; archived_at: string | null };
-type ChatMessageRow = { id: string; thread_id: string; role: "user" | "assistant"; content: string; created_at: string };
+type ChatMessageRow = { id: string; thread_id: string; role: "user" | "assistant"; content: string; metadata_json: string | null; created_at: string };
 type ProviderStateRow = { message_id: string; format: string; format_version: number; transport: string; replay_fingerprint_json: string; payload_json: string; payload_sha256: string; payload_size_bytes: number; created_at: string };
 type TransactionStatement = { query: string; values?: unknown[] };
 
@@ -140,16 +140,20 @@ export class SqliteWorkspacesConversationsRepository implements WorkspacesConver
   }
 
   async listChatMessages(threadId: string): Promise<ChatMessage[]> {
-    const rows = await this.dependencies.select<ChatMessageRow[]>(`SELECT id, thread_id, role, content, created_at FROM chat_messages WHERE thread_id = $1 AND role IN ('user','assistant') ORDER BY created_at`, [threadId]);
-    return rows.map((row) => ({ id: row.id, threadId: row.thread_id, role: row.role, content: row.content, createdAt: row.created_at }));
+    const rows = await this.dependencies.select<ChatMessageRow[]>(`SELECT id, thread_id, role, content, metadata_json, created_at FROM chat_messages WHERE thread_id = $1 AND role IN ('user','assistant') ORDER BY created_at`, [threadId]);
+    return rows.map((row) => ({ id: row.id, threadId: row.thread_id, role: row.role, content: row.content, ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as ChatMessage["metadata"] } : {}), createdAt: row.created_at }));
   }
 
-  async appendChatMessage(threadId: string, role: ChatMessage["role"], content: string): Promise<ChatMessage> {
+  async appendChatMessage(threadId: string, role: ChatMessage["role"], content: string, metadata?: ChatMessage["metadata"]): Promise<ChatMessage> {
     const timestamp = this.now();
-    const message: ChatMessage = { id: createId("message"), threadId, role, content, createdAt: timestamp };
-    await this.dependencies.executeWrite(`INSERT INTO chat_messages (id, thread_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)`, [message.id, threadId, role, content, timestamp]);
+    const message: ChatMessage = { id: createId("message"), threadId, role, content, ...(metadata ? { metadata: structuredClone(metadata) } : {}), createdAt: timestamp };
+    await this.dependencies.executeWrite(`INSERT INTO chat_messages (id, thread_id, role, content, metadata_json, created_at) VALUES ($1, $2, $3, $4, $5, $6)`, [message.id, threadId, role, content, metadata ? JSON.stringify(metadata) : null, timestamp]);
     await this.dependencies.executeWrite("UPDATE chat_threads SET updated_at = $1 WHERE id = $2", [timestamp, threadId]);
     return message;
+  }
+
+  async updateChatMessageMetadata(messageId: string, metadata?: ChatMessage["metadata"]): Promise<void> {
+    await this.dependencies.executeWrite("UPDATE chat_messages SET metadata_json = $1 WHERE id = $2 AND role = 'user'", [metadata ? JSON.stringify(metadata) : null, messageId]);
   }
 
   async appendAssistantMessageWithProviderState(threadId: string, content: string, state: ProviderContinuationState): Promise<ChatMessage> {
@@ -157,7 +161,7 @@ export class SqliteWorkspacesConversationsRepository implements WorkspacesConver
     const timestamp = this.now();
     const message: ChatMessage = { id: createId("message"), threadId, role: "assistant", content, createdAt: timestamp };
     await this.dependencies.executeTransaction([
-      { query: `INSERT INTO chat_messages (id, thread_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)`, values: [message.id, threadId, "assistant", content, timestamp] },
+      { query: `INSERT INTO chat_messages (id, thread_id, role, content, metadata_json, created_at) VALUES ($1, $2, $3, $4, $5, $6)`, values: [message.id, threadId, "assistant", content, null, timestamp] },
       { query: `INSERT INTO chat_message_provider_state (message_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, values: [message.id, prepared.format, prepared.formatVersion, prepared.transport, prepared.replayFingerprintJson, prepared.payloadJson, prepared.payloadSha256, prepared.payloadSizeBytes, timestamp] },
       { query: "UPDATE chat_threads SET updated_at = $1 WHERE id = $2", values: [timestamp, threadId] },
     ]);

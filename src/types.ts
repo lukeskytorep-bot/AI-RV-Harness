@@ -19,11 +19,25 @@ export interface ChatThread {
   archivedAt?: string;
 }
 
+export type ChatAttachmentDeliveryState = "prepared" | "included_in_request" | "not_included" | "uncertain";
+
+export interface ChatAttachmentAttemptMetadata {
+  attemptNumber: number;
+  createdAt: string;
+  sources: Array<{ id: string; name: string; type: string; included: boolean }>;
+  images: Array<{ name: string; mimeType?: string; state: ChatAttachmentDeliveryState }>;
+}
+
+export interface ChatMessageMetadata {
+  attachmentAttempts?: ChatAttachmentAttemptMetadata[];
+}
+
 export interface ChatMessage {
   id: string;
   threadId: string;
   role: "user" | "assistant";
   content: string;
+  metadata?: ChatMessageMetadata;
   createdAt: string;
 }
 

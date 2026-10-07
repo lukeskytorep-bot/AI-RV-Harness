@@ -1561,12 +1561,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn database_after_migrations_001_through_028_passes_live_validation() {
+    async fn database_after_migrations_001_through_029_passes_live_validation() {
         let directory = temp_case("migration-028-live-validation");
         let database = directory.join(DATABASE_FILE_NAME);
         create_database_through(&database, MIGRATION_SPECS.len()).await;
 
-        assert_eq!(CURRENT_MIGRATION_VERSION, 29);
+        assert_eq!(CURRENT_MIGRATION_VERSION, 30);
         validate_current_database(&database)
             .await
             .expect("migration-028 database should pass live validation");

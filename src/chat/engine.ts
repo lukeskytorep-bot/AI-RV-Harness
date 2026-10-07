@@ -1,6 +1,6 @@
 import { buildConversationPayload, buildManualRvPayload, type ScopedChatMessage } from "../domain/chatContext";
 import { resolveGenerationSettings } from "../providers/capabilities";
-import { executeProviderChat } from "../providers/requestExecutor";
+import { executeProviderChat, ProviderExecutionError } from "../providers/requestExecutor";
 import { providerBindingEndpoint } from "../providers/native";
 import { captureGoogleContinuationState } from "../providers/googleContinuation";
 import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
@@ -28,6 +28,7 @@ type ChatRepository = Pick<AppRepository,
   | "listChatMessages"
   | "appendChatMessage"
   | "appendAssistantMessageWithProviderState"
+  | "updateChatMessageMetadata"
   | "listChatMessageProviderStates"
   | "resetChatMessageProviderStates"
 >;
@@ -43,6 +44,8 @@ export function buildChatProviderMessages(input: {
   attachedProtocol?: string;
   sources?: WorkspaceSource[];
   images?: ProviderImageInput[];
+  imageNames?: string[];
+  imageMimeTypes?: string[];
   viewerLearning?: ConversationViewerLearningSnapshot;
   now?: Date;
 }): ProviderMessage[] {
@@ -100,6 +103,34 @@ export function buildChatProviderMessages(input: {
   return messages;
 }
 
+function attachmentAttemptMetadata(input: Parameters<typeof sendChatTurn>[0], attemptNumber: number, state: "prepared" | "included_in_request" | "not_included" | "uncertain") {
+  const names = input.imageNames ?? [];
+  return {
+    attemptNumber,
+    createdAt: new Date().toISOString(),
+    sources: (input.sources ?? []).map((source) => ({ id: source.id, name: source.displayName, type: source.sourceType, included: true })),
+    images: names.map((name, index) => ({
+      name,
+      mimeType: input.images?.[index]?.mimeType ?? input.imageMimeTypes?.[index],
+      state: input.images?.[index] ? state : "not_included" as const,
+    })),
+  };
+}
+
+async function recordAttachmentAttempt(repository: ChatRepository, message: ChatMessage, attempt: ReturnType<typeof attachmentAttemptMetadata>): Promise<ChatMessage> {
+  const metadata = { ...(message.metadata ?? {}), attachmentAttempts: [...(message.metadata?.attachmentAttempts ?? []), attempt] };
+  await repository.updateChatMessageMetadata(message.id, metadata);
+  return { ...message, metadata };
+}
+
+async function replaceLastAttachmentAttempt(repository: ChatRepository, message: ChatMessage, attempt: ReturnType<typeof attachmentAttemptMetadata>): Promise<ChatMessage> {
+  const attempts = [...(message.metadata?.attachmentAttempts ?? [])];
+  if (attempts.length) attempts[attempts.length - 1] = attempt; else attempts.push(attempt);
+  const metadata = { ...(message.metadata ?? {}), attachmentAttempts: attempts };
+  await repository.updateChatMessageMetadata(message.id, metadata);
+  return { ...message, metadata };
+}
+
 export async function sendChatTurn(input: {
   repository: ChatRepository;
   threadId: string;
@@ -113,6 +144,7 @@ export async function sendChatTurn(input: {
   attachedProtocol?: string;
   sources?: WorkspaceSource[];
   images?: ProviderImageInput[];
+  imageNames?: string[];
   viewerLearning?: ConversationViewerLearningSnapshot;
   conversationContextKey?: string;
   maxRetries?: number;
@@ -236,8 +268,16 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   }
   const settings = resolveGenerationSettings(input.model.capabilities, { ...input.requestedSettings, maxOutputTokens });
   if (settings.omitted.length) throw new Error(`Unsupported generation settings: ${settings.omitted.join(", ")}`);
-  const user = appendUser ? await input.repository.appendChatMessage(input.threadId, "user", content) : storedHistory.at(-1)!;
-  const response = await executeProviderChat({
+  let user = appendUser ? await input.repository.appendChatMessage(input.threadId, "user", content) : storedHistory.at(-1)!;
+  const attemptNumber = (user.metadata?.attachmentAttempts?.length ?? 0) + 1;
+  const hasAttachmentMetadata = Boolean(input.sources?.length || input.imageNames?.length);
+  if (hasAttachmentMetadata) {
+    user = await recordAttachmentAttempt(input.repository, user, attachmentAttemptMetadata(input, attemptNumber, "prepared"));
+  }
+  let response: ProviderChatResponse;
+  let providerAttemptStarted = false;
+  try {
+    response = await executeProviderChat({
     config: input.providerConfig,
     modelId: input.model.modelId,
     messages,
@@ -248,8 +288,24 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
     operationId: input.mode === "conversation" ? "chat.conversation" : "chat.manual-rv",
     streamWorkflowContext: input.mode === "conversation" ? "conversation" : "manual_rv",
     onStreamEvent: input.onStreamEvent,
+    onAttemptStart: () => { providerAttemptStarted = true; },
     attempt: input.chat,
-  });
+    });
+  } catch (cause) {
+    if (hasAttachmentMetadata) {
+      const beforeDispatch = cause instanceof ProviderExecutionError
+        ? cause.causeError.details.phase === "before_dispatch"
+        : Boolean(cause && typeof cause === "object" && "details" in cause && (cause as { details?: { phase?: string } }).details?.phase === "before_dispatch");
+      const imageState = input.images?.length
+        ? (!providerAttemptStarted || beforeDispatch ? "not_included" : "uncertain")
+        : "not_included";
+      user = await replaceLastAttachmentAttempt(input.repository, user, attachmentAttemptMetadata(input, attemptNumber, imageState));
+    }
+    throw cause;
+  }
+  if (hasAttachmentMetadata) {
+    user = await replaceLastAttachmentAttempt(input.repository, user, attachmentAttemptMetadata(input, attemptNumber, input.images?.length ? "included_in_request" : "not_included"));
+  }
   let continuationCapture:
     | ReturnType<typeof captureOpenRouterContinuationState>
     | ReturnType<typeof captureGoogleContinuationState>

@@ -150,3 +150,6 @@ select { min-width: 180px; height: 36px; padding: 0 10px; font-size: 11px; }
 .post-reveal-compose { display: grid; gap: 6px; }
 .post-reveal-compose textarea { width: 100%; resize: vertical; }
 .post-reveal-compose button { justify-self: end; }
+
+.chat-message-attachments { display: grid; gap: 0.2rem; margin-top: 0.35rem; opacity: 0.78; }
+.chat-message-attachments small { font-size: 0.72rem; }

@@ -29,7 +29,7 @@ export function ChatMessageList({ language, mode, threadCreatedAt, messages, pro
         return <div className="chat-message-block" key={message.id}>
           <article className={`chat-message ${message.role}`}>
             <span>{initials(displayName)}</span>
-            <div><small>{displayName}</small><SafeMarkdown content={message.content} /></div>
+            <div><small>{displayName}</small><SafeMarkdown content={message.content} />{message.role === "user" && message.metadata?.attachmentAttempts?.length ? <div className="chat-message-attachments">{message.metadata.attachmentAttempts.map((attempt) => <small key={attempt.attemptNumber}>{language === "pl" ? `Próba ${attempt.attemptNumber}` : `Attempt ${attempt.attemptNumber}`}: {[...attempt.sources.map((source) => `${source.name} · ${source.type.toUpperCase()}`), ...attempt.images.map((image) => `${image.name} · IMAGE · ${attachmentStateLabel(image.state, language)}`)].join(" · ")}</small>)}</div> : null}</div>
           </article>
         </div>;
       })}
@@ -54,4 +54,11 @@ function formatConversationStarted(value: string, language: InterfaceLanguage): 
 
 function initials(value: string): string {
   return value.split(/\s+/).filter(Boolean).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "AI";
+}
+
+function attachmentStateLabel(state: import("../types").ChatAttachmentDeliveryState, language: InterfaceLanguage): string {
+  if (state === "included_in_request") return language === "pl" ? "zawarty w żądaniu" : "included in request";
+  if (state === "uncertain") return language === "pl" ? "wynik wysłania niepewny" : "send outcome uncertain";
+  if (state === "not_included") return language === "pl" ? "nie wysłano" : "not sent";
+  return language === "pl" ? "przygotowany" : "prepared";
 }

@@ -425,6 +425,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       sourceIds: selectedSources.map((source) => source.id),
       images: chatImages,
       imageNames: chatImageNames,
+      imageMimeTypes: chatImages.map((image) => image.mimeType),
       createdAt: new Date().toISOString(),
     };
     savePendingChatTurn(pending);
@@ -443,6 +444,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         ...(effectiveRvSystemPrompt ? { rvSystemPrompt: effectiveRvSystemPrompt } : {}),
         sources: selectedSources,
         images: chatImages,
+        imageNames: chatImageNames,
         ...(frozenViewerLearning ? { viewerLearning: frozenViewerLearning } : {}),
         ...(frozenConversationContextKey ? { conversationContextKey: frozenConversationContextKey } : {}),
         maxRetries: settings.maxRetries,
@@ -509,7 +511,10 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       return;
     }
     setStreamingAssistant("");
-    setError(null);
+    const retryLostImages = pendingRetry.imageNames.length > 0 && pendingRetry.images.length === 0;
+    setError(retryLostImages
+      ? (settings.interfaceLanguage === "pl" ? "Po restarcie obraz nie jest przechowywany. Ta próba ponowi odpowiedź bez obrazu; aby wysłać obraz ponownie, utwórz nową turę i dołącz go ponownie." : "Image bytes are not stored across restarts. This retry will run without the image; to send it again, create a new turn and attach it again.")
+      : null);
     if (!allowTextOnlyContinuation) setContinuationFallback(null);
     try {
       await retryChatTurn({
@@ -524,6 +529,8 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         ...(pendingRetry.attachedProtocol ? { attachedProtocol: pendingRetry.attachedProtocol } : {}),
         sources: sources.filter((source) => pendingRetry.sourceIds.includes(source.id)),
         images: pendingRetry.images,
+        imageNames: pendingRetry.imageNames,
+        imageMimeTypes: pendingRetry.imageMimeTypes,
         ...(pendingRetry.viewerLearning ? { viewerLearning: pendingRetry.viewerLearning } : {}),
         ...(pendingRetry.conversationContextKey ? { conversationContextKey: pendingRetry.conversationContextKey } : {}),
         maxRetries: settings.maxRetries,

@@ -281,7 +281,8 @@ export class SqliteRepository implements AppRepository {
   restoreChatThread: AppRepository["restoreChatThread"] = (threadId) => this.workspacesConversationsRepository.restoreChatThread(threadId);
   setChatThreadFormalRvState: AppRepository["setChatThreadFormalRvState"] = (threadId, state) => this.workspacesConversationsRepository.setChatThreadFormalRvState(threadId, state);
   listChatMessages: AppRepository["listChatMessages"] = (threadId) => this.workspacesConversationsRepository.listChatMessages(threadId);
-  appendChatMessage: AppRepository["appendChatMessage"] = (threadId, role, content) => this.workspacesConversationsRepository.appendChatMessage(threadId, role, content);
+  appendChatMessage: AppRepository["appendChatMessage"] = (threadId, role, content, metadata) => this.workspacesConversationsRepository.appendChatMessage(threadId, role, content, metadata);
+  updateChatMessageMetadata: AppRepository["updateChatMessageMetadata"] = (messageId, metadata) => this.workspacesConversationsRepository.updateChatMessageMetadata(messageId, metadata);
   appendAssistantMessageWithProviderState: AppRepository["appendAssistantMessageWithProviderState"] = (threadId, content, state) => this.workspacesConversationsRepository.appendAssistantMessageWithProviderState(threadId, content, state);
   listChatMessageProviderStates: AppRepository["listChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.listChatMessageProviderStates(threadId);
   resetChatMessageProviderStates: AppRepository["resetChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.resetChatMessageProviderStates(threadId);

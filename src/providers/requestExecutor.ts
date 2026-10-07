@@ -72,6 +72,7 @@ export interface ExecuteProviderRequestInput<T> {
   signal?: AbortSignal;
   executeAttempt: (context: ProviderAttemptContext) => Promise<T>;
   onAttemptFailure?: (error: ProviderCallError, context: ProviderAttemptContext) => void | Promise<void>;
+  onAttemptStart?: (context: ProviderAttemptContext) => void | Promise<void>;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   random?: () => number;
 }
@@ -95,6 +96,7 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
     };
     physicalAttempts += 1;
     try {
+      await input.onAttemptStart?.(context);
       const value = await input.executeAttempt(context);
       return {
         value,
@@ -150,6 +152,7 @@ export async function executeProviderChat(input: {
   streamWorkflowContext?: StreamWorkflowContext;
   onStreamEvent?: (event: ProviderStreamEvent) => void;
   onAttemptFailure?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptFailure"];
+  onAttemptStart?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptStart"];
 }): Promise<ProviderChatResponse> {
   const attempt = input.attempt ?? providerChatAttempt;
   if ((attempt as ProviderChatAttempt & { [PROVIDER_EXECUTOR_BRAND]?: boolean })[PROVIDER_EXECUTOR_BRAND]) {
@@ -196,6 +199,7 @@ export async function executeProviderChat(input: {
       configuredRetries: input.configuredRetries,
       signal: input.signal,
       onAttemptFailure: input.onAttemptFailure,
+      onAttemptStart: input.onAttemptStart,
       executeAttempt: () => attempt({
         config: input.config,
         modelId: input.modelId,

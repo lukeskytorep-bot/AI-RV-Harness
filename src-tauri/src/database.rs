@@ -222,6 +222,8 @@ pub enum DatabaseWriteOperation {
     WorkspacesConversationsUpdateChatThreads05,
     #[serde(rename = "workspaces_conversations_insert_chat_messages_01")]
     WorkspacesConversationsInsertChatMessages01,
+    #[serde(rename = "workspaces_conversations_update_chat_message_metadata_01")]
+    WorkspacesConversationsUpdateChatMessageMetadata01,
     #[serde(rename = "workspaces_conversations_update_chat_threads_06")]
     WorkspacesConversationsUpdateChatThreads06,
     #[serde(rename = "continuation_insert_chat_message_provider_state_01")]
@@ -357,7 +359,8 @@ impl DatabaseWriteOperation {
             Self::WorkspacesConversationsUpdateChatThreads03 => "UPDATE chat_threads SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL",
             Self::WorkspacesConversationsUpdateChatThreads04 => "UPDATE chat_threads SET archived_at = NULL, updated_at = $1 WHERE id = $2",
             Self::WorkspacesConversationsUpdateChatThreads05 => "UPDATE chat_threads SET formal_rv_state = $1, updated_at = $2 WHERE id = $3 AND mode = 'manual_rv'",
-            Self::WorkspacesConversationsInsertChatMessages01 => "INSERT INTO chat_messages (id, thread_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)",
+            Self::WorkspacesConversationsInsertChatMessages01 => "INSERT INTO chat_messages (id, thread_id, role, content, metadata_json, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+            Self::WorkspacesConversationsUpdateChatMessageMetadata01 => "UPDATE chat_messages SET metadata_json = $1 WHERE id = $2 AND role = 'user'",
             Self::WorkspacesConversationsUpdateChatThreads06 => "UPDATE chat_threads SET updated_at = $1 WHERE id = $2",
             Self::ContinuationInsertChatMessageProviderState01 => "INSERT INTO chat_message_provider_state (message_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             Self::ContinuationDeleteChatMessageProviderState01 => "DELETE FROM chat_message_provider_state WHERE message_id IN (SELECT id FROM chat_messages WHERE thread_id = $1)",
@@ -480,7 +483,8 @@ impl DatabaseWriteOperation {
             Self::WorkspacesConversationsUpdateChatThreads03 => 2,
             Self::WorkspacesConversationsUpdateChatThreads04 => 2,
             Self::WorkspacesConversationsUpdateChatThreads05 => 3,
-            Self::WorkspacesConversationsInsertChatMessages01 => 5,
+            Self::WorkspacesConversationsInsertChatMessages01 => 6,
+            Self::WorkspacesConversationsUpdateChatMessageMetadata01 => 2,
             Self::WorkspacesConversationsUpdateChatThreads06 => 2,
             Self::ContinuationInsertChatMessageProviderState01 => 9,
             Self::ContinuationDeleteChatMessageProviderState01 => 1,
@@ -1184,7 +1188,7 @@ mod tests {
             DatabaseWriteOperation::TelepathicRenewSeriesLease01,
             DatabaseWriteOperation::TelepathicReleaseSeriesLease01,            DatabaseWriteOperation::WorkspacesConversationsInsertWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces02,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces03,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces04,            DatabaseWriteOperation::WorkspacesConversationsInsertChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads02,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads03,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads04,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads05,            DatabaseWriteOperation::WorkspacesConversationsInsertChatMessages01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads06,            DatabaseWriteOperation::ContinuationInsertChatMessageProviderState01,            DatabaseWriteOperation::ContinuationDeleteChatMessageProviderState01,            DatabaseWriteOperation::ContinuationInsertSessionEventProviderState01,            DatabaseWriteOperation::SqliteUpdateWorkspaces01,            DatabaseWriteOperation::SqliteUpdateProfiles01,            DatabaseWriteOperation::SqliteUpdateProfiles02,            DatabaseWriteOperation::SqliteUpdateWorkspaces02,            DatabaseWriteOperation::SqliteInsertWorkspaceSources01,            DatabaseWriteOperation::SqliteDeleteWorkspaceSources01,            DatabaseWriteOperation::SqliteInsertChatThreadSources01,            DatabaseWriteOperation::SqliteInsertProtocols01,            DatabaseWriteOperation::SqliteInsertProtocolVersions01
         ];
-        assert_eq!(operations.len(), 118);
+        assert_eq!(operations.len(), 119);
         for operation in operations {
             assert!(!operation.sql().trim().is_empty());
             assert!(!operation.sql().contains("{"));

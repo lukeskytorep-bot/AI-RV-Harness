@@ -125,8 +125,8 @@ async fn exact_green_v23_to_v24_preserves_existing_data_and_provenance() {
         .expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 29);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(29));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 30);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(30));
 }
 
 #[tokio::test]
@@ -215,8 +215,8 @@ async fn exact_green_v24_to_v25_adds_provider_state_storage_without_mutating_exi
     assert_eq!(chat_state, 0, "Conversation provider state should cascade with its message");
     assert_eq!(session_state, 0, "Session provider state should cascade with its event");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 29);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(29));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 30);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(30));
 }
 
 
@@ -236,7 +236,7 @@ async fn exact_green_v25_to_v26_types_existing_workspaces_without_moving_history
     let integrity = sqlx::query_scalar::<_, String>("PRAGMA integrity_check").fetch_one(&mut connection).await.expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 29);
+    assert_eq!(CURRENT_MIGRATION_VERSION, 30);
 }
 
 
@@ -350,8 +350,8 @@ async fn exact_green_v26_to_v27_repairs_factory_classification_without_unlocking
         .expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 29);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(29));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 30);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(30));
 }
 
 #[tokio::test]
@@ -417,8 +417,8 @@ async fn exact_green_v27_to_v28_adds_telepathic_exchange_storage_without_moving_
         .expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 29);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(29));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 30);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(30));
 }
 
 
@@ -444,6 +444,6 @@ async fn exact_green_v28_to_v29_adds_cross_instance_telepathic_run_lease_without
     let integrity = sqlx::query_scalar::<_, String>("PRAGMA integrity_check").fetch_one(&mut connection).await.expect("integrity");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 29);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(29));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 30);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(30));
 }

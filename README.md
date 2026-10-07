@@ -1,6 +1,39 @@
 # AI RV Harness
 
+> **Development branch: `ai-rv-2`**  
+> This branch is **not the current public release**. It is the active development line for the planned **v0.7.14 telepathic exchange and telepathic training work**, plus the compatibility and recovery changes required around it. The public release remains **v0.7.13** until the development line completes its audit, compatibility gate, runtime smoke and release process.
+
 AI RV Harness is a local-first desktop workspace for blind AI Remote Viewing sessions and controlled RV research. The desktop stack is Tauri 2 + React/TypeScript + Rust + SQLite, with public Windows and Linux release packages.
+
+## Development status on `ai-rv-2`
+
+This branch is intentionally ahead of the public v0.7.13 documentation. It should be treated as a **work-in-progress integration branch**, not as a release build or a stable database compatibility promise.
+
+The current development program adds a separate telepathic exchange workflow to Conversation and a separate AI-to-AI telepathic Training workflow while preserving ordinary Conversation, Manual RV, RV Sessions, classic Training and Research behavior. The new workflows are built around fresh per-round context, frozen targets before blind descriptions, Reveal boundaries, participant-specific routing, durable checkpoints, provider-call recovery and strict separation between what the operator can see and what an AI participant is allowed to receive.
+
+### Progress
+
+- **Steps 1–3:** telepathic data contracts, provider isolation, Profile/Workspace routing, Conversation telepathic exchange, durable persistence, lease/fencing protection, recovery and Conversation UI data boundaries are implemented and have passed the branch CI gates used during development.
+- **Step 4:** AI–AI Telepathic Training is implemented with 2–6 distinct AI Profiles, rotating senders, frozen per-Profile Field Guide and Viewer Notes, configuration preflight, operator live view, history, checkpoint/Resume and recovery. The training uses Viewer Learning read-only and does not update it.
+- **Step 5A:** Conversation attachment/source metadata is the current work area. The design records metadata for the specific send attempt without copying image bytes into durable chat history, distinguishes dispatch uncertainty from confirmed omission, preserves historical Workspace Source names, and supports safe retry semantics. This work may advance the development database schema beyond the last accepted Step 4 schema and must remain subject to CI/audit until Step 5 is closed.
+- **Step 5B:** RV Sessions post-Reveal review recovery is planned next. It will resume only the first incomplete Viewer/Monitor post-Reveal stage from the frozen Reveal, without replaying completed blind or Reveal work.
+- **Step 6:** final compatibility, isolation/security audit, provider-failure coverage, token/cost budgets, PL/EN review, backup/restore validation and desktop smoke remain release-gate work.
+
+### Development rules for this branch
+
+Do not treat branch state as a published v0.7.14 release. In particular:
+
+- do not merge or publish release artifacts solely because a feature patch is green;
+- preserve ordinary v0.7.13 workflows unless a step explicitly changes them;
+- keep telepathic rounds isolated from earlier-round continuation/reasoning state;
+- never expose a frozen target or another receiver's blind response before Reveal;
+- do not silently retry ambiguous post-dispatch provider calls;
+- do not persist Conversation image bytes merely to support history or retry;
+- do not let Telepathic Training update Viewer Notes or Field Guide;
+- keep migrations append-only and verify older migration bytes remain unchanged;
+- require `npm run typecheck`, tests and the repository verification gates before accepting a development step.
+
+The implementation plan for this branch is maintained separately from the public release notes. Public documentation under `docs/releases/v0.7.13/` remains the authoritative record of the released v0.7.13 build. Architecture/Wiki documents may temporarily lag this branch until the final compatibility/documentation stage.
 
 ## Current public release — 0.7.13
 
