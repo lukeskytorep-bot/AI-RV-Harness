@@ -6,7 +6,6 @@ import {
   resolveUncertainPostRevealReviewStage,
 } from "./postRevealRecovery";
 import { serializePostRevealTurn } from "./postRevealTranscript";
-import type { SessionEventRecord } from "./types";
 
 const viewerConfig: ProviderConfig = { id: "viewer-pc", provider: "openrouter", label: "Viewer", credentialId: "cred-v", enabled: true, createdAt: "now", updatedAt: "now" };
 const monitorConfig: ProviderConfig = { id: "monitor-pc", provider: "openrouter", label: "Monitor", credentialId: "cred-m", enabled: true, createdAt: "now", updatedAt: "now" };
@@ -16,7 +15,7 @@ const monitorModel: ProviderModel = { ...viewerModel, providerConfigId: "monitor
 
 function makeRepository(input?: { transcript?: string; monitor?: boolean; checkpoints?: Array<{ stage: "viewer" | "monitor"; status: string; attempt?: number }> }) {
   let transcript = input?.transcript ?? "";
-  const events: SessionEventRecord[] = (input?.checkpoints ?? []).map((checkpoint, index) => ({
+  const events = (input?.checkpoints ?? []).map((checkpoint, index) => ({
     id: `event-${index + 1}`,
     sessionId: "s",
     sequenceNumber: index + 1,
@@ -169,7 +168,9 @@ describe("STEP 5B post-Reveal review recovery", () => {
       sessionId: "s",
       viewer: { providerConfig: viewerConfig, model: limitedModel },
       chat: chat as never,
-    })).rejects.toThrow("exhausted the available analytical output budget");
+    })).rejects.toThrow("provider returned an incomplete assistant response [finish-reason=length]");
+
+    expect(chat).toHaveBeenCalledTimes(2);
 
     const recovery = await getPostRevealReviewRecoveryState(fixture.repository as never, "s");
     expect(recovery.viewer?.status).toBe("failed");
