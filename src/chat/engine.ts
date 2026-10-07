@@ -145,6 +145,7 @@ export async function sendChatTurn(input: {
   sources?: WorkspaceSource[];
   images?: ProviderImageInput[];
   imageNames?: string[];
+  imageMimeTypes?: string[];
   viewerLearning?: ConversationViewerLearningSnapshot;
   conversationContextKey?: string;
   maxRetries?: number;

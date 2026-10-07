@@ -34,18 +34,17 @@ function repo(history: ChatMessage[]) {
     return message;
   };
   return {
-    listChatMessages: async () => [...stored],
+    listChatMessages: async (threadId: string) => stored.filter((message) => message.threadId === threadId),
     appendChatMessage,
     appendAssistantMessageWithProviderState: async (threadId: string, content: string, state: ProviderContinuationState) => {
       const message = await appendChatMessage(threadId, "assistant", content);
       providerStates.set(message.id, structuredClone(state));
       return message;
     },
-    updateChatMessageMetadata: async (messageId: string, metadata: ChatMessage["metadata"]) => {
+    updateChatMessageMetadata: async (messageId: string, metadata: ChatMessage["metadata"]): Promise<void> => {
       const index = stored.findIndex((message) => message.id === messageId);
       if (index < 0) throw new Error("message not found");
       stored[index] = { ...stored[index], metadata: metadata ? structuredClone(metadata) : undefined };
-      return structuredClone(stored[index]);
     },
     listChatMessageProviderStates: async (threadId: string) => stored
       .filter((message) => message.threadId === threadId && providerStates.has(message.id))
