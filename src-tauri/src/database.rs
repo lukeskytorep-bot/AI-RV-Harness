@@ -319,7 +319,7 @@ impl DatabaseWriteOperation {
             Self::SessionsUpdateRvSessions05 => "UPDATE rv_sessions SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL",
             Self::SessionsUpdateRvSessions06 => "UPDATE rv_sessions SET archived_at = NULL, updated_at = $1 WHERE id = $2 AND archived_at IS NOT NULL",
             Self::SessionsAcquirePostRevealReviewLease01 => "UPDATE rv_sessions SET post_reveal_review_lease_owner=$1, post_reveal_review_lease_expires_at=$2, post_reveal_review_lease_version=post_reveal_review_lease_version+1 WHERE id=$3 AND (post_reveal_review_lease_owner IS NULL OR post_reveal_review_lease_expires_at IS NULL OR post_reveal_review_lease_expires_at < $4)",
-            Self::SessionsRenewPostRevealReviewLease01 => "UPDATE rv_sessions SET post_reveal_review_lease_expires_at=$1 WHERE id=$2 AND post_reveal_review_lease_owner=$3 AND post_reveal_review_lease_version=$4",
+            Self::SessionsRenewPostRevealReviewLease01 => "UPDATE rv_sessions SET post_reveal_review_lease_expires_at=$1 WHERE id=$2 AND post_reveal_review_lease_owner=$3 AND post_reveal_review_lease_version=$4 AND post_reveal_review_lease_expires_at IS NOT NULL AND post_reveal_review_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')",
             Self::SessionsReleasePostRevealReviewLease01 => "UPDATE rv_sessions SET post_reveal_review_lease_owner=NULL, post_reveal_review_lease_expires_at=NULL WHERE id=$1 AND post_reveal_review_lease_owner=$2 AND post_reveal_review_lease_version=$3",
             Self::SessionsInsertTargetClarifications01 => "INSERT INTO target_clarifications (id, session_id, content, created_at) VALUES ($1, $2, $3, $4)",
             Self::SettingsModelsInsertAppSettings01 => "INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, $3) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
@@ -751,6 +751,47 @@ pub async fn database_execute_telepathic_fenced_write_batch(
     if lease_valid != 1 {
         transaction.rollback().await.map_err(|error| error.to_string())?;
         return Err("telepathic series lease lost before fenced checkpoint".to_string());
+    }
+    let mut rows_affected = Vec::with_capacity(statements.len());
+    for statement in statements {
+        match execute_statement(&mut transaction, statement).await {
+            Ok(rows) => rows_affected.push(rows),
+            Err(message) => {
+                transaction.rollback().await.map_err(|rollback_error| format!("{message}; rollback failed: {rollback_error}"))?;
+                return Err(message);
+            }
+        }
+    }
+    transaction.commit().await.map_err(|error| error.to_string())?;
+    Ok(rows_affected)
+}
+
+#[tauri::command]
+pub async fn database_execute_post_reveal_review_fenced_write_batch(
+    db_instances: State<'_, DbInstances>,
+    session_id: String,
+    lease_owner: String,
+    lease_version: i64,
+    statements: Vec<DatabaseWriteStatement>,
+) -> Result<Vec<u64>, String> {
+    if statements.is_empty() { return Ok(Vec::new()); }
+    if statements.len() > MAX_TRANSACTION_STATEMENTS {
+        return Err("database transaction contains too many statements".to_string());
+    }
+    let pool = sqlite_pool(&db_instances).await?;
+    let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
+    let lease_valid: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM rv_sessions WHERE id=$1 AND post_reveal_review_lease_owner=$2 AND post_reveal_review_lease_version=$3 AND post_reveal_review_lease_expires_at IS NOT NULL AND post_reveal_review_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+    )
+    .bind(&session_id)
+    .bind(&lease_owner)
+    .bind(lease_version)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| error.to_string())?;
+    if lease_valid != 1 {
+        transaction.rollback().await.map_err(|error| error.to_string())?;
+        return Err("post-Reveal review lease lost before fenced checkpoint".to_string());
     }
     let mut rows_affected = Vec::with_capacity(statements.len());
     for statement in statements {

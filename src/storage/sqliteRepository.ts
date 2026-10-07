@@ -4,7 +4,8 @@ import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../p
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
-import { createDatabaseSnapshotNative, executeDatabaseTransaction, executeDatabaseWrite, executeTelepathicFencedDatabaseTransaction, initializeDatabaseNative, selectDatabaseReadonly, type DatabaseTransactionStatement } from "./databaseNative";
+import { createDatabaseSnapshotNative, executeDatabaseTransaction, executeDatabaseWrite, executeTelepathicFencedDatabaseTransaction,
+  executePostRevealReviewFencedDatabaseTransaction, initializeDatabaseNative, selectDatabaseReadonly, type DatabaseTransactionStatement } from "./databaseNative";
 import { SqliteWriteCoordinator } from "./sqliteWriteCoordinator";
 import { SqliteProfilesRepository } from "./sqlite/profilesRepository";
 import { SqliteTargetsRepository } from "./sqlite/targetsRepository";
@@ -80,6 +81,7 @@ export class SqliteRepository implements AppRepository {
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
       executeTransaction: (statements) => this.executeTransaction(statements),
+      executePostRevealReviewFencedTransaction: (input) => executePostRevealReviewFencedDatabaseTransaction(input),
       isResearchScoresFrozen: (projectId) => this.researchRepository.isScoresFrozen(projectId),
     });
     this.trainingRepository = new SqliteTrainingRepository({

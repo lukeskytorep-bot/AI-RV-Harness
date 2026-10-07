@@ -41,7 +41,7 @@ type SessionEventProviderStateRow = { session_event_id: string; format: string; 
 type TransactionStatement = { query: string; values?: unknown[] };
 
 const ACQUIRE_POST_REVEAL_REVIEW_LEASE = "UPDATE rv_sessions SET post_reveal_review_lease_owner=$1, post_reveal_review_lease_expires_at=$2, post_reveal_review_lease_version=post_reveal_review_lease_version+1 WHERE id=$3 AND (post_reveal_review_lease_owner IS NULL OR post_reveal_review_lease_expires_at IS NULL OR post_reveal_review_lease_expires_at < $4)";
-const RENEW_POST_REVEAL_REVIEW_LEASE = "UPDATE rv_sessions SET post_reveal_review_lease_expires_at=$1 WHERE id=$2 AND post_reveal_review_lease_owner=$3 AND post_reveal_review_lease_version=$4";
+const RENEW_POST_REVEAL_REVIEW_LEASE = "UPDATE rv_sessions SET post_reveal_review_lease_expires_at=$1 WHERE id=$2 AND post_reveal_review_lease_owner=$3 AND post_reveal_review_lease_version=$4 AND post_reveal_review_lease_expires_at IS NOT NULL AND post_reveal_review_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 const RELEASE_POST_REVEAL_REVIEW_LEASE = "UPDATE rv_sessions SET post_reveal_review_lease_owner=NULL, post_reveal_review_lease_expires_at=NULL WHERE id=$1 AND post_reveal_review_lease_owner=$2 AND post_reveal_review_lease_version=$3";
 type ActivePostRevealReviewLease = { owner: string; version: number; lost: boolean; controller: AbortController };
 
@@ -49,6 +49,7 @@ export interface SqliteSessionsRepositoryDependencies {
   select<T>(query: string, bindValues?: unknown[]): Promise<T>;
   executeWrite(query: string, bindValues?: unknown[]): Promise<WriteResult>;
   executeTransaction(statements: TransactionStatement[]): Promise<number[]>;
+  executePostRevealReviewFencedTransaction?: (input: { sessionId: string; leaseOwner: string; leaseVersion: number; statements: TransactionStatement[] }) => Promise<number[]>;
   isResearchScoresFrozen(researchProjectId: string): Promise<boolean>;
   now?: typeof nowIso;
 }
@@ -81,6 +82,31 @@ export class SqliteSessionsRepository implements SessionsRepository {
 
   private now(): string {
     return (this.dependencies.now ?? nowIso)();
+  }
+
+  private async executeReviewAwareTransaction(sessionId: string, statements: TransactionStatement[]): Promise<number[]> {
+    const lease = this.activePostRevealReviewLeases.get(sessionId);
+    if (!lease) return this.dependencies.executeTransaction(statements);
+    if (lease.lost) throw new Error("Post-Reveal review lease was lost before fenced write.");
+    if (!this.dependencies.executePostRevealReviewFencedTransaction) {
+      throw new Error("Post-Reveal review fenced persistence is unavailable.");
+    }
+    try {
+      return await this.dependencies.executePostRevealReviewFencedTransaction({ sessionId, leaseOwner: lease.owner, leaseVersion: lease.version, statements });
+    } catch (cause) {
+      lease.lost = true;
+      lease.controller.abort(new DOMException("Post-Reveal review lease was lost.", "AbortError"));
+      throw cause;
+    }
+  }
+
+  private async executeReviewAwareWrite(sessionId: string, statement: TransactionStatement): Promise<void> {
+    const lease = this.activePostRevealReviewLeases.get(sessionId);
+    if (!lease) {
+      await this.dependencies.executeWrite(statement.query, statement.values);
+      return;
+    }
+    await this.executeReviewAwareTransaction(sessionId, [statement]);
   }
 
   async createRvSession(input: CreateRvSessionInput): Promise<RvSession> {
@@ -132,7 +158,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
     }
     const next = `${session.post_reveal_transcript}${serializePostRevealTurn(role, content)}`;
     const timestamp = this.now();
-    await this.dependencies.executeTransaction([
+    await this.executeReviewAwareTransaction(sessionId, [
       { query: "UPDATE rv_sessions SET post_reveal_transcript = $1, updated_at = $2 WHERE id = $3", values: [next, timestamp, sessionId] },
       { query: `INSERT INTO session_events (id, session_id, sequence_number, event_type, role, content, metadata_json, created_at) SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7 FROM session_events WHERE session_id = $2`, values: [createId("event"), sessionId, `POST_REVEAL_${role.toUpperCase()}`, role, content.trim(), JSON.stringify(metadata ?? {}), timestamp] },
     ]);
@@ -154,7 +180,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
     const next = `${session.post_reveal_transcript}${serializePostRevealTurn("assistant", content)}`;
     const timestamp = this.now();
     const eventId = createId("event");
-    await this.dependencies.executeTransaction([
+    await this.executeReviewAwareTransaction(sessionId, [
       { query: "UPDATE rv_sessions SET post_reveal_transcript = $1, updated_at = $2 WHERE id = $3", values: [next, timestamp, sessionId] },
       { query: `INSERT INTO session_events (id, session_id, sequence_number, event_type, role, content, metadata_json, created_at) SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7 FROM session_events WHERE session_id = $2`, values: [eventId, sessionId, "POST_REVEAL_ASSISTANT", "assistant", content.trim(), JSON.stringify({ continuationState: { status: "stored", format: prepared.format, version: prepared.formatVersion } }), timestamp] },
       { query: `INSERT INTO session_event_provider_state (session_event_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, values: [eventId, prepared.format, prepared.formatVersion, prepared.transport, prepared.replayFingerprintJson, prepared.payloadJson, prepared.payloadSha256, prepared.payloadSizeBytes, timestamp] },
@@ -164,13 +190,13 @@ export class SqliteSessionsRepository implements SessionsRepository {
 
   async appendSessionEvent(sessionId: string, event: SessionEventInput): Promise<void> {
     const timestamp = this.now();
-    await this.dependencies.executeWrite(
-      `INSERT INTO session_events
+    await this.executeReviewAwareWrite(sessionId, {
+      query: `INSERT INTO session_events
        (id, session_id, sequence_number, event_type, role, content, metadata_json, created_at)
        SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7
          FROM session_events WHERE session_id = $2`,
-      [createId("event"), sessionId, event.eventType, event.role ?? null, event.content ?? null, JSON.stringify(event.metadata ?? {}), timestamp],
-    );
+      values: [createId("event"), sessionId, event.eventType, event.role ?? null, event.content ?? null, JSON.stringify(event.metadata ?? {}), timestamp],
+    });
   }
 
   async appendSessionEventWithProviderState(sessionId: string, event: SessionEventInput, state: ProviderContinuationState): Promise<SessionEventRecord> {
@@ -178,7 +204,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
     const prepared = await prepareProviderContinuationState(state);
     const timestamp = this.now();
     const eventId = createId("event");
-    await this.dependencies.executeTransaction([
+    await this.executeReviewAwareTransaction(sessionId, [
       { query: `INSERT INTO session_events (id, session_id, sequence_number, event_type, role, content, metadata_json, created_at) SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7 FROM session_events WHERE session_id = $2`, values: [eventId, sessionId, event.eventType, event.role ?? null, event.content ?? null, JSON.stringify(event.metadata ?? {}), timestamp] },
       { query: `INSERT INTO session_event_provider_state (session_event_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, values: [eventId, prepared.format, prepared.formatVersion, prepared.transport, prepared.replayFingerprintJson, prepared.payloadJson, prepared.payloadSha256, prepared.payloadSizeBytes, timestamp] },
     ]);

@@ -251,6 +251,96 @@ describe("SQLite Sessions repository contract", () => {
     expect(writes[0]).toContain("INSERT INTO target_clarifications");
   });
 
+
+  it("rejects a stale post-Reveal owner after lease takeover and fences the late checkpoint", async () => {
+    let leaseOwner: string | null = null;
+    let leaseExpiresAt: string | null = null;
+    let leaseVersion = 0;
+    const committedEvents: string[] = [];
+
+    const dependencies = {
+      select: async <T>(query: string) => {
+        if (query.includes("post_reveal_review_lease_owner")) {
+          return [{
+            post_reveal_review_lease_owner: leaseOwner,
+            post_reveal_review_lease_expires_at: leaseExpiresAt,
+            post_reveal_review_lease_version: leaseVersion,
+          }] as T;
+        }
+        return [] as T;
+      },
+      executeWrite: async (query: string, values?: unknown[]) => {
+        if (query.includes("post_reveal_review_lease_version=post_reveal_review_lease_version+1")) {
+          const [owner, expiresAt, _sessionId, nowValue] = values ?? [];
+          if (leaseOwner && leaseExpiresAt && leaseExpiresAt >= String(nowValue)) return { rowsAffected: 0 };
+          leaseOwner = String(owner);
+          leaseExpiresAt = String(expiresAt);
+          leaseVersion += 1;
+          return { rowsAffected: 1 };
+        }
+        if (query.includes("SET post_reveal_review_lease_expires_at=$1")) {
+          const [expiresAt, _sessionId, owner, version] = values ?? [];
+          if (leaseOwner !== owner || leaseVersion !== version || !leaseExpiresAt || leaseExpiresAt <= new Date().toISOString()) return { rowsAffected: 0 };
+          leaseExpiresAt = String(expiresAt);
+          return { rowsAffected: 1 };
+        }
+        if (query.includes("SET post_reveal_review_lease_owner=NULL")) {
+          const [_sessionId, owner, version] = values ?? [];
+          if (leaseOwner !== owner || leaseVersion !== version) return { rowsAffected: 0 };
+          leaseOwner = null;
+          leaseExpiresAt = null;
+          return { rowsAffected: 1 };
+        }
+        return { rowsAffected: 1 };
+      },
+      executeTransaction: async () => [],
+      executePostRevealReviewFencedTransaction: async ({ leaseOwner: expectedOwner, leaseVersion: expectedVersion, statements }: { sessionId: string; leaseOwner: string; leaseVersion: number; statements: Array<{ query: string; values?: unknown[] }> }) => {
+        if (leaseOwner !== expectedOwner || leaseVersion !== expectedVersion || !leaseExpiresAt || leaseExpiresAt <= new Date().toISOString()) {
+          throw new Error("post-Reveal review lease lost before fenced checkpoint");
+        }
+        for (const statement of statements) if (statement.query.includes("session_events")) committedEvents.push(String(statement.values?.[2] ?? ""));
+        return statements.map(() => 1);
+      },
+      isResearchScoresFrozen: async () => true,
+      now: () => timestamp,
+    };
+
+    const firstRepository = new SqliteSessionsRepository(dependencies);
+    const secondRepository = new SqliteSessionsRepository(dependencies);
+
+    let releaseFirst!: () => void;
+    let firstAcquired!: () => void;
+    const firstAcquiredPromise = new Promise<void>((resolve) => { firstAcquired = resolve; });
+    const firstWait = new Promise<void>((resolve) => { releaseFirst = resolve; });
+
+    const first = firstRepository.withPostRevealReviewLease("session-a", async () => {
+      firstAcquired();
+      await firstWait;
+      await firstRepository.appendSessionEvent("session-a", { eventType: "LATE_CHECKPOINT", role: "controller" });
+      return "first";
+    });
+    await firstAcquiredPromise;
+
+    leaseExpiresAt = "2000-01-01T00:00:00.000Z";
+
+    let releaseSecond!: () => void;
+    let secondAcquired!: () => void;
+    const secondAcquiredPromise = new Promise<void>((resolve) => { secondAcquired = resolve; });
+    const secondWait = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const second = secondRepository.withPostRevealReviewLease("session-a", async () => {
+      secondAcquired();
+      await secondWait;
+      return "second";
+    });
+    await secondAcquiredPromise;
+
+    releaseFirst();
+    await expect(first).rejects.toThrow(/lease lost|fenced checkpoint/);
+    expect(committedEvents).not.toContain("LATE_CHECKPOINT");
+
+    releaseSecond();
+    await expect(second).resolves.toBe("second");
+  });
   it("atomically rejects a second post-Reveal review lease across SQLite repository instances", async () => {
     let leaseOwner: string | null = null;
     let leaseExpiresAt: string | null = null;

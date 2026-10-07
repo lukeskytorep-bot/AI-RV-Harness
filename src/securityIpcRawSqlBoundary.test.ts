@@ -34,10 +34,12 @@ describe("SECURITY-IPC-1C-R1 SQLite IPC boundary", () => {
     expect(databaseNative).toContain('"database_execute_write"');
     expect(databaseNative).toContain('"database_execute_write_batch"');
     expect(databaseNative).toContain('"database_execute_telepathic_fenced_write_batch"');
+    expect(databaseNative).toContain('"database_execute_post_reveal_review_fenced_write_batch"');
     expect(databaseNative).toContain('"database_select_readonly"');
     expect(databaseNative).toContain('"database_initialize"');
     expect(databaseNative).not.toContain('"database_execute_transaction"');
     expect(nativeLib).toContain("database_execute_telepathic_fenced_write_batch");
+    expect(nativeLib).toContain("database_execute_post_reveal_review_fenced_write_batch");
     expect(nativeLib).not.toContain("database_execute_transaction");
     expect(nativeDatabase).toContain("read_only(true)");
     expect(nativeDatabase).toContain('sqlx::query("PRAGMA query_only = ON")');

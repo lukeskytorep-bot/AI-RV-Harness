@@ -10,6 +10,8 @@ describe("STEP 5B recovery hardening boundary", () => {
   it("uses durable repository ownership around automatic post-Reveal review", () => {
     expect(postReveal).toContain("withPostRevealReviewLease");
     expect(sqliteSessions).toContain("post_reveal_review_lease_version=post_reveal_review_lease_version+1");
+    expect(sqliteSessions).toContain("post_reveal_review_lease_expires_at > strftime");
+    expect(sqliteSessions).toContain("executePostRevealReviewFencedTransaction");
     expect(sqliteSessions).toContain("Post-Reveal review lease was lost before provider dispatch or checkpoint save.");
   });
 

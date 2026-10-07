@@ -40,6 +40,25 @@ export async function executeDatabaseTransaction(statements: DatabaseTransaction
 }
 
 
+export async function executePostRevealReviewFencedDatabaseTransaction(input: {
+  sessionId: string;
+  leaseOwner: string;
+  leaseVersion: number;
+  statements: DatabaseTransactionStatement[];
+}): Promise<number[]> {
+  if (input.statements.length === 0) return [];
+  const nativeStatements: NativeWriteStatement[] = input.statements.map((statement) => ({
+    operation: operationForWriteQuery(statement.query),
+    values: statement.values ?? [],
+  }));
+  return invoke<number[]>("database_execute_post_reveal_review_fenced_write_batch", {
+    sessionId: input.sessionId,
+    leaseOwner: input.leaseOwner,
+    leaseVersion: input.leaseVersion,
+    statements: nativeStatements,
+  });
+}
+
 export async function executeTelepathicFencedDatabaseTransaction(input: {
   seriesId: string;
   leaseOwner: string;
