@@ -6,13 +6,27 @@ import type { TelepathicSeriesConfig } from "./types";
 function model(contextTokens = 131072): ProviderModel {
   return {
     providerConfigId: "pc",
+    provider: "openrouter",
     modelId: "model",
     displayName: "Model",
     route: "model",
-    enabled: true,
-    mode: "chat",
-    capabilities: { contextTokens, maxOutputTokens: 4096, supportsImages: false, supportsReasoning: false },
+    capabilities: {
+      contextTokens,
+      maxOutputTokens: 4096,
+      inputModalities: ["text"],
+      outputModalities: ["text"],
+      supportsVision: false,
+      supportsStreaming: true,
+      reasoning: { supported: false, efforts: [], confidence: "unknown" },
+      temperature: { supported: false, confidence: "unknown" },
+      supportedParameters: [],
+      source: "provider",
+      capturedAt: "now",
+    },
     pricing: { promptPerToken: 0.000001, completionPerToken: 0.000002 },
+    recommended: false,
+    rawMetadata: {},
+    refreshedAt: "now",
   };
 }
 
