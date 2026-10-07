@@ -45,7 +45,8 @@ describe("OPENROUTER-CONTINUITY-PERSISTENCE-1 boundary", () => {
     expect(conversation).toContain("appendAssistantMessageWithProviderState");
     expect(conversation).toContain("executeTransaction([");
     expect(sessions).toContain("appendSessionEventWithProviderState");
-    expect(sessions).toContain("executeTransaction([");
+    expect(sessions).toContain("executeReviewAwareTransaction(sessionId, [");
+    expect(sessions).toContain("executePostRevealReviewFencedTransaction");
   });
 
   it("keeps ordinary export surfaces and visible semantic message types free of continuation payloads", () => {
@@ -87,7 +88,8 @@ describe("OPENROUTER-CONTINUITY-PERSISTENCE-1 boundary", () => {
     expect(read("src/sessions/providerContinuation.ts")).toContain("getSessionEventProviderState");
     expect(read("src/sessions/postReveal.ts")).toContain("appendPostRevealTurnWithProviderState");
     expect(read("src/storage/sqlite/sessionsRepository.ts")).toContain("async appendPostRevealTurn");
-    expect(read("src/storage/sqlite/sessionsRepository.ts")).toContain("executeTransaction([");
+    expect(read("src/storage/sqlite/sessionsRepository.ts")).toContain("executeReviewAwareTransaction(sessionId, [");
+    expect(read("src/storage/sqlite/sessionsRepository.ts")).toContain("executePostRevealReviewFencedTransaction");
     expect(read("src/storage/browser/sessionsRepository.ts")).toContain("const eventsBefore = this.storage.getItem(SESSION_EVENTS_KEY)");
     for (const relative of ["src/features/training/trainingExecution.ts", "src/research/engine.ts"]) {
       const source = read(relative);
