@@ -397,9 +397,8 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
 }
 
 export async function runAutomaticPostRevealReview(input: Parameters<typeof runAutomaticPostRevealReviewUnlocked>[0]): Promise<string> {
-  const withLease = input.repository.withPostRevealReviewLease;
-  if (!withLease) return runAutomaticPostRevealReviewUnlocked(input);
-  return withLease.call(input.repository, input.sessionId, async () => {
+  if (!input.repository.withPostRevealReviewLease) return runAutomaticPostRevealReviewUnlocked(input);
+  return input.repository.withPostRevealReviewLease<string>(input.sessionId, async (): Promise<string> => {
     await input.repository.assertPostRevealReviewLease?.(input.sessionId);
     const leaseSignal = input.repository.postRevealReviewLeaseSignal?.(input.sessionId);
     return runAutomaticPostRevealReviewUnlocked({ ...input, signal: combineAbortSignals(input.signal, leaseSignal) });
