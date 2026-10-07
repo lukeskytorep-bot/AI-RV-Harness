@@ -223,8 +223,10 @@ describe("TELEPATHIC STEP 3A audit fixes", () => {
     });
     await store.saveTelepathicSeries(state);
     const attempt = vi.fn<ProviderChatAttempt>(async () => ({ content: "SHOULD_NOT_RUN", usage: {} }));
-    const finished = await runTelepathicFinalReflections({ store, providerAttempt: attempt, resolveRoute: async (p) => routeFor(p) }, cfg.seriesId);
+    const resolveRoute = vi.fn(async (_p: TelepathicParticipant) => { throw new Error("route must not be resolved for a durably succeeded final reflection"); });
+    const finished = await runTelepathicFinalReflections({ store, providerAttempt: attempt, resolveRoute }, cfg.seriesId);
     expect(finished.finalReflections.leo).toBe("RECOVERED_FINAL");
+    expect(resolveRoute).not.toHaveBeenCalled();
     expect(attempt).not.toHaveBeenCalled();
   });
 

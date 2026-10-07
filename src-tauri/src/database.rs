@@ -192,6 +192,12 @@ pub enum DatabaseWriteOperation {
     TelepathicUpsertReflection01,
     #[serde(rename = "telepathic_upsert_call_01")]
     TelepathicUpsertCall01,
+    #[serde(rename = "telepathic_acquire_series_lease_01")]
+    TelepathicAcquireSeriesLease01,
+    #[serde(rename = "telepathic_renew_series_lease_01")]
+    TelepathicRenewSeriesLease01,
+    #[serde(rename = "telepathic_release_series_lease_01")]
+    TelepathicReleaseSeriesLease01,
     #[serde(rename = "workspaces_conversations_insert_workspaces_01")]
     WorkspacesConversationsInsertWorkspaces01,
     #[serde(rename = "workspaces_conversations_update_workspaces_01")]
@@ -337,6 +343,9 @@ impl DatabaseWriteOperation {
             Self::TelepathicUpsertBlind01 => "INSERT INTO telepathic_blind_submissions (round_id, participant_id, status, first_text, second_text, provider_attempt_count, content_sha256, sealed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(round_id, participant_id) DO UPDATE SET status=excluded.status, first_text=excluded.first_text, second_text=excluded.second_text, provider_attempt_count=excluded.provider_attempt_count, content_sha256=excluded.content_sha256, sealed_at=excluded.sealed_at WHERE telepathic_blind_submissions.status NOT IN ('sealed','no_submission')",
             Self::TelepathicUpsertReflection01 => "INSERT INTO telepathic_reflections (round_id, participant_id, role, reflection_text, share_others_consent, shared_answers_comment) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(round_id, participant_id) DO UPDATE SET reflection_text=excluded.reflection_text, share_others_consent=excluded.share_others_consent, shared_answers_comment=excluded.shared_answers_comment",
             Self::TelepathicUpsertCall01 => "INSERT INTO telepathic_provider_calls (id, series_id, round_id, participant_id, call_stage, technical_attempt, status, scope_key, request_sha256, provider_request_id, response_text, error_message, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(id) DO UPDATE SET status=excluded.status, provider_request_id=excluded.provider_request_id, response_text=excluded.response_text, error_message=excluded.error_message, updated_at=excluded.updated_at",
+            Self::TelepathicAcquireSeriesLease01 => "UPDATE telepathic_series SET run_lease_owner=$1, run_lease_expires_at=$2, run_lease_version=run_lease_version+1 WHERE id=$3 AND (run_lease_owner IS NULL OR run_lease_expires_at IS NULL OR run_lease_expires_at < $4)",
+            Self::TelepathicRenewSeriesLease01 => "UPDATE telepathic_series SET run_lease_expires_at=$1 WHERE id=$2 AND run_lease_owner=$3",
+            Self::TelepathicReleaseSeriesLease01 => "UPDATE telepathic_series SET run_lease_owner=NULL, run_lease_expires_at=NULL WHERE id=$1 AND run_lease_owner=$2",
             Self::WorkspacesConversationsInsertWorkspaces01 => "INSERT INTO workspaces (id, profile_id, name, description, kind, created_at, updated_at, last_opened_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             Self::WorkspacesConversationsUpdateWorkspaces01 => "UPDATE workspaces SET name = $1, updated_at = $2 WHERE id = $3",
             Self::WorkspacesConversationsUpdateWorkspaces02 => "UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL AND ((kind = 'conversation' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('conversation', 'legacy_combined'))) OR (kind = 'rv' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('rv', 'legacy_combined'))) OR (kind = 'legacy_combined' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('conversation', 'legacy_combined')) AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('rv', 'legacy_combined'))))",
@@ -457,6 +466,9 @@ impl DatabaseWriteOperation {
             Self::TelepathicUpsertBlind01 => 8,
             Self::TelepathicUpsertReflection01 => 6,
             Self::TelepathicUpsertCall01 => 14,
+            Self::TelepathicAcquireSeriesLease01 => 4,
+            Self::TelepathicRenewSeriesLease01 => 3,
+            Self::TelepathicReleaseSeriesLease01 => 2,
             Self::WorkspacesConversationsInsertWorkspaces01 => 8,
             Self::WorkspacesConversationsUpdateWorkspaces01 => 3,
             Self::WorkspacesConversationsUpdateWorkspaces02 => 2,
@@ -1126,9 +1138,12 @@ mod tests {
             DatabaseWriteOperation::TelepathicAdvanceTarget01,
             DatabaseWriteOperation::TelepathicUpsertBlind01,
             DatabaseWriteOperation::TelepathicUpsertReflection01,
-            DatabaseWriteOperation::TelepathicUpsertCall01,            DatabaseWriteOperation::WorkspacesConversationsInsertWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces02,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces03,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces04,            DatabaseWriteOperation::WorkspacesConversationsInsertChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads02,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads03,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads04,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads05,            DatabaseWriteOperation::WorkspacesConversationsInsertChatMessages01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads06,            DatabaseWriteOperation::ContinuationInsertChatMessageProviderState01,            DatabaseWriteOperation::ContinuationDeleteChatMessageProviderState01,            DatabaseWriteOperation::ContinuationInsertSessionEventProviderState01,            DatabaseWriteOperation::SqliteUpdateWorkspaces01,            DatabaseWriteOperation::SqliteUpdateProfiles01,            DatabaseWriteOperation::SqliteUpdateProfiles02,            DatabaseWriteOperation::SqliteUpdateWorkspaces02,            DatabaseWriteOperation::SqliteInsertWorkspaceSources01,            DatabaseWriteOperation::SqliteDeleteWorkspaceSources01,            DatabaseWriteOperation::SqliteInsertChatThreadSources01,            DatabaseWriteOperation::SqliteInsertProtocols01,            DatabaseWriteOperation::SqliteInsertProtocolVersions01
+            DatabaseWriteOperation::TelepathicUpsertCall01,
+            DatabaseWriteOperation::TelepathicAcquireSeriesLease01,
+            DatabaseWriteOperation::TelepathicRenewSeriesLease01,
+            DatabaseWriteOperation::TelepathicReleaseSeriesLease01,            DatabaseWriteOperation::WorkspacesConversationsInsertWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces02,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces03,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces04,            DatabaseWriteOperation::WorkspacesConversationsInsertChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads02,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads03,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads04,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads05,            DatabaseWriteOperation::WorkspacesConversationsInsertChatMessages01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads06,            DatabaseWriteOperation::ContinuationInsertChatMessageProviderState01,            DatabaseWriteOperation::ContinuationDeleteChatMessageProviderState01,            DatabaseWriteOperation::ContinuationInsertSessionEventProviderState01,            DatabaseWriteOperation::SqliteUpdateWorkspaces01,            DatabaseWriteOperation::SqliteUpdateProfiles01,            DatabaseWriteOperation::SqliteUpdateProfiles02,            DatabaseWriteOperation::SqliteUpdateWorkspaces02,            DatabaseWriteOperation::SqliteInsertWorkspaceSources01,            DatabaseWriteOperation::SqliteDeleteWorkspaceSources01,            DatabaseWriteOperation::SqliteInsertChatThreadSources01,            DatabaseWriteOperation::SqliteInsertProtocols01,            DatabaseWriteOperation::SqliteInsertProtocolVersions01
         ];
-        assert_eq!(operations.len(), 115);
+        assert_eq!(operations.len(), 118);
         for operation in operations {
             assert!(!operation.sql().trim().is_empty());
             assert!(!operation.sql().contains("{"));

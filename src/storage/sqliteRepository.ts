@@ -88,6 +88,7 @@ export class SqliteRepository implements AppRepository {
     });
     this.telepathicExchangeRepository = new SqliteTelepathicExchangeRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
+      executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
       executeTransaction: (statements) => this.executeTransaction(statements),
     });
     this.aiCenterRepository = new SqliteAiCenterRepository({
@@ -171,6 +172,9 @@ export class SqliteRepository implements AppRepository {
   listArchivedTrainingRuns: AppRepository["listArchivedTrainingRuns"] = () => this.trainingRepository.listArchivedTrainingRuns();
   getTelepathicSeries: AppRepository["getTelepathicSeries"] = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeries(seriesId);
   saveTelepathicSeries: AppRepository["saveTelepathicSeries"] = (state) => this.telepathicExchangeRepository.saveTelepathicSeries(state);
+  withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T> {
+    return this.telepathicExchangeRepository.withTelepathicSeriesLease(seriesId, task);
+  }
 
   async archiveTrainingRun(id: string): Promise<void> {
     const run = (await this.trainingRepository.listTrainingRuns()).find((item) => item.id === id);

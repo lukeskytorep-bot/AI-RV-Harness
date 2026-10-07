@@ -87,6 +87,7 @@ export interface AppRepository {
   listArchivedTrainingRuns(): Promise<TrainingRunRecord[]>;
   getTelepathicSeries(seriesId: string): Promise<TelepathicSeriesState | null>;
   saveTelepathicSeries(state: TelepathicSeriesState): Promise<void>;
+  withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T>;
   archiveTrainingRun(id: string): Promise<void>;
   restoreTrainingRun(id: string): Promise<void>;
   ensureAiIdentity(input: EnsureAiIdentityInput): Promise<AiIdentity>;

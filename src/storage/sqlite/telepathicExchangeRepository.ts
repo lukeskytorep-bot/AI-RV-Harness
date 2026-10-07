@@ -1,4 +1,4 @@
-import type { DatabaseTransactionStatement } from "../databaseNative";
+import type { DatabaseTransactionStatement, DatabaseWriteResult } from "../databaseNative";
 import type { TelepathicExchangeRepository } from "../contracts/telepathicExchangeRepository";
 import type {
   TelepathicBlindSubmission,
@@ -14,6 +14,7 @@ import type {
 
 export interface SqliteTelepathicExchangeRepositoryDependencies {
   select: <T>(query: string, values?: unknown[]) => Promise<T>;
+  executeWrite: (query: string, values?: unknown[]) => Promise<DatabaseWriteResult>;
   executeTransaction: (statements: DatabaseTransactionStatement[]) => Promise<unknown>;
 }
 
@@ -95,10 +96,35 @@ const INSERT_TARGET = "INSERT OR IGNORE INTO telepathic_targets (round_id, sende
 const ADVANCE_TARGET = "UPDATE telepathic_targets SET status='transmission_ready', transmission_ready_at=$1 WHERE round_id=$2 AND status='locked'";
 const UPSERT_BLIND = "INSERT INTO telepathic_blind_submissions (round_id, participant_id, status, first_text, second_text, provider_attempt_count, content_sha256, sealed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(round_id, participant_id) DO UPDATE SET status=excluded.status, first_text=excluded.first_text, second_text=excluded.second_text, provider_attempt_count=excluded.provider_attempt_count, content_sha256=excluded.content_sha256, sealed_at=excluded.sealed_at WHERE telepathic_blind_submissions.status NOT IN ('sealed','no_submission')";
 const UPSERT_REFLECTION = "INSERT INTO telepathic_reflections (round_id, participant_id, role, reflection_text, share_others_consent, shared_answers_comment) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(round_id, participant_id) DO UPDATE SET reflection_text=excluded.reflection_text, share_others_consent=excluded.share_others_consent, shared_answers_comment=excluded.shared_answers_comment";
+
+const ACQUIRE_SERIES_LEASE = "UPDATE telepathic_series SET run_lease_owner=$1, run_lease_expires_at=$2, run_lease_version=run_lease_version+1 WHERE id=$3 AND (run_lease_owner IS NULL OR run_lease_expires_at IS NULL OR run_lease_expires_at < $4)";
+const RENEW_SERIES_LEASE = "UPDATE telepathic_series SET run_lease_expires_at=$1 WHERE id=$2 AND run_lease_owner=$3";
+const RELEASE_SERIES_LEASE = "UPDATE telepathic_series SET run_lease_owner=NULL, run_lease_expires_at=NULL WHERE id=$1 AND run_lease_owner=$2";
+
 const UPSERT_CALL = "INSERT INTO telepathic_provider_calls (id, series_id, round_id, participant_id, call_stage, technical_attempt, status, scope_key, request_sha256, provider_request_id, response_text, error_message, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(id) DO UPDATE SET status=excluded.status, provider_request_id=excluded.provider_request_id, response_text=excluded.response_text, error_message=excluded.error_message, updated_at=excluded.updated_at";
 
 export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRepository {
   constructor(private readonly dependencies: SqliteTelepathicExchangeRepositoryDependencies) {}
+
+  async withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T> {
+    const owner = `telepathic-lease-${crypto.randomUUID()}`;
+    const leaseMs = 10 * 60 * 1000;
+    const acquiredAt = new Date();
+    const expiresAt = new Date(acquiredAt.getTime() + leaseMs).toISOString();
+    const acquired = await this.dependencies.executeWrite(ACQUIRE_SERIES_LEASE, [owner, expiresAt, seriesId, acquiredAt.toISOString()]);
+    if (acquired.rowsAffected !== 1) throw new Error("Telepathic series is already running in another application instance.");
+
+    const heartbeat = globalThis.setInterval(() => {
+      const nextExpiry = new Date(Date.now() + leaseMs).toISOString();
+      void this.dependencies.executeWrite(RENEW_SERIES_LEASE, [nextExpiry, seriesId, owner]).catch(() => undefined);
+    }, 60_000);
+    try {
+      return await task();
+    } finally {
+      globalThis.clearInterval(heartbeat);
+      await this.dependencies.executeWrite(RELEASE_SERIES_LEASE, [seriesId, owner]).catch(() => undefined);
+    }
+  }
 
   async saveTelepathicSeries(state: TelepathicSeriesState): Promise<void> {
     const existingTargets = await this.dependencies.select<Array<{ round_id: string; content_sha256: string }>>(

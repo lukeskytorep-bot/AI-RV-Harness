@@ -26,9 +26,9 @@ const migrationFiles = readdirSync(migrationDir)
   .filter((name) => /^\d{3}_.+\.sql$/.test(name))
   .sort();
 const migrationNumbers = migrationFiles.map((name) => Number(name.slice(0, 3)));
-const expectedNumbers = Array.from({ length: 28 }, (_, index) => index + 1);
+const expectedNumbers = Array.from({ length: 29 }, (_, index) => index + 1);
 if (JSON.stringify(migrationNumbers) !== JSON.stringify(expectedNumbers)) {
-  failures.push(`SQLite migrations must be contiguous 001-028; found: ${migrationFiles.join(", ")}`);
+  failures.push(`SQLite migrations must be contiguous 001-029; found: ${migrationFiles.join(", ")}`);
 }
 
 const tauriLib = read("src-tauri/src/lib.rs");
@@ -117,6 +117,7 @@ const migration025 = read("src-tauri/migrations/025_provider_continuation_state.
 const migration026 = read("src-tauri/migrations/026_typed_workspaces.sql");
 const migration027 = read("src-tauri/migrations/027_factory_training_classification_upgrade.sql");
 const migration028 = read("src-tauri/migrations/028_telepathic_exchange_series.sql");
+const migration029 = read("src-tauri/migrations/029_telepathic_series_run_lease.sql");
 for (const marker of ["chat_message_provider_state", "session_event_provider_state", "ON DELETE CASCADE", "payload_sha256", "payload_size_bytes"]) {
   if (!migration025.includes(marker)) failures.push(`provider-continuation persistence migration missing marker: ${marker}`);
 }
@@ -129,6 +130,9 @@ for (const marker of ["prevent_training_target_update", "prevent_used_target_upd
 for (const marker of ["telepathic_series", "telepathic_participants", "telepathic_rounds", "telepathic_targets", "telepathic_blind_submissions", "telepathic_reflections", "telepathic_provider_calls", "telepathic_target_content_immutable"]) {
   if (!migration028.includes(marker)) failures.push(`telepathic-exchange migration missing marker: ${marker}`);
 }
+for (const marker of ["run_lease_owner", "run_lease_expires_at", "run_lease_version", "idx_telepathic_series_run_lease"]) {
+  if (!migration029.includes(marker)) failures.push(`telepathic-series lease migration missing marker: ${marker}`);
+}
 
 const nativeCompatibility = join(root, "src-tauri", "src", "ux_data_compatibility.rs");
 if (!existsSync(nativeCompatibility)) failures.push("native UX-DATA compatibility test module is missing");
@@ -139,6 +143,7 @@ if (!nativeCompatibilitySource.includes("exact_green_v24_to_v25_adds_provider_st
 if (!nativeCompatibilitySource.includes("exact_green_v25_to_v26_types_existing_workspaces_without_moving_history")) failures.push("native compatibility gate must test exact green v25 -> v26 typed Workspace upgrade");
 if (!nativeCompatibilitySource.includes("exact_green_v26_to_v27_repairs_factory_classification_without_unlocking_history")) failures.push("native compatibility gate must test exact green v26 -> v27 factory-target metadata upgrade");
 if (!nativeCompatibilitySource.includes("exact_green_v27_to_v28_adds_telepathic_exchange_storage_without_moving_existing_data")) failures.push("native compatibility gate must test exact green v27 -> v28 telepathic exchange upgrade");
+if (!nativeCompatibilitySource.includes("exact_green_v28_to_v29_adds_cross_instance_telepathic_run_lease_without_moving_series_data")) failures.push("native compatibility gate must test exact green v28 -> v29 telepathic run-lease upgrade");
 if (nativeCompatibilitySource.includes("legacy_fixture_manual_chain_through_024")) failures.push("native compatibility gate must not reintroduce a public-v0.7.12 -> v0.7.13 migration chain");
 
 if (failures.length) {
@@ -146,4 +151,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`UX-DATA compatibility verification passed: ${migrationFiles.length} migrations, flat Conversations, shared dialogs/model routes, unified lifecycle, Viewer Notes provenance, Field Guide schema 024, provider continuation schema 025, typed Workspace schema 026, factory-target upgrade schema 027, telepathic exchange schema 028, and native green-v23/v24/v25/v26/v27 upgrade gates are present.`);
+console.log(`UX-DATA compatibility verification passed: ${migrationFiles.length} migrations, flat Conversations, shared dialogs/model routes, unified lifecycle, Viewer Notes provenance, Field Guide schema 024, provider continuation schema 025, typed Workspace schema 026, factory-target upgrade schema 027, telepathic exchange schema 028, cross-instance lease schema 029, and native green-v23/v24/v25/v26/v27/v28 upgrade gates are present.`);
