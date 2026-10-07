@@ -49,7 +49,7 @@ describe("SECURITY-IPC-1A trust-boundary hardening", () => {
       .filter((name) => /^\d{3}_.*\.sql$/.test(name))
       .sort();
 
-    expect(migrationNames).toHaveLength(29);
+    expect(migrationNames).toHaveLength(30);
     expect(migrationNames[0]).toMatch(/^001_/);
     expect(migrationNames.at(-1)).toMatch(/^030_/);
     expect(registry).toContain("MIGRATION_SPECS[MIGRATION_SPECS.len() - 1].version");
