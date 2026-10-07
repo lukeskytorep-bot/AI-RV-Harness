@@ -12,7 +12,7 @@ export interface TelepathicTrainingParticipantPreflight {
   route: string;
   estimatedInputTokens: number;
   estimatedTotalTokens: number;
-  contextLimit: number;
+  contextLimit?: number;
   estimatedCostPerRepresentativeCallUsd?: number;
   hardCostLimitEligibility: TelepathicHardCostLimitEligibility;
   exceeded: boolean;
