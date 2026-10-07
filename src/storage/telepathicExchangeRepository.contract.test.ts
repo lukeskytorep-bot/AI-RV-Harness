@@ -218,7 +218,16 @@ describe("telepathic exchange persistence contract", () => {
         if (query.startsWith("SELECT id, status, current_round_index")) return [seriesRow] as T;
         if (query.startsWith("SELECT participant_id")) return participantRows as T;
         if (query.startsWith("SELECT id, round_number")) return [{ id: round.assignment.roundId, round_number: 1, sender_participant_id: round.assignment.senderParticipantId, status: "reflections", revealed_at: round.revealedAt, completed_at: null, blocked_reason: null }] as T;
-        if (query.startsWith("SELECT t.round_id")) return [] as T;
+        if (query.startsWith("SELECT t.round_id")) return [{
+          round_id: round.assignment.roundId,
+          sender_participant_id: "human",
+          content: "Locked human target",
+          assets_manifest_json: "[]",
+          content_sha256: "target-hash",
+          status: "transmission_ready",
+          locked_at: "2026-10-07T21:01:00.000Z",
+          transmission_ready_at: "2026-10-07T21:02:00.000Z",
+        }] as T;
         if (query.startsWith("SELECT b.round_id")) return [] as T;
         if (query.startsWith("SELECT f.round_id")) return [{ round_id: round.assignment.roundId, participant_id: "human", role: "sender", reflection_text: "", share_others_consent: null, shared_answers_comment: null }] as T;
         if (query.startsWith("SELECT id, round_id, participant_id")) return [] as T;
