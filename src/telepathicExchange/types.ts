@@ -81,6 +81,7 @@ export interface TelepathicTargetAsset {
   mimeType: string;
   size: number;
   sha256: string;
+  path?: string;
   shortDescription?: string;
 }
 

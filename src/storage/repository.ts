@@ -86,8 +86,11 @@ export interface AppRepository {
   listTrainingRuns(): Promise<TrainingRunRecord[]>;
   listArchivedTrainingRuns(): Promise<TrainingRunRecord[]>;
   getTelepathicSeries(seriesId: string): Promise<TelepathicSeriesState | null>;
+  listTelepathicSeries(seriesWorkspaceId?: string): Promise<TelepathicSeriesState[]>;
   saveTelepathicSeries(state: TelepathicSeriesState): Promise<void>;
   withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T>;
+  assertTelepathicSeriesLease(seriesId: string): Promise<void>;
+  telepathicSeriesLeaseSignal(seriesId: string): AbortSignal | undefined;
   archiveTrainingRun(id: string): Promise<void>;
   restoreTrainingRun(id: string): Promise<void>;
   ensureAiIdentity(input: EnsureAiIdentityInput): Promise<AiIdentity>;

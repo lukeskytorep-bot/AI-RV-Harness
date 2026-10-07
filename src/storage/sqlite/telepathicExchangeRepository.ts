@@ -16,6 +16,7 @@ export interface SqliteTelepathicExchangeRepositoryDependencies {
   select: <T>(query: string, values?: unknown[]) => Promise<T>;
   executeWrite: (query: string, values?: unknown[]) => Promise<DatabaseWriteResult>;
   executeTransaction: (statements: DatabaseTransactionStatement[]) => Promise<unknown>;
+  executeFencedTransaction: (input: { seriesId: string; leaseOwner: string; leaseVersion: number; statements: DatabaseTransactionStatement[] }) => Promise<number[]>;
 }
 
 type SeriesRow = {
@@ -98,12 +99,16 @@ const UPSERT_BLIND = "INSERT INTO telepathic_blind_submissions (round_id, partic
 const UPSERT_REFLECTION = "INSERT INTO telepathic_reflections (round_id, participant_id, role, reflection_text, share_others_consent, shared_answers_comment) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(round_id, participant_id) DO UPDATE SET reflection_text=excluded.reflection_text, share_others_consent=excluded.share_others_consent, shared_answers_comment=excluded.shared_answers_comment";
 
 const ACQUIRE_SERIES_LEASE = "UPDATE telepathic_series SET run_lease_owner=$1, run_lease_expires_at=$2, run_lease_version=run_lease_version+1 WHERE id=$3 AND (run_lease_owner IS NULL OR run_lease_expires_at IS NULL OR run_lease_expires_at < $4)";
-const RENEW_SERIES_LEASE = "UPDATE telepathic_series SET run_lease_expires_at=$1 WHERE id=$2 AND run_lease_owner=$3";
-const RELEASE_SERIES_LEASE = "UPDATE telepathic_series SET run_lease_owner=NULL, run_lease_expires_at=NULL WHERE id=$1 AND run_lease_owner=$2";
+const RENEW_SERIES_LEASE = "UPDATE telepathic_series SET run_lease_expires_at=$1 WHERE id=$2 AND run_lease_owner=$3 AND run_lease_version=$4";
+const RELEASE_SERIES_LEASE = "UPDATE telepathic_series SET run_lease_owner=NULL, run_lease_expires_at=NULL WHERE id=$1 AND run_lease_owner=$2 AND run_lease_version=$3";
 
 const UPSERT_CALL = "INSERT INTO telepathic_provider_calls (id, series_id, round_id, participant_id, call_stage, technical_attempt, status, scope_key, request_sha256, provider_request_id, response_text, error_message, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(id) DO UPDATE SET status=excluded.status, provider_request_id=excluded.provider_request_id, response_text=excluded.response_text, error_message=excluded.error_message, updated_at=excluded.updated_at";
 
+type ActiveLease = { owner: string; version: number; expiresAt: string; lost: boolean; controller: AbortController };
+
 export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRepository {
+  private readonly activeLeases = new Map<string, ActiveLease>();
+
   constructor(private readonly dependencies: SqliteTelepathicExchangeRepositoryDependencies) {}
 
   async withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T> {
@@ -113,17 +118,73 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
     const expiresAt = new Date(acquiredAt.getTime() + leaseMs).toISOString();
     const acquired = await this.dependencies.executeWrite(ACQUIRE_SERIES_LEASE, [owner, expiresAt, seriesId, acquiredAt.toISOString()]);
     if (acquired.rowsAffected !== 1) throw new Error("Telepathic series is already running in another application instance.");
+    const rows = await this.dependencies.select<Array<{ run_lease_owner: string | null; run_lease_version: number; run_lease_expires_at: string | null }>>(
+      "SELECT run_lease_owner, run_lease_version, run_lease_expires_at FROM telepathic_series WHERE id=$1",
+      [seriesId],
+    );
+    const row = rows[0];
+    if (!row || row.run_lease_owner !== owner || !row.run_lease_expires_at) throw new Error("Telepathic series lease acquisition could not be verified.");
+    const lease: ActiveLease = { owner, version: row.run_lease_version, expiresAt: row.run_lease_expires_at, lost: false, controller: new AbortController() };
+    this.activeLeases.set(seriesId, lease);
 
-    const heartbeat = globalThis.setInterval(() => {
+    const markLost = () => {
+      if (lease.lost) return;
+      lease.lost = true;
+      lease.controller.abort(new DOMException("Telepathic series lease was lost.", "AbortError"));
+    };
+    const renew = async () => {
+      if (lease.lost) return;
       const nextExpiry = new Date(Date.now() + leaseMs).toISOString();
-      void this.dependencies.executeWrite(RENEW_SERIES_LEASE, [nextExpiry, seriesId, owner]).catch(() => undefined);
-    }, 60_000);
+      try {
+        const result = await this.dependencies.executeWrite(RENEW_SERIES_LEASE, [nextExpiry, seriesId, owner, lease.version]);
+        if (result.rowsAffected !== 1) markLost();
+        else lease.expiresAt = nextExpiry;
+      } catch {
+        markLost();
+      }
+    };
+    const heartbeat = globalThis.setInterval(() => { void renew(); }, 30_000);
     try {
-      return await task();
+      const result = await task();
+      await this.assertTelepathicSeriesLease(seriesId);
+      return result;
     } finally {
       globalThis.clearInterval(heartbeat);
-      await this.dependencies.executeWrite(RELEASE_SERIES_LEASE, [seriesId, owner]).catch(() => undefined);
+      this.activeLeases.delete(seriesId);
+      await this.dependencies.executeWrite(RELEASE_SERIES_LEASE, [seriesId, owner, lease.version]).catch(() => undefined);
     }
+  }
+
+  async assertTelepathicSeriesLease(seriesId: string): Promise<void> {
+    const lease = this.activeLeases.get(seriesId);
+    if (!lease || lease.lost) throw new Error("Telepathic series lease was lost or is not active.");
+    const rows = await this.dependencies.select<Array<{ run_lease_owner: string | null; run_lease_version: number; run_lease_expires_at: string | null }>>(
+      "SELECT run_lease_owner, run_lease_version, run_lease_expires_at FROM telepathic_series WHERE id=$1",
+      [seriesId],
+    );
+    const row = rows[0];
+    if (!row || row.run_lease_owner !== lease.owner || row.run_lease_version !== lease.version || !row.run_lease_expires_at || row.run_lease_expires_at <= new Date().toISOString()) {
+      lease.lost = true;
+      lease.controller.abort(new DOMException("Telepathic series lease was lost.", "AbortError"));
+      throw new Error("Telepathic series lease was lost before provider dispatch or checkpoint save.");
+    }
+  }
+
+  telepathicSeriesLeaseSignal(seriesId: string): AbortSignal | undefined {
+    return this.activeLeases.get(seriesId)?.controller.signal;
+  }
+
+
+
+  async listTelepathicSeries(seriesWorkspaceId?: string): Promise<TelepathicSeriesState[]> {
+    const rows = await this.dependencies.select<Array<{ id: string }>>(
+      seriesWorkspaceId
+        ? "SELECT id FROM telepathic_series WHERE series_workspace_id = $1 ORDER BY updated_at DESC"
+        : "SELECT id FROM telepathic_series ORDER BY updated_at DESC",
+      seriesWorkspaceId ? [seriesWorkspaceId] : [],
+    );
+    const states = await Promise.all(rows.map((row) => this.getTelepathicSeries(row.id)));
+    return states.filter((state): state is TelepathicSeriesState => Boolean(state));
   }
 
   async saveTelepathicSeries(state: TelepathicSeriesState): Promise<void> {
@@ -185,7 +246,13 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
     for (const call of state.providerCalls) {
       statements.push({ query: UPSERT_CALL, values: [call.id, call.seriesId, call.roundId, call.participantId, call.callStage, call.technicalAttempt, call.status, call.scopeKey, call.requestSha256, call.providerRequestId ?? null, call.responseText ?? null, call.errorMessage ?? null, call.createdAt, call.updatedAt] });
     }
-    await this.dependencies.executeTransaction(statements);
+    const lease = this.activeLeases.get(state.config.seriesId);
+    if (lease) {
+      if (lease.lost) throw new Error("Telepathic series lease was lost before checkpoint save.");
+      await this.dependencies.executeFencedTransaction({ seriesId: state.config.seriesId, leaseOwner: lease.owner, leaseVersion: lease.version, statements });
+    } else {
+      await this.dependencies.executeTransaction(statements);
+    }
   }
 
   async getTelepathicSeries(seriesId: string): Promise<TelepathicSeriesState | null> {

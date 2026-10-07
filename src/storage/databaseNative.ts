@@ -39,6 +39,26 @@ export async function executeDatabaseTransaction(statements: DatabaseTransaction
   return invoke<number[]>("database_execute_write_batch", { statements: nativeStatements });
 }
 
+
+export async function executeTelepathicFencedDatabaseTransaction(input: {
+  seriesId: string;
+  leaseOwner: string;
+  leaseVersion: number;
+  statements: DatabaseTransactionStatement[];
+}): Promise<number[]> {
+  if (input.statements.length === 0) return [];
+  const nativeStatements: NativeWriteStatement[] = input.statements.map((statement) => ({
+    operation: operationForWriteQuery(statement.query),
+    values: statement.values ?? [],
+  }));
+  return invoke<number[]>("database_execute_telepathic_fenced_write_batch", {
+    seriesId: input.seriesId,
+    leaseOwner: input.leaseOwner,
+    leaseVersion: input.leaseVersion,
+    statements: nativeStatements,
+  });
+}
+
 export async function createDatabaseSnapshotNative(destinationPath: string): Promise<void> {
   await invoke("database_snapshot", { destinationPath });
 }

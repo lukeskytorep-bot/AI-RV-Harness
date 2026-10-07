@@ -66,6 +66,7 @@ pub fn run() {
             database::database_select_readonly,
             database::database_execute_write,
             database::database_execute_write_batch,
+            database::database_execute_telepathic_fenced_write_batch,
             database::database_snapshot,
             database::database_controlled_purge
         ])

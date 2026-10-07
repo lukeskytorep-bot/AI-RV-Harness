@@ -91,6 +91,7 @@ describe("TELEPATHIC-EXCHANGE-STEP3A executable round", () => {
       captured.push({ modelId: request.modelId, content, hasContinuation: request.messages.some((message) => Boolean(message.continuationState)) });
       let response = "Reflection saved.";
       if (content.includes("please prepare one specific target")) response = content.includes("round 1") ? "LOCKED_TARGET_ALPHA" : "LOCKED_TARGET_BETA";
+      else if (content.includes("confirm the transmission")) response = "READY";
       else if (content.includes("Please give your first description")) response = "cool vertical textured form with motion";
       else if (content.includes("After this step we will close your description")) response = "open surroundings and a hard surface";
       else if (content.includes("Reply YES or NO")) response = request.modelId === "model-leo" ? "YES" : "maybe";

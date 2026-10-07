@@ -344,8 +344,8 @@ impl DatabaseWriteOperation {
             Self::TelepathicUpsertReflection01 => "INSERT INTO telepathic_reflections (round_id, participant_id, role, reflection_text, share_others_consent, shared_answers_comment) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(round_id, participant_id) DO UPDATE SET reflection_text=excluded.reflection_text, share_others_consent=excluded.share_others_consent, shared_answers_comment=excluded.shared_answers_comment",
             Self::TelepathicUpsertCall01 => "INSERT INTO telepathic_provider_calls (id, series_id, round_id, participant_id, call_stage, technical_attempt, status, scope_key, request_sha256, provider_request_id, response_text, error_message, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(id) DO UPDATE SET status=excluded.status, provider_request_id=excluded.provider_request_id, response_text=excluded.response_text, error_message=excluded.error_message, updated_at=excluded.updated_at",
             Self::TelepathicAcquireSeriesLease01 => "UPDATE telepathic_series SET run_lease_owner=$1, run_lease_expires_at=$2, run_lease_version=run_lease_version+1 WHERE id=$3 AND (run_lease_owner IS NULL OR run_lease_expires_at IS NULL OR run_lease_expires_at < $4)",
-            Self::TelepathicRenewSeriesLease01 => "UPDATE telepathic_series SET run_lease_expires_at=$1 WHERE id=$2 AND run_lease_owner=$3",
-            Self::TelepathicReleaseSeriesLease01 => "UPDATE telepathic_series SET run_lease_owner=NULL, run_lease_expires_at=NULL WHERE id=$1 AND run_lease_owner=$2",
+            Self::TelepathicRenewSeriesLease01 => "UPDATE telepathic_series SET run_lease_expires_at=$1 WHERE id=$2 AND run_lease_owner=$3 AND run_lease_version=$4",
+            Self::TelepathicReleaseSeriesLease01 => "UPDATE telepathic_series SET run_lease_owner=NULL, run_lease_expires_at=NULL WHERE id=$1 AND run_lease_owner=$2 AND run_lease_version=$3",
             Self::WorkspacesConversationsInsertWorkspaces01 => "INSERT INTO workspaces (id, profile_id, name, description, kind, created_at, updated_at, last_opened_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             Self::WorkspacesConversationsUpdateWorkspaces01 => "UPDATE workspaces SET name = $1, updated_at = $2 WHERE id = $3",
             Self::WorkspacesConversationsUpdateWorkspaces02 => "UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL AND ((kind = 'conversation' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('conversation', 'legacy_combined'))) OR (kind = 'rv' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('rv', 'legacy_combined'))) OR (kind = 'legacy_combined' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('conversation', 'legacy_combined')) AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('rv', 'legacy_combined'))))",
@@ -467,8 +467,8 @@ impl DatabaseWriteOperation {
             Self::TelepathicUpsertReflection01 => 6,
             Self::TelepathicUpsertCall01 => 14,
             Self::TelepathicAcquireSeriesLease01 => 4,
-            Self::TelepathicRenewSeriesLease01 => 3,
-            Self::TelepathicReleaseSeriesLease01 => 2,
+            Self::TelepathicRenewSeriesLease01 => 4,
+            Self::TelepathicReleaseSeriesLease01 => 3,
             Self::WorkspacesConversationsInsertWorkspaces01 => 8,
             Self::WorkspacesConversationsUpdateWorkspaces01 => 3,
             Self::WorkspacesConversationsUpdateWorkspaces02 => 2,
@@ -695,6 +695,47 @@ pub async fn database_execute_write_batch(
     }
     let pool = sqlite_pool(&db_instances).await?;
     let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
+    let mut rows_affected = Vec::with_capacity(statements.len());
+    for statement in statements {
+        match execute_statement(&mut transaction, statement).await {
+            Ok(rows) => rows_affected.push(rows),
+            Err(message) => {
+                transaction.rollback().await.map_err(|rollback_error| format!("{message}; rollback failed: {rollback_error}"))?;
+                return Err(message);
+            }
+        }
+    }
+    transaction.commit().await.map_err(|error| error.to_string())?;
+    Ok(rows_affected)
+}
+
+#[tauri::command]
+pub async fn database_execute_telepathic_fenced_write_batch(
+    db_instances: State<'_, DbInstances>,
+    series_id: String,
+    lease_owner: String,
+    lease_version: i64,
+    statements: Vec<DatabaseWriteStatement>,
+) -> Result<Vec<u64>, String> {
+    if statements.is_empty() { return Ok(Vec::new()); }
+    if statements.len() > MAX_TRANSACTION_STATEMENTS {
+        return Err("database transaction contains too many statements".to_string());
+    }
+    let pool = sqlite_pool(&db_instances).await?;
+    let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
+    let lease_valid: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM telepathic_series WHERE id=$1 AND run_lease_owner=$2 AND run_lease_version=$3 AND run_lease_expires_at IS NOT NULL AND run_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+    )
+    .bind(&series_id)
+    .bind(&lease_owner)
+    .bind(lease_version)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| error.to_string())?;
+    if lease_valid != 1 {
+        transaction.rollback().await.map_err(|error| error.to_string())?;
+        return Err("telepathic series lease lost before fenced checkpoint".to_string());
+    }
     let mut rows_affected = Vec::with_capacity(statements.len());
     for statement in statements {
         match execute_statement(&mut transaction, statement).await {

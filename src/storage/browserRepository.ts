@@ -112,10 +112,13 @@ export class BrowserRepository implements AppRepository {
   listTrainingRuns: AppRepository["listTrainingRuns"] = () => this.trainingRepository.listTrainingRuns();
   listArchivedTrainingRuns: AppRepository["listArchivedTrainingRuns"] = () => this.trainingRepository.listArchivedTrainingRuns();
   getTelepathicSeries: AppRepository["getTelepathicSeries"] = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeries(seriesId);
+  listTelepathicSeries: AppRepository["listTelepathicSeries"] = (seriesWorkspaceId) => this.telepathicExchangeRepository.listTelepathicSeries(seriesWorkspaceId);
   saveTelepathicSeries: AppRepository["saveTelepathicSeries"] = (state) => this.telepathicExchangeRepository.saveTelepathicSeries(state);
   withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T> {
     return this.telepathicExchangeRepository.withTelepathicSeriesLease(seriesId, task);
   }
+  assertTelepathicSeriesLease: AppRepository["assertTelepathicSeriesLease"] = (seriesId) => this.telepathicExchangeRepository.assertTelepathicSeriesLease(seriesId);
+  telepathicSeriesLeaseSignal: AppRepository["telepathicSeriesLeaseSignal"] = (seriesId) => this.telepathicExchangeRepository.telepathicSeriesLeaseSignal(seriesId);
 
   async archiveTrainingRun(id: string): Promise<void> {
     const run = (await this.trainingRepository.listTrainingRuns()).find((item) => item.id === id);

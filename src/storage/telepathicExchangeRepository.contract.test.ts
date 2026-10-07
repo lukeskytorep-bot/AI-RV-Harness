@@ -53,6 +53,8 @@ describe("telepathic exchange persistence contract", () => {
     await repository.saveTelepathicSeries(state);
     const loaded = await repository.getTelepathicSeries(config.seriesId);
     expect(loaded).toEqual(state);
+    expect((await repository.listTelepathicSeries("workspace-a")).map((item) => item.config.seriesId)).toEqual([config.seriesId]);
+    expect(await repository.listTelepathicSeries("workspace-other")).toEqual([]);
     expect(JSON.stringify(loaded)).not.toContain("chat_messages");
   });
 
@@ -77,25 +79,29 @@ describe("telepathic exchange persistence contract", () => {
 
   it("uses an atomic SQLite lease across separate repository instances", async () => {
     let leaseOwner: string | null = null;
+    let leaseVersion = 0;
+    let leaseExpiresAt: string | null = null;
     const executeWrite = async (query: string, values: unknown[] = []) => {
       if (query.startsWith("UPDATE telepathic_series SET run_lease_owner=NULL")) {
-        if (leaseOwner === String(values[1])) { leaseOwner = null; return { rowsAffected: 1 }; }
+        if (leaseOwner === String(values[1]) && leaseVersion === Number(values[2])) { leaseOwner = null; leaseExpiresAt = null; return { rowsAffected: 1 }; }
         return { rowsAffected: 0 };
       }
       if (query.startsWith("UPDATE telepathic_series SET run_lease_owner=")) {
         if (leaseOwner !== null) return { rowsAffected: 0 };
-        leaseOwner = String(values[0]);
+        leaseOwner = String(values[0]); leaseExpiresAt = String(values[1]); leaseVersion += 1;
         return { rowsAffected: 1 };
       }
       if (query.startsWith("UPDATE telepathic_series SET run_lease_expires_at=")) {
-        return { rowsAffected: leaseOwner === String(values[2]) ? 1 : 0 };
+        if (leaseOwner === String(values[2]) && leaseVersion === Number(values[3])) { leaseExpiresAt = String(values[0]); return { rowsAffected: 1 }; }
+        return { rowsAffected: 0 };
       }
       throw new Error(`unexpected write: ${query}`);
     };
     const deps = {
-      select: async <T,>(): Promise<T> => [] as T,
+      select: async <T,>(query: string): Promise<T> => query.includes("run_lease_owner") ? [{ run_lease_owner: leaseOwner, run_lease_version: leaseVersion, run_lease_expires_at: leaseExpiresAt }] as T : [] as T,
       executeWrite,
       executeTransaction: async () => [],
+      executeFencedTransaction: async () => [],
     };
     const first = new SqliteTelepathicExchangeRepository(deps);
     const second = new SqliteTelepathicExchangeRepository(deps);

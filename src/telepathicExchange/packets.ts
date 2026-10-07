@@ -1,4 +1,4 @@
-import type { ProviderMessage } from "../providers/types";
+import type { ProviderImageInput, ProviderMessage } from "../providers/types";
 import type { ProviderContinuationState } from "../providers/continuationContract";
 import {
   buildReceiverFirstPrompt,
@@ -7,6 +7,7 @@ import {
   buildReceiverSecondLookPrompt,
   buildSenderRevealPrompt,
   buildSenderTargetPrompt,
+  buildTargetLockedConfirmation,
   buildSeriesReflectionPrompt,
   buildSharedAnswersPrompt,
   buildSharingConsentPrompt,
@@ -61,13 +62,13 @@ export function composeTelepathicProviderMessages(
   return packet.messages.map((message) => ({ ...message }));
 }
 
-function packet(scope: TelepathicProviderScope, content: string, contextPolicy: TelepathicProviderPacket["contextPolicy"] = "fresh_round_context"): TelepathicProviderPacket {
+function packet(scope: TelepathicProviderScope, content: string, contextPolicy: TelepathicProviderPacket["contextPolicy"] = "fresh_round_context", images?: ProviderImageInput[]): TelepathicProviderPacket {
   return {
     scope,
     scopeKey: telepathicProviderScopeKey(scope),
     contextPolicy,
     continuationPolicy: "none",
-    messages: [{ role: "user", content }],
+    messages: [{ role: "user", content, ...(images?.length ? { images: images.map((image) => ({ ...image })) } : {}) }],
   };
 }
 
@@ -91,6 +92,19 @@ export function buildSenderTargetPacket(input: {
       buildRoundGreeting(input.language, { name: input.name, role, round: input.roundNumber, topicOrHidden: input.topicLabel }),
       buildSenderTargetPrompt(input.language, { name: input.name, topicOrHidden: input.topicLabel }),
     ].join("\n\n"),
+  );
+}
+
+export function buildSenderTransmissionConfirmationPacket(input: {
+  language: TelepathicLanguage;
+  seriesId: string;
+  roundId: string;
+  participantId: string;
+  name: string;
+}): TelepathicProviderPacket {
+  return packet(
+    { seriesId: input.seriesId, roundId: input.roundId, participantId: input.participantId, callStage: "sender_transmission_confirmation" },
+    buildTargetLockedConfirmation(input.language, input.name),
   );
 }
 
@@ -158,6 +172,7 @@ export async function buildReceiverRevealPacket(input: {
   target: TelepathicLockedTarget;
   blind: TelepathicBlindSubmission;
   canReadImages: boolean;
+  images?: ProviderImageInput[];
 }): Promise<TelepathicProviderPacket> {
   await assertTelepathicTargetIntegrity(input.target, { expectedRoundId: input.roundId, requireTransmissionReady: true });
   const files = targetFilesForModel(input.target, input.canReadImages, input.language);
@@ -170,6 +185,8 @@ export async function buildReceiverRevealPacket(input: {
       ownFirst: input.blind.first ?? "",
       ownSecond: input.blind.second ?? "",
     }),
+    "fresh_round_context",
+    input.images,
   );
 }
 

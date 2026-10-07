@@ -4,7 +4,7 @@ import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../p
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
-import { createDatabaseSnapshotNative, executeDatabaseTransaction, executeDatabaseWrite, initializeDatabaseNative, selectDatabaseReadonly, type DatabaseTransactionStatement } from "./databaseNative";
+import { createDatabaseSnapshotNative, executeDatabaseTransaction, executeDatabaseWrite, executeTelepathicFencedDatabaseTransaction, initializeDatabaseNative, selectDatabaseReadonly, type DatabaseTransactionStatement } from "./databaseNative";
 import { SqliteWriteCoordinator } from "./sqliteWriteCoordinator";
 import { SqliteProfilesRepository } from "./sqlite/profilesRepository";
 import { SqliteTargetsRepository } from "./sqlite/targetsRepository";
@@ -90,6 +90,7 @@ export class SqliteRepository implements AppRepository {
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
       executeTransaction: (statements) => this.executeTransaction(statements),
+      executeFencedTransaction: (input) => executeTelepathicFencedDatabaseTransaction(input),
     });
     this.aiCenterRepository = new SqliteAiCenterRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
@@ -171,10 +172,13 @@ export class SqliteRepository implements AppRepository {
   listTrainingRuns: AppRepository["listTrainingRuns"] = () => this.trainingRepository.listTrainingRuns();
   listArchivedTrainingRuns: AppRepository["listArchivedTrainingRuns"] = () => this.trainingRepository.listArchivedTrainingRuns();
   getTelepathicSeries: AppRepository["getTelepathicSeries"] = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeries(seriesId);
+  listTelepathicSeries: AppRepository["listTelepathicSeries"] = (seriesWorkspaceId) => this.telepathicExchangeRepository.listTelepathicSeries(seriesWorkspaceId);
   saveTelepathicSeries: AppRepository["saveTelepathicSeries"] = (state) => this.telepathicExchangeRepository.saveTelepathicSeries(state);
   withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T> {
     return this.telepathicExchangeRepository.withTelepathicSeriesLease(seriesId, task);
   }
+  assertTelepathicSeriesLease: AppRepository["assertTelepathicSeriesLease"] = (seriesId) => this.telepathicExchangeRepository.assertTelepathicSeriesLease(seriesId);
+  telepathicSeriesLeaseSignal: AppRepository["telepathicSeriesLeaseSignal"] = (seriesId) => this.telepathicExchangeRepository.telepathicSeriesLeaseSignal(seriesId);
 
   async archiveTrainingRun(id: string): Promise<void> {
     const run = (await this.trainingRepository.listTrainingRuns()).find((item) => item.id === id);

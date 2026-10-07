@@ -43,6 +43,7 @@ const APP_COMMANDS: &[&str] = &[
     "database_select_readonly",
     "database_execute_write",
     "database_execute_write_batch",
+    "database_execute_telepathic_fenced_write_batch",
     "database_snapshot",
     "database_controlled_purge",
 ];

@@ -99,3 +99,58 @@
 .attachment-chips button { max-width: 250px; display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border: 1px solid var(--border); border-radius: 7px; color: var(--cyan); background: var(--cyan-soft); font-size: 11px; cursor: pointer; }
 .attachment-chips button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+
+/* TELEPATHIC-EXCHANGE-3B */
+.conversation-surface-switch { display: inline-flex; gap: 4px; margin: -2px 0 14px; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }
+.conversation-surface-switch button { min-height: 30px; padding: 5px 11px; border: 0; border-radius: 7px; background: transparent; color: var(--muted-strong); font-size: 11px; font-weight: 800; cursor: pointer; }
+.conversation-surface-switch button.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.conversation-surface-switch button:disabled { opacity: .55; cursor: not-allowed; }
+.telepathic-exchange-stack { display: grid; gap: 12px; }
+.telepathic-exchange-panel, .telepathic-action-box { display: grid; gap: 12px; padding: 14px; }
+.telepathic-section-heading > div, .telepathic-run-head > div:first-child { display: flex; align-items: center; gap: 9px; }
+.telepathic-section-heading span, .telepathic-run-head span { display: grid; gap: 2px; }
+.telepathic-section-heading small, .telepathic-run-head small, .telepathic-profile-toggle small, .telepathic-round-title small { color: var(--muted); }
+.telepathic-config-grid, .telepathic-route-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.telepathic-config-grid label, .telepathic-route-grid label, .telepathic-exchange-panel > label { display: grid; gap: 5px; }
+.telepathic-config-grid label > span, .telepathic-route-grid label > span, .telepathic-exchange-panel > label > span { color: var(--muted-strong); font-size: 11px; font-weight: 800; }
+.telepathic-check { display: flex !important; align-items: center; gap: 7px !important; align-self: end; min-height: 34px; }
+.telepathic-profile-list { display: grid; gap: 8px; }
+.telepathic-profile-row { display: grid; gap: 9px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); }
+.telepathic-profile-toggle { display: flex; gap: 8px; align-items: flex-start; }
+.telepathic-profile-toggle > span { display: grid; gap: 2px; }
+.telepathic-schedule { display: flex; flex-wrap: wrap; gap: 7px; }
+.telepathic-schedule > span { padding: 6px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-soft); font-size: 11px; }
+.telepathic-schedule.compact > span.active { border-color: var(--violet); color: var(--violet); }
+.telepathic-start { justify-self: start; }
+.telepathic-run-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.telepathic-run-actions { display: flex; gap: 6px; }
+.telepathic-round-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.telepathic-round-title > span { color: var(--muted-strong); font-size: 11px; }
+.telepathic-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 7px; }
+.telepathic-status-grid > div { display: grid; gap: 2px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); }
+.telepathic-status-grid small { color: var(--muted); }
+.telepathic-reveal { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); }
+.telepathic-reveal > div { display: flex; align-items: center; gap: 7px; }
+.telepathic-reveal p, .telepathic-results p, .telepathic-final-reflection p { margin: 0; white-space: pre-wrap; line-height: 1.5; }
+.telepathic-results { display: grid; gap: 8px; }
+.telepathic-results article, .telepathic-final-reflection { display: grid; gap: 5px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.telepathic-action-box h3, .telepathic-action-box p { margin: 0; }
+.telepathic-action-box textarea { width: 100%; resize: vertical; }
+.telepathic-action-box blockquote { margin: 0; padding: 9px 11px; border-left: 3px solid var(--border-strong); background: var(--surface-soft); white-space: pre-wrap; }
+.telepathic-action-row, .telepathic-image-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.telepathic-image-row label { position: relative; overflow: hidden; }
+.telepathic-image-row input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+@media (max-width: 760px) { .telepathic-config-grid, .telepathic-route-grid { grid-template-columns: 1fr; } .telepathic-run-head { align-items: flex-start; flex-direction: column; } }
+.telepathic-schedule > button { padding: 6px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-soft); color: inherit; font: inherit; font-size: 11px; cursor: pointer; }
+.telepathic-schedule > button.active { border-color: var(--violet); color: var(--violet); }
+.telepathic-schedule > button:disabled { opacity: .55; cursor: default; }
+.telepathic-result-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.telepathic-result-head small { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+
+.telepathic-series-history { display: grid; gap: 7px; }
+.telepathic-series-history-item { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; }
+.telepathic-series-history-item > span:first-child { display: grid; gap: 2px; }
+.telepathic-series-history-item small, .telepathic-uncertain-call small { color: var(--muted); }
+.telepathic-blocked-resolution { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
+.telepathic-uncertain-call { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); }
+.telepathic-uncertain-call > span { display: grid; gap: 2px; }

@@ -7,12 +7,14 @@ import {
   buildReceiverSecondPacket,
   buildSenderRevealPacket,
   buildSenderTargetPacket,
+  buildSenderTransmissionConfirmationPacket,
   buildSharedAnswersPacket,
   buildSharingConsentPacket,
 } from "./packets";
 import { planTelepathicSeries } from "./planner";
 import { preflightTelepathicPacket } from "./preflight";
 import { executeTelepathicProviderPacket, type ResolvedTelepathicAiRoute } from "./providerGateway";
+import { loadRevealImageForJudge } from "../artifacts/native";
 import type { ProviderChatAttempt } from "../providers/requestExecutor";
 import type {
   TelepathicParticipant,
@@ -21,6 +23,7 @@ import type {
   TelepathicSeriesConfig,
   TelepathicSeriesParticipantPacket,
   TelepathicSeriesState,
+  TelepathicTargetDraft,
 } from "./types";
 import type { TelepathicExchangeStore } from "./store";
 import { lockTelepathicTarget, markTelepathicTargetTransmissionReady } from "./target";
@@ -158,6 +161,7 @@ async function invokeAi(
   state: TelepathicSeriesState,
   participantItem: TelepathicParticipant,
   packet: Parameters<typeof executeTelepathicProviderPacket>[0]["packet"],
+  preResolvedRoute?: ResolvedTelepathicAiRoute,
 ): Promise<string | null> {
   if (participantItem.kind !== "ai" || !participantItem.ai) throw new Error("This telepathic provider call requires an AI participant.");
 
@@ -172,8 +176,10 @@ async function invokeAi(
   let technicalAttempt = failedAttempts.length ? Math.max(...failedAttempts) + 1 : 1;
   if (technicalAttempt > 2) return null;
 
-  const route = await deps.resolveRoute(participantItem);
+  await deps.store.assertTelepathicSeriesLease(packet.scope.seriesId);
+  const route = preResolvedRoute ?? await deps.resolveRoute(participantItem);
   assertResolvedRouteMatchesParticipant(participantItem, route);
+  await deps.store.assertTelepathicSeriesLease(packet.scope.seriesId);
 
   for (; technicalAttempt <= 2; technicalAttempt += 1) {
     try {
@@ -182,6 +188,7 @@ async function invokeAi(
         route,
         technicalAttempt,
         attempt: deps.providerAttempt,
+        signal: deps.store.telepathicSeriesLeaseSignal(packet.scope.seriesId),
         hooks: {
           createCallId: () => nextId(deps, "telepathic-call"),
           now: () => now(deps),
@@ -217,26 +224,37 @@ async function ensureTarget(
   round: TelepathicRoundState,
   sender: TelepathicParticipant,
 ): Promise<void> {
-  if (round.target) {
-    round.status = "blind";
-    return;
-  }
   round.status = "preparing_target";
   await saveCheckpoint(deps, state);
-  const senderTargetText = await invokeAi(deps, state, sender, buildSenderTargetPacket({
-    language: state.config.language,
-    seriesId: state.config.seriesId,
-    roundId: round.assignment.roundId,
-    participantId: sender.id,
-    name: sender.displayName,
-    roundNumber: round.assignment.roundNumber,
-    topicLabel: topicLabel(state.config),
-  }));
-  if (!senderTargetText) throw new Error("AI sender failed to provide a target after two technical attempts; the round remains blocked before blind and no Reveal is created.");
-  round.target = await markTelepathicTargetTransmissionReady(
-    await lockTelepathicTarget(round.assignment.roundId, sender.id, { content: senderTargetText }, now(deps)),
-    now(deps),
-  );
+
+  if (!round.target) {
+    const senderTargetText = await invokeAi(deps, state, sender, buildSenderTargetPacket({
+      language: state.config.language,
+      seriesId: state.config.seriesId,
+      roundId: round.assignment.roundId,
+      participantId: sender.id,
+      name: sender.displayName,
+      roundNumber: round.assignment.roundNumber,
+      topicLabel: topicLabel(state.config),
+    }));
+    if (!senderTargetText) throw new Error("AI sender failed to provide a target after two technical attempts; the round remains blocked before blind and no Reveal is created.");
+    round.target = await lockTelepathicTarget(round.assignment.roundId, sender.id, { content: senderTargetText }, now(deps));
+    await saveCheckpoint(deps, state);
+  }
+
+  if (round.target.status === "locked") {
+    const confirmation = await invokeAi(deps, state, sender, buildSenderTransmissionConfirmationPacket({
+      language: state.config.language,
+      seriesId: state.config.seriesId,
+      roundId: round.assignment.roundId,
+      participantId: sender.id,
+      name: sender.displayName,
+    }));
+    if (!confirmation) throw new Error("AI sender did not confirm transmission after the target was locked; the round remains blocked before blind and no Reveal is created.");
+    round.target = await markTelepathicTargetTransmissionReady(round.target, now(deps));
+    await saveCheckpoint(deps, state);
+  }
+
   round.status = "blind";
   await saveCheckpoint(deps, state);
 }
@@ -252,7 +270,7 @@ async function ensureBlind(
 
   for (const receiverId of round.assignment.receiverParticipantIds) {
     const receiver = participant(state.config, receiverId);
-    if (receiver.kind !== "ai") throw new Error("Human receiver is handled by the STEP 3B interaction layer.");
+    if (receiver.kind !== "ai") continue;
     let blind = round.blindByParticipant[receiverId] ?? createBlindSubmission(receiverId);
     if (blind.status === "sealed" || blind.status === "no_submission") continue;
 
@@ -295,6 +313,30 @@ async function ensureBlind(
   }
 }
 
+async function revealImagesForParticipant(
+  target: NonNullable<TelepathicRoundState["target"]>,
+  route: ResolvedTelepathicAiRoute,
+): Promise<{ canReadImages: boolean; images: Array<{ mimeType: string; dataBase64: string }> }> {
+  if (!target.assets.length || !route.model.capabilities.supportsVision || !route.model.capabilities.inputModalities.includes("image")) {
+    return { canReadImages: false, images: [] };
+  }
+  const usable = target.assets.filter((asset) => Boolean(asset.path));
+  if (usable.length !== target.assets.length) return { canReadImages: false, images: [] };
+  try {
+    const images = await Promise.all(usable.map((asset) => loadRevealImageForJudge({
+      artifactId: asset.artifactId,
+      path: asset.path!,
+      originalFileName: asset.originalFileName,
+      mimeType: asset.mimeType,
+      size: asset.size,
+      sha256: asset.sha256,
+    })));
+    return { canReadImages: true, images };
+  } catch {
+    return { canReadImages: false, images: [] };
+  }
+}
+
 async function ensureRevealAndReflections(
   deps: TelepathicExchangeEngineDependencies,
   state: TelepathicSeriesState,
@@ -315,10 +357,13 @@ async function ensureRevealAndReflections(
     const existing = round.reflectionsByParticipant[item.id];
     if (existing && Object.prototype.hasOwnProperty.call(existing, "reflection")) continue;
     const isSender = item.id === sender.id;
+    const route = await deps.resolveRoute(item);
+    assertResolvedRouteMatchesParticipant(item, route);
+    const revealMaterial = isSender ? { canReadImages: false, images: [] } : await revealImagesForParticipant(round.target, route);
     const revealPacket = isSender
       ? await buildSenderRevealPacket({ language: state.config.language, seriesId: state.config.seriesId, roundId: round.assignment.roundId, participantId: item.id, name: item.displayName, target: round.target })
-      : await buildReceiverRevealPacket({ language: state.config.language, seriesId: state.config.seriesId, roundId: round.assignment.roundId, participantId: item.id, name: item.displayName, target: round.target, blind: round.blindByParticipant[item.id], canReadImages: false });
-    const reflectionText = await invokeAi(deps, state, item, revealPacket);
+      : await buildReceiverRevealPacket({ language: state.config.language, seriesId: state.config.seriesId, roundId: round.assignment.roundId, participantId: item.id, name: item.displayName, target: round.target, blind: round.blindByParticipant[item.id], canReadImages: revealMaterial.canReadImages, images: revealMaterial.images });
+    const reflectionText = await invokeAi(deps, state, item, revealPacket, route);
     const reflection: TelepathicReflectionRecord = {
       participantId: item.id,
       role: isSender ? "sender" : "receiver",
@@ -357,6 +402,202 @@ async function ensureSharing(
   }
 }
 
+
+export type TelepathicConversationHumanStep =
+  | { kind: "prepare_target"; roundNumber: number }
+  | { kind: "confirm_transmission"; roundNumber: number }
+  | { kind: "blind_first"; roundNumber: number }
+  | { kind: "blind_second"; roundNumber: number; first: string }
+  | { kind: "reflection"; roundNumber: number; role: "sender" | "receiver" }
+  | { kind: "none" };
+
+function currentHumanParticipant(state: TelepathicSeriesState): TelepathicParticipant | null {
+  return state.config.participants.find((item) => item.kind === "human") ?? null;
+}
+
+export function telepathicConversationHumanStep(state: TelepathicSeriesState): TelepathicConversationHumanStep {
+  if (state.status === "completed" || state.status === "cancelled" || state.status === "blocked") return { kind: "none" };
+  const round = state.rounds[state.currentRoundIndex];
+  if (!round) return { kind: "none" };
+  const human = currentHumanParticipant(state);
+  if (!human) return { kind: "none" };
+  const isSender = round.assignment.senderParticipantId === human.id;
+  if (isSender) {
+    if (!round.target) return { kind: "prepare_target", roundNumber: round.assignment.roundNumber };
+    if (round.target.status === "locked") return { kind: "confirm_transmission", roundNumber: round.assignment.roundNumber };
+  } else if (round.assignment.receiverParticipantIds.includes(human.id) && !round.revealedAt) {
+    const blind = round.blindByParticipant[human.id] ?? createBlindSubmission(human.id);
+    if (!blind.first) return { kind: "blind_first", roundNumber: round.assignment.roundNumber };
+    if (blind.status !== "sealed" && blind.status !== "no_submission") return { kind: "blind_second", roundNumber: round.assignment.roundNumber, first: blind.first };
+  }
+  if (round.revealedAt) {
+    const reflection = round.reflectionsByParticipant[human.id];
+    if (!reflection || !Object.prototype.hasOwnProperty.call(reflection, "reflection")) {
+      return { kind: "reflection", roundNumber: round.assignment.roundNumber, role: isSender ? "sender" : "receiver" };
+    }
+  }
+  return { kind: "none" };
+}
+
+async function mutateTelepathicSeries<T>(deps: TelepathicExchangeEngineDependencies, seriesId: string, task: (state: TelepathicSeriesState, round: TelepathicRoundState, human: TelepathicParticipant) => Promise<T>): Promise<T> {
+  return withTelepathicSeriesRunLock(deps, seriesId, async () => {
+    const state = await deps.store.getTelepathicSeries(seriesId);
+    if (!state) throw new Error("Telepathic series not found.");
+    const round = state.rounds[state.currentRoundIndex];
+    if (!round) throw new Error("Telepathic series has no current round.");
+    if (round.revealedAt && round.status === "cancelled") throw new Error("A revealed round cannot be changed.");
+    const human = currentHumanParticipant(state);
+    if (!human) throw new Error("Conversation telepathic exchange requires a human participant.");
+    const result = await task(state, round, human);
+    await saveCheckpoint(deps, state);
+    return result;
+  });
+}
+
+export async function saveHumanTelepathicTarget(deps: TelepathicExchangeEngineDependencies, seriesId: string, draft: TelepathicTargetDraft): Promise<TelepathicSeriesState> {
+  return mutateTelepathicSeries(deps, seriesId, async (state, round, human) => {
+    if (round.assignment.senderParticipantId !== human.id) throw new Error("The human participant is not the sender in this round.");
+    if (round.revealedAt) throw new Error("The target cannot be changed after Reveal.");
+    if (round.target) throw new Error("The target has already been locked for this round.");
+    round.status = "preparing_target";
+    round.target = await lockTelepathicTarget(round.assignment.roundId, human.id, draft, now(deps));
+    state.status = "paused";
+    return structuredClone(state);
+  });
+}
+
+export async function confirmHumanTelepathicTransmission(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState> {
+  return mutateTelepathicSeries(deps, seriesId, async (state, round, human) => {
+    if (round.assignment.senderParticipantId !== human.id) throw new Error("The human participant is not the sender in this round.");
+    if (!round.target) throw new Error("Lock the target before confirming transmission.");
+    round.target = await markTelepathicTargetTransmissionReady(round.target, now(deps));
+    round.status = "blind";
+    state.status = "paused";
+    return structuredClone(state);
+  });
+}
+
+export async function saveHumanTelepathicFirstBlind(deps: TelepathicExchangeEngineDependencies, seriesId: string, text: string): Promise<TelepathicSeriesState> {
+  return mutateTelepathicSeries(deps, seriesId, async (state, round, human) => {
+    if (!round.assignment.receiverParticipantIds.includes(human.id)) throw new Error("The human participant is not a receiver in this round.");
+    if (!round.target || round.target.status !== "transmission_ready" || round.revealedAt) throw new Error("Human blind input is only allowed before Reveal after transmission is ready.");
+    const blind = round.blindByParticipant[human.id] ?? createBlindSubmission(human.id);
+    round.blindByParticipant[human.id] = recordFirstBlindResponse(blind, text);
+    round.status = "blind";
+    state.status = "paused";
+    return structuredClone(state);
+  });
+}
+
+export async function sealHumanTelepathicBlind(deps: TelepathicExchangeEngineDependencies, seriesId: string, secondLook = ""): Promise<TelepathicSeriesState> {
+  return mutateTelepathicSeries(deps, seriesId, async (state, round, human) => {
+    if (!round.assignment.receiverParticipantIds.includes(human.id)) throw new Error("The human participant is not a receiver in this round.");
+    if (round.revealedAt) throw new Error("Human blind input cannot be changed after Reveal.");
+    let blind = round.blindByParticipant[human.id] ?? createBlindSubmission(human.id);
+    if (!blind.first) throw new Error("Save the first blind description before closing the blind record.");
+    if (secondLook.trim()) blind = recordSecondBlindResponse(blind, secondLook.trim());
+    round.blindByParticipant[human.id] = await sealBlindSubmission(blind, now(deps));
+    round.status = "blind";
+    state.status = "paused";
+    return structuredClone(state);
+  });
+}
+
+export async function saveHumanTelepathicReflection(deps: TelepathicExchangeEngineDependencies, seriesId: string, text: string): Promise<TelepathicSeriesState> {
+  return mutateTelepathicSeries(deps, seriesId, async (state, round, human) => {
+    if (!round.revealedAt) throw new Error("Human reflection is available only after Reveal.");
+    const role: "sender" | "receiver" = round.assignment.senderParticipantId === human.id ? "sender" : "receiver";
+    round.reflectionsByParticipant[human.id] = { participantId: human.id, role, reflection: text.trim() };
+    state.status = "paused";
+    return structuredClone(state);
+  });
+}
+
+export async function cancelCurrentTelepathicRoundBeforeReveal(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState> {
+  return mutateTelepathicSeries(deps, seriesId, async (state, round) => {
+    if (round.revealedAt) throw new Error("A telepathic round cannot be cancelled without Reveal after Reveal has already occurred.");
+    round.status = "cancelled";
+    round.completedAt = now(deps);
+    state.currentRoundIndex += 1;
+    state.status = state.currentRoundIndex >= state.rounds.length ? "completed" : "paused";
+    return structuredClone(state);
+  });
+}
+
+function allBlindClosed(_state: TelepathicSeriesState, round: TelepathicRoundState): boolean {
+  return round.assignment.receiverParticipantIds.every((id) => {
+    const blind = round.blindByParticipant[id];
+    return blind?.status === "sealed" || blind?.status === "no_submission";
+  });
+}
+
+/**
+ * Runs the automatic AI portions of one Conversation exchange round and stops
+ * at the next human action. No ordinary Conversation history or continuation is
+ * used; all provider calls pass through the telepathic packet gateway.
+ */
+export async function advanceTelepathicConversationSeries(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState> {
+  return withTelepathicSeriesRunLock(deps, seriesId, async () => {
+    const state = await deps.store.getTelepathicSeries(seriesId);
+    if (!state) throw new Error("Telepathic series not found.");
+    if (state.config.mode !== "conversation_exchange") throw new Error("This controller runs Conversation telepathic exchange only.");
+    if (state.status === "completed" || state.status === "cancelled") return state;
+    if (state.status === "blocked") throw new Error("Telepathic series is blocked and requires operator resolution before Resume.");
+    const round = state.rounds[state.currentRoundIndex];
+    if (!round) throw new Error("Telepathic series has no current round.");
+    if (round.status === "cancelled") return state;
+    if (round.status === "blocked") throw new Error("Telepathic round requires operator resolution before Resume.");
+    const sender = participant(state.config, round.assignment.senderParticipantId);
+
+    state.status = "running";
+    await saveCheckpoint(deps, state);
+    try {
+      if (["pending", "preparing_target"].includes(round.status)) {
+        if (sender.kind === "ai") await ensureTarget(deps, state, round, sender);
+        else if (!round.target || round.target.status !== "transmission_ready") {
+          round.status = "preparing_target";
+          state.status = "paused";
+          await saveCheckpoint(deps, state);
+          return structuredClone(state);
+        } else round.status = "blind";
+      }
+
+      if (round.status === "blind") {
+        await ensureBlind(deps, state, round);
+        if (!allBlindClosed(state, round)) {
+          state.status = "paused";
+          await saveCheckpoint(deps, state);
+          return structuredClone(state);
+        }
+      }
+
+      if (["blind", "revealed", "reflections"].includes(round.status)) {
+        await ensureRevealAndReflections(deps, state, round, sender);
+        const humanStep = telepathicConversationHumanStep(state);
+        if (humanStep.kind === "reflection") {
+          state.status = "paused";
+          await saveCheckpoint(deps, state);
+          return structuredClone(state);
+        }
+      }
+
+      if (["reflections", "sharing"].includes(round.status)) await ensureSharing(deps, state, round);
+
+      round.status = "completed";
+      round.completedAt ??= now(deps);
+      state.currentRoundIndex += 1;
+      state.status = state.currentRoundIndex >= state.rounds.length ? "completed" : "paused";
+      await saveCheckpoint(deps, state);
+      return structuredClone(state);
+    } catch (error) {
+      round.blockedReason = error instanceof Error ? error.message : String(error);
+      state.status = "blocked";
+      await saveCheckpoint(deps, state);
+      throw error;
+    }
+  });
+}
+
 /**
  * Runs or resumes the current AI-only round from its last durable checkpoint.
  * Completed provider stages are reconstructed from the call ledger and are not
@@ -390,13 +631,61 @@ export async function runNextTelepathicAiRound(deps: TelepathicExchangeEngineDep
     await saveCheckpoint(deps, state);
     return structuredClone(state);
   } catch (error) {
-    round.status = "blocked";
     round.blockedReason = error instanceof Error ? error.message : String(error);
     state.status = "blocked";
     await saveCheckpoint(deps, state);
     throw error;
   }
 
+  });
+}
+
+export function unresolvedTelepathicProviderCalls(state: TelepathicSeriesState): Array<TelepathicSeriesState["providerCalls"][number]> {
+  return state.providerCalls.filter((call) => call.status === "uncertain" || call.status === "dispatched");
+}
+
+function inferBlockedRoundStatus(round: TelepathicRoundState): TelepathicRoundState["status"] {
+  if (round.status !== "blocked") return round.status;
+  if (!round.target || round.target.status !== "transmission_ready") return "preparing_target";
+  if (!allBlindClosed({} as TelepathicSeriesState, round)) return "blind";
+  if (!round.revealedAt) return "blind";
+  return "reflections";
+}
+
+export async function resumeBlockedTelepathicSeries(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState> {
+  return withTelepathicSeriesRunLock(deps, seriesId, async () => {
+    const state = await deps.store.getTelepathicSeries(seriesId);
+    if (!state) throw new Error("Telepathic series not found.");
+    if (state.status !== "blocked") return state;
+    const unresolved = unresolvedTelepathicProviderCalls(state);
+    if (unresolved.length) throw new Error("An uncertain or dispatched provider call requires an explicit operator decision before Resume.");
+    const round = state.rounds[state.currentRoundIndex];
+    if (!round) throw new Error("Telepathic series has no current round.");
+    round.status = inferBlockedRoundStatus(round);
+    round.blockedReason = undefined;
+    state.status = "paused";
+    await saveCheckpoint(deps, state);
+    return structuredClone(state);
+  });
+}
+
+export async function allowRetryForUncertainTelepathicCall(deps: TelepathicExchangeEngineDependencies, seriesId: string, callId: string): Promise<TelepathicSeriesState> {
+  return withTelepathicSeriesRunLock(deps, seriesId, async () => {
+    const state = await deps.store.getTelepathicSeries(seriesId);
+    if (!state) throw new Error("Telepathic series not found.");
+    const call = state.providerCalls.find((item) => item.id === callId);
+    if (!call || (call.status !== "uncertain" && call.status !== "dispatched")) throw new Error("The selected provider call is not awaiting operator resolution.");
+    call.status = "failed";
+    call.errorMessage = `${call.errorMessage ?? "Delivery outcome was uncertain."} Operator explicitly allowed a retry.`;
+    call.updatedAt = now(deps);
+    const round = state.rounds.find((item) => item.assignment.roundId === call.roundId) ?? state.rounds[state.currentRoundIndex];
+    if (round) {
+      round.status = inferBlockedRoundStatus(round);
+      round.blockedReason = undefined;
+    }
+    state.status = "paused";
+    await saveCheckpoint(deps, state);
+    return structuredClone(state);
   });
 }
 

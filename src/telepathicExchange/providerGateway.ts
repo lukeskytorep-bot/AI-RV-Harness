@@ -115,6 +115,7 @@ export async function executeTelepathicProviderPacket(input: {
   technicalAttempt: number;
   hooks: TelepathicProviderCallHooks;
   attempt?: ProviderChatAttempt;
+  signal?: AbortSignal;
 }): Promise<{ response: ProviderChatResponse; call: TelepathicProviderCallRecord }> {
   assertExactRoute(input.route);
   const messages = composeTelepathicProviderMessages(input.packet);
@@ -147,6 +148,7 @@ export async function executeTelepathicProviderPacket(input: {
       operationId: input.packet.scopeKey,
       operationKind: "conversation",
       attempt: input.attempt,
+      signal: input.signal,
     });
     call = {
       ...call,

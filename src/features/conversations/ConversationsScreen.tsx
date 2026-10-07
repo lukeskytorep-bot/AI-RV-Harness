@@ -8,6 +8,7 @@ import type { AppRepository } from "../../storage/repository";
 import type { AppSettings, Profile, Workspace } from "../../types";
 import { WorkspaceSwitcherDialog } from "../workspaces";
 import { ChatPanel } from "./ChatPanel";
+import { TelepathicExchangePanel } from "./TelepathicExchangePanel";
 
 export interface ConversationsScreenProps {
   copy: ReturnType<typeof getCopy>;
@@ -38,10 +39,12 @@ export function ConversationsScreen({
 }: ConversationsScreenProps) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [surface, setSurface] = useState<"conversation" | "telepathic">("conversation");
   const [operationBusy, setOperationBusy] = useState(false);
+  const operationBusyRef = useRef(false);
   const switcherButtonRef = useRef<HTMLButtonElement>(null);
   const closeSwitcher = () => { setSwitcherOpen(false); requestAnimationFrame(() => switcherButtonRef.current?.focus()); };
-  const handleBusyChange = useCallback((busy: boolean) => { setOperationBusy(busy); onOperationBusyChange?.(busy); }, [onOperationBusyChange]);
+  const handleBusyChange = useCallback((busy: boolean) => { operationBusyRef.current = busy; setOperationBusy(busy); onOperationBusyChange?.(busy); }, [onOperationBusyChange]);
 
   return (
     <>
@@ -49,11 +52,14 @@ export function ConversationsScreen({
         <PageHeader
           title={copy.conversationsNav}
           subtitle={`${workspace.name} · ${profile ? aiIsBeDisplayName(profile) : "—"}`}
-          action={<div className="workspace-header-actions"><button ref={switcherButtonRef} className="secondary-button" disabled={operationBusy} onClick={() => setSwitcherOpen(true)}><RadioTower size={15} />{copy.switchWorkspace}</button><button className="secondary-button" aria-expanded={helpOpen} aria-controls="conversation-help-panel" onClick={() => setHelpOpen((current) => !current)}><CircleHelp size={15} />{settings.interfaceLanguage === "pl" ? "Jak działa rozmowa?" : "How does Conversation work?"}</button></div>}
+          action={<div className="workspace-header-actions"><button ref={switcherButtonRef} className="secondary-button" disabled={operationBusy} onClick={() => { if (!operationBusyRef.current) setSwitcherOpen(true); }}><RadioTower size={15} />{copy.switchWorkspace}</button><button className="secondary-button" aria-expanded={helpOpen} aria-controls="conversation-help-panel" onClick={() => setHelpOpen((current) => !current)}><CircleHelp size={15} />{surface === "telepathic" ? (settings.interfaceLanguage === "pl" ? "Jak działa wymiana telepatyczna?" : "How does telepathic exchange work?") : (settings.interfaceLanguage === "pl" ? "Jak działa rozmowa?" : "How does Conversation work?")}</button></div>}
         />
-        {helpOpen && <ConversationHelpPanel language={settings.interfaceLanguage} />}
+        <div className="conversation-surface-switch" role="tablist" aria-label={settings.interfaceLanguage === "pl" ? "Tryb rozmowy" : "Conversation mode"}><button role="tab" aria-selected={surface === "conversation"} className={surface === "conversation" ? "active" : ""} disabled={operationBusy} onClick={() => { if (!operationBusyRef.current) setSurface("conversation"); }}>{settings.interfaceLanguage === "pl" ? "Zwykła rozmowa" : "Normal conversation"}</button><button role="tab" aria-selected={surface === "telepathic"} className={surface === "telepathic" ? "active" : ""} disabled={operationBusy} onClick={() => { if (!operationBusyRef.current) setSurface("telepathic"); }}>{settings.interfaceLanguage === "pl" ? "Wymiana telepatyczna" : "Telepathic exchange"}</button></div>
+        {helpOpen && (surface === "telepathic" ? <TelepathicExchangeHelpPanel language={settings.interfaceLanguage} /> : <ConversationHelpPanel language={settings.interfaceLanguage} />)}
         {createdNotice && <div className="workspace-created-notice"><Check size={16} /><span><strong>{copy.workspaceCreated}</strong><small>{createdNotice.profileName} → {createdNotice.workspaceName}</small></span><button className="icon-button" onClick={onDismissCreatedNotice}><X size={14} /></button></div>}
-        <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} fixedMode="conversation" onBusyChange={handleBusyChange} />
+        {surface === "conversation"
+          ? <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} fixedMode="conversation" onBusyChange={handleBusyChange} />
+          : <TelepathicExchangePanel key={workspace.id} copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} profiles={profiles} workspaces={workspaces} onBusyChange={handleBusyChange} />}
       </div>
       {switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} kind="conversation" activeWorkspaceId={workspace.id} onOpenWorkspace={onOpenWorkspace} onClose={closeSwitcher} />}
     </>
@@ -76,5 +82,16 @@ function ConversationHelpPanel({ language }: { language: AppSettings["interfaceL
       <p>For a trained identity with an available package, <strong>Use Viewer Learning</strong> is enabled by default. That identity’s exact active <strong>Field Guide</strong> and <strong>Viewer Notes</strong> are attached as read-only context. You may disable the option for an individual conversation. Conversation never creates, updates, or activates Field Guide or Viewer Notes versions.</p>
       <p>The <strong>Estimated context</strong> indicator shows the approximate use of the context window. If active sources and conversation history approach the model limit, remove unnecessary sources or start a new conversation.</p>
     </>}
+  </section>;
+}
+
+
+function TelepathicExchangeHelpPanel({ language }: { language: AppSettings["interfaceLanguage"] }) {
+  const pl = language === "pl";
+  return <section id="conversation-help-panel" className="panel workspace-help-panel" aria-label={pl ? "Jak działa wymiana telepatyczna?" : "How does telepathic exchange work?"}>
+    <h2>{pl ? "Jak działa wymiana telepatyczna?" : "How does telepathic exchange work?"}</h2>
+    <p>{pl ? "Wybierz uczestników i zdecyduj, kto przygotowuje cel: Ty, jeden Profil AI albo kolejni uczestnicy na zmianę. Nadawca zapisuje i zamraża cel przed rozpoczęciem opisu. Odbiorcy nie widzą go; najpierw zapisują wrażenia, a potem mogą spojrzeć drugi raz. Nie muszą zgadywać, czym jest cel." : "Choose the participants and decide who prepares the target: you, one AI Profile, or participants taking turns. The sender saves and locks the target before any descriptions begin. Receivers cannot see it; they first record impressions, then may take a second look. They do not have to guess what the target is."}</p>
+    <p>{pl ? "Kiedy wszystkie opisy zostaną zamknięte, aplikacja ujawnia zamrożony cel i pokazuje odpowiedzi. Każdy może napisać własną refleksję. AI może następnie wybrać, czy chce poznać odpowiedzi innych. Każda nowa runda jest oddzielna, a dopiero po całej serii AI może przejrzeć zapis wszystkich swoich rund." : "After all descriptions are closed, the app reveals the locked target and shows the answers. Each participant can write a reflection. An AI may then choose whether to see the other answers. Each new round is separate; only after the whole series may an AI review all its own rounds."}</p>
+    <p>{pl ? "Gdy Reveal zawiera obraz, dodaj krótki opis tekstowy, ponieważ nie wszystkie modele odczytują obrazy." : "If Reveal includes an image, add a short text description because not every model can read images."}</p>
   </section>;
 }
