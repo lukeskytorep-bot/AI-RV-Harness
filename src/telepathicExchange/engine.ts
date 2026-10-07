@@ -678,12 +678,19 @@ export async function allowRetryForUncertainTelepathicCall(deps: TelepathicExcha
     call.status = "failed";
     call.errorMessage = `${call.errorMessage ?? "Delivery outcome was uncertain."} Operator explicitly allowed a retry.`;
     call.updatedAt = now(deps);
-    const round = state.rounds.find((item) => item.assignment.roundId === call.roundId) ?? state.rounds[state.currentRoundIndex];
-    if (round) {
-      round.status = inferBlockedRoundStatus(round);
-      round.blockedReason = undefined;
+    const isFinalSeriesReflection = call.callStage === "series_reflection" || call.roundId === "series-complete";
+    if (isFinalSeriesReflection) {
+      // Final-reflection recovery must not reopen completed rounds. The operator
+      // resolves only this provider attempt, then can rerun final reflections.
+      state.status = "completed";
+    } else {
+      const round = state.rounds.find((item) => item.assignment.roundId === call.roundId) ?? state.rounds[state.currentRoundIndex];
+      if (round) {
+        round.status = inferBlockedRoundStatus(round);
+        round.blockedReason = undefined;
+      }
+      state.status = "paused";
     }
-    state.status = "paused";
     await saveCheckpoint(deps, state);
     return structuredClone(state);
   });

@@ -63,3 +63,22 @@ describe("STEP 3B audit fixes", () => {
     expect(resolved.providerCalls[0].errorMessage).toMatch(/explicitly allowed/);
   });
 });
+
+describe("STEP 3B final-reflection recovery", () => {
+  it("keeps completed rounds complete when an uncertain final reflection is explicitly released for retry", async () => {
+    const store = new InMemoryTelepathicExchangeStore();
+    const state = createTelepathicSeriesState(config, "2026-10-07T00:00:00.000Z");
+    state.status = "completed";
+    state.currentRoundIndex = state.rounds.length;
+    state.rounds[0].status = "completed";
+    state.rounds[0].completedAt = "2026-10-07T00:10:00.000Z";
+    state.providerCalls.push({ id: "final-call-1", seriesId: config.seriesId, roundId: "series-complete", participantId: "ai", callStage: "series_reflection", technicalAttempt: 1, status: "uncertain", scopeKey: "final-scope", requestSha256: "hash", createdAt: state.createdAt, updatedAt: state.updatedAt });
+    await store.saveTelepathicSeries(state);
+
+    const resolved = await allowRetryForUncertainTelepathicCall(deps(store), config.seriesId, "final-call-1");
+    expect(resolved.status).toBe("completed");
+    expect(resolved.rounds[0].status).toBe("completed");
+    expect(resolved.rounds[0].completedAt).toBe("2026-10-07T00:10:00.000Z");
+    expect(resolved.providerCalls[0].status).toBe("failed");
+  });
+});
