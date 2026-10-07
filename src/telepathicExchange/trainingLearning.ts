@@ -1,7 +1,8 @@
 import { sha256Text } from "../application/sha256";
 import type { ProviderMessage } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
-import type { TelepathicLanguage, TelepathicLearningSnapshotRef, TelepathicParticipant, TelepathicProviderPacket, TelepathicSeriesConfig } from "./types";
+import type { TelepathicProviderPacket } from "./packets";
+import type { TelepathicLanguage, TelepathicLearningSnapshotRef, TelepathicParticipant, TelepathicSeriesConfig } from "./types";
 
 function nowIso(now?: () => string): string {
   return now?.() ?? new Date().toISOString();
@@ -23,6 +24,8 @@ async function snapshotFieldGuide(input: {
   const bundle = await input.repository.getExistingFieldGuideBundle(identityId, input.language);
   const active = bundle?.activeVersion;
   if (!active) return undefined;
+  if (active.aiIdentityId !== identityId) throw new Error("Field Guide active version does not belong to the selected AI Identity.");
+  if (active.language !== input.language) throw new Error("Field Guide active version language does not match the training language.");
   await assertStoredHash("Field Guide", active.content, active.contentSha256);
   return {
     id: active.id,
@@ -31,7 +34,10 @@ async function snapshotFieldGuide(input: {
     content: active.content,
     contentSha256: active.contentSha256,
     capturedAt: input.capturedAt,
+    profileId: input.participant.ai?.profileId,
+    aiIdentityId: input.participant.ai?.aiIdentityId,
     modelRoute: input.participant.ai?.route ?? "",
+    language: input.language,
     estimatedTokens: active.estimatedTokens,
   };
 }
@@ -46,6 +52,7 @@ async function snapshotViewerNotes(input: {
   const bundle = await input.repository.getExistingViewerNoteBundle(identityId);
   const active = bundle?.activeVersion;
   if (!active) return undefined;
+  if (active.aiIdentityId !== identityId) throw new Error("Viewer Notes active version does not belong to the selected AI Identity.");
   await assertStoredHash("Viewer Notes", active.content, active.contentSha256);
   return {
     id: active.id,
@@ -54,6 +61,8 @@ async function snapshotViewerNotes(input: {
     content: active.content,
     contentSha256: active.contentSha256,
     capturedAt: input.capturedAt,
+    profileId: input.participant.ai?.profileId,
+    aiIdentityId: input.participant.ai?.aiIdentityId,
     modelRoute: input.participant.ai?.route ?? "",
     estimatedTokens: active.estimatedTokens,
   };
@@ -81,8 +90,21 @@ export async function freezeTelepathicTrainingLearning(input: {
   return { ...structuredClone(input.config), participants };
 }
 
-export async function assertTelepathicLearningSnapshotIntegrity(snapshot: TelepathicLearningSnapshotRef, label: string): Promise<void> {
-  if (!snapshot.content || !snapshot.capturedAt || !snapshot.modelRoute) throw new Error(`${label} snapshot is incomplete.`);
+export async function assertTelepathicLearningSnapshotIntegrity(input: {
+  snapshot: TelepathicLearningSnapshotRef;
+  label: string;
+  participant: TelepathicParticipant;
+  expectedLanguage?: TelepathicLanguage;
+}): Promise<void> {
+  const { snapshot, label, participant, expectedLanguage } = input;
+  if (!participant.ai) throw new Error(`${label} snapshot requires an AI participant.`);
+  if (!snapshot.content || !snapshot.capturedAt || !snapshot.profileId || !snapshot.aiIdentityId || !snapshot.modelRoute) {
+    throw new Error(`${label} snapshot is incomplete.`);
+  }
+  if (snapshot.profileId !== participant.ai.profileId) throw new Error(`${label} snapshot Profile does not match the participant.`);
+  if (snapshot.aiIdentityId !== participant.ai.aiIdentityId) throw new Error(`${label} snapshot AI Identity does not match the participant.`);
+  if (snapshot.modelRoute !== participant.ai.route) throw new Error(`${label} snapshot model route does not match the participant.`);
+  if (expectedLanguage && snapshot.language !== expectedLanguage) throw new Error(`${label} snapshot language does not match the training language.`);
   await assertStoredHash(label, snapshot.content, snapshot.contentSha256);
 }
 
@@ -113,12 +135,21 @@ export async function withTelepathicTrainingLearning(input: {
   if (input.participant.kind !== "ai" || !input.participant.ai) throw new Error("Telepathic training learning requires an AI participant.");
   const messages: ProviderMessage[] = [{ role: "system", content: `[TELEPATHIC TRAINING VIEWER LEARNING — READ-ONLY BOUNDARY]\n${learningBoundary(input.language)}` }];
   if (input.participant.fieldGuide) {
-    await assertTelepathicLearningSnapshotIntegrity(input.participant.fieldGuide, "Field Guide");
+    await assertTelepathicLearningSnapshotIntegrity({
+      snapshot: input.participant.fieldGuide,
+      label: "Field Guide",
+      participant: input.participant,
+      expectedLanguage: input.language,
+    });
     messages.push(learningMessage("FIELD GUIDE", input.participant.fieldGuide, input.participant));
   }
   if (input.participant.viewerNotes) {
-    await assertTelepathicLearningSnapshotIntegrity(input.participant.viewerNotes, "Viewer Notes");
+    await assertTelepathicLearningSnapshotIntegrity({
+      snapshot: input.participant.viewerNotes,
+      label: "Viewer Notes",
+      participant: input.participant,
+    });
     messages.push(learningMessage("VIEWER NOTES", input.participant.viewerNotes, input.participant));
   }
-  return { ...input.packet, messages: [...messages, ...input.packet.messages.map((message) => ({ ...message }))] };
+  return { ...input.packet, messages: [...messages, ...input.packet.messages.map((message: ProviderMessage) => ({ ...message }))] };
 }

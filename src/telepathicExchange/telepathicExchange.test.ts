@@ -109,6 +109,10 @@ describe("TELEPATHIC-EXCHANGE-1 contracts", () => {
     const seven = Array.from({ length: 7 }, (_, index) => ai(`p${index}`));
     expect(() => planTelepathicSeries(baseConfig({ participants: seven }))).toThrow(/2 to 6/);
     expect(() => planTelepathicSeries(baseConfig({ participants: [ai("leo"), { id: "human", kind: "human", displayName: "Ed" }] }))).toThrow(/cannot include a human/);
+    const duplicateProfileA = ai("leo-a");
+    const duplicateProfileB = ai("leo-b");
+    duplicateProfileB.ai = { ...duplicateProfileB.ai!, profileId: duplicateProfileA.ai!.profileId };
+    expect(() => planTelepathicSeries(baseConfig({ participants: [duplicateProfileA, duplicateProfileB] }))).toThrow(/distinct AI Profiles/);
   });
 
   it("locks one immutable target snapshot before blind and preserves its hash when transmission becomes ready", async () => {

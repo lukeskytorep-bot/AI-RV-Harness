@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { sha256Text } from "../application/sha256";
+import type { ProviderMessage } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import { buildReceiverFirstPacket } from "./packets";
 import { freezeTelepathicTrainingLearning, withTelepathicTrainingLearning } from "./trainingLearning";
@@ -46,10 +47,10 @@ describe("STEP 4A telepathic training Viewer Learning", () => {
     const fgHash = await sha256Text(fgContent);
     const vnHash = await sha256Text(vnContent);
     const getExistingFieldGuideBundle = vi.fn(async (identityId: string) => identityId === "identity-leo" ? ({
-      activeVersion: { id: "fg-leo-4", versionNumber: 4, content: fgContent, contentSha256: fgHash, estimatedTokens: 17 },
+      activeVersion: { id: "fg-leo-4", aiIdentityId: identityId, language: "en", versionNumber: 4, content: fgContent, contentSha256: fgHash, estimatedTokens: 17 },
     }) : null);
     const getExistingViewerNoteBundle = vi.fn(async (identityId: string) => identityId === "identity-leo" ? ({
-      activeVersion: { id: "vn-leo-2", versionNumber: 2, content: vnContent, contentSha256: vnHash, estimatedTokens: 11 },
+      activeVersion: { id: "vn-leo-2", aiIdentityId: identityId, versionNumber: 2, content: vnContent, contentSha256: vnHash, estimatedTokens: 11 },
     }) : null);
     const repository = {
       getExistingFieldGuideBundle,
@@ -76,11 +77,11 @@ describe("STEP 4A telepathic training Viewer Learning", () => {
     const leo = ai("leo");
     const fg = "ONLY LEO FIELD GUIDE";
     const notes = "ONLY LEO VIEWER NOTES";
-    leo.fieldGuide = { id: "fg", version: "1", versionNumber: 1, content: fg, contentSha256: await sha256Text(fg), capturedAt: "now", modelRoute: leo.ai!.route };
-    leo.viewerNotes = { id: "vn", version: "2", versionNumber: 2, content: notes, contentSha256: await sha256Text(notes), capturedAt: "now", modelRoute: leo.ai!.route };
+    leo.fieldGuide = { id: "fg", version: "1", versionNumber: 1, content: fg, contentSha256: await sha256Text(fg), capturedAt: "now", profileId: leo.ai!.profileId, aiIdentityId: leo.ai!.aiIdentityId, modelRoute: leo.ai!.route, language: "en" };
+    leo.viewerNotes = { id: "vn", version: "2", versionNumber: 2, content: notes, contentSha256: await sha256Text(notes), capturedAt: "now", profileId: leo.ai!.profileId, aiIdentityId: leo.ai!.aiIdentityId, modelRoute: leo.ai!.route };
     const packet = buildReceiverFirstPacket({ language: "en", seriesId: "s", roundId: "r", participantId: "leo", name: "LEO", roundNumber: 1, topicLabel: "location", discloseTopic: false });
     const enriched = await withTelepathicTrainingLearning({ packet, participant: leo, language: "en" });
-    const all = enriched.messages.map((message) => message.content).join("\n");
+    const all = enriched.messages.map((message: ProviderMessage) => message.content).join("\n");
     expect(all).toContain("ONLY LEO FIELD GUIDE");
     expect(all).toContain("ONLY LEO VIEWER NOTES");
     expect(all).toContain("READ-ONLY");
@@ -90,5 +91,21 @@ describe("STEP 4A telepathic training Viewer Learning", () => {
     const tampered = structuredClone(leo);
     tampered.fieldGuide!.content = "TAMPERED";
     await expect(withTelepathicTrainingLearning({ packet, participant: tampered, language: "en" })).rejects.toThrow(/SHA-256/);
+
+    const wrongOwner = structuredClone(leo);
+    wrongOwner.fieldGuide = { ...wrongOwner.fieldGuide!, profileId: "profile-someone-else" };
+    await expect(withTelepathicTrainingLearning({ packet, participant: wrongOwner, language: "en" })).rejects.toThrow(/Profile/);
+
+    const wrongIdentity = structuredClone(leo);
+    wrongIdentity.viewerNotes = { ...wrongIdentity.viewerNotes!, aiIdentityId: "identity-someone-else" };
+    await expect(withTelepathicTrainingLearning({ packet, participant: wrongIdentity, language: "en" })).rejects.toThrow(/AI Identity/);
+
+    const wrongRoute = structuredClone(leo);
+    wrongRoute.viewerNotes = { ...wrongRoute.viewerNotes!, modelRoute: "custom_openai:other-model" };
+    await expect(withTelepathicTrainingLearning({ packet, participant: wrongRoute, language: "en" })).rejects.toThrow(/model route/);
+
+    const wrongLanguage = structuredClone(leo);
+    wrongLanguage.fieldGuide = { ...wrongLanguage.fieldGuide!, language: "pl" };
+    await expect(withTelepathicTrainingLearning({ packet, participant: wrongLanguage, language: "en" })).rejects.toThrow(/language/);
   });
 });

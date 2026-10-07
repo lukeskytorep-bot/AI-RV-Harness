@@ -32,6 +32,10 @@ function validateConfig(config: TelepathicSeriesConfig): void {
     if (aiParticipants.length < 2 || aiParticipants.length > 6) {
       throw new Error("AI-AI telepathic training requires 2 to 6 AI Profiles.");
     }
+    const profileIds = aiParticipants.map((participant) => participant.ai!.profileId);
+    if (new Set(profileIds).size !== profileIds.length) {
+      throw new Error("AI-AI telepathic training requires 2 to 6 distinct AI Profiles; a Profile cannot participate more than once.");
+    }
     if (config.senderPolicy.kind === "human_only") {
       throw new Error("AI-AI telepathic training cannot use a human-only sender policy.");
     }

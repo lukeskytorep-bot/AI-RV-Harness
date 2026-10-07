@@ -31,7 +31,10 @@ export interface TelepathicLearningSnapshotRef {
   contentSha256: string;
   content?: string;
   capturedAt?: string;
+  profileId?: string;
+  aiIdentityId?: string;
   modelRoute?: string;
+  language?: TelepathicLanguage;
   estimatedTokens?: number;
 }
 
