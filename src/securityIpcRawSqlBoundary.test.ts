@@ -96,4 +96,13 @@ describe("SECURITY-IPC-1C-R1 SQLite IPC boundary", () => {
     expect(nativeDatabase).toContain('sqlx::query("VACUUM INTO $1")');
     expect(nativeDatabase).toContain("SECURITY-IPC-1C controlled purge");
   });
+
+  it("does not allow telepathic series heartbeat renewal after lease expiry", () => {
+    const tsWrites = read("src/storage/databaseWriteOperations.ts");
+    const rustDb = read("src-tauri/src/database.rs");
+    const expiryGuard = "run_lease_expires_at IS NOT NULL AND run_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+    expect(tsWrites).toContain(expiryGuard);
+    expect(rustDb).toContain(expiryGuard);
+  });
+
 });

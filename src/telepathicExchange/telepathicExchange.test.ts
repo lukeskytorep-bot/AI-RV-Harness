@@ -185,6 +185,20 @@ describe("TELEPATHIC-EXCHANGE-1 contracts", () => {
     expect(JSON.stringify(valid.messages)).toContain("SECRET_TARGET_ALPHA");
   });
 
+  it("uses the dedicated Reveal prompt after NO_SUBMISSION instead of inventing a blind comparison", async () => {
+    const locked = await lockTelepathicTarget("r1", "leo", { content: "SECRET_TARGET_ALPHA", assets: [] }, "2026-10-06T10:00:00.000Z");
+    const ready = await markTelepathicTargetTransmissionReady(locked, "2026-10-06T10:01:00.000Z");
+    const packet = await buildReceiverRevealPacket({
+      language: "en", seriesId: "series-1", roundId: "r1", participantId: "nemo", name: "Nemo", target: ready,
+      blind: { participantId: "nemo", status: "no_submission", providerAttemptCount: 2 },
+      canReadImages: false,
+    });
+    const wire = JSON.stringify(packet.messages);
+    expect(wire).toContain("Your blind response was not saved after two attempts");
+    expect(wire).toContain("Do not compare a description that does not exist");
+    expect(wire).not.toContain("Compare your earlier words");
+  });
+
   it("keeps target text, target filenames, other answers, and hidden topic out of a receiver pre-Reveal provider packet", () => {
     const packet = buildReceiverFirstPacket({
       language: "en",

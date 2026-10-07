@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTelepathicSeriesState } from "../telepathicExchange/engine";
+import { createTelepathicSeriesState, telepathicConversationHumanStep } from "../telepathicExchange/engine";
 import type { TelepathicSeriesConfig } from "../telepathicExchange/types";
 import { BrowserTelepathicExchangeRepository } from "./browser/telepathicExchangeRepository";
 import { SqliteTelepathicExchangeRepository } from "./sqlite/telepathicExchangeRepository";
@@ -203,6 +203,67 @@ describe("telepathic exchange persistence contract", () => {
       return "unexpected";
     });
     await expect(run).rejects.toThrow(/lease was lost|fenced write rejected/);
+  });
+
+  it("preserves an explicitly completed empty human reflection when reading SQLite state", async () => {
+    const state = createTelepathicSeriesState(config, "2026-10-07T21:00:00.000Z");
+    const round = state.rounds[0];
+    round.status = "reflections";
+    round.revealedAt = "2026-10-07T21:05:00.000Z";
+    state.status = "paused";
+    const seriesRow = { id: config.seriesId, status: state.status, current_round_index: 0, config_json: JSON.stringify(config), plan_json: JSON.stringify(state.plan), created_at: state.createdAt, updated_at: state.updatedAt };
+    const participantRows = config.participants.map((item) => ({ participant_id: item.id, kind: item.kind, display_name: item.displayName, route_snapshot_json: item.ai ? JSON.stringify(item.ai) : null, field_guide_snapshot_json: null, viewer_notes_snapshot_json: null, final_reflection_text: null }));
+    const repository = new SqliteTelepathicExchangeRepository({
+      select: async <T,>(query: string): Promise<T> => {
+        if (query.startsWith("SELECT id, status, current_round_index")) return [seriesRow] as T;
+        if (query.startsWith("SELECT participant_id")) return participantRows as T;
+        if (query.startsWith("SELECT id, round_number")) return [{ id: round.assignment.roundId, round_number: 1, sender_participant_id: round.assignment.senderParticipantId, status: "reflections", revealed_at: round.revealedAt, completed_at: null, blocked_reason: null }] as T;
+        if (query.startsWith("SELECT t.round_id")) return [] as T;
+        if (query.startsWith("SELECT b.round_id")) return [] as T;
+        if (query.startsWith("SELECT f.round_id")) return [{ round_id: round.assignment.roundId, participant_id: "human", role: "sender", reflection_text: "", share_others_consent: null, shared_answers_comment: null }] as T;
+        if (query.startsWith("SELECT id, round_id, participant_id")) return [] as T;
+        throw new Error(`unexpected select: ${query}`);
+      },
+      executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async () => [],
+      executeFencedTransaction: async () => [],
+    });
+    const loaded = await repository.getTelepathicSeries(config.seriesId);
+    expect(loaded?.rounds[0].reflectionsByParticipant.human).toHaveProperty("reflection", "");
+    expect(loaded && telepathicConversationHumanStep(loaded)).toEqual({ kind: "none" });
+  });
+
+  it("refuses to renew a telepathic series lease after its stored expiry has passed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-07T22:00:00.000Z"));
+    try {
+      let owner: string | null = null;
+      let version = 0;
+      let expiry: string | null = null;
+      const repository = new SqliteTelepathicExchangeRepository({
+        select: async <T,>(query: string): Promise<T> => query.includes("run_lease_owner") ? [{ run_lease_owner: owner, run_lease_version: version, run_lease_expires_at: expiry }] as T : [] as T,
+        executeWrite: async (query: string, values: unknown[] = []) => {
+          if (query.startsWith("UPDATE telepathic_series SET run_lease_owner=NULL")) return { rowsAffected: 1 };
+          if (query.startsWith("UPDATE telepathic_series SET run_lease_owner=")) { owner = String(values[0]); expiry = String(values[1]); version += 1; return { rowsAffected: 1 }; }
+          if (query.startsWith("UPDATE telepathic_series SET run_lease_expires_at=")) {
+            const stillValid = expiry !== null && expiry > new Date().toISOString();
+            return { rowsAffected: owner === String(values[2]) && version === Number(values[3]) && stillValid ? 1 : 0 };
+          }
+          throw new Error(`unexpected write: ${query}`);
+        },
+        executeTransaction: async () => [],
+        executeFencedTransaction: async () => [],
+      });
+      const run = repository.withTelepathicSeriesLease(config.seriesId, async () => {
+        expiry = "2026-10-07T21:59:59.000Z";
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(repository.telepathicSeriesLeaseSignal(config.seriesId)?.aborted).toBe(true);
+        return "unexpected";
+      });
+      await expect(run).rejects.toThrow(/lease was lost/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("persists exact frozen telepathic-training learning content inside participant snapshots", async () => {

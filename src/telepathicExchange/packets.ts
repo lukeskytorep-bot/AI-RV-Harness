@@ -4,6 +4,7 @@ import {
   buildReceiverFirstPrompt,
   buildRoundGreeting,
   buildReceiverRevealPrompt,
+  buildMissingResponseRevealPrompt,
   buildReceiverSecondLookPrompt,
   buildSenderRevealPrompt,
   buildSenderTargetPrompt,
@@ -176,15 +177,18 @@ export async function buildReceiverRevealPacket(input: {
 }): Promise<TelepathicProviderPacket> {
   await assertTelepathicTargetIntegrity(input.target, { expectedRoundId: input.roundId, requireTransmissionReady: true });
   const files = targetFilesForModel(input.target, input.canReadImages, input.language);
+  const revealPrompt = input.blind.status === "no_submission"
+    ? [buildMissingResponseRevealPrompt(input.language, input.target.content), files].filter(Boolean).join("\n\n")
+    : buildReceiverRevealPrompt(input.language, {
+        name: input.name,
+        target: input.target.content,
+        targetFiles: files,
+        ownFirst: input.blind.first ?? "",
+        ownSecond: input.blind.second ?? "",
+      });
   return packet(
     { seriesId: input.seriesId, roundId: input.roundId, participantId: input.participantId, callStage: "receiver_reveal" },
-    buildReceiverRevealPrompt(input.language, {
-      name: input.name,
-      target: input.target.content,
-      targetFiles: files,
-      ownFirst: input.blind.first ?? "",
-      ownSecond: input.blind.second ?? "",
-    }),
+    revealPrompt,
     "fresh_round_context",
     input.images,
   );
