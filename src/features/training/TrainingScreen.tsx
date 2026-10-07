@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Archive, Check, CircleStop, Database, Download, FileCheck2, GraduationCap, Play, ShieldCheck } from "lucide-react";
 import type { getCopy } from "../../i18n";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
@@ -37,6 +37,7 @@ import type { TrainingRunRecord } from "../../training/types";
 import type { AppSettings, Profile, Workspace } from "../../types";
 import { SessionInspection } from "../../components/SessionInspection";
 import { executeTrainingRun } from "./trainingExecution";
+import { TelepathicTrainingPanel } from "./TelepathicTrainingPanel";
 
 type Copy = ReturnType<typeof getCopy>;
 type Mode = "full" | "partial";
@@ -45,17 +46,26 @@ export function factoryPackAllowsTrainingMode(mode: "full" | "partial", packVali
   return mode !== "full" || packValid;
 }
 
-export function TrainingScreen({ copy, settings, profiles, workspaces, repository }: {
+export function TrainingScreen({ copy, settings, profiles, workspaces, repository, onOperationBusyChange }: {
   copy: Copy;
   settings: AppSettings;
   profiles: Profile[];
   workspaces: Workspace[];
   repository: AppRepository | null;
+  onOperationBusyChange?: (busy: boolean) => void;
 }) {
   const pl = settings.interfaceLanguage === "pl";
   const dialogs = useAppDialogs();
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
   const text = labels(pl);
+  const [surface, setSurface] = useState<"standard" | "telepathic">("standard");
+  const [telepathicBusy, setTelepathicBusy] = useState(false);
+  const telepathicBusyGuard = useRef(false);
+  const handleTelepathicBusyChange = useCallback((nextBusy: boolean) => {
+    telepathicBusyGuard.current = nextBusy;
+    setTelepathicBusy(nextBusy);
+    onOperationBusyChange?.(nextBusy);
+  }, [onOperationBusyChange]);
   const [profileId, setProfileId] = useState(profiles[0]?.id ?? "");
   const profile = profiles.find((item) => item.id === profileId) ?? null;
   const technicalWorkspace = resolveTechnicalWorkspaceForProfile(workspaces, profileId);
@@ -285,8 +295,21 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     } catch (cause) { setError(errorText(cause)); }
   };
 
+  if (surface === "telepathic") return <div className="page training-page">
+    <PageHeader title={text.training} subtitle={pl ? "Kontrolowany trening telepatyczny między 2–6 Profilami AI." : "Controlled telepathic training between 2–6 AI Profiles."} />
+    <div className="conversation-surface-switch training-surface-switch" role="tablist" aria-label={pl ? "Tryb treningu" : "Training mode"}>
+      <button role="tab" aria-selected={false} disabled={telepathicBusy} onClick={() => { if (!telepathicBusyGuard.current) setSurface("standard"); }}>{pl ? "Standardowy trening RV" : "Standard RV Training"}</button>
+      <button role="tab" aria-selected={true} className="active">{pl ? "Trening telepatyczny AI–AI" : "AI–AI Telepathic Training"}</button>
+    </div>
+    <TelepathicTrainingPanel copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} onBusyChange={handleTelepathicBusyChange} />
+  </div>;
+
   return <div className="page training-page">
     <PageHeader title={text.training} subtitle={text.lead} />
+    <div className="conversation-surface-switch training-surface-switch" role="tablist" aria-label={pl ? "Tryb treningu" : "Training mode"}>
+      <button role="tab" aria-selected={true} className="active">{pl ? "Standardowy trening RV" : "Standard RV Training"}</button>
+      <button role="tab" aria-selected={false} disabled={busy} onClick={() => setSurface("telepathic")}>{pl ? "Trening telepatyczny AI–AI" : "AI–AI Telepathic Training"}</button>
+    </div>
     <TrainingHelpPanel pl={pl} packTotal={pack.total} packValid={pack.valid} />
     <div className="training-layout">
       <section className="panel training-config">

@@ -167,3 +167,20 @@
 .viewer-notes-toggle input, .manual-notes-toggle input { width: 18px; height: 18px; accent-color: var(--violet); }
 .manual-notes-toggle { min-width: 145px; padding: 7px 9px; font-size: 11px; font-weight: 750; }
 
+
+/* STEP 4B — AI-AI telepathic training */
+.training-surface-switch { margin: 0 0 14px; }
+.telepathic-training-stack { max-width: 1180px; }
+.telepathic-training-stack .telepathic-status-grid > span { display: grid; gap: 2px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); }
+.telepathic-training-stack .telepathic-stage-list { display: grid; gap: 9px; }
+.telepathic-training-stack .telepathic-stage-card { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); }
+.telepathic-training-stack .telepathic-stage-card p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.telepathic-training-stack .telepathic-stage-card small { color: var(--muted); }
+.telepathic-training-stack .telepathic-round-tabs { display: flex; flex-wrap: wrap; gap: 7px; }
+.telepathic-training-stack .telepathic-round-tabs button { display: grid; gap: 2px; min-width: 82px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); color: inherit; cursor: pointer; text-align: left; }
+.telepathic-training-stack .telepathic-round-tabs button.active { border-color: var(--violet); color: var(--violet); }
+.telepathic-training-stack .telepathic-round-tabs small { color: var(--muted); }
+.telepathic-training-stack .telepathic-operator-view { display: grid; gap: 10px; }
+@media (max-width: 680px) {
+  .telepathic-training-stack .telepathic-profile-row > label:last-child { min-width: 0; }
+}

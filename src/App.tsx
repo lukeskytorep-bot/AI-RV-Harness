@@ -429,7 +429,7 @@ export default function App() {
           ) : page === "targets" ? (
             <TargetsScreen copy={copy} settings={settings} repository={repository} />
           ) : page === "training" ? (
-            <TrainingScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
+            <TrainingScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} onOperationBusyChange={setCriticalOperationBusy} />
           ) : page === "ai-center" ? (
             <LazyAiCenterRoute
               copy={copy}

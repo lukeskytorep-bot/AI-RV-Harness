@@ -12,7 +12,7 @@ function assertUniqueParticipants(participants: TelepathicParticipant[]): void {
 
 function validateConfig(config: TelepathicSeriesConfig): void {
   assertUniqueParticipants(config.participants);
-  if (!config.seriesWorkspaceId.trim()) throw new Error("Telepathic series requires an owning Conversation Workspace.");
+  if (!config.seriesWorkspaceId.trim()) throw new Error("Telepathic series requires an owning Workspace.");
   for (const participant of config.participants) {
     if (participant.kind === "ai") {
       const route = participant.ai;
