@@ -27,7 +27,12 @@ export interface TelepathicAiRouteSnapshot {
 export interface TelepathicLearningSnapshotRef {
   id: string;
   version: string;
+  versionNumber?: number;
   contentSha256: string;
+  content?: string;
+  capturedAt?: string;
+  modelRoute?: string;
+  estimatedTokens?: number;
 }
 
 export interface TelepathicParticipant {

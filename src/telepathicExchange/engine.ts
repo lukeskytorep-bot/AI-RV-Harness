@@ -27,6 +27,7 @@ import type {
 } from "./types";
 import type { TelepathicExchangeStore } from "./store";
 import { lockTelepathicTarget, markTelepathicTargetTransmissionReady } from "./target";
+import { withTelepathicTrainingLearning } from "./trainingLearning";
 
 
 const activeSeriesRuns = new Set<string>();
@@ -180,11 +181,20 @@ async function invokeAi(
   const route = preResolvedRoute ?? await deps.resolveRoute(participantItem);
   assertResolvedRouteMatchesParticipant(participantItem, route);
   await deps.store.assertTelepathicSeriesLease(packet.scope.seriesId);
+  const effectivePacket = state.config.mode === "ai_ai_training"
+    ? await withTelepathicTrainingLearning({ packet, participant: participantItem, language: state.config.language })
+    : packet;
+  if (effectivePacket.scope.callStage === "series_reflection") {
+    const preflight = preflightTelepathicPacket({ packet: effectivePacket, model: route.model });
+    if (preflight.budget.exceeded) {
+      throw new Error(`Telepathic final-series packet exceeds the model context budget (${preflight.budget.estimatedTotalTokens}/${preflight.budget.contextLimit} estimated tokens). No rounds were truncated.`);
+    }
+  }
 
   for (; technicalAttempt <= 2; technicalAttempt += 1) {
     try {
       const result = await executeTelepathicProviderPacket({
-        packet,
+        packet: effectivePacket,
         route,
         technicalAttempt,
         attempt: deps.providerAttempt,
@@ -711,15 +721,10 @@ export async function runTelepathicFinalReflections(deps: TelepathicExchangeEngi
       continue;
     }
 
-    const route = await deps.resolveRoute(item);
-    assertResolvedRouteMatchesParticipant(item, route);
-    const preflight = preflightTelepathicPacket({ packet, model: route.model });
-    if (preflight.budget.exceeded) {
-      throw new Error(`Telepathic final-series packet exceeds the model context budget (${preflight.budget.estimatedTotalTokens}/${preflight.budget.contextLimit} estimated tokens). No rounds were truncated.`);
-    }
-
     // `invokeAi` first reuses any durably succeeded series_reflection response,
     // closing the crash window between provider success and finalReflections save.
+    // If a new call is needed it applies the participant's frozen training
+    // learning (AI-AI mode) before the final context-budget preflight.
     const reflection = await invokeAi(deps, state, item, packet);
     if (reflection !== null) state.finalReflections[item.id] = reflection;
     await saveCheckpoint(deps, state);

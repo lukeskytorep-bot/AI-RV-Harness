@@ -205,4 +205,32 @@ describe("telepathic exchange persistence contract", () => {
     await expect(run).rejects.toThrow(/lease was lost|fenced write rejected/);
   });
 
+  it("persists exact frozen telepathic-training learning content inside participant snapshots", async () => {
+    const repository = new BrowserTelepathicExchangeRepository({ storage: new MemoryStorage() });
+    const trainingConfig: TelepathicSeriesConfig = {
+      ...structuredClone(config),
+      seriesId: "series-training-learning-storage",
+      mode: "ai_ai_training",
+      participants: [
+        {
+          ...structuredClone(config.participants[1]),
+          id: "ai-one",
+          fieldGuide: { id: "fg-7", version: "7", versionNumber: 7, content: "FROZEN FIELD GUIDE TEXT", contentSha256: "fg-sha", capturedAt: "2026-10-07T12:00:00.000Z", modelRoute: "custom_openai:model-ai" },
+          viewerNotes: { id: "vn-3", version: "3", versionNumber: 3, content: "FROZEN VIEWER NOTES TEXT", contentSha256: "vn-sha", capturedAt: "2026-10-07T12:00:00.000Z", modelRoute: "custom_openai:model-ai" },
+        },
+        {
+          ...structuredClone(config.participants[1]),
+          id: "ai-two",
+          ai: { ...structuredClone(config.participants[1].ai!), aiIdentityId: "identity-ai-two", profileId: "profile-ai-two", workspaceId: "workspace-ai-two" },
+        },
+      ],
+      senderPolicy: { kind: "rotate" },
+    };
+    const state = createTelepathicSeriesState(trainingConfig, "2026-10-07T12:00:00.000Z");
+    await repository.saveTelepathicSeries(state);
+    const loaded = await repository.getTelepathicSeries(trainingConfig.seriesId);
+    expect(loaded?.config.participants[0].fieldGuide?.content).toBe("FROZEN FIELD GUIDE TEXT");
+    expect(loaded?.config.participants[0].viewerNotes?.content).toBe("FROZEN VIEWER NOTES TEXT");
+  });
+
 });

@@ -5,3 +5,5 @@ export * from "./preflight";
 export * from "./prompts";
 export * from "./target";
 export * from "./types";
+export * from "./trainingLearning";
+export * from "./training";
