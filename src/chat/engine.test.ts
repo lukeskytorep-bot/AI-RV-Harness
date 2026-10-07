@@ -147,7 +147,7 @@ describe("chat engine isolation", () => {
       return { content: "Recovered answer", usage: {} };
     } });
     expect(result.user.id).toBe("u1");
-    expect((await repository.listChatMessages()).map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect((await repository.listChatMessages("c")).map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(roles.at(-1)).toBe("user");
   });
 
