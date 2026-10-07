@@ -36,6 +36,7 @@ import {
   type TelepathicConversationSeriesView,
 } from "../../telepathicExchange/conversationView";
 import { resolveTelepathicAiRouteFromRepository } from "../../telepathicExchange/providerGateway";
+import { preflightTelepathicConversationConfig, type TelepathicConversationConfigPreflight } from "../../telepathicExchange/conversationPreflight";
 import type {
   TelepathicParticipant,
   TelepathicSenderPolicy,
@@ -103,6 +104,8 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   const [secondBlind, setSecondBlind] = useState("");
   const [reflection, setReflection] = useState("");
   const [viewRoundId, setViewRoundId] = useState<string | null>(null);
+  const [configPreflight, setConfigPreflight] = useState<TelepathicConversationConfigPreflight | null>(null);
+  const [configPreflightSignature, setConfigPreflightSignature] = useState<string | null>(null);
   const runGuardRef = useRef(false);
 
   useEffect(() => { onBusyChange?.(busy); return () => onBusyChange?.(false); }, [busy, onBusyChange]);
@@ -192,6 +195,30 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
 
   const schedule = useMemo(() => previewConfig ? planTelepathicSeries(previewConfig).rounds.map((round) => ({ ...round, sender: previewConfig.participants.find((item) => item.id === round.senderParticipantId)?.displayName ?? round.senderParticipantId })) : [], [previewConfig]);
 
+  const currentConfigSignature = useMemo(() => JSON.stringify({
+    profiles: selectedProfileIds,
+    routes: selectedProfileIds.map((profileId) => routeSelections[profileId] ?? null),
+    senderKind,
+    fixedAiProfileId,
+    roundCount,
+    topic,
+    discloseTopic,
+    language,
+  }), [selectedProfileIds, routeSelections, senderKind, fixedAiProfileId, roundCount, topic, discloseTopic, language]);
+
+  useEffect(() => {
+    if (configPreflightSignature !== currentConfigSignature) setConfigPreflight(null);
+  }, [currentConfigSignature, configPreflightSignature]);
+
+  const runConfigurationPreflight = (): TelepathicConversationConfigPreflight | null => {
+    if (!previewConfig) return null;
+    const modelByParticipantId = Object.fromEntries(selectedAiParticipants.map(({ profile: aiProfile, eligible }) => [`ai:${aiProfile.id}`, eligible.model]));
+    const result = preflightTelepathicConversationConfig({ config: previewConfig, modelByParticipantId });
+    setConfigPreflight(result);
+    setConfigPreflightSignature(currentConfigSignature);
+    return result;
+  };
+
   const engineDeps = (): TelepathicExchangeEngineDependencies => {
     if (!repository) throw new Error("Repository is not ready.");
     return {
@@ -246,6 +273,11 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
 
   const startSeries = async () => {
     if (!repository || !profile || !setupComplete) return;
+    const preflight = runConfigurationPreflight();
+    if (!preflight?.ok) {
+      setError(pl ? "Preflight konfiguracji nie przeszedł. Sprawdź budżet kontekstu przed startem." : "Configuration preflight failed. Review the context budget before starting.");
+      return;
+    }
     const seriesId = `telepathic-series-${crypto.randomUUID()}`;
     const humanId = humanParticipantId(seriesId);
     const participants: TelepathicParticipant[] = [
@@ -361,8 +393,19 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
     </section>
 
     {schedule.length > 0 && <section className="panel telepathic-exchange-panel"><div className="telepathic-section-heading"><div><Eye size={18} /><span><strong>{pl ? "Harmonogram przed startem" : "Schedule before start"}</strong><small>{pl ? "Plan zostanie zamrożony razem z serią." : "The plan will be frozen with the series."}</small></span></div></div><div className="telepathic-schedule">{schedule.map((item) => <span key={item.roundId}><strong>{pl ? "Runda" : "Round"} {item.roundNumber}</strong> → {item.sender}</span>)}</div></section>}
+    <section className="panel telepathic-exchange-panel">
+      <div className="telepathic-section-heading"><div><Eye size={18} /><span><strong>{pl ? "Budżet przed startem" : "Pre-start budget"}</strong><small>{pl ? "Szacunek konfiguracji. Rzeczywisty executor nadal sprawdza każdy konkretny request." : "Configuration estimate. The shared executor still checks every concrete request."}</small></span></div></div>
+      <div className="training-actions"><button className="secondary-button" disabled={!setupComplete || busy} onClick={() => runConfigurationPreflight()}>{pl ? "Uruchom preflight" : "Run preflight"}</button></div>
+      {configPreflight && configPreflightSignature === currentConfigSignature && <div className="training-preflight telepathic-training-preflight">
+        <span><small>{pl ? "Stan" : "Status"}</small><strong>{configPreflight.ok ? "PASS" : "FAIL"}</strong></span>
+        <span><small>{pl ? "Szacowane wywołania AI" : "Estimated AI calls"}</small><strong>{configPreflight.estimatedProviderCalls}</strong></span>
+        <span><small>{pl ? "Bazowy szacunek kosztu" : "Baseline cost estimate"}</small><strong>{configPreflight.estimatedBaselineCostUsd !== undefined ? `$${configPreflight.estimatedBaselineCostUsd.toFixed(4)}` : (pl ? "brak danych cenowych" : "pricing unavailable")}</strong></span>
+        <span><small>{pl ? "Największy szacowany pakiet" : "Largest estimated packet"}</small><strong>{configPreflight.participants.length ? Math.max(...configPreflight.participants.map((item) => item.estimatedTotalTokens)) : 0} tokens</strong></span>
+      </div>}
+      {configPreflight && <small className="training-preflight-note">{pl ? "To podgląd oparty na reprezentatywnych promptach i aktualnych trasach. Target, Reveal i odpowiedzi modeli powstają później, więc rzeczywisty koszt może być wyższy. Nie zastępuje to kontroli pojemności wykonywanej przez wspólny executor." : "This preview uses representative prompts and the current routes. Targets, Reveals, and model outputs are created later, so actual cost can be higher. It does not replace the shared executor's capacity checks."}</small>}
+    </section>
     {error && <div className="provider-error">{error}</div>}
-    <button className="primary-button telepathic-start" disabled={!setupComplete || busy} onClick={() => void startSeries()}><Play size={15} />{pl ? "Rozpocznij wymianę" : "Start exchange"}</button>
+    <button className="primary-button telepathic-start" disabled={!setupComplete || busy || !configPreflight?.ok || configPreflightSignature !== currentConfigSignature} onClick={() => void startSeries()}><Play size={15} />{pl ? "Rozpocznij wymianę" : "Start exchange"}</button>
   </div>;
 
   const fallbackVisibleRound = activeSeries.rounds[Math.min(activeSeries.currentRoundIndex, Math.max(0, activeSeries.rounds.length - 1))] ?? null;
