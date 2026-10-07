@@ -8,7 +8,9 @@ import { parsePostRevealTranscript } from "./postRevealTranscript";
 import type { InterfaceLanguage } from "../types";
 import { buildEffectiveMonitorPrompt } from "../resources/systemPrompts";
 import { politeRevealTransition } from "./courtesy";
-import { analyticalOutputBudget, callWithAnalyticalOutputRecovery } from "../providers/outputRecovery";
+import { analyticalOutputBudget, callWithAnalyticalOutputRecovery, isOutputLimitFailure } from "../providers/outputRecovery";
+import { providerErrorDetails } from "../providers/providerError";
+import { appendPostRevealReviewCheckpoint, getPostRevealReviewRecoveryState, hasPendingAutomaticViewerInstruction } from "./postRevealRecovery";
 import { captureSessionContinuationState, hydrateSessionMessageContinuation, validateFrozenSessionContinuationRoute, validateSessionContinuationBudget } from "./providerContinuation";
 
 type PostRevealContinuationRepository = Pick<AppRepository, "appendPostRevealTurnWithProviderState" | "listSessionEvents" | "getSessionEventProviderState">;
@@ -38,6 +40,8 @@ export async function sendPostRevealTurn(input: {
   maxRetries?: number;
   signal?: AbortSignal;
   streamWorkflowContext?: StreamWorkflowContext;
+  reuseExistingUserTurn?: boolean;
+  onProviderAttemptStart?: () => void | Promise<void>;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<{ transcript: string; response: ProviderChatResponse }> {
   const content = input.content.trim();
@@ -108,10 +112,10 @@ export async function sendPostRevealTurn(input: {
   if (continuationRoute && assistantIndex !== postRevealAssistantEvents.length) {
     throw new Error("Post-Reveal Session events do not match the persisted assistant transcript turns.");
   }
-  messages.push({ role: "user", content });
+  if (!input.reuseExistingUserTurn) messages.push({ role: "user", content });
   validateSessionContinuationBudget(messages);
   analyticalOutputBudget({ model: input.model, messages, operationKind: "post_reveal_viewer", attempt: 0 });
-  await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
+  if (!input.reuseExistingUserTurn) await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
   const automaticTrainingReview = supportedAutomaticPostRevealReviewRequests(language).includes(content);
   const response = (await callWithAnalyticalOutputRecovery({
     model: input.model,
@@ -131,6 +135,7 @@ export async function sendPostRevealTurn(input: {
       ...(automaticTrainingReview ? { operationKind: "post_reveal_viewer" as const } : {}),
       streamWorkflowContext: input.streamWorkflowContext,
       attempt: input.chat,
+      ...(input.onProviderAttemptStart ? { onAttemptStart: () => input.onProviderAttemptStart?.() } : {}),
     }),
   })).response;
   let transcript: string;
@@ -151,9 +156,33 @@ export async function sendPostRevealTurn(input: {
   return { transcript, response };
 }
 
-type MonitorPostRevealRepository = PostRevealRepository & Pick<AppRepository, "listMonitorRuns" | "listMonitorInterventions">;
+type MonitorPostRevealRepository = PostRevealRepository & Pick<AppRepository, "listMonitorRuns" | "listMonitorInterventions"> & Partial<Pick<AppRepository, "withPostRevealReviewLease" | "assertPostRevealReviewLease" | "postRevealReviewLeaseSignal">>;
 
-export async function runAutomaticPostRevealReview(input: {
+const activeAutomaticPostRevealReviews = new Set<string>();
+
+function combineAbortSignals(primary?: AbortSignal, lease?: AbortSignal): AbortSignal | undefined {
+  if (!primary) return lease;
+  if (!lease) return primary;
+  if (primary.aborted) return primary;
+  if (lease.aborted) return lease;
+  const controller = new AbortController();
+  const abort = (event: Event) => {
+    const signal = event.target as AbortSignal;
+    controller.abort(signal.reason);
+  };
+  primary.addEventListener("abort", abort, { once: true });
+  lease.addEventListener("abort", abort, { once: true });
+  return controller.signal;
+}
+
+function postRevealReviewFailureIsSafeToRetry(cause: unknown, providerAttemptStarted: boolean): boolean {
+  if (isOutputLimitFailure(cause)) return true;
+  const details = providerErrorDetails(cause);
+  if (details?.phase === "before_dispatch") return true;
+  return !providerAttemptStarted;
+}
+
+async function runAutomaticPostRevealReviewUnlocked(input: {
   repository: MonitorPostRevealRepository;
   sessionId: string;
   existingTranscript?: string;
@@ -166,43 +195,215 @@ export async function runAutomaticPostRevealReview(input: {
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
   afterViewerReview?: (review: { content: string; transcript: string; response: ProviderChatResponse }) => Promise<void>;
 }): Promise<string> {
-  const snapshot = await input.repository.getSessionSnapshot(input.sessionId);
-  if (!snapshot) throw new Error("The captured Session Snapshot is required for the automatic post-Reveal review.");
-  const request = automaticPostRevealReviewRequest(snapshot.sessionLanguage);
-  const viewerResult = await sendPostRevealTurn({
-    repository: input.repository,
-    sessionId: input.sessionId,
-    existingTranscript: input.existingTranscript ?? "",
-    providerConfig: input.viewer.providerConfig,
-    model: input.viewer.model,
-    content: request,
-    timeoutMs: input.timeoutMs,
-    maxRetries: input.maxRetries,
-    signal: input.signal,
-    streamWorkflowContext: input.streamWorkflowContext,
-    ...(input.chat ? { chat: input.chat } : {}),
-  });
-  if (input.afterViewerReview) {
-    try {
-      await input.afterViewerReview({ content: viewerResult.response.content, transcript: viewerResult.transcript, response: viewerResult.response });
-    } catch (cause) {
-      console.error("Viewer Notes reflection failed after the Viewer review; Monitor review will continue.", cause);
-    }
+  if (activeAutomaticPostRevealReviews.has(input.sessionId)) {
+    throw new Error("Automatic post-Reveal review is already running for this session.");
   }
-  if (!input.monitor) return viewerResult.transcript;
-  const monitorResult = await sendMonitorPostRevealReview({
-    repository: input.repository,
-    sessionId: input.sessionId,
-    existingTranscript: viewerResult.transcript,
-    providerConfig: input.monitor.providerConfig,
-    model: input.monitor.model,
-    timeoutMs: input.timeoutMs,
-    maxRetries: input.maxRetries,
-    signal: input.signal,
-    streamWorkflowContext: input.streamWorkflowContext,
-    ...(input.chat ? { chat: input.chat } : {}),
+  activeAutomaticPostRevealReviews.add(input.sessionId);
+  try {
+    const repositoryWithRecovery = input.repository as MonitorPostRevealRepository & Partial<Pick<AppRepository, "getRvSession" | "appendSessionEvent" | "listSessionEvents">>;
+    const checkpointRepository = {
+      appendSessionEvent: repositoryWithRecovery.appendSessionEvent
+        ? repositoryWithRecovery.appendSessionEvent.bind(repositoryWithRecovery)
+        : async () => undefined,
+      listSessionEvents: repositoryWithRecovery.listSessionEvents
+        ? repositoryWithRecovery.listSessionEvents.bind(repositoryWithRecovery)
+        : async () => [],
+      getSessionSnapshot: input.repository.getSessionSnapshot.bind(input.repository),
+    };
+    const loadStoredTranscript = async (fallback: string): Promise<string> => {
+      if (!repositoryWithRecovery.getRvSession) return fallback;
+      return (await repositoryWithRecovery.getRvSession(input.sessionId))?.postRevealTranscript ?? fallback;
+    };
+    const snapshot = await input.repository.getSessionSnapshot(input.sessionId);
+    if (!snapshot) throw new Error("The captured Session Snapshot is required for the automatic post-Reveal review.");
+    const request = automaticPostRevealReviewRequest(snapshot.sessionLanguage);
+    let transcript = input.existingTranscript ?? await loadStoredTranscript("");
+    let viewerRecord = findCompletedAutomaticViewerReviewRecord(transcript, snapshot.sessionLanguage);
+    let monitorCompleted = parsePostRevealTranscript(transcript).some((turn) => turn.role === "monitor");
+    let recovery = await getPostRevealReviewRecoveryState(checkpointRepository, input.sessionId, {
+      viewer: Boolean(viewerRecord),
+      monitor: monitorCompleted,
+    });
+
+    if (recovery.requiresDecision) {
+      throw new Error(`Post-Reveal ${recovery.nextStage ?? "review"} call has an uncertain dispatch state. Resolve it before retrying.`);
+    }
+
+    if (!viewerRecord) {
+      const previousAttempt = recovery.viewer?.attempt ?? 0;
+      const attempt = previousAttempt + 1;
+      const reuseExistingUserTurn = hasPendingAutomaticViewerInstruction(transcript, request);
+      await appendPostRevealReviewCheckpoint({
+        repository: checkpointRepository,
+        sessionId: input.sessionId,
+        stage: "viewer",
+        status: "pending",
+        attempt,
+      });
+      let providerAttemptStarted = false;
+      try {
+        const viewerResult = await sendPostRevealTurn({
+          repository: input.repository,
+          sessionId: input.sessionId,
+          existingTranscript: transcript,
+          providerConfig: input.viewer.providerConfig,
+          model: input.viewer.model,
+          content: request,
+          timeoutMs: input.timeoutMs,
+          maxRetries: input.maxRetries,
+          signal: input.signal,
+          streamWorkflowContext: input.streamWorkflowContext,
+          reuseExistingUserTurn,
+          onProviderAttemptStart: async () => {
+            if (providerAttemptStarted) return;
+            await input.repository.assertPostRevealReviewLease?.(input.sessionId);
+            providerAttemptStarted = true;
+            await appendPostRevealReviewCheckpoint({
+              repository: checkpointRepository,
+              sessionId: input.sessionId,
+              stage: "viewer",
+              status: "dispatched",
+              attempt,
+            });
+          },
+          ...(input.chat ? { chat: input.chat } : {}),
+        });
+        transcript = viewerResult.transcript;
+        viewerRecord = { request, content: viewerResult.response.content };
+        await appendPostRevealReviewCheckpoint({
+          repository: checkpointRepository,
+          sessionId: input.sessionId,
+          stage: "viewer",
+          status: "completed",
+          attempt,
+        });
+        if (input.afterViewerReview) {
+          try {
+            await input.afterViewerReview({ content: viewerResult.response.content, transcript: viewerResult.transcript, response: viewerResult.response });
+          } catch (cause) {
+            console.error("Viewer Notes reflection failed after the Viewer review; Monitor review will continue.", cause);
+          }
+        }
+      } catch (cause) {
+        transcript = await loadStoredTranscript(transcript);
+        viewerRecord = findCompletedAutomaticViewerReviewRecord(transcript, snapshot.sessionLanguage);
+        if (viewerRecord) {
+          await appendPostRevealReviewCheckpoint({
+            repository: checkpointRepository,
+            sessionId: input.sessionId,
+            stage: "viewer",
+            status: "completed",
+            attempt,
+            message: "Viewer review text was already persisted before a later continuation/validation failure.",
+          });
+        } else {
+          const safeRetry = postRevealReviewFailureIsSafeToRetry(cause, providerAttemptStarted);
+          await appendPostRevealReviewCheckpoint({
+            repository: checkpointRepository,
+            sessionId: input.sessionId,
+            stage: "viewer",
+            status: safeRetry ? "failed" : "uncertain",
+            attempt,
+            message: cause instanceof Error ? cause.message : String(cause),
+          });
+          throw cause;
+        }
+      }
+    }
+
+    if (!input.monitor) return transcript;
+
+    monitorCompleted = parsePostRevealTranscript(transcript).some((turn) => turn.role === "monitor");
+    recovery = await getPostRevealReviewRecoveryState(checkpointRepository, input.sessionId, {
+      viewer: true,
+      monitor: monitorCompleted,
+    });
+    if (recovery.monitor?.status === "completed" || monitorCompleted) return transcript;
+    if (recovery.monitor?.status === "uncertain" || recovery.monitor?.status === "dispatched") {
+      throw new Error("Post-Reveal monitor call has an uncertain dispatch state. Resolve it before retrying.");
+    }
+
+    const monitorAttempt = (recovery.monitor?.attempt ?? 0) + 1;
+    await appendPostRevealReviewCheckpoint({
+      repository: checkpointRepository,
+      sessionId: input.sessionId,
+      stage: "monitor",
+      status: "pending",
+      attempt: monitorAttempt,
+    });
+    let monitorAttemptStarted = false;
+    try {
+      const monitorResult = await sendMonitorPostRevealReview({
+        repository: input.repository,
+        sessionId: input.sessionId,
+        existingTranscript: transcript,
+        providerConfig: input.monitor.providerConfig,
+        model: input.monitor.model,
+        timeoutMs: input.timeoutMs,
+        maxRetries: input.maxRetries,
+        signal: input.signal,
+        streamWorkflowContext: input.streamWorkflowContext,
+        onProviderAttemptStart: async () => {
+          if (monitorAttemptStarted) return;
+          await input.repository.assertPostRevealReviewLease?.(input.sessionId);
+          monitorAttemptStarted = true;
+          await appendPostRevealReviewCheckpoint({
+            repository: checkpointRepository,
+            sessionId: input.sessionId,
+            stage: "monitor",
+            status: "dispatched",
+            attempt: monitorAttempt,
+          });
+        },
+        ...(input.chat ? { chat: input.chat } : {}),
+      });
+      transcript = monitorResult.transcript;
+      await appendPostRevealReviewCheckpoint({
+        repository: checkpointRepository,
+        sessionId: input.sessionId,
+        stage: "monitor",
+        status: "completed",
+        attempt: monitorAttempt,
+      });
+      return transcript;
+    } catch (cause) {
+      transcript = await loadStoredTranscript(transcript);
+      monitorCompleted = parsePostRevealTranscript(transcript).some((turn) => turn.role === "monitor");
+      if (monitorCompleted) {
+        await appendPostRevealReviewCheckpoint({
+          repository: checkpointRepository,
+          sessionId: input.sessionId,
+          stage: "monitor",
+          status: "completed",
+          attempt: monitorAttempt,
+          message: "Monitor review text was already persisted before a later failure.",
+        });
+        return transcript;
+      }
+      const safeRetry = postRevealReviewFailureIsSafeToRetry(cause, monitorAttemptStarted);
+      await appendPostRevealReviewCheckpoint({
+        repository: checkpointRepository,
+        sessionId: input.sessionId,
+        stage: "monitor",
+        status: safeRetry ? "failed" : "uncertain",
+        attempt: monitorAttempt,
+        message: cause instanceof Error ? cause.message : String(cause),
+      });
+      throw cause;
+    }
+  } finally {
+    activeAutomaticPostRevealReviews.delete(input.sessionId);
+  }
+}
+
+export async function runAutomaticPostRevealReview(input: Parameters<typeof runAutomaticPostRevealReviewUnlocked>[0]): Promise<string> {
+  const withLease = input.repository.withPostRevealReviewLease;
+  if (!withLease) return runAutomaticPostRevealReviewUnlocked(input);
+  return withLease.call(input.repository, input.sessionId, async () => {
+    await input.repository.assertPostRevealReviewLease?.(input.sessionId);
+    const leaseSignal = input.repository.postRevealReviewLeaseSignal?.(input.sessionId);
+    return runAutomaticPostRevealReviewUnlocked({ ...input, signal: combineAbortSignals(input.signal, leaseSignal) });
   });
-  return monitorResult.transcript;
 }
 
 const HISTORICAL_AUTOMATIC_POST_REVEAL_REVIEW_REQUESTS: Record<InterfaceLanguage, readonly string[]> = {
@@ -257,6 +458,7 @@ export async function sendMonitorPostRevealReview(input: {
   maxRetries?: number;
   signal?: AbortSignal;
   streamWorkflowContext?: StreamWorkflowContext;
+  onProviderAttemptStart?: () => void | Promise<void>;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<{ transcript: string; response: ProviderChatResponse }> {
   const [snapshot, reveal, evidence, clarifications] = await Promise.all([
@@ -294,7 +496,7 @@ export async function sendMonitorPostRevealReview(input: {
     model: input.model,
     messages,
     operationKind: "post_reveal_monitor",
-    call: (settings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "post-reveal.monitor", streamWorkflowContext: input.streamWorkflowContext, attempt: input.chat }),
+    call: (settings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "post-reveal.monitor", streamWorkflowContext: input.streamWorkflowContext, attempt: input.chat, ...(input.onProviderAttemptStart ? { onAttemptStart: () => input.onProviderAttemptStart?.() } : {}) }),
   })).response;
   const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "monitor", response.content);
   return { transcript, response };

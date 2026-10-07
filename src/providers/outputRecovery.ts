@@ -67,7 +67,7 @@ export function analyticalOutputBudget(input: {
 
 export function isOutputLimitFailure(cause: unknown): boolean {
   const message = (cause instanceof Error ? cause.message : String(cause)).toLowerCase();
-  return /finish[-_ ]?reason\s*[=:]\s*(?:length|max[_ -]?tokens)|reasoning without a final assistant response|incomplete assistant response.*(?:length|max[_ -]?tokens)|maximum output|output token limit/.test(message);
+  return /finish[-_ ]?reason\s*[=:]\s*(?:length|max[_ -]?tokens)|reasoning without a final assistant response|incomplete assistant response.*(?:length|max[_ -]?tokens)|maximum output|output token limit|exhausted the available analytical output budget|route cannot increase beyond/.test(message);
 }
 
 export function assertCompleteAnalyticalResponse(response: ProviderChatResponse): void {

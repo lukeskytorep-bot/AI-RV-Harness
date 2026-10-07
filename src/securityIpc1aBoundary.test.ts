@@ -41,7 +41,7 @@ function productionTypeScriptFiles(directory: string): string[] {
 }
 
 describe("SECURITY-IPC-1A trust-boundary hardening", () => {
-  it("keeps migration registration and expected current version on one contiguous 001-030 registry", () => {
+  it("keeps migration registration and expected current version on one contiguous 001-031 registry", () => {
     const registry = read("src-tauri/src/migrations.rs");
     const lib = read("src-tauri/src/lib.rs");
     const migrationNames = fs
@@ -49,9 +49,9 @@ describe("SECURITY-IPC-1A trust-boundary hardening", () => {
       .filter((name) => /^\d{3}_.*\.sql$/.test(name))
       .sort();
 
-    expect(migrationNames).toHaveLength(30);
+    expect(migrationNames).toHaveLength(31);
     expect(migrationNames[0]).toMatch(/^001_/);
-    expect(migrationNames.at(-1)).toMatch(/^030_/);
+    expect(migrationNames.at(-1)).toMatch(/^031_/);
     expect(registry).toContain("MIGRATION_SPECS[MIGRATION_SPECS.len() - 1].version");
     expect(registry).toContain("version: 26,");
     expect(registry).toContain("version: 27,");

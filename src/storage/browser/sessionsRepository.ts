@@ -35,6 +35,7 @@ export interface BrowserSessionsRepositoryDependencies {
 
 export class BrowserSessionsRepository implements SessionsRepository {
   private readonly storage: Storage;
+  private readonly activePostRevealReviewLeases = new Map<string, AbortController>();
 
   constructor(private readonly dependencies: BrowserSessionsRepositoryDependencies) {
     this.storage = dependencies.storage ?? localStorage;
@@ -203,6 +204,40 @@ export class BrowserSessionsRepository implements SessionsRepository {
       .filter((event) => event.sessionId === sessionId)
       .sort((left, right) => left.sequenceNumber - right.sequenceNumber)
       .map((event) => structuredClone(event));
+  }
+
+  async withPostRevealReviewLease<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+    if (this.activePostRevealReviewLeases.has(sessionId)) {
+      throw new Error("Automatic post-Reveal review is already running for this session.");
+    }
+    const controller = new AbortController();
+    const execute = async (): Promise<T> => {
+      if (this.activePostRevealReviewLeases.has(sessionId)) {
+        throw new Error("Automatic post-Reveal review is already running for this session.");
+      }
+      this.activePostRevealReviewLeases.set(sessionId, controller);
+      try {
+        return await task();
+      } finally {
+        this.activePostRevealReviewLeases.delete(sessionId);
+      }
+    };
+    const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+    if (!locks?.request) return execute();
+    return locks.request(`rvh-post-reveal-review:${sessionId}`, { mode: "exclusive", ifAvailable: true }, async (lock) => {
+      if (!lock) throw new Error("Automatic post-Reveal review is already running for this session.");
+      return execute();
+    });
+  }
+
+  async assertPostRevealReviewLease(sessionId: string): Promise<void> {
+    if (!this.activePostRevealReviewLeases.has(sessionId)) {
+      throw new Error("Post-Reveal review lease was lost or is not active.");
+    }
+  }
+
+  postRevealReviewLeaseSignal(sessionId: string): AbortSignal | undefined {
+    return this.activePostRevealReviewLeases.get(sessionId)?.signal;
   }
 
   async updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void> {

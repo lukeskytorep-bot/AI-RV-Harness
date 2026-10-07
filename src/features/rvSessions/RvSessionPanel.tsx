@@ -42,7 +42,8 @@ import { storeRevealArtifact } from "../../artifacts/native";
 import type { RevealArtifactRecord, RevealInput, RvSession } from "../../sessions/types";
 import type { SessionStreamPreview } from "../../sessions/streamingPreview";
 import { chooseDirectory } from "../../storage/native";
-import { runAutomaticPostRevealReview, sendPostRevealTurn } from "../../sessions/postReveal";
+import { findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview, sendPostRevealTurn } from "../../sessions/postReveal";
+import { getPostRevealReviewRecoveryState, resolveUncertainPostRevealReviewStage, type PostRevealReviewRecoveryState } from "../../sessions/postRevealRecovery";
 import { ProtocolDialog } from "../../components/ProtocolDialog";
 import { parsePostRevealTranscript } from "../../sessions/postRevealTranscript";
 import { exportSessionRecord } from "../../exports/session";
@@ -85,6 +86,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const [manualQuestionHandle, setManualQuestionHandle] = useState<TelepathicManualQuestionHandle | null>(null);
   const [telepathicRecovery, setTelepathicRecovery] = useState<Record<string, TelepathicManualRecoveryState>>({});
   const [recoverableSessions, setRecoverableSessions] = useState<Record<string, true>>({});
+  const [postRevealRecoveries, setPostRevealRecoveries] = useState<Record<string, PostRevealReviewRecoveryState>>({});
   const [manualQuestionText, setManualQuestionText] = useState("");
   const [manualQuestionBusy, setManualQuestionBusy] = useState(false);
   const [revealSource, setRevealSource] = useState<"automatic" | "external">(settings.defaultRevealSource);
@@ -119,6 +121,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const [postRevealTranscript, setPostRevealTranscript] = useState("");
   const [postRevealText, setPostRevealText] = useState("");
   const [postRevealBusy, setPostRevealBusy] = useState(false);
+  const postRevealBusyGuardRef = useRef(false);
   const [sessionExportBusy, setSessionExportBusy] = useState(false);
   const [sessionExportPath, setSessionExportPath] = useState<string | null>(null);
   const [batchCount, setBatchCount] = useState(3);
@@ -197,6 +200,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     setBatchProgress(null);
     setManualQuestionHandle(null);
     setManualQuestionText("");
+    setPostRevealRecoveries({});
   }, [workspace.id, profile?.id]);
 
   useEffect(() => {
@@ -235,6 +239,24 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     void Promise.all(interrupted.map(async (session) => [session.id, isRecoverableProviderInterruption(session, await repository.listSessionEvents(session.id))] as const)).then((items) => {
       if (!cancelled) setRecoverableSessions(Object.fromEntries(items.filter((item) => item[1]).map(([id]) => [id, true])));
     }).catch(() => { if (!cancelled) setRecoverableSessions({}); });
+    return () => { cancelled = true; };
+  }, [repository, recoveryInspectionKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!repository) return;
+    const revealed = recentSessions.filter((session) => session.state === "Revealed");
+    void Promise.all(revealed.map(async (session) => {
+      const snapshot = await repository.getSessionSnapshot(session.id);
+      if (!snapshot) return null;
+      const viewerComplete = Boolean(findCompletedAutomaticViewerReviewRecord(session.postRevealTranscript, snapshot.sessionLanguage));
+      const monitorComplete = parsePostRevealTranscript(session.postRevealTranscript).some((turn) => turn.role === "monitor");
+      const recovery = await getPostRevealReviewRecoveryState(repository, session.id, { viewer: viewerComplete, monitor: monitorComplete });
+      return recovery.completed ? null : [session.id, recovery] as const;
+    })).then((items) => {
+      if (cancelled) return;
+      setPostRevealRecoveries(Object.fromEntries(items.filter((item): item is readonly [string, PostRevealReviewRecoveryState] => Boolean(item))));
+    }).catch(() => { if (!cancelled) setPostRevealRecoveries({}); });
     return () => { cancelled = true; };
   }, [repository, recoveryInspectionKey]);
 
@@ -763,6 +785,60 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     }
   };
 
+  const refreshPostRevealRecovery = async (session: RvSession) => {
+    if (!repository) return;
+    const fresh = await repository.getRvSession(session.id);
+    const snapshot = await repository.getSessionSnapshot(session.id);
+    if (!fresh || !snapshot) return;
+    const viewerComplete = Boolean(findCompletedAutomaticViewerReviewRecord(fresh.postRevealTranscript, snapshot.sessionLanguage));
+    const monitorComplete = parsePostRevealTranscript(fresh.postRevealTranscript).some((turn) => turn.role === "monitor");
+    const recovery = await getPostRevealReviewRecoveryState(repository, session.id, { viewer: viewerComplete, monitor: monitorComplete });
+    setPostRevealRecoveries((current) => {
+      const next = { ...current };
+      if (recovery.completed) delete next[session.id]; else next[session.id] = recovery;
+      return next;
+    });
+  };
+
+  const resumePostRevealReview = async (session: RvSession) => {
+    if (!repository || postRevealBusyGuardRef.current) return;
+    postRevealBusyGuardRef.current = true;
+    setPostRevealBusy(true);
+    onBusyChange?.(true);
+    setRunError(null);
+    try {
+      await automaticReview(session.id, false);
+      const sessions = (await repository.listRvSessions(workspace.id)).filter((item) => !item.researchProjectId);
+      setRecentSessions(sessions);
+      await refreshPostRevealRecovery(sessions.find((item) => item.id === session.id) ?? session);
+    } catch (cause) {
+      setRunError(cause instanceof Error ? cause.message : String(cause));
+      await refreshPostRevealRecovery(session).catch(() => undefined);
+    } finally {
+      postRevealBusyGuardRef.current = false;
+      setPostRevealBusy(false);
+      onBusyChange?.(false);
+    }
+  };
+
+  const resolvePostRevealUncertain = async (session: RvSession, recovery: PostRevealReviewRecoveryState) => {
+    if (!repository || postRevealBusyGuardRef.current || !recovery.nextStage) return;
+    postRevealBusyGuardRef.current = true;
+    setPostRevealBusy(true);
+    onBusyChange?.(true);
+    setRunError(null);
+    try {
+      await resolveUncertainPostRevealReviewStage({ repository, sessionId: session.id, stage: recovery.nextStage });
+      await refreshPostRevealRecovery(session);
+    } catch (cause) {
+      setRunError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      postRevealBusyGuardRef.current = false;
+      setPostRevealBusy(false);
+      onBusyChange?.(false);
+    }
+  };
+
   const discussPostReveal = async () => {
     if (!repository || !progress?.sessionId || !postRevealText.trim() || postRevealBusy) return;
     setPostRevealBusy(true);
@@ -938,6 +1014,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
             const recovery = telepathicRecovery[session.id];
             const incomplete = session.state === "BlindRunning" || session.state === "Preflight";
             const providerRecovery = Boolean(recoverableSessions[session.id]);
+            const postRevealRecovery = postRevealRecoveries[session.id];
             const recoveryLabel = recovery === "questions"
               ? (settings.interfaceLanguage === "pl" ? "Wznów pytania Kroku 8" : "Resume Step 8 questions")
               : recovery === "step9"
@@ -947,6 +1024,13 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
               <div className="recent-session-row"><button className="recent-session-open" disabled={incomplete} onClick={() => void loadStoredSession(session)}><span><strong>{session.sessionCode}</strong><small>{session.state}</small></span><ChevronRight size={13} /></button><button className="icon-button" disabled={incomplete || sessionRunning || batchRunning} title={settings.interfaceLanguage === "pl" ? (incomplete ? "Najpierw zakończ albo oznacz sesję jako przerwaną." : "Archiwizuj sesję") : (incomplete ? "Complete or mark the session interrupted first." : "Archive session")} onClick={() => void archiveStoredSession(session)}><Archive size={14} /></button></div>
               {incomplete && <div className="session-recovery"><small>{recovery ? (settings.interfaceLanguage === "pl" ? "Znaleziono bezpieczny checkpoint Protokołu Telepatycznego." : "A safe Telepathic Protocol checkpoint was found.") : copy.recoveryRequired}</small>{recovery && <button disabled={sessionRunning || batchRunning} onClick={() => void resumeTelepathicSession(session)}>{recoveryLabel}</button>}<button disabled={sessionRunning || batchRunning} onClick={() => void preserveInterrupted(session)}>{copy.markInterrupted}</button></div>}
               {providerRecovery && <div className="session-recovery"><small>{settings.interfaceLanguage === "pl" ? "Sesja może zostać bezpiecznie wznowiona od nieudanego wywołania." : "The session can safely resume from the failed call."}</small><button disabled={sessionRunning || batchRunning} onClick={() => void runCapturedSession(session, true)}>{settings.interfaceLanguage === "pl" ? "Kontynuuj" : "Continue"}</button><button disabled={sessionRunning || batchRunning} onClick={() => void runCapturedSession(session, false)}>{settings.interfaceLanguage === "pl" ? "Od początku" : "Start again"}</button></div>}
+              {postRevealRecovery && <div className="session-recovery"><small>{postRevealRecovery.requiresDecision
+                ? (settings.interfaceLanguage === "pl" ? `Opinia po Revealu zatrzymała się po niepewnym wywołaniu (${postRevealRecovery.nextStage === "viewer" ? "Viewer" : "Monitor"}). Najpierw rozstrzygnij próbę.` : `Post-Reveal review stopped after an uncertain ${postRevealRecovery.nextStage === "viewer" ? "Viewer" : "Monitor"} call. Resolve the attempt first.`)
+                : (settings.interfaceLanguage === "pl" ? `Opinia po Revealu jest nieukończona. Wznowienie rozpocznie pierwszy brakujący etap: ${postRevealRecovery.nextStage === "viewer" ? "Viewer" : "Monitor"}.` : `Post-Reveal review is incomplete. Resume will start at the first missing stage: ${postRevealRecovery.nextStage === "viewer" ? "Viewer" : "Monitor"}.`)}</small>
+                {postRevealRecovery.requiresDecision
+                  ? <button disabled={sessionRunning || batchRunning || postRevealBusy} onClick={() => void resolvePostRevealUncertain(session, postRevealRecovery)}>{settings.interfaceLanguage === "pl" ? "Oznacz próbę jako nieudaną" : "Treat attempt as failed"}</button>
+                  : <button disabled={sessionRunning || batchRunning || postRevealBusy} onClick={() => void resumePostRevealReview(session)}>{settings.interfaceLanguage === "pl" ? "Wznów opinię po Revealu" : "Resume post-Reveal review"}</button>}
+              </div>}
             </div>;
           })}</div> : <p className="recent-session-empty">{copy.noSessions}</p>}
         </details>

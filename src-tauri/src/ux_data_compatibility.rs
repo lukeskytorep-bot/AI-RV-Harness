@@ -125,8 +125,8 @@ async fn exact_green_v23_to_v24_preserves_existing_data_and_provenance() {
         .expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 30);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(30));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 31);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(31));
 }
 
 #[tokio::test]
@@ -215,8 +215,8 @@ async fn exact_green_v24_to_v25_adds_provider_state_storage_without_mutating_exi
     assert_eq!(chat_state, 0, "Conversation provider state should cascade with its message");
     assert_eq!(session_state, 0, "Session provider state should cascade with its event");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 30);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(30));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 31);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(31));
 }
 
 
@@ -236,7 +236,7 @@ async fn exact_green_v25_to_v26_types_existing_workspaces_without_moving_history
     let integrity = sqlx::query_scalar::<_, String>("PRAGMA integrity_check").fetch_one(&mut connection).await.expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 30);
+    assert_eq!(CURRENT_MIGRATION_VERSION, 31);
 }
 
 
@@ -350,8 +350,8 @@ async fn exact_green_v26_to_v27_repairs_factory_classification_without_unlocking
         .expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 30);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(30));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 31);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(31));
 }
 
 #[tokio::test]
@@ -417,8 +417,8 @@ async fn exact_green_v27_to_v28_adds_telepathic_exchange_storage_without_moving_
         .expect("integrity_check should execute");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 30);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(30));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 31);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(31));
 }
 
 
@@ -444,6 +444,39 @@ async fn exact_green_v28_to_v29_adds_cross_instance_telepathic_run_lease_without
     let integrity = sqlx::query_scalar::<_, String>("PRAGMA integrity_check").fetch_one(&mut connection).await.expect("integrity");
     assert_eq!(integrity, "ok");
     assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
-    assert_eq!(CURRENT_MIGRATION_VERSION, 30);
-    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(30));
+    assert_eq!(CURRENT_MIGRATION_VERSION, 31);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(31));
 }
+
+#[tokio::test]
+async fn exact_green_v30_to_v31_adds_post_reveal_review_lease_without_moving_session_data() {
+    let mut connection = SqliteConnection::connect("sqlite::memory:")
+        .await
+        .expect("in-memory SQLite should open");
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut connection).await.expect("foreign keys should be enabled");
+    for migration in &MIGRATION_SPECS[..30] {
+        apply_sql(&mut connection, migration.sql).await;
+    }
+
+    sqlx::query("INSERT INTO profiles (id,display_name,created_at,updated_at) VALUES ('p-review','P','2026-10-07T00:00:00Z','2026-10-07T00:00:00Z')")
+        .execute(&mut connection).await.expect("profile insert");
+    sqlx::query("INSERT INTO workspaces (id,profile_id,name,kind,created_at,updated_at,last_opened_at) VALUES ('w-review','p-review','W','rv','2026-10-07T00:00:00Z','2026-10-07T00:00:00Z','2026-10-07T00:00:00Z')")
+        .execute(&mut connection).await.expect("workspace insert");
+    sqlx::query("INSERT INTO rv_sessions (id,workspace_id,profile_id,session_code,state,run_type,pre_reveal_transcript,post_reveal_transcript,created_at,updated_at) VALUES ('s-review','w-review','p-review','RV-1','Revealed','automatic','','existing review text','2026-10-07T00:00:00Z','2026-10-07T00:00:00Z')")
+        .execute(&mut connection).await.expect("session insert");
+
+    apply_sql(&mut connection, MIGRATION_SPECS[30].sql).await;
+    let row = sqlx::query_as::<_, (String, Option<String>, Option<String>, i64)>(
+        "SELECT post_reveal_transcript,post_reveal_review_lease_owner,post_reveal_review_lease_expires_at,post_reveal_review_lease_version FROM rv_sessions WHERE id='s-review'"
+    ).fetch_one(&mut connection).await.expect("post-Reveal review lease columns should exist");
+    assert_eq!(row, ("existing review text".to_string(), None, None, 0));
+
+    let integrity = sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
+        .fetch_one(&mut connection).await.expect("integrity");
+    assert_eq!(integrity, "ok");
+    assert_eq!(foreign_key_violation_count(&mut connection).await, 0);
+    assert_eq!(CURRENT_MIGRATION_VERSION, 31);
+    assert_eq!(MIGRATION_SPECS.last().map(|migration| migration.version), Some(31));
+}
+

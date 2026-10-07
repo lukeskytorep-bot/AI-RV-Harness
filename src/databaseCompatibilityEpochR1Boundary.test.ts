@@ -98,7 +98,7 @@ describe("DATABASE-COMPATIBILITY-EPOCH-1-R1 boundaries", () => {
     expect(sha256(migration022)).toBe("7fcec7326bbd8083efa830155ada3552fabeabf99ac92dab1b972260854aa4d4");
     expect(sha256(migration023)).toBe("1a9d300daa180a4507c01497b52deaf84722bd710ed4617f84058932dc7838a4");
     expect(sha256(migration024)).toBe("637d33319c0c1abcb85a4b565b16c4c3c2343b7e45a392079d73eaa1ce410837");
-    expect(migrationRegistry).toContain("(1_i64..=30)");
+    expect(migrationRegistry).toContain("(1_i64..=31)");
     expect(migrationRegistry).toContain('include_str!("../migrations/024_viewer_learning_field_guide.sql")');
     expect(migrationRegistry).toContain('include_str!("../migrations/025_provider_continuation_state.sql")');
     expect(migrationRegistry).toContain('include_str!("../migrations/026_typed_workspaces.sql")');

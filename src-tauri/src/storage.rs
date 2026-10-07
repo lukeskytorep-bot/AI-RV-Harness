@@ -1566,7 +1566,7 @@ mod tests {
         let database = directory.join(DATABASE_FILE_NAME);
         create_database_through(&database, MIGRATION_SPECS.len()).await;
 
-        assert_eq!(CURRENT_MIGRATION_VERSION, 30);
+        assert_eq!(CURRENT_MIGRATION_VERSION, 31);
         validate_current_database(&database)
             .await
             .expect("migration-028 database should pass live validation");

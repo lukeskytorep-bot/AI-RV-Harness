@@ -382,4 +382,9 @@ describe("analytical output recovery", () => {
     expect(() => analyticalOutputBudget({ model: smallContext, messages: [{ role: "user", content: "x".repeat(1400) }], operationKind: "judge", attempt: 0 }))
       .toThrow(/available context/);
   });
+
+  it("classifies exhausted recovery budget as an output-limit failure", () => {
+    expect(isOutputLimitFailure(new Error("Provider exhausted the available analytical output budget; this route cannot increase beyond 4096 tokens."))).toBe(true);
+  });
+
 });

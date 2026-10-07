@@ -40,6 +40,11 @@ type SessionEventRow = { id: string; session_id: string; sequence_number: number
 type SessionEventProviderStateRow = { session_event_id: string; format: string; format_version: number; transport: string; replay_fingerprint_json: string; payload_json: string; payload_sha256: string; payload_size_bytes: number; created_at: string };
 type TransactionStatement = { query: string; values?: unknown[] };
 
+const ACQUIRE_POST_REVEAL_REVIEW_LEASE = "UPDATE rv_sessions SET post_reveal_review_lease_owner=$1, post_reveal_review_lease_expires_at=$2, post_reveal_review_lease_version=post_reveal_review_lease_version+1 WHERE id=$3 AND (post_reveal_review_lease_owner IS NULL OR post_reveal_review_lease_expires_at IS NULL OR post_reveal_review_lease_expires_at < $4)";
+const RENEW_POST_REVEAL_REVIEW_LEASE = "UPDATE rv_sessions SET post_reveal_review_lease_expires_at=$1 WHERE id=$2 AND post_reveal_review_lease_owner=$3 AND post_reveal_review_lease_version=$4";
+const RELEASE_POST_REVEAL_REVIEW_LEASE = "UPDATE rv_sessions SET post_reveal_review_lease_owner=NULL, post_reveal_review_lease_expires_at=NULL WHERE id=$1 AND post_reveal_review_lease_owner=$2 AND post_reveal_review_lease_version=$3";
+type ActivePostRevealReviewLease = { owner: string; version: number; lost: boolean; controller: AbortController };
+
 export interface SqliteSessionsRepositoryDependencies {
   select<T>(query: string, bindValues?: unknown[]): Promise<T>;
   executeWrite(query: string, bindValues?: unknown[]): Promise<WriteResult>;
@@ -70,6 +75,8 @@ function mapRvSession(row: RvSessionRow): RvSession {
 }
 
 export class SqliteSessionsRepository implements SessionsRepository {
+  private readonly activePostRevealReviewLeases = new Map<string, ActivePostRevealReviewLease>();
+
   constructor(private readonly dependencies: SqliteSessionsRepositoryDependencies) {}
 
   private now(): string {
@@ -203,6 +210,69 @@ export class SqliteSessionsRepository implements SessionsRepository {
       metadata: JSON.parse(row.metadata_json || "{}") as Record<string, unknown>,
       createdAt: row.created_at,
     }));
+  }
+
+  async withPostRevealReviewLease<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+    if (this.activePostRevealReviewLeases.has(sessionId)) {
+      throw new Error("Automatic post-Reveal review is already running for this session.");
+    }
+    const owner = `post-reveal-review-${crypto.randomUUID()}`;
+    const leaseMs = 10 * 60 * 1000;
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
+    const acquired = await this.dependencies.executeWrite(ACQUIRE_POST_REVEAL_REVIEW_LEASE, [owner, expiresAt, sessionId, now.toISOString()]);
+    if (acquired.rowsAffected !== 1) throw new Error("Automatic post-Reveal review is already running for this session.");
+    const rows = await this.dependencies.select<Array<{ post_reveal_review_lease_owner: string | null; post_reveal_review_lease_version: number }>>(
+      "SELECT post_reveal_review_lease_owner, post_reveal_review_lease_version FROM rv_sessions WHERE id=$1",
+      [sessionId],
+    );
+    const row = rows[0];
+    if (!row || row.post_reveal_review_lease_owner !== owner) throw new Error("Post-Reveal review lease acquisition could not be verified.");
+    const lease: ActivePostRevealReviewLease = { owner, version: row.post_reveal_review_lease_version, lost: false, controller: new AbortController() };
+    this.activePostRevealReviewLeases.set(sessionId, lease);
+
+    const loseLease = () => {
+      if (lease.lost) return;
+      lease.lost = true;
+      lease.controller.abort(new DOMException("Post-Reveal review lease was lost.", "AbortError"));
+    };
+    const timer = setInterval(() => {
+      if (lease.lost) return;
+      const nextExpiry = new Date(Date.now() + leaseMs).toISOString();
+      void this.dependencies.executeWrite(RENEW_POST_REVEAL_REVIEW_LEASE, [nextExpiry, sessionId, owner, lease.version])
+        .then((result) => { if (result.rowsAffected !== 1) loseLease(); })
+        .catch(loseLease);
+    }, 60_000);
+
+    try {
+      await this.assertPostRevealReviewLease(sessionId);
+      const result = await task();
+      await this.assertPostRevealReviewLease(sessionId);
+      return result;
+    } finally {
+      clearInterval(timer);
+      this.activePostRevealReviewLeases.delete(sessionId);
+      await this.dependencies.executeWrite(RELEASE_POST_REVEAL_REVIEW_LEASE, [sessionId, owner, lease.version]).catch(() => undefined);
+    }
+  }
+
+  async assertPostRevealReviewLease(sessionId: string): Promise<void> {
+    const lease = this.activePostRevealReviewLeases.get(sessionId);
+    if (!lease || lease.lost) throw new Error("Post-Reveal review lease was lost or is not active.");
+    const rows = await this.dependencies.select<Array<{ post_reveal_review_lease_owner: string | null; post_reveal_review_lease_version: number; post_reveal_review_lease_expires_at: string | null }>>(
+      "SELECT post_reveal_review_lease_owner, post_reveal_review_lease_version, post_reveal_review_lease_expires_at FROM rv_sessions WHERE id=$1",
+      [sessionId],
+    );
+    const row = rows[0];
+    if (!row || row.post_reveal_review_lease_owner !== lease.owner || row.post_reveal_review_lease_version !== lease.version || !row.post_reveal_review_lease_expires_at || row.post_reveal_review_lease_expires_at <= new Date().toISOString()) {
+      lease.lost = true;
+      lease.controller.abort(new DOMException("Post-Reveal review lease was lost.", "AbortError"));
+      throw new Error("Post-Reveal review lease was lost before provider dispatch or checkpoint save.");
+    }
+  }
+
+  postRevealReviewLeaseSignal(sessionId: string): AbortSignal | undefined {
+    return this.activePostRevealReviewLeases.get(sessionId)?.controller.signal;
   }
 
   async updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void> {

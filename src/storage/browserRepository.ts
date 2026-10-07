@@ -307,6 +307,11 @@ export class BrowserRepository implements AppRepository {
   appendSessionEventWithProviderState: AppRepository["appendSessionEventWithProviderState"] = (sessionId, event, state) => this.sessionsRepository.appendSessionEventWithProviderState(sessionId, event, state);
   getSessionEventProviderState: AppRepository["getSessionEventProviderState"] = (sessionEventId) => this.sessionsRepository.getSessionEventProviderState(sessionEventId);
   listSessionEvents: AppRepository["listSessionEvents"] = (sessionId) => this.sessionsRepository.listSessionEvents(sessionId);
+  withPostRevealReviewLease<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+    return this.sessionsRepository.withPostRevealReviewLease(sessionId, task);
+  }
+  assertPostRevealReviewLease: AppRepository["assertPostRevealReviewLease"] = (sessionId) => this.sessionsRepository.assertPostRevealReviewLease(sessionId);
+  postRevealReviewLeaseSignal: AppRepository["postRevealReviewLeaseSignal"] = (sessionId) => this.sessionsRepository.postRevealReviewLeaseSignal(sessionId);
   updatePreRevealTranscript: AppRepository["updatePreRevealTranscript"] = (sessionId, transcript) => this.sessionsRepository.updatePreRevealTranscript(sessionId, transcript);
   appendPostRevealTurn: AppRepository["appendPostRevealTurn"] = (sessionId, role, content, metadata) => this.sessionsRepository.appendPostRevealTurn(sessionId, role, content, metadata);
   appendPostRevealTurnWithProviderState: AppRepository["appendPostRevealTurnWithProviderState"] = (sessionId, content, state) => this.sessionsRepository.appendPostRevealTurnWithProviderState(sessionId, content, state);

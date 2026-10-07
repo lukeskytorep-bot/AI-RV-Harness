@@ -250,4 +250,71 @@ describe("SQLite Sessions repository contract", () => {
     expect(await repository.addTargetClarification("session-a", " detail ")).toMatchObject({ content: "detail", createdAt: timestamp });
     expect(writes[0]).toContain("INSERT INTO target_clarifications");
   });
+
+  it("atomically rejects a second post-Reveal review lease across SQLite repository instances", async () => {
+    let leaseOwner: string | null = null;
+    let leaseExpiresAt: string | null = null;
+    let leaseVersion = 0;
+
+    const dependencies = {
+      select: async <T>(query: string) => {
+        if (query.includes("post_reveal_review_lease_owner")) {
+          return [{
+            post_reveal_review_lease_owner: leaseOwner,
+            post_reveal_review_lease_expires_at: leaseExpiresAt,
+            post_reveal_review_lease_version: leaseVersion,
+          }] as T;
+        }
+        return [] as T;
+      },
+      executeWrite: async (query: string, values?: unknown[]) => {
+        if (query.includes("post_reveal_review_lease_version=post_reveal_review_lease_version+1")) {
+          const [owner, expiresAt] = values ?? [];
+          if (leaseOwner && leaseExpiresAt && leaseExpiresAt >= new Date().toISOString()) return { rowsAffected: 0 };
+          leaseOwner = String(owner);
+          leaseExpiresAt = String(expiresAt);
+          leaseVersion += 1;
+          return { rowsAffected: 1 };
+        }
+        if (query.includes("SET post_reveal_review_lease_expires_at=$1")) {
+          const [expiresAt, _sessionId, owner, version] = values ?? [];
+          if (leaseOwner !== owner || leaseVersion !== version) return { rowsAffected: 0 };
+          leaseExpiresAt = String(expiresAt);
+          return { rowsAffected: 1 };
+        }
+        if (query.includes("SET post_reveal_review_lease_owner=NULL")) {
+          const [_sessionId, owner, version] = values ?? [];
+          if (leaseOwner !== owner || leaseVersion !== version) return { rowsAffected: 0 };
+          leaseOwner = null;
+          leaseExpiresAt = null;
+          return { rowsAffected: 1 };
+        }
+        return { rowsAffected: 1 };
+      },
+      executeTransaction: async () => [],
+      isResearchScoresFrozen: async () => true,
+      now: () => timestamp,
+    };
+    const firstRepository = new SqliteSessionsRepository(dependencies);
+    const secondRepository = new SqliteSessionsRepository(dependencies);
+
+    let release!: () => void;
+    let acquired!: () => void;
+    const acquiredPromise = new Promise<void>((resolve) => { acquired = resolve; });
+    const wait = new Promise<void>((resolve) => { release = resolve; });
+
+    const first = firstRepository.withPostRevealReviewLease("session-a", async () => {
+      acquired();
+      await wait;
+      return "done";
+    });
+    await acquiredPromise;
+
+    await expect(secondRepository.withPostRevealReviewLease("session-a", async () => "second"))
+      .rejects.toThrow("already running");
+
+    release();
+    await expect(first).resolves.toBe("done");
+  });
+
 });

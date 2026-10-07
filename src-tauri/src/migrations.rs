@@ -158,6 +158,11 @@ pub(crate) const MIGRATION_SPECS: &[MigrationSpec] = &[
         description: "chat_message_attachment_metadata",
         sql: include_str!("../migrations/030_chat_message_attachment_metadata.sql"),
     },
+    MigrationSpec {
+        version: 31,
+        description: "post_reveal_review_lease",
+        sql: include_str!("../migrations/031_post_reveal_review_lease.sql"),
+    },
 ];
 
 pub(crate) const CURRENT_MIGRATION_VERSION: i64 =
@@ -180,13 +185,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_is_contiguous_and_current_version_is_030() {
+    fn registry_is_contiguous_and_current_version_is_031() {
         let versions = MIGRATION_SPECS
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>();
-        assert_eq!(versions, (1_i64..=30).collect::<Vec<_>>());
-        assert_eq!(CURRENT_MIGRATION_VERSION, 30);
+        assert_eq!(versions, (1_i64..=31).collect::<Vec<_>>());
+        assert_eq!(CURRENT_MIGRATION_VERSION, 31);
         assert_eq!(registered_migrations().len(), MIGRATION_SPECS.len());
     }
 }
