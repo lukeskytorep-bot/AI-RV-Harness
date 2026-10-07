@@ -98,11 +98,9 @@ describe("SECURITY-IPC-1C-R1 SQLite IPC boundary", () => {
   });
 
   it("does not allow telepathic series heartbeat renewal after lease expiry", () => {
-    const tsWrites = fs.readFileSync("src/storage/databaseWriteOperations.ts", "utf8");
-    const rustDb = fs.readFileSync("src-tauri/src/database.rs", "utf8");
     const expiryGuard = "run_lease_expires_at IS NOT NULL AND run_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')";
-    expect(tsWrites).toContain(expiryGuard);
-    expect(rustDb).toContain(expiryGuard);
+    expect(writeRegistry).toContain(expiryGuard);
+    expect(nativeDatabase).toContain(expiryGuard);
   });
 
 });
