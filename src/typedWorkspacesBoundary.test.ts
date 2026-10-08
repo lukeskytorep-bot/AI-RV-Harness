@@ -46,8 +46,10 @@ describe("Stage 5 typed Workspace boundary", () => {
     const conversations = sources["./features/conversations/ConversationsScreen.tsx"] ?? "";
     const rv = sources["./features/rvSessions/RvSessionsScreen.tsx"] ?? "";
     expect(kind).toContain('workspace.kind === "legacy_combined"');
-    expect(conversations).toContain('kind="conversation"');
-    expect(rv).toContain('kind="rv"');
+    expect(conversations).toContain('value={workspace.profileId}');
+    expect(rv).toContain('value={workspace.profileId}');
+    expect(conversations).not.toContain("WorkspaceSwitcherDialog");
+    expect(rv).not.toContain("WorkspaceSwitcherDialog");
   });
 
   it("never selects a Conversation-only Workspace for Training or Research", () => {

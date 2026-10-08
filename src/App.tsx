@@ -75,6 +75,7 @@ import { ModelRouteSelect } from "./components/ModelRouteSelect";
 import { aiIsBeDisplayName } from "./domain/isBeIdentity";
 import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from "./targets/telepathicBundled";
 import { createProfileWithInitialWorkspaces } from "./application/profileWorkspace";
+import { resolveOpenedWorkspaceSelection, resolveProfileWorkspaceSelection } from "./application/profileSelection";
 import { isWorkspaceCompatible, latestCompatibleWorkspace } from "./domain/workspaceKind";
 
 const LazyResearchScreen = lazy(() =>
@@ -245,6 +246,23 @@ export default function App() {
     }));
   };
 
+
+  const handleProfileChange = (profileId: string) => {
+    if (criticalOperationBusyRef.current) return;
+    const selection = resolveProfileWorkspaceSelection({
+      profiles,
+      workspaces,
+      activeProfileId,
+      activeConversationWorkspaceId,
+      activeRvWorkspaceId,
+      selectedProfileId: profileId,
+    });
+    if (!selection || !selection.changed) return;
+    setActiveProfileId(selection.profileId);
+    rememberActiveWorkspace("conversation", selection.conversationWorkspaceId);
+    rememberActiveWorkspace("rv", selection.rvWorkspaceId);
+  };
+
   const navigate = (destination: LegacyPage) => {
     if (criticalOperationBusyRef.current) return;
     const normalized = normalizePage(destination);
@@ -270,8 +288,17 @@ export default function App() {
     if (criticalOperationBusyRef.current) return;
     const requiredKind: NewWorkspaceKind = destination === "rv-sessions" ? "rv" : "conversation";
     if (!isWorkspaceCompatible(workspace, requiredKind)) return;
-    rememberActiveWorkspace(requiredKind, workspace.id);
-    setActiveProfileId(workspace.profileId);
+    const selection = resolveOpenedWorkspaceSelection({
+      workspaces,
+      activeProfileId,
+      activeConversationWorkspaceId,
+      activeRvWorkspaceId,
+      workspace,
+      requiredKind,
+    });
+    setActiveProfileId(selection.profileId);
+    rememberActiveWorkspace("conversation", selection.conversationWorkspaceId);
+    rememberActiveWorkspace("rv", selection.rvWorkspaceId);
     if (destination === "rv-sessions") setRvSessionsView(rvView);
     setPage(destination);
     if (repository) {
@@ -440,7 +467,7 @@ export default function App() {
               activeWorkspace={activeWorkspace}
               repository={repository!}
               initialView={aiCenterView}
-              onProfileChange={(profileId) => { setActiveProfileId(profileId); rememberActiveWorkspace("rv", latestCompatibleWorkspace(workspaces, "rv", profileId)?.id ?? null); }}
+              onProfileChange={handleProfileChange}
               onProfileChanged={refreshProfiles}
             />
           ) : page === "settings" ? (
@@ -455,7 +482,7 @@ export default function App() {
                 repository={repository}
                 profiles={profiles}
                 workspaces={workspaces}
-                onOpenWorkspace={(workspace) => void openWorkspace(workspace, "conversations")}
+                onProfileChange={handleProfileChange}
                 createdNotice={workspaceCreatedNotice?.workspaceId === activeConversationWorkspace.id ? workspaceCreatedNotice : null}
                 onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
                 onOperationBusyChange={setCriticalOperationBusy}
@@ -470,10 +497,9 @@ export default function App() {
                 workspace={activeRvWorkspace}
                 repository={repository}
                 profiles={profiles}
-                workspaces={workspaces}
                 view={rvSessionsView}
                 onViewChange={setRvSessionsView}
-                onOpenWorkspace={(workspace) => void openWorkspace(workspace, "rv-sessions", rvSessionsView)}
+                onProfileChange={handleProfileChange}
                 createdNotice={workspaceCreatedNotice?.workspaceId === activeRvWorkspace.id ? workspaceCreatedNotice : null}
                 onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
                 onOperationBusyChange={setCriticalOperationBusy}

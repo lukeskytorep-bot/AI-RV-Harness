@@ -51,7 +51,8 @@ describe("Stage 4 top-level Conversations / RV Sessions boundary", () => {
     const conversations = sourceFiles["./features/conversations/ConversationsScreen.tsx"] ?? "";
     const rvSessions = sourceFiles["./features/rvSessions/RvSessionsScreen.tsx"] ?? "";
 
-    expect(app).toContain('openWorkspace(workspace, "conversations")');
+    expect(app).toContain('onOpenWorkspace={(workspace, kind) => void openWorkspace(workspace, kind === "rv" ? "rv-sessions" : "conversations")}');
+    expect(app).toContain('resolveOpenedWorkspaceSelection({');
     expect(app).toContain('openWorkspace(owner, "rv-sessions", "automatic")');
     expect(conversations).toContain('fixedMode="conversation"');
     expect(conversations).not.toContain('fixedMode="manual_rv"');

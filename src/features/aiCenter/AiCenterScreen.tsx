@@ -5,6 +5,7 @@ import { VIEWER_NOTES_CAPACITIES, currentViewerNotesLabel } from "../../aiCenter
 import { FIELD_GUIDE_CAPACITIES, resolveLegacyFieldGuideBaselineForViewer } from "../../aiCenter/fieldGuide";
 import type { FieldGuideBundle, FieldGuideCapacity, FieldGuideLanguage, FieldGuideLegacyBaseline } from "../../aiCenter/fieldGuideTypes";
 import { SafeMarkdown } from "../../components/SafeMarkdown";
+import { ProfileSelector } from "../../components/ProfileSelector";
 import { useAppDialogs } from "../../components/AppDialogProvider";
 import { getCopy } from "../../i18n";
 import type { AppRepository } from "../../storage/repository";
@@ -153,7 +154,7 @@ export function AiCenterScreen({ settings, profiles, workspaces, activeProfileId
 
 
   return <div className="page ai-center-page">
-    <header className="page-header ai-center-header"><div><span className="eyebrow"><Sparkles size={14} /> {pl ? "Role, historia i pamięć uczenia AI" : "AI roles, history, and learning memory"}</span><h1>AI Center</h1><p>{pl ? "Narzędzia AI dla aktywnego Profilu, wspólne dla wszystkich jego Workspace’ów." : "AI tools for the active Profile, shared across all of its Workspaces."}</p></div><label><span>{pl ? "Aktywny Profil" : "Active Profile"}</span><select value={activeProfile?.id ?? ""} onChange={(event) => onProfileChange(event.target.value)}>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{aiIsBeDisplayName(profile)}</option>)}</select></label></header>
+    <header className="page-header ai-center-header"><div><span className="eyebrow"><Sparkles size={14} /> {pl ? "Role, historia i pamięć uczenia AI" : "AI roles, history, and learning memory"}</span><h1>AI Center</h1><p>{pl ? "Narzędzia AI dla aktywnego Profilu, wspólne dla wszystkich jego Workspace’ów." : "AI tools for the active Profile, shared across all of its Workspaces."}</p></div><ProfileSelector profiles={profiles} value={activeProfile?.id ?? ""} onChange={onProfileChange} language={settings.interfaceLanguage} /></header>
     <div className="ai-center-context"><Users size={15} /><span>{activeProfile ? aiIsBeDisplayName(activeProfile) : "—"}</span><small>{workspaceFilterId ? ownedWorkspaces.find((item) => item.id === workspaceFilterId)?.name : (pl ? "Wszystkie Workspace’y Profilu" : "All Profile Workspaces")}</small></div>
     <nav className="module-tabs ai-center-tabs">
       <button className={view === "overview" ? "module-tab active" : "module-tab"} onClick={() => setView("overview")}><Sparkles size={17} />{pl ? "Przegląd" : "Overview"}</button>

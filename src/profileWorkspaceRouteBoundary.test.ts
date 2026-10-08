@@ -16,7 +16,7 @@ describe("STEP-2 Profile/Workspace route boundary", () => {
     }
   });
 
-  it("blocks Workspace switching and sidebar navigation while a Conversation send or automatic RV run is in flight", () => {
+  it("blocks Profile switching and sidebar navigation while a Conversation send or automatic RV run is in flight", () => {
     const conversations = read("./features/conversations/ConversationsScreen.tsx");
     const rv = read("./features/rvSessions/RvSessionsScreen.tsx");
     const app = read("./App.tsx");
@@ -46,7 +46,7 @@ describe("STEP-2 Profile/Workspace route boundary", () => {
     expect(rv).toContain("cannot be opened in the current view");
   });
 
-  it("keeps Conversation and RV Workspace selection module-local instead of routing through the shared activeProfileId", () => {
+  it("keeps Conversation and RV Workspace ownership explicit while shared Profile selection synchronizes both contexts", () => {
     const app = read("./App.tsx");
     expect(app).toContain('profile={profiles.find((item) => item.id === activeConversationWorkspace.profileId) ?? null}');
     expect(app).toContain('profile={profiles.find((item) => item.id === activeRvWorkspace.profileId) ?? null}');

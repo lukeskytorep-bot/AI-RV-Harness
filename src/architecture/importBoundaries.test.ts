@@ -110,7 +110,7 @@ describe("architecture import boundaries", () => {
     expect(deepImportOffenders, "Training consumers must import the public feature entry point").toEqual([]);
   });
 
-  it("uses the public Workspaces feature entry point only for the switcher dialog", () => {
+  it("keeps the legacy Workspace switcher isolated from Conversation and RV Sessions", () => {
     const appSource = sourceFiles["../App.tsx"];
     const deepImportOffenders = Object.entries(sourceFiles)
       .map(([path, content]) => ({ content, projectPath: path.replace(/^\.\.\//, "") }))
@@ -122,8 +122,8 @@ describe("architecture import boundaries", () => {
     expect(appSource).not.toContain("WorkspacesScreen");
     expect(sourceFiles["../features/workspaces/WorkspacesScreen.tsx"]).toBeUndefined();
     expect(sourceFiles["../features/workspaces/WorkspaceSwitcherDialog.tsx"]).toContain("function WorkspaceSwitcherDialog(");
-    expect(sourceFiles["../features/conversations/ConversationsScreen.tsx"]).toContain('from "../workspaces"');
-    expect(sourceFiles["../features/rvSessions/RvSessionsScreen.tsx"]).toContain('from "../workspaces"');
+    expect(sourceFiles["../features/conversations/ConversationsScreen.tsx"]).not.toContain('from "../workspaces"');
+    expect(sourceFiles["../features/rvSessions/RvSessionsScreen.tsx"]).not.toContain('from "../workspaces"');
     expect(deepImportOffenders, "Workspaces consumers must import the public feature entry point").toEqual([]);
   });
 

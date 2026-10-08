@@ -1,12 +1,12 @@
-import { Check, CircleHelp, RadioTower, X } from "lucide-react";
+import { Check, CircleHelp, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
 import { PageHeader } from "../../components/PageHeader";
+import { ProfileSelector } from "../../components/ProfileSelector";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 import type { getCopy } from "../../i18n";
 import type { AppRepository } from "../../storage/repository";
 import type { AppSettings, Profile, Workspace } from "../../types";
-import { WorkspaceSwitcherDialog } from "../workspaces";
 import { ChatPanel } from "./ChatPanel";
 import { TelepathicExchangePanel } from "./TelepathicExchangePanel";
 
@@ -18,7 +18,7 @@ export interface ConversationsScreenProps {
   repository: AppRepository | null;
   profiles: Profile[];
   workspaces: Workspace[];
-  onOpenWorkspace: (workspace: Workspace) => void;
+  onProfileChange: (profileId: string) => void;
   createdNotice: { workspaceId: string; workspaceName: string; profileName: string } | null;
   onDismissCreatedNotice: () => void;
   onOperationBusyChange?: (busy: boolean) => void;
@@ -32,18 +32,15 @@ export function ConversationsScreen({
   repository,
   profiles,
   workspaces,
-  onOpenWorkspace,
+  onProfileChange,
   createdNotice,
   onDismissCreatedNotice,
   onOperationBusyChange,
 }: ConversationsScreenProps) {
-  const [switcherOpen, setSwitcherOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [surface, setSurface] = useState<"conversation" | "telepathic">("conversation");
   const [operationBusy, setOperationBusy] = useState(false);
   const operationBusyRef = useRef(false);
-  const switcherButtonRef = useRef<HTMLButtonElement>(null);
-  const closeSwitcher = () => { setSwitcherOpen(false); requestAnimationFrame(() => switcherButtonRef.current?.focus()); };
   const handleBusyChange = useCallback((busy: boolean) => { operationBusyRef.current = busy; setOperationBusy(busy); onOperationBusyChange?.(busy); }, [onOperationBusyChange]);
 
   return (
@@ -52,7 +49,7 @@ export function ConversationsScreen({
         <PageHeader
           title={copy.conversationsNav}
           subtitle={`${workspace.name} · ${profile ? aiIsBeDisplayName(profile) : "—"}`}
-          action={<div className="workspace-header-actions"><button ref={switcherButtonRef} className="secondary-button" disabled={operationBusy} onClick={() => { if (!operationBusyRef.current) setSwitcherOpen(true); }}><RadioTower size={15} />{copy.switchWorkspace}</button><button className="secondary-button" aria-expanded={helpOpen} aria-controls="conversation-help-panel" onClick={() => setHelpOpen((current) => !current)}><CircleHelp size={15} />{surface === "telepathic" ? (settings.interfaceLanguage === "pl" ? "Jak działa wymiana telepatyczna?" : "How does telepathic exchange work?") : (settings.interfaceLanguage === "pl" ? "Jak działa rozmowa?" : "How does Conversation work?")}</button></div>}
+          action={<div className="workspace-header-actions"><ProfileSelector profiles={profiles} value={workspace.profileId} onChange={onProfileChange} language={settings.interfaceLanguage} disabled={operationBusy} /><button className="secondary-button" aria-expanded={helpOpen} aria-controls="conversation-help-panel" onClick={() => setHelpOpen((current) => !current)}><CircleHelp size={15} />{surface === "telepathic" ? (settings.interfaceLanguage === "pl" ? "Jak działa wymiana telepatyczna?" : "How does telepathic exchange work?") : (settings.interfaceLanguage === "pl" ? "Jak działa rozmowa?" : "How does Conversation work?")}</button></div>}
         />
         <div className="conversation-surface-switch" role="tablist" aria-label={settings.interfaceLanguage === "pl" ? "Tryb rozmowy" : "Conversation mode"}><button role="tab" aria-selected={surface === "conversation"} className={surface === "conversation" ? "active" : ""} disabled={operationBusy} onClick={() => { if (!operationBusyRef.current) setSurface("conversation"); }}>{settings.interfaceLanguage === "pl" ? "Zwykła rozmowa" : "Normal conversation"}</button><button role="tab" aria-selected={surface === "telepathic"} className={surface === "telepathic" ? "active" : ""} disabled={operationBusy} onClick={() => { if (!operationBusyRef.current) setSurface("telepathic"); }}>{settings.interfaceLanguage === "pl" ? "Wymiana telepatyczna" : "Telepathic exchange"}</button></div>
         {helpOpen && (surface === "telepathic" ? <TelepathicExchangeHelpPanel language={settings.interfaceLanguage} /> : <ConversationHelpPanel language={settings.interfaceLanguage} />)}
@@ -61,7 +58,6 @@ export function ConversationsScreen({
           ? <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} fixedMode="conversation" onBusyChange={handleBusyChange} />
           : <TelepathicExchangePanel key={workspace.id} copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} profiles={profiles} workspaces={workspaces} onBusyChange={handleBusyChange} />}
       </div>
-      {switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} kind="conversation" activeWorkspaceId={workspace.id} onOpenWorkspace={onOpenWorkspace} onClose={closeSwitcher} />}
     </>
   );
 }

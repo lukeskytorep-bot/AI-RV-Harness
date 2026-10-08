@@ -29,11 +29,11 @@ describe("STAGE-7B shared component boundaries", () => {
 
     expect(aiCenter).toContain('className="page-header ai-center-header"');
     expect(aiCenter).toContain('className="eyebrow"');
-    expect(aiCenter).toContain("<select");
+    expect(aiCenter).toContain("<ProfileSelector");
   });
 
   it("keeps shared UI component implementations inside src/components", () => {
-    for (const component of ["PageHeader", "EmptyState", "FormDialog", "ModelRouteSelect", "JudgeResults", "ProtocolDialog", "SafeMarkdown", "ResourceViewerDialogShell"]) {
+    for (const component of ["PageHeader", "ProfileSelector", "EmptyState", "FormDialog", "ModelRouteSelect", "JudgeResults", "ProtocolDialog", "SafeMarkdown", "ResourceViewerDialogShell"]) {
       expect(fs.existsSync(path.join(srcRoot, "components", `${component}.tsx`)), `${component} must live in src/components`).toBe(true);
     }
   });

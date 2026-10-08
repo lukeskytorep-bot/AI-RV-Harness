@@ -1,13 +1,13 @@
-import { Check, CircleHelp, Crosshair, MessageCircle, RadioTower, X } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { Check, CircleHelp, Crosshair, MessageCircle, X } from "lucide-react";
+import { useCallback, useState } from "react";
 
 import { PageHeader } from "../../components/PageHeader";
+import { ProfileSelector } from "../../components/ProfileSelector";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 import type { getCopy } from "../../i18n";
 import type { AppRepository } from "../../storage/repository";
 import type { AppSettings, Profile, Workspace } from "../../types";
 import { ChatPanel } from "../conversations";
-import { WorkspaceSwitcherDialog } from "../workspaces";
 import { RvSessionPanel } from "./RvSessionPanel";
 
 export type RvSessionsView = "manual" | "automatic";
@@ -19,10 +19,9 @@ export interface RvSessionsScreenProps {
   workspace: Workspace;
   repository: AppRepository | null;
   profiles: Profile[];
-  workspaces: Workspace[];
   view: RvSessionsView;
   onViewChange: (view: RvSessionsView) => void;
-  onOpenWorkspace: (workspace: Workspace) => void;
+  onProfileChange: (profileId: string) => void;
   createdNotice: { workspaceId: string; workspaceName: string; profileName: string } | null;
   onDismissCreatedNotice: () => void;
   onOperationBusyChange?: (busy: boolean) => void;
@@ -35,19 +34,15 @@ export function RvSessionsScreen({
   workspace,
   repository,
   profiles,
-  workspaces,
   view,
   onViewChange,
-  onOpenWorkspace,
+  onProfileChange,
   createdNotice,
   onDismissCreatedNotice,
   onOperationBusyChange,
 }: RvSessionsScreenProps) {
-  const [switcherOpen, setSwitcherOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [operationBusy, setOperationBusy] = useState(false);
-  const switcherButtonRef = useRef<HTMLButtonElement>(null);
-  const closeSwitcher = () => { setSwitcherOpen(false); requestAnimationFrame(() => switcherButtonRef.current?.focus()); };
   const handleBusyChange = useCallback((busy: boolean) => { setOperationBusy(busy); onOperationBusyChange?.(busy); }, [onOperationBusyChange]);
 
   return (
@@ -56,7 +51,7 @@ export function RvSessionsScreen({
         <PageHeader
           title={copy.rvSessionsNav}
           subtitle={`${workspace.name} · ${profile ? aiIsBeDisplayName(profile) : "—"}`}
-          action={<div className="workspace-header-actions"><button ref={switcherButtonRef} className="secondary-button" disabled={operationBusy} onClick={() => setSwitcherOpen(true)}><RadioTower size={15} />{copy.switchWorkspace}</button><button className="secondary-button" aria-expanded={helpOpen} aria-controls="rv-sessions-help-panel" onClick={() => setHelpOpen((current) => !current)}><CircleHelp size={15} />{settings.interfaceLanguage === "pl" ? "Jak działają sesje RV?" : "How do RV Sessions work?"}</button></div>}
+          action={<div className="workspace-header-actions"><ProfileSelector profiles={profiles} value={workspace.profileId} onChange={onProfileChange} language={settings.interfaceLanguage} disabled={operationBusy} /><button className="secondary-button" aria-expanded={helpOpen} aria-controls="rv-sessions-help-panel" onClick={() => setHelpOpen((current) => !current)}><CircleHelp size={15} />{settings.interfaceLanguage === "pl" ? "Jak działają sesje RV?" : "How do RV Sessions work?"}</button></div>}
         />
         {helpOpen && <RvSessionsHelpPanel language={settings.interfaceLanguage} />}
         {createdNotice && <div className="workspace-created-notice"><Check size={16} /><span><strong>{copy.workspaceCreated}</strong><small>{createdNotice.profileName} → {createdNotice.workspaceName}</small></span><button className="icon-button" onClick={onDismissCreatedNotice}><X size={14} /></button></div>}
@@ -68,7 +63,6 @@ export function RvSessionsScreen({
           ? <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} fixedMode="manual_rv" onBusyChange={handleBusyChange} />
           : <RvSessionPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} onBusyChange={handleBusyChange} />}
       </div>
-      {switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} kind="rv" activeWorkspaceId={workspace.id} onOpenWorkspace={onOpenWorkspace} onClose={closeSwitcher} />}
     </>
   );
 }
