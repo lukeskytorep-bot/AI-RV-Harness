@@ -1,6 +1,7 @@
-import { Check, CircleHelp, Crosshair, MessageCircle, X } from "lucide-react";
+import { Check, Crosshair, MessageCircle, X } from "lucide-react";
 import { useCallback, useState } from "react";
 
+import { ModuleHelpButton, ModuleHelpPanel } from "../../components/ModuleHelp";
 import { PageHeader } from "../../components/PageHeader";
 import { ProfileSelector } from "../../components/ProfileSelector";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
@@ -51,7 +52,7 @@ export function RvSessionsScreen({
         <PageHeader
           title={copy.rvSessionsNav}
           subtitle={`${workspace.name} · ${profile ? aiIsBeDisplayName(profile) : "—"}`}
-          action={<div className="workspace-header-actions"><ProfileSelector profiles={profiles} value={workspace.profileId} onChange={onProfileChange} language={settings.interfaceLanguage} disabled={operationBusy} /><button className="secondary-button" aria-expanded={helpOpen} aria-controls="rv-sessions-help-panel" onClick={() => setHelpOpen((current) => !current)}><CircleHelp size={15} />{settings.interfaceLanguage === "pl" ? "Jak działają sesje RV?" : "How do RV Sessions work?"}</button></div>}
+          action={<div className="module-header-actions"><ProfileSelector profiles={profiles} value={workspace.profileId} onChange={onProfileChange} language={settings.interfaceLanguage} disabled={operationBusy} /><ModuleHelpButton label={settings.interfaceLanguage === "pl" ? "Jak działają sesje RV?" : "How do RV Sessions work?"} icon={Crosshair} expanded={helpOpen} controlsId="rv-sessions-help-panel" onToggle={() => setHelpOpen((current) => !current)} /></div>}
         />
         {helpOpen && <RvSessionsHelpPanel language={settings.interfaceLanguage} />}
         {createdNotice && <div className="workspace-created-notice"><Check size={16} /><span><strong>{copy.workspaceCreated}</strong><small>{createdNotice.profileName} → {createdNotice.workspaceName}</small></span><button className="icon-button" onClick={onDismissCreatedNotice}><X size={14} /></button></div>}
@@ -70,8 +71,7 @@ export function RvSessionsScreen({
 
 function RvSessionsHelpPanel({ language }: { language: AppSettings["interfaceLanguage"] }) {
   const pl = language === "pl";
-  return <section id="rv-sessions-help-panel" className="panel workspace-help-panel" aria-label={pl ? "Jak działają sesje RV?" : "How do RV Sessions work?"}>
-    <h2>{pl ? "Jak działają sesje RV?" : "How do RV Sessions work?"}</h2>
+  return <ModuleHelpPanel id="rv-sessions-help-panel" title={pl ? "Jak działają sesje RV?" : "How do RV Sessions work?"} icon={Crosshair}>
     {pl ? <>
       <p>Sekcja <strong>Sesje RV</strong> obejmuje dwa sposoby pracy: <strong>Manual RV</strong> i sesję automatyczną. Każda sesja używa dokładnie wybranej tożsamości Viewera należącej do aktywnego Profilu. Jeżeli Profil ma kilka dostępnych tożsamości, możesz przełączać się tylko między nimi. Field Guide oraz — gdy są włączone — Viewer Notes są używane wyłącznie do odczytu. Zwykła sesja RV ich nie aktualizuje.</p>
       <p>W <strong>Manual RV</strong> rozmawiasz z Viewerem podobnie jak w Conversation, ale działasz jako Monitor. Możesz dołączyć jeden z wbudowanych protokołów: Full RCP, RV Lite Core, RV Lite Extended albo Protokół Telepatyczny, prowadzić Viewera własnymi wiadomościami oraz dodawać źródła i obrazy. Obecny tryb Manual RV nie uruchamia zapisanego Custom Protocol jako automatycznej sekwencji.</p>
@@ -85,5 +85,5 @@ function RvSessionsHelpPanel({ language }: { language: AppSettings["interfaceLan
       <p>For Full RCP and RV Lite, you may optionally add a special task concerning a specific subject, structure, object, activity, or event. If you use labels such as <strong>Subject A</strong> or <strong>Object A</strong>, the Target Reveal must clearly define what every label means. Otherwise, the Viewer cannot meaningfully compare the result with the target.</p>
       <p>General targets are used by Full RCP, RV Lite, and compatible Custom Protocols; telepathic targets are intended for the Telepathic Protocol. The Reveal remains hidden during the blind portion and is provided only after that portion ends.</p>
     </>}
-  </section>;
+  </ModuleHelpPanel>;
 }

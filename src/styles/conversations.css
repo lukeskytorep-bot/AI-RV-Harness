@@ -62,15 +62,6 @@
 .chat-date-separator::before, .chat-date-separator::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .chat-date-separator span { padding: 0 5px; }
 .conversation-start-time { flex: 0 0 auto; margin: 16px 22px 0; }
-.research-help-panel { margin-top: 18px; overflow: hidden; }
-.research-help-panel > summary { cursor: pointer; display: flex; justify-content: space-between; gap: 16px; padding: 18px 20px; }
-.research-help-panel > summary span { color: var(--muted); font-size: 12px; }
-.research-help-content { display: grid; gap: 12px; padding: 0 20px 20px; color: var(--text); line-height: 1.6; }
-.research-help-content p, .research-help-content ol, .research-help-content dl { margin: 0; }
-.research-help-content dl { display: grid; gap: 8px; }
-.research-help-content dl > div { display: grid; grid-template-columns: minmax(120px, 170px) 1fr; gap: 12px; padding-top: 8px; border-top: 1px solid var(--border); }
-.research-help-content dt { font-weight: 800; }
-.research-help-content dd { margin: 0; color: var(--muted); }
 .target-help-panel { margin-top: 16px; padding: 18px 20px; }
 .target-help-panel p { margin: 8px 0 0; color: var(--muted); line-height: 1.6; }
 .external-project-link { padding: 0; border: 0; color: var(--accent); background: transparent; font: inherit; cursor: pointer; text-align: left; }

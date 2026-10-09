@@ -33,7 +33,7 @@ describe("STAGE-7B shared component boundaries", () => {
   });
 
   it("keeps shared UI component implementations inside src/components", () => {
-    for (const component of ["PageHeader", "ProfileSelector", "EmptyState", "FormDialog", "ModelRouteSelect", "JudgeResults", "ProtocolDialog", "SafeMarkdown", "ResourceViewerDialogShell"]) {
+    for (const component of ["PageHeader", "ProfileSelector", "ModuleHelp", "EmptyState", "FormDialog", "ModelRouteSelect", "JudgeResults", "ProtocolDialog", "SafeMarkdown", "ResourceViewerDialogShell"]) {
       expect(fs.existsSync(path.join(srcRoot, "components", `${component}.tsx`)), `${component} must live in src/components`).toBe(true);
     }
   });

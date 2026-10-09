@@ -1,16 +1,3 @@
-.training-help-panel { margin-bottom: 15px; overflow: hidden; border: 1px solid rgba(23, 143, 167, .2); border-radius: 14px; background: var(--cyan-soft); }
-.training-help-panel > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 10px 14px; color: var(--cyan); cursor: pointer; list-style-position: inside; }
-.training-help-panel > summary::marker { color: var(--muted); }
-.training-help-title { min-width: 0; display: inline-flex; align-items: center; gap: 9px; }
-.training-help-title svg { flex: 0 0 auto; }
-.training-help-title strong { font-size: 11px; }
-.training-help-content { display: grid; gap: 10px; padding: 0 16px 14px 38px; border-top: 1px solid color-mix(in srgb, var(--cyan) 18%, transparent); }
-.training-help-content > p { margin: 12px 0 0; color: var(--muted-strong); font-size: 11px; line-height: 1.55; }
-.training-help-content section { display: grid; gap: 3px; }
-.training-help-content h3 { margin: 0; color: var(--text); font-size: 11px; }
-.training-help-content section p { margin: 0; color: var(--muted-strong); font-size: 11px; line-height: 1.55; }
-.training-help-content ul, .training-help-content ol { margin: 2px 0 0; padding-left: 20px; color: var(--muted-strong); font-size: 11px; line-height: 1.55; }
-.training-help-content li + li { margin-top: 2px; }
 .training-layout { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 15px; align-items: start; }
 .training-config { overflow: hidden; }
 .training-section { display: grid; gap: 9px; padding: 16px 19px; border-bottom: 1px solid var(--border); }
@@ -128,7 +115,6 @@
 @media (max-width: 680px) {
   .training-viewer-row { grid-template-columns: minmax(0, 1fr); }
   .training-round-control { align-items: stretch; flex-direction: column; }
-  .training-help-content { padding-left: 16px; }
 }
 
 @media (max-width: 520px) {

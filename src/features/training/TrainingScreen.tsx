@@ -5,6 +5,7 @@ import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 import { resolveSessionLanguage } from "../../domain/localization";
 import { findCredentialScopedModelByRouteKey, findModelByRouteKey, modelRouteKeyFor, resolveViewerDefault } from "../../modelRoutes";
 import { ModelRouteSelect } from "../../components/ModelRouteSelect";
+import { ModuleHelpButton, ModuleHelpPanel } from "../../components/ModuleHelp";
 import { PageHeader } from "../../components/PageHeader";
 import { useAppDialogs } from "../../components/AppDialogProvider";
 import { profileGenerationDefaults } from "../../profileViewerDefaults";
@@ -59,6 +60,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
   const text = labels(pl);
   const [surface, setSurface] = useState<"standard" | "telepathic">("standard");
+  const [helpOpen, setHelpOpen] = useState(false);
   const [telepathicBusy, setTelepathicBusy] = useState(false);
   const telepathicBusyGuard = useRef(false);
   const handleTelepathicBusyChange = useCallback((nextBusy: boolean) => {
@@ -296,7 +298,8 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   };
 
   if (surface === "telepathic") return <div className="page training-page">
-    <PageHeader title={text.training} subtitle={pl ? "Kontrolowany trening telepatyczny między 2–6 Profilami AI." : "Controlled telepathic training between 2–6 AI Profiles."} />
+    <PageHeader title={text.training} subtitle={pl ? "Kontrolowany trening telepatyczny między 2–6 Profilami AI." : "Controlled telepathic training between 2–6 AI Profiles."} action={<ModuleHelpButton label={pl ? "Jak działa trening telepatyczny AI–AI?" : "How does AI–AI Telepathic Training work?"} icon={GraduationCap} expanded={helpOpen} controlsId="training-help-panel" onToggle={() => setHelpOpen((current) => !current)} />} />
+    {helpOpen && <TelepathicTrainingHelpPanel pl={pl} />}
     <div className="conversation-surface-switch training-surface-switch" role="tablist" aria-label={pl ? "Tryb treningu" : "Training mode"}>
       <button role="tab" aria-selected={false} disabled={telepathicBusy} onClick={() => { if (!telepathicBusyGuard.current) setSurface("standard"); }}>{pl ? "Standardowy trening RV" : "Standard RV Training"}</button>
       <button role="tab" aria-selected={true} className="active">{pl ? "Trening telepatyczny AI–AI" : "AI–AI Telepathic Training"}</button>
@@ -305,12 +308,12 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   </div>;
 
   return <div className="page training-page">
-    <PageHeader title={text.training} subtitle={text.lead} />
+    <PageHeader title={text.training} subtitle={text.lead} action={<ModuleHelpButton label={pl ? "Jak działa AI Training?" : "How does AI Training work?"} icon={GraduationCap} expanded={helpOpen} controlsId="training-help-panel" onToggle={() => setHelpOpen((current) => !current)} />} />
+    {helpOpen && <TrainingHelpPanel pl={pl} packTotal={pack.total} packValid={pack.valid} />}
     <div className="conversation-surface-switch training-surface-switch" role="tablist" aria-label={pl ? "Tryb treningu" : "Training mode"}>
       <button role="tab" aria-selected={true} className="active">{pl ? "Standardowy trening RV" : "Standard RV Training"}</button>
       <button role="tab" aria-selected={false} disabled={busy} onClick={() => setSurface("telepathic")}>{pl ? "Trening telepatyczny AI–AI" : "AI–AI Telepathic Training"}</button>
     </div>
-    <TrainingHelpPanel pl={pl} packTotal={pack.total} packValid={pack.valid} />
     <div className="training-layout">
       <section className="panel training-config">
         <TrainingSection title={text.identity}>
@@ -351,13 +354,16 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
 }
 
 function TrainingHelpPanel({ pl, packTotal, packValid }: { pl: boolean; packTotal: number; packValid: boolean }) {
-  return <details className="training-help-panel">
-    <summary>
-      <span className="training-help-title"><GraduationCap size={20} /><strong>{pl ? "Jak działa AI Training?" : "How does AI Training work?"}</strong></span>
-      <span className={packValid ? "status-chip ready" : "status-chip next"}>{packTotal}/94</span>
-    </summary>
-    <div className="training-help-content">{pl ? <PolishTrainingHelp /> : <EnglishTrainingHelp />}</div>
-  </details>;
+  return <ModuleHelpPanel id="training-help-panel" title={pl ? "Jak działa AI Training?" : "How does AI Training work?"} icon={GraduationCap}>
+    <div className="module-help-meta"><span className={packValid ? "status-chip ready" : "status-chip next"}>{packTotal}/94</span></div>
+    {pl ? <PolishTrainingHelp /> : <EnglishTrainingHelp />}
+  </ModuleHelpPanel>;
+}
+
+function TelepathicTrainingHelpPanel({ pl }: { pl: boolean }) {
+  return <ModuleHelpPanel id="training-help-panel" title={pl ? "Jak działa trening telepatyczny AI–AI?" : "How does AI–AI Telepathic Training work?"} icon={GraduationCap}>
+    <p>{pl ? "W każdej rundzie jeden Profil AI przygotowuje i zamraża cel, a pozostałe opisują własne wrażenia bez znajomości celu. Nadawca rotuje automatycznie. Operator widzi pełny przebieg, ale modele przed Revealem otrzymują wyłącznie dane dozwolone dla swojej roli. Training korzysta z zamrożonych Field Guide i Viewer Notes, ale nigdy ich nie aktualizuje." : "In each round one AI Profile prepares and locks a target while the others describe their impressions without seeing it. The sender rotates automatically. The operator can see the full run, while models receive only role-appropriate information before Reveal. Training uses frozen Field Guide and Viewer Notes but never updates them."}</p>
+  </ModuleHelpPanel>;
 }
 
 function PolishTrainingHelp() {

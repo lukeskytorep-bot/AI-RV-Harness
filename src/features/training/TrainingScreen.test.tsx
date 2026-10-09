@@ -22,7 +22,8 @@ describe("TrainingScreen", () => {
 
     expect(html).toContain("AI Training");
     expect(html).toContain("How does AI Training work?");
-    expect(html).toContain("94/94");
+    expect(html).toContain('aria-controls="training-help-panel"');
+    expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("Number of rounds");
     expect(html).toContain("1–10 rounds");
     expect(html).toContain("Viewer model");
@@ -49,15 +50,17 @@ describe("TrainingScreen", () => {
       <TrainingScreen copy={getCopy("pl")} settings={plSettings} profiles={[]} workspaces={[]} repository={null} />,
     );
 
-    expect(en).toContain('<details class="training-help-panel">');
+    const source = fs.readFileSync(path.join(process.cwd(), "src/features/training/TrainingScreen.tsx"), "utf8");
     expect(en).toContain("How does AI Training work?");
-    expect(en).toContain("One Full Training round consists of 8 sessions");
-    expect(en).toContain("5 of 10 remaining");
-    expect(en).toContain("Pause and Resume");
+    expect(en).toContain('aria-expanded="false"');
     expect(pl).toContain("Jak działa AI Training?");
-    expect(pl).toContain("Jeden przebieg Full Training składa się z 8 sesji");
-    expect(pl).toContain("Pozostało 5 z 10");
-    expect(pl).toContain("Pauza i Resume");
+    expect(source).toContain("One Full Training round consists of 8 sessions");
+    expect(source).toContain("5 of 10 remaining");
+    expect(source).toContain("Pause and Resume");
+    expect(source).toContain("Jeden przebieg Full Training składa się z 8 sesji");
+    expect(source).toContain("Pozostało 5 z 10");
+    expect(source).toContain("Pauza i Resume");
+    expect(source).toContain("{packTotal}/94");
     expect(pl).not.toContain("Eksperymentalne");
   });
 

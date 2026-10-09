@@ -1,4 +1,4 @@
-import { CircleHelp, CircleStop, GraduationCap, Play, RefreshCw, Users } from "lucide-react";
+import { CircleStop, GraduationCap, Play, RefreshCw, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
@@ -67,7 +67,6 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
   const [history, setHistory] = useState<TelepathicSeriesState[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [helpOpen, setHelpOpen] = useState(false);
   const [viewRoundId, setViewRoundId] = useState<string | null>(null);
   const [configPreflight, setConfigPreflight] = useState<TelepathicTrainingConfigPreflight | null>(null);
   const [configPreflightSignature, setConfigPreflightSignature] = useState<string | null>(null);
@@ -314,8 +313,7 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
 
   return <div className="telepathic-exchange-stack telepathic-training-stack">
     <section className="panel telepathic-exchange-panel">
-      <div className="telepathic-section-heading"><div><GraduationCap size={18} /><span><strong>{pl ? "Trening telepatyczny AI–AI" : "AI–AI Telepathic Training"}</strong><small>{pl ? "2–6 Profili AI. Każda runda ma świeży kontekst; Field Guide i Viewer Notes są zamrożone i tylko do odczytu." : "2–6 AI Profiles. Every round starts fresh; Field Guide and Viewer Notes are frozen and read-only."}</small></span></div><button type="button" className="secondary-button" onClick={() => setHelpOpen((value) => !value)}><CircleHelp size={15} />{pl ? "Jak to działa?" : "How does it work?"}</button></div>
-      {helpOpen && <div className="training-requirement-note"><span>{pl ? "W każdej rundzie jeden Profil AI przygotowuje i zamraża cel, a pozostałe opisują własne wrażenia bez znajomości celu. Nadawca rotuje automatycznie. Operator widzi pełny przebieg, ale modele przed Revealem otrzymują wyłącznie dane dozwolone dla swojej roli. Training korzysta z zamrożonych Field Guide i Viewer Notes, ale nigdy ich nie aktualizuje." : "In each round one AI Profile prepares and locks a target while the others describe their impressions without seeing it. The sender rotates automatically. The operator can see the full run, while models receive only role-appropriate information before Reveal. Training uses frozen Field Guide and Viewer Notes but never updates them."}</span></div>}
+      <div className="telepathic-section-heading"><div><GraduationCap size={18} /><span><strong>{pl ? "Trening telepatyczny AI–AI" : "AI–AI Telepathic Training"}</strong><small>{pl ? "2–6 Profili AI. Każda runda ma świeży kontekst; Field Guide i Viewer Notes są zamrożone i tylko do odczytu." : "2–6 AI Profiles. Every round starts fresh; Field Guide and Viewer Notes are frozen and read-only."}</small></span></div></div>
     </section>
 
     {!activeSeries && <>
