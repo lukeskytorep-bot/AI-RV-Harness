@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../providers/native", () => ({
   discoverOpenRouterModelEndpoints: vi.fn(async () => ({ data: { endpoints: [
-    { tag: "test/large", context_length: 262_144, max_completion_tokens: 32_768 },
+    { tag: "test/large", context_length: 262_144, max_completion_tokens: 65_536 },
   ] } })),
   providerChatAttempt: vi.fn(),
 }));
