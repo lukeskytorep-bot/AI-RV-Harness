@@ -5,6 +5,7 @@ import type { EffectiveGenerationSettings, GenerationSettings, ProviderChatRespo
 export const ANALYTICAL_OUTPUT_INITIAL_TOKENS = 8192;
 export const ANALYTICAL_OUTPUT_RECOVERY_TOKENS = 16384;
 export const ANALYTICAL_CONTEXT_SAFETY_TOKENS = 1024;
+export type AnalyticalBudgetPolicy = "default" | "training_reveal";
 
 export function estimateProviderMessageTokens(messages: ProviderMessage[]): number {
   const textTokens = Math.ceil(messages.reduce((sum, message) => sum + message.content.length, 0) / 3.5);
@@ -16,17 +17,19 @@ function preferredAnalyticalOutputTokens(input: {
   operationKind: OperationKind;
   attempt: 0 | 1;
   learningObjectCapacityTokens?: number;
+  budgetPolicy?: AnalyticalBudgetPolicy;
 }): number {
   const profile = getOperationResourceProfile(input.operationKind);
   if (profile.outputPolicy === "capacity_bound_learning_object") {
     if (!input.learningObjectCapacityTokens || input.learningObjectCapacityTokens <= 0) {
       throw new Error(`Operation ${input.operationKind} requires a positive learning-object capacity.`);
     }
-    return learningObjectOutputAllowance(input.learningObjectCapacityTokens, input.attempt);
+    return learningObjectOutputAllowance(input.learningObjectCapacityTokens, input.attempt, input.budgetPolicy === "training_reveal");
   }
   if (profile.outputPolicy !== "reasoning_heavy_analytical") {
     throw new Error(`Operation ${input.operationKind} does not use analytical output recovery.`);
   }
+  if (input.budgetPolicy === "training_reveal") return input.attempt === 0 ? 16_384 : 32_768;
   return input.attempt === 0 ? ANALYTICAL_OUTPUT_INITIAL_TOKENS : ANALYTICAL_OUTPUT_RECOVERY_TOKENS;
 }
 
@@ -38,14 +41,14 @@ export function analyticalOutputBudget(input: {
   learningObjectCapacityTokens?: number;
   minimumUsefulTokens?: number;
   allowOpenRouterEndpointRecoveryEscalation?: boolean;
+  budgetPolicy?: AnalyticalBudgetPolicy;
 }): number {
   const preferred = preferredAnalyticalOutputTokens(input);
   // OpenRouter analytical recovery must reach endpoint-level capacity discovery
   // before a generic model-level maxOutputTokens value can reject a larger route.
   // The first attempt and every non-OpenRouter provider retain the existing hard cap.
-  const deferRecoveryOutputLimitToEndpointDiscovery = input.attempt === 1
-    && input.model.provider === "openrouter"
-    && input.allowOpenRouterEndpointRecoveryEscalation === true;
+  const deferRecoveryOutputLimitToEndpointDiscovery = input.model.provider === "openrouter"
+    && (input.budgetPolicy === "training_reveal" || (input.attempt === 1 && input.allowOpenRouterEndpointRecoveryEscalation === true));
   const routeMaximum = deferRecoveryOutputLimitToEndpointDiscovery
     ? preferred
     : input.model.capabilities.maxOutputTokens ?? preferred;
@@ -94,6 +97,7 @@ export async function callWithAnalyticalOutputRecovery(input: {
   recoveryReasoningMaxTokens?: number;
   recoveryReasoningMaxTokensSupported?: boolean;
   allowOpenRouterEndpointRecoveryEscalation?: boolean;
+  budgetPolicy?: AnalyticalBudgetPolicy;
   call: (settings: EffectiveGenerationSettings, attempt: 0 | 1, messages: ProviderMessage[]) => Promise<ProviderChatResponse>;
 }): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; attempt: 0 | 1 }> {
   let firstBudget = 0;
@@ -111,6 +115,7 @@ export async function callWithAnalyticalOutputRecovery(input: {
       learningObjectCapacityTokens: input.learningObjectCapacityTokens,
       minimumUsefulTokens: input.minimumUsefulTokens,
       allowOpenRouterEndpointRecoveryEscalation: input.allowOpenRouterEndpointRecoveryEscalation,
+      ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
     });
     if (attempt === 1 && budget <= firstBudget) throw new Error(`Provider exhausted the available analytical output budget; this route cannot increase beyond ${firstBudget} tokens.`);
     if (attempt === 0) firstBudget = budget;
@@ -123,9 +128,8 @@ export async function callWithAnalyticalOutputRecovery(input: {
     const capabilities = useExactReasoningCap
       ? { ...input.model.capabilities, reasoning: { ...input.model.capabilities.reasoning, supportsMaxTokens: true } }
       : input.model.capabilities;
-    const settingsCapabilities = attempt === 1
-      && input.model.provider === "openrouter"
-      && input.allowOpenRouterEndpointRecoveryEscalation === true
+    const settingsCapabilities = input.model.provider === "openrouter"
+      && (input.budgetPolicy === "training_reveal" || (attempt === 1 && input.allowOpenRouterEndpointRecoveryEscalation === true))
       ? { ...capabilities, maxOutputTokens: undefined }
       : capabilities;
     const settings = resolveGenerationSettings(settingsCapabilities, requestedSettings);

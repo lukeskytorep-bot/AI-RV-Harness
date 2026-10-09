@@ -357,6 +357,9 @@ describe("Training execution", () => {
     const outcome = await executeTrainingRun(input(run({ targetIds: ["t1"] }), testHarness));
     expect(outcome.run.status).toBe("Completed");
     expect(order).toEqual(["review", "field-guide", "viewer-notes"]);
+    expect(testHarness.dependencies!.runAutomaticPostRevealReview).toHaveBeenCalledWith(expect.objectContaining({ budgetPolicy: "training_reveal" }));
+    expect(testHarness.fieldGuideUpdate).toHaveBeenCalledWith(expect.objectContaining({ budgetPolicy: "training_reveal" }));
+    expect(testHarness.reflect).toHaveBeenCalledWith(expect.objectContaining({ budgetPolicy: "training_reveal" }));
   });
 
   it("checkpoints the exact Field Guide version created by this training update and passes that provenance to Viewer Notes", async () => {

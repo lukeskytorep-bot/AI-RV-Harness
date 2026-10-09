@@ -262,6 +262,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
             maxRetries: execution.transport.maxRetries,
             signal: input.signal,
             streamWorkflowContext: "training",
+            budgetPolicy: "training_reveal",
           });
           const completedReview = findCompletedAutomaticViewerReviewRecord(transcript, execution.language);
           viewerReview = completedReview?.content ?? null;
@@ -291,6 +292,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
           timeoutMs: execution.transport.requestTimeoutMs,
           maxRetries: execution.transport.maxRetries,
           signal: input.signal,
+          budgetPolicy: "training_reveal",
         });
         if (fieldGuideResult && !fieldGuideUpdateCompletesStage(fieldGuideResult.status)) {
           throw new Error(`Field Guide Update did not complete (${fieldGuideResult.status}).${fieldGuideResult.audit.failureMessage ? ` ${fieldGuideResult.audit.failureMessage}` : ""}`);
@@ -335,6 +337,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
           timeoutMs: execution.transport.requestTimeoutMs,
           maxRetries: execution.transport.maxRetries,
           signal: input.signal,
+          budgetPolicy: "training_reveal",
         });
         const sessionSnapshot = await input.repository.getSessionSnapshot(checkpoint.sessionId);
         const reflectionPacketSha256 = sessionSnapshot?.viewerNotes?.enabled

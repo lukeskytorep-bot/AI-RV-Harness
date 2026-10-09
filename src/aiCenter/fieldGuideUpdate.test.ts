@@ -218,6 +218,21 @@ describe("Field Guide Update", () => {
     expect(JSON.stringify(chat.mock.calls[1][0].messages)).toContain("second and final attempt");
   });
 
+
+  it("never decreases the durable attempt count across capacity retry analytical recovery", async () => {
+    const h = integrationHarness();
+    const huge = "x".repeat(9000);
+    const chat = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify({ decision: "UPDATE", fieldGuide: huge, changeSummary: "too long" }), "r1"))
+      .mockResolvedValueOnce({ content: "", reasoningContent: "thinking", finishReason: "length", providerRequestId: "r2", usage: {} })
+      .mockResolvedValueOnce(response('{"decision":"NO_CHANGE","changeSummary":"Recovered within the capacity limit"}', "r3"));
+    const result = await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat, budgetPolicy: "training_reveal" });
+    expect(result?.status).toBe("NO_CHANGE");
+    expect(chat).toHaveBeenCalledTimes(3);
+    expect(result?.audit.attemptCount).toBe(3);
+    expect(h.run.fieldGuideUpdates?.at(-1)?.attemptCount).toBe(3);
+  });
+
   it("records FAILED_CAPACITY after the second oversize proposal and leaves the old guide active", async () => {
     const h = integrationHarness();
     const huge = "x".repeat(9000);

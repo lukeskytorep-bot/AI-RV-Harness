@@ -18,7 +18,7 @@ import type {
   ViewerNotesSessionSnapshot,
 } from "./types";
 import { loadRevealImageForJudge } from "../artifacts/native";
-import { analyticalOutputBudget, callWithAnalyticalOutputRecovery } from "../providers/outputRecovery";
+import { analyticalOutputBudget, callWithAnalyticalOutputRecovery, type AnalyticalBudgetPolicy } from "../providers/outputRecovery";
 import { assertViewerNoteBasePair, viewerNoteBaseFromSnapshot } from "./baseVersion";
 import { requireExistingViewerIdentity } from "./viewerIdentitySelection";
 
@@ -432,6 +432,7 @@ export async function runViewerNoteReflection(input: {
   timeoutMs?: number;
   maxRetries?: number;
   signal?: AbortSignal;
+  budgetPolicy?: AnalyticalBudgetPolicy;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<ViewerNoteReflectionResult | null> {
   const [snapshot, reveal, evidence] = await Promise.all([
@@ -524,7 +525,7 @@ export async function runViewerNoteReflection(input: {
     { role: "user", content: prompt, ...(images.length ? { images } : {}) },
   ];
   try {
-    analyticalOutputBudget({ model: input.model, messages: reflectionMessages, operationKind: "viewer_notes_reflection", attempt: 0, learningObjectCapacityTokens: packet.capacityTokens });
+    analyticalOutputBudget({ model: input.model, messages: reflectionMessages, operationKind: "viewer_notes_reflection", attempt: 0, learningObjectCapacityTokens: packet.capacityTokens, ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}) });
   } catch (cause) {
     await input.repository.failViewerNoteReflection(runId, "FAILED_OUTPUT_PREFLIGHT", cause instanceof Error ? cause.message : String(cause));
     return null;
@@ -538,6 +539,7 @@ export async function runViewerNoteReflection(input: {
       operationKind: "viewer_notes_reflection",
       requestedSettings: snapshot.generationSettings.requested,
       learningObjectCapacityTokens: packet.capacityTokens,
+      ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
       recoveryInstruction: viewerNotesOutputRecoveryInstruction(snapshot.sessionLanguage),
       recoveryReasoningMaxTokens: 10_000,
       recoveryReasoningMaxTokensSupported: frozenSupportsExactReasoningMaxTokens(snapshot.capabilitySnapshot),
@@ -564,6 +566,7 @@ export async function runViewerNoteReflection(input: {
         messages: repairMessages,
         operationKind: "viewer_notes_reflection",
         learningObjectCapacityTokens: packet.capacityTokens,
+        ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
         call: (repairSettings) => executeProviderChat({
           config: input.providerConfig,
           modelId: input.model.modelId,
@@ -573,6 +576,7 @@ export async function runViewerNoteReflection(input: {
           signal: input.signal,
           configuredRetries: input.maxRetries,
           operationId: "viewer-notes.json-repair",
+          ...(input.budgetPolicy === "training_reveal" ? { operationKind: "viewer_notes_reflection" as const } : {}),
           attempt: input.chat,
         }),
       });
@@ -607,7 +611,8 @@ export async function runViewerNoteReflection(input: {
           operationKind: "viewer_notes_reflection",
           requestedSettings: snapshot.generationSettings.requested,
           learningObjectCapacityTokens: packet.capacityTokens,
-          call: (retrySettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: retryMessages, settings: retrySettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.capacity-retry", attempt: input.chat }),
+          ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
+          call: (retrySettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: retryMessages, settings: retrySettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.capacity-retry", ...(input.budgetPolicy === "training_reveal" ? { operationKind: "viewer_notes_reflection" as const } : {}), attempt: input.chat }),
         });
         finalResponse = retry.response;
         settings = retry.settings;
@@ -627,7 +632,8 @@ export async function runViewerNoteReflection(input: {
             messages: repairMessages,
             operationKind: "viewer_notes_reflection",
             learningObjectCapacityTokens: packet.capacityTokens,
-            call: (repairSettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: repairMessages, settings: repairSettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.capacity-json-repair", attempt: input.chat }),
+            ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
+            call: (repairSettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: repairMessages, settings: repairSettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.capacity-json-repair", ...(input.budgetPolicy === "training_reveal" ? { operationKind: "viewer_notes_reflection" as const } : {}), attempt: input.chat }),
           });
           finalResponse = repair.response;
           parsed = parseViewerNoteReflection(finalResponse.content);

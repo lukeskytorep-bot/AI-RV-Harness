@@ -39,6 +39,7 @@ import type { AppSettings, Profile, Workspace } from "../../types";
 import { SessionInspection } from "../../components/SessionInspection";
 import { executeTrainingRun } from "./trainingExecution";
 import { TelepathicTrainingPanel } from "./TelepathicTrainingPanel";
+import { prepareTrainingRunResume } from "./trainingResumeRecovery";
 
 type Copy = ReturnType<typeof getCopy>;
 type Mode = "full" | "partial";
@@ -95,6 +96,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   const [selectedSession, setSelectedSession] = useState<{ workspaceId: string; sessionId: string } | null>(null);
   const pauseRequested = useRef(false);
   const executionAbort = useRef<AbortController | null>(null);
+  const resumeGuard = useRef(false);
 
   const refresh = async () => {
     if (!repository) return;
@@ -263,6 +265,30 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     }
   };
 
+  const resumeExisting = async (run: TrainingRunRecord) => {
+    if (!repository || resumeGuard.current) return;
+    resumeGuard.current = true;
+    try {
+      const prepared = await prepareTrainingRunResume({
+        repository,
+        runId: run.id,
+        fallbackLanguage: language,
+        confirmUncertainViewerReview: (decision) => dialogs.confirm({
+          title: decision.title,
+          description: decision.description,
+          confirmLabel: decision.confirmLabel,
+          cancelLabel: decision.cancelLabel,
+          severity: "warning",
+        }),
+      });
+      if (prepared) await execute(prepared);
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      resumeGuard.current = false;
+    }
+  };
+
   const archiveExisting = async (run: TrainingRunRecord) => {
     if (!repository) return;
     const confirmed = await dialogs.confirm({
@@ -347,7 +373,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
         {!workspaceId && <div className="training-requirement-note"><ShieldCheck size={15} /><span>{text.workspaceRequired}</span></div>}
         {error && <div className="provider-error">{error}</div>}{exportMessage && <div className="storage-success"><Check size={14} />{exportMessage}</div>}
       </section>
-      <aside className="training-runs panel"><div className="panel-header"><span><Database size={18} /></span><h2>{text.history}</h2></div>{activeRun && <div className="active-training-run"><strong>{activeRun.name}</strong><span>{activeRun.completedTargetIds.length}/{activeRun.targetIds.length}</span><progress max={activeRun.targetIds.length} value={activeRun.completedTargetIds.length} /><small>{progressLine || activeRun.status}</small></div>}<div className="training-run-list">{runs.map((run) => <article key={run.id} className={expandedRunId === run.id ? "expanded" : ""}><div className="training-run-meta"><strong>#{run.runNumber} · {run.name}</strong><small>{run.status} · {run.completedTargetIds.length}/{run.targetIds.length} · Lite {run.protocolVariant}</small></div>{(run.status === "Paused" || run.status === "Interrupted" || run.status === "Running") && !busy && run.currentIndex < run.targetIds.length && <button className="secondary-button training-resume-button" onClick={() => void execute(run)}><Play size={13} />{text.resume}</button>}<div className="training-run-actions">{Boolean(run.sessionIds?.length) && <button className="secondary-button" onClick={() => setExpandedRunId((current) => current === run.id ? null : run.id)}>{text.showSessions}</button>}{Boolean(run.sessionIds?.length) && <button className="secondary-button" title={text.export} onClick={() => void exportExisting(run)}><Download size={14} />{text.saveTraining}</button>}<button className="secondary-button" disabled={busy && activeRun?.id === run.id} title={text.archiveTraining} onClick={() => void archiveExisting(run)}><Archive size={14} />{text.archive}</button></div>{expandedRunId === run.id && <div className="training-session-links">{run.sessionIds.map((sessionId, index) => <button key={sessionId} className={selectedSession?.sessionId === sessionId ? "active" : ""} onClick={() => setSelectedSession({ workspaceId: run.workspaceId, sessionId })}>{text.session} {index + 1} · {run.completedTargetIds[index] ?? sessionId}</button>)}</div>}</article>)}</div>{!runs.length && <p className="recent-session-empty">{text.noRuns}</p>}</aside>
+      <aside className="training-runs panel"><div className="panel-header"><span><Database size={18} /></span><h2>{text.history}</h2></div>{activeRun && <div className="active-training-run"><strong>{activeRun.name}</strong><span>{activeRun.completedTargetIds.length}/{activeRun.targetIds.length}</span><progress max={activeRun.targetIds.length} value={activeRun.completedTargetIds.length} /><small>{progressLine || activeRun.status}</small></div>}<div className="training-run-list">{runs.map((run) => <article key={run.id} className={expandedRunId === run.id ? "expanded" : ""}><div className="training-run-meta"><strong>#{run.runNumber} · {run.name}</strong><small>{run.status} · {run.completedTargetIds.length}/{run.targetIds.length} · Lite {run.protocolVariant}</small></div>{(run.status === "Paused" || run.status === "Interrupted" || run.status === "Running") && !busy && run.currentIndex < run.targetIds.length && <button className="secondary-button training-resume-button" onClick={() => void resumeExisting(run)}><Play size={13} />{text.resume}</button>}<div className="training-run-actions">{Boolean(run.sessionIds?.length) && <button className="secondary-button" onClick={() => setExpandedRunId((current) => current === run.id ? null : run.id)}>{text.showSessions}</button>}{Boolean(run.sessionIds?.length) && <button className="secondary-button" title={text.export} onClick={() => void exportExisting(run)}><Download size={14} />{text.saveTraining}</button>}<button className="secondary-button" disabled={busy && activeRun?.id === run.id} title={text.archiveTraining} onClick={() => void archiveExisting(run)}><Archive size={14} />{text.archive}</button></div>{expandedRunId === run.id && <div className="training-session-links">{run.sessionIds.map((sessionId, index) => <button key={sessionId} className={selectedSession?.sessionId === sessionId ? "active" : ""} onClick={() => setSelectedSession({ workspaceId: run.workspaceId, sessionId })}>{text.session} {index + 1} · {run.completedTargetIds[index] ?? sessionId}</button>)}</div>}</article>)}</div>{!runs.length && <p className="recent-session-empty">{text.noRuns}</p>}</aside>
     </div>
     {selectedSession && repository && <SessionInspection repository={repository} workspaceId={selectedSession.workspaceId} sessionId={selectedSession.sessionId} language={language} />}
   </div>;

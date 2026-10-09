@@ -387,4 +387,46 @@ describe("analytical output recovery", () => {
     expect(isOutputLimitFailure(new Error("Provider exhausted the available analytical output budget; this route cannot increase beyond 4096 tokens."))).toBe(true);
   });
 
+
+  it("uses 16k then 32k only for Training Reveal analytical review", async () => {
+    const budgets: number[] = [];
+    const call = vi.fn(async (settings) => {
+      budgets.push(settings.effective.maxOutputTokens ?? 0);
+      if (budgets.length === 1) return { content: "", reasoningContent: "thinking", finishReason: "length", usage: {} };
+      return { content: "complete review", finishReason: "stop", usage: {} };
+    });
+    const result = await callWithAnalyticalOutputRecovery({
+      model: { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 32768 } },
+      messages: [{ role: "user", content: "Training Reveal review" }],
+      operationKind: "post_reveal_viewer",
+      budgetPolicy: "training_reveal",
+      call,
+    });
+    expect(budgets).toEqual([16384, 32768]);
+    expect(result.attempt).toBe(1);
+  });
+
+  it("uses capacity + 16k then capacity + 32k for Training learning updates", async () => {
+    const budgets: number[] = [];
+    const call = vi.fn(async (settings) => {
+      budgets.push(settings.effective.maxOutputTokens ?? 0);
+      if (budgets.length === 1) return { content: "", reasoningContent: "thinking", finishReason: "length", usage: {} };
+      return { content: '{"decision":"NO_CHANGE"}', finishReason: "stop", usage: {} };
+    });
+    await callWithAnalyticalOutputRecovery({
+      model: { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 40000 } },
+      messages: [{ role: "user", content: "Training learning update" }],
+      operationKind: "field_guide_update",
+      learningObjectCapacityTokens: 2048,
+      budgetPolicy: "training_reveal",
+      call,
+    });
+    expect(budgets).toEqual([18432, 34816]);
+  });
+
+  it("does not change the default budgets outside Training Reveal", () => {
+    expect(analyticalOutputBudget({ model, messages: [{ role: "user", content: "Review" }], operationKind: "post_reveal_viewer", attempt: 0 })).toBe(8192);
+    expect(analyticalOutputBudget({ model, messages: [{ role: "user", content: "Notes" }], operationKind: "viewer_notes_reflection", learningObjectCapacityTokens: 2048, attempt: 0 })).toBe(10240);
+  });
+
 });

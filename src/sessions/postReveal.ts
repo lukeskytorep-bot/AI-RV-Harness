@@ -8,7 +8,7 @@ import { parsePostRevealTranscript } from "./postRevealTranscript";
 import type { InterfaceLanguage } from "../types";
 import { buildEffectiveMonitorPrompt } from "../resources/systemPrompts";
 import { politeRevealTransition } from "./courtesy";
-import { analyticalOutputBudget, callWithAnalyticalOutputRecovery, isOutputLimitFailure } from "../providers/outputRecovery";
+import { analyticalOutputBudget, callWithAnalyticalOutputRecovery, isOutputLimitFailure, type AnalyticalBudgetPolicy } from "../providers/outputRecovery";
 import { providerErrorDetails } from "../providers/providerError";
 import { appendPostRevealReviewCheckpoint, getPostRevealReviewRecoveryState, hasPendingAutomaticViewerInstruction } from "./postRevealRecovery";
 import { captureSessionContinuationState, hydrateSessionMessageContinuation, validateFrozenSessionContinuationRoute, validateSessionContinuationBudget } from "./providerContinuation";
@@ -42,6 +42,7 @@ export async function sendPostRevealTurn(input: {
   streamWorkflowContext?: StreamWorkflowContext;
   reuseExistingUserTurn?: boolean;
   onProviderAttemptStart?: () => void | Promise<void>;
+  budgetPolicy?: AnalyticalBudgetPolicy;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<{ transcript: string; response: ProviderChatResponse }> {
   const content = input.content.trim();
@@ -114,7 +115,7 @@ export async function sendPostRevealTurn(input: {
   }
   if (!input.reuseExistingUserTurn) messages.push({ role: "user", content });
   validateSessionContinuationBudget(messages);
-  analyticalOutputBudget({ model: input.model, messages, operationKind: "post_reveal_viewer", attempt: 0 });
+  analyticalOutputBudget({ model: input.model, messages, operationKind: "post_reveal_viewer", attempt: 0, ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}) });
   if (!input.reuseExistingUserTurn) await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
   const automaticTrainingReview = supportedAutomaticPostRevealReviewRequests(language).includes(content);
   const response = (await callWithAnalyticalOutputRecovery({
@@ -122,6 +123,7 @@ export async function sendPostRevealTurn(input: {
     messages,
     operationKind: "post_reveal_viewer",
     requestedSettings: snapshot.generationSettings?.requested,
+    ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
     ...(automaticTrainingReview ? { recoveryInstruction: postRevealOutputRecoveryInstruction(language), recoveryReasoningMaxTokens: 10_000, recoveryReasoningMaxTokensSupported: frozenSupportsExactReasoningMaxTokens(snapshot.capabilitySnapshot), allowOpenRouterEndpointRecoveryEscalation: true } : {}),
     call: (settings, _attempt, attemptMessages) => executeProviderChat({
       config: input.providerConfig,
@@ -194,6 +196,7 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
   streamWorkflowContext?: StreamWorkflowContext;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
   afterViewerReview?: (review: { content: string; transcript: string; response: ProviderChatResponse }) => Promise<void>;
+  budgetPolicy?: AnalyticalBudgetPolicy;
 }): Promise<string> {
   if (activeAutomaticPostRevealReviews.has(input.sessionId)) {
     throw new Error("Automatic post-Reveal review is already running for this session.");
@@ -254,6 +257,7 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
           signal: input.signal,
           streamWorkflowContext: input.streamWorkflowContext,
           reuseExistingUserTurn,
+          ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
           onProviderAttemptStart: async () => {
             if (providerAttemptStarted) return;
             await input.repository.assertPostRevealReviewLease?.(input.sessionId);

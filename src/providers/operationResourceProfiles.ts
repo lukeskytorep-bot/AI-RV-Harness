@@ -179,9 +179,9 @@ export function resolveOperationResourceProfile(input: {
   return getOperationResourceProfile(input.operationKind ?? inferOperationKind(input.operationId));
 }
 
-export function learningObjectOutputAllowance(capacityTokens: number, attempt: 0 | 1): number {
+export function learningObjectOutputAllowance(capacityTokens: number, attempt: 0 | 1, trainingReveal = false): number {
   const capacity = Math.max(1, Math.floor(capacityTokens));
   return capacity + (attempt === 0
-    ? LEARNING_OBJECT_INITIAL_HEADROOM_TOKENS
-    : LEARNING_OBJECT_RECOVERY_HEADROOM_TOKENS);
+    ? trainingReveal ? 16_384 : LEARNING_OBJECT_INITIAL_HEADROOM_TOKENS
+    : trainingReveal ? 32_768 : LEARNING_OBJECT_RECOVERY_HEADROOM_TOKENS);
 }
