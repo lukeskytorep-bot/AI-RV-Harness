@@ -12,7 +12,8 @@ describe("S2 streaming workflow boundaries", () => {
     expect(panel).toContain("streamingAssistant");
     expect(panel).toContain("onStreamEvent: handleVisibleStreamEvent");
     expect(messages).toContain("provisional-stream");
-    expect(engine).toContain('streamWorkflowContext: input.mode === "conversation" ? "conversation" : "manual_rv"');
+    expect(engine).toContain('streamWorkflowContext: "manual_rv"');
+    expect(engine).toContain('streamWorkflowContext: "conversation"');
     expect(engine.indexOf("onStreamEvent: input.onStreamEvent")).toBeLessThan(engine.indexOf('appendChatMessage(input.threadId, "assistant"'));
   });
 

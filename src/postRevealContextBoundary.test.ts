@@ -124,10 +124,10 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
       .replace("  LOCKED_BASE_VOCABULARY_VERSION,\n", "")
       .replace(/^\s*\{ id: "locked-viewer-base-vocabulary"[^\n]*\n/m, "")
       .replace(/^\s*\.\.\.\(input\.rvSystemPrompt\.fieldGuide[^\n]*\n/m, "");
-    // C5-R1 intentionally adds Anthropic signed-turn sanitizer stop wiring to the Telepathic
-    // controller. Freeze the accepted C5-R1 baseline while the Monitor prompt contract above
-    // remains separately byte-stable.
-    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("e29230f99554ea038ea7247f364477366596c21f36cb6ea419f08df9bab89c66");
+    // C5-R1 and Viewer Output Safety Step A intentionally change Viewer-only execution wiring
+    // in the Telepathic controller. Freeze that accepted baseline while the Monitor prompt contract
+    // above remains separately byte-stable.
+    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("1f364b941483f3d5ac35dc99ec0f4e8627fb19526bc730ccb5e8376051b124e7");
   });
 
   it("keeps AI Judge prompt, rubric, scoring and packet byte-identical while allowing ORP1 resource wiring in the engine", () => {
