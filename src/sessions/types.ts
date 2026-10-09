@@ -120,6 +120,7 @@ export interface SessionSnapshot {
   capabilitySnapshot: Record<string, unknown>;
   capabilityCapturedAt: string;
   generationSettings: EffectiveGenerationSettings;
+  viewerOutputPolicy?: { version: 1; initialTokens: number; recoveryTokens: number; preserveConfiguredBudget: boolean };
   sessionLanguage: InterfaceLanguage;
   protocol: {
     id: string;

@@ -42,6 +42,13 @@ describe("durable session replay", () => {
     expect(isRecoverableProviderInterruption(session, [event(1, "SESSION_STOPPED", ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON)])).toBe(false);
   });
 
+  it("recognizes persisted Viewer output-limit interruption without relying on stop-message wording", () => {
+    expect(isRecoverableProviderInterruption(session, [
+      event(1, "VIEWER_OUTPUT_INCOMPLETE", "partial", { reason: "output_limit", phase: 1 }),
+      event(2, "SESSION_STOPPED", "AUTO-STOP: Viewer step incomplete or provider/API failure — recovery exhausted"),
+    ])).toBe(true);
+  });
+
   it("replays saved responses and starts the provider only at the missing call", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
     const append = vi.fn().mockResolvedValue(undefined);
@@ -52,21 +59,92 @@ describe("durable session replay", () => {
       session,
       events: [
         event(1, "VIEWER_RESPONSE", "saved viewer", { usage: { totalTokens: 10 } }),
-        event(2, "MONITOR_TELEMETRY", "CONTINUE_PROTOCOL", { usage: { totalTokens: 2 } }),
-        event(3, "MONITOR_TELEMETRY", "truncated monitor output that must not be replayed", { failed: true, finishReason: "length" }),
+        event(2, "VIEWER_RESPONSE", "legacy partial viewer that must not be replayed", { finishReason: "length", usage: { totalTokens: 99 } }),
+        event(3, "MONITOR_TELEMETRY", "CONTINUE_PROTOCOL", { usage: { totalTokens: 2 } }),
+        event(4, "MONITOR_TELEMETRY", "truncated monitor output that must not be replayed", { failed: true, finishReason: "length" }),
       ],
       liveChat,
     });
     const request = { config: {} as never, modelId: "m", messages: [], settings: { requested: {}, effective: {}, omitted: [] } };
     expect((await replay.chat(request)).content).toBe("saved viewer");
-    expect((await replay.chat(request)).content).toBe("CONTINUE_PROTOCOL");
-    expect(liveChat).not.toHaveBeenCalled();
     expect((await replay.chat(request)).content).toBe("recovered");
+    expect(liveChat).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledWith(session.id, "BlindRunning");
     expect(append).toHaveBeenCalledWith(session.id, expect.objectContaining({ eventType: "SESSION_RESUMED" }));
   });
 
 
+
+  it("stops replay at the first unresolved Viewer step so a later phase cannot be substituted", async () => {
+    const liveChat = vi.fn().mockResolvedValue({ content: "live phase two", finishReason: "stop", usage: {} });
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ schemaVersion: 4 } as unknown as SessionSnapshot),
+      updateRvSessionState: vi.fn().mockResolvedValue(undefined),
+      appendSessionEvent: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AppRepository;
+    const replay = await createSessionReplay({
+      repository, session, liveChat,
+      events: [
+        event(1, "VIEWER_RESPONSE", "phase one", { phase: 1, accepted: true, finishReason: "stop" }),
+        event(2, "VIEWER_OUTPUT_INCOMPLETE", "partial phase two", { phase: 2, reason: "output_limit", accepted: false }),
+        event(3, "VIEWER_RESPONSE", "phase three must not replay", { phase: 3, accepted: true, finishReason: "stop" }),
+        event(4, "SESSION_STOPPED", "AUTO-STOP"),
+      ],
+    });
+    const request = { config: {} as never, modelId: "m", messages: [], settings: { requested: {}, effective: {}, omitted: [] } };
+    expect((await replay.chat(request)).content).toBe("phase one");
+    expect((await replay.chat(request)).content).toBe("live phase two");
+    expect(liveChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an incomplete attempt as resolved when a later accepted event matches the same step", async () => {
+    const liveChat = vi.fn().mockResolvedValue({ content: "live later", usage: {} });
+    const repository = { getSessionSnapshot: vi.fn().mockResolvedValue({ schemaVersion: 4 } as unknown as SessionSnapshot), updateRvSessionState: vi.fn(), appendSessionEvent: vi.fn() } as unknown as AppRepository;
+    const replay = await createSessionReplay({ repository, session, liveChat, events: [
+      event(1, "VIEWER_OUTPUT_INCOMPLETE", "partial", { phase: 1, source: "viewer", reason: "output_limit", accepted: false }),
+      event(2, "VIEWER_RESPONSE", "recovered phase one", { phase: 1, accepted: true, finishReason: "stop" }),
+      event(3, "VIEWER_RESPONSE", "phase two", { phase: 2, accepted: true, finishReason: "stop" }),
+    ] });
+    const request = { config: {} as never, modelId: "m", messages: [], settings: { requested: {}, effective: {}, omitted: [] } };
+    expect((await replay.chat(request)).content).toBe("recovered phase one");
+    expect((await replay.chat(request)).content).toBe("phase two");
+    expect(liveChat).not.toHaveBeenCalled();
+  });
+
+  it("stops legacy replay at a length-limited phase so a later legacy phase cannot shift into its place", async () => {
+    const liveChat = vi.fn().mockResolvedValue({ content: "live phase two", finishReason: "stop", usage: {} });
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ schemaVersion: 3 } as unknown as SessionSnapshot),
+      updateRvSessionState: vi.fn().mockResolvedValue(undefined),
+      appendSessionEvent: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AppRepository;
+    const replay = await createSessionReplay({ repository, session, liveChat, events: [
+      event(1, "VIEWER_RESPONSE", "legacy phase one", { phase: 1, finishReason: "stop" }),
+      event(2, "VIEWER_RESPONSE", "legacy partial phase two", { phase: 2, finishReason: "length" }),
+      event(3, "VIEWER_RESPONSE", "legacy phase three must not replay", { phase: 3, finishReason: "stop" }),
+    ] });
+    const request = { config: {} as never, modelId: "m", messages: [], settings: { requested: {}, effective: {}, omitted: [] } };
+    expect((await replay.chat(request)).content).toBe("legacy phase one");
+    expect((await replay.chat(request)).content).toBe("live phase two");
+    expect(liveChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay a Viewer response marked length as an accepted step", async () => {
+    const liveChat = vi.fn().mockResolvedValue({ content: "live recovery", finishReason: "stop", usage: {} });
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ schemaVersion: 4 } as unknown as SessionSnapshot),
+      updateRvSessionState: vi.fn().mockResolvedValue(undefined),
+      appendSessionEvent: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AppRepository;
+    const replay = await createSessionReplay({
+      repository, session,
+      events: [event(1, "VIEWER_RESPONSE", "legacy partial", { finishReason: "length" })],
+      liveChat,
+    });
+    const request = { config: {} as never, modelId: "m", messages: [], settings: { requested: {}, effective: {}, omitted: [] } };
+    expect((await replay.chat(request)).content).toBe("live recovery");
+    expect(liveChat).toHaveBeenCalledTimes(1);
+  });
 
   it("keeps historical Resume text-only when the saved snapshot has no continuation route", async () => {
     const config: ProviderConfig = { id: "pc", provider: "openrouter", label: "OpenRouter", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };

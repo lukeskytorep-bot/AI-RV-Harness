@@ -34,7 +34,7 @@ const model: ProviderModel = {
     reasoning: { supported: true, efforts: ["low", "high"], confidence: "provider_metadata" },
     temperature: { supported: true, min: 0, max: 2, confidence: "provider_metadata" },
     supportedParameters: ["reasoning_effort", "temperature", "max_tokens"],
-    maxOutputTokens: 8192,
+    maxOutputTokens: 65536, contextTokens: 131072,
     source: "provider",
     capturedAt: "2026-08-08T00:00:00.000Z",
   },
@@ -87,6 +87,44 @@ describe("automatic RCP controller", () => {
     expect(snapshots[0].rvSystemPrompt).toEqual(expect.objectContaining({ contentSha256: "c".repeat(64), fullContent: "FIXED PROFILE VIEWER PROMPT" }));
     expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity", "locked-viewer-base-vocabulary"]);
     expect(snapshots[0].researchConditionInstruction).toEqual(expect.objectContaining({ contentSha256: "d".repeat(64), fullContent: "CUSTOM VARIABLE A" }));
+  });
+
+  it("retries the same RCP phase at 16K -> 32K after length and accepts only recovery", async () => {
+    const log: string[] = [];
+    const budgets: number[] = [];
+    let calls = 0;
+    const result = await runAutomaticRcpSession({
+      repository: fakeRepository(log), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 8192 },
+      chat: async ({ settings, messages }) => {
+        budgets.push(settings.effective.maxOutputTokens ?? 0);
+        calls += 1;
+        if (calls === 1) return { content: "partial phase one", finishReason: "length", usage: {} };
+        if (calls === 2) { expect(messages.at(-1)?.content).toContain("Phase 1"); return { content: "complete phase one", finishReason: "stop", usage: {} }; }
+        return { content: `complete phase ${calls - 1}`, finishReason: "stop", usage: {} };
+      },
+    });
+    expect(result.state).toBe("AwaitingReveal");
+    expect(budgets.slice(0, 2)).toEqual([16384, 32768]);
+    expect(calls).toBe(7);
+    expect(result.transcript).not.toContain("partial phase one");
+    expect(result.transcript).toContain("complete phase one");
+    expect(log.filter((item) => item === "event:VIEWER_OUTPUT_INCOMPLETE")).toHaveLength(1);
+  });
+
+  it("stops RCP after a second length result without starting the next phase", async () => {
+    const log: string[] = [];
+    const prompts: string[] = [];
+    const result = await runAutomaticRcpSession({
+      repository: fakeRepository(log), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 8192 },
+      chat: async ({ messages }) => { prompts.push(messages.at(-1)?.content ?? ""); return { content: `partial ${prompts.length}`, finishReason: "length", usage: {} }; },
+    });
+    expect(result.state).toBe("Interrupted");
+    expect(prompts).toHaveLength(2);
+    expect(prompts.every((prompt) => prompt.includes("Phase 1"))).toBe(true);
+    expect(log.filter((item) => item === "event:VIEWER_OUTPUT_INCOMPLETE")).toHaveLength(2);
+    expect(log).not.toContain("sealed");
   });
 
   it("never sends reveal data during blind execution", async () => {

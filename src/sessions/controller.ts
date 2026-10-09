@@ -18,6 +18,7 @@ import { APP_VERSION } from "../version";
 import { createSessionCode } from "./sessionCode";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
+import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_POLICY_VERSION, VIEWER_OUTPUT_RECOVERY_TOKENS } from "./viewerOutputRecovery";
 import type { SpecialTaskInput } from "./specialTask";
 import { renderSpecialTask } from "./specialTask";
 import { politeRevealTransition, politeSessionGreeting } from "./courtesy";
@@ -165,6 +166,32 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     ...(input.researchConditionInstruction?.content.trim() ? [{ role: "system" as const, content: `[LOCKED RESEARCH CONDITION INSTRUCTION]\n${input.researchConditionInstruction.content.trim()}` }] : []),
   ];
   const stop = (reason: string) => stopRun(input, sessionId, sessionCode, transcript, reason, metrics, startedAtMs);
+  const runViewerCall = async (requestMessages: ProviderMessage[], onStreamEvent: ((event: ProviderStreamEvent) => void) | undefined, metadata: Record<string, unknown>) => {
+    let durationMs = 0;
+    const result = await callViewerWithOutputRecovery({
+      model: input.model, baseSettings: effectiveSettings, operationKind: input.operationKind ?? "rv_session_viewer", messages: requestMessages,
+      preserveConfiguredBudget: input.operationKind === "research_viewer",
+      call: async (settings, semanticAttempt) => {
+        validateSessionContinuationBudget(requestMessages);
+        const auth = costGuard.authorize(input.model, requestMessages, settings);
+        const started = Date.now();
+        try {
+          let response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: requestMessages.map((message) => ({ ...message })), settings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent });
+          input.onStreamPreview?.(null);
+          response = { ...response, usage: auth.success(response.usage) };
+          const elapsed = Date.now() - started; durationMs += elapsed; metrics = recordProviderRequest(metrics, response.usage, elapsed);
+          return response;
+        } catch (cause) {
+          input.onStreamPreview?.(null); auth.failure();
+          if (!input.signal?.aborted) metrics = recordProviderRequest(metrics, undefined, Date.now() - started);
+          await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...metadata, semanticAttempt, requestDurationMs: Date.now() - started } });
+          throw cause;
+        }
+      },
+      onIncompleteAttempt: (attempt) => input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: attempt.content, metadata: { ...metadata, ...viewerOutputAttemptMetadata(attempt) } }),
+    });
+    return { response: result.response, durationMs, acceptedMetadata: viewerOutputAcceptedMetadata(result) };
+  };
 
   await input.repository.createRvSession({
     id: sessionId,
@@ -198,6 +225,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     capabilitySnapshot: JSON.parse(JSON.stringify(input.model.capabilities)) as Record<string, unknown>,
     capabilityCapturedAt: input.model.capabilities.capturedAt,
     generationSettings: effectiveSettings,
+    viewerOutputPolicy: { version: VIEWER_OUTPUT_POLICY_VERSION, initialTokens: VIEWER_OUTPUT_INITIAL_TOKENS, recoveryTokens: VIEWER_OUTPUT_RECOVERY_TOKENS, preserveConfiguredBudget: input.operationKind === "research_viewer" },
     sessionLanguage: input.sessionLanguage,
     protocol: {
       id: input.protocol.id,
@@ -303,53 +331,17 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     });
     notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
 
-    let response: ProviderChatResponse | null = null;
-    let lastError = "";
+    let response: ProviderChatResponse;
     let responseDurationMs = 0;
-    {
-      const attempt = 0;
+    let responseAcceptedMetadata: Record<string, unknown> = {};
+    try {
+      const recovered = await runViewerCall([...messages], createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase }), { phase });
+      response = recovered.response; responseDurationMs = recovered.durationMs; responseAcceptedMetadata = recovered.acceptedMetadata;
+    } catch (cause) {
       if (input.signal?.aborted) return stop("USER STOP");
-      let costAuthorization;
-      try {
-        validateSessionContinuationBudget(messages);
-        costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
-      } catch (cause) {
-        if (cause instanceof CostGuardStop) return stop(cause.message);
-        throw cause;
-      }
-      const requestStartedAt = Date.now();
-      try {
-        response = await chat({
-          config: input.providerConfig,
-          modelId: input.model.modelId,
-          messages: [...messages],
-          settings: effectiveSettings,
-          timeoutMs: input.requestTimeoutMs,
-          signal: input.signal,
-          onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase }),
-        });
-        input.onStreamPreview?.(null);
-        response = { ...response, usage: costAuthorization.success(response.usage) };
-        responseDurationMs = Date.now() - requestStartedAt;
-        metrics = recordProviderRequest(metrics, response.usage, responseDurationMs);
-        if (!response.content.trim()) throw new Error("empty provider response");
-      } catch (cause) {
-        input.onStreamPreview?.(null);
-        costAuthorization.failure();
-        if (input.signal?.aborted) return stop("USER STOP");
-        if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
-        lastError = cause instanceof Error ? cause.message : String(cause);
-        await input.repository.appendSessionEvent(sessionId, {
-          eventType: "PROVIDER_ERROR",
-          role: "controller",
-          content: lastError,
-          metadata: { phase, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt },
-        });
-        response = null;
-      }
-    }
-    if (!response) {
-      return stop(`AUTO-STOP: repeated provider/API failures${lastError ? ` — ${lastError}` : ""}`);
+      if (cause instanceof CostGuardStop) return stop(cause.message);
+      const message = cause instanceof Error ? cause.message : String(cause);
+      return stop(`AUTO-STOP: Viewer phase incomplete or provider/API failure${message ? ` — ${message}` : ""}`);
     }
 
     const rawResponseContent = response.content;
@@ -363,12 +355,13 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         content: sanitized.finding?.fragment,
         metadata: { phase, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(rawResponseContent) },
       });
+      return stop("AUTO-STOP: Viewer output entered a clear repetition runaway; the partial result was not accepted.")
     }
     let continuationState;
     try {
       ({ state: continuationState } = await persistSessionAssistantResponse({
         repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : continuationRoute,
-        event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { phase, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
+        event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { phase, ...responseAcceptedMetadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
       }));
     } catch (cause) {
       if (cause instanceof SessionContinuationError) return stop(`AUTO-STOP: ${cause.message}`);
@@ -393,52 +386,18 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         messages.push({ role: "user", content: taskPrompt });
         await input.repository.appendSessionEvent(sessionId, { eventType: "SPECIAL_TASK_INJECTED", role: "controller", content: taskPrompt, metadata: { phase, recipient: "viewer" } });
 
-        let taskResponse: ProviderChatResponse | null = null;
-        let taskError = "";
+        let taskResponse: ProviderChatResponse;
         let taskDurationMs = 0;
-        {
-          const attempt = 0;
+        let taskAcceptedMetadata: Record<string, unknown> = {};
+        try {
+          const recovered = await runViewerCall([...messages], createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase, source: "special_task" }), { phase, source: "special_task" });
+          taskResponse = recovered.response; taskDurationMs = recovered.durationMs; taskAcceptedMetadata = recovered.acceptedMetadata;
+        } catch (cause) {
           if (input.signal?.aborted) return stop("USER STOP");
-          let costAuthorization;
-          try {
-            validateSessionContinuationBudget(messages);
-            costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
-          } catch (cause) {
-            if (cause instanceof CostGuardStop) return stop(cause.message);
-            throw cause;
-          }
-          const requestStartedAt = Date.now();
-          try {
-            taskResponse = await chat({
-              config: input.providerConfig,
-              modelId: input.model.modelId,
-              messages: [...messages],
-              settings: effectiveSettings,
-              timeoutMs: input.requestTimeoutMs,
-              signal: input.signal,
-              onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase, source: "special_task" }),
-            });
-            input.onStreamPreview?.(null);
-            taskResponse = { ...taskResponse, usage: costAuthorization.success(taskResponse.usage) };
-            taskDurationMs = Date.now() - requestStartedAt;
-            metrics = recordProviderRequest(metrics, taskResponse.usage, taskDurationMs);
-            if (!taskResponse.content.trim()) throw new Error("empty provider response");
-          } catch (cause) {
-            input.onStreamPreview?.(null);
-            costAuthorization.failure();
-            if (input.signal?.aborted) return stop("USER STOP");
-            if (!taskResponse) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
-            taskError = cause instanceof Error ? cause.message : String(cause);
-            await input.repository.appendSessionEvent(sessionId, {
-              eventType: "PROVIDER_ERROR",
-              role: "controller",
-              content: taskError,
-              metadata: { phase, attempt: attempt + 1, source: "special_task", requestDurationMs: Date.now() - requestStartedAt },
-            });
-            taskResponse = null;
-          }
+          if (cause instanceof CostGuardStop) return stop(cause.message);
+          const message = cause instanceof Error ? cause.message : String(cause);
+          return stop(`AUTO-STOP: Viewer failed during Special Task${message ? ` — ${message}` : ""}`);
         }
-        if (!taskResponse) return stop(`AUTO-STOP: Viewer failed during Special Task${taskError ? ` — ${taskError}` : ""}`);
 
         const rawTaskContent = taskResponse.content;
         const sanitizedTask = sanitizeRepetitiveOutput(rawTaskContent, input.sessionLanguage);
@@ -451,12 +410,13 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
             content: sanitizedTask.finding?.fragment,
             metadata: { phase, source: "special_task", rule: sanitizedTask.finding?.rule, originalLength: sanitizedTask.originalLength, retainedLength: sanitizedTask.retainedLength, rawOutputSha256: await sha256Text(rawTaskContent) },
           });
+          return stop("AUTO-STOP: Viewer output entered a clear repetition runaway during Special Task; the partial result was not accepted.")
         }
         let taskContinuationState;
         try {
           ({ state: taskContinuationState } = await persistSessionAssistantResponse({
             repository: input.repository, sessionId, response: taskResponse, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTask ? undefined : continuationRoute,
-            event: { eventType: "VIEWER_SPECIAL_TASK_RESPONSE", role: "assistant", content: taskResponse.content, metadata: { phase, finishReason: taskResponse.finishReason, actualModel: taskResponse.actualModel ?? "unavailable", providerRequestId: taskResponse.providerRequestId ?? "unavailable", usage: taskResponse.usage, usageAccuracy: taskResponse.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: taskDurationMs, ...(stopAfterSanitizedAnthropicTask ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
+            event: { eventType: "VIEWER_SPECIAL_TASK_RESPONSE", role: "assistant", content: taskResponse.content, metadata: { phase, ...taskAcceptedMetadata, finishReason: taskResponse.finishReason, actualModel: taskResponse.actualModel ?? "unavailable", providerRequestId: taskResponse.providerRequestId ?? "unavailable", usage: taskResponse.usage, usageAccuracy: taskResponse.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: taskDurationMs, ...(stopAfterSanitizedAnthropicTask ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
           }));
         } catch (cause) {
           if (cause instanceof SessionContinuationError) return stop(`AUTO-STOP: ${cause.message}`);
@@ -564,53 +524,17 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         });
         messages.push({ role: "user", content: decision.commandText });
 
-        let deepening: ProviderChatResponse | null = null;
-        let deepeningError = "";
+        let deepening: ProviderChatResponse;
         let deepeningDurationMs = 0;
-        {
-          const attempt = 0;
+        let deepeningAcceptedMetadata: Record<string, unknown> = {};
+        try {
+          const recovered = await runViewerCall([...messages], createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase, source: "monitor_intervention" }), { phase, source: "monitor_intervention", exchangeNumber });
+          deepening = recovered.response; deepeningDurationMs = recovered.durationMs; deepeningAcceptedMetadata = recovered.acceptedMetadata;
+        } catch (cause) {
           if (input.signal?.aborted) return stop("USER STOP");
-          let costAuthorization;
-          try {
-            validateSessionContinuationBudget(messages);
-            costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
-          } catch (cause) {
-            if (cause instanceof CostGuardStop) return stop(cause.message);
-            throw cause;
-          }
-          const requestStartedAt = Date.now();
-          try {
-            deepening = await chat({
-              config: input.providerConfig,
-              modelId: input.model.modelId,
-              messages: [...messages],
-              settings: effectiveSettings,
-              timeoutMs: input.requestTimeoutMs,
-              signal: input.signal,
-              onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase, source: "monitor_intervention" }),
-            });
-            input.onStreamPreview?.(null);
-            deepening = { ...deepening, usage: costAuthorization.success(deepening.usage) };
-            deepeningDurationMs = Date.now() - requestStartedAt;
-            metrics = recordProviderRequest(metrics, deepening.usage, deepeningDurationMs);
-            if (!deepening.content.trim()) throw new Error("empty provider response");
-          } catch (cause) {
-            input.onStreamPreview?.(null);
-            costAuthorization.failure();
-            if (input.signal?.aborted) return stop("USER STOP");
-            if (!deepening) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
-            deepeningError = cause instanceof Error ? cause.message : String(cause);
-            await input.repository.appendSessionEvent(sessionId, {
-              eventType: "PROVIDER_ERROR",
-              role: "controller",
-              content: deepeningError,
-              metadata: { phase, attempt: attempt + 1, source: "monitor_intervention", requestDurationMs: Date.now() - requestStartedAt },
-            });
-            deepening = null;
-          }
-        }
-        if (!deepening) {
-          return stop(`AUTO-STOP: Viewer failed after Monitor intervention${deepeningError ? ` — ${deepeningError}` : ""}`);
+          if (cause instanceof CostGuardStop) return stop(cause.message);
+          const message = cause instanceof Error ? cause.message : String(cause);
+          return stop(`AUTO-STOP: Viewer failed after Monitor intervention${message ? ` — ${message}` : ""}`);
         }
         const rawDeepeningContent = deepening.content;
         const sanitizedDeepening = sanitizeRepetitiveOutput(rawDeepeningContent, input.sessionLanguage);
@@ -623,12 +547,13 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
             content: sanitizedDeepening.finding?.fragment,
             metadata: { phase, source: "monitor_intervention", rule: sanitizedDeepening.finding?.rule, originalLength: sanitizedDeepening.originalLength, retainedLength: sanitizedDeepening.retainedLength, rawOutputSha256: await sha256Text(rawDeepeningContent) },
           });
+          return stop("AUTO-STOP: Viewer output entered a clear repetition runaway after Monitor intervention; the partial result was not accepted.")
         }
         let deepeningContinuationState;
         try {
           ({ state: deepeningContinuationState } = await persistSessionAssistantResponse({
             repository: input.repository, sessionId, response: deepening, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicDeepening ? undefined : continuationRoute,
-            event: { eventType: "VIEWER_MONITOR_RESPONSE", role: "assistant", content: deepening.content, metadata: { phase, exchangeNumber, finishReason: deepening.finishReason, actualModel: deepening.actualModel ?? "unavailable", providerRequestId: deepening.providerRequestId ?? "unavailable", usage: deepening.usage, usageAccuracy: deepening.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: deepeningDurationMs, ...(stopAfterSanitizedAnthropicDeepening ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
+            event: { eventType: "VIEWER_MONITOR_RESPONSE", role: "assistant", content: deepening.content, metadata: { phase, exchangeNumber, ...deepeningAcceptedMetadata, finishReason: deepening.finishReason, actualModel: deepening.actualModel ?? "unavailable", providerRequestId: deepening.providerRequestId ?? "unavailable", usage: deepening.usage, usageAccuracy: deepening.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: deepeningDurationMs, ...(stopAfterSanitizedAnthropicDeepening ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
           }));
         } catch (cause) {
           if (cause instanceof SessionContinuationError) return stop(`AUTO-STOP: ${cause.message}`);

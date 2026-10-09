@@ -11,7 +11,7 @@ import { retryChatTurn, sendChatTurn } from "./engine";
 const provider: ProviderConfig = { id: "provider", provider: "openrouter", label: "OR", credentialId: "cred", enabled: true, createdAt: "x", updatedAt: "x" };
 const model: ProviderModel = {
   providerConfigId: "provider", provider: "openrouter", modelId: "m", displayName: "M", route: "openrouter:m", recommended: false, rawMetadata: {}, refreshedAt: "x", pricing: {},
-  capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: ["max_tokens"], maxOutputTokens: 8192, source: "provider", capturedAt: "x" },
+  capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: ["max_tokens"], maxOutputTokens: 65536, contextTokens: 131072, source: "provider", capturedAt: "x" },
 };
 
 
@@ -116,7 +116,57 @@ describe("chat engine isolation", () => {
       chat: async (request) => { captured = request; return { content: "Contact", usage: {} }; },
     });
     expect(captured?.messages[0]).toEqual({ role: "system", content: "FIXED PROFILE VIEWER PROMPT" });
-    expect(captured?.settings.effective).toEqual({ reasoningEffort: "high", temperature: 0.9, maxOutputTokens: 8192 });
+    expect(captured?.settings.effective).toEqual({ reasoningEffort: "high", temperature: 0.9, maxOutputTokens: 16384 });
+  });
+
+  it("Manual RV clamps the first attempt to an 8K model limit and does not repeat the same capped budget after length", async () => {
+    const capped: ProviderModel = {
+      ...model,
+      capabilities: { ...model.capabilities, maxOutputTokens: 8192, contextTokens: 131072 },
+    };
+    const budgets: number[] = [];
+    await expect(sendChatTurn({
+      repository: repo([]),
+      threadId: "manual-8k-cap",
+      mode: "manual_rv",
+      language: "en",
+      providerConfig: provider,
+      model: capped,
+      content: "Start",
+      chat: async ({ settings }) => {
+        budgets.push(settings.effective.maxOutputTokens ?? 0);
+        return { content: "partial", finishReason: "length", usage: {} };
+      },
+    })).rejects.toMatchObject({ name: "ViewerOutputIncompleteError", reason: "no_larger_recovery_budget" });
+    expect(budgets).toEqual([8192]);
+  });
+
+  it("Manual RV retries one length-limited turn at 32K without appending the partial assistant", async () => {
+    const repository = repo([]);
+    const budgets: number[] = [];
+    let calls = 0;
+    const result = await sendChatTurn({
+      repository, threadId: "manual-recovery", mode: "manual_rv", language: "en", providerConfig: provider, model, content: "Start", requestedSettings: { maxOutputTokens: 8192 },
+      chat: async ({ settings }) => {
+        budgets.push(settings.effective.maxOutputTokens ?? 0);
+        calls += 1;
+        return calls === 1
+          ? { content: "partial", finishReason: "length", usage: {} }
+          : { content: "complete", finishReason: "stop", usage: {} };
+      },
+    });
+    expect(budgets).toEqual([16384, 32768]);
+    expect(result.assistant.content).toBe("complete");
+    const stored = await repository.listChatMessages("manual-recovery");
+    expect(stored.map((message) => message.content)).toEqual(["Start", "complete"]);
+    expect(stored[0].metadata?.viewerOutputAttempts).toEqual([expect.objectContaining({ reason: "output_limit", semanticAttempt: 1, recoveryLevel: 0, content: "partial" })]);
+    expect(stored[0].metadata?.viewerOutputAccepted).toEqual(expect.objectContaining({ accepted: true, semanticAttempt: 2, recoveryLevel: 1 }));
+  });
+
+  it("Conversation keeps its existing output budget policy", async () => {
+    let budget = 0;
+    await sendChatTurn({ repository: repo([]), threadId: "conversation-budget", mode: "conversation", language: "en", providerConfig: provider, model, content: "Hello", requestedSettings: { maxOutputTokens: 4096 }, chat: async ({ settings }) => { budget = settings.effective.maxOutputTokens ?? 0; return { content: "Hi", finishReason: "stop", usage: {} }; } });
+    expect(budget).toBe(4096);
   });
 
   it("blocks an oversized selected Source before any provider call and never truncates it", async () => {

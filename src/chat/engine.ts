@@ -1,6 +1,7 @@
 import { buildConversationPayload, buildManualRvPayload, type ScopedChatMessage } from "../domain/chatContext";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat, ProviderExecutionError } from "../providers/requestExecutor";
+import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, viewerOutputPreferredBudget } from "../sessions/viewerOutputRecovery";
 import { providerBindingEndpoint } from "../providers/native";
 import { captureGoogleContinuationState } from "../providers/googleContinuation";
 import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
@@ -127,6 +128,19 @@ async function replaceLastAttachmentAttempt(repository: ChatRepository, message:
   const attempts = [...(message.metadata?.attachmentAttempts ?? [])];
   if (attempts.length) attempts[attempts.length - 1] = attempt; else attempts.push(attempt);
   const metadata = { ...(message.metadata ?? {}), attachmentAttempts: attempts };
+  await repository.updateChatMessageMetadata(message.id, metadata);
+  return { ...message, metadata };
+}
+
+async function recordManualRvIncompleteAttempt(repository: ChatRepository, message: ChatMessage, attempt: Parameters<typeof viewerOutputAttemptMetadata>[0]): Promise<ChatMessage> {
+  const entry = { ...viewerOutputAttemptMetadata(attempt), content: attempt.content };
+  const metadata = { ...(message.metadata ?? {}), viewerOutputAttempts: [...(message.metadata?.viewerOutputAttempts ?? []), entry] };
+  await repository.updateChatMessageMetadata(message.id, metadata);
+  return { ...message, metadata };
+}
+
+async function recordManualRvAcceptedOutput(repository: ChatRepository, message: ChatMessage, accepted: Record<string, unknown>): Promise<ChatMessage> {
+  const metadata = { ...(message.metadata ?? {}), viewerOutputAccepted: accepted };
   await repository.updateChatMessageMetadata(message.id, metadata);
   return { ...message, metadata };
 }
@@ -259,7 +273,16 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   }
 
 
-  const maxOutputTokens = Math.floor(input.requestedSettings?.maxOutputTokens ?? input.model.capabilities.maxOutputTokens ?? DEFAULT_UNKNOWN_OUTPUT_LIMIT);
+  const requestedOutputTokens = input.requestedSettings?.maxOutputTokens;
+  const maxOutputTokens = Math.floor(
+    input.mode === "manual_rv"
+      ? viewerOutputPreferredBudget({
+        model: input.model,
+        explicitRequested: requestedOutputTokens,
+        recoveryLevel: 0,
+      })
+      : requestedOutputTokens ?? input.model.capabilities.maxOutputTokens ?? DEFAULT_UNKNOWN_OUTPUT_LIMIT,
+  );
   if (maxOutputTokens < 1 || (input.model.capabilities.maxOutputTokens && maxOutputTokens > input.model.capabilities.maxOutputTokens)) {
     throw new Error("Maximum output tokens must be a positive integer within the selected model limit.");
   }
@@ -278,20 +301,54 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   let response: ProviderChatResponse;
   let providerAttemptStarted = false;
   try {
-    response = await executeProviderChat({
-    config: input.providerConfig,
-    modelId: input.model.modelId,
-    messages,
-    settings,
-    timeoutMs: input.timeoutMs,
-    signal: input.signal,
-    configuredRetries: input.maxRetries,
-    operationId: input.mode === "conversation" ? "chat.conversation" : "chat.manual-rv",
-    streamWorkflowContext: input.mode === "conversation" ? "conversation" : "manual_rv",
-    onStreamEvent: input.onStreamEvent,
-    onAttemptStart: () => { providerAttemptStarted = true; },
-    attempt: input.chat,
-    });
+    if (input.mode === "manual_rv") {
+      const recovered = await callViewerWithOutputRecovery({
+        model: input.model,
+        baseSettings: settings,
+        operationKind: "manual_rv_viewer",
+        messages,
+        onIncompleteAttempt: async (attempt) => {
+          user = await recordManualRvIncompleteAttempt(input.repository, user, attempt);
+        },
+        call: (attemptSettings) => executeProviderChat({
+          config: input.providerConfig,
+          modelId: input.model.modelId,
+          messages,
+          settings: attemptSettings,
+          timeoutMs: input.timeoutMs,
+          signal: input.signal,
+          configuredRetries: input.maxRetries,
+          operationId: "chat.manual-rv",
+          operationKind: "manual_rv_viewer",
+          streamWorkflowContext: "manual_rv",
+          onStreamEvent: input.onStreamEvent,
+          onAttemptStart: () => { providerAttemptStarted = true; },
+          attempt: input.chat,
+        }),
+      });
+      response = recovered.response;
+      user = await recordManualRvAcceptedOutput(input.repository, user, {
+        ...viewerOutputAcceptedMetadata(recovered),
+        ...(response.finishReason ? { finishReason: response.finishReason } : {}),
+        ...(response.providerRequestId ? { providerRequestId: response.providerRequestId } : {}),
+        usage: response.usage,
+      });
+    } else {
+      response = await executeProviderChat({
+        config: input.providerConfig,
+        modelId: input.model.modelId,
+        messages,
+        settings,
+        timeoutMs: input.timeoutMs,
+        signal: input.signal,
+        configuredRetries: input.maxRetries,
+        operationId: "chat.conversation",
+        streamWorkflowContext: "conversation",
+        onStreamEvent: input.onStreamEvent,
+        onAttemptStart: () => { providerAttemptStarted = true; },
+        attempt: input.chat,
+      });
+    }
   } catch (cause) {
     if (hasAttachmentMetadata) {
       const beforeDispatch = cause instanceof ProviderExecutionError

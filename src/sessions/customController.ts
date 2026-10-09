@@ -1,5 +1,6 @@
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { createProviderChatExecutor } from "../providers/requestExecutor";
+import type { OperationKind } from "../providers/operationResourceProfiles";
 import type { StreamWorkflowContext } from "../providers/streamPresentation";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderStreamEvent } from "../providers/types";
 import type { CustomProtocolVersion } from "../protocols/types";
@@ -14,6 +15,7 @@ import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetri
 import type { RevealInput, RvSession, RvSessionState, SessionContinuationRouteSnapshot, SessionSnapshot } from "./types";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
+import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_POLICY_VERSION, VIEWER_OUTPUT_RECOVERY_TOKENS } from "./viewerOutputRecovery";
 import {
   LOCKED_IDENTITY_VERSION,
   LOCKED_BASE_VOCABULARY_VERSION,
@@ -57,6 +59,7 @@ export interface AutomaticCustomRunInput {
   signal?: AbortSignal;
   maxRetries?: number;
   requestTimeoutMs?: number;
+  operationKind?: OperationKind;
   streamWorkflowContext?: StreamWorkflowContext;
   onStreamPreview?: (preview: SessionStreamPreview | null) => void;
   maxSessionCostUsd?: number;
@@ -86,7 +89,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
-  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.custom", streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code } }) });
+  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.custom", operationKind: input.operationKind ?? "rv_session_viewer", streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code } }) });
   const messages: ProviderMessage[] = [
     ...(input.protocol.systemPrompt ? [{ role: "system" as const, content: input.protocol.systemPrompt }] : []),
     ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
@@ -96,6 +99,32 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
   let metrics = emptySessionRequestMetrics();
   let transcript = "";
   const stopRun = (reason: string) => stop(input, sessionId, sessionCode, transcript, reason, metrics, startedAtMs);
+  const runViewerCall = async (requestMessages: ProviderMessage[], onStreamEvent: ((event: ProviderStreamEvent) => void) | undefined, metadata: Record<string, unknown>) => {
+    let durationMs = 0;
+    const result = await callViewerWithOutputRecovery({
+      model: input.model, baseSettings: effectiveSettings, operationKind: input.operationKind ?? "rv_session_viewer", messages: requestMessages,
+      preserveConfiguredBudget: input.operationKind === "research_viewer",
+      call: async (settings, semanticAttempt) => {
+        validateSessionContinuationBudget(requestMessages);
+        const auth = costGuard.authorize(input.model, requestMessages, settings);
+        const started = Date.now();
+        try {
+          let response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: requestMessages.map((message) => ({ ...message })), settings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent });
+          input.onStreamPreview?.(null);
+          response = { ...response, usage: auth.success(response.usage) };
+          const elapsed = Date.now() - started; durationMs += elapsed; metrics = recordProviderRequest(metrics, response.usage, elapsed);
+          return response;
+        } catch (cause) {
+          input.onStreamPreview?.(null); auth.failure();
+          if (!input.signal?.aborted) metrics = recordProviderRequest(metrics, undefined, Date.now() - started);
+          await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...metadata, semanticAttempt, requestDurationMs: Date.now() - started } });
+          throw cause;
+        }
+      },
+      onIncompleteAttempt: (attempt) => input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: attempt.content, metadata: { ...metadata, ...viewerOutputAttemptMetadata(attempt) } }),
+    });
+    return { response: result.response, durationMs, acceptedMetadata: viewerOutputAcceptedMetadata(result) };
+  };
 
   await input.repository.createRvSession({
     id: sessionId,
@@ -129,6 +158,7 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
     capabilitySnapshot: JSON.parse(JSON.stringify(input.model.capabilities)) as Record<string, unknown>,
     capabilityCapturedAt: input.model.capabilities.capturedAt,
     generationSettings: effectiveSettings,
+    viewerOutputPolicy: { version: VIEWER_OUTPUT_POLICY_VERSION, initialTokens: VIEWER_OUTPUT_INITIAL_TOKENS, recoveryTokens: VIEWER_OUTPUT_RECOVERY_TOKENS, preserveConfiguredBudget: input.operationKind === "research_viewer" },
     sessionLanguage: input.sessionLanguage,
     protocol: {
       id: input.protocol.protocolId,
@@ -173,39 +203,18 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
     await input.repository.appendSessionEvent(sessionId, { eventType: "CONTROLLER_STEP", role: "controller", content: prompt, metadata: { step, customProtocol: input.protocol.versionId } });
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, step, undefined, metrics, startedAtMs);
 
-    let response: ProviderChatResponse | null = null;
-    let lastError = "";
+    let response: ProviderChatResponse;
     let responseDurationMs = 0;
-    {
-      const attempt = 0;
+    let responseAcceptedMetadata: Record<string, unknown> = {};
+    try {
+      const recovered = await runViewerCall([...messages], createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase: step }), { step });
+      response = recovered.response; responseDurationMs = recovered.durationMs; responseAcceptedMetadata = recovered.acceptedMetadata;
+    } catch (cause) {
       if (input.signal?.aborted) return stopRun("USER STOP");
-      let costAuthorization;
-      try {
-        validateSessionContinuationBudget(messages);
-        costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
-      } catch (cause) {
-        if (cause instanceof CostGuardStop) return stopRun(cause.message);
-        throw cause;
-      }
-      const requestStartedAt = Date.now();
-      try {
-        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase: step }) });
-        input.onStreamPreview?.(null);
-        response = { ...response, usage: costAuthorization.success(response.usage) };
-        responseDurationMs = Date.now() - requestStartedAt;
-        metrics = recordProviderRequest(metrics, response.usage, responseDurationMs);
-        if (!response.content.trim()) throw new Error("empty provider response");
-      } catch (cause) {
-        input.onStreamPreview?.(null);
-        costAuthorization.failure();
-        if (input.signal?.aborted) return stopRun("USER STOP");
-        if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
-        lastError = cause instanceof Error ? cause.message : String(cause);
-        await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { step, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
-        response = null;
-      }
+      if (cause instanceof CostGuardStop) return stopRun(cause.message);
+      const message = cause instanceof Error ? cause.message : String(cause);
+      return stopRun(`AUTO-STOP: Viewer step incomplete or provider/API failure${message ? ` — ${message}` : ""}`);
     }
-    if (!response) return stopRun(`AUTO-STOP: repeated provider/API failures${lastError ? ` — ${lastError}` : ""}`);
 
     const rawResponseContent = response.content;
     const sanitized = sanitizeRepetitiveOutput(rawResponseContent, input.sessionLanguage);
@@ -218,10 +227,11 @@ export async function runAutomaticCustomSession(input: AutomaticCustomRunInput):
         content: sanitized.finding?.fragment,
         metadata: { step, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(rawResponseContent) },
       });
+          return stopRun("AUTO-STOP: Viewer output entered a clear repetition runaway; the partial result was not accepted.");
     }
     let continuationState;
     try {
-      ({ state: continuationState } = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { step, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } }));
+      ({ state: continuationState } = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { step, ...responseAcceptedMetadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } }));
     } catch (cause) {
       if (cause instanceof SessionContinuationError) return stopRun(`AUTO-STOP: ${cause.message}`);
       throw cause;

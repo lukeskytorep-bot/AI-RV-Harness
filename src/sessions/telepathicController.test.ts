@@ -9,7 +9,7 @@ import { resumeTelepathicManualQuestionStage, runAutomaticTelepathicSession, tel
 const config: ProviderConfig = { id: "p", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
 const model: ProviderModel = {
   providerConfigId: "p", provider: "openrouter", modelId: "m", displayName: "M", route: "openrouter:m", pricing: {}, recommended: false, rawMetadata: {}, refreshedAt: "now",
-  capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: [], maxOutputTokens: 4096, source: "provider", capturedAt: "now" },
+  capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: [], maxOutputTokens: 65536, contextTokens: 131072, source: "provider", capturedAt: "now" },
 };
 
 function repository(log: string[], snapshots: SessionSnapshot[] = []) {
@@ -59,6 +59,27 @@ describe("automatic Telepathic Protocol controller", () => {
     expect(prompts[12]).toContain("T10 (Telepathic Summary)");
     expect(log.at(-1)).toBe("event:PRE_REVEAL_SEALED");
     expect(snapshots[0].telepathic).toEqual(expect.objectContaining({ controllerStepCount: 9, fixedDeepeningAfterSteps: [3, 4, 5] }));
+  });
+
+  it("retries the same telepathic Viewer step at 16K -> 32K after length", async () => {
+    const budgets: number[] = [];
+    const prompts: string[] = [];
+    let calls = 0;
+    const result = await runAutomaticTelepathicSession({
+      repository: repository([]), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getTelepathicProtocol("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+      step8Questions: { mode: "predefined", questions: ["What is the subject's primary intention?"] },
+      chat: async ({ messages, settings }) => {
+        budgets.push(settings.effective.maxOutputTokens ?? 0);
+        prompts.push(messages.at(-1)?.content ?? "");
+        calls += 1;
+        if (calls === 1) return { content: "partial", finishReason: "length", usage: {} };
+        return { content: `complete ${calls}`, finishReason: "stop", usage: {} };
+      },
+    });
+    expect(result.state).toBe("AwaitingReveal");
+    expect(budgets.slice(0, 2)).toEqual([16384, 32768]);
+    expect(prompts[0]).toBe(prompts[1]);
   });
 
   it("invokes AI Monitor after Steps 2–8 only and uses the telepathic whole-session scope after Step 8", async () => {

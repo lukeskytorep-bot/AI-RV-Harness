@@ -37,7 +37,7 @@ describe("repetition guard", () => {
     expect(sanitizeRepetitiveOutput(valid, "pl")).toEqual(expect.objectContaining({ truncated: false, content: valid }));
   });
 
-  it("truncates a clear runaway but preserves the session instead of aborting it", () => {
+  it("truncates a clear runaway suffix for diagnostics", () => {
     const valid = "Useful perceptual evidence before the provider loop.";
     const loop = `${valid}\n${Array(65).fill("identical runaway line").join("\n")}`;
     const result = sanitizeRepetitiveOutput(loop, "en");
@@ -51,4 +51,10 @@ describe("repetition guard", () => {
     const drawing = `\`\`\`text\n${Array(8).fill("+------------------------------+").join("\n")}\n\`\`\``;
     expect(analyzeRepetitiveOutput(drawing).severity).toBe("clear");
   });
+  it("does not classify a large but non-repetitive response above the old 120k character threshold as a loop", () => {
+    const large = Array.from({ length: 5000 }, (_, index) => `Observation ${index}: distinct spatial descriptor ${index % 97}, texture ${index % 53}, relation ${index % 31}.`).join("\n");
+    expect(large.length).toBeGreaterThan(120_000);
+    expect(analyzeRepetitiveOutput(large)).toEqual({ severity: "clear" });
+  });
+
 });

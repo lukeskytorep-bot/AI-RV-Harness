@@ -22,6 +22,7 @@ import { createSessionCode } from "./sessionCode";
 import type { RevealInput, RvSession, RvSessionState, SessionContinuationRouteSnapshot, SessionSnapshot } from "./types";
 import { CostGuardStop, SessionCostGuard } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
+import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_POLICY_VERSION, VIEWER_OUTPUT_RECOVERY_TOKENS } from "./viewerOutputRecovery";
 import type { SpecialTaskInput } from "./specialTask";
 import { renderSpecialTask } from "./specialTask";
 import { politeRevealTransition } from "./courtesy";
@@ -108,6 +109,43 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   let metrics = emptySessionRequestMetrics();
   let transcript = "";
   const stopRun = (reason: string) => stop(input, sessionId, sessionCode, transcript, reason, metrics, startedAtMs);
+  const runViewerCall = async (requestMessages: ProviderMessage[], onStreamEvent: ((event: ProviderStreamEvent) => void) | undefined, metadata: Record<string, unknown>) => {
+    let durationMs = 0;
+    const result = await callViewerWithOutputRecovery({
+      model: input.model,
+      baseSettings: effectiveSettings,
+      operationKind: input.operationKind ?? "rv_session_viewer",
+      messages: requestMessages,
+      preserveConfiguredBudget: input.operationKind === "research_viewer",
+      call: async (settings, semanticAttempt) => {
+        validateSessionContinuationBudget(requestMessages);
+        const costAuthorization = costGuard.authorize(input.model, requestMessages, settings);
+        const requestStartedAt = Date.now();
+        try {
+          let response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: requestMessages.map((message) => ({ ...message })), settings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent });
+          input.onStreamPreview?.(null);
+          response = { ...response, usage: costAuthorization.success(response.usage) };
+          const elapsed = Date.now() - requestStartedAt;
+          durationMs += elapsed;
+          metrics = recordProviderRequest(metrics, response.usage, elapsed);
+          return response;
+        } catch (cause) {
+          input.onStreamPreview?.(null);
+          costAuthorization.failure();
+          if (!input.signal?.aborted) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
+          await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...metadata, semanticAttempt, requestDurationMs: Date.now() - requestStartedAt } });
+          throw cause;
+        }
+      },
+      onIncompleteAttempt: (attempt) => input.repository.appendSessionEvent(sessionId, {
+        eventType: "VIEWER_OUTPUT_INCOMPLETE",
+        role: "assistant",
+        content: attempt.content,
+        metadata: { ...metadata, ...viewerOutputAttemptMetadata(attempt) },
+      }),
+    });
+    return { response: result.response, durationMs, acceptedMetadata: viewerOutputAcceptedMetadata(result) };
+  };
 
   await input.repository.createRvSession({
     id: sessionId,
@@ -142,6 +180,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     capabilitySnapshot: JSON.parse(JSON.stringify(input.model.capabilities)) as Record<string, unknown>,
     capabilityCapturedAt: input.model.capabilities.capturedAt,
     generationSettings: effectiveSettings,
+    viewerOutputPolicy: { version: VIEWER_OUTPUT_POLICY_VERSION, initialTokens: VIEWER_OUTPUT_INITIAL_TOKENS, recoveryTokens: VIEWER_OUTPUT_RECOVERY_TOKENS, preserveConfiguredBudget: input.operationKind === "research_viewer" },
     sessionLanguage: input.sessionLanguage,
     protocol: {
       id: input.protocol.id,
@@ -205,39 +244,20 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     await input.repository.appendSessionEvent(sessionId, { eventType: "CONTROLLER_STEP", role: "controller", content: prompt, metadata: { promptNumber, protocolFamily: "rv-lite" } });
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, promptNumber, undefined, metrics, startedAtMs);
 
-    let response: ProviderChatResponse | null = null;
-    let lastError = "";
+    let response: ProviderChatResponse;
     let responseDurationMs = 0;
-    {
-      const attempt = 0;
+    let responseAcceptedMetadata: Record<string, unknown> = {};
+    try {
+      const recovered = await runViewerCall([...messages], createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase: promptNumber }), { promptNumber });
+      response = recovered.response;
+      responseDurationMs = recovered.durationMs;
+      responseAcceptedMetadata = recovered.acceptedMetadata;
+    } catch (cause) {
       if (input.signal?.aborted) return stopRun("USER STOP");
-      let costAuthorization;
-      try {
-        validateSessionContinuationBudget(messages);
-        costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
-      } catch (cause) {
-        if (cause instanceof CostGuardStop) return stopRun(cause.message);
-        throw cause;
-      }
-      const requestStartedAt = Date.now();
-      try {
-        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase: promptNumber }) });
-        input.onStreamPreview?.(null);
-        response = { ...response, usage: costAuthorization.success(response.usage) };
-        responseDurationMs = Date.now() - requestStartedAt;
-        metrics = recordProviderRequest(metrics, response.usage, responseDurationMs);
-        if (!response.content.trim()) throw new Error("empty provider response");
-      } catch (cause) {
-        input.onStreamPreview?.(null);
-        costAuthorization.failure();
-        if (input.signal?.aborted) return stopRun("USER STOP");
-        if (!response) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
-        lastError = cause instanceof Error ? cause.message : String(cause);
-        await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: lastError, metadata: { promptNumber, attempt: attempt + 1, requestDurationMs: Date.now() - requestStartedAt } });
-        response = null;
-      }
+      if (cause instanceof CostGuardStop) return stopRun(cause.message);
+      const message = cause instanceof Error ? cause.message : String(cause);
+      return stopRun(`AUTO-STOP: Viewer step incomplete or provider/API failure${message ? ` — ${message}` : ""}`);
     }
-    if (!response) return stopRun(`AUTO-STOP: repeated provider/API failures${lastError ? ` — ${lastError}` : ""}`);
 
     const rawResponseContent = response.content;
     const sanitized = sanitizeRepetitiveOutput(rawResponseContent, input.sessionLanguage);
@@ -250,10 +270,11 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         content: sanitized.finding?.fragment,
         metadata: { promptNumber, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(rawResponseContent) },
       });
+          return stopRun("AUTO-STOP: Viewer output entered a clear repetition runaway; the partial result was not accepted.");
     }
     let continuationState;
     try {
-      ({ state: continuationState } = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { promptNumber, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } }));
+      ({ state: continuationState } = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { promptNumber, ...responseAcceptedMetadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } }));
     } catch (cause) {
       if (cause instanceof SessionContinuationError) return stopRun(`AUTO-STOP: ${cause.message}`);
       throw cause;
@@ -275,39 +296,20 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         messages.push({ role: "user", content: taskPrompt });
         await input.repository.appendSessionEvent(sessionId, { eventType: "SPECIAL_TASK_INJECTED", role: "controller", content: taskPrompt, metadata: { promptNumber, recipient: "viewer", injectAfter: "rv_lite_step_3" } });
 
-        let taskResponse: ProviderChatResponse | null = null;
-        let taskError = "";
+        let taskResponse: ProviderChatResponse;
         let taskDurationMs = 0;
-        {
-          const attempt = 0;
+        let taskAcceptedMetadata: Record<string, unknown> = {};
+        try {
+          const recovered = await runViewerCall([...messages], createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase: promptNumber, source: "special_task" }), { promptNumber, source: "special_task" });
+          taskResponse = recovered.response;
+          taskDurationMs = recovered.durationMs;
+          taskAcceptedMetadata = recovered.acceptedMetadata;
+        } catch (cause) {
           if (input.signal?.aborted) return stopRun("USER STOP");
-          let costAuthorization;
-          try {
-            validateSessionContinuationBudget(messages);
-            costAuthorization = costGuard.authorize(input.model, messages, effectiveSettings);
-          } catch (cause) {
-            if (cause instanceof CostGuardStop) return stopRun(cause.message);
-            throw cause;
-          }
-          const requestStartedAt = Date.now();
-          try {
-            taskResponse = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: effectiveSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent: createSessionStreamPreviewHandler({ emit: input.onStreamPreview, role: "viewer", phase: promptNumber, source: "special_task" }) });
-            input.onStreamPreview?.(null);
-            taskResponse = { ...taskResponse, usage: costAuthorization.success(taskResponse.usage) };
-            taskDurationMs = Date.now() - requestStartedAt;
-            metrics = recordProviderRequest(metrics, taskResponse.usage, taskDurationMs);
-            if (!taskResponse.content.trim()) throw new Error("empty provider response");
-          } catch (cause) {
-            input.onStreamPreview?.(null);
-            costAuthorization.failure();
-            if (input.signal?.aborted) return stopRun("USER STOP");
-            if (!taskResponse) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
-            taskError = cause instanceof Error ? cause.message : String(cause);
-            await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: taskError, metadata: { promptNumber, attempt: attempt + 1, source: "special_task", requestDurationMs: Date.now() - requestStartedAt } });
-            taskResponse = null;
-          }
+          if (cause instanceof CostGuardStop) return stopRun(cause.message);
+          const message = cause instanceof Error ? cause.message : String(cause);
+          return stopRun(`AUTO-STOP: Viewer failed during Special Task${message ? ` — ${message}` : ""}`);
         }
-        if (!taskResponse) return stopRun(`AUTO-STOP: Viewer failed during Special Task${taskError ? ` — ${taskError}` : ""}`);
 
         const rawTaskContent = taskResponse.content;
         const sanitizedTask = sanitizeRepetitiveOutput(rawTaskContent, input.sessionLanguage);
@@ -320,10 +322,11 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
             content: sanitizedTask.finding?.fragment,
             metadata: { promptNumber, source: "special_task", rule: sanitizedTask.finding?.rule, originalLength: sanitizedTask.originalLength, retainedLength: sanitizedTask.retainedLength, rawOutputSha256: await sha256Text(rawTaskContent) },
           });
+                  return stopRun("AUTO-STOP: Viewer output entered a clear repetition runaway during Special Task; the partial result was not accepted.");
         }
         let taskContinuationState;
         try {
-          ({ state: taskContinuationState } = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response: taskResponse, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTask ? undefined : continuationRoute, event: { eventType: "VIEWER_SPECIAL_TASK_RESPONSE", role: "assistant", content: taskResponse.content, metadata: { promptNumber, finishReason: taskResponse.finishReason, actualModel: taskResponse.actualModel ?? "unavailable", providerRequestId: taskResponse.providerRequestId ?? "unavailable", usage: taskResponse.usage, usageAccuracy: taskResponse.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: taskDurationMs, ...(stopAfterSanitizedAnthropicTask ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } }));
+          ({ state: taskContinuationState } = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response: taskResponse, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTask ? undefined : continuationRoute, event: { eventType: "VIEWER_SPECIAL_TASK_RESPONSE", role: "assistant", content: taskResponse.content, metadata: { promptNumber, ...taskAcceptedMetadata, finishReason: taskResponse.finishReason, actualModel: taskResponse.actualModel ?? "unavailable", providerRequestId: taskResponse.providerRequestId ?? "unavailable", usage: taskResponse.usage, usageAccuracy: taskResponse.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: taskDurationMs, ...(stopAfterSanitizedAnthropicTask ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } }));
         } catch (cause) {
           if (cause instanceof SessionContinuationError) return stopRun(`AUTO-STOP: ${cause.message}`);
           throw cause;

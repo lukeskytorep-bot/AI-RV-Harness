@@ -17,7 +17,6 @@ export interface SanitizedRepetitiveOutput {
   finding?: RepetitionInspection;
 }
 
-const MAX_OUTPUT_CHARACTERS = 120_000;
 const IDENTICAL_LINE_LIMIT = 60;
 const IDENTICAL_CHARACTER_LIMIT = 600;
 const MIN_PERIOD = 12;
@@ -34,17 +33,9 @@ export class RepetitionGuard {
 /**
  * Detects only unmistakable generation runaways. Repeated RV field names,
  * descriptors, touches and ordinary prose are valid protocol data and are not
- * scored. This is a last-resort output guillotine, not a semantic classifier.
+ * scored. This is a last-resort repetition-runaway detector, not a size limit or semantic classifier.
  */
 export function analyzeRepetitiveOutput(content: string): RepetitionInspection {
-  if (content.length > MAX_OUTPUT_CHARACTERS) {
-    return {
-      severity: "stop",
-      rule: "output-size-limit",
-      fragment: content.slice(MAX_OUTPUT_CHARACTERS, MAX_OUTPUT_CHARACTERS + 120),
-      cutAt: MAX_OUTPUT_CHARACTERS,
-    };
-  }
   return findCharacterRun(content)
     ?? findConsecutiveIdenticalLines(content)
     ?? findRepeatedTailBlock(content)
@@ -57,8 +48,8 @@ export function detectRepetitiveOutput(content: string): boolean {
 }
 
 /**
- * Preserves valid evidence, removes only the runaway suffix and appends a
- * durable marker. Controllers continue with the next protocol instruction.
+ * Preserves valid evidence, removes only an unmistakable runaway suffix and appends a
+ * durable marker. Callers must treat a truncated result as incomplete, never as an accepted protocol step.
  */
 export function sanitizeRepetitiveOutput(
   content: string,

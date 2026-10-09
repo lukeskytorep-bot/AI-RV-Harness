@@ -30,6 +30,8 @@ export interface ChatAttachmentAttemptMetadata {
 
 export interface ChatMessageMetadata {
   attachmentAttempts?: ChatAttachmentAttemptMetadata[];
+  viewerOutputAttempts?: Array<Record<string, unknown>>;
+  viewerOutputAccepted?: Record<string, unknown>;
 }
 
 export interface ChatMessage {
