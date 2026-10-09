@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderModel } from "../providers/types";
-import { callViewerWithOutputRecovery, viewerOutputAttemptSettings, viewerResponseCompletion } from "./viewerOutputRecovery";
+import { callViewerWithOutputRecovery, viewerDispatchOutcome, viewerOutputAttemptSettings, viewerResponseCompletion } from "./viewerOutputRecovery";
 
 const model: ProviderModel = {
   providerConfigId: "pc",
@@ -87,4 +87,38 @@ describe("Viewer output recovery", () => {
   it("can preserve a frozen Research output budget", () => {
     expect(viewerOutputAttemptSettings({ model, baseSettings: base, operationKind: "research_viewer", recoveryLevel: 0, preserveConfiguredBudget: true }).effective.maxOutputTokens).toBe(8192);
   });
+  it("can resume directly at the one allowed recovery attempt without repeating primary", async () => {
+    const call = vi.fn().mockResolvedValue({ content: "recovered", finishReason: "stop", usage });
+    const result = await callViewerWithOutputRecovery({
+      model, baseSettings: base, operationKind: "rv_session_viewer", messages: [{ role: "user", content: "same-step" }],
+      startRecoveryLevel: 1, priorEffectiveMaxOutputTokens: 16384, call,
+    });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(call.mock.calls[0][0].effective.maxOutputTokens).toBe(32768);
+    expect(call.mock.calls[0][2]).toEqual(expect.objectContaining({ semanticAttempt: 2, recoveryLevel: 1 }));
+    expect(result.semanticAttempt).toBe(2);
+  });
+
+  it("does not treat a generic AbortError as proof that dispatch never happened", () => {
+    expect(viewerDispatchOutcome(new DOMException("cancelled", "AbortError"))).toBe("unknown");
+  });
+
+  it("unwraps executor causeError when before_dispatch is explicitly known", () => {
+    const wrapped = {
+      name: "ProviderExecutionError",
+      causeError: { details: { code: "cancelled", message: "cancelled before dispatch", phase: "before_dispatch" } },
+    };
+    expect(viewerDispatchOutcome(wrapped)).toBe("not_dispatched");
+  });
+
+  it("does not dispatch a resumed recovery when the effective budget cannot exceed the persisted primary budget", async () => {
+    const capped = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 16384 } };
+    const call = vi.fn();
+    await expect(callViewerWithOutputRecovery({
+      model: capped, baseSettings: base, operationKind: "rv_session_viewer", messages: [{ role: "user", content: "same-step" }],
+      startRecoveryLevel: 1, priorEffectiveMaxOutputTokens: 16384, call,
+    })).rejects.toMatchObject({ name: "ViewerOutputIncompleteError", reason: "no_larger_recovery_budget" });
+    expect(call).not.toHaveBeenCalled();
+  });
+
 });

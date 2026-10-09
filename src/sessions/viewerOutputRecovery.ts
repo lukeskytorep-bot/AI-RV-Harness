@@ -2,6 +2,7 @@ import { resolveGenerationSettings } from "../providers/capabilities";
 import { estimateContextBudget } from "../chat/contextBudget";
 import type { OperationKind } from "../providers/operationResourceProfiles";
 import type { EffectiveGenerationSettings, ProviderChatResponse, ProviderMessage, ProviderModel } from "../providers/types";
+import { providerErrorDetails } from "../providers/providerError";
 
 export const VIEWER_OUTPUT_POLICY_VERSION = 1;
 export const VIEWER_OUTPUT_INITIAL_TOKENS = 16_384;
@@ -10,6 +11,7 @@ export const VIEWER_OUTPUT_RECOVERY_TOKENS = 32_768;
 export type ViewerOutputCompletion = "complete" | "output_limit" | "empty" | "provider_error" | "refusal";
 
 export interface ViewerOutputAttemptRecord {
+  attemptId: string;
   semanticAttempt: 1 | 2;
   recoveryLevel: 0 | 1;
   completion: Exclude<ViewerOutputCompletion, "complete">;
@@ -131,20 +133,53 @@ export function viewerOutputAttemptMetadata(attempt: ViewerOutputAttemptRecord):
     effectiveMaxOutputTokens: attempt.effectiveMaxOutputTokens,
     ...(attempt.finishReason ? { finishReason: attempt.finishReason } : {}),
     ...(attempt.providerRequestId ? { providerRequestId: attempt.providerRequestId } : {}),
+    attemptId: attempt.attemptId,
     usage: attempt.response.usage,
   };
 }
 
-export function viewerOutputAcceptedMetadata(result: { settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2 }): Record<string, unknown> {
+export function viewerOutputAcceptedMetadata(result: { settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2; attemptId?: string }): Record<string, unknown> {
   const effective = result.settings.effective.maxOutputTokens;
   return {
     viewerOutputPolicyVersion: VIEWER_OUTPUT_POLICY_VERSION,
     accepted: true,
+    ...(result.attemptId ? { attemptId: result.attemptId } : {}),
     semanticAttempt: result.semanticAttempt,
     recoveryLevel: result.semanticAttempt - 1,
     requestedMaxOutputTokens: result.settings.requested.maxOutputTokens ?? effective,
     effectiveMaxOutputTokens: effective,
   };
+}
+
+
+export interface ViewerOutputDispatchAttempt {
+  attemptId: string;
+  semanticAttempt: 1 | 2;
+  recoveryLevel: 0 | 1;
+  requestedMaxOutputTokens: number;
+  effectiveMaxOutputTokens: number;
+}
+
+
+function nestedProviderErrorDetails(cause: unknown): ReturnType<typeof providerErrorDetails> {
+  const direct = providerErrorDetails(cause);
+  if (direct) return direct;
+  if (!cause || typeof cause !== "object") return undefined;
+  const candidate = cause as { causeError?: unknown; cause?: unknown };
+  if (candidate.causeError !== undefined) {
+    const nested = nestedProviderErrorDetails(candidate.causeError);
+    if (nested) return nested;
+  }
+  if (candidate.cause !== undefined && candidate.cause !== cause) return nestedProviderErrorDetails(candidate.cause);
+  return undefined;
+}
+
+export function viewerDispatchOutcome(cause: unknown): "not_dispatched" | "unknown" {
+  // AbortError is not enough to prove that no request left the process. A user
+  // can abort while headers/body are already in flight, so only an explicit
+  // provider failure phase before_dispatch is safe to classify as unsent.
+  const details = nestedProviderErrorDetails(cause);
+  return details?.phase === "before_dispatch" ? "not_dispatched" : "unknown";
 }
 
 export async function callViewerWithOutputRecovery(input: {
@@ -153,18 +188,29 @@ export async function callViewerWithOutputRecovery(input: {
   operationKind?: OperationKind;
   messages: ProviderMessage[];
   preserveConfiguredBudget?: boolean;
-  call: (settings: EffectiveGenerationSettings, semanticAttempt: 1 | 2) => Promise<ProviderChatResponse>;
+  call: (settings: EffectiveGenerationSettings, semanticAttempt: 1 | 2, attempt: ViewerOutputDispatchAttempt) => Promise<ProviderChatResponse>;
   onIncompleteAttempt?: (attempt: ViewerOutputAttemptRecord) => void | Promise<void>;
-}): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2; attempts: ViewerOutputAttemptRecord[] }> {
+  startRecoveryLevel?: 0 | 1;
+  priorEffectiveMaxOutputTokens?: number;
+}): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2; attemptId?: string; attempts: ViewerOutputAttemptRecord[] }> {
   const kind = effectiveOperationKind(input.operationKind);
   if (!isViewerOutputRecoveryOperation(kind)) {
-    const response = await input.call(input.baseSettings, 1);
-    return { response, settings: input.baseSettings, semanticAttempt: 1, attempts: [] };
+    const budget = input.baseSettings.effective.maxOutputTokens ?? input.baseSettings.requested.maxOutputTokens ?? 1;
+    const dispatchAttempt: ViewerOutputDispatchAttempt = {
+      attemptId: `viewer_attempt_${crypto.randomUUID()}`,
+      semanticAttempt: 1,
+      recoveryLevel: 0,
+      requestedMaxOutputTokens: input.baseSettings.requested.maxOutputTokens ?? budget,
+      effectiveMaxOutputTokens: budget,
+    };
+    const response = await input.call(input.baseSettings, 1, dispatchAttempt);
+    return { response, settings: input.baseSettings, semanticAttempt: 1, attemptId: dispatchAttempt.attemptId, attempts: [] };
   }
 
   const attempts: ViewerOutputAttemptRecord[] = [];
-  let firstBudget = 0;
-  for (const recoveryLevel of [0, 1] as const) {
+  let firstBudget = input.startRecoveryLevel === 1 ? Math.max(0, input.priorEffectiveMaxOutputTokens ?? 0) : 0;
+  const levels = input.startRecoveryLevel === 1 ? ([1] as const) : ([0, 1] as const);
+  for (const recoveryLevel of levels) {
     const settings = viewerOutputAttemptSettings({
       model: input.model,
       baseSettings: input.baseSettings,
@@ -191,9 +237,10 @@ export async function callViewerWithOutputRecovery(input: {
     }
 
     const semanticAttempt = (recoveryLevel + 1) as 1 | 2;
-    const response = await input.call(settings, semanticAttempt);
+    const dispatchAttempt: ViewerOutputDispatchAttempt = { attemptId: `viewer_attempt_${crypto.randomUUID()}`, semanticAttempt, recoveryLevel, requestedMaxOutputTokens: settings.requested.maxOutputTokens ?? budget, effectiveMaxOutputTokens: budget };
+    const response = await input.call(settings, semanticAttempt, dispatchAttempt);
     const completion = viewerResponseCompletion(response);
-    if (completion === "complete") return { response, settings, semanticAttempt, attempts };
+    if (completion === "complete") return { response, settings, semanticAttempt, attemptId: dispatchAttempt.attemptId, attempts };
 
     const record: ViewerOutputAttemptRecord = {
       semanticAttempt,
@@ -205,6 +252,7 @@ export async function callViewerWithOutputRecovery(input: {
       ...(response.providerRequestId ? { providerRequestId: response.providerRequestId } : {}),
       content: response.content,
       response,
+      attemptId: dispatchAttempt.attemptId,
     };
     attempts.push(record);
     await input.onIncompleteAttempt?.(record);

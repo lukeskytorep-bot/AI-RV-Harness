@@ -11,7 +11,7 @@ function run(): TrainingRunRecord {
     targetIds: ["t"], completedTargetIds: [], sessionIds: ["s"], currentIndex: 0,
     categories: ["mixed_targets"], judgeModelRoutes: [], pauseAfterBlock: false, viewerNotesEnabled: true,
     activeTargetCheckpoint: { targetId: "t", sessionId: "s", stage: "session_revealed" },
-    executionSnapshot: { language: "en", generationSettings: {}, transport: { maxRetries: 1, requestTimeoutMs: 1000, sessionCodePrefix: "T", maxSessionCostUsd: 0 } },
+    executionSnapshot: { language: "en", generationSettings: {}, transport: { maxRetries: 1, requestTimeoutMs: 1000, sessionCodePrefix: "T" } },
     errors: [], createdAt: "now", updatedAt: "now",
   } as TrainingRunRecord;
 }

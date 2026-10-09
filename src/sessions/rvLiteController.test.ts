@@ -18,6 +18,7 @@ const target: TargetRecord = { id: "training_1", collection: "training", title: 
 
 function repository(log: string[], snapshots: SessionSnapshot[] = []) {
   return {
+    listSessionEvents: async () => [],
     createRvSession: async () => ({} as never),
     updateRvSessionState: async (_id: string, state: string) => { log.push(`state:${state}`); },
     appendSessionEvent: async (_id: string, event: { eventType: string }) => { log.push(event.eventType); },
@@ -27,7 +28,7 @@ function repository(log: string[], snapshots: SessionSnapshot[] = []) {
     sealPreReveal: async () => { log.push("sealed"); },
     acceptReveal: async () => { log.push("reveal"); },
     recordTargetUsage: async () => undefined,
-  } as unknown as Pick<AppRepository, "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "appendSessionEventWithProviderState" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage">;
+  } as unknown as Pick<AppRepository, "listSessionEvents" | "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "appendSessionEventWithProviderState" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage">;
 }
 
 describe("automatic RV Lite controller", () => {

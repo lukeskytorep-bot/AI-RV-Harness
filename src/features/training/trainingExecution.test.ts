@@ -194,7 +194,7 @@ function input(initial: TrainingRunRecord, testHarness: ReturnType<typeof harnes
     judges: [],
     targets,
     language: "en",
-    settings: { maxRetries: 2, requestTimeoutMs: 30_000, sessionCodePrefix: "RV", maxSessionCostUsd: 0 },
+    settings: { maxRetries: 2, requestTimeoutMs: 30_000, sessionCodePrefix: "RV" },
     dependencies: testHarness.dependencies,
     now: () => "later",
     ...extra,

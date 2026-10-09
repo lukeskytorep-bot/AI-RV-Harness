@@ -14,11 +14,12 @@ const protocol: CustomProtocolVersion = { protocolId: "custom", versionId: "cv1"
 
 function repository(log: string[], snapshots: SessionSnapshot[] = []) {
   return {
+    listSessionEvents: async () => [],
     createRvSession: async () => ({} as never), updateRvSessionState: async () => undefined,
     appendSessionEvent: async (_id: string, event: { eventType: string }) => { log.push(event.eventType); },
     updatePreRevealTranscript: async () => { log.push("saved"); }, saveSessionSnapshot: async (_id: string, snapshot: SessionSnapshot) => { snapshots.push(snapshot); },
     sealPreReveal: async () => { log.push("sealed"); }, acceptReveal: async () => undefined, recordTargetUsage: async () => undefined,
-  } as unknown as Pick<AppRepository, "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage">;
+  } as unknown as Pick<AppRepository, "listSessionEvents" | "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage">;
 }
 
 describe("automatic Custom Protocol controller", () => {

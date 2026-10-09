@@ -124,7 +124,8 @@ export interface ResearchConfig {
     requestTimeoutMs: number;
     maxRetries: number;
     defaultMaxOutputTokens: number;
-    maxSessionCostUsd: number;
+    /** Legacy v0.7.13 field; retained only for old locked-project compatibility and ignored by execution. */
+    maxSessionCostUsd?: number;
     sessionCodePrefix: string;
   };
   viewerControl?: ResearchViewerControl;

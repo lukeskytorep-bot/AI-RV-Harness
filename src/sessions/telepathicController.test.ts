@@ -14,6 +14,7 @@ const model: ProviderModel = {
 
 function repository(log: string[], snapshots: SessionSnapshot[] = []) {
   return {
+    listSessionEvents: async () => [],
     createRvSession: async () => ({} as never),
     updateRvSessionState: async (_id: string, state: string) => { log.push(`state:${state}`); },
     appendSessionEvent: async (_id: string, event: { eventType: string }) => { log.push(`event:${event.eventType}`); },
@@ -24,7 +25,7 @@ function repository(log: string[], snapshots: SessionSnapshot[] = []) {
     recordTargetUsage: async () => undefined,
     createMonitorRun: async () => "monitor_1",
     appendMonitorIntervention: async () => undefined,
-  } as unknown as Pick<AppRepository, "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage" | "createMonitorRun" | "appendMonitorIntervention">;
+  } as unknown as Pick<AppRepository, "listSessionEvents" | "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage" | "createMonitorRun" | "appendMonitorIntervention">;
 }
 
 describe("automatic Telepathic Protocol controller", () => {

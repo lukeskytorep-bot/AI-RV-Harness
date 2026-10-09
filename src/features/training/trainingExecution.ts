@@ -16,7 +16,7 @@ import type { TrainingFieldGuidePostUpdateCheckpoint, TrainingRunRecord, Trainin
 import { FACTORY_PLANNER_VERSION, FACTORY_ROUND_SIZE } from "../../training/curriculum";
 import type { AppSettings, InterfaceLanguage, Profile, ViewerSystemPromptSnapshot } from "../../types";
 
-type ExecutionSettings = Pick<AppSettings, "maxRetries" | "requestTimeoutMs" | "sessionCodePrefix" | "maxSessionCostUsd">;
+type ExecutionSettings = Pick<AppSettings, "maxRetries" | "requestTimeoutMs" | "sessionCodePrefix">;
 
 const defaultDependencies = {
   prepareFieldGuideForSession,
@@ -226,7 +226,6 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
           operationKind: "training_blind_viewer",
           streamWorkflowContext: "training",
           sessionCodePrefix: execution.transport.sessionCodePrefix,
-          ...(execution.transport.maxSessionCostUsd > 0 ? { maxSessionCostUsd: execution.transport.maxSessionCostUsd } : {}),
           onProgress: (sessionProgress) => input.onProgress?.({ index, total: working.targetIds.length, target, sessionProgress }),
         });
         if (session.state !== "Revealed") throw new Error(session.stopReason ?? "The training session was interrupted.");

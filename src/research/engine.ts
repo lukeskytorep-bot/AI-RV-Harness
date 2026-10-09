@@ -135,7 +135,6 @@ export async function executeResearchSessions(input: {
       operationKind: "research_viewer" as const,
       streamWorkflowContext: "research" as const,
       sessionCodePrefix: project.config.sessionPolicy?.sessionCodePrefix,
-      ...(project.config.sessionPolicy?.maxSessionCostUsd && project.config.sessionPolicy.maxSessionCostUsd > 0 ? { maxSessionCostUsd: project.config.sessionPolicy.maxSessionCostUsd } : {}),
       automaticTarget: target,
       researchProjectId: project.id,
       ...(condition.systemPrompt ? { rvSystemPrompt: condition.systemPrompt } : {}),

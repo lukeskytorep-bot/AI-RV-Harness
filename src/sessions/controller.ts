@@ -16,9 +16,10 @@ import type { RevealArtifactRecord, RevealInput, RvSession, RvSessionState, Sess
 import { buildAutomaticTargetReveal, targetHasSupportedReveal } from "../targets/service";
 import { APP_VERSION } from "../version";
 import { createSessionCode } from "./sessionCode";
-import { CostGuardStop, SessionCostGuard } from "./costGuard";
+import { withEstimatedCost } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
-import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_POLICY_VERSION, VIEWER_OUTPUT_RECOVERY_TOKENS } from "./viewerOutputRecovery";
+import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, viewerDispatchOutcome, VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_POLICY_VERSION, VIEWER_OUTPUT_RECOVERY_TOKENS } from "./viewerOutputRecovery";
+import { buildViewerStepId, resolveViewerResumeStart, viewerRequestFingerprintInput } from "./viewerResumeLedger";
 import type { SpecialTaskInput } from "./specialTask";
 import { renderSpecialTask } from "./specialTask";
 import { politeRevealTransition, politeSessionGreeting } from "./courtesy";
@@ -43,6 +44,7 @@ type SessionRepository = Pick<
   | "createRvSession"
   | "updateRvSessionState"
   | "appendSessionEvent"
+  | "listSessionEvents"
   | "updatePreRevealTranscript"
   | "saveSessionSnapshot"
   | "sealPreReveal"
@@ -67,7 +69,6 @@ export interface AutomaticRcpRunInput {
   operationKind?: OperationKind;
   streamWorkflowContext?: StreamWorkflowContext;
   onStreamPreview?: (preview: SessionStreamPreview | null) => void;
-  maxSessionCostUsd?: number;
   sessionCodePrefix?: string;
   automaticTarget?: TargetRecord;
   capturedAutomaticReveal?: RevealInput;
@@ -126,10 +127,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   if (effectiveSettings.omitted.length) {
     throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
   }
-  const costGuard = new SessionCostGuard(input.maxSessionCostUsd);
   const continuationRoute = input.resumeSession ? input.resumeContinuationRoute : captureSessionContinuationRoute(input.providerConfig, input.model);
-  costGuard.validateModel(input.model);
-  if (input.monitor) costGuard.validateModel(input.monitor.model);
   const automaticReveal = input.automaticTarget
     ? input.capturedAutomaticReveal ?? await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage)
     : undefined;
@@ -142,6 +140,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   let metrics = emptySessionRequestMetrics();
   let currentState: RvSessionState = "Draft";
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
+  let activeViewerAttemptId: string | undefined;
   const chat = createProviderChatExecutor({
     configuredRetries: maxRetries,
     operationId: "session.rcp",
@@ -152,7 +151,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
       eventType: "PROVIDER_ATTEMPT_FAILED",
       role: "controller",
       content: cause.message,
-      metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, billingStatus: ["response_body_read", "response_body_decode", "invalid_provider_json"].includes(cause.details.code) ? "unknown" : "not_reported" },
+      metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, ...(activeViewerAttemptId ? { attemptId: activeViewerAttemptId } : {}), dispatchOutcome: cause.details.phase === "before_dispatch" ? "not_dispatched" : "unknown", billingStatus: ["response_body_read", "response_body_decode", "invalid_provider_json"].includes(cause.details.code) ? "unknown" : "not_reported" },
     }),
   });
   const rawChat = (request: Parameters<typeof chat>[0]) => providerChatOnce(request, input.chat);
@@ -168,29 +167,40 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   const stop = (reason: string) => stopRun(input, sessionId, sessionCode, transcript, reason, metrics, startedAtMs);
   const runViewerCall = async (requestMessages: ProviderMessage[], onStreamEvent: ((event: ProviderStreamEvent) => void) | undefined, metadata: Record<string, unknown>) => {
     let durationMs = 0;
+    const requestSha256 = await sha256Text(viewerRequestFingerprintInput(requestMessages));
+    const stepId = buildViewerStepId("rcp", metadata);
+    const durable = input.resumeSession ? await resolveViewerResumeStart({ repository: input.repository, sessionId, stepKey: stepId, requestSha256 }) : { startRecoveryLevel: 0 as const };
+    const durableMetadata = { ...metadata, stepId, requestSha256 };
     const result = await callViewerWithOutputRecovery({
       model: input.model, baseSettings: effectiveSettings, operationKind: input.operationKind ?? "rv_session_viewer", messages: requestMessages,
       preserveConfiguredBudget: input.operationKind === "research_viewer",
-      call: async (settings, semanticAttempt) => {
+      startRecoveryLevel: durable.startRecoveryLevel,
+      priorEffectiveMaxOutputTokens: durable.priorEffectiveMaxOutputTokens,
+      call: async (settings, semanticAttempt, dispatchAttempt) => {
         validateSessionContinuationBudget(requestMessages);
-        const auth = costGuard.authorize(input.model, requestMessages, settings);
+        await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
+        activeViewerAttemptId = dispatchAttempt.attemptId;
         const started = Date.now();
         try {
           let response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: requestMessages.map((message) => ({ ...message })), settings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent });
           input.onStreamPreview?.(null);
-          response = { ...response, usage: auth.success(response.usage) };
+          response = { ...response, usage: withEstimatedCost(response.usage, input.model) };
           const elapsed = Date.now() - started; durationMs += elapsed; metrics = recordProviderRequest(metrics, response.usage, elapsed);
+          activeViewerAttemptId = undefined;
           return response;
         } catch (cause) {
-          input.onStreamPreview?.(null); auth.failure();
+          input.onStreamPreview?.(null);
           if (!input.signal?.aborted) metrics = recordProviderRequest(metrics, undefined, Date.now() - started);
-          await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...metadata, semanticAttempt, requestDurationMs: Date.now() - started } });
+          const dispatchOutcome = viewerDispatchOutcome(cause);
+          if (dispatchOutcome === "not_dispatched") await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_NOT_DISPATCHED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
+          await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...durableMetadata, attemptId: dispatchAttempt.attemptId, semanticAttempt, dispatchOutcome, requestDurationMs: Date.now() - started } });
+          activeViewerAttemptId = undefined;
           throw cause;
         }
       },
-      onIncompleteAttempt: (attempt) => input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: attempt.content, metadata: { ...metadata, ...viewerOutputAttemptMetadata(attempt) } }),
+      onIncompleteAttempt: (attempt) => input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: attempt.content, metadata: { ...durableMetadata, ...viewerOutputAttemptMetadata(attempt) } }),
     });
-    return { response: result.response, durationMs, acceptedMetadata: viewerOutputAcceptedMetadata(result) };
+    return { response: result.response, durationMs, acceptedMetadata: { stepId, ...viewerOutputAcceptedMetadata(result) } };
   };
 
   await input.repository.createRvSession({
@@ -339,7 +349,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
       response = recovered.response; responseDurationMs = recovered.durationMs; responseAcceptedMetadata = recovered.acceptedMetadata;
     } catch (cause) {
       if (input.signal?.aborted) return stop("USER STOP");
-      if (cause instanceof CostGuardStop) return stop(cause.message);
       const message = cause instanceof Error ? cause.message : String(cause);
       return stop(`AUTO-STOP: Viewer phase incomplete or provider/API failure${message ? ` — ${message}` : ""}`);
     }
@@ -373,7 +382,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
     if (stopAfterSanitizedAnthropicTurn) return stop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
-    if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
 
     if (input.signal?.aborted) return stop("USER STOP");
 
@@ -394,7 +402,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
           taskResponse = recovered.response; taskDurationMs = recovered.durationMs; taskAcceptedMetadata = recovered.acceptedMetadata;
         } catch (cause) {
           if (input.signal?.aborted) return stop("USER STOP");
-          if (cause instanceof CostGuardStop) return stop(cause.message);
           const message = cause instanceof Error ? cause.message : String(cause);
           return stop(`AUTO-STOP: Viewer failed during Special Task${message ? ` — ${message}` : ""}`);
         }
@@ -427,7 +434,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
         if (stopAfterSanitizedAnthropicTask) return stop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
-        if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
       }
     }
 
@@ -470,17 +476,16 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
               });
             },
             chat: async (request) => {
-              const costAuthorization = costGuard.authorize(input.monitor!.model, request.messages, request.settings);
               const requestStartedAt = Date.now();
               try {
                 const rawMonitorResponse = await rawChat({ ...request, signal: input.signal });
-                const monitorResponse = { ...rawMonitorResponse, usage: costAuthorization.success(rawMonitorResponse.usage) };
+                const monitorResponse = { ...rawMonitorResponse, usage: withEstimatedCost(rawMonitorResponse.usage, input.monitor!.model) };
                 const requestDurationMs = Date.now() - requestStartedAt;
                 metrics = recordProviderRequest(metrics, monitorResponse.usage, requestDurationMs);
                 await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", content: rawMonitorResponse.content, metadata: { phase, exchangeNumber, usage: monitorResponse.usage, requestDurationMs, reasoningSource: rawMonitorResponse.reasoningSource, reasoningCharacterCount: rawMonitorResponse.reasoningContent?.length ?? 0, failed: isIncompleteMonitorResponse(rawMonitorResponse) } });
                 return monitorResponse;
               } catch (cause) {
-                costAuthorization.failure();
+               
                 const requestDurationMs = Date.now() - requestStartedAt;
                 metrics = recordProviderRequest(metrics, undefined, requestDurationMs);
                 await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", metadata: { phase, exchangeNumber, requestDurationMs, failed: true } });
@@ -491,7 +496,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
             input.onStreamPreview?.(null);
           } catch (cause) {
             input.onStreamPreview?.(null);
-            if (cause instanceof CostGuardStop) return stop(cause.message);
             if (input.signal?.aborted) return stop("USER STOP");
             monitorError = cause instanceof Error ? cause.message : String(cause);
             await input.repository.appendSessionEvent(sessionId, {
@@ -504,7 +508,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         }
         if (!decision) return stop(`AUTO-STOP: Monitor provider failure — ${monitorError}`);
         if (input.signal?.aborted) return stop("USER STOP");
-        if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
         await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_DECISION", role: "monitor", content: decision.decision === "INTERVENE" ? decision.commandText : "CONTINUE_PROTOCOL", metadata: { phase, exchangeNumber, decision: decision.decision } });
         if (decision.decision === "CONTINUE_PROTOCOL") {
           await input.repository.appendMonitorIntervention(monitorRunId, { decision: "CONTINUE_PROTOCOL", rationale: JSON.stringify({ phase, exchangeNumber }) });
@@ -532,7 +535,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
           deepening = recovered.response; deepeningDurationMs = recovered.durationMs; deepeningAcceptedMetadata = recovered.acceptedMetadata;
         } catch (cause) {
           if (input.signal?.aborted) return stop("USER STOP");
-          if (cause instanceof CostGuardStop) return stop(cause.message);
           const message = cause instanceof Error ? cause.message : String(cause);
           return stop(`AUTO-STOP: Viewer failed after Monitor intervention${message ? ` — ${message}` : ""}`);
         }
@@ -564,7 +566,6 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
         if (stopAfterSanitizedAnthropicDeepening) return stop(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
-        if (costLimitExceeded(input.maxSessionCostUsd, metrics.costUsd)) return stop("AUTO-STOP: configured session cost limit exceeded");
       }
     }
   }
@@ -633,9 +634,6 @@ function validateRunInput(input: AutomaticRcpRunInput): void {
   }
 }
 
-function costLimitExceeded(limit: number | undefined, reportedCost: number | undefined): boolean {
-  return Boolean(limit && limit > 0 && reportedCost !== undefined && reportedCost >= limit);
-}
 
 export function appendPhaseTranscript(current: string, phase: number, prompt: string, content: string, language: InterfaceLanguage): string {
   const block = language === "pl"

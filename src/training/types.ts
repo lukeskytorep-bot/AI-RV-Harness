@@ -38,7 +38,8 @@ export interface TrainingExecutionSnapshot {
     maxRetries: number;
     requestTimeoutMs: number;
     sessionCodePrefix: string;
-    maxSessionCostUsd: number;
+    /** Legacy v0.7.13 field; ignored by execution. */
+    maxSessionCostUsd?: number;
   };
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
 }

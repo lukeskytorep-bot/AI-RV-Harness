@@ -387,4 +387,46 @@ describe("durable session replay", () => {
     expect(repository.listSessionEvents).toHaveBeenCalledTimes(2);
   });
 
+  it("does not resolve telepathic question 1 with the accepted answer to question 2", async () => {
+    const liveChat = vi.fn().mockResolvedValue({ content: "live q1", usage: {} });
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ schemaVersion: 3 } as unknown as SessionSnapshot),
+      updateRvSessionState: vi.fn().mockResolvedValue(undefined),
+      appendSessionEvent: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AppRepository;
+    const replay = await createSessionReplay({
+      repository,
+      session,
+      events: [
+        event(1, "VIEWER_OUTPUT_INCOMPLETE", "partial q1", { step: 8, source: "viewer", questionNumber: 1, recoveryLevel: 0, reason: "output_limit" }),
+        event(2, "VIEWER_RESPONSE", "answer q2", { step: 8, source: "viewer", questionNumber: 2, accepted: true, finishReason: "stop" }),
+      ],
+      liveChat,
+    });
+    const request = { config: {} as never, modelId: "m", messages: [], settings: { requested: {}, effective: {}, omitted: [] } };
+    expect((await replay.chat(request)).content).toBe("live q1");
+    expect(liveChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists Viewer attempt start exactly at the replay-to-live boundary before provider dispatch", async () => {
+    const calls: string[] = [];
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ schemaVersion: 3 } as unknown as SessionSnapshot),
+      updateRvSessionState: vi.fn().mockImplementation(async () => { calls.push("state-live"); }),
+      appendSessionEvent: vi.fn().mockImplementation(async (_sessionId: string, payload: { eventType: string }) => { calls.push(`event:${payload.eventType}`); }),
+    } as unknown as AppRepository;
+    const liveChat = vi.fn().mockImplementation(async () => { calls.push("provider"); return { content: "live", usage: {} }; });
+    const replay = await createSessionReplay({ repository, session, events: [event(1, "VIEWER_RESPONSE", "saved", { phase: 1, source: "viewer", stepId: "rcp:phase:1:viewer", accepted: true, finishReason: "stop" })], liveChat });
+    const request = { config: {} as never, modelId: "m", messages: [], settings: { requested: {}, effective: {}, omitted: [] } };
+
+    await replay.repository.appendSessionEvent(session.id, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { stepId: "rcp:phase:1:viewer", attemptId: "attempt-replay-p1", recoveryLevel: 0, semanticAttempt: 1 } });
+    expect(repository.appendSessionEvent).not.toHaveBeenCalled();
+    expect((await replay.chat(request)).content).toBe("saved");
+
+    await replay.repository.appendSessionEvent(session.id, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { stepId: "rcp:phase:2:viewer", attemptId: "attempt-live-p2", recoveryLevel: 1, semanticAttempt: 2 } });
+    expect(calls).toEqual(["state-live", "event:SESSION_RESUMED", "event:VIEWER_OUTPUT_ATTEMPT_STARTED"]);
+    expect((await replay.chat(request)).content).toBe("live");
+    expect(calls.at(-1)).toBe("provider");
+  });
+
 });

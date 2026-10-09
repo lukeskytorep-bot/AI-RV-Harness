@@ -4,6 +4,7 @@ import type { AppRepository } from "../storage/repository";
 import type { MonitorRunRecord } from "../monitor/types";
 import type { RvSession, SessionEventRecord } from "./types";
 import { hydrateSessionMessageContinuationForRequest, validateFrozenSessionContinuationRequest, validateSessionContinuationBudget } from "./providerContinuation";
+import { buildViewerStepId } from "./viewerResumeLedger";
 
 const SUCCESSFUL_PROVIDER_EVENTS = new Set([
   "VIEWER_RESPONSE",
@@ -52,30 +53,42 @@ export async function createSessionReplay(input: {
   const snapshot = await input.repository.getSessionSnapshot(input.session.id);
   if (!snapshot) throw new Error("The saved Session Snapshot required for Resume is unavailable.");
   const unresolvedCutoff = firstUnresolvedViewerIncompleteSequence(input.events);
-  const replayResponses = input.events
+  const replayEvents = input.events
     .filter((event) => (unresolvedCutoff === undefined || event.sequenceNumber < unresolvedCutoff) && successfulReplayEvent(event))
-    .sort((left, right) => left.sequenceNumber - right.sequenceNumber)
-    .map(eventResponse);
+    .sort((left, right) => left.sequenceNumber - right.sequenceNumber);
   let replayIndex = 0;
+  let pendingReplayStepId: string | undefined;
   let live = false;
   const base = input.repository;
 
-  const beginLiveContinuation = async (): Promise<void> => {
+  const beginLiveContinuation = async (viewerAttempt?: Record<string, unknown>): Promise<void> => {
     if (live) return;
     live = true;
     await base.updateRvSessionState(input.session.id, "BlindRunning");
     await base.appendSessionEvent(input.session.id, {
       eventType: "SESSION_RESUMED",
       role: "controller",
-      metadata: { replayedResponseCount: replayResponses.length, resumedAt: new Date().toISOString() },
+      metadata: { replayedResponseCount: replayEvents.length, resumedAt: new Date().toISOString(), ...(viewerAttempt ? { viewerAttempt } : {}) },
     });
   };
 
   const chat = async (request: ReplayChatRequest): Promise<ProviderChatResponse> => {
-    const replay = replayResponses[replayIndex];
-    if (replay) {
+    const replayEvent = replayEvents[replayIndex];
+    if (replayEvent) {
+      if (SUCCESSFUL_VIEWER_EVENTS.has(replayEvent.eventType)) {
+        const needsExactIdentity = typeof replayEvent.metadata?.stepId === "string"
+          || typeof replayEvent.metadata?.questionNumber === "number"
+          || typeof replayEvent.metadata?.exchangeNumber === "number";
+        if (!pendingReplayStepId && needsExactIdentity) {
+          throw new Error("Resume replay reached an identity-sensitive persisted Viewer response without an exact current step identity.");
+        }
+        if (pendingReplayStepId && !replayEventMatchesStepId(replayEvent, pendingReplayStepId)) {
+          throw new Error(`Resume replay step mismatch: expected ${pendingReplayStepId}; persisted event ${replayEvent.id} belongs to a different Viewer step.`);
+        }
+      }
       replayIndex += 1;
-      return replay;
+      pendingReplayStepId = undefined;
+      return eventResponse(replayEvent);
     }
     await beginLiveContinuation();
     let messages = request.messages;
@@ -84,8 +97,11 @@ export async function createSessionReplay(input: {
       ? validateFrozenSessionContinuationRequest(snapshot, request.config, request.modelId)
       : undefined;
     if (frozenRoute) {
-      const viewerEvents = (await base.listSessionEvents(input.session.id))
-        .filter((event) => ["VIEWER_RESPONSE", "VIEWER_SPECIAL_TASK_RESPONSE", "VIEWER_MONITOR_RESPONSE"].includes(event.eventType) && successfulReplayEvent(event))
+      const persistedEvents = await base.listSessionEvents(input.session.id);
+      const resumedSequence = Math.max(0, ...persistedEvents.filter((event) => event.eventType === "SESSION_RESUMED").map((event) => event.sequenceNumber));
+      const viewerEvents = persistedEvents
+        .filter((event) => SUCCESSFUL_VIEWER_EVENTS.has(event.eventType) && successfulReplayEvent(event))
+        .filter((event) => unresolvedCutoff === undefined || event.sequenceNumber < unresolvedCutoff || (resumedSequence > 0 && event.sequenceNumber > resumedSequence))
         .sort((left, right) => left.sequenceNumber - right.sequenceNumber);
       let viewerIndex = 0;
       messages = [];
@@ -109,17 +125,50 @@ export async function createSessionReplay(input: {
         if (!input.monitorRun) throw new Error("The saved AI Monitor run required for continuation is unavailable.");
         return input.monitorRun.id;
       };
+      if (property === "appendSessionEvent" && !live) return async (sessionId: string, payload: Parameters<AppRepository["appendSessionEvent"]>[1]) => {
+        if (payload.eventType === "VIEWER_OUTPUT_ATTEMPT_STARTED") {
+          const stepId = typeof payload.metadata?.stepId === "string" ? payload.metadata.stepId : undefined;
+          if (replayIndex < replayEvents.length) {
+            if (!stepId) throw new Error("Resume replay requires an exact stepId before replaying a Viewer response.");
+            pendingReplayStepId = stepId;
+            return undefined;
+          }
+          await beginLiveContinuation(payload.metadata ?? undefined);
+          return base.appendSessionEvent(sessionId, payload);
+        }
+        return undefined;
+      };
       if (!live && typeof property === "string" && SUPPRESSED_REPLAY_WRITES.has(property)) return async () => undefined;
       const value = Reflect.get(target, property, receiver) as unknown;
       return typeof value === "function" ? value.bind(target) : value;
     },
   }) as AppRepository;
 
-  return { repository, chat, replayedResponseCount: replayResponses.length };
+  return { repository, chat, replayedResponseCount: replayEvents.length };
+}
+
+const SUCCESSFUL_VIEWER_EVENTS = new Set(["VIEWER_RESPONSE", "VIEWER_SPECIAL_TASK_RESPONSE", "VIEWER_MONITOR_RESPONSE"]);
+
+function replayEventMatchesStepId(event: SessionEventRecord, expectedStepId: string): boolean {
+  const exact = typeof event.metadata?.stepId === "string" ? event.metadata.stepId : undefined;
+  if (exact) return exact === expectedStepId;
+  const scope = expectedStepId.split(":", 1)[0];
+  if (!["rcp", "lite", "custom", "telepathic"].includes(scope)) return false;
+  const metadata = { ...(event.metadata ?? {}) } as Record<string, unknown>;
+  if (typeof metadata.source !== "string") {
+    metadata.source = event.eventType === "VIEWER_SPECIAL_TASK_RESPONSE" ? "special_task"
+      : event.eventType === "VIEWER_MONITOR_RESPONSE" ? "monitor_intervention" : "viewer";
+  }
+  try {
+    return buildViewerStepId(scope as "rcp" | "lite" | "custom" | "telepathic", metadata) === expectedStepId;
+  } catch {
+    return false;
+  }
 }
 
 function replayStepKey(event: SessionEventRecord): string | undefined {
   const metadata = event.metadata ?? {};
+  if (typeof metadata.stepId === "string" && metadata.stepId.trim()) return `exact:${metadata.stepId}`;
   const locator = ["phase", "promptNumber", "step"].find((key) => typeof metadata[key] === "number");
   if (!locator) return undefined;
   const source = typeof metadata.source === "string"
@@ -129,8 +178,9 @@ function replayStepKey(event: SessionEventRecord): string | undefined {
       : event.eventType === "VIEWER_MONITOR_RESPONSE"
         ? "monitor_intervention"
         : "viewer";
-  const exchange = typeof metadata.exchangeNumber === "number" ? `:${metadata.exchangeNumber}` : "";
-  return `${locator}:${String(metadata[locator])}:${source}${exchange}`;
+  const exchange = typeof metadata.exchangeNumber === "number" ? `:exchange:${metadata.exchangeNumber}` : "";
+  const question = typeof metadata.questionNumber === "number" ? `:question:${metadata.questionNumber}` : "";
+  return `legacy:${locator}:${String(metadata[locator])}:${source}${exchange}${question}`;
 }
 
 function firstUnresolvedViewerIncompleteSequence(events: SessionEventRecord[]): number | undefined {

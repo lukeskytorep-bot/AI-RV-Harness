@@ -20,9 +20,10 @@ import { sha256Text, type SessionProgress } from "./controller";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics } from "./metrics";
 import { createSessionCode } from "./sessionCode";
 import type { RevealInput, RvSession, RvSessionState, SessionContinuationRouteSnapshot, SessionSnapshot } from "./types";
-import { CostGuardStop, SessionCostGuard } from "./costGuard";
+import { withEstimatedCost } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
-import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_POLICY_VERSION, VIEWER_OUTPUT_RECOVERY_TOKENS } from "./viewerOutputRecovery";
+import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, viewerDispatchOutcome, VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_POLICY_VERSION, VIEWER_OUTPUT_RECOVERY_TOKENS } from "./viewerOutputRecovery";
+import { buildViewerStepId, resolveViewerResumeStart, viewerRequestFingerprintInput } from "./viewerResumeLedger";
 import type { SpecialTaskInput } from "./specialTask";
 import { renderSpecialTask } from "./specialTask";
 import { politeRevealTransition } from "./courtesy";
@@ -36,6 +37,7 @@ type RvLiteSessionRepository = Pick<
   | "createRvSession"
   | "updateRvSessionState"
   | "appendSessionEvent"
+  | "listSessionEvents"
   | "updatePreRevealTranscript"
   | "saveSessionSnapshot"
   | "sealPreReveal"
@@ -69,7 +71,6 @@ export interface AutomaticRvLiteRunInput {
   operationKind?: OperationKind;
   streamWorkflowContext?: StreamWorkflowContext;
   onStreamPreview?: (preview: SessionStreamPreview | null) => void;
-  maxSessionCostUsd?: number;
   sessionCodePrefix?: string;
   chat?: (input: {
     config: ProviderConfig;
@@ -88,9 +89,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   validate(input);
   const effectiveSettings = resolveGenerationSettings(input.model.capabilities, input.requestedSettings);
   if (effectiveSettings.omitted.length) throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
-  const costGuard = new SessionCostGuard(input.maxSessionCostUsd);
   const continuationRoute = input.resumeSession ? input.resumeContinuationRoute : captureSessionContinuationRoute(input.providerConfig, input.model);
-  costGuard.validateModel(input.model);
   const automaticReveal = input.automaticTarget
     ? input.capturedAutomaticReveal ?? await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage)
     : undefined;
@@ -99,7 +98,8 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const steps = renderRvLiteSteps(input.protocol, input.profileName, sessionCode);
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
-  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.rv-lite", operationKind: input.operationKind, streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code } }) });
+  let activeViewerAttemptId: string | undefined;
+  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.rv-lite", operationKind: input.operationKind, streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, ...(activeViewerAttemptId ? { attemptId: activeViewerAttemptId } : {}), dispatchOutcome: cause.details.phase === "before_dispatch" ? "not_dispatched" : "unknown" } }) });
   const messages: ProviderMessage[] = [
     ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
     ...(viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage)! }] : []),
@@ -111,29 +111,40 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   const stopRun = (reason: string) => stop(input, sessionId, sessionCode, transcript, reason, metrics, startedAtMs);
   const runViewerCall = async (requestMessages: ProviderMessage[], onStreamEvent: ((event: ProviderStreamEvent) => void) | undefined, metadata: Record<string, unknown>) => {
     let durationMs = 0;
+    const requestSha256 = await sha256Text(viewerRequestFingerprintInput(requestMessages));
+    const stepId = buildViewerStepId("lite", metadata);
+    const durable = input.resumeSession ? await resolveViewerResumeStart({ repository: input.repository, sessionId, stepKey: stepId, requestSha256 }) : { startRecoveryLevel: 0 as const };
+    const durableMetadata = { ...metadata, stepId, requestSha256 };
     const result = await callViewerWithOutputRecovery({
       model: input.model,
       baseSettings: effectiveSettings,
       operationKind: input.operationKind ?? "rv_session_viewer",
       messages: requestMessages,
       preserveConfiguredBudget: input.operationKind === "research_viewer",
-      call: async (settings, semanticAttempt) => {
+      startRecoveryLevel: durable.startRecoveryLevel,
+      priorEffectiveMaxOutputTokens: durable.priorEffectiveMaxOutputTokens,
+      call: async (settings, semanticAttempt, dispatchAttempt) => {
         validateSessionContinuationBudget(requestMessages);
-        const costAuthorization = costGuard.authorize(input.model, requestMessages, settings);
+        await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
+        activeViewerAttemptId = dispatchAttempt.attemptId;
         const requestStartedAt = Date.now();
         try {
           let response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: requestMessages.map((message) => ({ ...message })), settings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent });
           input.onStreamPreview?.(null);
-          response = { ...response, usage: costAuthorization.success(response.usage) };
+          response = { ...response, usage: withEstimatedCost(response.usage, input.model) };
           const elapsed = Date.now() - requestStartedAt;
           durationMs += elapsed;
           metrics = recordProviderRequest(metrics, response.usage, elapsed);
+          activeViewerAttemptId = undefined;
           return response;
         } catch (cause) {
           input.onStreamPreview?.(null);
-          costAuthorization.failure();
+         
           if (!input.signal?.aborted) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
-          await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...metadata, semanticAttempt, requestDurationMs: Date.now() - requestStartedAt } });
+          const dispatchOutcome = viewerDispatchOutcome(cause);
+          if (dispatchOutcome === "not_dispatched") await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_NOT_DISPATCHED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
+          await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...durableMetadata, attemptId: dispatchAttempt.attemptId, semanticAttempt, dispatchOutcome, requestDurationMs: Date.now() - requestStartedAt } });
+          activeViewerAttemptId = undefined;
           throw cause;
         }
       },
@@ -141,10 +152,10 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         eventType: "VIEWER_OUTPUT_INCOMPLETE",
         role: "assistant",
         content: attempt.content,
-        metadata: { ...metadata, ...viewerOutputAttemptMetadata(attempt) },
+        metadata: { ...durableMetadata, ...viewerOutputAttemptMetadata(attempt) },
       }),
     });
-    return { response: result.response, durationMs, acceptedMetadata: viewerOutputAcceptedMetadata(result) };
+    return { response: result.response, durationMs, acceptedMetadata: { stepId, ...viewerOutputAcceptedMetadata(result) } };
   };
 
   await input.repository.createRvSession({
@@ -254,7 +265,6 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
       responseAcceptedMetadata = recovered.acceptedMetadata;
     } catch (cause) {
       if (input.signal?.aborted) return stopRun("USER STOP");
-      if (cause instanceof CostGuardStop) return stopRun(cause.message);
       const message = cause instanceof Error ? cause.message : String(cause);
       return stopRun(`AUTO-STOP: Viewer step incomplete or provider/API failure${message ? ` — ${message}` : ""}`);
     }
@@ -285,7 +295,6 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     await input.repository.updatePreRevealTranscript(sessionId, transcript);
     notify(input, sessionId, sessionCode, "BlindRunning", transcript, promptNumber, undefined, metrics, startedAtMs);
     if (stopAfterSanitizedAnthropicTurn) return stopRun(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
-    if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) return stopRun("AUTO-STOP: configured session cost limit exceeded");
 
     if (promptNumber === 3) {
       const specialTask = renderSpecialTask(input.specialTask, input.sessionLanguage);
@@ -306,7 +315,6 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
           taskAcceptedMetadata = recovered.acceptedMetadata;
         } catch (cause) {
           if (input.signal?.aborted) return stopRun("USER STOP");
-          if (cause instanceof CostGuardStop) return stopRun(cause.message);
           const message = cause instanceof Error ? cause.message : String(cause);
           return stopRun(`AUTO-STOP: Viewer failed during Special Task${message ? ` — ${message}` : ""}`);
         }
@@ -336,7 +344,6 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         await input.repository.updatePreRevealTranscript(sessionId, transcript);
         notify(input, sessionId, sessionCode, "BlindRunning", transcript, promptNumber, undefined, metrics, startedAtMs);
         if (stopAfterSanitizedAnthropicTask) return stopRun(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON);
-        if (input.maxSessionCostUsd && input.maxSessionCostUsd > 0 && metrics.costUsd !== undefined && metrics.costUsd >= input.maxSessionCostUsd) return stopRun("AUTO-STOP: configured session cost limit exceeded");
       }
     }
   }

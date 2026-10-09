@@ -390,7 +390,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
     return {
       schemaVersion: 1, name: name.trim(), workspaceId: workspace.id, templateType: template, sessionLanguage: language,
       protocol: createResearchProtocolSelection(researchProtocolId, language), targetIds: [...selectedTargetIds], targetSelection: { source: targetSource, mode: targetSelectionMode, ...(targetSelectionMode === "random" ? { requestedCount: randomTargetCount } : {}) }, repetitions, requireUnusedTargets: unusedOnly,
-      sessionPolicy: { requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, defaultMaxOutputTokens: settings.defaultMaxOutputTokens, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix },
+      sessionPolicy: { requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, defaultMaxOutputTokens: settings.defaultMaxOutputTokens, sessionCodePrefix: settings.sessionCodePrefix },
       viewerControl,
       fieldGuideControl: {
         mode: template === "system_prompt" ? (promptResearchSource === "field_guide_history" ? "history" : "off") : fieldGuideMode === "current" ? "current" : "off",

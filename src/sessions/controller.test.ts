@@ -42,6 +42,7 @@ const model: ProviderModel = {
 
 function fakeRepository(log: string[], snapshots: SessionSnapshot[] = []) {
   return {
+    listSessionEvents: async () => [],
     createRvSession: async () => { log.push("create"); return {} as never; },
     updateRvSessionState: async (_id: string, state: string) => { log.push(`state:${state}`); },
     appendSessionEvent: async (_id: string, event: { eventType: string }) => { log.push(`event:${event.eventType}`); },
@@ -52,7 +53,7 @@ function fakeRepository(log: string[], snapshots: SessionSnapshot[] = []) {
     createMonitorRun: async () => "monitor_1",
     appendMonitorIntervention: async () => undefined,
     recordTargetUsage: async () => { log.push("target-used"); },
-  } as unknown as Pick<AppRepository, "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "createMonitorRun" | "appendMonitorIntervention" | "recordTargetUsage">;
+  } as unknown as Pick<AppRepository, "listSessionEvents" | "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "createMonitorRun" | "appendMonitorIntervention" | "recordTargetUsage">;
 }
 
 describe("automatic RCP controller", () => {

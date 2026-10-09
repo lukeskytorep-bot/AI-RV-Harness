@@ -124,10 +124,10 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
       .replace("  LOCKED_BASE_VOCABULARY_VERSION,\n", "")
       .replace(/^\s*\{ id: "locked-viewer-base-vocabulary"[^\n]*\n/m, "")
       .replace(/^\s*\.\.\.\(input\.rvSystemPrompt\.fieldGuide[^\n]*\n/m, "");
-    // C5-R1 and Viewer Output Safety Step A intentionally change Viewer-only execution wiring
-    // in the Telepathic controller. Freeze that accepted baseline while the Monitor prompt contract
-    // above remains separately byte-stable.
-    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("1f364b941483f3d5ac35dc99ec0f4e8627fb19526bc730ccb5e8376051b124e7");
+    // C5-R1 and Viewer Output Safety Steps A/B1 intentionally change Viewer execution wiring.
+    // B1 also removes the user-configured session cost blocker while preserving cost reporting.
+    // Freeze that accepted execution baseline while the Monitor prompt contract above remains separately byte-stable.
+    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("973d109cf709f6f4ab41ea1d18e4942f1724e9ce3d3e19c8c8233a5f65dae5fe");
   });
 
   it("keeps AI Judge prompt, rubric, scoring and packet byte-identical while allowing ORP1 resource wiring in the engine", () => {

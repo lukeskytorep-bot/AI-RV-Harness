@@ -36,7 +36,6 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     checks.push(config.sessionPolicy.requestTimeoutMs >= 1_000 && config.sessionPolicy.requestTimeoutMs <= 600_000 ? pass("session_timeout", "Request timeout is within the supported safety range") : fail("session_timeout", "Request timeout must be between 1 and 600 seconds"));
     checks.push(Number.isInteger(config.sessionPolicy.maxRetries) && config.sessionPolicy.maxRetries >= 0 && config.sessionPolicy.maxRetries <= 5 ? pass("session_retries", "Retry policy is valid") : fail("session_retries", "Retry count must be between 0 and 5"));
     checks.push(config.sessionPolicy.defaultMaxOutputTokens > 0 ? pass("session_output", "Default output limit is valid") : fail("session_output", "Default output limit must be positive"));
-    checks.push(config.sessionPolicy.maxSessionCostUsd >= 0 ? pass("session_cost_limit", config.sessionPolicy.maxSessionCostUsd > 0 ? "A hard per-session cost stop is locked into the experiment" : "No hard per-session cost stop is configured") : fail("session_cost_limit", "Session cost limit cannot be negative"));
     checks.push(/^[A-Za-z0-9]{1,12}$/.test(config.sessionPolicy.sessionCodePrefix) ? pass("session_code", "Session code prefix is valid") : fail("session_code", "Session code prefix must contain 1–12 alphanumeric characters"));
   } else {
     checks.push(warn("session_policy", "Legacy Research configuration has no explicit Settings session-policy snapshot"));
@@ -85,12 +84,6 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
       continue;
     }
     checks.push(pass(`${prefix}:model`, `${condition.label}: model route is cached`));
-    if (config.sessionPolicy?.maxSessionCostUsd && config.sessionPolicy.maxSessionCostUsd > 0) {
-      const hasPricing = model.pricing.promptPerToken !== undefined && model.pricing.completionPerToken !== undefined;
-      checks.push(hasPricing
-        ? pass(`${prefix}:hard_cost`, `${condition.label}: cached pricing supports hard session cost enforcement`)
-        : fail(`${prefix}:hard_cost`, `${condition.label}: hard session cost limit requires cached input/output pricing`));
-    }
     const effective = resolveGenerationSettings(model.capabilities, condition.requestedSettings);
     checks.push(effective.omitted.length ? fail(`${prefix}:settings`, `${condition.label}: unsupported setting(s): ${effective.omitted.join(", ")}`) : pass(`${prefix}:settings`, `${condition.label}: requested settings are supported`));
     checks.push(condition.capabilitySnapshot && condition.effectiveSettings ? pass(`${prefix}:snapshot`, `${condition.label}: capability + requested/effective settings snapshot is present`) : fail(`${prefix}:snapshot`, `${condition.label}: Research capability snapshot is missing`));
