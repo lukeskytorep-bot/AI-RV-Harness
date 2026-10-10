@@ -59,6 +59,7 @@ export interface AutomaticRvLiteRunInput {
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
   viewerNotes?: ViewerNotesSessionSnapshot;
   resumeSession?: RvSession;
+  sessionIdentity?: { id: string; sessionCode: string };
   resumeContinuationRoute?: SessionContinuationRouteSnapshot;
   automaticTarget?: TargetRecord;
   capturedAutomaticReveal?: RevealInput;
@@ -89,13 +90,13 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
   validate(input);
   const effectiveSettings = resolveGenerationSettings(input.model.capabilities, input.requestedSettings);
   if (effectiveSettings.omitted.length) throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
-  const continuationRoute = input.resumeSession ? input.resumeContinuationRoute : captureSessionContinuationRoute(input.providerConfig, input.model);
+  const continuationRoute = input.resumeSession && input.resumeContinuationRoute ? input.resumeContinuationRoute : captureSessionContinuationRoute(input.providerConfig, input.model);
   const automaticReveal = input.automaticTarget
     ? input.capturedAutomaticReveal ?? await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage)
     : undefined;
 
-  const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
-  const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
+  const sessionId = input.resumeSession?.id ?? input.sessionIdentity?.id ?? `session_${crypto.randomUUID()}`;
+  const sessionCode = input.resumeSession?.sessionCode ?? input.sessionIdentity?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const steps = renderRvLiteSteps(input.protocol, input.profileName, sessionCode);
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
   let activeViewerAttemptId: string | undefined;
@@ -158,17 +159,18 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     return { response: result.response, durationMs, acceptedMetadata: { stepId, ...viewerOutputAcceptedMetadata(result) } };
   };
 
-  await input.repository.createRvSession({
-    id: sessionId,
-    workspaceId: input.workspaceId,
-    profileId: input.profileId,
-    sessionCode,
-    runType: "automatic",
-    targetId: input.automaticTarget?.id,
-    researchProjectId: input.researchProjectId,
-  });
-  await input.repository.appendSessionEvent(sessionId, { eventType: "SESSION_CREATED", role: "controller", metadata: { sessionCode, protocolFamily: "rv-lite" } });
-  if (!input.resumeSession) await input.onSessionCreated?.(sessionId, sessionCode);
+  if (!input.resumeSession) {
+    await input.repository.createRvSession({
+      id: sessionId,
+      workspaceId: input.workspaceId,
+      profileId: input.profileId,
+      sessionCode,
+      runType: "automatic",
+      targetId: input.automaticTarget?.id,
+      researchProjectId: input.researchProjectId,
+    });
+    await input.repository.appendSessionEvent(sessionId, { eventType: "SESSION_CREATED", role: "controller", metadata: { sessionCode, protocolFamily: "rv-lite" } });
+  }
   await input.repository.updateRvSessionState(sessionId, "Preflight");
 
   const snapshot: SessionSnapshot = {
@@ -242,6 +244,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     createdAt: new Date().toISOString(),
   };
   await input.repository.saveSessionSnapshot(sessionId, snapshot, await sha256Text(JSON.stringify(snapshot)));
+  await input.onSessionCreated?.(sessionId, sessionCode);
   await input.repository.appendSessionEvent(sessionId, { eventType: "PREFLIGHT_COMPLETE", role: "controller", metadata: { viewerCalls: 4, mandatoryDeepeningInPrompt: 3 } });
   notify(input, sessionId, sessionCode, "Preflight", transcript, undefined, undefined, metrics, startedAtMs);
   await input.repository.updateRvSessionState(sessionId, "BlindRunning");

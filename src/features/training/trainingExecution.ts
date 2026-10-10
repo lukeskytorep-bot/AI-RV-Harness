@@ -10,6 +10,9 @@ import { getRvLite } from "../../resources/protocolRegistry";
 import type { SessionProgress } from "../../sessions/controller";
 import { findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview } from "../../sessions/postReveal";
 import { runAutomaticRvLiteSession } from "../../sessions/rvLiteController";
+import { createSessionReplay } from "../../sessions/resumeReplay";
+import { createSessionCode } from "../../sessions/sessionCode";
+import { buildAutomaticTargetReveal } from "../../targets/service";
 import type { AppRepository } from "../../storage/repository";
 import type { TargetRecord } from "../../targets/types";
 import type { TrainingFieldGuidePostUpdateCheckpoint, TrainingRunRecord, TrainingTargetCheckpoint } from "../../training/types";
@@ -89,6 +92,81 @@ async function currentTrainingRecord(repository: AppRepository, id: string, fall
   return (await repository.listTrainingRuns()).find((run) => run.id === id) ?? fallback;
 }
 
+async function frozenBlindResumeInput(input: ExecuteTrainingRunInput, checkpoint: TrainingTargetCheckpoint, target: TargetRecord) {
+  const [session, snapshot] = await Promise.all([
+    input.repository.getRvSession(checkpoint.sessionId),
+    input.repository.getSessionSnapshot(checkpoint.sessionId),
+  ]);
+  if (!session || !snapshot) throw new Error("Training Resume cannot recover the blind session because its durable Session Snapshot is missing.");
+  if (session.id !== checkpoint.sessionId || session.targetId !== checkpoint.targetId || snapshot.targetId !== checkpoint.targetId) {
+    throw new Error("Training Resume refused a blind checkpoint whose session/target identity does not match.");
+  }
+  if (snapshot.profileId !== input.profile.id || snapshot.workspaceId !== input.initial.workspaceId) {
+    throw new Error("Training Resume refused a blind checkpoint whose frozen Profile or Workspace does not match the Training run.");
+  }
+  if (snapshot.providerConfigId !== input.providerConfig.id || snapshot.provider !== input.providerConfig.provider || snapshot.modelId !== input.model.modelId || snapshot.modelRoute !== input.model.route) {
+    throw new Error("Training Resume refused provider/model route drift from the frozen blind Session Snapshot.");
+  }
+  if (snapshot.protocol.id !== "rv-lite" || snapshot.sessionLanguage !== snapshot.protocol.language) {
+    throw new Error("Training Resume found an incompatible frozen RV Lite protocol snapshot.");
+  }
+  const variant = snapshot.protocol.variant ?? input.initial.protocolVariant;
+  const protocol = getRvLite(snapshot.sessionLanguage, variant);
+  if (protocol.contentSha256 !== snapshot.protocol.contentSha256 || protocol.version !== snapshot.protocol.version) {
+    throw new Error("Training Resume cannot reproduce the exact frozen RV Lite protocol from this application build.");
+  }
+  const capturedAutomaticReveal = await buildAutomaticTargetReveal(target, snapshot.sessionLanguage);
+  if (snapshot.automaticRevealHash && capturedAutomaticReveal.hash !== snapshot.automaticRevealHash) {
+    throw new Error("Training Resume refused target/reveal drift from the frozen blind Session Snapshot.");
+  }
+  const rvSystemPrompt = snapshot.rvSystemPrompt ? {
+    id: snapshot.rvSystemPrompt.id,
+    version: snapshot.rvSystemPrompt.version,
+    language: snapshot.sessionLanguage,
+    content: snapshot.rvSystemPrompt.fullContent,
+    contentSha256: snapshot.rvSystemPrompt.contentSha256,
+    ...(snapshot.rvSystemPrompt.fieldGuide ? { fieldGuide: snapshot.rvSystemPrompt.fieldGuide } : {}),
+  } : undefined;
+  return { session, snapshot, protocol, capturedAutomaticReveal, rvSystemPrompt };
+}
+
+
+async function ensurePersistedTrainingBlindReveal(input: {
+  repository: AppRepository;
+  sessionId: string;
+  targetId: string;
+}): Promise<void> {
+  const session = await input.repository.getRvSession(input.sessionId);
+  if (!session || session.state !== "Revealed" || !session.preRevealSealedAt) {
+    throw new Error("Training cannot advance to session_revealed before the blind session is durably sealed and Revealed.");
+  }
+  const reveal = await input.repository.getReveal(input.sessionId);
+  if (!reveal) throw new Error("Training cannot advance to session_revealed because the durable Reveal record is missing.");
+
+  let events = await input.repository.listSessionEvents(input.sessionId);
+  const revealAccepted = events.some((event) => event.eventType === "REVEAL_ACCEPTED" && (event.metadata?.targetId === input.targetId || event.metadata?.source === "automatic_target"));
+  if (!revealAccepted) {
+    await input.repository.appendSessionEvent(input.sessionId, {
+      eventType: "REVEAL_ACCEPTED",
+      role: "controller",
+      metadata: { source: "automatic_target", targetId: input.targetId, recoveredFinalization: true },
+    });
+    events = await input.repository.listSessionEvents(input.sessionId);
+  }
+
+  let usage = await input.repository.listTargetUsage();
+  if (!usage.some((record) => record.sessionId === input.sessionId && record.targetId === input.targetId)) {
+    await input.repository.recordTargetUsage({ targetId: input.targetId, profileId: session.profileId, sessionId: input.sessionId });
+    usage = await input.repository.listTargetUsage();
+  }
+
+  if (!events.some((event) => event.eventType === "REVEAL_ACCEPTED" && (event.metadata?.targetId === input.targetId || event.metadata?.source === "automatic_target"))) {
+    throw new Error("Training Reveal finalization did not persist REVEAL_ACCEPTED.");
+  }
+  if (!usage.some((record) => record.sessionId === input.sessionId && record.targetId === input.targetId)) {
+    throw new Error("Training Reveal finalization did not persist target usage.");
+  }
+}
 
 async function trainingPostRevealReviewPacketSha256(repository: AppRepository, sessionId: string, language: InterfaceLanguage, request: string): Promise<string> {
   const [snapshot, reveal, evidence] = await Promise.all([
@@ -187,10 +265,6 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
 
       let checkpoint = working.activeTargetCheckpoint?.targetId === targetId ? working.activeTargetCheckpoint : undefined;
       if (!checkpoint) {
-        // Freeze the currently active Field Guide for this session, not for the
-        // whole multi-target Training run. A successful update after target N
-        // must therefore be visible to target N+1, while Resume continues from
-        // the immutable snapshot already stored by the session controller.
         const fieldGuide = await dependencies.prepareFieldGuideForSession({
           repository: input.repository,
           profile: input.profile,
@@ -198,41 +272,144 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
           model: input.model,
           language: execution.language,
         });
-        const rvSystemPrompt = await dependencies.viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
-        const viewerNotes = await dependencies.prepareViewerNotesForSession({
+        const frozenRvSystemPrompt = await dependencies.viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
+        const frozenViewerNotes = await dependencies.prepareViewerNotesForSession({
           repository: input.repository,
           profileId: input.profile.id,
           providerConfig: input.providerConfig,
           model: input.model,
           enabled: working.viewerNotesEnabled ?? false,
         });
-        const session = await dependencies.runAutomaticRvLiteSession({
-          repository: input.repository,
-          workspaceId: working.workspaceId,
-          profileId: input.profile.id,
-          profileName: aiIsBeDisplayName(input.profile),
-          humanIsBeDisplayName: humanIsBeDisplayName(input.profile),
-          providerConfig: input.providerConfig,
-          model: input.model,
-          protocol: getRvLite(execution.language, working.protocolVariant),
-          sessionLanguage: execution.language,
-          requestedSettings: execution.generationSettings,
-          viewerNotes,
-          rvSystemPrompt,
-          automaticTarget: target,
-          signal: input.signal,
-          maxRetries: execution.transport.maxRetries,
-          requestTimeoutMs: execution.transport.requestTimeoutMs,
-          operationKind: "training_blind_viewer",
-          streamWorkflowContext: "training",
-          sessionCodePrefix: execution.transport.sessionCodePrefix,
-          onProgress: (sessionProgress) => input.onProgress?.({ index, total: working.targetIds.length, target, sessionProgress }),
-        });
-        if (session.state !== "Revealed") throw new Error(session.stopReason ?? "The training session was interrupted.");
-        checkpoint = { targetId, sessionId: session.sessionId, stage: "session_revealed" };
+        const frozenReveal = await buildAutomaticTargetReveal(target, execution.language);
+        const sessionId = `session_${crypto.randomUUID()}`;
+        const sessionCode = createSessionCode(execution.transport.sessionCodePrefix);
+        checkpoint = {
+          targetId,
+          sessionId,
+          stage: "blind_initializing",
+          blindInitialization: {
+            sessionCode,
+            rvSystemPrompt: frozenRvSystemPrompt,
+            viewerNotes: frozenViewerNotes,
+            automaticRevealHash: frozenReveal.hash,
+          },
+        };
         working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
         await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
         input.onRunChange?.(working);
+      }
+
+      if (checkpoint.stage === "blind_initializing") {
+        const init = checkpoint.blindInitialization;
+        if (!init) throw new Error("Training Resume cannot recover a blind_initializing checkpoint without its frozen initialization packet.");
+        const existingSession = await input.repository.getRvSession(checkpoint.sessionId);
+        const existingSnapshot = await input.repository.getSessionSnapshot(checkpoint.sessionId);
+        if (existingSnapshot && !existingSession) {
+          throw new Error("Training Resume found a Session Snapshot without its RV session row.");
+        }
+        if (existingSnapshot) {
+          if (existingSnapshot.targetId !== checkpoint.targetId || existingSnapshot.workspaceId !== working.workspaceId || existingSnapshot.profileId !== input.profile.id) {
+            throw new Error("Training Resume refused a blind_initializing checkpoint whose persisted Session Snapshot identity does not match.");
+          }
+          if (existingSnapshot.automaticRevealHash !== init.automaticRevealHash) {
+            throw new Error("Training Resume refused target/reveal drift during blind initialization.");
+          }
+          checkpoint = { ...checkpoint, stage: "blind_running", blindInitialization: undefined };
+          working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
+          await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
+          input.onRunChange?.(working);
+        } else {
+          const currentReveal = await buildAutomaticTargetReveal(target, execution.language);
+          if (currentReveal.hash !== init.automaticRevealHash) {
+            throw new Error("Training Resume cannot recreate the exact frozen target Reveal for blind initialization.");
+          }
+          const markSnapshotReady = async (sessionId: string) => {
+            if (sessionId !== checkpoint!.sessionId) throw new Error("Training blind initialization created an unexpected session id.");
+            checkpoint = { ...checkpoint!, stage: "blind_running", blindInitialization: undefined };
+            working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
+            await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
+            input.onRunChange?.(working);
+          };
+          const session = await dependencies.runAutomaticRvLiteSession({
+            repository: input.repository,
+            workspaceId: working.workspaceId,
+            profileId: input.profile.id,
+            profileName: aiIsBeDisplayName(input.profile),
+            humanIsBeDisplayName: humanIsBeDisplayName(input.profile),
+            providerConfig: input.providerConfig,
+            model: input.model,
+            protocol: getRvLite(execution.language, working.protocolVariant),
+            sessionLanguage: execution.language,
+            requestedSettings: execution.generationSettings,
+            ...(init.viewerNotes ? { viewerNotes: init.viewerNotes } : {}),
+            ...(init.rvSystemPrompt ? { rvSystemPrompt: init.rvSystemPrompt } : {}),
+            automaticTarget: target,
+            capturedAutomaticReveal: currentReveal,
+            ...(existingSession ? { resumeSession: existingSession } : { sessionIdentity: { id: checkpoint.sessionId, sessionCode: init.sessionCode } }),
+            signal: input.signal,
+            maxRetries: execution.transport.maxRetries,
+            requestTimeoutMs: execution.transport.requestTimeoutMs,
+            operationKind: "training_blind_viewer",
+            streamWorkflowContext: "training",
+            sessionCodePrefix: execution.transport.sessionCodePrefix,
+            onSessionCreated: markSnapshotReady,
+            onProgress: (sessionProgress) => input.onProgress?.({ index, total: working.targetIds.length, target, sessionProgress }),
+          });
+          if (session.state !== "Revealed") throw new Error(session.stopReason ?? "The training session was interrupted.");
+          if (session.sessionId !== checkpoint.sessionId) throw new Error("Training blind initialization completed under a different session id.");
+          await ensurePersistedTrainingBlindReveal({ repository: input.repository, sessionId: checkpoint.sessionId, targetId: checkpoint.targetId });
+          checkpoint = { ...checkpoint, stage: "session_revealed", blindInitialization: undefined };
+          working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
+          await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
+          input.onRunChange?.(working);
+        }
+      }
+
+      if (checkpoint.stage === "blind_running") {
+        const frozen = await frozenBlindResumeInput(input, checkpoint, target);
+        if (frozen.session.state === "Revealed") {
+          await ensurePersistedTrainingBlindReveal({ repository: input.repository, sessionId: checkpoint.sessionId, targetId: checkpoint.targetId });
+          checkpoint = { ...checkpoint, stage: "session_revealed" };
+          working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
+          await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
+          input.onRunChange?.(working);
+        } else {
+          const events = await input.repository.listSessionEvents(checkpoint.sessionId);
+          const replay = await createSessionReplay({ repository: input.repository, session: frozen.session, events });
+          const session = await dependencies.runAutomaticRvLiteSession({
+            repository: replay.repository,
+            workspaceId: frozen.snapshot.workspaceId,
+            profileId: frozen.snapshot.profileId,
+            profileName: frozen.snapshot.identities?.aiIsBeDisplayName,
+            humanIsBeDisplayName: frozen.snapshot.identities?.humanIsBeDisplayName,
+            providerConfig: input.providerConfig,
+            model: input.model,
+            protocol: frozen.protocol,
+            sessionLanguage: frozen.snapshot.sessionLanguage,
+            requestedSettings: frozen.snapshot.generationSettings.requested,
+            ...(frozen.snapshot.viewerNotes ? { viewerNotes: frozen.snapshot.viewerNotes } : {}),
+            ...(frozen.rvSystemPrompt ? { rvSystemPrompt: frozen.rvSystemPrompt } : {}),
+            automaticTarget: target,
+            capturedAutomaticReveal: frozen.capturedAutomaticReveal,
+            resumeSession: frozen.session,
+            ...(frozen.snapshot.continuationRoute ? { resumeContinuationRoute: frozen.snapshot.continuationRoute } : {}),
+            chat: replay.chat,
+            signal: input.signal,
+            maxRetries: execution.transport.maxRetries,
+            requestTimeoutMs: execution.transport.requestTimeoutMs,
+            operationKind: "training_blind_viewer",
+            streamWorkflowContext: "training",
+            sessionCodePrefix: execution.transport.sessionCodePrefix,
+            onProgress: (sessionProgress) => input.onProgress?.({ index, total: working.targetIds.length, target, sessionProgress }),
+          });
+          if (session.state !== "Revealed") throw new Error(session.stopReason ?? "The training session was interrupted.");
+          if (session.sessionId !== checkpoint.sessionId) throw new Error("Training Resume created a different blind session instead of resuming the checkpointed session.");
+          await ensurePersistedTrainingBlindReveal({ repository: input.repository, sessionId: checkpoint.sessionId, targetId: checkpoint.targetId });
+          checkpoint = { ...checkpoint, stage: "session_revealed" };
+          working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
+          await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
+          input.onRunChange?.(working);
+        }
       }
 
       let viewerReview: string | null = null;

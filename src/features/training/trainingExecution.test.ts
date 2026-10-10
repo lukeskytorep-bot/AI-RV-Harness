@@ -64,9 +64,14 @@ function run(overrides: Partial<TrainingRunRecord> = {}): TrainingRunRecord {
 
 function harness(sessionFailureAt?: string) {
   const updates: Array<Record<string, unknown>> = [];
+  const pendingInitializationSessions = new Set<string>();
   const transcripts = new Map<string, string>();
+  const durableSessions = new Map<string, { id: string; state: "BlindRunning" | "AwaitingReveal" | "Revealed" | "Interrupted"; preRevealSealedAt?: string; profileId: string; workspaceId: string; sessionCode: string; targetId: string; runType: "automatic"; preRevealTranscript: string; postRevealTranscript: string; createdAt: string; updatedAt: string }>();
+  const durableEvents = new Map<string, Array<{ eventType: string; metadata?: Record<string, unknown> }>>();
+  const durableUsage: Array<{ targetId: string; profileId?: string; sessionId?: string; id: string; usedAt: string }> = [];
   const sessionPrompts = new Map<string, { id: string; version: string; language: "en"; content: string; contentSha256: string; fieldGuide?: Record<string, unknown> }>();
   const fieldGuideVersions: Array<Record<string, unknown>> = [];
+  const sessionByTarget = new Map<string, string>();
   const legacyFieldGuide = {
     aiIdentityId: "identity",
     language: "en" as const,
@@ -82,13 +87,27 @@ function harness(sessionFailureAt?: string) {
     sourceKind: "factory-baseline" as const,
   };
   const repository = {
-    updateTrainingRun: vi.fn(async (_id: string, update: Record<string, unknown>) => { updates.push(update); }),
-    updateRvSessionState: vi.fn(async () => undefined),
+    updateTrainingRun: vi.fn(async (_id: string, update: Record<string, unknown>) => {
+      updates.push(update);
+      const checkpoint = update.activeTargetCheckpoint as { stage?: string; sessionId?: string } | undefined;
+      if (checkpoint?.stage === "blind_initializing" && checkpoint.sessionId) pendingInitializationSessions.add(checkpoint.sessionId);
+      if (checkpoint?.stage === "blind_running" && checkpoint.sessionId) pendingInitializationSessions.delete(checkpoint.sessionId);
+    }),
+    updateRvSessionState: vi.fn(async (sessionId: string, state: "BlindRunning" | "AwaitingReveal" | "Revealed" | "Interrupted") => {
+      const current = durableSessions.get(sessionId);
+      if (current) durableSessions.set(sessionId, { ...current, state, updatedAt: "now" });
+    }),
+    getRvSession: vi.fn(async (sessionId: string) => durableSessions.get(sessionId) as never),
+    listSessionEvents: vi.fn(async (sessionId: string) => (durableEvents.get(sessionId) ?? []).map((event, index) => ({ ...event, id: `${sessionId}-e${index + 1}`, sessionId, sequenceNumber: index + 1, createdAt: "now" })) as never),
+    appendSessionEvent: vi.fn(async (sessionId: string, event: { eventType: string; metadata?: Record<string, unknown> }) => { const list = durableEvents.get(sessionId) ?? []; list.push(event); durableEvents.set(sessionId, list); return { ...event, id: `${sessionId}-e${list.length}`, sessionId, sequenceNumber: list.length, createdAt: "now" } as never; }),
+    listTargetUsage: vi.fn(async () => durableUsage as never),
+    recordTargetUsage: vi.fn(async (value: { targetId: string; profileId?: string; sessionId?: string }) => { if (!durableUsage.some((item) => item.targetId === value.targetId && item.sessionId === value.sessionId)) durableUsage.push({ ...value, id: `u${durableUsage.length + 1}`, usedAt: "now" }); }),
     listRvSessions: vi.fn(async () => [...transcripts].map(([id, postRevealTranscript]) => ({ id, postRevealTranscript })) as never),
     listTrainingRuns: vi.fn(async () => []),
     listArchivedTrainingRuns: vi.fn(async () => []),
     getSessionSnapshot: vi.fn(async (sessionId: string) => {
       const rvSystemPrompt = sessionPrompts.get(sessionId);
+      if (pendingInitializationSessions.has(sessionId) && !durableSessions.has(sessionId) && !rvSystemPrompt) return null;
       return {
         schemaVersion: 3,
         sessionId,
@@ -115,7 +134,9 @@ function harness(sessionFailureAt?: string) {
         createdAt: "now",
       } as never;
     }),
-    getReveal: vi.fn(async () => ({ hash: "reveal-hash", text: "Reveal", artifactManifest: [] }) as never),
+    getReveal: vi.fn(async (sessionId: string) => durableSessions.get(sessionId)?.state === "Revealed"
+      ? ({ source: "automatic", hash: "reveal-hash", text: "Reveal", artifactManifest: [] } as never)
+      : null),
     getViewerEvidence: vi.fn(async () => "sealed blind evidence"),
     listViewerNoteReflectionRuns: vi.fn(async () => []),
     listJudgeScores: vi.fn(async () => []),
@@ -160,11 +181,28 @@ function harness(sessionFailureAt?: string) {
     contentSha256: `prompt-hash-${fieldGuide.versionId}`,
     fieldGuide,
   }));
-  const runSession = vi.fn(async (request: { automaticTarget?: TargetRecord; signal?: AbortSignal; rvSystemPrompt?: { id: string; version: string; language: "en"; content: string; contentSha256: string; fieldGuide?: Record<string, unknown> } }) => {
+  const runSession = vi.fn(async (request: {
+    automaticTarget?: TargetRecord;
+    signal?: AbortSignal;
+    sessionIdentity?: { id: string; sessionCode: string };
+    resumeSession?: { id: string; sessionCode: string };
+    onSessionCreated?: (sessionId: string, sessionCode: string) => Promise<void> | void;
+    rvSystemPrompt?: { id: string; version: string; language: "en"; content: string; contentSha256: string; fieldGuide?: Record<string, unknown> };
+  }) => {
     const id = request.automaticTarget!.id;
     if (id === sessionFailureAt) throw new Error("provider unavailable");
-    if (request.rvSystemPrompt) sessionPrompts.set(`session_${id}`, request.rvSystemPrompt);
-    return { sessionId: `session_${id}`, sessionCode: id, state: "Revealed" as const, transcript: id };
+    const sessionId = request.resumeSession?.id ?? request.sessionIdentity?.id ?? `session_${id}`;
+    const sessionCode = request.resumeSession?.sessionCode ?? request.sessionIdentity?.sessionCode ?? id;
+    sessionByTarget.set(id, sessionId);
+    if (request.rvSystemPrompt) sessionPrompts.set(sessionId, request.rvSystemPrompt);
+    durableSessions.set(sessionId, {
+      id: sessionId, state: "Revealed", preRevealSealedAt: "now", profileId: profile.id, workspaceId: "workspace",
+      sessionCode, targetId: id, runType: "automatic", preRevealTranscript: id, postRevealTranscript: "", createdAt: "now", updatedAt: "now",
+    });
+    await request.onSessionCreated?.(sessionId, sessionCode);
+    durableEvents.set(sessionId, [{ eventType: "REVEAL_ACCEPTED", metadata: { source: "automatic_target", targetId: id } }]);
+    durableUsage.push({ id: `u${durableUsage.length + 1}`, targetId: id, profileId: profile.id, sessionId, usedAt: "now" });
+    return { sessionId, sessionCode, state: "Revealed" as const, transcript: id };
   });
   const postReview = vi.fn(async (request: { sessionId: string }) => {
     const transcript = `${serializePostRevealTurn("user", supportedAutomaticPostRevealReviewRequests("en")[0])}${serializePostRevealTurn("assistant", "review")}`;
@@ -174,14 +212,18 @@ function harness(sessionFailureAt?: string) {
   const dependencies = {
     prepareFieldGuideForSession: prepareFieldGuide,
     viewerSystemPromptSnapshotFromFieldGuide: promptFromFieldGuide,
-    prepareViewerNotesForSession: vi.fn(async () => ({ enabled: true })),
+    prepareViewerNotesForSession: vi.fn(async () => ({
+      enabled: true, aiIdentityId: "identity", noteType: "viewer_self_notes" as const, versionId: "notes-1", versionNumber: 1,
+      content: "notes", contentSha256: "notes-hash", estimatedTokens: 1, estimatorVersion: "conservative-char-v1" as const,
+      capacityTokens: 2048 as const, modelRoute: model.route, capturedAt: "now",
+    })),
     runAutomaticRvLiteSession: runSession,
     runAutomaticPostRevealReview: postReview,
     runFieldGuideUpdate: fieldGuideUpdate,
     runViewerNoteReflection: reflect,
     runBlindJudging: vi.fn(async () => ({ scores: [], aggregate: null })),
   } as unknown as NonNullable<ExecuteTrainingRunInput["dependencies"]>;
-  return { repository, updates, transcripts, sessionPrompts, fieldGuideVersions, reflect, fieldGuideUpdate, prepareFieldGuide, promptFromFieldGuide, runSession, dependencies };
+  return { repository, updates, transcripts, sessionPrompts, fieldGuideVersions, sessionByTarget, durableSessions, durableEvents, durableUsage, reflect, fieldGuideUpdate, prepareFieldGuide, promptFromFieldGuide, runSession, dependencies };
 }
 
 function input(initial: TrainingRunRecord, testHarness: ReturnType<typeof harness>, extra: Partial<ExecuteTrainingRunInput> = {}): ExecuteTrainingRunInput {
@@ -225,7 +267,11 @@ describe("Training execution", () => {
     const outcome = await executeTrainingRun(input(run(), testHarness));
     expect(outcome.run.status).toBe("Completed");
     expect(outcome.run.completedTargetIds).toEqual(["t1", "t2", "t3"]);
-    expect(outcome.run.sessionIds).toEqual(["session_t1", "session_t2", "session_t3"]);
+    expect(outcome.run.sessionIds).toEqual([
+      testHarness.sessionByTarget.get("t1"),
+      testHarness.sessionByTarget.get("t2"),
+      testHarness.sessionByTarget.get("t3"),
+    ]);
     expect(testHarness.fieldGuideUpdate).toHaveBeenCalledTimes(3);
     expect(testHarness.prepareFieldGuide).toHaveBeenCalledTimes(3);
     expect(testHarness.runSession.mock.calls.map((call) => call[0].rvSystemPrompt?.fieldGuide?.versionId)).toEqual([
@@ -249,7 +295,11 @@ describe("Training execution", () => {
     const outcome = await executeTrainingRun(input(initial, testHarness));
     expect(testHarness.runSession.mock.calls.map((call) => call[0].automaticTarget?.id)).toEqual(["t2", "t3"]);
     expect(outcome.run.completedTargetIds).toEqual(["t1", "t2", "t3"]);
-    expect(outcome.run.sessionIds).toEqual(["session_t1", "session_t2", "session_t3"]);
+    expect(outcome.run.sessionIds).toEqual([
+      "session_t1",
+      testHarness.sessionByTarget.get("t2"),
+      testHarness.sessionByTarget.get("t3"),
+    ]);
   });
 
   it("pauses only after the current target has been durably checkpointed", async () => {
@@ -266,7 +316,7 @@ describe("Training execution", () => {
     const outcome = await executeTrainingRun(input(run(), testHarness));
     expect(outcome.run.status).toBe("Interrupted");
     expect(outcome.run.completedTargetIds).toEqual(["t1"]);
-    expect(outcome.run.sessionIds).toEqual(["session_t1"]);
+    expect(outcome.run.sessionIds).toEqual([testHarness.sessionByTarget.get("t1")]);
     expect(outcome.error).toBe("provider unavailable");
     expect(testHarness.updates.at(-1)).toMatchObject({ status: "Interrupted", error: "provider unavailable" });
   });
@@ -298,7 +348,7 @@ describe("Training execution", () => {
     const outcome = await executeTrainingRun(input(run(), testHarness, { signal: controller.signal }));
     expect(outcome.run.status).toBe("Interrupted");
     expect(outcome.run.completedTargetIds).toEqual([]);
-    expect(testHarness.repository.updateRvSessionState).not.toHaveBeenCalledWith("session_t1", "Completed");
+    expect(testHarness.repository.updateRvSessionState).not.toHaveBeenCalledWith(testHarness.sessionByTarget.get("t1"), "Completed");
   });
 
   it("resumes after a Judge failure without repeating the Viewer session, review, or reflection", async () => {
@@ -309,14 +359,14 @@ describe("Training execution", () => {
 
     const interrupted = await executeTrainingRun(input(run({ targetIds: ["t1"], judgeModelRoutes: [model.route] }), testHarness, { judges }));
     expect(interrupted.run.status).toBe("Interrupted");
-    expect(interrupted.run.activeTargetCheckpoint).toMatchObject({ targetId: "t1", sessionId: "session_t1", stage: "viewer_notes_reflection_completed" });
+    expect(interrupted.run.activeTargetCheckpoint).toMatchObject({ targetId: "t1", sessionId: testHarness.sessionByTarget.get("t1"), stage: "viewer_notes_reflection_completed" });
     expect(interrupted.run.activeTargetCheckpoint?.postRevealReviewPacketSha256).toMatch(/^[a-f0-9]{64}$/);
 
     judge.mockResolvedValueOnce({ scores: [], aggregate: null });
     const resumed = await executeTrainingRun(input(interrupted.run, testHarness, { judges }));
 
     expect(resumed.run.status).toBe("Completed");
-    expect(resumed.run.sessionIds).toEqual(["session_t1"]);
+    expect(resumed.run.sessionIds).toEqual([testHarness.sessionByTarget.get("t1")]);
     expect(testHarness.runSession).toHaveBeenCalledTimes(1);
     expect(testHarness.dependencies!.runAutomaticPostRevealReview).toHaveBeenCalledTimes(1);
     expect(testHarness.fieldGuideUpdate).toHaveBeenCalledTimes(1);
@@ -541,6 +591,20 @@ describe("Training execution", () => {
     const request = supportedAutomaticPostRevealReviewRequests(language)[requestIndex];
     const transcript = `${serializePostRevealTurn("user", request)}${serializePostRevealTurn("assistant", "Stored review")}`;
     testHarness.repository.listRvSessions = vi.fn(async () => [{ id: "session_t1", postRevealTranscript: transcript }] as never);
+    testHarness.durableSessions.set("session_t1", {
+      id: "session_t1",
+      state: "Revealed",
+      preRevealSealedAt: "now",
+      profileId: profile.id,
+      workspaceId: "workspace",
+      sessionCode: "session_t1",
+      targetId: "t1",
+      runType: "automatic",
+      preRevealTranscript: "sealed blind evidence",
+      postRevealTranscript: transcript,
+      createdAt: "now",
+      updatedAt: "now",
+    });
     const initial = run({
       targetIds: ["t1"],
       status: "Interrupted",

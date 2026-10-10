@@ -408,6 +408,98 @@ describe("durable session replay", () => {
     expect(liveChat).toHaveBeenCalledTimes(1);
   });
 
+  it("switches from full response replay to finalization-only live writes without duplicating Viewer responses", async () => {
+    const updateState = vi.fn().mockResolvedValue(undefined);
+    const append = vi.fn().mockResolvedValue(undefined);
+    const appendWithState = vi.fn().mockResolvedValue(undefined);
+    const updateTranscript = vi.fn().mockResolvedValue(undefined);
+    const seal = vi.fn().mockResolvedValue(undefined);
+    const accept = vi.fn().mockResolvedValue(undefined);
+    const usage = vi.fn().mockResolvedValue(undefined);
+    const liveChat = vi.fn();
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ schemaVersion: 4 } as unknown as SessionSnapshot),
+      updateRvSessionState: updateState,
+      appendSessionEvent: append,
+      appendSessionEventWithProviderState: appendWithState,
+      updatePreRevealTranscript: updateTranscript,
+      sealPreReveal: seal,
+      acceptReveal: accept,
+      recordTargetUsage: usage,
+    } as unknown as AppRepository;
+    const replay = await createSessionReplay({
+      repository,
+      session,
+      events: [1, 2, 3, 4].map((promptNumber) => event(promptNumber, "VIEWER_RESPONSE", `saved ${promptNumber}`, { promptNumber, source: "viewer", stepId: `lite:prompt:${promptNumber}:viewer`, accepted: true, finishReason: "stop" })),
+      liveChat,
+    });
+    const request = { config: {} as never, modelId: "m", messages: [], settings: { requested: {}, effective: {}, omitted: [] } };
+    for (let promptNumber = 1; promptNumber <= 4; promptNumber += 1) {
+      await replay.repository.appendSessionEvent(session.id, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { stepId: `lite:prompt:${promptNumber}:viewer`, attemptId: `attempt-${promptNumber}`, recoveryLevel: 0, semanticAttempt: 1 } });
+      expect((await replay.chat(request)).content).toBe(`saved ${promptNumber}`);
+      await replay.repository.appendSessionEventWithProviderState(session.id, { eventType: "VIEWER_RESPONSE", role: "assistant", content: `saved ${promptNumber}`, metadata: { stepId: `lite:prompt:${promptNumber}:viewer` } }, undefined as never);
+      await replay.repository.updatePreRevealTranscript(session.id, `transcript ${promptNumber}`);
+    }
+    await replay.repository.sealPreReveal(session.id, "transcript 4", "hash");
+    await replay.repository.appendSessionEvent(session.id, { eventType: "PRE_REVEAL_SEALED", role: "controller" });
+    await replay.repository.appendSessionEvent(session.id, { eventType: "REVEAL_TRANSITION", role: "controller" });
+    await replay.repository.acceptReveal(session.id, { source: "automatic", text: "Reveal", hash: "reveal-hash" } as never);
+    await replay.repository.recordTargetUsage({ targetId: "target", profileId: "p", sessionId: session.id });
+    await replay.repository.appendSessionEvent(session.id, { eventType: "REVEAL_ACCEPTED", role: "controller", metadata: { source: "automatic_target", targetId: "target" } });
+
+    expect(liveChat).not.toHaveBeenCalled();
+    expect(updateState).toHaveBeenCalledWith(session.id, "BlindRunning");
+    expect(updateTranscript).toHaveBeenCalledTimes(1);
+    expect(seal).toHaveBeenCalledTimes(1);
+    expect(accept).toHaveBeenCalledTimes(1);
+    expect(usage).toHaveBeenCalledTimes(1);
+    expect(appendWithState).not.toHaveBeenCalled();
+    expect(append).toHaveBeenCalledWith(session.id, expect.objectContaining({ eventType: "SESSION_RESUMED" }));
+    expect(append).toHaveBeenCalledWith(session.id, expect.objectContaining({ eventType: "REVEAL_ACCEPTED" }));
+  });
+
+  it("keeps a previously sealed session AwaitingReveal while replay finalizes the durable Reveal", async () => {
+    let state = "AwaitingReveal";
+    const sealedSession: RvSession = { ...session, state: "Interrupted", preRevealSealedAt: "2026-01-01T00:00:00.000Z", preRevealHash: "sealed-hash" };
+    const updateState = vi.fn(async (_sessionId: string, nextState: string) => { state = nextState; });
+    const acceptReveal = vi.fn(async () => {
+      if (state !== "AwaitingReveal") throw new Error("Reveal requires a sealed pre-reveal session");
+      state = "Revealed";
+    });
+    const append = vi.fn().mockResolvedValue(undefined);
+    const repository = {
+      getSessionSnapshot: vi.fn().mockResolvedValue({ schemaVersion: 4 } as unknown as SessionSnapshot),
+      updateRvSessionState: updateState,
+      appendSessionEvent: append,
+      acceptReveal,
+      recordTargetUsage: vi.fn().mockResolvedValue(undefined),
+      sealPreReveal: vi.fn().mockResolvedValue(undefined),
+      updatePreRevealTranscript: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AppRepository;
+    const replay = await createSessionReplay({
+      repository,
+      session: sealedSession,
+      events: [1, 2, 3, 4].map((promptNumber) => event(promptNumber, "VIEWER_RESPONSE", `saved ${promptNumber}`, { promptNumber, source: "viewer", stepId: `lite:prompt:${promptNumber}:viewer`, accepted: true, finishReason: "stop" })),
+    });
+    const request = { config: {} as never, modelId: "m", messages: [], settings: { requested: {}, effective: {}, omitted: [] } };
+    for (let promptNumber = 1; promptNumber <= 4; promptNumber += 1) {
+      await replay.repository.appendSessionEvent(sealedSession.id, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { stepId: `lite:prompt:${promptNumber}:viewer`, attemptId: `attempt-${promptNumber}`, recoveryLevel: 0, semanticAttempt: 1 } });
+      expect((await replay.chat(request)).content).toBe(`saved ${promptNumber}`);
+      await replay.repository.appendSessionEventWithProviderState(sealedSession.id, { eventType: "VIEWER_RESPONSE", role: "assistant", content: `saved ${promptNumber}`, metadata: { stepId: `lite:prompt:${promptNumber}:viewer` } }, undefined as never);
+      await replay.repository.updatePreRevealTranscript(sealedSession.id, `transcript ${promptNumber}`);
+    }
+    await replay.repository.sealPreReveal(sealedSession.id, "transcript 4", "sealed-hash");
+    await replay.repository.appendSessionEvent(sealedSession.id, { eventType: "PRE_REVEAL_SEALED", role: "controller" });
+    await replay.repository.appendSessionEvent(sealedSession.id, { eventType: "REVEAL_TRANSITION", role: "controller" });
+    await replay.repository.acceptReveal(sealedSession.id, { source: "automatic", text: "Reveal", hash: "reveal-hash" } as never);
+
+    expect(updateState).toHaveBeenCalledWith(sealedSession.id, "AwaitingReveal");
+    expect(updateState).not.toHaveBeenCalledWith(sealedSession.id, "BlindRunning");
+    expect(acceptReveal).toHaveBeenCalledTimes(1);
+    expect(state).toBe("Revealed");
+    expect(append).toHaveBeenCalledWith(sealedSession.id, expect.objectContaining({ eventType: "SESSION_RESUMED", metadata: expect.objectContaining({ resumeMode: "finalization" }) }));
+  });
+
   it("persists Viewer attempt start exactly at the replay-to-live boundary before provider dispatch", async () => {
     const calls: string[] = [];
     const repository = {

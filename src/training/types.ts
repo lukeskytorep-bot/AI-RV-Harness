@@ -2,11 +2,12 @@ import type { TrainingCategory } from "../targets/bundled";
 import type { TrainingTargetRepeatPolicy } from "./curriculum";
 import type { GenerationSettings } from "../providers/types";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
+import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import type { FieldGuideUpdateAuditRecord } from "../aiCenter/fieldGuideTypes";
 
 export type TrainingRunStatus = "Planned" | "Running" | "Paused" | "Interrupted" | "Completed";
 
-export type TrainingTargetStage = "session_revealed" | "review_completed" | "field_guide_update_completed" | "viewer_notes_reflection_completed" | "judging_completed";
+export type TrainingTargetStage = "blind_initializing" | "blind_running" | "session_revealed" | "review_completed" | "field_guide_update_completed" | "viewer_notes_reflection_completed" | "judging_completed";
 
 export type TrainingFieldGuidePostUpdateStatus = "UPDATE" | "NO_CHANGE" | "FAILED_CAPACITY" | "STALE_BASE" | "LEGACY_UNRECORDED";
 
@@ -21,6 +22,13 @@ export interface TrainingTargetCheckpoint {
   targetId: string;
   sessionId: string;
   stage: TrainingTargetStage;
+  /** Frozen initialization packet used only until the immutable Session Snapshot exists. */
+  blindInitialization?: {
+    sessionCode: string;
+    rvSystemPrompt?: ViewerSystemPromptSnapshot;
+    viewerNotes?: ViewerNotesSessionSnapshot;
+    automaticRevealHash: string;
+  };
   /** Stable input packet hash for the completed shared post-Reveal Review. */
   postRevealReviewPacketSha256?: string;
   /** Stable Field Guide Update packet hash when the stage is applicable. */

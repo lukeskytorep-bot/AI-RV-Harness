@@ -98,7 +98,9 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(training).toContain("executionSnapshot:");
     expect(trainingExecution).toContain("prepareFieldGuideForSession");
     expect(trainingExecution).toContain("viewerSystemPromptSnapshotFromFieldGuide");
-    expect(trainingExecution).toContain("rvSystemPrompt,");
+    expect(trainingExecution).toContain("blindInitialization");
+    expect(trainingExecution).toContain("rvSystemPrompt: frozenRvSystemPrompt");
+    expect(trainingExecution).toContain("rvSystemPrompt: frozen.rvSystemPrompt");
   });
 
   it("treats the Profile prompt column as legacy-only after schema 024", () => {

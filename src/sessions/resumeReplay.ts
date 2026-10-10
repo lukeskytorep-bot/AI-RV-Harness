@@ -61,14 +61,22 @@ export async function createSessionReplay(input: {
   let live = false;
   const base = input.repository;
 
-  const beginLiveContinuation = async (viewerAttempt?: Record<string, unknown>): Promise<void> => {
+  const beginLiveContinuation = async (viewerAttempt?: Record<string, unknown>, mode: "viewer" | "finalization" = "viewer"): Promise<void> => {
     if (live) return;
     live = true;
-    await base.updateRvSessionState(input.session.id, "BlindRunning");
+    // A sealed session must remain AwaitingReveal. Moving it back to BlindRunning
+    // violates migration 010 and would make the subsequent durable Reveal fail.
+    const resumeState = mode === "finalization" && input.session.preRevealSealedAt ? "AwaitingReveal" : "BlindRunning";
+    await base.updateRvSessionState(input.session.id, resumeState);
     await base.appendSessionEvent(input.session.id, {
       eventType: "SESSION_RESUMED",
       role: "controller",
-      metadata: { replayedResponseCount: replayEvents.length, resumedAt: new Date().toISOString(), ...(viewerAttempt ? { viewerAttempt } : {}) },
+      metadata: {
+        replayedResponseCount: replayEvents.length,
+        resumedAt: new Date().toISOString(),
+        resumeMode: mode,
+        ...(viewerAttempt ? { viewerAttempt } : {}),
+      },
     });
   };
 
@@ -136,7 +144,32 @@ export async function createSessionReplay(input: {
           await beginLiveContinuation(payload.metadata ?? undefined);
           return base.appendSessionEvent(sessionId, payload);
         }
+        if (replayIndex >= replayEvents.length && payload.eventType === "REVEAL_TRANSITION") {
+          await beginLiveContinuation(undefined, "finalization");
+          return base.appendSessionEvent(sessionId, payload);
+        }
         return undefined;
+      };
+      if (property === "updatePreRevealTranscript" && !live) return async (...args: Parameters<AppRepository["updatePreRevealTranscript"]>) => {
+        if (replayIndex < replayEvents.length || input.session.preRevealSealedAt) return undefined;
+        await beginLiveContinuation();
+        return base.updatePreRevealTranscript(...args);
+      };
+      if (property === "sealPreReveal" && !live) return async (...args: Parameters<AppRepository["sealPreReveal"]>) => {
+        if (input.session.preRevealSealedAt) return undefined;
+        if (replayIndex < replayEvents.length) return undefined;
+        await beginLiveContinuation();
+        return base.sealPreReveal(...args);
+      };
+      if (property === "acceptReveal" && !live) return async (...args: Parameters<AppRepository["acceptReveal"]>) => {
+        if (replayIndex < replayEvents.length) return undefined;
+        await beginLiveContinuation(undefined, "finalization");
+        return base.acceptReveal(...args);
+      };
+      if (property === "recordTargetUsage" && !live) return async (...args: Parameters<AppRepository["recordTargetUsage"]>) => {
+        if (replayIndex < replayEvents.length) return undefined;
+        await beginLiveContinuation(undefined, "finalization");
+        return base.recordTargetUsage(...args);
       };
       if (!live && typeof property === "string" && SUPPRESSED_REPLAY_WRITES.has(property)) return async () => undefined;
       const value = Reflect.get(target, property, receiver) as unknown;
