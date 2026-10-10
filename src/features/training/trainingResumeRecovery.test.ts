@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { serializePostRevealTurn } from "../../sessions/postRevealTranscript";
 import { supportedAutomaticPostRevealReviewRequests } from "../../sessions/postReveal";
 import type { TrainingRunRecord } from "../../training/types";
+import type { AppRepository } from "../../storage/repository";
 import { prepareTrainingRunResume } from "./trainingResumeRecovery";
 
-function run(): TrainingRunRecord {
+function run(overrides: Partial<TrainingRunRecord> = {}): TrainingRunRecord {
   return {
     id: "run-1", runNumber: 1, name: "Training", status: "Interrupted", mode: "partial",
     profileId: "p", workspaceId: "w", modelRoute: "route", protocolVariant: "extended",
@@ -13,6 +14,7 @@ function run(): TrainingRunRecord {
     activeTargetCheckpoint: { targetId: "t", sessionId: "s", stage: "session_revealed" },
     executionSnapshot: { language: "en", generationSettings: {}, transport: { maxRetries: 1, requestTimeoutMs: 1000, sessionCodePrefix: "T" } },
     errors: [], createdAt: "now", updatedAt: "now",
+    ...overrides,
   } as TrainingRunRecord;
 }
 
@@ -83,4 +85,20 @@ describe("Training uncertain Viewer Review Resume", () => {
     expect(confirm).not.toHaveBeenCalled();
     expect(repo.appendSessionEvent).not.toHaveBeenCalled();
   });
+  it("refuses a user-finished run before checkpoint analysis or confirmation", async () => {
+    const terminal = run({
+      status: "Interrupted",
+      termination: { reason: "user_finished", endedAt: "2026-10-10T12:00:00.000Z" },
+    });
+    const repository = {
+      listTrainingRuns: vi.fn(async () => [terminal]),
+      getRvSession: vi.fn(),
+      withPostRevealReviewLease: vi.fn(),
+    } as unknown as AppRepository;
+    const confirm = vi.fn(async () => true);
+    await expect(prepareTrainingRunResume({ repository, runId: terminal.id, fallbackLanguage: "en", confirmUncertainViewerReview: confirm })).rejects.toThrow("ended by the user");
+    expect(repository.getRvSession).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
 });

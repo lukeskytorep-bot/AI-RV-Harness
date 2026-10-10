@@ -18,6 +18,7 @@ import type { TargetRecord } from "../../targets/types";
 import type { TrainingFieldGuidePostUpdateCheckpoint, TrainingRunRecord, TrainingTargetCheckpoint } from "../../training/types";
 import { FACTORY_PLANNER_VERSION, FACTORY_ROUND_SIZE } from "../../training/curriculum";
 import type { AppSettings, InterfaceLanguage, Profile, ViewerSystemPromptSnapshot } from "../../types";
+import { isTrainingRunUserFinished, userFinishedTrainingError } from "../../training/runLifecycle";
 
 type ExecutionSettings = Pick<AppSettings, "maxRetries" | "requestTimeoutMs" | "sessionCodePrefix">;
 
@@ -234,16 +235,20 @@ async function resolveTrainingFieldGuideAfterUpdate(input: {
 }
 
 export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promise<TrainingExecutionOutcome> {
+  const persisted = (await input.repository.listTrainingRuns()).find((run) => run.id === input.initial.id);
+  if (!persisted) throw new Error("Training run is no longer available.");
+  if (isTrainingRunUserFinished(persisted)) return { run: persisted, error: userFinishedTrainingError().message };
+
   const dependencies = { ...defaultDependencies, ...input.dependencies };
   const targetById = new Map(input.targets.map((target) => [target.id, target]));
-  const completed = new Set(input.initial.completedTargetIds);
+  const completed = new Set(persisted.completedTargetIds);
   const now = input.now ?? (() => new Date().toISOString());
   let working: TrainingRunRecord = {
-    ...input.initial,
-    sessionIds: input.initial.sessionIds ?? [],
-    currentIndex: firstPendingTrainingTargetIndex(input.initial),
+    ...persisted,
+    sessionIds: persisted.sessionIds ?? [],
+    currentIndex: firstPendingTrainingTargetIndex(persisted),
     status: "Running",
-    executionSnapshot: input.initial.executionSnapshot ?? {
+    executionSnapshot: persisted.executionSnapshot ?? {
       language: input.language,
       generationSettings: profileGenerationDefaults(input.profile, input.model),
       transport: { ...input.settings },
@@ -585,6 +590,11 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
     input.onRunChange?.(working);
     return { run: working };
   } catch (cause) {
+    const latest = (await input.repository.listTrainingRuns()).find((run) => run.id === working.id);
+    if (latest && isTrainingRunUserFinished(latest)) {
+      input.onRunChange?.(latest);
+      return { run: latest, error: userFinishedTrainingError().message };
+    }
     const message = cause instanceof Error ? cause.message : String(cause);
     working = { ...working, status: "Interrupted", errors: [...working.errors, message], updatedAt: now() };
     await input.repository.updateTrainingRun(working.id, { status: "Interrupted", error: message });

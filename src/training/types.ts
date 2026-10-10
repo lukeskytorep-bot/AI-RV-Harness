@@ -7,6 +7,11 @@ import type { FieldGuideUpdateAuditRecord } from "../aiCenter/fieldGuideTypes";
 
 export type TrainingRunStatus = "Planned" | "Running" | "Paused" | "Interrupted" | "Completed";
 
+export interface TrainingRunTermination {
+  reason: "user_finished";
+  endedAt: string;
+}
+
 export type TrainingTargetStage = "blind_initializing" | "blind_running" | "session_revealed" | "review_completed" | "field_guide_update_completed" | "viewer_notes_reflection_completed" | "judging_completed";
 
 export type TrainingFieldGuidePostUpdateStatus = "UPDATE" | "NO_CHANGE" | "FAILED_CAPACITY" | "STALE_BASE" | "LEGACY_UNRECORDED";
@@ -92,9 +97,11 @@ export interface TrainingRunRecord {
   updatedAt: string;
   completedAt?: string;
   archivedAt?: string;
+  /** Durable terminal marker for a run explicitly ended by the user. */
+  termination?: TrainingRunTermination;
 }
 
-export type CreateTrainingRunInput = Omit<TrainingRunRecord, "id" | "runNumber" | "createdAt" | "updatedAt" | "completedTargetIds" | "sessionIds" | "currentIndex" | "errors">;
+export type CreateTrainingRunInput = Omit<TrainingRunRecord, "id" | "runNumber" | "createdAt" | "updatedAt" | "completedTargetIds" | "sessionIds" | "currentIndex" | "errors" | "termination">;
 
 export interface UpdateTrainingRunInput {
   status?: TrainingRunStatus;
@@ -108,4 +115,5 @@ export interface UpdateTrainingRunInput {
   actualCostUsd?: number;
   error?: string;
   completedAt?: string;
+  termination?: TrainingRunTermination;
 }

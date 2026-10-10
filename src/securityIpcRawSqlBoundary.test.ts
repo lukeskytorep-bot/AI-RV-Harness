@@ -49,8 +49,14 @@ describe("SECURITY-IPC-1C-R1 SQLite IPC boundary", () => {
 
   it("keeps the fixed Rust write registry explicit and complete", () => {
     expect(writeRegistry).toContain("registeredWriteOperationCount");
-    expect(writeRegistry.match(/\["(?:INSERT|UPDATE|DELETE)/g)?.length).toBe(122);
-    expect(nativeDatabase.match(/#\[serde\(rename = "/g)?.length).toBeGreaterThanOrEqual(122);
+    expect(writeRegistry.match(/\["(?:INSERT|UPDATE|DELETE)/g)?.length).toBe(124);
+    expect(nativeDatabase.match(/#\[serde\(rename = "/g)?.length).toBeGreaterThanOrEqual(124);
+    const atomicTrainingArchive = "UPDATE training_runs SET record_json = json_set(record_json, '$.archivedAt', $1, '$.updatedAt', $1), archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL";
+    const guardedTrainingTermination = "UPDATE training_runs SET status = 'Interrupted', record_json = json_set(record_json, '$.status', 'Interrupted', '$.termination', json($1), '$.updatedAt', $2), updated_at = $2 WHERE id = $3 AND archived_at IS NULL AND status IN ('Paused', 'Interrupted', 'Running') AND COALESCE(json_extract(record_json, '$.currentIndex'), 0) < json_array_length(COALESCE(json_extract(record_json, '$.targetIds'), '[]')) AND COALESCE(json_extract(record_json, '$.termination.reason'), '') = ''";
+    expect(writeRegistry).toContain(atomicTrainingArchive);
+    expect(nativeDatabase).toContain(atomicTrainingArchive);
+    expect(writeRegistry).toContain(guardedTrainingTermination);
+    expect(nativeDatabase).toContain(guardedTrainingTermination);
   });
 
 

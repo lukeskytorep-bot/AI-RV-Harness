@@ -112,6 +112,10 @@ export async function exportTrainingRun(
   const additionalMetadata: ExportMetadataField[] = [
     { label: language === "pl" ? "Numer treningu" : "Training run", value: run.runNumber },
     { label: language === "pl" ? "Postęp" : "Progress", value: `${run.completedTargetIds.length}/${run.targetIds.length}` },
+    ...(run.termination?.reason === "user_finished" ? [
+      { label: language === "pl" ? "Zakończenie" : "Termination", value: language === "pl" ? "Zakończony przez użytkownika" : "Ended by user" },
+      { label: language === "pl" ? "Czas zakończenia" : "Ended at", value: run.termination.endedAt },
+    ] : []),
     ...(run.mode === "full" && run.plannerVersion === FACTORY_PLANNER_VERSION && run.roundSize === FACTORY_ROUND_SIZE ? [
       { label: language === "pl" ? "Planner" : "Planner", value: run.plannerVersion },
       { label: language === "pl" ? "Przebiegi" : "Rounds", value: `${run.roundCount ?? Math.ceil(run.targetIds.length / FACTORY_ROUND_SIZE)} × ${FACTORY_ROUND_SIZE}` },

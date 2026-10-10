@@ -87,6 +87,8 @@ export type DatabaseWriteOperation =
   | "training_update_training_runs_01"
   | "training_update_training_runs_02"
   | "training_update_training_runs_03"
+  | "training_update_training_runs_04"
+  | "training_update_training_runs_05"
   | "telepathic_upsert_series_01"
   | "telepathic_upsert_participant_01"
   | "telepathic_upsert_round_01"
@@ -209,8 +211,10 @@ const WRITE_OPERATIONS = new Map<string, DatabaseWriteOperation>([
   ["INSERT INTO target_usage (id, target_id, profile_id, research_project_id, session_id, used_at) VALUES ($1, $2, $3, $4, $5, $6)", "targets_insert_target_usage_01"],
   ["INSERT INTO training_runs (id, run_number, status, record_json, created_at, updated_at, archived_at) VALUES ($1, $2, $3, $4, $5, $5, NULL)", "training_insert_training_runs_01"],
   ["UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL", "training_update_training_runs_01"],
-  ["UPDATE training_runs SET record_json = $1, archived_at = $2, updated_at = $2 WHERE id = $3 AND archived_at IS NULL", "training_update_training_runs_02"],
+  ["UPDATE training_runs SET record_json = json_set(record_json, '$.archivedAt', $1, '$.updatedAt', $1), archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL", "training_update_training_runs_02"],
   ["UPDATE training_runs SET record_json = $1, archived_at = NULL, updated_at = $2 WHERE id = $3 AND archived_at IS NOT NULL", "training_update_training_runs_03"],
+  ["UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL AND COALESCE(json_extract(record_json, '$.termination.reason'), '') = ''", "training_update_training_runs_04"],
+  ["UPDATE training_runs SET status = 'Interrupted', record_json = json_set(record_json, '$.status', 'Interrupted', '$.termination', json($1), '$.updatedAt', $2), updated_at = $2 WHERE id = $3 AND archived_at IS NULL AND status IN ('Paused', 'Interrupted', 'Running') AND COALESCE(json_extract(record_json, '$.currentIndex'), 0) < json_array_length(COALESCE(json_extract(record_json, '$.targetIds'), '[]')) AND COALESCE(json_extract(record_json, '$.termination.reason'), '') = ''", "training_update_training_runs_05"],
   ["INSERT INTO telepathic_series (id, series_workspace_id, mode, language, status, current_round_index, config_json, plan_json, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_round_index=excluded.current_round_index, config_json=excluded.config_json, plan_json=excluded.plan_json, updated_at=excluded.updated_at", "telepathic_upsert_series_01"],
   ["INSERT INTO telepathic_participants (series_id, participant_id, kind, display_name, profile_id, workspace_id, ai_identity_id, provider_config_id, credential_id, model_id, model_route, route_snapshot_json, field_guide_snapshot_json, viewer_notes_snapshot_json, final_reflection_text) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(series_id, participant_id) DO UPDATE SET display_name=excluded.display_name, field_guide_snapshot_json=excluded.field_guide_snapshot_json, viewer_notes_snapshot_json=excluded.viewer_notes_snapshot_json, final_reflection_text=excluded.final_reflection_text", "telepathic_upsert_participant_01"],
   ["INSERT INTO telepathic_rounds (id, series_id, round_number, sender_participant_id, status, revealed_at, completed_at, blocked_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET status=excluded.status, revealed_at=excluded.revealed_at, completed_at=excluded.completed_at, blocked_reason=excluded.blocked_reason", "telepathic_upsert_round_01"],

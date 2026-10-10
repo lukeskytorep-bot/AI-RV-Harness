@@ -64,6 +64,7 @@ function run(overrides: Partial<TrainingRunRecord> = {}): TrainingRunRecord {
 
 function harness(sessionFailureAt?: string) {
   const updates: Array<Record<string, unknown>> = [];
+  let persistedTrainingRun: TrainingRunRecord | null = null;
   const pendingInitializationSessions = new Set<string>();
   const transcripts = new Map<string, string>();
   const durableSessions = new Map<string, { id: string; state: "BlindRunning" | "AwaitingReveal" | "Revealed" | "Interrupted"; preRevealSealedAt?: string; profileId: string; workspaceId: string; sessionCode: string; targetId: string; runType: "automatic"; preRevealTranscript: string; postRevealTranscript: string; createdAt: string; updatedAt: string }>();
@@ -89,6 +90,14 @@ function harness(sessionFailureAt?: string) {
   const repository = {
     updateTrainingRun: vi.fn(async (_id: string, update: Record<string, unknown>) => {
       updates.push(update);
+      if (persistedTrainingRun) {
+        persistedTrainingRun = {
+          ...persistedTrainingRun,
+          ...update,
+          errors: typeof update.error === "string" ? [...persistedTrainingRun.errors, update.error] : persistedTrainingRun.errors,
+          updatedAt: "later",
+        } as TrainingRunRecord;
+      }
       const checkpoint = update.activeTargetCheckpoint as { stage?: string; sessionId?: string } | undefined;
       if (checkpoint?.stage === "blind_initializing" && checkpoint.sessionId) pendingInitializationSessions.add(checkpoint.sessionId);
       if (checkpoint?.stage === "blind_running" && checkpoint.sessionId) pendingInitializationSessions.delete(checkpoint.sessionId);
@@ -103,7 +112,7 @@ function harness(sessionFailureAt?: string) {
     listTargetUsage: vi.fn(async () => durableUsage as never),
     recordTargetUsage: vi.fn(async (value: { targetId: string; profileId?: string; sessionId?: string }) => { if (!durableUsage.some((item) => item.targetId === value.targetId && item.sessionId === value.sessionId)) durableUsage.push({ ...value, id: `u${durableUsage.length + 1}`, usedAt: "now" }); }),
     listRvSessions: vi.fn(async () => [...transcripts].map(([id, postRevealTranscript]) => ({ id, postRevealTranscript })) as never),
-    listTrainingRuns: vi.fn(async () => []),
+    listTrainingRuns: vi.fn(async () => persistedTrainingRun ? [persistedTrainingRun] : []),
     listArchivedTrainingRuns: vi.fn(async () => []),
     getSessionSnapshot: vi.fn(async (sessionId: string) => {
       const rvSystemPrompt = sessionPrompts.get(sessionId);
@@ -223,10 +232,15 @@ function harness(sessionFailureAt?: string) {
     runViewerNoteReflection: reflect,
     runBlindJudging: vi.fn(async () => ({ scores: [], aggregate: null })),
   } as unknown as NonNullable<ExecuteTrainingRunInput["dependencies"]>;
-  return { repository, updates, transcripts, sessionPrompts, fieldGuideVersions, sessionByTarget, durableSessions, durableEvents, durableUsage, reflect, fieldGuideUpdate, prepareFieldGuide, promptFromFieldGuide, runSession, dependencies };
+  return {
+    repository, updates, transcripts, sessionPrompts, fieldGuideVersions, sessionByTarget, durableSessions, durableEvents, durableUsage,
+    reflect, fieldGuideUpdate, prepareFieldGuide, promptFromFieldGuide, runSession, dependencies,
+    setTrainingRun: (value: TrainingRunRecord) => { persistedTrainingRun = structuredClone(value); },
+  };
 }
 
 function input(initial: TrainingRunRecord, testHarness: ReturnType<typeof harness>, extra: Partial<ExecuteTrainingRunInput> = {}): ExecuteTrainingRunInput {
+  testHarness.setTrainingRun(initial);
   return {
     repository: testHarness.repository,
     initial,
@@ -243,6 +257,22 @@ function input(initial: TrainingRunRecord, testHarness: ReturnType<typeof harnes
   };
 }
 
+
+describe("Training terminal execution guard", () => {
+  it("refuses a user-finished run before model dependencies or Running persistence", async () => {
+    const testHarness = harness();
+    const terminal = run({
+      status: "Interrupted",
+      termination: { reason: "user_finished", endedAt: "2026-10-10T12:00:00.000Z" },
+    });
+    const outcome = await executeTrainingRun(input(terminal, testHarness));
+    expect(outcome.run.termination).toEqual(terminal.termination);
+    expect(outcome.error).toContain("ended by the user");
+    expect(testHarness.prepareFieldGuide).not.toHaveBeenCalled();
+    expect(testHarness.runSession).not.toHaveBeenCalled();
+    expect(testHarness.repository.updateTrainingRun).not.toHaveBeenCalled();
+  });
+});
 
 describe("Training round boundaries", () => {
   it("uses 8-session boundaries for Stage 3 Full Training and suppresses the automatic pause after the final round", () => {

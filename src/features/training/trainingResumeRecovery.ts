@@ -1,6 +1,7 @@
 import type { AppRepository } from "../../storage/repository";
 import type { TrainingRunRecord } from "../../training/types";
 import type { InterfaceLanguage } from "../../types";
+import { isTrainingRunUserFinished, userFinishedTrainingError } from "../../training/runLifecycle";
 import { findCompletedAutomaticViewerReviewRecord } from "../../sessions/postReveal";
 import { getPostRevealReviewRecoveryState, resolveUncertainPostRevealReviewStage } from "../../sessions/postRevealRecovery";
 
@@ -19,6 +20,7 @@ export async function prepareTrainingRunResume(input: {
 }): Promise<TrainingRunRecord | null> {
   const current = (await input.repository.listTrainingRuns()).find((run) => run.id === input.runId);
   if (!current) throw new Error("Training run is no longer available.");
+  if (isTrainingRunUserFinished(current)) throw userFinishedTrainingError();
   const checkpoint = current.activeTargetCheckpoint;
   if (!checkpoint || checkpoint.stage !== "session_revealed") return current;
 
@@ -45,6 +47,7 @@ export async function prepareTrainingRunResume(input: {
   await input.repository.withPostRevealReviewLease(checkpoint.sessionId, async () => {
     const refreshedRun = (await input.repository.listTrainingRuns()).find((run) => run.id === input.runId);
     if (!refreshedRun) throw new Error("Training run is no longer available.");
+    if (isTrainingRunUserFinished(refreshedRun)) throw userFinishedTrainingError();
     const refreshedCheckpoint = refreshedRun.activeTargetCheckpoint;
     if (!refreshedCheckpoint || refreshedCheckpoint.sessionId !== checkpoint.sessionId || refreshedCheckpoint.stage !== "session_revealed") return;
 
@@ -61,5 +64,7 @@ export async function prepareTrainingRunResume(input: {
     await resolveUncertainPostRevealReviewStage({ repository: input.repository, sessionId: checkpoint.sessionId, stage: "viewer" });
   });
 
-  return (await input.repository.listTrainingRuns()).find((run) => run.id === input.runId) ?? current;
+  const finalRun = (await input.repository.listTrainingRuns()).find((run) => run.id === input.runId) ?? current;
+  if (isTrainingRunUserFinished(finalRun)) throw userFinishedTrainingError();
+  return finalRun;
 }

@@ -35,6 +35,7 @@ import {
 } from "../../training/curriculum";
 import { exportTrainingRun } from "../../training/export";
 import type { TrainingRunRecord } from "../../training/types";
+import { isTrainingRunUserFinished } from "../../training/runLifecycle";
 import type { AppSettings, Profile, Workspace } from "../../types";
 import { SessionInspection } from "../../components/SessionInspection";
 import { executeTrainingRun } from "./trainingExecution";
@@ -96,7 +97,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   const [selectedSession, setSelectedSession] = useState<{ workspaceId: string; sessionId: string } | null>(null);
   const pauseRequested = useRef(false);
   const executionAbort = useRef<AbortController | null>(null);
-  const resumeGuard = useRef(false);
+  const trainingOperationGuard = useRef(false);
 
   const refresh = async () => {
     if (!repository) return;
@@ -142,7 +143,9 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
 
 
   const startNew = async () => {
-    if (!repository || !profile || !viewerModel || !provider || !ready) return;
+    if (!repository || !profile || !viewerModel || !provider || !ready || trainingOperationGuard.current) return;
+    trainingOperationGuard.current = true;
+    try {
     if (mode === "full" && !pack.valid) {
       setError(`${text.packError}${pack.errors.length ? ` ${pack.errors.join(", ")}` : ""}`);
       return;
@@ -213,6 +216,9 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     setTargets(latestTargets);
     setTargetUsage(latestUsage);
     await execute(run, latestTargets);
+    } finally {
+      trainingOperationGuard.current = false;
+    }
   };
 
   const execute = async (initial: TrainingRunRecord, targetCatalogue: TargetRecord[] = targets) => {
@@ -265,8 +271,8 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   };
 
   const resumeExisting = async (run: TrainingRunRecord) => {
-    if (!repository || resumeGuard.current) return;
-    resumeGuard.current = true;
+    if (!repository || trainingOperationGuard.current || isTrainingRunUserFinished(run)) return;
+    trainingOperationGuard.current = true;
     try {
       const prepared = await prepareTrainingRunResume({
         repository,
@@ -284,7 +290,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     } catch (cause) {
       setError(errorText(cause));
     } finally {
-      resumeGuard.current = false;
+      trainingOperationGuard.current = false;
     }
   };
 
