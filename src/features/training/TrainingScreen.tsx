@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, Check, CircleStop, Database, Download, FileCheck2, GraduationCap, Play, ShieldCheck } from "lucide-react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Archive, Check, CircleStop, Database, Download, FileCheck2, GraduationCap, List, Play, ShieldCheck } from "lucide-react";
+import { createPortal } from "react-dom";
 import type { getCopy } from "../../i18n";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 import { resolveSessionLanguage } from "../../domain/localization";
@@ -35,18 +36,32 @@ import {
 } from "../../training/curriculum";
 import { exportTrainingRun } from "../../training/export";
 import type { TrainingRunRecord } from "../../training/types";
-import { isTrainingRunUserFinished } from "../../training/runLifecycle";
+import { canResumeOrEndTrainingRun, isTrainingRunUserFinished } from "../../training/runLifecycle";
 import type { AppSettings, Profile, Workspace } from "../../types";
 import { SessionInspection } from "../../components/SessionInspection";
 import { executeTrainingRun } from "./trainingExecution";
 import { TelepathicTrainingPanel } from "./TelepathicTrainingPanel";
 import { prepareTrainingRunResume } from "./trainingResumeRecovery";
+import { endTrainingRun } from "./trainingTermination";
 
 type Copy = ReturnType<typeof getCopy>;
 type Mode = "full" | "partial";
 
 export function factoryPackAllowsTrainingMode(mode: "full" | "partial", packValid: boolean): boolean {
   return mode !== "full" || packValid;
+}
+
+export function acquireTrainingOperation(guard: { current: boolean }, setPending: (pending: boolean) => void): (() => void) | null {
+  if (guard.current) return null;
+  guard.current = true;
+  setPending(true);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    guard.current = false;
+    setPending(false);
+  };
 }
 
 export function TrainingScreen({ copy, settings, profiles, workspaces, repository, onOperationBusyChange }: {
@@ -95,6 +110,8 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [selectedSession, setSelectedSession] = useState<{ workspaceId: string; sessionId: string } | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(true);
+  const [trainingOperationPending, setTrainingOperationPending] = useState(false);
   const pauseRequested = useRef(false);
   const executionAbort = useRef<AbortController | null>(null);
   const trainingOperationGuard = useRef(false);
@@ -143,8 +160,9 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
 
 
   const startNew = async () => {
-    if (!repository || !profile || !viewerModel || !provider || !ready || trainingOperationGuard.current) return;
-    trainingOperationGuard.current = true;
+    if (!repository || !profile || !viewerModel || !provider || !ready) return;
+    const releaseTrainingOperation = acquireTrainingOperation(trainingOperationGuard, setTrainingOperationPending);
+    if (!releaseTrainingOperation) return;
     try {
     if (mode === "full" && !pack.valid) {
       setError(`${text.packError}${pack.errors.length ? ` ${pack.errors.join(", ")}` : ""}`);
@@ -217,7 +235,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     setTargetUsage(latestUsage);
     await execute(run, latestTargets);
     } finally {
-      trainingOperationGuard.current = false;
+      releaseTrainingOperation();
     }
   };
 
@@ -271,8 +289,9 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   };
 
   const resumeExisting = async (run: TrainingRunRecord) => {
-    if (!repository || trainingOperationGuard.current || isTrainingRunUserFinished(run)) return;
-    trainingOperationGuard.current = true;
+    if (!repository || isTrainingRunUserFinished(run)) return;
+    const releaseTrainingOperation = acquireTrainingOperation(trainingOperationGuard, setTrainingOperationPending);
+    if (!releaseTrainingOperation) return;
     try {
       const prepared = await prepareTrainingRunResume({
         repository,
@@ -290,29 +309,60 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     } catch (cause) {
       setError(errorText(cause));
     } finally {
-      trainingOperationGuard.current = false;
+      releaseTrainingOperation();
+    }
+  };
+
+  const endExisting = async (run: TrainingRunRecord) => {
+    if (!repository || busy || !canResumeOrEndTrainingRun(run)) return;
+    const releaseTrainingOperation = acquireTrainingOperation(trainingOperationGuard, setTrainingOperationPending);
+    if (!releaseTrainingOperation) return;
+    setError(null);
+    try {
+      const ended = await endTrainingRun(repository, run.id);
+      setRuns((current) => current.map((item) => item.id === ended.id ? ended : item));
+      if (activeRun?.id === ended.id) setActiveRun(ended);
+      await refresh();
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      releaseTrainingOperation();
     }
   };
 
   const archiveExisting = async (run: TrainingRunRecord) => {
-    if (!repository) return;
-    const confirmed = await dialogs.confirm({
-      title: text.archiveTraining,
-      description: text.archiveTrainingLead,
-      details: [`#${run.runNumber} · ${run.name}`, `${run.sessionIds?.length ?? 0} ${text.sessions.toLowerCase()}`],
-      confirmLabel: text.archive,
-      cancelLabel: copy.cancel,
-      severity: "warning",
-    });
-    if (!confirmed) return;
-    setError(null);
+    if (!repository || busy) return;
+    const releaseTrainingOperation = acquireTrainingOperation(trainingOperationGuard, setTrainingOperationPending);
+    if (!releaseTrainingOperation) return;
     try {
+      const confirmed = await dialogs.confirm({
+        title: text.archiveTraining,
+        description: text.archiveTrainingLead,
+        details: [`#${run.runNumber} · ${run.name}`, `${run.sessionIds?.length ?? 0} ${text.sessions.toLowerCase()}`],
+        confirmLabel: text.archive,
+        cancelLabel: copy.cancel,
+        severity: "warning",
+      });
+      if (!confirmed) return;
+
+      const fresh = (await repository.listTrainingRuns()).find((item) => item.id === run.id);
+      if (!fresh) return;
+      if (fresh.status === "Running" && run.status !== "Running") {
+        setError(text.trainingChangedBeforeArchive);
+        return;
+      }
+
+      setError(null);
       await repository.archiveTrainingRun(run.id);
       if (activeRun?.id === run.id) setActiveRun(null);
       if (expandedRunId === run.id) setExpandedRunId(null);
       if (selectedSession && run.sessionIds.includes(selectedSession.sessionId)) setSelectedSession(null);
       await refresh();
-    } catch (cause) { setError(errorText(cause)); }
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      releaseTrainingOperation();
+    }
   };
 
   const exportExisting = async (run: TrainingRunRecord) => {
@@ -343,9 +393,9 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     {helpOpen && <TrainingHelpPanel pl={pl} packTotal={pack.total} packValid={pack.valid} />}
     <div className="conversation-surface-switch training-surface-switch" role="tablist" aria-label={pl ? "Tryb treningu" : "Training mode"}>
       <button role="tab" aria-selected={true} className="active">{pl ? "Standardowy trening RV" : "Standard RV Training"}</button>
-      <button role="tab" aria-selected={false} disabled={busy} onClick={() => setSurface("telepathic")}>{pl ? "Trening telepatyczny AI–AI" : "AI–AI Telepathic Training"}</button>
+      <button role="tab" aria-selected={false} disabled={busy || trainingOperationPending} onClick={() => { if (!trainingOperationGuard.current) setSurface("telepathic"); }}>{pl ? "Trening telepatyczny AI–AI" : "AI–AI Telepathic Training"}</button>
     </div>
-    <div className="training-layout">
+    <div className={`training-layout ${historyOpen ? "history-open" : "history-collapsed"}`}>
       <section className="panel training-config">
         <TrainingSection title={text.identity}>
           <div className="training-grid"><label>{text.aiIsBe}<select value={profileId} onChange={(event) => setProfileId(event.target.value)}>{profiles.map((item) => <option key={item.id} value={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></label></div>
@@ -374,14 +424,194 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
         {mode === "partial" && <TrainingSection title={text.categories}><div className="training-category-grid">{TRAINING_CATEGORIES.map((category) => { const pool = availability.categories[category]; return <label key={category}><span>{TRAINING_CATEGORY_LABELS[category][settings.interfaceLanguage]}<small>{formatTrainingAvailability(pool, settings.targetRepeatPolicy, pl)}</small></span><input type="number" min={0} max={pool.available} value={counts[category] ?? 0} onChange={(event) => setCounts((current) => ({ ...current, [category]: Math.max(0, Math.floor(Number(event.target.value) || 0)) }))} /></label>; })}<label className="training-my-targets"><span>{text.user}<small>{formatTrainingAvailability(availability.myTargets, settings.targetRepeatPolicy, pl)}</small></span><input type="number" min={0} max={availability.myTargets.available} value={myTargetsCount} onChange={(event) => setMyTargetsCount(Math.max(0, Math.floor(Number(event.target.value) || 0)))} /></label></div></TrainingSection>}
         <TrainingSection title="AI Judge"><div className="training-grid two"><label>{text.judgeCount}<select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))}><option value={0}>0 · {text.none}</option><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>{Array.from({ length: judgeCount }, (_, index) => <label key={index}>Judge {index + 1}<ModelRouteSelect role="judge" profile={profile} providers={providers} models={models} value={judgeRoutes[index]} onChange={(next) => setJudgeRoutes((current) => current.map((value, itemIndex) => itemIndex === index ? next : value))} emptyLabel={text.selectModel} /></label>)}</div></TrainingSection>
         <TrainingSection title={text.execution}>{mode === "full" && roundCount > 1 && <label className="training-check"><input type="checkbox" checked={pauseAfterBlock} onChange={(event) => setPauseAfterBlock(event.target.checked)} /><span><strong>{text.pauseRounds}</strong><small>{text.pauseRoundsLead}</small></span></label>}<div className="training-preflight"><span><small>{text.sessions}</small><strong>{plannedSessionCount}</strong></span><span><small>{text.viewerCalls}</small><strong>{baselineViewerCalls}</strong></span><span><small>{text.judgeCalls}</small><strong>{plannedSessionCount * judgeCount}</strong></span><span><small>{text.curriculum}</small><strong>{mode === "full" ? `${FACTORY_CURRICULUM_ID}:${FACTORY_CURRICULUM_VERSION} · ${roundCount}×${FACTORY_ROUND_SIZE}` : text.partial}</strong></span><span><small>{text.repeatPolicy}</small><strong>{settings.targetRepeatPolicy === "avoid_profile" ? text.avoidProfile : text.allowRepeat}</strong></span></div><small className="training-preflight-note">{text.viewerCallNote}</small></TrainingSection>
-        <div className="training-actions">{busy ? <><button className="secondary-button" onClick={() => { pauseRequested.current = true; }}><CircleStop size={15} />{text.pauseAfterSession}</button><span>{progressLine}</span></> : <span className="disabled-action-help" title={!workspaceId ? text.workspaceRequired : plannedSessionCount <= 0 ? text.targetsRequired : !fullSelectionValid && mode === "full" ? text.noRoundsAvailable : undefined}><button className="primary-button" disabled={!ready} onClick={() => void startNew()}><Play size={15} />{mode === "full" ? `${text.startFull} · ${plannedSessionCount}` : `${text.startPartial} · ${plannedSessionCount}`}</button></span>}</div>
+        <div className="training-actions">{busy ? <><button className="secondary-button" onClick={() => { pauseRequested.current = true; }}><CircleStop size={15} />{text.pauseAfterSession}</button><span>{progressLine}</span></> : <span className="disabled-action-help" title={!workspaceId ? text.workspaceRequired : plannedSessionCount <= 0 ? text.targetsRequired : !fullSelectionValid && mode === "full" ? text.noRoundsAvailable : undefined}><button className="primary-button" disabled={!ready || trainingOperationPending} onClick={() => void startNew()}><Play size={15} />{mode === "full" ? `${text.startFull} · ${plannedSessionCount}` : `${text.startPartial} · ${plannedSessionCount}`}</button></span>}</div>
         {!workspaceId && <div className="training-requirement-note"><ShieldCheck size={15} /><span>{text.workspaceRequired}</span></div>}
         {error && <div className="provider-error">{error}</div>}{exportMessage && <div className="storage-success"><Check size={14} />{exportMessage}</div>}
       </section>
-      <aside className="training-runs panel"><div className="panel-header"><span><Database size={18} /></span><h2>{text.history}</h2></div>{activeRun && <div className="active-training-run"><strong>{activeRun.name}</strong><span>{activeRun.completedTargetIds.length}/{activeRun.targetIds.length}</span><progress max={activeRun.targetIds.length} value={activeRun.completedTargetIds.length} /><small>{progressLine || activeRun.status}</small></div>}<div className="training-run-list">{runs.map((run) => <article key={run.id} className={expandedRunId === run.id ? "expanded" : ""}><div className="training-run-meta"><strong>#{run.runNumber} · {run.name}</strong><small>{run.status} · {run.completedTargetIds.length}/{run.targetIds.length} · Lite {run.protocolVariant}</small></div>{(run.status === "Paused" || run.status === "Interrupted" || run.status === "Running") && !busy && run.currentIndex < run.targetIds.length && <button className="secondary-button training-resume-button" onClick={() => void resumeExisting(run)}><Play size={13} />{text.resume}</button>}<div className="training-run-actions">{Boolean(run.sessionIds?.length) && <button className="secondary-button" onClick={() => setExpandedRunId((current) => current === run.id ? null : run.id)}>{text.showSessions}</button>}{Boolean(run.sessionIds?.length) && <button className="secondary-button" title={text.export} onClick={() => void exportExisting(run)}><Download size={14} />{text.saveTraining}</button>}<button className="secondary-button" disabled={busy && activeRun?.id === run.id} title={text.archiveTraining} onClick={() => void archiveExisting(run)}><Archive size={14} />{text.archive}</button></div>{expandedRunId === run.id && <div className="training-session-links">{run.sessionIds.map((sessionId, index) => <button key={sessionId} className={selectedSession?.sessionId === sessionId ? "active" : ""} onClick={() => setSelectedSession({ workspaceId: run.workspaceId, sessionId })}>{text.session} {index + 1} · {run.completedTargetIds[index] ?? sessionId}</button>)}</div>}</article>)}</div>{!runs.length && <p className="recent-session-empty">{text.noRuns}</p>}</aside>
+      <div className={`training-history-shell ${historyOpen ? "open" : "collapsed"}`}>
+        <TooltipButton
+          className="training-history-toggle"
+          label={historyOpen ? text.collapseHistory : text.expandHistory}
+          ariaExpanded={historyOpen}
+          ariaControls="training-history-panel"
+          onClick={() => setHistoryOpen((current) => !current)}
+        >{historyOpen ? "›" : "‹"}</TooltipButton>
+        <aside id="training-history-panel" className="training-runs panel" aria-hidden={!historyOpen}>
+          <div className="panel-header"><span><Database size={18} /></span><h2>{text.history}</h2></div>
+          {activeRun && <div className="active-training-run"><span className="training-history-title">{activeRun.name}</span><span>{activeRun.completedTargetIds.length}/{activeRun.targetIds.length}</span><progress max={activeRun.targetIds.length} value={activeRun.completedTargetIds.length} /><small>{progressLine || (isTrainingRunUserFinished(activeRun) ? text.endedByUser : activeRun.status)}</small></div>}
+          <div className="training-run-list">{runs.map((run) => <TrainingRunHistoryCard
+            key={run.id}
+            run={run}
+            expanded={expandedRunId === run.id}
+            selectedSessionId={selectedSession?.sessionId ?? null}
+            operationUnavailable={busy || trainingOperationPending}
+            archiveDisabled={trainingOperationPending || (busy && activeRun?.id === run.id)}
+            text={{
+              resume: text.resume, endTraining: text.endTraining, endedByUser: text.endedByUser,
+              showSessions: text.showSessions, hideSessions: text.hideSessions, saveTraining: text.export,
+              archiveTraining: text.archiveAction, session: text.session,
+            }}
+            onToggleSessions={() => setExpandedRunId((current) => current === run.id ? null : run.id)}
+            onExport={() => void exportExisting(run)}
+            onArchive={() => void archiveExisting(run)}
+            onResume={() => void resumeExisting(run)}
+            onEnd={() => void endExisting(run)}
+            onSelectSession={(sessionId) => setSelectedSession({ workspaceId: run.workspaceId, sessionId })}
+          />)}</div>
+          {!runs.length && <p className="recent-session-empty">{text.noRuns}</p>}
+        </aside>
+      </div>
     </div>
     {selectedSession && repository && <SessionInspection repository={repository} workspaceId={selectedSession.workspaceId} sessionId={selectedSession.sessionId} language={language} />}
   </div>;
+}
+
+export type TrainingTooltipPosition = { left: number; top: number; placement: "above" | "below" };
+
+export function computeTrainingTooltipPosition({
+  button, tooltip, viewportWidth, viewportHeight, margin = 10, gap = 8,
+}: {
+  button: { left: number; top: number; right: number; bottom: number; width: number; height: number };
+  tooltip: { width: number; height: number };
+  viewportWidth: number;
+  viewportHeight: number;
+  margin?: number;
+  gap?: number;
+}): TrainingTooltipPosition {
+  const maxLeft = Math.max(margin, viewportWidth - margin - tooltip.width);
+  const centeredLeft = button.left + button.width / 2 - tooltip.width / 2;
+  const left = Math.min(maxLeft, Math.max(margin, centeredLeft));
+  const aboveTop = button.top - gap - tooltip.height;
+  const belowTop = button.bottom + gap;
+  if (aboveTop >= margin) return { left, top: aboveTop, placement: "above" };
+  const maxTop = Math.max(margin, viewportHeight - margin - tooltip.height);
+  return { left, top: Math.min(maxTop, Math.max(margin, belowTop)), placement: "below" };
+}
+
+function TooltipButton({
+  label, children, className, disabled = false, ariaExpanded, ariaControls, onClick,
+}: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+  disabled?: boolean;
+  ariaExpanded?: boolean;
+  ariaControls?: string;
+  onClick: () => void;
+}) {
+  const tooltipId = useId();
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<TrainingTooltipPosition | null>(null);
+
+  const place = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const button = buttonRef.current?.getBoundingClientRect();
+    const tooltip = tooltipRef.current?.getBoundingClientRect();
+    if (!button || !tooltip || tooltip.width <= 0 || tooltip.height <= 0) return;
+    setPosition(computeTrainingTooltipPosition({
+      button,
+      tooltip,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    }));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null);
+      return;
+    }
+    place();
+  }, [label, open, place]);
+
+  useEffect(() => {
+    if (!open || typeof window === "undefined") return;
+    const update = () => place();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open, place]);
+
+  return <>
+    <button
+      ref={buttonRef}
+      className={className}
+      type="button"
+      disabled={disabled}
+      aria-label={label}
+      aria-describedby={open ? tooltipId : undefined}
+      aria-expanded={ariaExpanded}
+      aria-controls={ariaControls}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+      onClick={onClick}
+    >{children}</button>
+    {open && typeof document !== "undefined" && createPortal(
+      <div
+        ref={tooltipRef}
+        id={tooltipId}
+        role="tooltip"
+        className={`training-tooltip ${position?.placement ?? "above"}`}
+        style={position ? { left: `${position.left}px`, top: `${position.top}px`, visibility: "visible" } : { left: "0px", top: "0px", visibility: "hidden" }}
+      >{label}</div>,
+      document.body,
+    )}
+  </>;
+}
+
+export type TrainingRunHistoryCardText = {
+  resume: string;
+  endTraining: string;
+  endedByUser: string;
+  showSessions: string;
+  hideSessions: string;
+  saveTraining: string;
+  archiveTraining: string;
+  session: string;
+};
+
+export function TrainingRunHistoryCard({
+  run, expanded, selectedSessionId, operationUnavailable, archiveDisabled, text,
+  onToggleSessions, onExport, onArchive, onResume, onEnd, onSelectSession,
+}: {
+  run: TrainingRunRecord;
+  expanded: boolean;
+  selectedSessionId: string | null;
+  operationUnavailable: boolean;
+  archiveDisabled: boolean;
+  text: TrainingRunHistoryCardText;
+  onToggleSessions: () => void;
+  onExport: () => void;
+  onArchive: () => void;
+  onResume: () => void;
+  onEnd: () => void;
+  onSelectSession: (sessionId: string) => void;
+}) {
+  const canRecover = canResumeOrEndTrainingRun(run);
+  const sessionsId = `training-run-sessions-${run.id}`;
+  return <article className={expanded ? "expanded" : ""}>
+    <div className="training-run-header">
+      <span className="training-history-title" title={`#${run.runNumber} · ${run.name}`}>#{run.runNumber} · {run.name}</span>
+      <div className="training-run-icon-actions">
+        {Boolean(run.sessionIds?.length) && <TooltipButton className="icon-button" label={expanded ? text.hideSessions : text.showSessions} ariaExpanded={expanded} ariaControls={sessionsId} onClick={onToggleSessions}><List size={14} aria-hidden="true" /></TooltipButton>}
+        {Boolean(run.sessionIds?.length) && <TooltipButton className="icon-button" label={text.saveTraining} onClick={onExport}><Download size={14} aria-hidden="true" /></TooltipButton>}
+        <TooltipButton className="icon-button" label={text.archiveTraining} disabled={archiveDisabled} onClick={onArchive}><Archive size={14} aria-hidden="true" /></TooltipButton>
+      </div>
+    </div>
+    <div className="training-run-details"><small>{isTrainingRunUserFinished(run) ? text.endedByUser : run.status} · {run.completedTargetIds.length}/{run.targetIds.length} · Lite {run.protocolVariant}</small></div>
+    {canRecover && <div className="training-run-recovery-actions">
+      <button className="secondary-button training-resume-button" type="button" disabled={operationUnavailable} onClick={onResume}><Play size={13} />{text.resume}</button>
+      <button className="secondary-button training-end-button" type="button" disabled={operationUnavailable} onClick={onEnd}><CircleStop size={13} />{text.endTraining}</button>
+    </div>}
+    <div id={sessionsId} className="training-session-links" hidden={!expanded}>{expanded && run.sessionIds.map((sessionId, index) => <button key={sessionId} className={selectedSessionId === sessionId ? "active" : ""} onClick={() => onSelectSession(sessionId)}><span className="training-session-id">{text.session} {index + 1} · {run.completedTargetIds[index] ?? sessionId}</span></button>)}</div>
+  </article>;
 }
 
 function TrainingHelpPanel({ pl, packTotal, packValid }: { pl: boolean; packTotal: number; packValid: boolean }) {
@@ -447,8 +677,8 @@ function trainingSelectionError(cause: unknown, language: AppSettings["interface
 
 function labels(pl: boolean) {
   return pl ? {
-    training: "Trening AI", lead: "Kontrolowane serie treningowe RV Lite na fabrycznych i własnych celach treningowych.", viewerModel: "Model Viewera", useViewerNotes: "Użyj Viewer Notes", enabledByDefault: "Domyślnie włączone", viewerNotesHelp: "Notatki są używane w sesji i mogą zostać zaktualizowane po Revealu i własnej ocenie Viewera. Monitor i Judge są wykluczeni.", packError: "Pakiet fabryczny nie zawiera kompletnego zestawu 94 celów:", trainingRun: "Trening", identity: "AI IS-BE", aiIsBe: "AI IS-BE", noModel: "Brak modelu Viewer", noProvider: "Brak połączenia profilu", protocol: "Wariant protokołu Lite", coreLead: "Cztery podstawowe kroki.", extendedLead: "Cztery kroki z pogłębianiem pomiędzy krokiem 3 i 4.", scope: "Zakres treningu", full: "Full Training", fullLead: "1–10 przebiegów, po jednej sesji z każdej z 8 kategorii fabrycznych.", partial: "Partial Training", partialLead: "Wybierz kategorie i liczbę celów.", rounds: "Full Training", roundCount: "Liczba przebiegów", roundRange: "Zakres 1–10", dynamicMaximum: "Maksimum dla wybranego Profilu", roundLimit: "Wybrana liczba przebiegów przekracza pulę w kategorii", noRoundsAvailable: "Brak pełnego przebiegu bez powtórek. Kategoria ograniczająca:", noRoundsGuidance: "Dodaj nowe cele w tej kategorii, użyj Partial Training albo zmień ustawienie powtórek w Settings.", partialOnly: "tylko Partial Training", categories: "Kategorie", factory: "Fabryczne", user: "Moje cele", available: "dostępne", judgeCount: "Liczba AI Judge", none: "bez oceny", selectModel: "Wybierz model", execution: "Wykonanie i checkpointy", pauseRounds: "Pauza po każdym przebiegu", pauseRoundsLead: "Przy kilku przebiegach trening zatrzyma się po każdej pełnej grupie 8 sesji, ale nie po ostatniej sesji całego runu.", sessions: "Sesje", viewerCalls: "Wywołania Viewera (bazowe)", viewerCallNote: "Bazowy pipeline na sesję: 4 wywołania RV Lite + Post-Reveal Review + Field Guide Update + Viewer Notes Reflection, gdy Viewer Notes są włączone. Recovery/repair może dodać wywołanie tylko wtedy, gdy wymaga tego istniejący kontrakt domenowy.", judgeCalls: "Wywołania Judge", curriculum: "Curriculum", repeatPolicy: "Polityka powtórek", avoidProfile: "Unikaj celów użytych przez ten Profil", allowRepeat: "Zezwalaj na ponowne użycie", costCeiling: "Limit kosztu sesji RV", rvOnly: "· tylko część RV", notConfigured: "nie ustawiono", startFull: "Rozpocznij Full Training", startPartial: "Rozpocznij trening częściowy", pauseAfterSession: "Pauza po bieżącej sesji", session: "Sesja", step: "krok", pausedCheckpoint: "Trening zatrzymany na trwałym checkpoincie.", completed: "Trening zakończony.", sessionInterrupted: "Sesja treningowa została przerwana.", routeMissing: "Nie można odtworzyć trasy modelu Viewer dla tego treningu.", judgeMissing: "Nie można odtworzyć wybranej trasy Judge.", targetMissing: "Brak celu", exported: "Pakiet treningowy zapisano", history: "Ostatnie treningi", resume: "Wznów", export: "Zapisz cały trening", noRuns: "Nie wykonano jeszcze żadnego treningu.", chooseExportFolder: "Wybierz folder zapisu całego treningu", showSessions: "Pokaż sesje", saveTraining: "Zapisz trening", archive: "Archiwizuj", archiveTraining: "Archiwizować trening?", archiveTrainingLead: "Trening i należące do niego sesje znikną z aktywnych widoków, ale pozostaną bezpiecznie zapisane i będzie można je przywrócić w Archive and recovery.", workspaceRequired: "Wybrany Profil nie ma aktywnego RV Workspace ani legacy combined Workspace. Przywróć lub utwórz kompatybilny RV Workspace dla tego Profilu, aby rozpocząć Training.", targetsRequired: "Wybierz co najmniej jeden cel treningowy.",
+    training: "Trening AI", lead: "Kontrolowane serie treningowe RV Lite na fabrycznych i własnych celach treningowych.", viewerModel: "Model Viewera", useViewerNotes: "Użyj Viewer Notes", enabledByDefault: "Domyślnie włączone", viewerNotesHelp: "Notatki są używane w sesji i mogą zostać zaktualizowane po Revealu i własnej ocenie Viewera. Monitor i Judge są wykluczeni.", packError: "Pakiet fabryczny nie zawiera kompletnego zestawu 94 celów:", trainingRun: "Trening", identity: "AI IS-BE", aiIsBe: "AI IS-BE", noModel: "Brak modelu Viewer", noProvider: "Brak połączenia profilu", protocol: "Wariant protokołu Lite", coreLead: "Cztery podstawowe kroki.", extendedLead: "Cztery kroki z pogłębianiem pomiędzy krokiem 3 i 4.", scope: "Zakres treningu", full: "Full Training", fullLead: "1–10 przebiegów, po jednej sesji z każdej z 8 kategorii fabrycznych.", partial: "Partial Training", partialLead: "Wybierz kategorie i liczbę celów.", rounds: "Full Training", roundCount: "Liczba przebiegów", roundRange: "Zakres 1–10", dynamicMaximum: "Maksimum dla wybranego Profilu", roundLimit: "Wybrana liczba przebiegów przekracza pulę w kategorii", noRoundsAvailable: "Brak pełnego przebiegu bez powtórek. Kategoria ograniczająca:", noRoundsGuidance: "Dodaj nowe cele w tej kategorii, użyj Partial Training albo zmień ustawienie powtórek w Settings.", partialOnly: "tylko Partial Training", categories: "Kategorie", factory: "Fabryczne", user: "Moje cele", available: "dostępne", judgeCount: "Liczba AI Judge", none: "bez oceny", selectModel: "Wybierz model", execution: "Wykonanie i checkpointy", pauseRounds: "Pauza po każdym przebiegu", pauseRoundsLead: "Przy kilku przebiegach trening zatrzyma się po każdej pełnej grupie 8 sesji, ale nie po ostatniej sesji całego runu.", sessions: "Sesje", viewerCalls: "Wywołania Viewera (bazowe)", viewerCallNote: "Bazowy pipeline na sesję: 4 wywołania RV Lite + Post-Reveal Review + Field Guide Update + Viewer Notes Reflection, gdy Viewer Notes są włączone. Recovery/repair może dodać wywołanie tylko wtedy, gdy wymaga tego istniejący kontrakt domenowy.", judgeCalls: "Wywołania Judge", curriculum: "Curriculum", repeatPolicy: "Polityka powtórek", avoidProfile: "Unikaj celów użytych przez ten Profil", allowRepeat: "Zezwalaj na ponowne użycie", costCeiling: "Limit kosztu sesji RV", rvOnly: "· tylko część RV", notConfigured: "nie ustawiono", startFull: "Rozpocznij Full Training", startPartial: "Rozpocznij trening częściowy", pauseAfterSession: "Pauza po bieżącej sesji", session: "Sesja", step: "krok", pausedCheckpoint: "Trening zatrzymany na trwałym checkpoincie.", completed: "Trening zakończony.", sessionInterrupted: "Sesja treningowa została przerwana.", routeMissing: "Nie można odtworzyć trasy modelu Viewer dla tego treningu.", judgeMissing: "Nie można odtworzyć wybranej trasy Judge.", targetMissing: "Brak celu", exported: "Pakiet treningowy zapisano", history: "Ostatnie treningi", resume: "Wznów", export: "Zapisz cały trening", noRuns: "Nie wykonano jeszcze żadnego treningu.", chooseExportFolder: "Wybierz folder zapisu całego treningu", showSessions: "Pokaż sesje", hideSessions: "Ukryj sesje", saveTraining: "Zapisz trening", archive: "Archiwizuj", archiveAction: "Archiwizuj trening", endTraining: "Zakończ trening", endedByUser: "Zakończony przez użytkownika", collapseHistory: "Zwiń historię treningów", expandHistory: "Rozwiń historię treningów", archiveTraining: "Archiwizować trening?", trainingChangedBeforeArchive: "Trening zmienił stan podczas potwierdzania archiwizacji. Odśwież historię i spróbuj ponownie.", archiveTrainingLead: "Trening i należące do niego sesje znikną z aktywnych widoków, ale pozostaną bezpiecznie zapisane i będzie można je przywrócić w Archive and recovery.", workspaceRequired: "Wybrany Profil nie ma aktywnego RV Workspace ani legacy combined Workspace. Przywróć lub utwórz kompatybilny RV Workspace dla tego Profilu, aby rozpocząć Training.", targetsRequired: "Wybierz co najmniej jeden cel treningowy.",
   } : {
-    training: "AI Training", lead: "Controlled RV Lite training series using factory and user-added training targets.", viewerModel: "Viewer model", useViewerNotes: "Use Viewer Notes", enabledByDefault: "Enabled by default", viewerNotesHelp: "Notes are used in the session and may be updated after Reveal and the Viewer's own review. Monitor and Judge are excluded.", packError: "The factory pack does not contain the complete 94-target set:", trainingRun: "Training", identity: "AI IS-BE", aiIsBe: "AI IS-BE", noModel: "No Viewer model", noProvider: "No profile connection", protocol: "RV Lite variant", coreLead: "The four core steps only.", extendedLead: "Four steps with deepening between Steps 3 and 4.", scope: "Training scope", full: "Full Training", fullLead: "1–10 rounds, one session from each of the 8 factory categories per round.", partial: "Partial Training", partialLead: "Choose categories and target counts.", rounds: "Full Training", roundCount: "Number of rounds", roundRange: "Range 1–10", dynamicMaximum: "Maximum for the selected Profile", roundLimit: "The selected round count exceeds the available pool in", noRoundsAvailable: "No complete round is available without target reuse. Limiting category:", noRoundsGuidance: "Add targets to that category, use Partial Training, or change the repeat setting in Settings.", partialOnly: "Partial Training only", categories: "Categories", factory: "Factory", user: "My Targets", available: "available", judgeCount: "AI Judge count", none: "no evaluation", selectModel: "Select model", execution: "Execution and checkpoints", pauseRounds: "Pause after each round", pauseRoundsLead: "With multiple rounds, Training pauses after each complete group of 8 sessions, but not after the final session of the whole run.", sessions: "Sessions", viewerCalls: "Viewer calls (baseline)", viewerCallNote: "Baseline per session: 4 RV Lite calls + Post-Reveal Review + Field Guide Update + Viewer Notes Reflection when Viewer Notes are enabled. Recovery/repair can add a call only when required by the existing domain contract.", judgeCalls: "Judge calls", curriculum: "Curriculum", repeatPolicy: "Repeat policy", avoidProfile: "Avoid targets used by this Profile", allowRepeat: "Allow target reuse", costCeiling: "RV session cost ceiling", rvOnly: "· RV portion only", notConfigured: "not configured", startFull: "Start Full Training", startPartial: "Start partial training", pauseAfterSession: "Pause after current session", session: "Session", step: "step", pausedCheckpoint: "Training paused at a durable checkpoint.", completed: "Training completed.", sessionInterrupted: "The training session was interrupted.", routeMissing: "The Viewer model route for this training run is unavailable.", judgeMissing: "A selected Judge route is unavailable.", targetMissing: "Missing target", exported: "Training package saved", history: "Recent training runs", resume: "Resume", export: "Save complete training", noRuns: "No training runs yet.", chooseExportFolder: "Choose where to save the complete training", showSessions: "Show sessions", saveTraining: "Save training", archive: "Archive", archiveTraining: "Archive training?", archiveTrainingLead: "The Training run and its sessions will leave active views but remain safely stored and can be restored from Archive and recovery.", workspaceRequired: "The selected Profile has no active RV Workspace or legacy combined Workspace. Restore or create a compatible RV Workspace for this Profile before starting Training.", targetsRequired: "Select at least one training target.",
+    training: "AI Training", lead: "Controlled RV Lite training series using factory and user-added training targets.", viewerModel: "Viewer model", useViewerNotes: "Use Viewer Notes", enabledByDefault: "Enabled by default", viewerNotesHelp: "Notes are used in the session and may be updated after Reveal and the Viewer's own review. Monitor and Judge are excluded.", packError: "The factory pack does not contain the complete 94-target set:", trainingRun: "Training", identity: "AI IS-BE", aiIsBe: "AI IS-BE", noModel: "No Viewer model", noProvider: "No profile connection", protocol: "RV Lite variant", coreLead: "The four core steps only.", extendedLead: "Four steps with deepening between Steps 3 and 4.", scope: "Training scope", full: "Full Training", fullLead: "1–10 rounds, one session from each of the 8 factory categories per round.", partial: "Partial Training", partialLead: "Choose categories and target counts.", rounds: "Full Training", roundCount: "Number of rounds", roundRange: "Range 1–10", dynamicMaximum: "Maximum for the selected Profile", roundLimit: "The selected round count exceeds the available pool in", noRoundsAvailable: "No complete round is available without target reuse. Limiting category:", noRoundsGuidance: "Add targets to that category, use Partial Training, or change the repeat setting in Settings.", partialOnly: "Partial Training only", categories: "Categories", factory: "Factory", user: "My Targets", available: "available", judgeCount: "AI Judge count", none: "no evaluation", selectModel: "Select model", execution: "Execution and checkpoints", pauseRounds: "Pause after each round", pauseRoundsLead: "With multiple rounds, Training pauses after each complete group of 8 sessions, but not after the final session of the whole run.", sessions: "Sessions", viewerCalls: "Viewer calls (baseline)", viewerCallNote: "Baseline per session: 4 RV Lite calls + Post-Reveal Review + Field Guide Update + Viewer Notes Reflection when Viewer Notes are enabled. Recovery/repair can add a call only when required by the existing domain contract.", judgeCalls: "Judge calls", curriculum: "Curriculum", repeatPolicy: "Repeat policy", avoidProfile: "Avoid targets used by this Profile", allowRepeat: "Allow target reuse", costCeiling: "RV session cost ceiling", rvOnly: "· RV portion only", notConfigured: "not configured", startFull: "Start Full Training", startPartial: "Start partial training", pauseAfterSession: "Pause after current session", session: "Session", step: "step", pausedCheckpoint: "Training paused at a durable checkpoint.", completed: "Training completed.", sessionInterrupted: "The training session was interrupted.", routeMissing: "The Viewer model route for this training run is unavailable.", judgeMissing: "A selected Judge route is unavailable.", targetMissing: "Missing target", exported: "Training package saved", history: "Recent training runs", resume: "Resume", export: "Save complete training", noRuns: "No training runs yet.", chooseExportFolder: "Choose where to save the complete training", showSessions: "Show sessions", hideSessions: "Hide sessions", saveTraining: "Save training", archive: "Archive", archiveAction: "Archive training", endTraining: "End training", endedByUser: "Ended by user", collapseHistory: "Collapse training history", expandHistory: "Expand training history", archiveTraining: "Archive training?", trainingChangedBeforeArchive: "The Training run changed state while archive confirmation was open. Refresh the history and try again.", archiveTrainingLead: "The Training run and its sessions will leave active views but remain safely stored and can be restored from Archive and recovery.", workspaceRequired: "The selected Profile has no active RV Workspace or legacy combined Workspace. Restore or create a compatible RV Workspace for this Profile before starting Training.", targetsRequired: "Select at least one training target.",
   };
 }
