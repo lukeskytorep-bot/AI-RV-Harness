@@ -8,11 +8,12 @@ The completed v0.7.13 modularization work adds the following living architecture
 - [Module boundaries](MODULE_BOUNDARIES.md)
 - [ADR-0001: Modular monolith](decisions/ADR-0001-MODULAR_MONOLITH.md)
 - [ADR-0003: Stable storage facade and domain repositories](decisions/ADR-0003-STORAGE_FACADE.md)
-- [Central provider retry architecture](PROVIDER_RETRY_ARCHITECTURE_FINAL_PL.md)
+- [Central provider retry architecture](PROVIDER_RETRY_ARCHITECTURE_FINAL_EN.md) ([PL](PROVIDER_RETRY_ARCHITECTURE_FINAL_PL.md))
+- [Provider continuation contract v1](PROVIDER_CONTINUATION_CONTRACT_V1_EN.md) ([PL](PROVIDER_CONTINUATION_CONTRACT_V1_PL.md))
 - [Native Rust provider module boundaries](MODULE_BOUNDARIES.md#native-rust-provider-modules-after-etap-6)
 - [UX-DATA compatibility gate](UX_DATA_COMPATIBILITY_GATE.md)
-- [Final modularization runtime smoke](FINAL_RUNTIME_SMOKE_v0.7.13_PL.md)
-- [v0.7.14 development final runtime/release smoke](FINAL_RUNTIME_SMOKE_v0.7.14_PL.md)
+- [v0.7.13 public release verification](../releases/v0.7.13/RELEASE_VERIFICATION_v0.7.13.md)
+- [v0.7.14 development final runtime/release smoke](FINAL_RUNTIME_SMOKE_v0.7.14_EN.md) ([PL](FINAL_RUNTIME_SMOKE_v0.7.14_PL.md))
 - [Stage 9 modularization closeout](../reports/MODULARIZATION_STAGE_9_CLOSEOUT_v0.7.13_PL.md)
 
 ## Documents
@@ -23,6 +24,13 @@ The completed v0.7.13 modularization work adds the following living architecture
 | [Engineering Design and Integrity Safeguards](ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md) | Stable engineering decisions protecting blinding, evidence, judging, Research, provider normalization, recovery, and persistence. |
 | [AI Center and Viewer Notes](AI_CENTER_AND_VIEWER_NOTES.md) | Identity scope, note lifecycle, immutable provenance, source-preservation behavior, Research controls, and controlled-purge integration. |
 | [Training, target pack, and typed Workspaces](TRAINING_TARGETS_AND_TYPED_WORKSPACES.md) | Current 94-target/eight-category curriculum, Full Training rounds, Viewer learning order, top-level Conversations/RV Sessions split, typed Workspaces, and schema 027 compatibility. |
+
+## Language and publication policy
+
+- English is the default language for public-facing and living architecture documentation.
+- Polish versions may coexist as working or translated counterparts and should use the `_PL` suffix when both language versions exist.
+- Audit reports, implementation checkpoints, and internal execution plans may remain Polish unless they become part of the public architecture or release surface.
+- When both EN and PL exist, architecture indexes should link to EN first and expose PL as an alternate version.
 
 ## Documentation policy
 
