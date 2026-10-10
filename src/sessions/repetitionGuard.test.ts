@@ -57,4 +57,19 @@ describe("repetition guard", () => {
     expect(analyzeRepetitiveOutput(large)).toEqual({ severity: "clear" });
   });
 
+  it("treats long structural separators as formatting rather than semantic repetition", () => {
+    const separators = Array(80).fill("+----------------------------------------------+").join("\n");
+    expect(analyzeRepetitiveOutput(separators)).toEqual({ severity: "clear" });
+  });
+
+  it("keeps a legal fenced structural drawing clear", () => {
+    const fenced = `~~~text\n${Array(20).fill("+------------------------------+\n|                              |").join("\n")}\n~~~`;
+    expect(analyzeRepetitiveOutput(fenced)).toEqual({ severity: "clear" });
+  });
+
+  it("still stops repeated semantic text inside a fence", () => {
+    const fenced = `~~~text\n${Array(80).fill("The same semantic sentence repeats without adding any new evidence.").join("\n")}\n~~~`;
+    expect(analyzeRepetitiveOutput(fenced)).toEqual(expect.objectContaining({ severity: "stop" }));
+  });
+
 });

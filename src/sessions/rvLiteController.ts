@@ -280,13 +280,15 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     response = { ...response, content: sanitized.content };
     const stopAfterSanitizedAnthropicTurn = requiresAnthropicContinuationStopAfterContentMutation(continuationRoute, rawResponseContent, response.content);
     if (sanitized.truncated) {
+      const rawOutputSha256 = await sha256Text(rawResponseContent);
       await input.repository.appendSessionEvent(sessionId, {
         eventType: "OUTPUT_TRUNCATED_LOOP",
         role: "controller",
         content: sanitized.finding?.fragment,
-        metadata: { promptNumber, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(rawResponseContent) },
+        metadata: { promptNumber, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256 },
       });
-          return stopRun("AUTO-STOP: Viewer output entered a clear repetition runaway; the partial result was not accepted.");
+      await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: sanitized.content, metadata: { promptNumber, ...responseAcceptedMetadata, accepted: false, reason: "repetition_runaway", originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256 } });
+      return stopRun("AUTO-STOP: Viewer output entered a clear repetition runaway; the partial result was not accepted.");
     }
     let continuationState;
     try {
@@ -330,13 +332,15 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         taskResponse = { ...taskResponse, content: sanitizedTask.content };
         const stopAfterSanitizedAnthropicTask = requiresAnthropicContinuationStopAfterContentMutation(continuationRoute, rawTaskContent, taskResponse.content);
         if (sanitizedTask.truncated) {
+          const rawOutputSha256 = await sha256Text(rawTaskContent);
           await input.repository.appendSessionEvent(sessionId, {
             eventType: "OUTPUT_TRUNCATED_LOOP",
             role: "controller",
             content: sanitizedTask.finding?.fragment,
-            metadata: { promptNumber, source: "special_task", rule: sanitizedTask.finding?.rule, originalLength: sanitizedTask.originalLength, retainedLength: sanitizedTask.retainedLength, rawOutputSha256: await sha256Text(rawTaskContent) },
+            metadata: { promptNumber, source: "special_task", rule: sanitizedTask.finding?.rule, originalLength: sanitizedTask.originalLength, retainedLength: sanitizedTask.retainedLength, rawOutputSha256 },
           });
-                  return stopRun("AUTO-STOP: Viewer output entered a clear repetition runaway during Special Task; the partial result was not accepted.");
+          await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: sanitizedTask.content, metadata: { promptNumber, source: "special_task", ...taskAcceptedMetadata, accepted: false, reason: "repetition_runaway", originalLength: sanitizedTask.originalLength, retainedLength: sanitizedTask.retainedLength, rawOutputSha256 } });
+          return stopRun("AUTO-STOP: Viewer output entered a clear repetition runaway during Special Task; the partial result was not accepted.");
         }
         let taskContinuationState;
         try {

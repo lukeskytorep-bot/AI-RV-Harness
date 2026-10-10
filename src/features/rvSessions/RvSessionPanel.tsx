@@ -39,7 +39,7 @@ import { runAutomaticRvLiteSession } from "../../sessions/rvLiteController";
 import { createSessionReplay, isRecoverableProviderInterruption } from "../../sessions/resumeReplay";
 import { runOrdinaryBatch, selectBatchTargets, type OrdinaryBatchProgress, type OrdinaryBatchSessionResult } from "../../sessions/batch";
 import { storeRevealArtifact } from "../../artifacts/native";
-import type { RevealArtifactRecord, RevealInput, RvSession } from "../../sessions/types";
+import type { RevealArtifactRecord, RevealInput, RvSession, SessionEventRecord } from "../../sessions/types";
 import type { SessionStreamPreview } from "../../sessions/streamingPreview";
 import { chooseDirectory } from "../../storage/native";
 import { findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview, sendPostRevealTurn } from "../../sessions/postReveal";
@@ -54,6 +54,7 @@ import { useAppDialogs } from "../../components/AppDialogProvider";
 import { profileGenerationDefaults } from "../../profileViewerDefaults";
 import { canSelectMonitor, canSelectProtocol, isRunModeCompatible } from "../../sessions/modeCompatibility";
 import { SafeMarkdown } from "../../components/SafeMarkdown";
+import { BlindTranscriptRecord } from "../../components/BlindTranscriptRecord";
 import { reasoningOptions } from "../../providers/modelReasoningRegistry";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "../../domain/isBeIdentity";
 import { localizedMonitorEditablePrompt } from "../../resources/systemPrompts";
@@ -107,6 +108,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const [reasoning, setReasoning] = useState<"" | ReasoningEffort>("");
   const [temperature, setTemperature] = useState("");
   const [progress, setProgress] = useState<SessionProgress | null>(null);
+  const [liveBlindEvents, setLiveBlindEvents] = useState<SessionEventRecord[]>([]);
   const [streamPreview, setStreamPreview] = useState<SessionStreamPreview | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [revealText, setRevealText] = useState("");
@@ -154,6 +156,20 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const running = sessionRunning || batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
   useEffect(() => { onBusyChange?.(sessionRunning || batchRunning); return () => onBusyChange?.(false); }, [sessionRunning, batchRunning, onBusyChange]);
   const recoveryInspectionKey = recentSessions.map((session) => `${session.id}:${session.state}:${session.updatedAt}`).join("|");
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!repository || !progress?.sessionId) {
+      setLiveBlindEvents([]);
+      return () => { cancelled = true; };
+    }
+    void repository.listSessionEvents(progress.sessionId).then((events) => {
+      if (!cancelled) setLiveBlindEvents(events);
+    }).catch(() => {
+      if (!cancelled) setLiveBlindEvents([]);
+    });
+    return () => { cancelled = true; };
+  }, [repository, progress?.sessionId, progress?.state, progress?.transcript]);
 
   useEffect(() => {
     let cancelled = false;
@@ -904,9 +920,9 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
             </div>
             {executionScope === "batch" && batchProgress && <div className="batch-progress-strip"><strong>{copy.batchProgress}</strong><span>{batchProgress.current} / {batchProgress.total}</span><small>{copy.completedSessions}: {batchProgress.completed}</small></div>}
             {progress.metrics && <div className="session-run-metrics"><span><small>{copy.apiCalls}</small><strong>{progress.metrics.requestCount}</strong></span>{progress.metrics.totalTokens !== undefined && <span><small>{copy.tokens}</small><strong>{Math.round(progress.metrics.totalTokens).toLocaleString()}</strong></span>}{progress.metrics.costUsd !== undefined && <span><small>{copy.cost}</small><strong>${progress.metrics.costUsd.toFixed(4)}</strong></span>}<span><small>{copy.elapsed}</small><strong>{formatDuration(progress.metrics.sessionDurationMs)}</strong></span></div>}
-            {progress.transcript && <SafeMarkdown className="live-transcript" content={progress.transcript} />}
+            {(progress.transcript || liveBlindEvents.length > 0) && <BlindTranscriptRecord className="live-transcript" events={liveBlindEvents} fallbackTranscript={progress.transcript} interfaceLanguage={settings.interfaceLanguage} sessionLanguage={resolvedLanguage} />}
             {streamPreview?.content && <section className={`session-stream-preview ${streamPreview.role}`} aria-live="polite"><small>{streamPreview.role === "monitor" ? (settings.interfaceLanguage === "pl" ? "AI Monitor · odpowiedź w toku" : "AI Monitor · streaming") : (settings.interfaceLanguage === "pl" ? "AI Viewer · odpowiedź w toku" : "AI Viewer · streaming")}</small><SafeMarkdown content={streamPreview.content} /></section>}
-            {!progress.transcript && !streamPreview?.content && <div className="session-wait"><span className="loader-orb" /><p>{progress.state === "Preflight" ? "Preflight" : `${copy.runningPhase} ${progress.phase ?? 1}`}</p></div>}
+            {!progress.transcript && liveBlindEvents.length === 0 && !streamPreview?.content && <div className="session-wait"><span className="loader-orb" /><p>{progress.state === "Preflight" ? "Preflight" : `${copy.runningPhase} ${progress.phase ?? 1}`}</p></div>}
             {progress.awaitingStep8Questions && manualQuestionHandle && <section className="telepathic-question-stage"><div><BrainCircuit size={18} /><span><strong>{settings.interfaceLanguage === "pl" ? "Krok 8 zakończony — pytania T9" : "Step 8 complete — T9 questions"}</strong><small>{settings.interfaceLanguage === "pl" ? `Zadane pytania: ${progress.telepathicQuestionCount ?? 0}. Możesz zadawać kolejne pojedynczo.` : `Questions asked: ${progress.telepathicQuestionCount ?? 0}. You may ask more, one at a time.`}</small></span></div><textarea rows={3} value={manualQuestionText} onChange={(event) => setManualQuestionText(event.target.value)} disabled={manualQuestionBusy} placeholder={settings.interfaceLanguage === "pl" ? "Wpisz pytanie do AI Viewera…" : "Enter a question for the AI Viewer…"} /><div className="telepathic-question-actions"><button className="secondary-button" disabled={!manualQuestionText.trim() || manualQuestionBusy} onClick={() => void askManualTelepathicQuestion()}>{manualQuestionBusy ? copy.sending : (settings.interfaceLanguage === "pl" ? "Zadaj pytanie" : "Ask question")}</button><button className="primary-button" disabled={manualQuestionBusy} onClick={finishManualTelepathicQuestions}>{settings.interfaceLanguage === "pl" ? "Zakończ Krok 8 i przejdź do Kroku 9" : "Finish Step 8 and continue to Step 9"}</button></div></section>}
             {progress.state === "AwaitingReveal" && <div className="reveal-box"><div><LockKeyhole size={18} /><span><strong>{copy.awaitingReveal}</strong><small>{copy.blindRunComplete}</small></span></div><textarea rows={5} value={revealText} onChange={(event) => setRevealText(event.target.value)} placeholder={copy.revealPlaceholder} /><div className="reveal-artifact-row"><label className="secondary-button reveal-file-button">{copy.revealFiles}<input type="file" multiple accept=".txt,.md,image/png,image/jpeg,image/webp,image/gif" disabled={artifactBusy} onChange={(event) => void attachRevealFiles(event.target.files)} /></label>{artifactBusy && <small>{copy.storingFile}</small>}{revealArtifacts.map((artifact) => <span className="reveal-artifact-chip" key={`${artifact.artifactId}-${artifact.originalFileName}`}>{artifact.mimeType.startsWith("image/") ? "▣" : "≡"} {artifact.originalFileName}</span>)}</div>{revealArtifacts.some((artifact) => artifact.mimeType.startsWith("image/")) && <small className="vision-guard-note">{copy.imageJudgeGuard}</small>}<button className="primary-button" disabled={artifactBusy || (!revealText.trim() && !revealArtifacts.length)} onClick={() => void submitReveal()}>{copy.submitReveal}</button></div>}
             {(progress.state === "Revealed" || progress.state === "Completed") && <>

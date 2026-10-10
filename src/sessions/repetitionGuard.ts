@@ -36,9 +36,10 @@ export class RepetitionGuard {
  * scored. This is a last-resort repetition-runaway detector, not a size limit or semantic classifier.
  */
 export function analyzeRepetitiveOutput(content: string): RepetitionInspection {
-  return findCharacterRun(content)
-    ?? findConsecutiveIdenticalLines(content)
-    ?? findRepeatedTailBlock(content)
+  const scannable = maskFencedDrawingLines(content);
+  return findCharacterRun(scannable)
+    ?? findConsecutiveIdenticalLines(scannable)
+    ?? findRepeatedTailBlock(scannable)
     ?? { severity: "clear" };
 }
 
@@ -80,18 +81,46 @@ export function formatRepetitionStopReason(finding: RepetitionInspection): strin
   return `OUTPUT TRUNCATED: clear generation loop detected${finding.rule ? ` [${finding.rule}]` : ""}${fragment ? ` — ${fragment}` : ""}`;
 }
 
+function maskFencedDrawingLines(content: string): string {
+  const lines = content.split(/(?<=\n)/);
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+  return lines.map((line) => {
+    const markerMatch = line.match(/^\s*(`{3,}|~{3,})/);
+    const marker = markerMatch?.[1];
+    const isFenceBoundary = Boolean(marker && (!fence || (marker[0] === fence.marker && marker.length >= fence.length)));
+    const inside = Boolean(fence);
+    if (isFenceBoundary && marker) {
+      if (fence) fence = null;
+      else fence = { marker: marker[0] as "`" | "~", length: marker.length };
+      return line.replace(/[^\n\r]/g, " ");
+    }
+    if (!inside) return line;
+
+    // Fenced blocks are often used for ASCII sketches in RV. Mask only lines that
+    // are predominantly structural drawing glyphs. Natural-language/code text in
+    // a fence remains scannable, so a real repeated sentence loop is still caught.
+    const body = line.replace(/[\r\n]+$/g, "");
+    const compact = body.replace(/\s/g, "");
+    if (!compact) return line;
+    const alnum = (compact.match(/[\p{L}\p{N}]/gu) ?? []).length;
+    const structural = (compact.match(/[-_=+*~|.:/\\<>\[\]{}()^vVxX]/g) ?? []).length;
+    const drawingLike = structural >= 4 && alnum / compact.length <= 0.3;
+    return drawingLike ? line.replace(/[^\n\r]/g, " ") : line;
+  }).join("");
+}
+
 function findCharacterRun(content: string): RepetitionInspection | null {
   let runStart = 0;
   let runLength = 0;
   let previous = "";
   for (let index = 0; index < content.length; index += 1) {
     const current = content[index];
-    if (!/\s/.test(current) && current === previous) {
+    if (!/\s/.test(current) && !/[-_=+*~|.:]/.test(current) && current === previous) {
       runLength += 1;
     } else {
       previous = current;
       runStart = index;
-      runLength = /\s/.test(current) ? 0 : 1;
+      runLength = /\s/.test(current) || /[-_=+*~|.:]/.test(current) ? 0 : 1;
     }
     if (runLength >= IDENTICAL_CHARACTER_LIMIT) {
       return {
@@ -115,16 +144,17 @@ function findConsecutiveIdenticalLines(content: string): RepetitionInspection | 
 
   for (const rawLine of lines) {
     const normalized = rawLine.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-    if (normalized && normalized === previous) {
+    const structuralOnly = normalized !== "" && /^[\-_=+*~|.:\s]+$/.test(normalized);
+    if (normalized && !structuralOnly && normalized === previous) {
       runCount += 1;
       if (runCount === 3) thirdLineEnd = offset + rawLine.length;
     } else {
-      previous = normalized;
-      runCount = normalized ? 1 : 0;
+      previous = structuralOnly ? "" : normalized;
+      runCount = normalized && !structuralOnly ? 1 : 0;
       runStart = offset;
       thirdLineEnd = offset + rawLine.length;
     }
-    if (normalized && runCount >= IDENTICAL_LINE_LIMIT) {
+    if (normalized && !structuralOnly && runCount >= IDENTICAL_LINE_LIMIT) {
       return {
         severity: "stop",
         rule: "consecutive-identical-lines",
@@ -145,7 +175,7 @@ function findRepeatedTailBlock(content: string): RepetitionInspection | null {
 
   for (let period = MIN_PERIOD; period <= maxPeriod; period += 1) {
     const block = tail.slice(-period);
-    if (!block.trim() || new Set(block.replace(/\s/g, "")).size < 2) continue;
+    if (!block.trim() || new Set(block.replace(/\s/g, "")).size < 2 || !/[\p{L}\p{N}]/u.test(block)) continue;
     let repeats = 1;
     while (repeats < 200) {
       const end = tail.length - repeats * period;

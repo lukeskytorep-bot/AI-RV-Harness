@@ -212,6 +212,31 @@ describe("automatic RV Lite controller", () => {
     expect(snapshots[0].continuationRoute).toMatchObject({ transport: "anthropic-native", providerConfigId: "anthropic-p", credentialId: "c", requestedModelId: "claude-fixture", stateFormat: "anthropic-thinking-blocks", prefixPolicy: "append-only" });
   });
 
+  it("stops a real repeated-sentence loop inside fenced output before the next Lite step or Reveal", async () => {
+    const log: string[] = [];
+    const events: SessionEventInput[] = [];
+    const repo = repository(log);
+    repo.appendSessionEvent = vi.fn(async (_sessionId: string, event: SessionEventInput) => {
+      events.push(structuredClone(event));
+      log.push(event.eventType);
+      return { ...event, id: `event-${events.length}`, sessionId: "session", sequenceNumber: events.length, createdAt: "now" } as never;
+    });
+    const fencedLoop = `\`\`\`text\n${Array(80).fill("The same runaway sentence repeats with no new perceptual information.").join("\n")}\n\`\`\``;
+    let calls = 0;
+
+    const result = await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "profile", providerConfig: config, model,
+      protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, automaticTarget: target,
+      chat: async () => { calls += 1; return { content: fencedLoop, usage: {} }; },
+    });
+
+    expect(calls).toBe(1);
+    expect(result.state).toBe("Interrupted");
+    expect(events).toContainEqual(expect.objectContaining({ eventType: "VIEWER_OUTPUT_INCOMPLETE", metadata: expect.objectContaining({ reason: "repetition_runaway" }) }));
+    expect(log).not.toContain("sealed");
+    expect(log).not.toContain("reveal");
+  });
+
   it("auto-stops before replay when repetition sanitization changes an Anthropic signed turn", async () => {
     const anthropicConfig: ProviderConfig = { ...config, id: "anthropic-p", provider: "anthropic", label: "Anthropic" };
     const anthropicModel: ProviderModel = { ...model, providerConfigId: anthropicConfig.id, provider: "anthropic", modelId: "claude-fixture", route: "anthropic:claude-fixture" };
@@ -247,6 +272,7 @@ describe("automatic RV Lite controller", () => {
     expect(persistWithProviderState).not.toHaveBeenCalled();
     expect(events).not.toContainEqual(expect.objectContaining({ eventType: "VIEWER_RESPONSE" }));
     expect(events).toContainEqual(expect.objectContaining({ eventType: "OUTPUT_TRUNCATED_LOOP" }));
+    expect(events).toContainEqual(expect.objectContaining({ eventType: "VIEWER_OUTPUT_INCOMPLETE", content: expect.stringContaining("Useful perceptual evidence"), metadata: expect.objectContaining({ accepted: false, reason: "repetition_runaway" }) }));
     expect(events).toContainEqual(expect.objectContaining({ eventType: "SESSION_STOPPED", content: expect.stringContaining("repetition runaway") }));
   });
 

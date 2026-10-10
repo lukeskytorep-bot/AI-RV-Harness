@@ -170,3 +170,11 @@
 @media (max-width: 680px) {
   .telepathic-training-stack .telepathic-profile-row > label:last-child { min-width: 0; }
 }
+.blind-transcript-record { display: grid; gap: 9px; }
+.blind-transcript-block { min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); }
+.blind-transcript-block > h5 { margin: 0 0 5px; font-size: 12px; }
+.blind-transcript-block > small { display: block; margin-bottom: 6px; color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .02em; }
+.blind-transcript-block.partial { border-style: dashed; }
+.blind-transcript-block.partial > small { color: var(--warning, var(--muted)); }
+.blind-transcript-fallback > small { display: block; margin-bottom: 6px; color: var(--muted); font-size: 10px; font-weight: 750; }
+.blind-transcript-legacy { max-height: 540px; overflow: auto; margin: 0; padding: 10px; border-radius: 9px; background: var(--surface-soft); font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -321,8 +321,10 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     response = { ...response, content: sanitized.content };
     const stopAfterSanitizedAnthropicTurn = requiresAnthropicContinuationStopAfterContentMutation(continuationRoute, raw, response.content);
     if (sanitized.truncated) {
-      await input.repository.appendSessionEvent(sessionId, { eventType: "OUTPUT_TRUNCATED_LOOP", role: "controller", content: sanitized.finding?.fragment, metadata: { ...metadata, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(raw) } });
-          throw new TelepathicRunStop("AUTO-STOP: Viewer output entered a clear repetition runaway; the partial result was not accepted.");
+      const rawOutputSha256 = await sha256Text(raw);
+      await input.repository.appendSessionEvent(sessionId, { eventType: "OUTPUT_TRUNCATED_LOOP", role: "controller", content: sanitized.finding?.fragment, metadata: { ...metadata, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256 } });
+      await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: sanitized.content, metadata: { ...metadata, ...responseAcceptedMetadata, accepted: false, reason: "repetition_runaway", originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256 } });
+      throw new TelepathicRunStop("AUTO-STOP: Viewer output entered a clear repetition runaway; the partial result was not accepted.");
     }
     try {
       const persisted = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, ...responseAcceptedMetadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } });
@@ -642,8 +644,10 @@ export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathi
     response = { ...response, content: sanitized.content };
     const stopAfterSanitizedAnthropicTurn = requiresAnthropicContinuationStopAfterContentMutation(snapshot.continuationRoute, raw, response.content);
     if (sanitized.truncated) {
-      await input.repository.appendSessionEvent(input.session.id, { eventType: "OUTPUT_TRUNCATED_LOOP", role: "controller", content: sanitized.finding?.fragment, metadata: { ...metadata, resumed: true, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256: await sha256Text(raw) } });
-          throw new TelepathicRunStop("AUTO-STOP: Viewer output entered a clear repetition runaway; the partial resumed result was not accepted.");
+      const rawOutputSha256 = await sha256Text(raw);
+      await input.repository.appendSessionEvent(input.session.id, { eventType: "OUTPUT_TRUNCATED_LOOP", role: "controller", content: sanitized.finding?.fragment, metadata: { ...metadata, resumed: true, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256 } });
+      await input.repository.appendSessionEvent(input.session.id, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: sanitized.content, metadata: { ...metadata, resumed: true, ...responseAcceptedMetadata, accepted: false, reason: "repetition_runaway", originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256 } });
+      throw new TelepathicRunStop("AUTO-STOP: Viewer output entered a clear repetition runaway; the partial resumed result was not accepted.");
     }
     try {
       const persisted = await persistSessionAssistantResponse({ repository: input.repository, sessionId: input.session.id, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : snapshot.continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...metadata, resumed: true, ...responseAcceptedMetadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } });
