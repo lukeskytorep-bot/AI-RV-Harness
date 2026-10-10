@@ -61,6 +61,13 @@ export interface ResearchViewerNotesControl {
 }
 
 
+export interface ResearchViewerOutputPolicy {
+  version: 1;
+  initialTokens: number;
+  recoveryTokens: number;
+  preserveConfiguredBudget: boolean;
+}
+
 export interface ResearchConditionDefinition {
   key: string;
   label: string;
@@ -68,6 +75,8 @@ export interface ResearchConditionDefinition {
   providerConfigId: string;
   modelId: string;
   requestedSettings: GenerationSettings;
+  /** Frozen at Experiment Lock for new projects. Absent means legacy single-budget compatibility. */
+  viewerOutputPolicy?: ResearchViewerOutputPolicy;
   effectiveSettings?: EffectiveGenerationSettings;
   capabilitySnapshot?: ModelCapabilities;
   systemPrompt?: ResearchSystemPromptSnapshot;

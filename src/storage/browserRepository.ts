@@ -398,6 +398,18 @@ export class BrowserRepository implements AppRepository {
   listResearchAssignments: AppRepository["listResearchAssignments"] = (projectId) => this.researchRepository.listResearchAssignments(projectId);
   listBlindingMappings: AppRepository["listBlindingMappings"] = (projectId) => this.researchRepository.listBlindingMappings(projectId);
   updateResearchAssignment: AppRepository["updateResearchAssignment"] = (id, sessionId, status) => this.researchRepository.updateResearchAssignment(id, sessionId, status);
+  async initializeResearchSession(assignmentId: string, input: Parameters<AppRepository["initializeResearchSession"]>[1]): Promise<Awaited<ReturnType<AppRepository["initializeResearchSession"]>>> {
+    const session = await this.sessionsRepository.createRvSession(input);
+    try {
+      await this.sessionsRepository.appendSessionEvent(session.id, { eventType: "SESSION_CREATED", role: "controller", metadata: { sessionCode: session.sessionCode, researchInitialization: true } });
+      await this.researchRepository.updateResearchAssignment(assignmentId, session.id, "Initializing");
+      return session;
+    } catch (cause) {
+      // BrowserRepository is a development fallback without SQLite FK transactions. Keep the assignment authoritative;
+      // production SQLite uses one atomic transaction in SqliteRepository.initializeResearchSession().
+      throw cause;
+    }
+  }
   saveResearchResults: AppRepository["saveResearchResults"] = (projectId, results, hash) => this.researchRepository.saveResearchResults(projectId, results, hash);
   getResearchResults: AppRepository["getResearchResults"] = (projectId) => this.researchRepository.getResearchResults(projectId);
 

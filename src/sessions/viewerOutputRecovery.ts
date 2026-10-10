@@ -102,10 +102,12 @@ export function viewerOutputAttemptSettings(input: {
   operationKind?: OperationKind;
   recoveryLevel: 0 | 1;
   preserveConfiguredBudget?: boolean;
+  lockedPolicy?: { initialTokens: number; recoveryTokens: number; preserveConfiguredBudget: boolean };
 }): EffectiveGenerationSettings {
   const configured = configuredOutputTokens(input.baseSettings, input.model);
   const explicitRequested = input.baseSettings.requested.maxOutputTokens;
-  const preferred = viewerOutputPreferredBudget({
+  const lockedPreferred = input.lockedPolicy ? (input.recoveryLevel === 0 ? input.lockedPolicy.initialTokens : input.lockedPolicy.recoveryTokens) : undefined;
+  const preferred = lockedPreferred !== undefined ? Math.min(lockedPreferred, input.model.capabilities.maxOutputTokens ?? lockedPreferred) : viewerOutputPreferredBudget({
     model: input.model,
     explicitRequested,
     recoveryLevel: input.recoveryLevel,
@@ -188,6 +190,7 @@ export async function callViewerWithOutputRecovery(input: {
   operationKind?: OperationKind;
   messages: ProviderMessage[];
   preserveConfiguredBudget?: boolean;
+  lockedPolicy?: { initialTokens: number; recoveryTokens: number; preserveConfiguredBudget: boolean };
   call: (settings: EffectiveGenerationSettings, semanticAttempt: 1 | 2, attempt: ViewerOutputDispatchAttempt) => Promise<ProviderChatResponse>;
   onIncompleteAttempt?: (attempt: ViewerOutputAttemptRecord) => void | Promise<void>;
   startRecoveryLevel?: 0 | 1;
@@ -216,7 +219,8 @@ export async function callViewerWithOutputRecovery(input: {
       baseSettings: input.baseSettings,
       operationKind: kind,
       recoveryLevel,
-      preserveConfiguredBudget: input.preserveConfiguredBudget,
+      preserveConfiguredBudget: input.lockedPolicy?.preserveConfiguredBudget ?? input.preserveConfiguredBudget,
+      lockedPolicy: input.lockedPolicy,
     });
     const budget = settings.effective.maxOutputTokens!;
     const context = estimateContextBudget(input.messages, input.model.capabilities.contextTokens, budget);

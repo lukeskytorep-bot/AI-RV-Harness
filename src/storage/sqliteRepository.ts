@@ -506,6 +506,27 @@ export class SqliteRepository implements AppRepository {
   listResearchAssignments: AppRepository["listResearchAssignments"] = (projectId) => this.researchRepository.listResearchAssignments(projectId);
   listBlindingMappings: AppRepository["listBlindingMappings"] = (projectId) => this.researchRepository.listBlindingMappings(projectId);
   updateResearchAssignment: AppRepository["updateResearchAssignment"] = (id, sessionId, status) => this.researchRepository.updateResearchAssignment(id, sessionId, status);
+  async initializeResearchSession(assignmentId: string, input: Parameters<AppRepository["initializeResearchSession"]>[1]): Promise<Awaited<ReturnType<AppRepository["initializeResearchSession"]>>> {
+    const timestamp = nowIso();
+    await this.executeTransaction([
+      {
+        query: `INSERT INTO rv_sessions
+          (id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript, post_reveal_transcript, target_id, target_id_snapshot, research_project_id, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, 'Draft', $5, '', '', $6, $6, $7, $8, $8)`,
+        values: [input.id, input.workspaceId, input.profileId, input.sessionCode, input.runType, input.targetId ?? null, input.researchProjectId ?? null, timestamp],
+      },
+      {
+        query: "INSERT INTO session_events (id, session_id, sequence_number, event_type, role, content, metadata_json, created_at) SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7 FROM session_events WHERE session_id = $2",
+        values: [createId("event"), input.id, "SESSION_CREATED", "controller", null, JSON.stringify({ sessionCode: input.sessionCode, researchInitialization: true }), timestamp],
+      },
+      { query: "UPDATE research_assignments SET session_id = $1, status = $2 WHERE id = $3", values: [input.id, "Initializing", assignmentId] },
+    ]);
+    return {
+      id: input.id, workspaceId: input.workspaceId, profileId: input.profileId, sessionCode: input.sessionCode, state: "Draft", runType: input.runType,
+      preRevealTranscript: "", postRevealTranscript: "", ...(input.targetId ? { targetId: input.targetId } : {}),
+      ...(input.researchProjectId ? { researchProjectId: input.researchProjectId } : {}), createdAt: timestamp, updatedAt: timestamp,
+    };
+  }
   saveResearchResults: AppRepository["saveResearchResults"] = (projectId, results, hash) => this.researchRepository.saveResearchResults(projectId, results, hash);
   getResearchResults: AppRepository["getResearchResults"] = (projectId) => this.researchRepository.getResearchResults(projectId);
 

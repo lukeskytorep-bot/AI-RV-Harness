@@ -164,6 +164,7 @@ export interface AppRepository {
   listResearchAssignments(projectId: string): Promise<ResearchAssignmentRecord[]>;
   listBlindingMappings(projectId: string): Promise<BlindingMappingRecord[]>;
   updateResearchAssignment(id: string, sessionId: string | undefined, status: string): Promise<void>;
+  initializeResearchSession(assignmentId: string, session: CreateRvSessionInput): Promise<RvSession>;
   saveResearchResults(projectId: string, results: ResearchResults, hash: string): Promise<void>;
   getResearchResults(projectId: string): Promise<ResearchResults | null>;
   recordExport(workspaceId: string, researchProjectId: string | undefined, exportType: string, artifactPath: string, manifestHash: string): Promise<void>;

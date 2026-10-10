@@ -56,10 +56,12 @@ export interface AutomaticRvLiteRunInput {
   protocol: RvLiteProtocolResource;
   sessionLanguage: InterfaceLanguage;
   requestedSettings: GenerationSettings;
+  viewerOutputPolicy?: { version: 1; initialTokens: number; recoveryTokens: number; preserveConfiguredBudget: boolean };
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
   viewerNotes?: ViewerNotesSessionSnapshot;
   resumeSession?: RvSession;
   sessionIdentity?: { id: string; sessionCode: string };
+  initializationExistingSession?: RvSession;
   resumeContinuationRoute?: SessionContinuationRouteSnapshot;
   automaticTarget?: TargetRecord;
   capturedAutomaticReveal?: RevealInput;
@@ -95,8 +97,8 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     ? input.capturedAutomaticReveal ?? await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage)
     : undefined;
 
-  const sessionId = input.resumeSession?.id ?? input.sessionIdentity?.id ?? `session_${crypto.randomUUID()}`;
-  const sessionCode = input.resumeSession?.sessionCode ?? input.sessionIdentity?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
+  const sessionId = input.resumeSession?.id ?? input.sessionIdentity?.id ?? input.initializationExistingSession?.id ?? `session_${crypto.randomUUID()}`;
+  const sessionCode = input.resumeSession?.sessionCode ?? input.sessionIdentity?.sessionCode ?? input.initializationExistingSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const steps = renderRvLiteSteps(input.protocol, input.profileName, sessionCode);
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
   let activeViewerAttemptId: string | undefined;
@@ -121,7 +123,8 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
       baseSettings: effectiveSettings,
       operationKind: input.operationKind ?? "rv_session_viewer",
       messages: requestMessages,
-      preserveConfiguredBudget: input.operationKind === "research_viewer",
+      preserveConfiguredBudget: input.operationKind === "research_viewer" && !input.viewerOutputPolicy,
+      ...(input.viewerOutputPolicy ? { lockedPolicy: input.viewerOutputPolicy } : {}),
       startRecoveryLevel: durable.startRecoveryLevel,
       priorEffectiveMaxOutputTokens: durable.priorEffectiveMaxOutputTokens,
       call: async (settings, semanticAttempt, dispatchAttempt) => {
@@ -159,7 +162,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     return { response: result.response, durationMs, acceptedMetadata: { stepId, ...viewerOutputAcceptedMetadata(result) } };
   };
 
-  if (!input.resumeSession) {
+  if (!input.resumeSession && !input.initializationExistingSession) {
     await input.repository.createRvSession({
       id: sessionId,
       workspaceId: input.workspaceId,
@@ -193,7 +196,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
     capabilitySnapshot: JSON.parse(JSON.stringify(input.model.capabilities)) as Record<string, unknown>,
     capabilityCapturedAt: input.model.capabilities.capturedAt,
     generationSettings: effectiveSettings,
-    viewerOutputPolicy: { version: VIEWER_OUTPUT_POLICY_VERSION, initialTokens: VIEWER_OUTPUT_INITIAL_TOKENS, recoveryTokens: VIEWER_OUTPUT_RECOVERY_TOKENS, preserveConfiguredBudget: input.operationKind === "research_viewer" },
+    viewerOutputPolicy: input.viewerOutputPolicy ?? { version: VIEWER_OUTPUT_POLICY_VERSION, initialTokens: VIEWER_OUTPUT_INITIAL_TOKENS, recoveryTokens: VIEWER_OUTPUT_RECOVERY_TOKENS, preserveConfiguredBudget: input.operationKind === "research_viewer" },
     sessionLanguage: input.sessionLanguage,
     protocol: {
       id: input.protocol.id,

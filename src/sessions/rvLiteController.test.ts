@@ -283,6 +283,22 @@ describe("automatic RV Lite controller", () => {
     });
   });
 
+  it("persists the Session Snapshot before publishing reserved Research session linkage", async () => {
+    const log: string[] = [];
+    const snapshots: SessionSnapshot[] = [];
+    const repo = repository(log, snapshots);
+    let calls = 0;
+    await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 16384 },
+      sessionIdentity: { id: "session_reserved", sessionCode: "RES-TEST" },
+      onSessionCreated: async () => { expect(snapshots).toHaveLength(1); log.push("linked"); },
+      chat: async () => ({ content: `evidence ${++calls}`, finishReason: "stop", usage: {} }),
+    });
+    expect(snapshots).toHaveLength(1);
+    expect(log).toContain("linked");
+  });
+
   it("runs the Special Viewer Task in a separate call after Step 3 and appends the visible response", async () => {
     const log: string[] = [];
     const requests: string[] = [];

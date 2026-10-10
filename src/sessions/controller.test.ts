@@ -90,6 +90,20 @@ describe("automatic RCP controller", () => {
     expect(snapshots[0].researchConditionInstruction).toEqual(expect.objectContaining({ contentSha256: "d".repeat(64), fullContent: "CUSTOM VARIABLE A" }));
   });
 
+  it("persists the Session Snapshot before publishing Research session linkage", async () => {
+    const log: string[] = [];
+    let calls = 0;
+    await runAutomaticRcpSession({
+      repository: fakeRepository(log), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 16384 },
+      sessionIdentity: { id: "session_reserved", sessionCode: "RES-TEST" },
+      onSessionCreated: async () => { log.push("linked"); },
+      chat: async () => ({ content: `response ${++calls}`, finishReason: "stop", usage: {} }),
+    });
+    expect(log.indexOf("snapshot")).toBeGreaterThanOrEqual(0);
+    expect(log.indexOf("linked")).toBeGreaterThan(log.indexOf("snapshot"));
+  });
+
   it("retries the same RCP phase at 16K -> 32K after length and accepts only recovery", async () => {
     const log: string[] = [];
     const budgets: number[] = [];

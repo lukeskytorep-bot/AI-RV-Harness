@@ -63,6 +63,7 @@ export interface AutomaticRcpRunInput {
   protocol: ProtocolResource;
   sessionLanguage: InterfaceLanguage;
   requestedSettings: GenerationSettings;
+  viewerOutputPolicy?: { version: 1; initialTokens: number; recoveryTokens: number; preserveConfiguredBudget: boolean };
   signal?: AbortSignal;
   maxRetries?: number;
   requestTimeoutMs?: number;
@@ -80,6 +81,8 @@ export interface AutomaticRcpRunInput {
   viewerNotes?: ViewerNotesSessionSnapshot;
   researchConditionInstruction?: ViewerSystemPromptSnapshot;
   resumeSession?: RvSession;
+  sessionIdentity?: { id: string; sessionCode: string };
+  initializationExistingSession?: RvSession;
   resumeContinuationRoute?: SessionContinuationRouteSnapshot;
   monitor?: {
     providerConfig: ProviderConfig;
@@ -132,8 +135,8 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     ? input.capturedAutomaticReveal ?? await buildAutomaticTargetReveal(input.automaticTarget, input.sessionLanguage)
     : undefined;
 
-  const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
-  const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
+  const sessionId = input.resumeSession?.id ?? input.sessionIdentity?.id ?? input.initializationExistingSession?.id ?? `session_${crypto.randomUUID()}`;
+  const sessionCode = input.resumeSession?.sessionCode ?? input.sessionIdentity?.sessionCode ?? input.initializationExistingSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const createdAt = new Date().toISOString();
   const startedAtMs = Date.now();
   let transcript = "";
@@ -173,7 +176,8 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     const durableMetadata = { ...metadata, stepId, requestSha256 };
     const result = await callViewerWithOutputRecovery({
       model: input.model, baseSettings: effectiveSettings, operationKind: input.operationKind ?? "rv_session_viewer", messages: requestMessages,
-      preserveConfiguredBudget: input.operationKind === "research_viewer",
+      preserveConfiguredBudget: input.operationKind === "research_viewer" && !input.viewerOutputPolicy,
+      ...(input.viewerOutputPolicy ? { lockedPolicy: input.viewerOutputPolicy } : {}),
       startRecoveryLevel: durable.startRecoveryLevel,
       priorEffectiveMaxOutputTokens: durable.priorEffectiveMaxOutputTokens,
       call: async (settings, semanticAttempt, dispatchAttempt) => {
@@ -203,18 +207,18 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     return { response: result.response, durationMs, acceptedMetadata: { stepId, ...viewerOutputAcceptedMetadata(result) } };
   };
 
-  await input.repository.createRvSession({
-    id: sessionId,
-    workspaceId: input.workspaceId,
-    profileId: input.profileId,
-    sessionCode,
-    runType: input.monitor ? "automatic_monitor" : "automatic",
-    targetId: input.automaticTarget?.id,
-    researchProjectId: input.researchProjectId,
-  });
-  await input.repository.appendSessionEvent(sessionId, { eventType: "SESSION_CREATED", role: "controller", metadata: { sessionCode } });
-  if (!input.resumeSession) await input.onSessionCreated?.(sessionId, sessionCode);
-
+  if (!input.initializationExistingSession) {
+    await input.repository.createRvSession({
+      id: sessionId,
+      workspaceId: input.workspaceId,
+      profileId: input.profileId,
+      sessionCode,
+      runType: input.monitor ? "automatic_monitor" : "automatic",
+      targetId: input.automaticTarget?.id,
+      researchProjectId: input.researchProjectId,
+    });
+    await input.repository.appendSessionEvent(sessionId, { eventType: "SESSION_CREATED", role: "controller", metadata: { sessionCode } });
+  }
   const snapshot: SessionSnapshot = {
     schemaVersion: 4,
     sessionId,
@@ -235,7 +239,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     capabilitySnapshot: JSON.parse(JSON.stringify(input.model.capabilities)) as Record<string, unknown>,
     capabilityCapturedAt: input.model.capabilities.capturedAt,
     generationSettings: effectiveSettings,
-    viewerOutputPolicy: { version: VIEWER_OUTPUT_POLICY_VERSION, initialTokens: VIEWER_OUTPUT_INITIAL_TOKENS, recoveryTokens: VIEWER_OUTPUT_RECOVERY_TOKENS, preserveConfiguredBudget: input.operationKind === "research_viewer" },
+    viewerOutputPolicy: input.viewerOutputPolicy ?? { version: VIEWER_OUTPUT_POLICY_VERSION, initialTokens: VIEWER_OUTPUT_INITIAL_TOKENS, recoveryTokens: VIEWER_OUTPUT_RECOVERY_TOKENS, preserveConfiguredBudget: input.operationKind === "research_viewer" },
     sessionLanguage: input.sessionLanguage,
     protocol: {
       id: input.protocol.id,
@@ -308,6 +312,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
   currentState = "Preflight";
   await input.repository.updateRvSessionState(sessionId, currentState);
   await input.repository.saveSessionSnapshot(sessionId, snapshot, await sha256Text(JSON.stringify(snapshot)));
+  if (!input.resumeSession) await input.onSessionCreated?.(sessionId, sessionCode);
   await input.repository.appendSessionEvent(sessionId, {
     eventType: "PREFLIGHT_COMPLETE",
     role: "controller",

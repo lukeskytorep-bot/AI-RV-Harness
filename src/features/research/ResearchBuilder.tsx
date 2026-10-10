@@ -554,8 +554,8 @@ function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: {
   useEffect(() => { void repository.getResearchResults(project.id).then(setResults); }, [repository, project.id, project.state]);
   useEffect(() => { void repository.listResearchAssignments(project.id).then(setAssignments); }, [repository, project.id, project.state]);
   useEffect(() => {
-    if (project.state !== "Interrupted") { setRecoverableCount(0); return; }
-    void repository.listResearchAssignments(project.id).then((items) => setRecoverableCount(items.filter((item) => item.sessionId && !["SessionComplete", "Judged"].includes(item.status)).length));
+    if (!["Running", "Interrupted"].includes(project.state)) { setRecoverableCount(0); return; }
+    void repository.listResearchAssignments(project.id).then((items) => setRecoverableCount(items.filter((item) => item.sessionId && !["SessionComplete", "Judged", "ResumeApproved"].includes(item.status)).length));
   }, [repository, project.id, project.state]);
   const runSessions = async () => {
     const controller = new AbortController(); abortRef.current = controller; setBusy("sessions"); setError(null);
