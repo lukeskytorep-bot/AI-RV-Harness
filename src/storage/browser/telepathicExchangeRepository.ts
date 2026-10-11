@@ -1,3 +1,4 @@
+import { assertArchiveRevision } from "../../telepathicExchange/persistence";
 import type { TelepathicSeriesState } from "../../telepathicExchange/types";
 import type { TelepathicExchangeRepository } from "../contracts/telepathicExchangeRepository";
 
@@ -40,6 +41,7 @@ export class BrowserTelepathicExchangeRepository implements TelepathicExchangeRe
 
   async saveTelepathicSeries(state: TelepathicSeriesState): Promise<void> {
     const all = this.readAll();
+    assertArchiveRevision(state, all.find(item => item.config.seriesId === state.config.seriesId) ?? null);
     const next = [structuredClone(state), ...all.filter((item) => item.config.seriesId !== state.config.seriesId)];
     this.storage.setItem(TELEPATHIC_SERIES_KEY, JSON.stringify(next));
   }

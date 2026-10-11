@@ -38,6 +38,6 @@ export async function sealBlindSubmission(
 ): Promise<TelepathicBlindSubmission> {
   if (submission.status === "no_submission") return { ...submission, sealedAt: now };
   if (!submission.first) throw new Error("Cannot seal a blind submission before the first response exists.");
-  const contentSha256 = await sha256Text(JSON.stringify({ first: submission.first, second: submission.second ?? "" }));
+  const contentSha256 = await sha256Text(JSON.stringify({ first: submission.first, second: submission.second ?? "", ...(submission.guidanceResponses ? { guidanceResponses: submission.guidanceResponses } : {}) }));
   return { ...submission, status: "sealed", sealedAt: now, contentSha256 };
 }

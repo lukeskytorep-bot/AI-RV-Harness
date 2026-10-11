@@ -352,7 +352,7 @@ impl DatabaseWriteOperation {
             Self::TrainingUpdateTrainingRuns03 => "UPDATE training_runs SET record_json = $1, archived_at = NULL, updated_at = $2 WHERE id = $3 AND archived_at IS NOT NULL",
             Self::TrainingUpdateTrainingRuns04 => "UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL AND COALESCE(json_extract(record_json, '$.termination.reason'), '') = ''",
             Self::TrainingUpdateTrainingRuns05 => "UPDATE training_runs SET status = 'Interrupted', record_json = json_set(record_json, '$.status', 'Interrupted', '$.termination', json($1), '$.updatedAt', $2), updated_at = $2 WHERE id = $3 AND archived_at IS NULL AND status IN ('Paused', 'Interrupted', 'Running') AND COALESCE(json_extract(record_json, '$.currentIndex'), 0) < json_array_length(COALESCE(json_extract(record_json, '$.targetIds'), '[]')) AND COALESCE(json_extract(record_json, '$.termination.reason'), '') = ''",
-            Self::TelepathicUpsertSeries01 => "INSERT INTO telepathic_series (id, series_workspace_id, mode, language, status, current_round_index, config_json, plan_json, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_round_index=excluded.current_round_index, config_json=excluded.config_json, plan_json=excluded.plan_json, updated_at=excluded.updated_at",
+            Self::TelepathicUpsertSeries01 => "INSERT INTO telepathic_series (id, series_workspace_id, mode, language, status, current_round_index, config_json, plan_json, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_round_index=excluded.current_round_index, config_json=excluded.config_json, plan_json=excluded.plan_json, updated_at=excluded.updated_at WHERE COALESCE(json_extract(telepathic_series.plan_json,'$._runtime.archiveRevision'),0) <= COALESCE(json_extract(excluded.plan_json,'$._runtime.archiveRevision'),0)",
             Self::TelepathicUpsertParticipant01 => "INSERT INTO telepathic_participants (series_id, participant_id, kind, display_name, profile_id, workspace_id, ai_identity_id, provider_config_id, credential_id, model_id, model_route, route_snapshot_json, field_guide_snapshot_json, viewer_notes_snapshot_json, final_reflection_text) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(series_id, participant_id) DO UPDATE SET display_name=excluded.display_name, field_guide_snapshot_json=excluded.field_guide_snapshot_json, viewer_notes_snapshot_json=excluded.viewer_notes_snapshot_json, final_reflection_text=excluded.final_reflection_text",
             Self::TelepathicUpsertRound01 => "INSERT INTO telepathic_rounds (id, series_id, round_number, sender_participant_id, status, revealed_at, completed_at, blocked_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET status=excluded.status, revealed_at=excluded.revealed_at, completed_at=excluded.completed_at, blocked_reason=excluded.blocked_reason",
             Self::TelepathicInsertTarget01 => "INSERT OR IGNORE INTO telepathic_targets (round_id, sender_participant_id, content, assets_manifest_json, content_sha256, status, locked_at, transmission_ready_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
@@ -561,7 +561,13 @@ async fn execute_statement(
             structured @ (JsonValue::Array(_) | JsonValue::Object(_)) => query.bind(structured.to_string()),
         };
     }
-    query.execute(&mut **transaction).await.map(|result| result.rows_affected()).map_err(|error| error.to_string())
+    let rows = query.execute(&mut **transaction).await.map(|result| result.rows_affected()).map_err(|error| error.to_string())?;
+    // This runs inside both ordinary and fenced transactions, before any child
+    // statements. A rejected parent is a conflict, never a successful no-op.
+    if matches!(statement.operation, DatabaseWriteOperation::TelepathicUpsertSeries01) && rows != 1 {
+        return Err("Stale telepathic archive revision conflict".to_string());
+    }
+    Ok(rows)
 }
 
 async fn sqlite_pool(db_instances: &State<'_, DbInstances>) -> Result<sqlx::SqlitePool, String> {
@@ -1120,6 +1126,30 @@ mod tests {
         assert!(!directory.join("escaped.db").exists(), "VACUUM INTO must not create a file through the read channel");
 
         std::fs::remove_dir_all(directory).expect("test directory should be removed");
+    }
+
+    #[tokio::test]
+    async fn stale_telepathic_parent_is_an_error_inside_transaction() {
+        let mut connection = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE workspaces (id TEXT PRIMARY KEY)").execute(&mut connection).await.unwrap();
+        sqlx::query("INSERT INTO workspaces VALUES ('w')").execute(&mut connection).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/028_telepathic_exchange_series.sql")).execute(&mut connection).await.unwrap();
+        let statement = |plan: &str| DatabaseWriteStatement {
+            operation: DatabaseWriteOperation::TelepathicUpsertSeries01,
+            values: vec![JsonValue::from("s"), JsonValue::from("w"), JsonValue::from("conversation_exchange"), JsonValue::from("en"), JsonValue::from("paused"), JsonValue::from(0), JsonValue::from("{}"), JsonValue::from(plan), JsonValue::from("t"), JsonValue::from("t")],
+        };
+        let mut tx = connection.begin().await.unwrap();
+        execute_statement(&mut tx, statement(r#"{"_runtime":{"archiveRevision":1,"archivedAt":"saved"}}"#)).await.unwrap();
+        tx.commit().await.unwrap();
+        for old_plan in ["{}", r#"{"_runtime":{"archiveRevision":0}}"#] {
+            let mut tx = connection.begin().await.unwrap();
+            sqlx::query("UPDATE telepathic_series SET status='running' WHERE id='s'").execute(&mut *tx).await.unwrap();
+            let error = execute_statement(&mut tx, statement(old_plan)).await.unwrap_err();
+            assert!(error.contains("revision conflict"));
+            tx.rollback().await.unwrap();
+            let status: String = sqlx::query_scalar("SELECT status FROM telepathic_series WHERE id='s'").fetch_one(&mut connection).await.unwrap();
+            assert_eq!(status, "paused");
+        }
     }
 
     #[tokio::test]

@@ -69,3 +69,7 @@ ModuleHelpButton and ModuleHelpPanel provide the common green help style with th
 There is no SessionCostGuard/CostAuthorization hard per-session spend blocker in the reviewed source. Pricing, preflight estimates, usage and possible duplicate billing remain useful diagnostics. An ambiguous paid call may have been billed; uncertainty protection remains despite removal of the spend blocker. A historical cost-limit statement in a release/checkpoint report is not a current runtime requirement.
 
 Automated tests and source gates cover contracts and regressions. They do not prove desktop visual quality, upstream provider availability or completed release smoke. Execute the paired [desktop checklist](FINAL_RUNTIME_SMOKE_v0.7.14_EN.md) on the exact release candidate and record platform/commit and actual results.
+
+## Fixed-lead telepathy candidate
+
+New telepathic series implement fixed_lead_v1 with geography, optional lead cycles, automatic AI finalization and role-safe transcript/history/export. This is a candidate pending native/visual acceptance; existing sections above describe the accepted input baseline. See [candidate workflow and ownership](TELEPATHY_FIXED_LEAD_v0.7.14_EN.md) and [implementation evidence](../reports/TELEPATHY_FIXED_LEAD_TRANSCRIPT_UX_IMPLEMENTATION_PL.md).

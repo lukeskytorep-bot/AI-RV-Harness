@@ -1,3 +1,4 @@
+import { serializeTelepathicPlan, restoreTelepathicRuntime, assertArchiveRevision } from "../../telepathicExchange/persistence";
 import type { DatabaseTransactionStatement, DatabaseWriteResult } from "../databaseNative";
 import type { TelepathicExchangeRepository } from "../contracts/telepathicExchangeRepository";
 import type {
@@ -15,6 +16,7 @@ import type {
 export interface SqliteTelepathicExchangeRepositoryDependencies {
   select: <T>(query: string, values?: unknown[]) => Promise<T>;
   executeWrite: (query: string, values?: unknown[]) => Promise<DatabaseWriteResult>;
+  /** The native executor must reject a zero-row series upsert before children and roll back. */
   executeTransaction: (statements: DatabaseTransactionStatement[]) => Promise<unknown>;
   executeFencedTransaction: (input: { seriesId: string; leaseOwner: string; leaseVersion: number; statements: DatabaseTransactionStatement[] }) => Promise<number[]>;
 }
@@ -90,7 +92,7 @@ type CallRow = {
   updated_at: string;
 };
 
-const UPSERT_SERIES = "INSERT INTO telepathic_series (id, series_workspace_id, mode, language, status, current_round_index, config_json, plan_json, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_round_index=excluded.current_round_index, config_json=excluded.config_json, plan_json=excluded.plan_json, updated_at=excluded.updated_at";
+const UPSERT_SERIES = "INSERT INTO telepathic_series (id, series_workspace_id, mode, language, status, current_round_index, config_json, plan_json, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_round_index=excluded.current_round_index, config_json=excluded.config_json, plan_json=excluded.plan_json, updated_at=excluded.updated_at WHERE COALESCE(json_extract(telepathic_series.plan_json,'$._runtime.archiveRevision'),0) <= COALESCE(json_extract(excluded.plan_json,'$._runtime.archiveRevision'),0)";
 const UPSERT_PARTICIPANT = "INSERT INTO telepathic_participants (series_id, participant_id, kind, display_name, profile_id, workspace_id, ai_identity_id, provider_config_id, credential_id, model_id, model_route, route_snapshot_json, field_guide_snapshot_json, viewer_notes_snapshot_json, final_reflection_text) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(series_id, participant_id) DO UPDATE SET display_name=excluded.display_name, field_guide_snapshot_json=excluded.field_guide_snapshot_json, viewer_notes_snapshot_json=excluded.viewer_notes_snapshot_json, final_reflection_text=excluded.final_reflection_text";
 const UPSERT_ROUND = "INSERT INTO telepathic_rounds (id, series_id, round_number, sender_participant_id, status, revealed_at, completed_at, blocked_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET status=excluded.status, revealed_at=excluded.revealed_at, completed_at=excluded.completed_at, blocked_reason=excluded.blocked_reason";
 const INSERT_TARGET = "INSERT OR IGNORE INTO telepathic_targets (round_id, sender_participant_id, content, assets_manifest_json, content_sha256, status, locked_at, transmission_ready_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)";
@@ -188,6 +190,7 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
   }
 
   async saveTelepathicSeries(state: TelepathicSeriesState): Promise<void> {
+    assertArchiveRevision(state, await this.getTelepathicSeries(state.config.seriesId));
     const existingTargets = await this.dependencies.select<Array<{ round_id: string; content_sha256: string }>>(
       "SELECT round_id, content_sha256 FROM telepathic_targets WHERE round_id IN (SELECT id FROM telepathic_rounds WHERE series_id = $1)",
       [state.config.seriesId],
@@ -202,7 +205,7 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
 
     const statements: DatabaseTransactionStatement[] = [{
       query: UPSERT_SERIES,
-      values: [state.config.seriesId, state.config.seriesWorkspaceId, state.config.mode, state.config.language, state.status, state.currentRoundIndex, JSON.stringify(state.config), JSON.stringify(state.plan), state.createdAt, state.updatedAt],
+      values: [state.config.seriesId, state.config.seriesWorkspaceId, state.config.mode, state.config.language, state.status, state.currentRoundIndex, JSON.stringify(state.config), serializeTelepathicPlan(state), state.createdAt, state.updatedAt],
     }];
 
     for (const participant of state.config.participants) {
@@ -313,7 +316,7 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
         role: row.role,
         ...(row.reflection_text !== null ? { reflection: row.reflection_text } : {}),
         ...(row.share_others_consent ? { shareOthersConsent: row.share_others_consent } : {}),
-        ...(row.shared_answers_comment ? { sharedAnswersComment: row.shared_answers_comment } : {}),
+        ...(row.shared_answers_comment !== null ? { sharedAnswersComment: row.shared_answers_comment } : {}),
       };
       reflectionsByRound.set(row.round_id, map);
     }
@@ -348,6 +351,6 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
       updatedAt: row.updated_at,
     }));
     const finalReflections = Object.fromEntries(participantRows.filter((row) => row.final_reflection_text).map((row) => [row.participant_id, row.final_reflection_text!])) as Record<string, string>;
-    return { schemaVersion: 1, config, plan, currentRoundIndex: series.current_round_index, status: series.status, rounds, providerCalls, finalReflections, createdAt: series.created_at, updatedAt: series.updated_at };
+    return restoreTelepathicRuntime({ schemaVersion: 1, config, plan, currentRoundIndex: series.current_round_index, status: series.status, rounds, providerCalls, finalReflections, createdAt: series.created_at, updatedAt: series.updated_at }, structuredClone(plan));
   }
 }

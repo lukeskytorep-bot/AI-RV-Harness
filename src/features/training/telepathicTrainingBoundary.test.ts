@@ -12,10 +12,10 @@ describe("STEP 4B telepathic training UI boundary", () => {
     expect(panel).toContain("createTelepathicAiTrainingSeries");
   });
 
-  it("uses 2-6 distinct Profiles, rotating sender, frozen learning and shared durable recovery", () => {
+  it("uses 2-6 distinct Profiles, fixed lead, frozen learning and shared durable recovery", () => {
     expect(panel).toContain("selectedProfileIds.length >= 2");
     expect(panel).toContain("selectedProfileIds.length <= 6");
-    expect(panel).toContain('senderPolicy: { kind: "rotate" }');
+    expect(panel).toContain('senderPolicy: { kind: "fixed_ai"');
     expect(panel).toContain("runNextTelepathicAiRound");
     expect(panel).toContain("resumeBlockedTelepathicSeries");
     expect(panel).toContain("allowRetryForUncertainTelepathicCall");
@@ -23,9 +23,9 @@ describe("STEP 4B telepathic training UI boundary", () => {
   });
 
   it("shows the operator full round content while leaving provider isolation to the shared engine", () => {
-    expect(panel).toContain("currentViewRound.target.content");
-    expect(panel).toContain("blind?.first");
-    expect(panel).toContain("reflection?.reflection");
+    expect(panel).toContain("<TelepathicTranscript");
+    expect(panel).toContain("activeSeries.transcript ?? legacyEvents(activeSeries)");
+    expect(panel).toContain("telepathicRuntimeMetrics(activeSeries)");
     expect(panel).toContain("resolveTelepathicAiRouteFromRepository");
   });
 });

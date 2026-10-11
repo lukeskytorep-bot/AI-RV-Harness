@@ -85,6 +85,7 @@ export function buildSenderTargetPacket(input: {
   name: string;
   roundNumber: number;
   topicLabel: string;
+  geographyLabel?: string;
 }): TelepathicProviderPacket {
   const role = input.language === "pl" ? "nadawcą" : "the sender";
   return packet(
@@ -92,6 +93,7 @@ export function buildSenderTargetPacket(input: {
     [
       buildRoundGreeting(input.language, { name: input.name, role, round: input.roundNumber, topicOrHidden: input.topicLabel }),
       buildSenderTargetPrompt(input.language, { name: input.name, topicOrHidden: input.topicLabel }),
+      ...(input.geographyLabel ? [input.language === "pl" ? `Przygotuj jeden cel z kategorii ${input.topicLabel}, powiązany z obszarem: ${input.geographyLabel}. Unikaj stereotypów i listy wielu celów.` : `Prepare one target in category ${input.topicLabel}, associated with area: ${input.geographyLabel}. Avoid stereotypes and lists of targets.`] : []),
     ].join("\n\n"),
   );
 }
@@ -184,7 +186,9 @@ export async function buildReceiverRevealPacket(input: {
         target: input.target.content,
         targetFiles: files,
         ownFirst: input.blind.first ?? "",
-        ownSecond: input.blind.second ?? "",
+        ownSecond: [input.blind.second, ...(input.blind.guidanceResponses ?? []).map(r => `Cycle ${r.cycle}
+Instruction: ${r.instruction}
+Response: ${r.response}`)].filter(Boolean).join("\n\n"),
       });
   return packet(
     { seriesId: input.seriesId, roundId: input.roundId, participantId: input.participantId, callStage: "receiver_reveal" },

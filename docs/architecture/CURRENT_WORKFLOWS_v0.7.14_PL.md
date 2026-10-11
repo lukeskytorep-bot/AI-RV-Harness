@@ -47,3 +47,7 @@ AI Center, Conversation i RV Sessions korzystają ze wspólnego ProfileSelector.
 Usunięto twardą blokadę wydatku SessionCostGuard/CostAuthorization. Estymacje, usage i diagnostyka naliczeń pozostają odrębnymi danymi. Ochrona przed niepewnym dispatch nadal obowiązuje: poprzednia próba mogła zostać rozliczona.
 
 Testy DOM korzystają z jsdom i lokalnej adnotacji środowiska testu. Zmiany zależności wymagają obu plików package.json/package-lock.json. Zielone testy nie zastępują rzeczywistego Windows/Linux desktop smoke na konkretnym kandydacie.
+
+## Kandydat: telepatia ze stałym prowadzącym
+
+Nowe serie telepatyczne używają fixed_lead_v1: geografii tylko dla twórcy, opcjonalnych cykli prowadzenia, automatycznej finalizacji AI i wspólnej transkrypcji/historii/eksportu. Odbiór native i wizualny pozostaje otwarty; wcześniejsze sekcje opisują zaakceptowaną bazę wejściową. Zobacz [opis przebiegu](TELEPATHY_FIXED_LEAD_v0.7.14_EN.md) oraz [raport wdrożenia](../reports/TELEPATHY_FIXED_LEAD_TRANSCRIPT_UX_IMPLEMENTATION_PL.md).

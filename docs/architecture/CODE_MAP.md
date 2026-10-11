@@ -188,3 +188,7 @@ Stage 9 treats legacy Thread-group metadata, Workspace Sources, Custom Protocol 
 | Shared Profile/help UI | `src/components/ProfileSelector.tsx`, `ModuleHelp.tsx` | module headers share components; specific Workspace management stays in Profiles |
 
 See [current workflow contract](CURRENT_WORKFLOWS_v0.7.14_EN.md) for budget and lifecycle details.
+
+## Fixed-lead telepathy candidate (11 October 2026)
+
+The candidate adds a shared fixed-lead runtime, durable `plan_json` extension and role-safe transcript/history/export for both telepathic surfaces. Owners, legacy boundaries and open native/visual acceptance checks are documented in [Fixed-lead telepathy](TELEPATHY_FIXED_LEAD_v0.7.14_EN.md). This section is candidate scope, not accepted release evidence. Schema remains 031 and the architecture allowlist remains empty.

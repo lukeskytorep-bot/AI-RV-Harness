@@ -1,3 +1,4 @@
+import type { ProviderUsage, ProviderMessage, EffectiveGenerationSettings } from "../providers/types";
 import type { ProviderContinuationState } from "../providers/continuationContract";
 
 export type TelepathicLanguage = "pl" | "en";
@@ -54,6 +55,10 @@ export type TelepathicSenderPolicy =
 
 export interface TelepathicSeriesConfig {
   schemaVersion: 1;
+  protocolVersion?: "fixed_lead_v1";
+  leadInstructionVersion?: string;
+  leadInstruction?: string;
+  maxGuidanceCycles?: 3;
   seriesId: string;
   seriesWorkspaceId: string;
   mode: TelepathicMode;
@@ -70,6 +75,7 @@ export interface TelepathicRoundAssignment {
   roundNumber: number;
   senderParticipantId: string;
   receiverParticipantIds: string[];
+  targetGeography?: TelepathicTargetGeography;
 }
 
 export interface TelepathicSeriesPlan {
@@ -122,6 +128,7 @@ export interface TelepathicBlindSubmission {
   status: BlindStageStatus;
   first?: string;
   second?: string;
+  guidanceResponses?: Array<{ cycle: 1 | 2 | 3; instruction: string; response: string }>;
   providerAttemptCount: number;
   sealedAt?: string;
   contentSha256?: string;
@@ -193,6 +200,13 @@ export interface TelepathicProviderCallRecord {
   requestSha256: string;
   providerRequestId?: string;
   responseText?: string;
+  usage?: ProviderUsage;
+  elapsedMs?: number;
+  physicalAttempts?: number;
+  costSource?: "provider" | "estimated" | "unknown";
+  finishReason?: string;
+  requestMessages?: ProviderMessage[];
+  requestSettings?: EffectiveGenerationSettings;
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;
@@ -206,6 +220,7 @@ export interface TelepathicRoundState {
   reflectionsByParticipant: Record<string, TelepathicReflectionRecord>;
   revealedAt?: string;
   completedAt?: string;
+  guidance?: TelepathicGuidanceState;
   blockedReason?: string;
 }
 
@@ -217,7 +232,47 @@ export interface TelepathicSeriesState {
   status: "ready" | "running" | "paused" | "completed" | "cancelled" | "blocked";
   rounds: TelepathicRoundState[];
   providerCalls: TelepathicProviderCallRecord[];
+  transcript?: TelepathicTranscriptEvent[];
+  finalization?: "pending" | "running" | "completed" | "blocked";
+  activeElapsedMs?: number;
+  archivedAt?: string;
+  archiveRevision?: number;
   finalReflections: Record<string, string>;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TelepathicTargetGeography {
+  areaId: string;
+  labelPl: string;
+  labelEn: string;
+  poolVersion: string;
+}
+export interface LeadGuidanceDecision {
+  cycle: 1 | 2 | 3;
+  finishRound: boolean;
+  finishParticipantIds: string[];
+  broadcast?: { recipientIds: string[]; instruction: string };
+  individual?: Array<{ participantId: string; instruction: string }>;
+}
+export interface TelepathicGuidanceState {
+  decisions: LeadGuidanceDecision[];
+  finishedParticipantIds: string[];
+  closed: boolean;
+}
+export interface TelepathicTranscriptEvent {
+  id: string;
+  seriesId: string;
+  roundId?: string;
+  sequence: number;
+  stage: string;
+  kind: "instruction" | "materials" | "response" | "consent" | "reveal" | "reflection" | "notice";
+  authorId: string;
+  recipientIds: string[];
+  text: string;
+  providerCallId?: string;
+  providerCallStatus?: TelepathicProviderCallRecord["status"];
+  cycle?: 1 | 2 | 3;
+  attachmentRefs?: string[];
+  createdAt: string;
 }

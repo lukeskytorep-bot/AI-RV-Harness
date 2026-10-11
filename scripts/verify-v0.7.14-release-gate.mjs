@@ -36,8 +36,13 @@ requireContains("src/storage/databaseWriteOperations.ts", expiryGuard, "telepath
 requireContains("src-tauri/src/database.rs", expiryGuard, "telepathic lease expiry guard in Rust registry");
 requireFile("src/telepathicExchange/trainingPreflight.ts");
 requireFile("src/telepathicExchange/conversationPreflight.ts");
-requireContains("src/features/training/TelepathicTrainingPanel.tsx", "preflightTelepathicTrainingConfig", "Training configuration preflight");
-requireContains("src/features/conversations/TelepathicExchangePanel.tsx", "preflightTelepathicConversationConfig", "Conversation configuration preflight");
+requireContains("src/features/training/TelepathicTrainingPanel.tsx", 'protocolVersion:"fixed_lead_v1"', "Training fixed lead protocol");
+requireContains("src/features/conversations/TelepathicExchangePanel.tsx", 'protocolVersion:"fixed_lead_v1"', "Conversation fixed lead protocol");
+requireContains("src/telepathicExchange/providerGateway.ts", "preflightTelepathicPacket", "actual packet capacity validation");
+requireContains("src/telepathicExchange/providerGateway.ts", "viewerResponseCompletion", "semantic output validation");
+requireContains("src/storage/sqlite/telepathicExchangeRepository.ts", "restoreTelepathicRuntime", "durable fixed lead extensions");
+requireContains("src/telepathicExchange/fixedLeadRuntime.ts", "cycle <= 3", "bounded guidance cycles");
+for (const rel of ["src/telepathicExchange/fixedLeadEngine.test.ts", "src/storage/telepathicFixedLead.sqlite.test.ts", "src/components/TelepathicUx.dom.test.tsx"]) requireFile(rel);
 
 // Step 5 metadata and post-Reveal recovery invariants.
 requireFile("src-tauri/migrations/030_chat_message_attachment_metadata.sql");

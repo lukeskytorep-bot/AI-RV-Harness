@@ -62,7 +62,7 @@ describe("telepathic exchange persistence contract", () => {
     const statements: Array<{ query: string; values?: unknown[] }> = [];
     const repository = new SqliteTelepathicExchangeRepository({
       select: async <T,>(query: string): Promise<T> => {
-        if (query.startsWith("SELECT round_id, content_sha256 FROM telepathic_targets")) return [] as T;
+        if (query.startsWith("SELECT id, status, current_round_index, config_json, plan_json, created_at, updated_at FROM telepathic_series") || query.startsWith("SELECT round_id, content_sha256 FROM telepathic_targets")) return [] as T;
         throw new Error(`unexpected select: ${query}`);
       },
       executeWrite: async () => ({ rowsAffected: 1 }),

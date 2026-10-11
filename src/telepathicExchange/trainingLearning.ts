@@ -79,10 +79,10 @@ export async function freezeTelepathicTrainingLearning(input: {
   config: TelepathicSeriesConfig;
   now?: () => string;
 }): Promise<TelepathicSeriesConfig> {
-  if (input.config.mode !== "ai_ai_training") throw new Error("Viewer Learning snapshots are frozen only for AI-AI telepathic training.");
-  if (input.config.participants.some((item) => item.kind !== "ai" || !item.ai)) throw new Error("AI-AI telepathic training requires AI participants with frozen route snapshots.");
+  if (input.config.mode !== "ai_ai_training" && input.config.protocolVersion !== "fixed_lead_v1") throw new Error("Viewer Learning snapshots require AI Training or fixed-lead Conversation.");
+  if (input.config.participants.some((item) => item.kind === "ai" && !item.ai)) throw new Error("AI-AI telepathic training requires AI participants with frozen route snapshots.");
   const capturedAt = nowIso(input.now);
-  const participants = await Promise.all(input.config.participants.map(async (item) => ({
+  const participants = await Promise.all(input.config.participants.map(async (item) => item.kind === "human" ? structuredClone(item) : ({
     ...structuredClone(item),
     fieldGuide: await snapshotFieldGuide({ repository: input.repository, participant: item, language: input.config.language, capturedAt }),
     viewerNotes: await snapshotViewerNotes({ repository: input.repository, participant: item, capturedAt }),

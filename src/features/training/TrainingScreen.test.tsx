@@ -339,13 +339,14 @@ describe("TrainingScreen", () => {
     expect(source).toContain("const releaseTrainingOperation = acquireTrainingOperation(trainingOperationGuard, setTrainingOperationPending)");
     expect(source).toContain("const fresh = (await repository.listTrainingRuns()).find((item) => item.id === run.id)");
     expect(source).toContain('disabled={busy || trainingOperationPending}');
-    expect(source).toContain('onFocus={() => setOpen(true)}');
-    expect(source).toContain('onMouseEnter={() => setOpen(true)}');
-    expect(source).toContain('createPortal(');
-    expect(source).toContain('role="tooltip"');
-    expect(source).toContain('tooltipRef.current?.getBoundingClientRect()');
-    expect(source).toContain('window.addEventListener("resize", update)');
-    expect(source).toContain('window.addEventListener("scroll", update, true)');
+    const tooltip = fs.readFileSync(path.join(process.cwd(), "src/components/TooltipButton.tsx"), "utf8");
+    expect(tooltip).toContain('onFocus={() => setOpen(true)}');
+    expect(tooltip).toContain('onMouseEnter={() => setOpen(true)}');
+    expect(tooltip).toContain('createPortal(');
+    expect(tooltip).toContain('role="tooltip"');
+    expect(tooltip).toContain('tooltipRef.current?.getBoundingClientRect()');
+    expect(tooltip).toContain('window.addEventListener("resize", update)');
+    expect(tooltip).toContain('window.addEventListener("scroll", update, true)');
   });
 
 });

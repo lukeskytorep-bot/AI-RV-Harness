@@ -32,10 +32,10 @@ describe("STEP 4B stabilization boundary", () => {
     expect(panel).toContain("refreshGenerationRef.current += 1;");
   });
 
-  it("requires a visible configuration preflight before Start", () => {
-    expect(panel).toContain("preflightTelepathicTrainingConfig");
-    expect(panel).toContain("Run preflight");
-    expect(panel).toContain("Baseline cost estimate");
-    expect(panel).toContain("!configPreflight?.ok");
+  it("starts without a visible cost preflight and keeps authoritative engine validation", () => {
+    expect(panel).not.toContain("Run preflight");
+    expect(panel).not.toContain("Baseline cost estimate");
+    expect(panel).toContain("resolveTelepathicAiRouteFromRepository");
+    expect(panel).toContain("createTelepathicAiTrainingSeries");
   });
 });

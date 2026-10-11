@@ -1,3 +1,5 @@
+import { viewerResponseCompletion } from "../sessions/viewerOutputRecovery";
+import { preflightTelepathicPacket } from "./preflight";
 import { sha256Text } from "../application/sha256";
 import { requireWorkspaceViewerRoute } from "../aiCenter/viewerIdentitySelection";
 import { resolveGenerationSettings } from "../providers/capabilities";
@@ -109,6 +111,18 @@ function isAmbiguousFailure(error: unknown): boolean {
   return details?.phase !== "before_dispatch";
 }
 
+// The scope contract excludes only the deliberate per-attempt output escalation.
+// Effective generation and the actual provider endpoint/route are otherwise fixed.
+export async function telepathicRequestFingerprint(packet: TelepathicProviderPacket, route: ResolvedTelepathicAiRoute, fixedLead: boolean): Promise<string> {
+  const messages = composeTelepathicProviderMessages(packet);
+  if (!fixedLead) return sha256Text(JSON.stringify({ modelId: route.model.modelId, messages }));
+  const settings = resolveGenerationSettings(route.model.capabilities, route.requestedSettings);
+  const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,canonical(v)])) : value;
+  return sha256Text(JSON.stringify(canonical({ modelId: route.model.modelId, messages, settings,
+    outputCeiling: route.model.capabilities.maxOutputTokens, provider: route.providerConfig.provider,
+    baseUrl: route.providerConfig.baseUrl, outputTokenField: route.providerConfig.customOutputTokenField, route: route.model.route })));
+}
+
 export async function executeTelepathicProviderPacket(input: {
   packet: TelepathicProviderPacket;
   route: ResolvedTelepathicAiRoute;
@@ -116,11 +130,18 @@ export async function executeTelepathicProviderPacket(input: {
   hooks: TelepathicProviderCallHooks;
   attempt?: ProviderChatAttempt;
   signal?: AbortSignal;
+  fixedLead?: boolean;
+  validateResponse?: (text: string) => void;
 }): Promise<{ response: ProviderChatResponse; call: TelepathicProviderCallRecord }> {
   assertExactRoute(input.route);
   const messages = composeTelepathicProviderMessages(input.packet);
   if (messages.some((message) => message.continuationState)) throw new Error("Telepathic provider payload cannot contain continuation state.");
-  const requestSha256 = await sha256Text(JSON.stringify({ modelId: input.route.model.modelId, messages }));
+  const requestSha256 = await telepathicRequestFingerprint(input.packet, input.route, Boolean(input.fixedLead));
+  input.signal?.throwIfAborted();
+  const outputStage = /^(receiver_first|receiver_guidance:|receiver_reveal|sender_reveal|shared_answers_comment|series_reflection)/.test(input.packet.scope.callStage);
+  const requestedSettings = input.fixedLead ? { ...input.route.requestedSettings, maxOutputTokens: Math.min(outputStage ? (input.technicalAttempt === 1 ? 16384 : 32768) : 4096, input.route.model.capabilities.maxOutputTokens ?? 32768) } : input.route.requestedSettings;
+  const validation = preflightTelepathicPacket({ packet: input.packet, model: input.route.model, reservedOutputTokens: requestedSettings.maxOutputTokens });
+  if (input.fixedLead && validation.budget.exceeded) throw new Error("Telepathic packet exceeds the model context budget; no materials were truncated.");
   const timestamp = input.hooks.now();
   let call: TelepathicProviderCallRecord = {
     id: input.hooks.createCallId(),
@@ -132,10 +153,13 @@ export async function executeTelepathicProviderPacket(input: {
     status: "prepared",
     scopeKey: input.packet.scopeKey,
     requestSha256,
+    requestSettings: resolveGenerationSettings(input.route.model.capabilities, requestedSettings),
+    ...(input.fixedLead ? { requestMessages: messages.map(({role,content,images}) => ({ role, content, ...(images?.length ? { images: images.map(({mimeType}) => ({ mimeType, dataBase64: "[attachment transmitted]" })) } : {}) })) } : {}),
     createdAt: timestamp,
     updatedAt: timestamp,
   };
   await input.hooks.persist(call);
+  input.signal?.throwIfAborted();
   call = { ...call, status: "dispatched", updatedAt: input.hooks.now() };
   await input.hooks.persist(call);
   try {
@@ -143,26 +167,39 @@ export async function executeTelepathicProviderPacket(input: {
       config: input.route.providerConfig,
       modelId: input.route.model.modelId,
       messages,
-      settings: resolveGenerationSettings(input.route.model.capabilities, input.route.requestedSettings),
+      settings: resolveGenerationSettings(input.route.model.capabilities, requestedSettings),
       configuredRetries: 0,
       operationId: input.packet.scopeKey,
       operationKind: "conversation",
       attempt: input.attempt,
       signal: input.signal,
     });
+    let domainError: string | undefined;
+    if (!input.fixedLead || viewerResponseCompletion(response) === "complete") {
+      try { input.validateResponse?.(response.content); }
+      catch (error) { domainError = error instanceof Error ? error.message : String(error); }
+    }
     call = {
       ...call,
-      status: "succeeded",
+      ...(domainError ? { errorMessage: domainError } : {}),
+      status: domainError || input.fixedLead && viewerResponseCompletion(response) !== "complete" ? "failed" : "succeeded",
+      usage: response.usage, elapsedMs: response.execution?.elapsedMs ?? Math.max(0, Date.parse(input.hooks.now()) - Date.parse(timestamp)),
+      physicalAttempts: response.execution?.physicalAttempts ?? 1,
+      costSource: response.usage.costUsd !== undefined ? "provider" : "unknown", finishReason: response.finishReason,
       ...(response.providerRequestId ? { providerRequestId: response.providerRequestId } : {}),
       responseText: response.content,
       updatedAt: input.hooks.now(),
     };
     await input.hooks.persist(call);
+    if (call.status === "failed") throw Object.assign(new Error(domainError ?? `Incomplete telepathic output: ${viewerResponseCompletion(response)}`), { telepathicCall: call });
     return { response, call };
   } catch (error) {
+    if ((error as { telepathicCall?: TelepathicProviderCallRecord })?.telepathicCall?.status === "failed") throw error;
     call = {
       ...call,
       status: isAmbiguousFailure(error) ? "uncertain" : "failed",
+      elapsedMs: error instanceof ProviderExecutionError ? error.report.elapsedMs : Math.max(0,Date.parse(input.hooks.now())-Date.parse(timestamp)),
+      physicalAttempts: error instanceof ProviderExecutionError ? error.report.physicalAttempts : 1,
       errorMessage: error instanceof Error ? error.message : String(error),
       updatedAt: input.hooks.now(),
     };

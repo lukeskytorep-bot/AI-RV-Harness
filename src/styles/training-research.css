@@ -208,3 +208,28 @@
   pointer-events: none;
   white-space: normal;
 }
+
+/* Fixed-lead telepathy: shared transcript and right history. */
+.telepathic-with-history { display:flex; align-items:flex-start; gap:16px; min-width:0; }
+.telepathic-with-history > .telepathic-exchange-stack { flex:1; min-width:0; }
+.telepathic-history { width:330px; flex:0 0 330px; position:sticky; top:12px; max-height:calc(100vh - 150px); overflow:visible; background:var(--panel-bg, var(--surface)); border:1px solid var(--border); border-radius:12px; padding:12px; }
+.telepathic-history.collapsed { width:28px; flex-basis:28px; padding:0; border:0; }
+.telepathic-history-toggle { margin-left:auto; display:block; }
+.telepathic-history-card { padding:12px 0; border-bottom:1px solid var(--border); }
+.telepathic-history-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:start; }
+.telepathic-history-row > span { font:11px/1.25 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-weight:400; overflow-wrap:anywhere; min-width:0; }
+.telepathic-history-row small { display:block; margin-top:5px; }
+.telepathic-history-icons { display:flex; gap:4px; flex-wrap:wrap; }
+.telepathic-icon-button { position:relative; padding:5px; display:inline-flex; }
+.telepathic-participant-nav { position:sticky; top:0; z-index:3; display:flex; flex-wrap:wrap; gap:6px; padding:8px; background:var(--panel-bg, var(--surface)); border-bottom:1px solid var(--border); }
+.telepathic-participant-section h3 { display:flex; gap:8px; align-items:center; padding-top:16px; font-size:20px; scroll-margin-top:120px; overflow-wrap:anywhere; }
+.telepathic-back { margin-left:auto; flex-shrink:0; }
+.telepathic-transcript-message { border:1px solid var(--border); border-radius:8px; padding:12px; margin:10px 0; overflow-wrap:anywhere; }
+.telepathic-transcript-message small { opacity:.75; display:block; margin-bottom:8px; }
+.telepathic-runtime-metrics { display:flex; flex-wrap:wrap; gap:12px; padding:10px; font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+@media(max-width:850px) { .telepathic-with-history { flex-wrap:wrap; } .telepathic-history { position:static; flex-basis:100%; width:100%; max-height:none; } .telepathic-history.collapsed { flex-basis:28px; } }
+.telepathic-history-list { max-height:calc(100vh - 260px); overflow:auto; }
+.telepathic-participant-nav { background:var(--surface-strong); }
+
+.telepathic-transcript { max-height:75vh; overflow:auto; min-width:0; }
+.telepathic-transcript-message pre { overflow-x:auto; }

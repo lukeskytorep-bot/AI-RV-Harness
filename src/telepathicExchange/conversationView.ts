@@ -1,3 +1,5 @@
+import { visibleTranscript } from "./transcript";
+import { telepathicRuntimeMetrics } from "./runtimeMetrics";
 import type { TelepathicExchangeRepository } from "../storage/contracts/telepathicExchangeRepository";
 import { telepathicConversationHumanStep, type TelepathicConversationHumanStep } from "./engine";
 import type {
@@ -37,6 +39,7 @@ export interface TelepathicConversationBlindView {
   providerAttemptCount: number;
   first?: string;
   second?: string;
+  guidanceResponses?: TelepathicBlindSubmission["guidanceResponses"];
   contentSha256?: string;
   sealedAt?: string;
 }
@@ -71,7 +74,7 @@ export interface TelepathicConversationSeriesView {
     language: "pl" | "en";
     participants: TelepathicConversationParticipantView[];
     roundCount: number;
-    topic: TelepathicTopic;
+    topic?: TelepathicTopic;
     discloseTopicToReceivers: boolean;
     senderPolicy: TelepathicSenderPolicy;
   };
@@ -82,6 +85,11 @@ export interface TelepathicConversationSeriesView {
   finalReflections: Record<string, string>;
   humanStep: TelepathicConversationHumanStep;
   recoveryCalls: TelepathicConversationRecoveryCallView[];
+  legacyTranscript?: boolean;
+  transcript?: TelepathicSeriesState["transcript"];
+  metrics?: ReturnType<typeof telepathicRuntimeMetrics>;
+  archivedAt?: string;
+  finalization?: TelepathicSeriesState["finalization"];
   createdAt: string;
   updatedAt: string;
 }
@@ -91,6 +99,7 @@ export interface TelepathicConversationSeriesSummary {
   roundCount: number;
   status: TelepathicSeriesState["status"];
   updatedAt: string;
+  archivedAt?: string;
 }
 
 function assetView(asset: TelepathicLockedTarget["assets"][number]): TelepathicConversationTargetAssetView {
@@ -118,6 +127,7 @@ function blindFull(blind: TelepathicBlindSubmission): TelepathicConversationBlin
     participantId: blind.participantId,
     status: blind.status,
     providerAttemptCount: blind.providerAttemptCount,
+    ...(blind.guidanceResponses ? { guidanceResponses: structuredClone(blind.guidanceResponses) } : {}),
     ...(blind.first !== undefined ? { first: blind.first } : {}),
     ...(blind.second !== undefined ? { second: blind.second } : {}),
     ...(blind.contentSha256 ? { contentSha256: blind.contentSha256 } : {}),
@@ -138,10 +148,10 @@ export function buildTelepathicConversationView(state: TelepathicSeriesState): T
     const humanIsSender = Boolean(human && round.assignment.senderParticipantId === human.id);
     const blindByParticipant = Object.fromEntries(Object.entries(round.blindByParticipant).map(([participantId, blind]) => {
       const maySeeOwnBlind = Boolean(human && participantId === human.id);
-      return [participantId, revealed || maySeeOwnBlind ? blindFull(blind) : blindStatusOnly(blind)];
+      return [participantId, revealed || humanIsSender || maySeeOwnBlind ? blindFull(blind) : blindStatusOnly(blind)];
     }));
     return {
-      assignment: structuredClone(round.assignment),
+      assignment: { ...structuredClone(round.assignment), ...(!revealed && !humanIsSender ? { targetGeography: undefined } : {}) },
       status: round.status,
       ...(round.target && (revealed || humanIsSender) ? { target: targetView(round.target) } : {}),
       blindByParticipant,
@@ -165,11 +175,12 @@ export function buildTelepathicConversationView(state: TelepathicSeriesState): T
       language: state.config.language,
       participants: state.config.participants.map((item) => ({ id: item.id, kind: item.kind, displayName: item.displayName })),
       roundCount: state.config.roundCount,
-      topic: state.config.topic,
+      ...((state.config.discloseTopicToReceivers || state.rounds.every(r=>r.revealedAt || r.assignment.senderParticipantId===human?.id)) ? {topic:state.config.topic} : {}),
       discloseTopicToReceivers: state.config.discloseTopicToReceivers,
       senderPolicy: structuredClone(state.config.senderPolicy),
     },
-    plan: structuredClone(state.plan),
+    plan: { ...structuredClone(state.plan), rounds: rounds.map(r => structuredClone(r.assignment)) },
+    transcript: visibleTranscript(state), legacyTranscript: state.transcript === undefined, metrics: telepathicRuntimeMetrics(state), archivedAt: state.archivedAt, finalization: state.finalization,
     currentRoundIndex: state.currentRoundIndex,
     status: state.status,
     rounds,
@@ -182,7 +193,7 @@ export function buildTelepathicConversationView(state: TelepathicSeriesState): T
 }
 
 export function telepathicConversationSummary(state: TelepathicSeriesState | TelepathicConversationSeriesView): TelepathicConversationSeriesSummary {
-  return { seriesId: state.config.seriesId, roundCount: state.config.roundCount, status: state.status, updatedAt: state.updatedAt };
+  return { seriesId: state.config.seriesId, roundCount: state.config.roundCount, status: state.status, updatedAt: state.updatedAt, archivedAt: state.archivedAt };
 }
 
 export async function loadTelepathicConversationView(repository: TelepathicExchangeRepository, seriesId: string): Promise<TelepathicConversationSeriesView | null> {
@@ -190,9 +201,9 @@ export async function loadTelepathicConversationView(repository: TelepathicExcha
   return state ? buildTelepathicConversationView(state) : null;
 }
 
-export async function listTelepathicConversationSummaries(repository: TelepathicExchangeRepository, seriesWorkspaceId: string): Promise<TelepathicConversationSeriesSummary[]> {
+export async function listTelepathicConversationSummaries(repository: TelepathicExchangeRepository, seriesWorkspaceId: string, includeArchived = false): Promise<TelepathicConversationSeriesSummary[]> {
   const states = await repository.listTelepathicSeries(seriesWorkspaceId);
-  return states.filter((state) => state.config.mode === "conversation_exchange").map(telepathicConversationSummary);
+  return states.filter((state) => state.config.mode === "conversation_exchange" && (includeArchived || !state.archivedAt)).map(telepathicConversationSummary);
 }
 
 export async function runTelepathicConversationUiAction(task: () => Promise<TelepathicSeriesState>): Promise<TelepathicConversationSeriesView> {
