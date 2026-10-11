@@ -2,7 +2,7 @@ import { providerChatOnce } from "../providers/requestExecutor";
 import type { EffectiveGenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderUsage } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import type { MonitorRunRecord } from "../monitor/types";
-import type { RvSession, SessionEventRecord } from "./types";
+import type { RvSession, SessionEventRecord, SessionSnapshot } from "./types";
 import { hydrateSessionMessageContinuationForRequest, validateFrozenSessionContinuationRequest, validateSessionContinuationBudget } from "./providerContinuation";
 import { buildViewerStepId } from "./viewerResumeLedger";
 
@@ -28,10 +28,12 @@ export interface SessionReplay {
   replayedResponseCount: number;
 }
 
-export function isRecoverableProviderInterruption(session: RvSession, events: SessionEventRecord[]): boolean {
+export function isRecoverableProviderInterruption(session: RvSession, events: SessionEventRecord[], snapshot?:SessionSnapshot|null): boolean {
+  if(snapshot?.sessionFocus && session.runType==="automatic" && !session.researchProjectId && ["Preflight","BlindRunning","AwaitingReveal"].includes(session.state))return true;
   if (session.state !== "Interrupted" || session.preRevealSealedAt) return false;
   const stop = [...events].reverse().find((event) => event.eventType === "SESSION_STOPPED");
   const reason = stop?.content?.toLowerCase() ?? "";
+  if (/user stop/.test(reason) && events.some(event=>event.eventType==="FOCUS_PASS_STARTED")) return true;
   if (!reason || /user stop|cost limit|content[_ -]?filter|safety|blocked|api key|credential|unauthorized|forbidden|context length|invalid model|route mismatch/.test(reason)) return false;
   const stopSequence = stop?.sequenceNumber ?? Number.POSITIVE_INFINITY;
   const codedViewerFailure = [...events].reverse().find((event) =>
@@ -134,6 +136,18 @@ export async function createSessionReplay(input: {
         return input.monitorRun.id;
       };
       if (property === "appendSessionEvent" && !live) return async (sessionId: string, payload: Parameters<AppRepository["appendSessionEvent"]>[1]) => {
+        if (snapshot.sessionFocus && replayIndex >= replayEvents.length && ["CONTROLLER_STEP","SPECIAL_TASK_INJECTED"].includes(payload.eventType)) {
+          const existing=(await base.listSessionEvents(sessionId)).find(event=>event.eventType===payload.eventType && ["passIndex","phase","promptNumber","step","source"].every(key=>event.metadata?.[key]===payload.metadata?.[key]) && event.content===payload.content);
+          if(!existing)await base.appendSessionEvent(sessionId,payload);
+          return undefined;
+        }
+        if (payload.eventType === "FOCUS_PASS_STARTED" || payload.eventType === "FOCUS_PASS_COMPLETED") {
+          const existing = (await base.listSessionEvents(sessionId)).find(event=>event.eventType===payload.eventType && event.metadata?.passIndex===payload.metadata?.passIndex);
+          if(existing)return undefined;
+          // Missing checkpoints can be restored after replay without a provider dispatch.
+          if(input.session.preRevealSealedAt)throw new Error("Sealed focus evidence has a missing checkpoint.");
+          return base.appendSessionEvent(sessionId,payload);
+        }
         if (payload.eventType === "VIEWER_OUTPUT_ATTEMPT_STARTED") {
           const stepId = typeof payload.metadata?.stepId === "string" ? payload.metadata.stepId : undefined;
           if (replayIndex < replayEvents.length) {

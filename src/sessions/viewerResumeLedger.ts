@@ -55,12 +55,13 @@ export function viewerRequestFingerprintInput(messages: ProviderMessage[]): stri
 }
 
 export function buildViewerStepId(scope: "rcp" | "lite" | "custom" | "telepathic", metadata: Record<string, unknown>): string {
+  const pass = typeof metadata.passIndex === "number" ? `:pass:${metadata.passIndex}` : "";
   const source = typeof metadata.source === "string" ? metadata.source : "viewer";
   const exchange = typeof metadata.exchangeNumber === "number" ? `:exchange:${metadata.exchangeNumber}` : "";
   const question = typeof metadata.questionNumber === "number" ? `:question:${metadata.questionNumber}` : "";
-  if (typeof metadata.phase === "number") return `${scope}:phase:${metadata.phase}:${source}${exchange}${question}`;
-  if (typeof metadata.promptNumber === "number") return `${scope}:prompt:${metadata.promptNumber}:${source}${exchange}${question}`;
-  if (typeof metadata.step === "number") return `${scope}:step:${metadata.step}:${source}${exchange}${question}`;
+  if (typeof metadata.phase === "number") return `${scope}:phase:${metadata.phase}:${source}${exchange}${question}${pass}`;
+  if (typeof metadata.promptNumber === "number") return `${scope}:prompt:${metadata.promptNumber}:${source}${exchange}${question}${pass}`;
+  if (typeof metadata.step === "number") return `${scope}:step:${metadata.step}:${source}${exchange}${question}${pass}`;
   throw new Error("Viewer output recovery requires an exact persisted step identity.");
 }
 

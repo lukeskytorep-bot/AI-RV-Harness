@@ -1,3 +1,4 @@
+import { focusTranscriptContent, sessionFocusLabel, type SessionFocus } from "../sessions/sessionFocus";
 import type { InterfaceLanguage } from "../types";
 import type { SessionEventRecord } from "../sessions/types";
 import { SafeMarkdown } from "./SafeMarkdown";
@@ -28,7 +29,7 @@ function isAcceptedViewerEvent(event: SessionEventRecord): boolean {
   return true;
 }
 
-function metadataHeading(event: SessionEventRecord, language: InterfaceLanguage): string | undefined {
+function stepHeading(event: SessionEventRecord, language: InterfaceLanguage): string | undefined {
   const metadata = event.metadata ?? {};
   const pl = language === "pl";
   const phase = typeof metadata.phase === "number" || typeof metadata.phase === "string" ? metadata.phase : undefined;
@@ -52,6 +53,11 @@ function metadataHeading(event: SessionEventRecord, language: InterfaceLanguage)
   if (telepathicPhase) return `Telepathic — ${telepathicPhase}`;
   if (questionNumber !== undefined) return `${pl ? "Pytanie" : "Question"} ${questionNumber}`;
   return undefined;
+}
+
+function metadataHeading(event:SessionEventRecord,language:InterfaceLanguage):string|undefined {
+ const heading=stepHeading(event,language),m=event.metadata;
+ return typeof m?.passIndex==="number" ? `${language==="pl"?"Sesja":"Session"} ${m.passIndex} — ${sessionFocusLabel(m.sessionFocus as SessionFocus,language)} · ${heading??""}` : heading;
 }
 
 function carriesStepHeading(event: SessionEventRecord): boolean {
@@ -161,7 +167,7 @@ function telepathicMonitorBlock(step: number, prompt: string, response: string, 
 function precedingPrompt(events: SessionEventRecord[], responseIndex: number, predicate: (event: SessionEventRecord) => boolean): SessionEventRecord | undefined {
   for (let index = responseIndex - 1; index >= 0; index -= 1) {
     const candidate = events[index];
-    if (predicate(candidate)) return candidate;
+    if (candidate.metadata?.passIndex === events[responseIndex].metadata?.passIndex && predicate(candidate)) return candidate;
   }
   return undefined;
 }
@@ -172,13 +178,18 @@ function precedingPrompt(events: SessionEventRecord[], responseIndex: number, pr
  * excluded: they are presentation/diagnostic records, never accepted transcript.
  */
 export function reconstructAcceptedBlindTranscript(events: SessionEventRecord[], language: InterfaceLanguage): string | null {
-  const ordered = [...events].sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+  const ordered = [...events].sort((a, b) => a.sequenceNumber - b.sequenceNumber).map(event=>({...event,content:typeof event.metadata?.passIndex==="number" && event.content ? focusTranscriptContent(event.content,{version:1,first:event.metadata.sessionFocus as SessionFocus}) : event.content}));
+  let lastPass:unknown;
   let transcript = "";
 
   for (let index = 0; index < ordered.length; index += 1) {
     const response = ordered[index];
     if (!isAcceptedViewerEvent(response)) continue;
     const metadata = response.metadata ?? {};
+    if(typeof metadata.passIndex==="number" && metadata.passIndex!==lastPass) {
+      transcript=appendBlock(transcript,`## ${language==="pl"?"Sesja":"Session"} ${metadata.passIndex} — ${sessionFocusLabel(metadata.sessionFocus as SessionFocus,language)}`);
+      lastPass=metadata.passIndex;
+    }
     const phase = typeof metadata.phase === "number" || typeof metadata.phase === "string" ? metadata.phase : undefined;
     const promptNumber = typeof metadata.promptNumber === "number" ? metadata.promptNumber : undefined;
     const step = typeof metadata.step === "number" ? metadata.step : undefined;

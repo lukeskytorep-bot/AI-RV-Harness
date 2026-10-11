@@ -1,3 +1,4 @@
+import { focusFeedbackIntroduction } from "./sessionFocus";
 import { loadRevealImageForJudge } from "../artifacts/native";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat } from "../providers/requestExecutor";
@@ -67,9 +68,9 @@ export async function sendPostRevealTurn(input: {
     throw new Error("The repository cannot restore the frozen provider continuation state required by this post-Reveal conversation.");
   }
   const continuationRepository: PostRevealContinuationRepository | undefined = continuationRoute ? {
-    listSessionEvents: input.repository.listSessionEvents!,
-    getSessionEventProviderState: input.repository.getSessionEventProviderState!,
-    appendPostRevealTurnWithProviderState: input.repository.appendPostRevealTurnWithProviderState!,
+    listSessionEvents: input.repository.listSessionEvents!.bind(input.repository),
+    getSessionEventProviderState: input.repository.getSessionEventProviderState!.bind(input.repository),
+    appendPostRevealTurnWithProviderState: input.repository.appendPostRevealTurnWithProviderState!.bind(input.repository),
   } : undefined;
 
   const imageArtifacts = (reveal.artifactManifest ?? []).filter((artifact) => artifact.mimeType.startsWith("image/"));
@@ -82,6 +83,7 @@ export async function sendPostRevealTurn(input: {
     ? "To jest wyłącznie rozmowa PO REVEALU. Zapieczętowany materiał pre-reveal jest historycznym dowodem i nie wolno go przepisywać ani przedstawiać nowych obserwacji jako danych z części blind. Możesz porównywać feedback z istniejącym materiałem i omawiać sesję wprost jako analizę po feedbacku."
     : "This is a POST-REVEAL discussion only. The sealed pre-reveal material is historical evidence and must never be rewritten or supplemented with new claims presented as blind data. You may compare feedback with the existing evidence and discuss the session explicitly as after-feedback analysis.";
   const revealText = [
+    focusFeedbackIntroduction(snapshot.sessionFocus,language),
     `[SEALED PRE-REVEAL EVIDENCE — READ ONLY]\n${evidence}`,
     `[ACCEPTED REVEAL]\n${reveal.text?.trim() || "(image Reveal attached)"}`,
     clarifications.length ? `[SUPPLEMENTARY TARGET CLARIFICATIONS — POST-REVEAL ONLY]\n${clarifications.map((item) => item.content).join("\n\n")}` : "",

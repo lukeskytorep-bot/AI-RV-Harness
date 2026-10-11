@@ -1,3 +1,5 @@
+import { verifyFocusEvidence } from "../../sessions/sessionFocusLifecycle";
+import { assertFocusPassesComplete } from "../../sessions/sessionFocus";
 import type {
   CreateRvSessionInput,
   RevealInput,
@@ -255,11 +257,15 @@ export class BrowserSessionsRepository implements SessionsRepository {
   }
 
   async sealPreReveal(sessionId: string, transcript: string, hash: string): Promise<void> {
+    assertFocusPassesComplete(await this.getSessionSnapshot(sessionId),await this.listSessionEvents(sessionId));
+    await verifyFocusEvidence(await this.getSessionSnapshot(sessionId),await this.listSessionEvents(sessionId),transcript,await this.getRvSession(sessionId));
     const timestamp = this.now();
     this.write(RV_SESSIONS_KEY, this.read<RvSession[]>(RV_SESSIONS_KEY, []).map((session) => session.id === sessionId ? { ...session, preRevealTranscript: transcript, preRevealHash: hash, preRevealSealedAt: timestamp, state: "AwaitingReveal", updatedAt: timestamp } : session));
   }
 
   async acceptReveal(sessionId: string, reveal: RevealInput): Promise<void> {
+    assertFocusPassesComplete(await this.getSessionSnapshot(sessionId),await this.listSessionEvents(sessionId),await this.getRvSession(sessionId));
+    await verifyFocusEvidence(await this.getSessionSnapshot(sessionId),await this.listSessionEvents(sessionId),(await this.getRvSession(sessionId))?.preRevealTranscript??"",await this.getRvSession(sessionId));
     const reveals = this.read<Array<{ sessionId: string; reveal: RevealInput; acceptedAt: string }>>(REVEALS_KEY, []);
     if (reveals.some((item) => item.sessionId === sessionId)) throw new Error("reveal already exists");
     this.write(REVEALS_KEY, [...reveals, { sessionId, reveal, acceptedAt: this.now() }]);

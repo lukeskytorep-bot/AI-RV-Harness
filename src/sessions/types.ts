@@ -1,3 +1,4 @@
+import type { SessionFocusPlan } from "./sessionFocus";
 import type { InterfaceLanguage } from "../types";
 import type { EffectiveGenerationSettings, ProviderKind } from "../providers/types";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
@@ -122,6 +123,9 @@ export interface SessionSnapshot {
   generationSettings: EffectiveGenerationSettings;
   viewerOutputPolicy?: { version: 1; initialTokens: number; recoveryTokens: number; preserveConfiguredBudget: boolean };
   sessionLanguage: InterfaceLanguage;
+  sessionFocus?: SessionFocusPlan;
+  sessionFocusInstructionVersion?: 1;
+  sessionFocusRoute?: {providerConfigId:string;provider:string;modelId:string;modelRoute:string;baseUrl:string;customOutputTokenField:string};
   protocol: {
     id: string;
     version: string;

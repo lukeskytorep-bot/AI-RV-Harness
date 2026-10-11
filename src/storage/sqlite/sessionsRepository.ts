@@ -1,3 +1,5 @@
+import { verifyFocusEvidence } from "../../sessions/sessionFocusLifecycle";
+import { assertFocusPassesComplete } from "../../sessions/sessionFocus";
 import type {
   CreateRvSessionInput,
   RevealInput,
@@ -322,6 +324,8 @@ export class SqliteSessionsRepository implements SessionsRepository {
   }
 
   async sealPreReveal(sessionId: string, transcript: string, hash: string): Promise<void> {
+    assertFocusPassesComplete(await this.getSessionSnapshot(sessionId),await this.listSessionEvents(sessionId));
+    await verifyFocusEvidence(await this.getSessionSnapshot(sessionId),await this.listSessionEvents(sessionId),transcript,await this.getRvSession(sessionId));
     const timestamp = this.now();
     await this.dependencies.executeWrite(
       `UPDATE rv_sessions SET pre_reveal_transcript = $1, pre_reveal_hash = $2,
@@ -331,6 +335,8 @@ export class SqliteSessionsRepository implements SessionsRepository {
   }
 
   async acceptReveal(sessionId: string, reveal: RevealInput): Promise<void> {
+    assertFocusPassesComplete(await this.getSessionSnapshot(sessionId),await this.listSessionEvents(sessionId),await this.getRvSession(sessionId));
+    await verifyFocusEvidence(await this.getSessionSnapshot(sessionId),await this.listSessionEvents(sessionId),(await this.getRvSession(sessionId))?.preRevealTranscript??"",await this.getRvSession(sessionId));
     const timestamp = this.now();
     await this.dependencies.executeWrite(
       `INSERT INTO reveals (id, session_id, reveal_source, reveal_text, artifact_manifest_json, reveal_hash, accepted_at)
