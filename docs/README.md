@@ -1,5 +1,10 @@
 # AI RV Harness documentation
 
+## Current development documentation — reviewed 11 October 2026
+
+The accepted AI RV branch through Training History UX uses schema 031. This is development-source documentation, not a declaration that v0.7.14 desktop release smoke or publication is complete. [Current workflows EN](architecture/CURRENT_WORKFLOWS_v0.7.14_EN.md) / [PL](architecture/CURRENT_WORKFLOWS_v0.7.14_PL.md) summarize recovery, generation budgets, Training history, Profile/help headers and Markdown boundaries. [Architecture index](architecture/README.md) links to living documents. Release/checkpoint/audit records below retain their historical scope and are not silently rewritten.
+
+
 This directory contains project documentation that is useful for development, review, release reconstruction and historical audit but is not required in the repository root.
 
 ## Directory structure
@@ -15,9 +20,9 @@ This directory contains project documentation that is useful for development, re
 | [`reports/`](reports/) | Implementation and audit reports, including the completed v0.7.13 UX-DATA campaign. |
 | [`credits/`](credits/) | Credit history, attribution policy and technical-reference records supporting the root `CREDITS.md` and `CITATION.cff`. |
 
-## Current release documentation
+## Documented public release and living architecture
 
-The current public release is v0.7.13 for Windows and Linux. Its exact release notes, verification record, checksums and source identity are stored under [`releases/v0.7.13/`](releases/v0.7.13/). The living architecture documents below describe the released v0.7.13 baseline, while older reports remain historical evidence of the stages that produced it:
+The documented public release baseline here is v0.7.13 for Windows and Linux. Its exact release notes, verification record, checksums and source identity are stored under [`releases/v0.7.13/`](releases/v0.7.13/). Living architecture now describes the accepted development source; release reports retain their original v0.7.13 scope:
 
 - [Public release notes](releases/v0.7.13/RELEASE_NOTES_v0.7.13.md)
 - [Release verification](releases/v0.7.13/RELEASE_VERIFICATION_v0.7.13.md)
@@ -36,8 +41,8 @@ The current public release is v0.7.13 for Windows and Linux. Its exact release n
 - [UX-DATA compatibility gate architecture](architecture/UX_DATA_COMPATIBILITY_GATE.md)
 - [Etap 6 Rust provider modularization report](reports/MODULARIZATION_RUST_PROVIDERS_SPLIT_v0.7.13_PL.md)
 - [Stage 9 modularization closeout](reports/MODULARIZATION_STAGE_9_CLOSEOUT_v0.7.13_PL.md)
-- [Current desktop runtime and release smoke](architecture/FINAL_RUNTIME_SMOKE_v0.7.13_PL.md)
-- [v0.7.14 development final runtime/release smoke](architecture/FINAL_RUNTIME_SMOKE_v0.7.14_PL.md)
+- [Historical v0.7.13 desktop runtime and release smoke](architecture/FINAL_RUNTIME_SMOKE_v0.7.13_PL.md)
+- [v0.7.14 development final runtime/release smoke — EN](architecture/FINAL_RUNTIME_SMOKE_v0.7.14_EN.md) ([PL](architecture/FINAL_RUNTIME_SMOKE_v0.7.14_PL.md))
 - [v0.7.14 Step 6 final release gate](reports/STEP6_V0714_FINAL_RELEASE_GATE_PL.md)
 - [Viewer Learning 1 Field Guide foundation report](reports/VIEWER_LEARNING_1_FIELD_GUIDE_FOUNDATION_R1_v0.7.13_PL.md)
 - [Viewer Learning 2 Training Field Guide update report](reports/VIEWER_LEARNING_2_TRAINING_FIELD_GUIDE_UPDATE_v0.7.13_PL.md)

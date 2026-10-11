@@ -1,7 +1,10 @@
 # Training, target pack, and typed Workspaces
 
-> **Status:** implemented in the released v0.7.13 baseline
-> **Introduced typed-Workspace schema:** 026; **current application schema:** 027
+> **Documentation scope:** accepted `ai-rv-2` development source through Training History UX and DOM dependency fixes; reviewed 11 October 2026. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
+
+> **Status:** implemented in the accepted v0.7.14 development baseline
+> **Introduced typed-Workspace schema:** 026; **current application schema:** 031
 > **Scope:** Training stages 1–3 and navigation/Workspace stages 4–5
 
 This page is the living description of the current Training and Workspace model. Historical requirements and candidate reports may describe the earlier 84-target curriculum, seven-session blocks, or one shared Workspace selection; those documents remain historical evidence and do not define current runtime behavior.
@@ -47,8 +50,8 @@ Field Guide and Viewer Notes are separate versioned knowledge packages. Ordinary
 
 The user-selected document capacity is unchanged. Generation budgets are:
 
-- first attempt: `capacity + 8192`;
-- one final recovery attempt: `capacity + 16384`.
+- first Training Reveal attempt: `capacity + 16384`;
+- one final Training Reveal recovery attempt: `capacity + 32768`.
 
 No third capacity attempt is allowed. A failed or oversized proposal does not replace the previously active version.
 
@@ -79,7 +82,7 @@ legacy_combined
 - `rv` is accepted by RV Sessions and by technical Training/Research resolution;
 - `legacy_combined` is accepted by both surfaces so historical records remain accessible.
 
-Migration 026 assigns existing rows `legacy_combined`; it does not move, duplicate, or infer ownership for historical Conversations or RV Sessions. A new Profile is created atomically with one Conversation Workspace and one RV Workspace. Additional Workspaces of either type may be created from Profiles.
+Migration 026 assigns existing rows `legacy_combined`; it does not move, duplicate, or infer ownership for historical Conversations or RV Sessions. Creating a new Profile automatically creates one Conversation Workspace and one RV Workspace; the application use case archives the partially created Profile and its Workspaces if initialization fails. Additional Workspaces of either type may be created from Profiles.
 
 The application stores separate active selections:
 
@@ -88,19 +91,20 @@ activeConversationWorkspaceId
 activeRvWorkspaceId
 ```
 
-Changing one does not change the other. Profiles presents separate Conversation Workspaces and RV Workspaces sections with create, open, rename, and archive actions. Archive guards prevent removal of the last compatible active Workspace required by a Profile.
+Opening a specific Workspace preserves the separate selection for the other purpose. Selecting a different Profile through the shared selector synchronizes both compatible selections; reselecting the active Profile preserves the manually opened Workspace. Profiles presents separate Conversation Workspaces and RV Workspaces sections with create, open, rename, and archive actions. Archive guards prevent removal of the last compatible active Workspace required by a Profile.
 
 Training and Research do not expose a Workspace selector. When a technical Workspace is required, `resolveTechnicalWorkspaceForProfile` selects an active compatible `rv` or `legacy_combined` Workspace deterministically and never chooses a `conversation` Workspace.
 
 ## Compatibility and validation
 
-The current SQLite registry is contiguous through migration 027. The accepted chain retains:
+The current SQLite registry is contiguous through migration 031. The accepted chain retains:
 
 - exact-green v23 → v24 Viewer Learning compatibility;
 - exact-green v24 → v25 provider-continuation persistence;
 - exact-green v25 → v26 typed Workspace migration;
 - exact-green v26 → v27 factory Training classification upgrade;
-- fresh 001 → 027 validation;
+- fresh 001 → 031 validation;
+- migrations 028–031 add telepathic exchange, cross-instance leases, Conversation attachment metadata and post-Reveal review leases;
 - `integrity_check=ok` and `foreign_key_check=0`.
 
 Public/legacy schemas outside the accepted v0.7.13 epoch remain governed by the database compatibility gate and are not silently promoted through an unverified migration chain.

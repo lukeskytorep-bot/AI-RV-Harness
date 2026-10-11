@@ -1,6 +1,9 @@
 # AI RV Harness module boundaries
 
-**Status:** enforceable boundaries for released v0.7.13
+> **Documentation scope:** accepted `ai-rv-2` development source through Training History UX and DOM dependency fixes; reviewed 11 October 2026. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
+
+**Status:** enforceable boundaries for the accepted AI RV development source
 **Architecture:** modular monolith
 
 ## Dependency direction
@@ -213,3 +216,7 @@ The accepted Stage 9 result closed the modularization after the automated archit
 2. the desktop runtime checklist in `FINAL_RUNTIME_SMOKE_v0.7.13_PL.md` records the required actual-Tauri checks; the final Windows/Linux result is recorded in `docs/releases/v0.7.13/RELEASE_VERIFICATION_v0.7.13.md`.
 
 Static evidence, CI and source inspection do not replace interactive runtime validation. Conversely, documented compatibility surfaces such as legacy `chat_thread_groups/thread_group_id` are not architectural exceptions and did not require removal to close Stage 9.
+
+## Current branch additions
+
+Transport retry remains executor-owned; Viewer semantic recovery and the durable step/fingerprint ledger are Session-domain rules. Training coordinates the same-session checkpoint and termination but does not implement another transport loop. Research uses locked policy and explicit same-session recovery. BlindTranscriptRecord isolates display records and delegates safe Markdown; presentation never changes persisted evidence. Shared ProfileSelector and ModuleHelpButton/Panel own reusable presentation. A specific Workspace selection is managed in Profiles, not an extra header button. Training termination is permanent JSON state checked by engine and repository, not a CSS-only hiding rule. These extensions preserve the existing public feature entry points and schema 031.

@@ -15,9 +15,12 @@ The current development program adds a separate telepathic exchange workflow to 
 
 - **Steps 1–3:** telepathic data contracts, provider isolation, Profile/Workspace routing, Conversation telepathic exchange, durable persistence, lease/fencing protection, recovery and Conversation UI data boundaries are implemented and have passed the branch CI gates used during development.
 - **Step 4:** AI–AI Telepathic Training is implemented with 2–6 distinct AI Profiles, rotating senders, frozen per-Profile Field Guide and Viewer Notes, configuration preflight, operator live view, history, checkpoint/Resume and recovery. The training uses Viewer Learning read-only and does not update it.
-- **Step 5A:** Conversation attachment/source metadata is the current work area. The design records metadata for the specific send attempt without copying image bytes into durable chat history, distinguishes dispatch uncertainty from confirmed omission, preserves historical Workspace Source names, and supports safe retry semantics. This work may advance the development database schema beyond the last accepted Step 4 schema and must remain subject to CI/audit until Step 5 is closed.
-- **Step 5B:** RV Sessions post-Reveal review recovery is planned next. It will resume only the first incomplete Viewer/Monitor post-Reveal stage from the frozen Reveal, without replaying completed blind or Reveal work.
-- **Step 6:** final compatibility, isolation/security audit, provider-failure coverage, token/cost budgets, PL/EN review, backup/restore validation and desktop smoke remain release-gate work.
+- **Step 5A:** Conversation attachment/source metadata is implemented in schema 030. Durable history stores send-attempt metadata without persisting transient image bytes; retry and dispatch-uncertainty boundaries remain explicit.
+- **Step 5B:** post-Reveal review recovery is implemented with schema-031 leases, frozen Reveal and first-missing-stage Resume.
+- **Subsequent accepted work:** shared Profile selection and module help, Viewer output safety (preferred 16K→32K, durable attempt ledger), Training/Research same-session Resume, Markdown record isolation and Training History UX with persistent End training. DOM interaction tests use jsdom with package/lockfile dependencies.
+- **Step 6:** actual desktop smoke, platform/provider checks and final release acceptance remain separate gates; green development CI alone does not publish a release.
+
+Current architecture and recovery behavior are described in [current workflows](docs/architecture/CURRENT_WORKFLOWS_v0.7.14_EN.md) ([PL](docs/architecture/CURRENT_WORKFLOWS_v0.7.14_PL.md)). The reviewed branch contains no SessionCostGuard hard per-session spend blocker. Usage/cost estimates and uncertain-dispatch protection remain distinct.
 
 ### Development rules for this branch
 
@@ -33,11 +36,11 @@ Do not treat branch state as a published v0.7.14 release. In particular:
 - keep migrations append-only and verify older migration bytes remain unchanged;
 - require `npm run typecheck`, tests and the repository verification gates before accepting a development step.
 
-The implementation plan for this branch is maintained separately from the public release notes. Public documentation under `docs/releases/v0.7.13/` remains the authoritative record of the released v0.7.13 build. Architecture/Wiki documents may temporarily lag this branch until the final compatibility/documentation stage.
+The implementation plan for this branch is maintained separately from the public release notes. Public documentation under `docs/releases/v0.7.13/` remains the authoritative record of the released v0.7.13 build. Living architecture is synchronized to the reviewed source; immutable release reports and the Library Wiki snapshot still describe their recorded releases.
 
-## Current public release — 0.7.13
+## Documented public baseline — 0.7.13
 
-Version 0.7.13 is the current public release for Windows and Linux. It retains AI Center and Viewer Notes, adds the versioned Viewer Field Guide learning layer, integrates centralized provider transport/retry and provider-native continuation, and completes the staged UX-DATA lifecycle through controlled purge plus its final compatibility gate. It also separates Conversations from RV Sessions, introduces typed Conversation/RV Workspaces with safe `legacy_combined` compatibility, expands the factory Training pack to 94 targets in eight categories with Polish and English Reveals, and implements Full Training as one to ten frozen eight-session rounds. The current SQLite boundary is schema 027.
+Version 0.7.13 is the current public release for Windows and Linux. It retains AI Center and Viewer Notes, adds the versioned Viewer Field Guide learning layer, integrates centralized provider transport/retry and provider-native continuation, and completes the staged UX-DATA lifecycle through controlled purge plus its final compatibility gate. It also separates Conversations from RV Sessions, introduces typed Conversation/RV Workspaces with safe `legacy_combined` compatibility, expands the factory Training pack to 94 targets in eight categories with Polish and English Reveals, and implements Full Training as one to ten frozen eight-session rounds. The documented public baseline uses schema 027; this development source uses schema 031.
 
 Viewer Notes belong to one exact Profile + credential identity + provider + model route + Viewer role. They are shared across that Profile's Workspaces but never transferred between models or roles. Notes are frozen before each supported session, supplied as a separate read-only system data block, and may be replaced only by the same Viewer after Reveal and its own post-Reveal review. Monitor opinions, Judge results and later operator discussion are excluded. Every version is immutable, capacity is enforced without truncation, stale concurrent updates are blocked, and a human restoration of an earlier version is explicitly audited.
 

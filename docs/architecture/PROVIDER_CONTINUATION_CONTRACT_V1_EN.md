@@ -1,4 +1,7 @@
-# AI RV Harness v0.7.13 — Provider Continuation Contract v1
+# Provider Continuation Contract v1 — AI RV development reference
+
+> **Documentation scope:** accepted `ai-rv-2` development source through Training History UX and DOM dependency fixes; reviewed 11 October 2026. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
 
 **Base stage:** `CONTINUATION-CONTRACT-0-R1`  
 **Current runtime stage:** `ANTHROPIC-CONTINUITY-1` (`C5`, released session-safe scope)  
@@ -181,21 +184,11 @@ C5 scope released in v0.7.13:
 6. **post-Reveal remains Anthropic text-only in C5** because its prefix may legally change when supplementary target clarifications are appended. Blind-session thinking is not replayed after Reveal;
 7. **ordinary Conversation does not activate Anthropic replay in C5** because `src/chat/engine.ts` builds dynamic local time context and may inject dynamic workspace context. Replaying signed thinking across a changed prefix could be rejected by Anthropic. Rather than risking HTTP 400 or heuristically stripping blocks, the Harness stays fail-closed/text-only there until a separate prefix-stability stage;
 8. C5 does not set or infer thinking mode from the model name. Extended/adaptive/default thinking remains governed by the existing provider request contract; continuation preserves blocks only if the provider actually returns them;
-9. schema remains 025. Migration 026 is unnecessary because C2 already allowed `anthropic-native` in provider-state storage.
+9. C5 reuses provider-state tables introduced in schema 025 without its own additional migration; C2 already allowed `anthropic-native` in provider-state storage.
 
-### Anthropic model/mode matrix for C5
+### Model capability boundary
 
-This matrix is documentation for the safe replay contract. Runtime **does not encode an allowlist of model names**. Capture activates only when Anthropic actually returns validated `thinking` or `redacted_thinking`, and replay requires a compatible frozen route and append-only prefix.
-
-| Family / version | Thinking mode under the current API | `thinking` | `redacted_thinking` | Signature / opaque data | Replay in C5 | Notes |
-|---|---|---|---|---|---|---|
-| Claude 4.5 and earlier thinking-capable models | manual extended `thinking.type=enabled` + `budget_tokens`; adaptive unavailable | possible when enabled | possible | `thinking.signature` and `redacted_thinking.data` must return unchanged | yes, if blocks were actually returned and prefix is append-only | C5 does not enable thinking or choose the budget; older-block context behavior differs by model, e.g. Opus 4.5 keeps them while Sonnet/Haiku 4.5 may strip them, but latest assistant thinking is still never reconstructed or edited |
-| Claude 4.6 | adaptive supported and preferred; manual `enabled` still works but is deprecated | possible | possible | unchanged and in original order | yes, if provider returned blocks | C5 does not switch mode |
-| Claude 4.7 / 4.8 | adaptive only; manual `enabled` returns 400 | possible under adaptive | possible | unchanged and in original order | yes, if provider returned blocks | request builder does not synthesize `thinking` |
-| Claude Sonnet 5 / Opus 5 | adaptive, thinking enabled by default according to current documentation | possible | possible | unchanged and in original order | yes on frozen append-only Session routes | ordinary Conversation remains text-only in C5 |
-| Claude Fable 5.1 / Mythos 5.1 / Opus 5.5 class | adaptive / preserved thinking; Opus 5.5 is always-on, while newer prefix-bound blocks use conversation binding | possible | possible | signature/data exactly 1:1; prefix `system` + `tools` + earlier `messages` must remain compatible | yes only on frozen append-only Session routes | C5 applies the restrictive contract to older accounts too, so behavior does not depend on account age |
-
-**C5 API wire contract:** Claude Messages API, `anthropic-version: 2023-06-01`, matching the existing Harness adapter. C5 adds no beta headers, tools, or function calling. `thinking-binding-controls-2026-08-01` remains an optional Anthropic diagnostic/control mechanism and is not required for basic exact-block replay.
+The Harness does not activate replay through a model-name allowlist or infer a vendor's current thinking mode from a historical catalog. The current request/capability contract controls generation settings. Capture requires actually returned, validated blocks; replay requires the compatible frozen append-only route. Model-specific API availability must be checked separately before changing the request builder. Historical fixtures and source-check dates below are provenance, not a claim that every future model has been verified.
 
 **Data scope:**
 
@@ -206,3 +199,7 @@ This matrix is documentation for the safe replay contract. Runtime **does not en
 - full tool-use/interleaved-thinking turns remain outside ProviderMessage v1 because they also require `tool_use` / `tool_result` blocks.
 
 Sources: https://platform.claude.com/docs/en/build-with-claude/preserved-thinking , https://platform.claude.com/docs/en/build-with-claude/extended-thinking , https://platform.claude.com/docs/en/api/messages/create
+
+## Current application boundary
+
+Provider-state tables were introduced in schema 025; the overall application now uses schema 031. Later workflow checkpoints and Viewer attempt ledgers do not replace exact-message/event continuation ownership. Continuation compatibility is distinct from the Viewer request fingerprint and budget-exhaustion decision. Supported provider layouts are preserved according to the checked-in validator; diagnostics and visible reasoning are never used to reconstruct signed state.

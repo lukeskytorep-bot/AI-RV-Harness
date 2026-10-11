@@ -1,18 +1,21 @@
 # AI RV Harness
 
-> Current architecture reference: public AI RV Harness v0.7.13 Windows/Linux release
-> Last updated: 30 September 2026
+> **Documentation scope:** accepted `ai-rv-2` development source through Training History UX and DOM dependency fixes; reviewed 11 October 2026. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
+
+> Current architecture reference: accepted v0.7.14 development source; documented public baseline v0.7.13
+> Last updated: 11 October 2026
 
 AI RV Harness is a local-first desktop environment for AI-assisted Remote Viewing sessions, structured training, controlled research, and blinded evaluation. It combines repeatable protocols, multiple AI roles, evidence-preserving session flows, target management, and reproducible research tools in one application.
 
 The project is designed to make AI-assisted RV work easier to organize, inspect, repeat, and evaluate. It does not claim that Remote Viewing has been scientifically proven, that a particular model possesses anomalous perception, or that generated material is accurate. The Harness provides controlled procedures and records; interpretation of results remains the responsibility of the user and researcher.
 
 - **Source repository:** [lukeskytorep-bot/AI-RV-Harness](https://github.com/lukeskytorep-bot/AI-RV-Harness)
-- **Current public release:** AI RV Harness v0.7.13
+- **Documented public baseline:** AI RV Harness v0.7.13
 - **Platforms:** Windows and Linux
 - **Application source license:** MIT
 
-This page describes the current implemented and released v0.7.13 architecture. The public release notes and exact GitHub Release assets remain authoritative for the shipped binaries.
+This page describes the accepted development architecture; release-specific claims belong to the historical release records. The public release notes and exact GitHub Release assets remain authoritative for the shipped binaries.
 
 ## Project goals
 
@@ -386,17 +389,17 @@ npm run tauri build
 
 Contributors should also run the Rust tests and Clippy checks used by the repository workflows. Consult the checked-in workflow files for the currently supported toolchain and complete release gates.
 
-## Verification status for v0.7.12
+## Historical verification and current validation
 
 The v0.7.12 implementation retains the v0.7.11 reasoning-compatibility coverage and adds AI identity, Viewer Notes, reflection, Research snapshot, Judge-transition, unblinding-recovery, and database-integrity checks.
 
-The release was validated with:
+The historical v0.7.12 release was validated with:
 
 - TypeScript type checking;
 - 74 Vitest files and 207 tests;
 - a production Vite build;
 - a dependency audit with no reported known vulnerabilities at release time;
-- 27 SQLite migrations, including the closed UX-DATA compatibility layer and current schema 027 factory Training classification boundary, plus negative checks for integrity and lifecycle guards.
+- 20 ordered migrations at that historical boundary; later accepted development extends the registry to 031. The current source/UX-data/release-gate results are recorded in the dated documentation-sync report.
 
 Rust checks and platform packaging remain release-workflow gates. Practical AI Center sessions should complement automated validation before the learning effect is treated as empirically proven.
 

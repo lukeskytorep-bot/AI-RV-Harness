@@ -1,9 +1,12 @@
 # Engineering Design and Integrity Safeguards
 
+> **Documentation scope:** accepted `ai-rv-2` development source through Training History UX and DOM dependency fixes; reviewed 11 October 2026. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
+
 > **Project:** AI RV Harness  
 > **Document type:** Implemented engineering decisions and integrity safeguards  
 > **Implementation status:** Implemented  
-> **Current reference:** public AI RV Harness v0.7.13 Windows/Linux release
+> **Current reference:** accepted v0.7.14 development source; documented public baseline v0.7.13
 > **Repository:** [lukeskytorep-bot/AI-RV-Harness](https://github.com/lukeskytorep-bot/AI-RV-Harness)  
 > **Scope:** Foundational safeguards through v0.7.12 plus explicitly documented v0.7.13 modularization, UX-DATA lifecycle, Viewer Learning, frozen Training planning, provider continuation, and typed Workspace safeguards
 
@@ -386,11 +389,7 @@ Blindly retrying every failure can duplicate paid calls, repeat a Monitor interv
 
 ### Decision
 
-Provider failures are classified into three categories:
-
-1. **Standard retry:** selected temporary HTTP failures such as 425, 429, 502, 503, and 504, using the configured retry allowance.
-2. **Single recovery:** incomplete body, invalid JSON, empty response, reasoning without final content, timeout, connection reset, unexpected EOF, overload, and similar transient failures—at most one controlled recovery when retries are enabled.
-3. **Never retry:** authentication, authorization, invalid model, route mismatch, context limit, safety/content block, user stop, cost stop, and other permanent or policy-related failures.
+Transport failures use the current shared executor and `retry.ts`: standard statuses 408, 425, 429, 500, 502, 503, 504, 524 and 529 plus supported transient typed errors; bounded single recovery for body/decode/invalid provider JSON/empty response; no retry for semanticOutputStarted, cancellation, configuration and permanent failures. Reasoning-only/length output recovery is separate from transport retry. See [current retry policy](PROVIDER_RETRY_ARCHITECTURE_FINAL_EN.md) for classification order and configured allowances.
 
 Viewer and Monitor calls recover independently. If the Monitor completed an intervention and the subsequent Viewer call failed, the Harness retries the missing Viewer call rather than asking the Monitor to generate a second intervention.
 
@@ -410,15 +409,14 @@ The Harness reconstructs a session from persistent events. Completed provider re
 
 During replay, writes that would duplicate session state, transcript entries, seals, Reveal records, Monitor interventions, or target usage are suppressed. When live continuation begins, a distinct `SESSION_RESUMED` event is recorded.
 
-Only qualifying provider interruptions before the pre-Reveal seal are eligible. Continuation is not offered for:
+Blind replay and post-Reveal review recovery have distinct boundaries. Post-Reveal resumes the first missing stage from frozen Reveal under a lease, not the blind controller. Safe replay preserves the durable attempt budget. Failures requiring a configuration or safety decision cannot be silently retried, including:
 
 - user stop;
-- cost-limit stop;
 - authentication or credential failure;
 - safety or content blocking;
 - context-limit failure;
 - invalid model or route mismatch;
-- a session already sealed or revealed.
+- a blind-controller Resume on a session already sealed or revealed (post-Reveal uses its separate stage recovery).
 
 ### Invariant
 
@@ -436,7 +434,7 @@ Automatically restarting an incomplete Research assignment could create undisclo
 
 ### Decision
 
-If a Research assignment already has a linked but incomplete paid session, automatic batch execution stops and marks the study Interrupted. Recovery requires an explicit user action. The partial session is preserved and annotated before the assignment can be approved for retry.
+If a Research assignment already has a linked but incomplete paid session, automatic batch execution stops and marks the study Interrupted. Recovery requires an explicit user action. Supported same-session Resume retains the linked Session, locked policy, accepted events and durable attempt ledger. A new-attempt retry is a separate decision and cannot silently replace partial paid evidence.
 
 ### Invariant
 
@@ -480,19 +478,19 @@ Detailed provider diagnostics require explicit activation. Stored secrets are no
 
 > Diagnostic value should be obtained with the least sensitive retained data, and full payload inspection should require an explicit user choice.
 
-## Decision 15 — Cost limits fail closed when a safe upper bound is unavailable
+## Decision 15 — Cost reporting does not impose a removed session spend blocker
 
 ### Problem
 
-A “hard cost limit” is misleading if the application lacks current pricing, cannot bound maximum output, or cannot estimate image-token billing.
+Provider usage and pricing estimates are different from a guaranteed enforced spend cap. Ambiguous dispatch may incur a charge even without a saved result.
 
 ### Decision
 
-When a hard session cost limit is enabled, the Harness requires cached finite input/output pricing and a known maximum output allowance. It pre-authorizes the next request against a conservative upper bound. If it cannot safely bound the request—for example because image billing cannot be predicted—it stops rather than claiming the limit is enforced.
+The accepted branch removed SessionCostGuard / CostAuthorization and the hard per-session spend blocker. Usage and preflight estimates remain diagnostics. Do not restore that blocker from earlier reports; preserve uncertain-dispatch protection and disclose possibly billed attempts.
 
 ### Invariant
 
-> A hard limit is enforced as a conservative upper bound or the request is refused; it is never presented as guaranteed when the necessary pricing data is missing.
+> Cost estimates and billing uncertainty remain explicit; no removed hard per-session limit is presented as an active runtime guarantee.
 
 ## Decision 16 — Used evidence targets and supplementary clarifications are protected
 
@@ -604,7 +602,7 @@ The Harness favors explicit interruption over silent degradation when continuing
 - a changed provider capability does not silently alter a locked Research condition;
 - missing Judge vision support blocks image-target judging;
 - invalid Judge JSON is not interpreted heuristically;
-- a hard cost limit is not claimed when it cannot be bounded;
+- cost reporting does not masquerade as an active hard per-session spend limit;
 - a partial paid Research session is not silently rerun;
 - Reveal cannot proceed before evidence sealing.
 
@@ -721,7 +719,7 @@ Used user targets preserve their historical identity through `target_id_snapshot
 
 ### Compatibility gate
 
-UX-DATA-9 and the later Viewer Learning, provider-continuation, typed-Workspace, and factory Training extensions turn the accepted UX/data invariants into permanent build checks. `npm run verify:ux-data` verifies the contiguous migration registry through 027, flat Conversation product boundary, shared dialog/model-route boundaries, unified lifecycle surface, Viewer Notes/target preservation markers, Field Guide schema markers, provider-continuation tables, Workspace-kind markers, and factory-target classification markers. Native Rust tests preserve the accepted exact-green v23 → v24 Viewer Learning upgrade, exact-green v24 → v25 provider-state transition, exact-green v25 → v26 typed-Workspace transition, and exact-green v26 → v27 factory Training classification transition without moving historical records. Older public/legacy databases are handled by the compatibility epoch gate rather than silently entering this controlled upgrade path.
+UX-DATA-9 and the later Viewer Learning, provider-continuation, typed-Workspace, and factory Training extensions turn the accepted UX/data invariants into permanent build checks. `npm run verify:ux-data` verifies the contiguous migration registry through 031, flat Conversation product boundary, shared dialog/model-route boundaries, unified lifecycle surface, Viewer Notes/target preservation markers, Field Guide schema markers, provider-continuation tables, Workspace-kind markers, and factory-target classification markers. Native Rust tests preserve the accepted exact-green v23 → v24 Viewer Learning upgrade, exact-green v24 → v25 provider-state transition, exact-green v25 → v26 typed-Workspace transition, and exact-green v26 → v27 factory Training classification transition without moving historical records. Older public/legacy databases are handled by the compatibility epoch gate rather than silently entering this controlled upgrade path.
 
 ## Decision 21 — Training plans and Workspace purposes are frozen explicitly
 

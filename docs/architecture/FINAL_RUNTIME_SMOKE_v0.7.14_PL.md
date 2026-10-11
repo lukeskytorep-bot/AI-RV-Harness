@@ -48,6 +48,19 @@
 | 29 | PL/EN | Wykonaj po jednym Telepathic Conversation i Training w PL i EN. | Teksty UI i prompty odpowiadają roli/stage; nie występuje mieszanie języka ani ujawnienie hidden topic/target. |
 | 30 | Restart końcowy | Zamknij aplikację po wszystkich operacjach i uruchom ponownie. | Brak startup error; ostatnie poprawne dane, archiwa, serie, checkpointy i historia są dostępne. |
 
+
+| 31 | Limit wyjścia Viewera w przepływach | Wywołaj length i recovery w automatycznym RV (RCP/Lite/Custom/Telepathic), Manual RV, Training blind i nowym locked Research. | Preferowane 16K→32K mieści się w faktycznych limitach route/kontekstu; niepełny wynik nie przesuwa fazy jako zaakceptowany. |
+| 32 | Trwały ledger po restarcie | Restart po pierwszym potwierdzonym length oraz po wyczerpanym recovery; uwzględnij Monitor exchange i Special Task. | Ten sam step/fingerprint i poziom recovery; brak trzeciej automatycznej próby; drift/niejednoznaczny legacy blokują unsafe Resume. |
+| 33 | Błąd streamu po treści | Błąd po widocznej treści oraz dispatch start bez trwałego zakończenia. | semanticOutputStarted blokuje automatyczne retry transportu; tekst pozostaje niekompletny; uncertain wymaga jawnej ścieżki rozstrzygnięcia. |
+| 34 | Same-session Resume Training | Przerwij blind target, restart i Wznów; sprawdź też pierwszy brakujący etap po Reveal. | Ten sam sessionId, kolejność celów, snapshoty i zaakceptowane eventy; brak duplikacji dowodów i learning commitów. |
+| 35 | Headroom Training Reveal | Viewer Review, Field Guide i Viewer Notes: length i odrzucenie propozycji z powodu pojemności. | Review 16K→32K, learning C+16K→C+32K; pojemność dokumentu C stała; odrzucone propozycje nie stają się aktywne. |
+| 36 | Zamrożona polityka Research | Wznów nowy snapshot-policy projekt i starszy locked-budget projekt. | Ta sama linked Session, frozen controls i poziom recovery; starszy limit nie jest cicho podnoszony. |
+| 37 | Izolacja Markdown | Nagłówki, bold, tabele i niedomknięty fence przed następną fazą, także fazą 5; sprawdź widoki sesji Training/Research. | Osobne granice formatowania odpowiedzi; fragment nie przejmuje następnego; surowy fallback zachowuje dowód. |
+| 38 | Trwałe Zakończ trening | Zakończ uprawniony niepełny run, restart, archive/restore i stale Resume/execute. | Marker trwały; brak model call; sesje/checkpoint zachowane; brak fałszywego Completed. |
+| 39 | Historia Training / dostępność | Panel 330px, breakpoint, zoom 125/150%, długie nazwy ze spacjami i bez; klawiatura/mysz. | Trzy ikony przy nazwie, Wznów/Zakończ niżej bez nakładania; tooltip/focus działa; historia domyślnie otwarta, collapse zachowuje wybór. |
+| 40 | Wspólny Profil i pomoc | A→B w Conversation, potem RV/AI Center; ponowny B po ręcznym otwarciu Workspace; pomoc Training/Research. | Spójność danych Profilu; reselect zachowuje Workspace; wspólny zielony styl/ikony/header; brak dodatkowego selektora Workspace. |
+| 41 | Regresja usuniętej blokady kosztu | Sprawdź standardowe ustawienia/wykonanie i diagnostykę kosztu. | Nie wraca SessionCostGuard; usage/estymacje i ochrona uncertain pozostają oddzielne. |
+
 ## Kryterium zaliczenia
 
 Krok 6 może otrzymać status `COMPLETED` dopiero, gdy:

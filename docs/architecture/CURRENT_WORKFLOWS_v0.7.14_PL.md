@@ -1,0 +1,49 @@
+# Aktualne przepływy — gałąź rozwojowa v0.7.14
+
+**Przegląd:** 11 października 2026. **Baza:** zaakceptowana gałąź AI RV po Training History UX, testach DOM i poprawce ich zależności. **Schema:** 031. Wersja package.json nadal wynosi 0.7.13. Nazwa v0.7.14 oznacza zakres rozwoju, nie opublikowanie nowych instalatorów ani zaliczenie desktop smoke. Pełny opis z właścicielami kodu: [EN](CURRENT_WORKFLOWS_v0.7.14_EN.md).
+
+## Budżety
+
+Limit generacji jest oddzielny od kontekstu wejścia. Zwiększenie limitu odpowiedzi nie zwiększa okna kontekstu modelu. Reasoning może zużywać limit generacji; liczniki natywne i przeliczone OpenRoutera nie są osobnymi porcjami pracy, które należy bezwarunkowo dodawać.
+
+| Operacja | Preferowany limit pierwszej / recovery próby |
+| --- | --- |
+| Blind Viewer zwykłego RV, Manual RV i klasycznego Training | 16 384 → 32 768 |
+| Nowy Research z zamrożoną standardową polityką | 16 384 → 32 768, według snapshotu Experiment Lock |
+| Starszy Research bez nowego snapshotu polityki | zachowany zamrożony limit; brak cichej aktualizacji |
+| Viewer Review po Reveal w klasycznym Training | 16 384 → 32 768 |
+| Field Guide / Viewer Notes w Training Reveal | pojemność dokumentu C + 16 384 → C + 32 768 |
+| Pozostałe analizy używające domyślnej polityki | 8192 → 16 384 |
+| Propozycje learning poza polityką Training Reveal | C + 8192 → C + 16 384 |
+
+To wartości preferowane, ograniczane przez rzeczywisty model/endpoint i dostępny kontekst. Recovery musi rzeczywiście zwiększać efektywny limit, inaczej kończy się jawnym błędem. Jawnie ustawiony większy budżet Viewera jest zachowywany tam, gdzie model go obsługuje. Pojemność C samego dokumentu pozostaje niezmieniona. Output recovery, naprawa JSON i ponowienie z powodu przekroczonej pojemności dokumentu są osobnymi operacjami; nie wolno obiecywać dwóch wywołań HTTP dla wszystkich możliwych napraw.
+
+## Próby, wznowienia i niepewny dispatch
+
+`length`, jawny error/refusal i pusta odpowiedź nie stają się zaakceptowanym dowodem tylko dlatego, że HTTP zwróciło 200. Niekompletny wynik pozostaje zapisany diagnostycznie i nie przesuwa fazy dalej jako kompletna odpowiedź.
+
+Trwały ledger wiąże `stepId`, fingerprint wejścia i attemptId, rozróżniając także Monitor exchange i Special Task. Zapis `VIEWER_OUTPUT_ATTEMPT_STARTED` pozwala rozpoznać przerwę po rozpoczęciu dispatch. Restart nie resetuje recovery: po pierwszym potwierdzonym length pozostaje większa próba; po wyczerpaniu drugiej nie ma trzeciej automatycznej próby. Niepewny wynik bez trwałego zakończenia oraz drift fingerprintu blokują niebezpieczne automatyczne wznowienie. Nie odgaduje się miejsca wznowienia z ostatniej widocznej linijki.
+
+Replay odtwarza lokalnie zaakceptowane odpowiedzi, bez powtórnych zapisów i wywołań. Live zaczyna się przy pierwszym brakującym wywołaniu. Transport retry pozostaje oddzielne od limitu prób semantycznych.
+
+Training używa checkpointu i tej samej Session przy wspieranym blind Resume, bez ponownego losowania celu ani tworzenia zastępczej płatnej sesji. Po Reveal wraca do pierwszego brakującego etapu. Niepewny Viewer Review wymaga jawnej decyzji operatora i ponownej kontroli pod lease. Research stosuje jawne same-session Resume, snapshot konfiguracji/learning/polityki i istniejący ledger; nie ukrywa niepełnej płatnej próby nową sesją. Research i AI–AI Telepathic Training nie zapisują Field Guide ani Viewer Notes.
+
+## Historia Training
+
+Trzy ikony Pokaż/Ukryj sesje, Zapisz i Archiwizuj stoją przy nazwie treningu. Wznów i Zakończ trening zajmują osobny wiersz niżej. Tooltip działa myszą i klawiaturą, a nazwy i identyfikatory używają monospace 11px/1.25, weight 400. Układ zawija się w wąskim panelu, bez absolutnych przesunięć i nakładania wierszy.
+
+Historia jest domyślnie rozwinięta po wejściu. Lokalny przełącznik nie kasuje aktywnego treningu, wybranej sesji ani rozwiniętej karty i nie trafia do Settings/Profile/DB.
+
+Zakończ trening zapisuje `termination: { reason: "user_finished", endedAt }` i status Interrupted. To rezygnacja z dalszego wykonywania, nie ukończenie wszystkich celów. Indeks, checkpoint, snapshot, sesje i wyniki pozostają. Marker przetrwa restart oraz archive/restore; zwykły update nie może go usunąć ani ponownie ustawić Running. Silnik i Resume ponownie czytają rekord i odrzucają zakończony trening. Wznów/Zakończ znikają, ale historia nadal jest dostępna. Nie ma statusu Cancelled ani migracji 032.
+
+## Markdown, Profil i pomoc
+
+Zaakceptowane odpowiedzi blind są renderowane jako osobne rekordy przez BlindTranscriptRecord i bezpieczny renderer Markdown. Niedomknięty fence jednej odpowiedzi nie przejmuje następnej fazy. Jawny surowy fallback nie zmienia zapisanego dowodu. Streaming pokazuje stan roboczy; widoczny tekst nie oznacza zaakceptowanego zakończenia.
+
+AI Center, Conversation i RV Sessions korzystają ze wspólnego ProfileSelector. Zmiana Profilu synchronizuje zgodne konteksty Conversation/RV; ponowny wybór aktywnego Profilu zachowuje ręcznie otwarty Workspace. Konkretny Workspace wybiera się w Profiles, bez dodatkowych przycisków w nagłówkach Conversation/RV. Pomoc używa ModuleHelpButton/Panel, zielonego stylu i ikony modułu, z panelem poniżej nagłówka.
+
+## Koszt i weryfikacja
+
+Usunięto twardą blokadę wydatku SessionCostGuard/CostAuthorization. Estymacje, usage i diagnostyka naliczeń pozostają odrębnymi danymi. Ochrona przed niepewnym dispatch nadal obowiązuje: poprzednia próba mogła zostać rozliczona.
+
+Testy DOM korzystają z jsdom i lokalnej adnotacji środowiska testu. Zmiany zależności wymagają obu plików package.json/package-lock.json. Zielone testy nie zastępują rzeczywistego Windows/Linux desktop smoke na konkretnym kandydacie.

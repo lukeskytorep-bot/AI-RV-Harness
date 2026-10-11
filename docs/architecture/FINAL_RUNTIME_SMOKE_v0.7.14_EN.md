@@ -48,6 +48,19 @@
 | 29 | PL/EN | Run one Telepathic Conversation and one Training in Polish and English. | UI text and prompts match role/stage; no language mixing or hidden topic/target disclosure. |
 | 30 | Final restart | Close the application after all operations and start it again. | No startup error; the latest valid data, archives, series, checkpoints, and history remain available. |
 
+
+| 31 | Viewer output limit by workflow | Force first length then recovery in automatic RV (RCP/Lite/Custom/Telepathic), Manual RV, Training blind and a newly locked Research project. | Preferred 16K→32K is applied within actual route/context limits; incomplete output is not accepted or used to advance a phase. |
+| 32 | Restart preserves Viewer attempt ledger | Restart after confirmed first length and, separately, after exhausted recovery. Include Monitor exchange and Special Task identities. | Same step/fingerprint and recovery level survive; no third automatic semantic attempt; drift and unresolved legacy identity stop safely. |
+| 33 | Stream failure after semantic output | Inject failure after some visible content; separately test dispatch start without terminal persistence. | No automatic transport resend with semanticOutputStarted; partial text remains incomplete; uncertain dispatch requires the workflow's explicit recovery path. |
+| 34 | Training blind same-session Resume | Interrupt mid-target, restart and Resume; repeat with post-Reveal first-missing-stage recovery. | Session ID, target order, snapshots and accepted events are retained; no duplicate evidence or learning commit. |
+| 35 | Training Reveal generation headroom | Exercise Viewer Review, Field Guide and Viewer Notes with output exhaustion and a capacity-rejected proposal. | Review prefers 16K→32K; learning objects use C+16K→C+32K; document capacity C stays fixed; failures do not activate rejected proposals. |
+| 36 | Research frozen recovery policy | Resume both a new policy-snapshot project and a legacy locked-budget project. | Same linked Session and frozen controls are used; new recovery level persists; legacy budgets are not silently upgraded. |
+| 37 | Markdown phase isolation | Use headings/bold/tables and an unfinished code fence before another phase, including phase 5; inspect Training and Research session views. | Each accepted response has its own formatting boundary; one fragment cannot swallow the next; raw fallback preserves evidence honestly. |
+| 38 | User-ended Training persistence | End an eligible incomplete run, restart, archive/restore and attempt stale Resume/execute. | Termination remains permanent; no model call; historical sessions/checkpoint stay intact; run is not falsely Completed. |
+| 39 | Training history layout/accessibility | Inspect 330px panel, narrow breakpoint, 125/150% zoom and long spaced/unbroken names. Use keyboard and pointer for all icons and history toggle. | Three icons share the name row; Resume/End stay below without overlap; tooltip/focus labels work; default history open and selection survives collapse. |
+| 40 | Shared Profile and module help | Switch A→B in Conversation, then RV and AI Center; reselect B with a manually opened compatible Workspace. Inspect help across Training/Research. | Profile-owned data is consistent; reselecting active Profile preserves Workspace; common green help/icon/header layout; no extra Workspace selector. |
+| 41 | Removed spend blocker regression | Inspect standard session settings/execution and cost diagnostics. | No SessionCostGuard hard per-session stop returns; usage estimates and uncertain-dispatch protection remain independent. |
+
 ## Pass criteria
 
 Step 6 may be marked `COMPLETED` only when:

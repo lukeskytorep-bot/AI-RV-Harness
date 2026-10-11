@@ -1,12 +1,15 @@
 # AI Center and Viewer Notes
 
-> **Status:** Implemented and released in v0.7.13
+> **Documentation scope:** accepted `ai-rv-2` development source through Training History UX and DOM dependency fixes; reviewed 11 October 2026. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
+
+> **Status:** implemented baseline with accepted subsequent development updates
 > **Design baseline:** AI RV Harness v0.7.11
-> **Reference:** public v0.7.13 Viewer Learning, UX-DATA and Research lifecycle
+> **Reference:** preserved Viewer Learning and subsequent schema-031 development lifecycle
 
 AI Center is a top-level area of AI RV Harness for inspecting and managing AI roles, their histories, and carefully controlled learning features. **Viewer Notes** are private, versioned working guidance created and revised only by the same Viewer identity after qualifying completed Training sessions.
 
-This page describes the released v0.7.13 Viewer Notes and Field Guide architecture. The core Viewer Notes capability was introduced in v0.7.12; source preservation, controlled purge, the versioned trainable Field Guide, and frozen Research controls are part of the public v0.7.13 release.
+This page describes the preserved Viewer Notes and Field Guide architecture with current development recovery; release claims below refer to the recorded v0.7.13 baseline. The core Viewer Notes capability was introduced in v0.7.12; source preservation, controlled purge, the versioned trainable Field Guide, and frozen Research controls are part of the public v0.7.13 release.
 
 ## Why AI Center is a top-level section
 
