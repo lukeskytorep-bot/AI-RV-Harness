@@ -1,3 +1,5 @@
+import { TelepathicSetupStep } from "../../components/TelepathicSetupStep";
+import { useTelepathicSetupConfirmation } from "../../components/useTelepathicSetupConfirmation";
 import { telepathicStageLabel } from "../../telepathicExchange/stageLabels";
 import { legacyEvents } from "../../telepathicExchange/transcript";
 import { TelepathicHistory } from "../../components/TelepathicHistory";
@@ -146,8 +148,12 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
   }).filter((item): item is { profile: Profile; workspace: Workspace; eligible: EligibleViewerIdentity } => Boolean(item)), [selectedProfileIds, profiles, workspaces, identitySelections, eligibleByProfile]);
 
   const configReady = selectedProfileIds.length >= 2 && selectedProfileIds.length <= 6 && selected.length === selectedProfileIds.length;
+  const setup = useTelepathicSetupConfirmation(
+    JSON.stringify({ selectedProfileIds, selected, language }), configReady,
+    leadProfileId, selectedProfileIds.includes(leadProfileId) && selected.some(item => item.profile.id === leadProfileId), repository);
+  const editParticipants = () => { setup.editParticipants(); setLeadProfileId(""); };
   const previewConfig = useMemo<TelepathicSeriesConfig | null>(() => {
-    if (!configReady) return null;
+    if (!configReady || !setup.leadConfirmed) return null;
     const seriesWorkspaceId = selected[0]?.workspace.id;
     if (!seriesWorkspaceId) return null;
     const participants: TelepathicParticipant[] = selected.map(({ profile, workspace, eligible }) => ({
@@ -166,8 +172,8 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
         route: eligible.model.route,
       },
     }));
-    return { schemaVersion: 1, seriesId: "preview", seriesWorkspaceId, mode: "ai_ai_training", language, participants, roundCount, topic, discloseTopicToReceivers: discloseTopic, protocolVersion:"fixed_lead_v1",leadInstructionVersion:LEAD_INSTRUCTION_VERSION,maxGuidanceCycles:3,senderPolicy: { kind: "fixed_ai",participantId: `ai:${selectedProfileIds.includes(leadProfileId) ? leadProfileId : selectedProfileIds[0]}` } };
-  }, [configReady, selected, language, roundCount, topic, discloseTopic,leadProfileId]);
+    return { schemaVersion: 1, seriesId: "preview", seriesWorkspaceId, mode: "ai_ai_training", language, participants, roundCount, topic, discloseTopicToReceivers: discloseTopic, protocolVersion:"fixed_lead_v1",leadInstructionVersion:LEAD_INSTRUCTION_VERSION,maxGuidanceCycles:3,senderPolicy: { kind: "fixed_ai",participantId: `ai:${leadProfileId}` } };
+  }, [configReady, selected, language, roundCount, topic, discloseTopic,leadProfileId,setup.leadConfirmed]);
 
   const schedule = useMemo(() => previewConfig ? planTelepathicSeries(previewConfig).rounds.map((round) => ({ ...round, sender: previewConfig.participants.find((item) => item.id === round.senderParticipantId)?.displayName ?? round.senderParticipantId })) : [], [previewConfig]);
 
@@ -219,7 +225,7 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
   };
 
   const startTraining = async () => {
-    if (!repository || !previewConfig) return;
+    if (!repository || !previewConfig || !setup.leadConfirmed || busy) return;
     const seriesId = `telepathic-training-${crypto.randomUUID()}`;
     const config: TelepathicSeriesConfig = { ...structuredClone(previewConfig), seriesId, participants: previewConfig.participants.map((item) => ({ ...structuredClone(item), id: `ai:${item.ai!.profileId}` })) };
     pauseRequested.current = false;
@@ -278,7 +284,7 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
   };
 
   const selectProfile = (profileId: string, checked: boolean) => {
-    if (busy) return;
+    if (busy || setup.participantsConfirmed) return;
     setSelectedProfileIds((current) => checked ? (current.includes(profileId) ? current : [...current, profileId].slice(0, 6)) : current.filter((id) => id !== profileId));
     if (!checked) {
       setIdentitySelections((current) => { const next = { ...current }; delete next[profileId]; return next; });
@@ -302,16 +308,21 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
     {!activeSeries && <>
 
 
-      <section className="panel telepathic-exchange-panel"><div className="telepathic-section-heading"><div><Users size={18} /><span><strong>{pl ? "Uczestnicy" : "Participants"}</strong><small>{pl ? "Wybierz od 2 do 6 różnych Profili AI. Każdy używa własnego RV Workspace i własnej trasy Viewera." : "Choose 2 to 6 distinct AI Profiles. Each uses its own RV Workspace and Viewer route."}</small></span></div></div><div className="telepathic-profile-list">{profiles.map((profile) => {
+      <TelepathicSetupStep step={1} pl={pl} valid={configReady} confirmed={setup.participantsConfirmed} busy={busy} onConfirm={() => { setLeadProfileId(""); setup.confirmParticipants(); }} onEdit={editParticipants}><div className="telepathic-section-heading"><div><Users size={18} /><span><strong>{pl ? "Uczestnicy AI" : "AI participants"}</strong><small>{pl ? "Wybierz od 2 do 6 różnych Profili AI. Każdy używa własnego RV Workspace i własnej trasy Viewera." : "Choose 2 to 6 distinct AI Profiles. Each uses its own RV Workspace and Viewer route."}</small></span></div></div><div className="telepathic-profile-list">{profiles.map((profile) => {
         const workspace = resolveTechnicalWorkspaceForProfile(workspaces, profile.id);
         const eligible = eligibleByProfile[profile.id] ?? [];
         const checked = selectedProfileIds.includes(profile.id);
         const selectedIdentity = identitySelections[profile.id] ?? "";
         return <article className="telepathic-profile-row" key={profile.id}><label className="telepathic-profile-toggle"><input type="checkbox" checked={checked} disabled={busy || !workspace || !eligible.length || (!checked && selectedProfileIds.length >= 6)} onChange={(event) => selectProfile(profile.id, event.target.checked)} /><span><strong>{aiIsBeDisplayName(profile)}</strong><small>{!workspace ? (pl ? "Brak aktywnego RV Workspace" : "No active RV Workspace") : !eligible.length ? (pl ? "Brak dostępnej tożsamości Viewera" : "No available Viewer identity") : `${workspace.name} · ${eligible.length} route`}</small></span></label>{checked && <label><span>{pl ? "Tożsamość / trasa" : "Identity / route"}</span><select value={selectedIdentity} onChange={(event) => setIdentitySelections((current) => ({ ...current, [profile.id]: event.target.value }))}><option value="">{pl ? "Wybierz trasę" : "Select route"}</option>{eligible.map((item) => <option value={item.identity.id} key={item.identity.id}>{viewerIdentityLabel(item, language)}</option>)}</select></label>}</article>;
-      })}</div></section>
+      })}</div></TelepathicSetupStep>
 
-      <section className="panel telepathic-exchange-panel"><div className="telepathic-config-grid"><label><span>{pl?"Wybierz prowadzącego":"Select lead"}</span><select value={selectedProfileIds.includes(leadProfileId)?leadProfileId:selectedProfileIds[0]??""} onChange={e=>setLeadProfileId(e.target.value)}>{selectedProfileIds.map(id=><option key={id} value={id}>{aiIsBeDisplayName(profiles.find(p=>p.id===id)!)}</option>)}</select></label><label><span>{pl ? "Liczba rund" : "Rounds"}</span><input type="number" min={1} max={50} value={roundCount} onChange={(event) => setRoundCount(Math.max(1, Math.min(50, Math.floor(Number(event.target.value) || 1))))} /></label><label><span>{pl ? "Temat" : "Topic"}</span><select value={topic} onChange={(event) => setTopic(event.target.value as TelepathicTopic)}>{TOPICS.map((item) => <option value={item} key={item}>{topicLabel(item, pl)}</option>)}</select></label><label className="telepathic-check"><input type="checkbox" checked={discloseTopic} onChange={(event) => setDiscloseTopic(event.target.checked)} /><span>{pl ? "Pokaż temat odbiorcom" : "Disclose topic to receivers"}</span></label></div>{schedule.length > 0 && <div className="telepathic-schedule"><strong>{pl ? "Harmonogram" : "Schedule"}</strong>{schedule.map((round) => <span key={round.roundId}>{pl ? "Runda" : "Round"} {round.roundNumber}: {round.sender}</span>)}</div>}<div className="training-actions">
-        <button className="primary-button" disabled={!configReady || busy} onClick={() => void startTraining()}><Play size={15} />{pl ? "Rozpocznij trening telepatyczny" : "Start telepathic training"}</button>
+      <TelepathicSetupStep step={2} pl={pl} enabled={setup.participantsConfirmed} valid={selected.some(item => item.profile.id === leadProfileId)} confirmed={setup.leadConfirmed} busy={busy} onConfirm={setup.confirmLead} onEdit={setup.editLead}>
+        <label><span>{pl ? "Wybierz prowadzącego" : "Select lead"}</span><select value={leadProfileId} onChange={event => setLeadProfileId(event.target.value)}>
+          <option value="">{pl ? "Wybierz prowadzącego" : "Select lead"}</option>{selected.map(item => <option key={item.profile.id} value={item.profile.id}>{aiIsBeDisplayName(item.profile)}</option>)}
+        </select></label>
+      </TelepathicSetupStep>
+      <section className="panel telepathic-exchange-panel"><fieldset className="telepathic-setup-fields" disabled={busy}><div className="telepathic-config-grid"><label><span>{pl ? "Liczba rund" : "Rounds"}</span><input type="number" min={1} max={50} value={roundCount} onChange={(event) => setRoundCount(Math.max(1, Math.min(50, Math.floor(Number(event.target.value) || 1))))} /></label><label><span>{pl ? "Temat" : "Topic"}</span><select value={topic} onChange={(event) => setTopic(event.target.value as TelepathicTopic)}>{TOPICS.map((item) => <option value={item} key={item}>{topicLabel(item, pl)}</option>)}</select></label><label className="telepathic-check"><input type="checkbox" checked={discloseTopic} onChange={(event) => setDiscloseTopic(event.target.checked)} /><span>{pl ? "Pokaż temat odbiorcom" : "Disclose topic to receivers"}</span></label></div></fieldset>{schedule.length > 0 && <div className="telepathic-schedule"><strong>{pl ? "Harmonogram" : "Schedule"}</strong>{schedule.map((round) => <span key={round.roundId}>{pl ? "Runda" : "Round"} {round.roundNumber}: {round.sender}</span>)}</div>}<div className="training-actions">
+        <button className="primary-button" disabled={!previewConfig || busy} onClick={() => void startTraining()}><Play size={15} />{pl ? "Rozpocznij trening telepatyczny" : "Start telepathic training"}</button>
       </div>
       {!configReady && <div className="training-requirement-note"><span>{pl ? "Wybierz 2–6 Profili z poprawnym RV Workspace i trasą Viewera." : "Select 2–6 Profiles with a valid RV Workspace and Viewer route."}</span></div>}</section>
     </>}

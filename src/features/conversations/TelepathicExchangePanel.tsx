@@ -1,3 +1,5 @@
+import { TelepathicSetupStep } from "../../components/TelepathicSetupStep";
+import { useTelepathicSetupConfirmation } from "../../components/useTelepathicSetupConfirmation";
 import { telepathicStageLabel } from "../../telepathicExchange/stageLabels";
 import { TelepathicHistory } from "../../components/TelepathicHistory";
 import { TelepathicTranscript } from "../../components/TelepathicTranscript";
@@ -167,6 +169,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   const compatibleWorkspaces = useMemo(() => workspaces.filter((item) => !item.archivedAt && isWorkspaceCompatible(item, "conversation")), [workspaces]);
 
   const setProfileSelected = (profileId: string, selected: boolean) => {
+    if (busy || setup.participantsConfirmed) return;
     setError(null);
     setSelectedProfileIds((current) => selected ? [...current, profileId] : current.filter((id) => id !== profileId));
     if (!selected) {
@@ -194,7 +197,13 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
     return { profile: selectedProfile, workspace: workspaceForAi, eligible };
   }).filter((item): item is { profile: Profile; workspace: Workspace; eligible: EligibleViewerIdentity } => Boolean(item)), [selectedProfileIds, profiles, routeSelections, compatibleWorkspaces, eligibleByProfile]);
 
-  const setupComplete = Boolean(repository && profile && selectedProfileIds.length >= 1 && selectedAiParticipants.length === selectedProfileIds.length && (senderKind !== "fixed_ai" || selectedProfileIds.includes(fixedAiProfileId)));
+  const participantsValid = Boolean(repository && profile && selectedProfileIds.length >= 1 && selectedAiParticipants.length === selectedProfileIds.length);
+  const leadValid = senderKind === "human_only" || selectedAiParticipants.some(item => item.profile.id === fixedAiProfileId);
+  const setup = useTelepathicSetupConfirmation(
+    JSON.stringify({ selectedProfileIds, selectedAiParticipants, profile, workspace, language }), participantsValid,
+    JSON.stringify({ senderKind, fixedAiProfileId }), leadValid, repository);
+  const editParticipants = () => { setup.editParticipants(); setFixedAiProfileId(""); };
+  const setupComplete = participantsValid && setup.leadConfirmed;
 
   const previewConfig = useMemo((): TelepathicSeriesConfig | null => {
     if (!setupComplete || !profile) return null;
@@ -288,7 +297,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   };
 
   const startSeries = async () => {
-    if (!repository || !profile || !setupComplete) return;
+    if (!repository || !profile || !setupComplete || busy) return;
     const seriesId = `telepathic-series-${crypto.randomUUID()}`;
     const humanId = humanParticipantId(seriesId);
     const participants: TelepathicParticipant[] = [
@@ -386,17 +395,18 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
     </section>}
     <section className="panel telepathic-exchange-panel">
       <div className="telepathic-section-heading"><div><RadioTower size={18} /><span><strong>{pl ? "Wymiana telepatyczna" : "Telepathic exchange"}</strong><small>{pl ? "Skonfiguruj uczestników i harmonogram przed startem." : "Configure participants and the schedule before starting."}</small></span></div></div>
-      <div className="telepathic-config-grid">
+      <fieldset className="telepathic-setup-fields" disabled={busy}><div className="telepathic-config-grid">
         <label><span>{pl ? "Liczba rund" : "Rounds"}</span><input type="number" min={1} max={20} value={roundCount} onChange={(event) => setRoundCount(Math.max(1, Math.min(20, Number(event.target.value) || 1)))} /></label>
         <label><span>{pl ? "Temat" : "Topic"}</span><select value={topic} onChange={(event) => setTopic(event.target.value as TelepathicTopic)}>{TOPICS.map((item) => <option key={item} value={item}>{topicLabel(item, pl)}</option>)}</select></label>
-        <label><span>{pl ? "Prowadzący" : "Lead"}</span><select value={senderKind} onChange={(event) => setSenderKind(event.target.value as typeof senderKind)}><option value="human_only">{pl ? "Tylko człowiek" : "Human only"}</option><option value="fixed_ai">{pl ? "Jeden wybrany AI" : "One selected AI"}</option></select></label>
+
         <label className="telepathic-check"><input type="checkbox" checked={discloseTopic} onChange={(event) => setDiscloseTopic(event.target.checked)} /><span>{pl ? "Pokaż temat odbiorcom" : "Disclose topic to receivers"}</span></label>
-      </div>
-      {senderKind === "fixed_ai" && <label><span>{pl ? "Stały AI nadawca" : "Fixed AI sender"}</span><select value={fixedAiProfileId} onChange={(event) => setFixedAiProfileId(event.target.value)}><option value="">{pl ? "Wybierz Profil" : "Select Profile"}</option>{selectedProfileIds.map((id) => <option key={id} value={id}>{aiIsBeDisplayName(profiles.find((item) => item.id === id)!)}</option>)}</select></label>}
+      </div></fieldset>
+
     </section>
 
-    <section className="panel telepathic-exchange-panel">
+    <TelepathicSetupStep step={1} pl={pl} valid={participantsValid} confirmed={setup.participantsConfirmed} busy={busy} onConfirm={() => { setFixedAiProfileId(""); setup.confirmParticipants(); }} onEdit={editParticipants}>
       <div className="telepathic-section-heading"><div><Users size={18} /><span><strong>{pl ? "Uczestnicy AI" : "AI participants"}</strong><small>{pl ? "Każdy AI używa własnego Profilu, Workspace i trasy Viewera." : "Each AI uses its own Profile, Workspace, and Viewer route."}</small></span></div></div>
+      <p>{pl ? "Uczestniczysz jako człowiek" : "You participate as a human"}: {profile ? humanIsBeDisplayName(profile) : "—"}</p>
       <div className="telepathic-profile-list">{profiles.map((item) => {
         const selected = selectedProfileIds.includes(item.id);
         const owned = compatibleWorkspaces.filter((candidate) => candidate.profileId === item.id);
@@ -407,7 +417,11 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
           {selected && <div className="telepathic-route-grid"><label><span>Workspace</span><select value={route.workspaceId} onChange={(event) => setRouteSelections((current) => ({ ...current, [item.id]: { ...route, workspaceId: event.target.value } }))}><option value="">{owned.length > 1 ? (pl ? "Wybierz Workspace" : "Select Workspace") : "—"}</option>{owned.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label><label><span>{pl ? "Tożsamość / trasa" : "Identity / route"}</span><select value={route.identityId} onChange={(event) => setRouteSelections((current) => ({ ...current, [item.id]: { ...route, identityId: event.target.value } }))}><option value="">{eligible.length > 1 ? (pl ? "Wybierz trasę" : "Select route") : "—"}</option>{eligible.map((candidate) => <option key={candidate.identity.id} value={candidate.identity.id}>{viewerIdentityLabel(candidate, language)}</option>)}</select></label></div>}
         </article>;
       })}</div>
-    </section>
+    </TelepathicSetupStep>
+    <TelepathicSetupStep step={2} pl={pl} enabled={setup.participantsConfirmed} valid={leadValid} confirmed={setup.leadConfirmed} busy={busy} onConfirm={setup.confirmLead} onEdit={setup.editLead}>
+        <label><span>{pl ? "Prowadzący" : "Lead"}</span><select value={senderKind} onChange={(event) => setSenderKind(event.target.value as typeof senderKind)}><option value="human_only">{pl ? "Tylko człowiek" : "Human only"}</option><option value="fixed_ai">{pl ? "Jeden wybrany AI" : "One selected AI"}</option></select></label>
+      {senderKind === "fixed_ai" && <label><span>{pl ? "Stały AI nadawca" : "Fixed AI sender"}</span><select value={fixedAiProfileId} onChange={(event) => setFixedAiProfileId(event.target.value)}><option value="">{pl ? "Wybierz Profil" : "Select Profile"}</option>{selectedAiParticipants.map(({ profile: item }) => <option key={item.id} value={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></label>}
+    </TelepathicSetupStep>
 
     {schedule.length > 0 && <section className="panel telepathic-exchange-panel"><div className="telepathic-section-heading"><div><Eye size={18} /><span><strong>{pl ? "Harmonogram przed startem" : "Schedule before start"}</strong><small>{pl ? "Plan zostanie zamrożony razem z serią." : "The plan will be frozen with the series."}</small></span></div></div><div className="telepathic-schedule">{schedule.map((item) => <span key={item.roundId}><strong>{pl ? "Runda" : "Round"} {item.roundNumber}</strong> → {item.sender}</span>)}</div></section>}
     {error && <div className="provider-error">{error}</div>}

@@ -230,3 +230,8 @@
 
 .telepathic-transcript { max-height:75vh; overflow:auto; min-width:0; }
 .telepathic-transcript-message pre { overflow-x:auto; }
+
+/* Two local setup confirmations, shared by Training and Conversation. */
+.telepathic-setup-fields { border:0; padding:0; margin:0; min-width:0; display:grid; gap:12px; }
+.telepathic-setup-step h3 { margin:0; font-size:14px; }
+.telepathic-setup-step > .training-actions { margin-top:12px; }
