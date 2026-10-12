@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderCallError } from "./providerError";
 import { clearOpenRouterEndpointCapabilityCache } from "./openRouterEndpointCapability";
 import { createProviderChatExecutor, executeProviderChat, executeProviderRequest, ProviderExecutionError } from "./requestExecutor";
+import { isStreamingRepetitionRunawayError, runWithStreamingRepetitionGuard } from "../sessions/streamingRepetitionGuard";
 
 const failure = (code: ConstructorParameters<typeof ProviderCallError>[0]["code"], extras: Partial<ConstructorParameters<typeof ProviderCallError>[0]> = {}) =>
   new ProviderCallError({ code, message: code, phase: "reading_body", ...extras });
@@ -96,6 +97,34 @@ describe("provider request executor", () => {
       throw new DOMException("Provider request cancelled", "AbortError");
     });
     await expect(executeProviderRequest({ operationId: "test.active-cancel", configuredRetries: 5, signal: controller.signal, executeAttempt: attempt })).rejects.toMatchObject({ name: "AbortError" });
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the active transport when the internal streaming repetition guard fires", async () => {
+    const attempt = vi.fn(async (request) => {
+      request.onStreamEvent?.({ event: "started", data: { providerRequestId: "req-loop" } });
+      for (let index = 0; index < 300 && !request.signal?.aborted; index += 1) {
+        request.onStreamEvent?.({ event: "contentDelta", data: { content: "our " } });
+      }
+      expect(request.signal?.aborted).toBe(true);
+      throw new DOMException("cancelled by local repetition guard", "AbortError");
+    });
+    let caught: unknown;
+    try {
+      await runWithStreamingRepetitionGuard({ execute: (signal, internalOnStreamEvent) => executeProviderChat({
+          config: { id: "pc", provider: "custom_openai", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now", baseUrl: "https://example.invalid" },
+          modelId: "model",
+          messages: [{ role: "user", content: "test" }],
+          settings: { requested: {}, effective: {}, omitted: [] },
+          configuredRetries: 5,
+          attempt,
+          signal,
+          internalOnStreamEvent,
+        }) });
+    } catch (error) {
+      caught = error;
+    }
+    expect(isStreamingRepetitionRunawayError(caught)).toBe(true);
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
@@ -384,10 +413,12 @@ describe("S2 stream presentation integration", () => {
   const settings = { requested: {}, effective: {}, omitted: [] };
   const response = { content: "ok", usage: {} };
 
-  it("forwards a live stream callback for visible Conversation work", async () => {
+  it("forwards each visible Conversation stream event exactly once through the merged callback", async () => {
     const onStreamEvent = vi.fn();
+    const internalOnStreamEvent = vi.fn();
     const attempt = vi.fn(async (request) => {
-      expect(request.onStreamEvent).toBe(onStreamEvent);
+      expect(request.onStreamEvent).toEqual(expect.any(Function));
+      request.onStreamEvent?.({ event: "contentDelta", data: { content: "hello" } });
       return response;
     });
     await executeProviderChat({
@@ -398,9 +429,13 @@ describe("S2 stream presentation integration", () => {
       operationKind: "conversation",
       streamWorkflowContext: "conversation",
       onStreamEvent,
+      internalOnStreamEvent,
       attempt,
     });
     expect(attempt).toHaveBeenCalledTimes(1);
+    expect(internalOnStreamEvent).toHaveBeenCalledTimes(1);
+    expect(onStreamEvent).toHaveBeenCalledTimes(1);
+    expect(internalOnStreamEvent.mock.invocationCallOrder[0]).toBeLessThan(onStreamEvent.mock.invocationCallOrder[0]);
   });
 
   it("suppresses callbacks for Research Judge even when a caller supplies one", async () => {

@@ -81,31 +81,48 @@ export function formatRepetitionStopReason(finding: RepetitionInspection): strin
   return `OUTPUT TRUNCATED: clear generation loop detected${finding.rule ? ` [${finding.rule}]` : ""}${fragment ? ` — ${fragment}` : ""}`;
 }
 
+export interface RepetitionFenceState { marker: "`" | "~"; length: number }
+
+/**
+ * Masks one logical line while carrying fence state across bounded/incremental
+ * scans. Output length always matches input length so detector offsets still map
+ * back to the raw response.
+ */
+export function maskRepetitionLine(
+  line: string,
+  fence: RepetitionFenceState | null,
+): { masked: string; nextFence: RepetitionFenceState | null } {
+  const markerMatch = line.match(/^\s*(`{3,}|~{3,})/);
+  const marker = markerMatch?.[1];
+  const isFenceBoundary = Boolean(marker && (!fence || (marker[0] === fence.marker && marker.length >= fence.length)));
+  const inside = Boolean(fence);
+  if (isFenceBoundary && marker) {
+    return {
+      masked: line.replace(/[^\n\r]/g, " "),
+      nextFence: fence ? null : { marker: marker[0] as "`" | "~", length: marker.length },
+    };
+  }
+  if (!inside) return { masked: line, nextFence: fence };
+
+  // Fenced blocks are often used for ASCII sketches in RV. Mask only lines that
+  // are predominantly structural drawing glyphs. Natural-language/code text in
+  // a fence remains scannable, so a real repeated sentence loop is still caught.
+  const body = line.replace(/[\r\n]+$/g, "");
+  const compact = body.replace(/\s/g, "");
+  if (!compact) return { masked: line, nextFence: fence };
+  const alnum = (compact.match(/[\p{L}\p{N}]/gu) ?? []).length;
+  const structural = (compact.match(/[-_=+*~|.:/\\<>\[\]{}()^vVxX]/g) ?? []).length;
+  const drawingLike = structural >= 4 && alnum / compact.length <= 0.3;
+  return { masked: drawingLike ? line.replace(/[^\n\r]/g, " ") : line, nextFence: fence };
+}
+
 function maskFencedDrawingLines(content: string): string {
   const lines = content.split(/(?<=\n)/);
-  let fence: { marker: "`" | "~"; length: number } | null = null;
+  let fence: RepetitionFenceState | null = null;
   return lines.map((line) => {
-    const markerMatch = line.match(/^\s*(`{3,}|~{3,})/);
-    const marker = markerMatch?.[1];
-    const isFenceBoundary = Boolean(marker && (!fence || (marker[0] === fence.marker && marker.length >= fence.length)));
-    const inside = Boolean(fence);
-    if (isFenceBoundary && marker) {
-      if (fence) fence = null;
-      else fence = { marker: marker[0] as "`" | "~", length: marker.length };
-      return line.replace(/[^\n\r]/g, " ");
-    }
-    if (!inside) return line;
-
-    // Fenced blocks are often used for ASCII sketches in RV. Mask only lines that
-    // are predominantly structural drawing glyphs. Natural-language/code text in
-    // a fence remains scannable, so a real repeated sentence loop is still caught.
-    const body = line.replace(/[\r\n]+$/g, "");
-    const compact = body.replace(/\s/g, "");
-    if (!compact) return line;
-    const alnum = (compact.match(/[\p{L}\p{N}]/gu) ?? []).length;
-    const structural = (compact.match(/[-_=+*~|.:/\\<>\[\]{}()^vVxX]/g) ?? []).length;
-    const drawingLike = structural >= 4 && alnum / compact.length <= 0.3;
-    return drawingLike ? line.replace(/[^\n\r]/g, " ") : line;
+    const result = maskRepetitionLine(line, fence);
+    fence = result.nextFence;
+    return result.masked;
   }).join("");
 }
 

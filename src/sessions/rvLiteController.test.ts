@@ -230,9 +230,12 @@ describe("automatic RV Lite controller", () => {
       chat: async () => { calls += 1; return { content: fencedLoop, usage: {} }; },
     });
 
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
     expect(result.state).toBe("Interrupted");
-    expect(events).toContainEqual(expect.objectContaining({ eventType: "VIEWER_OUTPUT_INCOMPLETE", metadata: expect.objectContaining({ reason: "repetition_runaway" }) }));
+    const incomplete = events.filter((event) => event.eventType === "VIEWER_OUTPUT_INCOMPLETE");
+    expect(incomplete).toHaveLength(2);
+    expect(incomplete.map((event) => event.metadata?.recoveryLevel)).toEqual([0, 1]);
+    expect(incomplete.every((event) => event.metadata?.reason === "repetition_runaway")).toBe(true);
     expect(log).not.toContain("sealed");
     expect(log).not.toContain("reveal");
   });
@@ -264,15 +267,18 @@ describe("automatic RV Lite controller", () => {
       },
     });
 
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
     expect(result.state).toBe("Interrupted");
     expect(result.stopReason).toContain("repetition runaway");
     expect(result.transcript).not.toContain("Useful perceptual evidence");
     expect(result.transcript).not.toContain("OUTPUT TRUNCATED");
     expect(persistWithProviderState).not.toHaveBeenCalled();
+    const incompleteAttempts = events.filter((event) => event.eventType === "VIEWER_OUTPUT_INCOMPLETE");
+    expect(incompleteAttempts).toHaveLength(2);
+    expect(incompleteAttempts.map((event) => event.metadata?.recoveryLevel)).toEqual([0, 1]);
     expect(events).not.toContainEqual(expect.objectContaining({ eventType: "VIEWER_RESPONSE" }));
-    expect(events).toContainEqual(expect.objectContaining({ eventType: "OUTPUT_TRUNCATED_LOOP" }));
-    expect(events).toContainEqual(expect.objectContaining({ eventType: "VIEWER_OUTPUT_INCOMPLETE", content: expect.stringContaining("Useful perceptual evidence"), metadata: expect.objectContaining({ accepted: false, reason: "repetition_runaway" }) }));
+    expect(events).not.toContainEqual(expect.objectContaining({ eventType: "OUTPUT_TRUNCATED_LOOP" }));
+    expect(events).toContainEqual(expect.objectContaining({ eventType: "VIEWER_OUTPUT_INCOMPLETE", content: expect.stringContaining("Useful perceptual evidence"), metadata: expect.objectContaining({ accepted: false, reason: "repetition_runaway", rawOutputSha256: expect.any(String), recoveryLevel: expect.any(Number) }) }));
     expect(events).toContainEqual(expect.objectContaining({ eventType: "SESSION_STOPPED", content: expect.stringContaining("repetition runaway") }));
   });
 

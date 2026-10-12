@@ -49,6 +49,18 @@ describe("durable session replay", () => {
     ])).toBe(true);
   });
 
+  it("allows Resume after the first repetition attempt but not after repetition recovery is exhausted", () => {
+    expect(isRecoverableProviderInterruption(session, [
+      event(1, "VIEWER_OUTPUT_INCOMPLETE", "partial", { reason: "repetition_runaway", recoveryLevel: 0, phase: 1 }),
+      event(2, "SESSION_STOPPED", "AUTO-STOP: Viewer repetition recovery interrupted"),
+    ])).toBe(true);
+    expect(isRecoverableProviderInterruption(session, [
+      event(1, "VIEWER_OUTPUT_INCOMPLETE", "partial one", { reason: "repetition_runaway", recoveryLevel: 0, phase: 1 }),
+      event(2, "VIEWER_OUTPUT_INCOMPLETE", "partial two", { reason: "repetition_runaway", recoveryLevel: 1, phase: 1 }),
+      event(3, "SESSION_STOPPED", "AUTO-STOP: Viewer repetition recovery exhausted"),
+    ])).toBe(false);
+  });
+
   it("replays saved responses and starts the provider only at the missing call", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
     const append = vi.fn().mockResolvedValue(undefined);

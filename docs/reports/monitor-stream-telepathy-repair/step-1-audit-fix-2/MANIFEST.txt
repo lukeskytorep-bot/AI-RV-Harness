@@ -1,0 +1,23 @@
+MONITOR STREAM TELEPATHY REPAIR — STEP 1 AUDIT FIX 2
+Base ZIP SHA-256: 8c640348be226af3b971e1905932fe49656aadd161de361a14cb6707589944be
+STEP 1 SHA-256: 586f3943ff64abadae908cd5320a847919e8a387ab39a2e9cbd215975a49a44c
+STEP 1 AUDIT FIX SHA-256: 0806ce110e0e636143214ff974cf25ab174995d23cca5b550a42b2f43001d17a
+Schema: 031
+
+Changed payload files: 11
+src/chat/engine.ts
+src/postRevealContextBoundary.test.ts
+src/sessions/controller.ts
+src/sessions/customController.ts
+src/sessions/rvLiteController.test.ts
+src/sessions/rvLiteController.ts
+src/sessions/streamingRepetitionGuard.test.ts
+src/sessions/streamingRepetitionGuard.ts
+src/sessions/telepathicController.ts
+src/sessions/viewerOutputRecovery.test.ts
+src/sessions/viewerOutputRecovery.ts
+
+Package metadata:
+docs/reports/monitor-stream-telepathy-repair/step-1-audit-fix-2/REPORT_PL.md
+docs/reports/monitor-stream-telepathy-repair/step-1-audit-fix-2/MANIFEST.txt
+docs/reports/monitor-stream-telepathy-repair/step-1-audit-fix-2/SHA256SUMS.txt

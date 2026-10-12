@@ -3,12 +3,16 @@ import { estimateContextBudget } from "../chat/contextBudget";
 import type { OperationKind } from "../providers/operationResourceProfiles";
 import type { EffectiveGenerationSettings, ProviderChatResponse, ProviderMessage, ProviderModel } from "../providers/types";
 import { providerErrorDetails } from "../providers/providerError";
+import type { InterfaceLanguage } from "../types";
+import { sanitizeRepetitiveOutput } from "./repetitionGuard";
+import { isStreamingRepetitionRunawayError } from "./streamingRepetitionGuard";
+import { sha256Text } from "../application/sha256";
 
 export const VIEWER_OUTPUT_POLICY_VERSION = 1;
 export const VIEWER_OUTPUT_INITIAL_TOKENS = 16_384;
 export const VIEWER_OUTPUT_RECOVERY_TOKENS = 32_768;
 
-export type ViewerOutputCompletion = "complete" | "output_limit" | "empty" | "provider_error" | "refusal";
+export type ViewerOutputCompletion = "complete" | "output_limit" | "repetition_runaway" | "empty" | "provider_error" | "refusal";
 
 export interface ViewerOutputAttemptRecord {
   attemptId: string;
@@ -19,12 +23,16 @@ export interface ViewerOutputAttemptRecord {
   effectiveMaxOutputTokens: number;
   finishReason?: string;
   providerRequestId?: string;
+  rawOutputSha256?: string;
+  originalLength?: number;
+  retainedLength?: number;
+  repetitionRule?: string;
   content: string;
   response: ProviderChatResponse;
 }
 
 export class ViewerOutputIncompleteError extends Error {
-  readonly reason: "output_limit" | "empty" | "no_larger_recovery_budget" | "provider_error" | "refusal" | "context_limit";
+  readonly reason: "output_limit" | "repetition_runaway" | "empty" | "no_larger_recovery_budget" | "provider_error" | "refusal" | "context_limit";
   readonly attempts: ViewerOutputAttemptRecord[];
 
   constructor(reason: ViewerOutputIncompleteError["reason"], attempts: ViewerOutputAttemptRecord[], message: string) {
@@ -38,6 +46,7 @@ export class ViewerOutputIncompleteError extends Error {
 export function viewerResponseCompletion(response: ProviderChatResponse): ViewerOutputCompletion {
   const reason = response.finishReason?.trim().toLowerCase().replace(/[ -]/g, "_");
   if (reason && ["length", "max_tokens", "max_output_tokens", "max_completion_tokens"].includes(reason)) return "output_limit";
+  if (reason === "repetition_runaway") return "repetition_runaway";
   if (reason && ["content_filter", "safety", "blocked", "refusal", "refused"].includes(reason)) return "refusal";
   if (reason && ["error", "failed", "failure"].includes(reason)) return "provider_error";
   if (!response.content.trim()) return "empty";
@@ -135,6 +144,10 @@ export function viewerOutputAttemptMetadata(attempt: ViewerOutputAttemptRecord):
     effectiveMaxOutputTokens: attempt.effectiveMaxOutputTokens,
     ...(attempt.finishReason ? { finishReason: attempt.finishReason } : {}),
     ...(attempt.providerRequestId ? { providerRequestId: attempt.providerRequestId } : {}),
+    ...(attempt.rawOutputSha256 ? { rawOutputSha256: attempt.rawOutputSha256 } : {}),
+    ...(attempt.originalLength !== undefined ? { originalLength: attempt.originalLength } : {}),
+    ...(attempt.retainedLength !== undefined ? { retainedLength: attempt.retainedLength } : {}),
+    ...(attempt.repetitionRule ? { repetitionRule: attempt.repetitionRule } : {}),
     attemptId: attempt.attemptId,
     usage: attempt.response.usage,
   };
@@ -195,6 +208,9 @@ export async function callViewerWithOutputRecovery(input: {
   onIncompleteAttempt?: (attempt: ViewerOutputAttemptRecord) => void | Promise<void>;
   startRecoveryLevel?: 0 | 1;
   priorEffectiveMaxOutputTokens?: number;
+  priorIncompleteReason?: "output_limit" | "repetition_runaway";
+  sessionLanguage?: InterfaceLanguage;
+  abortSignal?: AbortSignal;
 }): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2; attemptId?: string; attempts: ViewerOutputAttemptRecord[] }> {
   const kind = effectiveOperationKind(input.operationKind);
   if (!isViewerOutputRecoveryOperation(kind)) {
@@ -212,8 +228,10 @@ export async function callViewerWithOutputRecovery(input: {
 
   const attempts: ViewerOutputAttemptRecord[] = [];
   let firstBudget = input.startRecoveryLevel === 1 ? Math.max(0, input.priorEffectiveMaxOutputTokens ?? 0) : 0;
+  let previousIncompleteReason: "output_limit" | "repetition_runaway" | undefined = input.startRecoveryLevel === 1 ? input.priorIncompleteReason : undefined;
   const levels = input.startRecoveryLevel === 1 ? ([1] as const) : ([0, 1] as const);
   for (const recoveryLevel of levels) {
+    input.abortSignal?.throwIfAborted();
     const settings = viewerOutputAttemptSettings({
       model: input.model,
       baseSettings: input.baseSettings,
@@ -232,7 +250,7 @@ export async function callViewerWithOutputRecovery(input: {
       );
     }
     if (recoveryLevel === 0) firstBudget = budget;
-    if (recoveryLevel === 1 && budget <= firstBudget) {
+    if (recoveryLevel === 1 && budget <= firstBudget && previousIncompleteReason !== "repetition_runaway") {
       throw new ViewerOutputIncompleteError(
         "no_larger_recovery_budget",
         attempts,
@@ -242,8 +260,39 @@ export async function callViewerWithOutputRecovery(input: {
 
     const semanticAttempt = (recoveryLevel + 1) as 1 | 2;
     const dispatchAttempt: ViewerOutputDispatchAttempt = { attemptId: `viewer_attempt_${crypto.randomUUID()}`, semanticAttempt, recoveryLevel, requestedMaxOutputTokens: settings.requested.maxOutputTokens ?? budget, effectiveMaxOutputTokens: budget };
-    const response = await input.call(settings, semanticAttempt, dispatchAttempt);
-    const completion = viewerResponseCompletion(response);
+    let response: ProviderChatResponse;
+    let repetitionMetadata: Pick<ViewerOutputAttemptRecord, "rawOutputSha256" | "originalLength" | "retainedLength" | "repetitionRule"> = {};
+    try {
+      response = await input.call(settings, semanticAttempt, dispatchAttempt);
+    } catch (cause) {
+      if (!isStreamingRepetitionRunawayError(cause)) throw cause;
+      repetitionMetadata = {
+        rawOutputSha256: await sha256Text(cause.rawContent),
+        originalLength: cause.originalLength,
+        retainedLength: cause.retainedLength,
+        ...(cause.finding.rule ? { repetitionRule: cause.finding.rule } : {}),
+      };
+      response = {
+        content: cause.sanitizedContent,
+        finishReason: "repetition_runaway",
+        usage: {},
+        ...(cause.providerRequestId ? { providerRequestId: cause.providerRequestId } : {}),
+      };
+    }
+    let completion = viewerResponseCompletion(response);
+    if (completion === "complete") {
+      const sanitized = sanitizeRepetitiveOutput(response.content, input.sessionLanguage ?? "en");
+      if (sanitized.truncated) {
+        repetitionMetadata = {
+          rawOutputSha256: await sha256Text(response.content),
+          originalLength: sanitized.originalLength,
+          retainedLength: sanitized.retainedLength,
+          ...(sanitized.finding?.rule ? { repetitionRule: sanitized.finding.rule } : {}),
+        };
+        response = { ...response, content: sanitized.content, finishReason: "repetition_runaway" };
+        completion = "repetition_runaway";
+      }
+    }
     if (completion === "complete") return { response, settings, semanticAttempt, attemptId: dispatchAttempt.attemptId, attempts };
 
     const record: ViewerOutputAttemptRecord = {
@@ -257,9 +306,15 @@ export async function callViewerWithOutputRecovery(input: {
       content: response.content,
       response,
       attemptId: dispatchAttempt.attemptId,
+      ...repetitionMetadata,
     };
     attempts.push(record);
+    if (completion === "output_limit" || completion === "repetition_runaway") previousIncompleteReason = completion;
     await input.onIncompleteAttempt?.(record);
+    // A definitive incomplete response must be durably recorded before honoring
+    // a concurrent parent Stop/lease. Never start the next paid recovery attempt
+    // after cancellation; Resume will continue from the persisted recovery level.
+    input.abortSignal?.throwIfAborted();
 
     if (completion === "empty") {
       throw new ViewerOutputIncompleteError("empty", attempts, "Viewer returned an empty response; the step was not accepted.");
@@ -269,6 +324,13 @@ export async function callViewerWithOutputRecovery(input: {
     }
     if (completion === "provider_error") {
       throw new ViewerOutputIncompleteError("provider_error", attempts, "Viewer response ended with a provider error; the step was not accepted.");
+    }
+    if (completion === "repetition_runaway" && recoveryLevel === 1) {
+      throw new ViewerOutputIncompleteError(
+        "repetition_runaway",
+        attempts,
+        "Viewer output entered a clear repetition runaway on the recovery attempt; the step remains incomplete and no third paid attempt is allowed.",
+      );
     }
     if (recoveryLevel === 1) {
       throw new ViewerOutputIncompleteError(

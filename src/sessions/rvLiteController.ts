@@ -32,6 +32,7 @@ import { politeRevealTransition } from "./courtesy";
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
+import { isStreamingRepetitionRunawayError, runWithStreamingRepetitionGuard } from "./streamingRepetitionGuard";
 import { ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON, appendAssistantMessageWithContinuation, captureSessionContinuationRoute, persistSessionAssistantResponse, requiresAnthropicContinuationStopAfterContentMutation, SessionContinuationError, validateSessionContinuationBudget } from "./providerContinuation";
 
 type RvLiteSessionRepository = Pick<
@@ -138,6 +139,9 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
       ...(input.viewerOutputPolicy ? { lockedPolicy: input.viewerOutputPolicy } : {}),
       startRecoveryLevel: durable.startRecoveryLevel,
       priorEffectiveMaxOutputTokens: durable.priorEffectiveMaxOutputTokens,
+      priorIncompleteReason: durable.priorIncompleteReason,
+      sessionLanguage: input.sessionLanguage,
+      abortSignal: input.signal,
       call: async (settings, semanticAttempt, dispatchAttempt) => {
         validateSessionContinuationBudget(requestMessages);
         await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
@@ -145,7 +149,7 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
         const requestStartedAt = Date.now();
         const failuresBefore=focusedPhysicalFailures;
         try {
-          let response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: requestMessages.map((message) => ({ ...message })), settings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent });
+          let response = await runWithStreamingRepetitionGuard({ parentSignal: input.signal, language: input.sessionLanguage, execute: (signal, internalOnStreamEvent) => chat({ config: input.providerConfig, modelId: input.model.modelId, messages: requestMessages.map((message) => ({ ...message })), settings, timeoutMs: input.requestTimeoutMs, signal, onStreamEvent, internalOnStreamEvent }) });
           input.onStreamPreview?.(null);
           response = { ...response, usage: withEstimatedCost(response.usage, input.model) };
           const elapsed = Date.now() - requestStartedAt;
@@ -157,9 +161,11 @@ export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput):
           input.onStreamPreview?.(null);
          
           if (!input.signal?.aborted && (!sessionFocus || focusedPhysicalFailures===failuresBefore)) metrics = recordProviderRequest(metrics, undefined, Date.now() - requestStartedAt);
-          const dispatchOutcome = viewerDispatchOutcome(cause);
-          if (dispatchOutcome === "not_dispatched") await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_NOT_DISPATCHED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
-          await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...durableMetadata, attemptId: dispatchAttempt.attemptId, semanticAttempt, dispatchOutcome, requestDurationMs: Date.now() - requestStartedAt } });
+          if (!isStreamingRepetitionRunawayError(cause)) {
+            const dispatchOutcome = viewerDispatchOutcome(cause);
+            if (dispatchOutcome === "not_dispatched") await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_NOT_DISPATCHED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
+            await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...durableMetadata, attemptId: dispatchAttempt.attemptId, semanticAttempt, dispatchOutcome, requestDurationMs: Date.now() - requestStartedAt } });
+          }
           activeViewerAttemptId = undefined;
           throw cause;
         }

@@ -127,8 +127,10 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     // C5-R1 and Viewer Output Safety Steps A/B1 intentionally change Viewer execution wiring.
     // B1 also removes the user-configured session cost blocker while preserving cost reporting.
     // STEP C intentionally adds Viewer-only repetition-runaway persistence wiring in Telepathic.
+    // MONITOR-STREAM-TELEPATHY-REPAIR-1 additionally wires attempt-local streaming abort/recovery.
+    // AUDIT FIX 2 preserves definitive provider results across a concurrent Stop while gating any later recovery request.
     // Freeze that accepted execution baseline while the Monitor prompt contract above remains separately byte-stable.
-    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("5dcbffdae8635a39bcab0657e19b9ea166f25445a26a1241d102899e418439ef");
+    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("e2578fedd10c536304ee1a49927b9761082a7f7bdea4d95d8d11ce150147c0fc");
   });
 
   it("keeps AI Judge prompt, rubric, scoring and packet byte-identical while allowing ORP1 resource wiring in the engine", () => {

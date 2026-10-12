@@ -39,9 +39,13 @@ export function isRecoverableProviderInterruption(session: RvSession, events: Se
   const codedViewerFailure = [...events].reverse().find((event) =>
     event.sequenceNumber < stopSequence
     && event.eventType === "VIEWER_OUTPUT_INCOMPLETE"
-    && ["output_limit", "empty", "no_larger_recovery_budget"].includes(String(event.metadata?.reason ?? "")),
+    && ["output_limit", "repetition_runaway", "empty", "no_larger_recovery_budget"].includes(String(event.metadata?.reason ?? "")),
   );
-  if (codedViewerFailure) return true;
+  if (codedViewerFailure) {
+    const reasonCode = String(codedViewerFailure.metadata?.reason ?? "");
+    if (["output_limit", "repetition_runaway"].includes(reasonCode) && codedViewerFailure.metadata?.recoveryLevel === 1) return false;
+    return true;
+  }
   return /provider|api fail|response body|empty assistant|invalid json|timed? out|timeout|connection/.test(reason);
 }
 

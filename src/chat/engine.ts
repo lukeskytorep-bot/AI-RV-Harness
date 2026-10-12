@@ -307,6 +307,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
         baseSettings: settings,
         operationKind: "manual_rv_viewer",
         messages,
+        abortSignal: input.signal,
         onIncompleteAttempt: async (attempt) => {
           user = await recordManualRvIncompleteAttempt(input.repository, user, attempt);
         },

@@ -172,6 +172,54 @@ describe("TELEPATHIC STEP 3A audit fixes", () => {
     expect(records.at(-1)?.status).toBe("uncertain");
   });
 
+  it("marks a detected streaming repetition as a failed technical attempt with preserved partial output", async () => {
+    const nemo = ai("nemo");
+    const records: Array<{ status: string; finishReason?: string; responseText?: string }> = [];
+    const packet = buildReceiverFirstPacket({ language: "en", seriesId: "s", roundId: "r", participantId: nemo.id, name: nemo.displayName, roundNumber: 1, topicLabel: "location", discloseTopic: false });
+    const attempt: ProviderChatAttempt = async (request) => {
+      request.onStreamEvent?.({ event: "started", data: { providerRequestId: "req-loop" } });
+      for (let index = 0; index < 300 && !request.signal?.aborted; index += 1) {
+        request.onStreamEvent?.({ event: "contentDelta", data: { content: "our " } });
+      }
+      throw new DOMException("cancelled by repetition guard", "AbortError");
+    };
+    await expect(executeTelepathicProviderPacket({
+      packet,
+      route: routeFor(nemo),
+      technicalAttempt: 1,
+      attempt,
+      fixedLead: true,
+      repetitionGuardLanguage: "en",
+      hooks: {
+        createCallId: () => "call-loop",
+        now: () => capturedAt,
+        persist: async (record) => { records.push({ status: record.status, finishReason: record.finishReason, responseText: record.responseText }); },
+      },
+    })).rejects.toMatchObject({ name: "StreamingRepetitionRunawayError" });
+    expect(records.at(-1)).toMatchObject({ status: "failed", finishReason: "repetition_runaway", responseText: expect.stringContaining("OUTPUT TRUNCATED") });
+  });
+
+  it("also rejects a completed non-streaming repetition response", async () => {
+    const nemo = ai("nemo");
+    const records: Array<{ status: string; finishReason?: string; responseText?: string }> = [];
+    const packet = buildReceiverFirstPacket({ language: "en", seriesId: "s", roundId: "r", participantId: nemo.id, name: nemo.displayName, roundNumber: 1, topicLabel: "location", discloseTopic: false });
+    const attempt: ProviderChatAttempt = async () => ({ content: `Useful evidence\n${"our ".repeat(240)}`, finishReason: "stop", usage: {} });
+    await expect(executeTelepathicProviderPacket({
+      packet,
+      route: routeFor(nemo),
+      technicalAttempt: 1,
+      attempt,
+      fixedLead: true,
+      repetitionGuardLanguage: "en",
+      hooks: {
+        createCallId: () => "call-loop-final",
+        now: () => capturedAt,
+        persist: async (record) => { records.push({ status: record.status, finishReason: record.finishReason, responseText: record.responseText }); },
+      },
+    })).rejects.toThrow(/repetition runaway/i);
+    expect(records.at(-1)).toMatchObject({ status: "failed", finishReason: "repetition_runaway", responseText: expect.stringContaining("OUTPUT TRUNCATED") });
+  });
+
   it("resumes inside a blind round without repeating the target or completed first blind call", async () => {
     const cfg = series(1);
     const store = new InMemoryTelepathicExchangeStore();

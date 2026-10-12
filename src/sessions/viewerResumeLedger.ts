@@ -6,13 +6,14 @@ import type { SessionEventRecord } from "./types";
  */
 export type ViewerResumeLedgerDecision =
   | { kind: "fresh" }
-  | { kind: "primary_limit"; eventId: string; stepKey: string; effectiveMaxOutputTokens: number }
+  | { kind: "primary_limit"; eventId: string; stepKey: string; effectiveMaxOutputTokens: number; reason: "output_limit" | "repetition_runaway" }
   | { kind: "exhausted"; eventId: string; stepKey: string }
   | { kind: "uncertain"; eventId: string; stepKey: string; recoveryLevel: 0 | 1 }
   | { kind: "unsafe"; reason: string };
 
 const viewerEvents = new Set(["VIEWER_RESPONSE", "VIEWER_SPECIAL_TASK_RESPONSE", "VIEWER_MONITOR_RESPONSE"]);
 const limitReasons = new Set(["length", "max_tokens", "max_output_tokens", "max_completion_tokens"]);
+const resumableIncompleteReasons = new Set(["output_limit", "repetition_runaway"]);
 
 function normalizedReason(event: SessionEventRecord): string {
   return String(event.metadata?.finishReason ?? "").trim().toLowerCase().replace(/[ -]/g, "_");
@@ -132,18 +133,18 @@ export function inspectViewerResumeLedger(events: SessionEventRecord[], stepKey?
   }
   const lastReason = String(last.metadata?.reason ?? "");
   if (related.some((event) => event.metadata?.recoveryLevel === 1)) return { kind: "exhausted", eventId: last.id, stepKey: persistedStepKey! };
-  if (last.eventType === "VIEWER_OUTPUT_INCOMPLETE" && lastReason && lastReason !== "output_limit") return { kind: "fresh" };
+  if (last.eventType === "VIEWER_OUTPUT_INCOMPLETE" && lastReason && !resumableIncompleteReasons.has(lastReason)) return { kind: "fresh" };
   const acceptedLater = sorted.some((event) => viewerEvents.has(event.eventType) && event.sequenceNumber > last.sequenceNumber && viewerEventStepKey(event) === persistedStepKey && event.metadata?.accepted === true && !limitReasons.has(normalizedReason(event)));
   if (acceptedLater) return { kind: "fresh" };
   const budget = last.metadata?.effectiveMaxOutputTokens;
   if (!Number.isSafeInteger(budget) || Number(budget) < 1) return { kind: "unsafe", reason: "The saved primary attempt has no valid effective output budget." };
-  return { kind: "primary_limit", eventId: last.id, stepKey: persistedStepKey!, effectiveMaxOutputTokens: Number(budget) };
+  return { kind: "primary_limit", eventId: last.id, stepKey: persistedStepKey!, effectiveMaxOutputTokens: Number(budget), reason: lastReason === "repetition_runaway" ? "repetition_runaway" : "output_limit" };
 }
 
-export async function resolveViewerResumeStart(input: { repository: { listSessionEvents(sessionId: string): Promise<SessionEventRecord[]> }; sessionId: string; stepKey: string; requestSha256: string }): Promise<{ startRecoveryLevel: 0 | 1; priorEffectiveMaxOutputTokens?: number }> {
+export async function resolveViewerResumeStart(input: { repository: { listSessionEvents(sessionId: string): Promise<SessionEventRecord[]> }; sessionId: string; stepKey: string; requestSha256: string }): Promise<{ startRecoveryLevel: 0 | 1; priorEffectiveMaxOutputTokens?: number; priorIncompleteReason?: "output_limit" | "repetition_runaway" }> {
   const decision = inspectViewerResumeLedger(await input.repository.listSessionEvents(input.sessionId), input.stepKey, input.requestSha256);
   if (decision.kind === "fresh") return { startRecoveryLevel: 0 };
-  if (decision.kind === "primary_limit") return { startRecoveryLevel: 1, priorEffectiveMaxOutputTokens: decision.effectiveMaxOutputTokens };
+  if (decision.kind === "primary_limit") return { startRecoveryLevel: 1, priorEffectiveMaxOutputTokens: decision.effectiveMaxOutputTokens, priorIncompleteReason: decision.reason };
   if (decision.kind === "exhausted") throw new Error("AUTO-STOP: Viewer output recovery was already exhausted for this exact step; no additional automatic paid attempt is allowed.");
   if (decision.kind === "uncertain") throw new Error("AUTO-STOP: A Viewer request for this exact step may already have been dispatched before interruption; automatic resend is blocked to avoid a duplicate paid request.");
   throw new Error(`AUTO-STOP: ${decision.reason}`);

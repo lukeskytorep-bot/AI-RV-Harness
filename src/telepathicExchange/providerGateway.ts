@@ -8,7 +8,9 @@ import { providerErrorDetails } from "../providers/providerError";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderModel } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import { composeTelepathicProviderMessages, type TelepathicProviderPacket } from "./packets";
-import type { TelepathicAiRouteSnapshot, TelepathicParticipant, TelepathicProviderCallRecord } from "./types";
+import type { TelepathicAiRouteSnapshot, TelepathicLanguage, TelepathicParticipant, TelepathicProviderCallRecord } from "./types";
+import { isStreamingRepetitionRunawayError, runWithStreamingRepetitionGuard } from "../sessions/streamingRepetitionGuard";
+import { sanitizeRepetitiveOutput } from "../sessions/repetitionGuard";
 
 export interface ResolvedTelepathicAiRoute {
   snapshot: TelepathicAiRouteSnapshot;
@@ -132,6 +134,7 @@ export async function executeTelepathicProviderPacket(input: {
   signal?: AbortSignal;
   fixedLead?: boolean;
   validateResponse?: (text: string) => void;
+  repetitionGuardLanguage?: TelepathicLanguage;
 }): Promise<{ response: ProviderChatResponse; call: TelepathicProviderCallRecord }> {
   assertExactRoute(input.route);
   const messages = composeTelepathicProviderMessages(input.packet);
@@ -163,17 +166,40 @@ export async function executeTelepathicProviderPacket(input: {
   call = { ...call, status: "dispatched", updatedAt: input.hooks.now() };
   await input.hooks.persist(call);
   try {
-    const response = await executeProviderChat({
-      config: input.route.providerConfig,
-      modelId: input.route.model.modelId,
-      messages,
-      settings: resolveGenerationSettings(input.route.model.capabilities, requestedSettings),
-      configuredRetries: 0,
-      operationId: input.packet.scopeKey,
-      operationKind: "conversation",
-      attempt: input.attempt,
-      signal: input.signal,
+    const response = await runWithStreamingRepetitionGuard({
+      parentSignal: input.signal,
+      language: input.repetitionGuardLanguage,
+      execute: (signal, internalOnStreamEvent) => executeProviderChat({
+        config: input.route.providerConfig,
+        modelId: input.route.model.modelId,
+        messages,
+        settings: resolveGenerationSettings(input.route.model.capabilities, requestedSettings),
+        configuredRetries: 0,
+        operationId: input.packet.scopeKey,
+        operationKind: "conversation",
+        attempt: input.attempt,
+        signal,
+        internalOnStreamEvent,
+      }),
     });
+    const sanitized = sanitizeRepetitiveOutput(response.content, input.repetitionGuardLanguage ?? "en");
+    if (sanitized.truncated) {
+      call = {
+        ...call,
+        status: "failed",
+        usage: response.usage,
+        elapsedMs: response.execution?.elapsedMs ?? Math.max(0, Date.parse(input.hooks.now()) - Date.parse(timestamp)),
+        physicalAttempts: response.execution?.physicalAttempts ?? 1,
+        costSource: response.usage.costUsd !== undefined ? "provider" : "unknown",
+        finishReason: "repetition_runaway",
+        ...(response.providerRequestId ? { providerRequestId: response.providerRequestId } : {}),
+        responseText: sanitized.content,
+        errorMessage: "Detected repetition runaway; the partial output was not accepted.",
+        updatedAt: input.hooks.now(),
+      };
+      await input.hooks.persist(call);
+      throw Object.assign(new Error(call.errorMessage), { telepathicCall: call });
+    }
     let domainError: string | undefined;
     if (!input.fixedLead || viewerResponseCompletion(response) === "complete") {
       try { input.validateResponse?.(response.content); }
@@ -195,6 +221,21 @@ export async function executeTelepathicProviderPacket(input: {
     return { response, call };
   } catch (error) {
     if ((error as { telepathicCall?: TelepathicProviderCallRecord })?.telepathicCall?.status === "failed") throw error;
+    if (isStreamingRepetitionRunawayError(error)) {
+      call = {
+        ...call,
+        status: "failed",
+        elapsedMs: Math.max(0, Date.parse(input.hooks.now()) - Date.parse(timestamp)),
+        physicalAttempts: 1,
+        errorMessage: "Detected repetition runaway; the partial output was not accepted.",
+        finishReason: "repetition_runaway",
+        responseText: error.sanitizedContent,
+        ...(error.providerRequestId ? { providerRequestId: error.providerRequestId } : {}),
+        updatedAt: input.hooks.now(),
+      };
+      await input.hooks.persist(call);
+      throw Object.assign(error, { telepathicCall: call });
+    }
     call = {
       ...call,
       status: isAmbiguousFailure(error) ? "uncertain" : "failed",

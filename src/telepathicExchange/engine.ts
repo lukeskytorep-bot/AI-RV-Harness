@@ -237,6 +237,7 @@ async function invokeAi(
         attempt: deps.providerAttempt,
         signal: combinedSignal(deps, packet.scope.seriesId),
         fixedLead: state.config.protocolVersion === "fixed_lead_v1",
+        repetitionGuardLanguage: state.config.language,
         validateResponse: validateDecisionResponse,
         hooks: {
           createCallId: () => nextId(deps, "telepathic-call"),

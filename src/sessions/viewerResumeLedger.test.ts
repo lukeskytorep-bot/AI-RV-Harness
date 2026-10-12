@@ -23,7 +23,22 @@ describe("durable Viewer attempt ledger", () => {
 
   it("resumes an exact first length at recovery level one", async () => {
     const repository = { listSessionEvents: vi.fn().mockResolvedValue([event(1, "VIEWER_OUTPUT_INCOMPLETE", { stepId: "rcp:phase:2:viewer", recoveryLevel: 0, reason: "output_limit", effectiveMaxOutputTokens: 16384, requestSha256: "hash" })]) };
-    await expect(resolveViewerResumeStart({ repository, sessionId: "s", stepKey: "rcp:phase:2:viewer", requestSha256: "hash" })).resolves.toEqual({ startRecoveryLevel: 1, priorEffectiveMaxOutputTokens: 16384 });
+    await expect(resolveViewerResumeStart({ repository, sessionId: "s", stepKey: "rcp:phase:2:viewer", requestSha256: "hash" })).resolves.toEqual({ startRecoveryLevel: 1, priorEffectiveMaxOutputTokens: 16384, priorIncompleteReason: "output_limit" });
+  });
+
+  it("resumes an exact first repetition runaway at recovery level one", async () => {
+    const repository = { listSessionEvents: vi.fn().mockResolvedValue([
+      event(1, "VIEWER_OUTPUT_INCOMPLETE", { stepId: "rcp:phase:2:viewer", recoveryLevel: 0, reason: "repetition_runaway", effectiveMaxOutputTokens: 16384, requestSha256: "hash" }),
+    ]) };
+    await expect(resolveViewerResumeStart({ repository, sessionId: "s", stepKey: "rcp:phase:2:viewer", requestSha256: "hash" })).resolves.toEqual({ startRecoveryLevel: 1, priorEffectiveMaxOutputTokens: 16384, priorIncompleteReason: "repetition_runaway" });
+  });
+
+  it("does not reset repetition recovery after the second semantic attempt", async () => {
+    const repository = { listSessionEvents: vi.fn().mockResolvedValue([
+      event(1, "VIEWER_OUTPUT_INCOMPLETE", { stepId: "rcp:phase:2:viewer", recoveryLevel: 0, reason: "repetition_runaway", effectiveMaxOutputTokens: 16384, requestSha256: "hash" }),
+      event(2, "VIEWER_OUTPUT_INCOMPLETE", { stepId: "rcp:phase:2:viewer", recoveryLevel: 1, reason: "repetition_runaway", effectiveMaxOutputTokens: 32768, requestSha256: "hash" }),
+    ]) };
+    await expect(resolveViewerResumeStart({ repository, sessionId: "s", stepKey: "rcp:phase:2:viewer", requestSha256: "hash" })).rejects.toThrow(/already exhausted/i);
   });
 
   it("prohibits resetting exhausted recovery after restart", async () => {

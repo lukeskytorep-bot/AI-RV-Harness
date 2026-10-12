@@ -55,6 +55,7 @@ export type ProviderChatAttempt = (request: {
   signal?: AbortSignal;
   providerRouting?: OpenRouterProviderRouting;
   onStreamEvent?: (event: ProviderStreamEvent) => void;
+  internalOnStreamEvent?: (event: ProviderStreamEvent) => void;
   transportEnvelope?: EffectiveRequestEnvelope;
 }) => Promise<ProviderChatResponse>;
 
@@ -151,6 +152,7 @@ export async function executeProviderChat(input: {
   capacityProtectedRouting?: boolean;
   streamWorkflowContext?: StreamWorkflowContext;
   onStreamEvent?: (event: ProviderStreamEvent) => void;
+  internalOnStreamEvent?: (event: ProviderStreamEvent) => void;
   onAttemptFailure?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptFailure"];
   onAttemptStart?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptStart"];
 }): Promise<ProviderChatResponse> {
@@ -192,6 +194,13 @@ export async function executeProviderChat(input: {
       phase: "before_dispatch",
     });
   }
+  const presentLiveStream = transportEnvelope.presentationMode === "live" && Boolean(input.onStreamEvent);
+  const internalStreamHandler = input.internalOnStreamEvent || presentLiveStream
+    ? (event: ProviderStreamEvent) => {
+        input.internalOnStreamEvent?.(event);
+        if (presentLiveStream) input.onStreamEvent?.(event);
+      }
+    : undefined;
   let result: ProviderExecutionResult<ProviderChatResponse>;
   try {
     result = await executeProviderRequest({
@@ -214,7 +223,7 @@ export async function executeProviderChat(input: {
         signal: input.signal,
         providerRouting: providerRouting ? structuredClone(providerRouting) : undefined,
         transportEnvelope: structuredClone(transportEnvelope),
-        ...(transportEnvelope.presentationMode === "live" && input.onStreamEvent ? { onStreamEvent: input.onStreamEvent } : {}),
+        ...(internalStreamHandler ? { onStreamEvent: internalStreamHandler } : {}),
       }),
     });
   } catch (cause) {
