@@ -1,3 +1,4 @@
+import { scopeOutputBudget } from "../telepathicExchange/outputBudgets";
 import { BrowserTelepathicExchangeRepository } from "./browser/telepathicExchangeRepository";
 import type { ResolvedTelepathicAiRoute } from "../telepathicExchange/providerGateway";
 import type { ProviderModel } from "../providers/types";
@@ -124,4 +125,22 @@ for(const backend of ["sqlite","browser"] as const) it(`${backend}: a completed 
  const {db,repository}=backend==="sqlite"?database():browser();try{
   const state=createTelepathicSeriesState({...config,senderPolicy:{kind:"fixed_ai",participantId:"a"}});state.rounds[0].revealedAt="t";state.rounds[0].reflectionsByParticipant.lead={participantId:"lead",role:"receiver",reflection:"done",shareOthersConsent:"yes",sharedAnswersComment:""};await repository.saveTelepathicSeries(state);const restarted=(await repository.getTelepathicSeries("sqlite"))!;expect(telepathicConversationHumanStep(restarted).kind).toBe("none");
  }finally{db.close();}
+});
+
+it("backs up and restores frozen Telepathic output policy and diagnostics in SQLite and Browser", async () => {
+ const {db,repository}=database();const directory=mkdtempSync(join(tmpdir(),"telepathy-budget-backup-"));
+ try {
+  const state=createTelepathicSeriesState(config);
+  state.providerCalls=[{id:"budget-call",seriesId:config.seriesId,roundId:state.rounds[0].assignment.roundId,participantId:"a",callStage:"sharing_consent",technicalAttempt:2,status:"failed",scopeKey:"frozen-budget-scope",requestSha256:"frozen-request",createdAt:"now",updatedAt:"now",outputBudgetSnapshot:scopeOutputBudget("sharing_consent",32768),outputDiagnostics:{policyVersion:2,requestedMaxOutputTokens:16384,effectiveMaxOutputTokens:16384,modelMaxOutputTokens:32768,completion:"partial"},usage:{totalTokens:11,reasoningTokens:5},finishReason:"length"}];
+  await repository.saveTelepathicSeries(state);await backup(db,join(directory,"budgets.sqlite"));
+  const restoredDb=new DatabaseSync(join(directory,"budgets.sqlite"));
+  try {
+   const restored=(await database(restoredDb,false).repository.getTelepathicSeries(config.seriesId))!;
+   expect(restored.config.outputBudgetPolicyVersion).toBe(2);expect(restored.providerCalls).toEqual(state.providerCalls);
+   expect(restoredDb.prepare("PRAGMA integrity_check").get()).toEqual({integrity_check:"ok"});
+   const values=new Map<string,string>();const storage={getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>{values.set(key,value);}} as Storage;
+   const browser=new BrowserTelepathicExchangeRepository({storage});await browser.saveTelepathicSeries(restored);
+   const browserLoaded=(await browser.getTelepathicSeries(config.seriesId))!;expect(browserLoaded.providerCalls).toEqual(state.providerCalls);
+  }finally{restoredDb.close();}
+ }finally{db.close();rmSync(directory,{recursive:true,force:true});}
 });

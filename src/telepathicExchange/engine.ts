@@ -1,3 +1,4 @@
+import { TELEPATHIC_OUTPUT_POLICY_VERSION, scopeOutputBudget, nextDurableTechnicalAttempt, lengthRecoveryUnavailable } from "./outputBudgets";
 import { recordTranscript } from "./transcript";
 import { ensureFixedLeadGuidance, validateRoundLeadDecision } from "./fixedLeadRuntime";
 import type { LeadGuidanceDecision } from "./types";
@@ -82,6 +83,7 @@ function topicLabel(config: TelepathicSeriesConfig): string {
 }
 
 export function createTelepathicSeriesState(config: TelepathicSeriesConfig, timestamp = new Date().toISOString()): TelepathicSeriesState {
+  if (config.outputBudgetPolicyVersion !== undefined && config.outputBudgetPolicyVersion !== TELEPATHIC_OUTPUT_POLICY_VERSION) throw new Error("Unsupported Telepathic output policy version.");
   const plan = planTelepathicSeries(config);
   if (config.protocolVersion === "fixed_lead_v1") {
     const areas = assignTargetGeographies(plan.rounds.length);
@@ -95,7 +97,7 @@ export function createTelepathicSeriesState(config: TelepathicSeriesConfig, time
   }));
   return {
     schemaVersion: 1,
-    config: { ...structuredClone(config), ...(config.protocolVersion === "fixed_lead_v1" ? { leadInstruction: leadInstructions(config.language) } : {}) },
+    config: { ...structuredClone(config), ...(config.protocolVersion === "fixed_lead_v1" ? { leadInstruction: leadInstructions(config.language), outputBudgetPolicyVersion: TELEPATHIC_OUTPUT_POLICY_VERSION } : {}) },
     plan,
     currentRoundIndex: 0,
     status: "ready",
@@ -208,8 +210,7 @@ async function invokeAi(
     throw new Error("Telepathic provider result is uncertain after dispatch. Resume must not automatically repeat this call until the operator resolves it.");
   }
 
-  const failedAttempts = existing.filter((call) => call.status === "failed").map((call) => call.technicalAttempt);
-  let technicalAttempt = failedAttempts.length ? Math.max(...failedAttempts) + 1 : 1;
+  let technicalAttempt = nextDurableTechnicalAttempt(existing);
   if (technicalAttempt > 2) {
     if (state.config.protocolVersion === "fixed_lead_v1") throw new Error("Telepathic stage attempts exhausted; no complete output was accepted.");
     return null;
@@ -218,7 +219,8 @@ async function invokeAi(
   await deps.store.assertTelepathicSeriesLease(packet.scope.seriesId);
   const route = preResolvedRoute ?? await deps.resolveRoute(participantItem);
   assertResolvedRouteMatchesParticipant(participantItem, route);
-  const requestHash = await telepathicRequestFingerprint(effectivePacket, route, state.config.protocolVersion === "fixed_lead_v1");
+  const outputBudget = state.config.protocolVersion === "fixed_lead_v1" ? scopeOutputBudget(packet.scope.callStage, route.model.capabilities.maxOutputTokens, existing, state.config.outputBudgetPolicyVersion) : undefined;
+  const requestHash = await telepathicRequestFingerprint(effectivePacket, route, state.config.protocolVersion === "fixed_lead_v1", outputBudget);
   if (state.config.protocolVersion === "fixed_lead_v1" && existing.some(call => call.requestSha256 !== requestHash)) throw new Error("Telepathic request fingerprint/settings changed after its durable attempt was prepared.");
   await deps.store.assertTelepathicSeriesLease(packet.scope.seriesId);
   if (effectivePacket.scope.callStage === "series_reflection") {
@@ -229,6 +231,9 @@ async function invokeAi(
   }
 
   for (; technicalAttempt <= 2; technicalAttempt += 1) {
+    if (outputBudget && technicalAttempt === 2 && lengthRecoveryUnavailable(outputBudget, callsForScope(state, packet.scopeKey))) {
+      throw new Error("No larger output recovery budget is available for this model.");
+    }
     try {
       const result = await executeTelepathicProviderPacket({
         packet: effectivePacket,
@@ -237,6 +242,7 @@ async function invokeAi(
         attempt: deps.providerAttempt,
         signal: combinedSignal(deps, packet.scope.seriesId),
         fixedLead: state.config.protocolVersion === "fixed_lead_v1",
+        outputBudgetSnapshot: outputBudget,
         repetitionGuardLanguage: state.config.language,
         validateResponse: validateDecisionResponse,
         hooks: {
@@ -272,7 +278,6 @@ async function invokeAi(
       if (call?.status === "uncertain") {
         throw new Error("Telepathic provider result is uncertain after dispatch. Resume must not automatically repeat this call until the operator resolves it.", { cause: error });
       }
-      if (state.config.protocolVersion === "fixed_lead_v1" && /^(receiver_first|receiver_guidance:)/.test(packet.scope.callStage) && existing.concat(state.providerCalls).some(c => c.scopeKey===packet.scopeKey && c.status==="failed" && ["length","max_tokens"].includes(c.finishReason ?? "")) && (route.model.capabilities.maxOutputTokens ?? 32768) <= 16384) throw new Error("No larger output recovery budget is available for this model.", {cause:error});
       if (technicalAttempt >= 2) {
         if (state.config.protocolVersion === "fixed_lead_v1") throw error;
         return null;

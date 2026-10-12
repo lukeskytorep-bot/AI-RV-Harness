@@ -1,3 +1,4 @@
+import type { TelepathicOutputBudgetSnapshot, TelepathicOutputDiagnostics } from "./outputBudgets";
 import type { ProviderUsage, ProviderMessage, EffectiveGenerationSettings } from "../providers/types";
 import type { ProviderContinuationState } from "../providers/continuationContract";
 
@@ -57,6 +58,7 @@ export interface TelepathicSeriesConfig {
   schemaVersion: 1;
   protocolVersion?: "fixed_lead_v1";
   leadInstructionVersion?: string;
+  outputBudgetPolicyVersion?: 2;
   leadInstruction?: string;
   maxGuidanceCycles?: 3;
   seriesId: string;
@@ -207,6 +209,8 @@ export interface TelepathicProviderCallRecord {
   finishReason?: string;
   requestMessages?: ProviderMessage[];
   requestSettings?: EffectiveGenerationSettings;
+  outputBudgetSnapshot?: TelepathicOutputBudgetSnapshot;
+  outputDiagnostics?: TelepathicOutputDiagnostics;
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;

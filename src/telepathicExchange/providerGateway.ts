@@ -1,3 +1,4 @@
+import { scopeOutputBudget, outputAttemptBudget, validateOutputBudgetSnapshot, type TelepathicOutputBudgetSnapshot } from "./outputBudgets";
 import { viewerResponseCompletion } from "../sessions/viewerOutputRecovery";
 import { preflightTelepathicPacket } from "./preflight";
 import { sha256Text } from "../application/sha256";
@@ -115,14 +116,14 @@ function isAmbiguousFailure(error: unknown): boolean {
 
 // The scope contract excludes only the deliberate per-attempt output escalation.
 // Effective generation and the actual provider endpoint/route are otherwise fixed.
-export async function telepathicRequestFingerprint(packet: TelepathicProviderPacket, route: ResolvedTelepathicAiRoute, fixedLead: boolean): Promise<string> {
+export async function telepathicRequestFingerprint(packet: TelepathicProviderPacket, route: ResolvedTelepathicAiRoute, fixedLead: boolean, outputBudget?: TelepathicOutputBudgetSnapshot): Promise<string> {
   const messages = composeTelepathicProviderMessages(packet);
   if (!fixedLead) return sha256Text(JSON.stringify({ modelId: route.model.modelId, messages }));
   const settings = resolveGenerationSettings(route.model.capabilities, route.requestedSettings);
   const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,canonical(v)])) : value;
   return sha256Text(JSON.stringify(canonical({ modelId: route.model.modelId, messages, settings,
     outputCeiling: route.model.capabilities.maxOutputTokens, provider: route.providerConfig.provider,
-    baseUrl: route.providerConfig.baseUrl, outputTokenField: route.providerConfig.customOutputTokenField, route: route.model.route })));
+    baseUrl: route.providerConfig.baseUrl, outputTokenField: route.providerConfig.customOutputTokenField, route: route.model.route, ...(outputBudget?.version === 2 ? { outputBudget } : {}) })));
 }
 
 export async function executeTelepathicProviderPacket(input: {
@@ -133,16 +134,20 @@ export async function executeTelepathicProviderPacket(input: {
   attempt?: ProviderChatAttempt;
   signal?: AbortSignal;
   fixedLead?: boolean;
+  outputBudgetSnapshot?: TelepathicOutputBudgetSnapshot;
   validateResponse?: (text: string) => void;
   repetitionGuardLanguage?: TelepathicLanguage;
 }): Promise<{ response: ProviderChatResponse; call: TelepathicProviderCallRecord }> {
   assertExactRoute(input.route);
   const messages = composeTelepathicProviderMessages(input.packet);
   if (messages.some((message) => message.continuationState)) throw new Error("Telepathic provider payload cannot contain continuation state.");
-  const requestSha256 = await telepathicRequestFingerprint(input.packet, input.route, Boolean(input.fixedLead));
+  const outputBudget = input.fixedLead ? input.outputBudgetSnapshot ?? scopeOutputBudget(input.packet.scope.callStage, input.route.model.capabilities.maxOutputTokens) : undefined;
+  if (outputBudget) validateOutputBudgetSnapshot(outputBudget, input.packet.scope.callStage, input.route.model.capabilities.maxOutputTokens);
+  const budget = outputBudget ? outputAttemptBudget(outputBudget, input.technicalAttempt) : undefined;
+  if (!Number.isSafeInteger(input.technicalAttempt) || ![1, 2].includes(input.technicalAttempt)) throw new Error("Telepathic stage attempts exhausted; only two attempts are allowed.");
+  const requestSha256 = await telepathicRequestFingerprint(input.packet, input.route, Boolean(input.fixedLead), outputBudget);
   input.signal?.throwIfAborted();
-  const outputStage = /^(receiver_first|receiver_guidance:|receiver_reveal|sender_reveal|shared_answers_comment|series_reflection)/.test(input.packet.scope.callStage);
-  const requestedSettings = input.fixedLead ? { ...input.route.requestedSettings, maxOutputTokens: Math.min(outputStage ? (input.technicalAttempt === 1 ? 16384 : 32768) : 4096, input.route.model.capabilities.maxOutputTokens ?? 32768) } : input.route.requestedSettings;
+  const requestedSettings = budget ? { ...input.route.requestedSettings, maxOutputTokens: budget.effective } : input.route.requestedSettings;
   const validation = preflightTelepathicPacket({ packet: input.packet, model: input.route.model, reservedOutputTokens: requestedSettings.maxOutputTokens });
   if (input.fixedLead && validation.budget.exceeded) throw new Error("Telepathic packet exceeds the model context budget; no materials were truncated.");
   const timestamp = input.hooks.now();
@@ -157,6 +162,8 @@ export async function executeTelepathicProviderPacket(input: {
     scopeKey: input.packet.scopeKey,
     requestSha256,
     requestSettings: resolveGenerationSettings(input.route.model.capabilities, requestedSettings),
+    ...(outputBudget ? { outputBudgetSnapshot: structuredClone(outputBudget) } : {}),
+    outputDiagnostics: { ...(outputBudget ? { policyVersion: outputBudget.version } : {}), requestedMaxOutputTokens: budget?.requested ?? requestedSettings.maxOutputTokens, effectiveMaxOutputTokens: resolveGenerationSettings(input.route.model.capabilities, requestedSettings).effective.maxOutputTokens, modelMaxOutputTokens: input.route.model.capabilities.maxOutputTokens, completion: "unknown" },
     ...(input.fixedLead ? { requestMessages: messages.map(({role,content,images}) => ({ role, content, ...(images?.length ? { images: images.map(({mimeType}) => ({ mimeType, dataBase64: "[attachment transmitted]" })) } : {}) })) } : {}),
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -187,6 +194,7 @@ export async function executeTelepathicProviderPacket(input: {
       call = {
         ...call,
         status: "failed",
+        outputDiagnostics: { ...call.outputDiagnostics!, completion: "partial" },
         usage: response.usage,
         elapsedMs: response.execution?.elapsedMs ?? Math.max(0, Date.parse(input.hooks.now()) - Date.parse(timestamp)),
         physicalAttempts: response.execution?.physicalAttempts ?? 1,
@@ -209,6 +217,7 @@ export async function executeTelepathicProviderPacket(input: {
       ...call,
       ...(domainError ? { errorMessage: domainError } : {}),
       status: domainError || input.fixedLead && viewerResponseCompletion(response) !== "complete" ? "failed" : "succeeded",
+      outputDiagnostics: { ...call.outputDiagnostics!, completion: viewerResponseCompletion(response) === "complete" ? "complete" : "partial" },
       usage: response.usage, elapsedMs: response.execution?.elapsedMs ?? Math.max(0, Date.parse(input.hooks.now()) - Date.parse(timestamp)),
       physicalAttempts: response.execution?.physicalAttempts ?? 1,
       costSource: response.usage.costUsd !== undefined ? "provider" : "unknown", finishReason: response.finishReason,
@@ -225,6 +234,7 @@ export async function executeTelepathicProviderPacket(input: {
       call = {
         ...call,
         status: "failed",
+        outputDiagnostics: { ...call.outputDiagnostics!, completion: "partial" },
         elapsedMs: Math.max(0, Date.parse(input.hooks.now()) - Date.parse(timestamp)),
         physicalAttempts: 1,
         errorMessage: "Detected repetition runaway; the partial output was not accepted.",
