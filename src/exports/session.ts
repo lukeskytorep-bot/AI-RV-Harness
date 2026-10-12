@@ -38,6 +38,7 @@ export async function exportSessionRecord(
     title: `${session.sessionCode} — ${language === "pl" ? "pełny zapis sesji" : "complete session record"}`,
     language,
     session,
+    ...(snapshot?.protocol?.id === "telepathic-protocol" ? { events: await repository.listSessionEvents(session.id), sessionLanguage: snapshot.sessionLanguage } : {}),
     revealText: reveal?.text ?? "",
     revealFilesMarkdown: revealFilesMarkdown(reveal),
     scores,

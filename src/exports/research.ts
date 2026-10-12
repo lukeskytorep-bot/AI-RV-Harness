@@ -89,6 +89,7 @@ export async function exportResearchPackage(repository: AppRepository, projectId
         title: `${assignment.anonymousSessionId} — ${project.config.sessionLanguage === "pl" ? "pełny zapis sesji" : "complete session record"}`,
         language: project.config.sessionLanguage,
         session,
+        ...(snapshot?.protocol?.id === "telepathic-protocol" ? { events: await repository.listSessionEvents(session.id), sessionLanguage: snapshot.sessionLanguage } : {}),
         revealText: reveal?.text ?? "",
         revealFilesMarkdown: readableArtifacts(exportedArtifacts, saveOnly ? "../../../" : `sessions/${assignment.anonymousSessionId}/`),
         scores: judgeScores,

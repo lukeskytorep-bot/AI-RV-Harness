@@ -1,3 +1,4 @@
+import { monitorInterventionId } from "./monitorInterventions";
 import { evaluateMonitor, isIncompleteMonitorResponse, type MonitorDecision } from "../monitor/engine";
 import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
 import { resolveGenerationSettings } from "../providers/capabilities";
@@ -277,7 +278,7 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     const requestSha256 = await sha256Text(viewerRequestFingerprintInput(messages));
     const durable = input.resumeSession ? await resolveViewerResumeStart({ repository: input.repository, sessionId, stepKey: stepId, requestSha256 }) : { startRecoveryLevel: 0 as const };
     const durableMetadata = { ...metadata, stepId, requestSha256 };
-    await input.repository.appendSessionEvent(sessionId, { eventType: "CONTROLLER_STEP", role: "controller", content: prompt, metadata: { protocolFamily: "telepathic", ...metadata } });
+    await input.repository.appendSessionEvent(sessionId, { eventType: "CONTROLLER_STEP", role: "controller", content: prompt, metadata: { protocolFamily: "telepathic", ...metadata, stepId } });
     let response: ProviderChatResponse;
     let responseDurationMs = 0;
     let responseAcceptedMetadata: Record<string, unknown> = {};
@@ -352,9 +353,9 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     }
   };
 
-  const runQuestion = async (question: string, questionNumber: number, source: "operator" | "monitor"): Promise<void> => {
+  const runQuestion = async (question: string, questionNumber: number, source: "operator" | "monitor", interventionId?: string): Promise<void> => {
     const prompt = telepathicQuestionPrompt(input.sessionLanguage, question, questionNumber);
-    const response = await viewerCall(prompt, { step: 8, telepathicPhase: "T9", questionNumber, source });
+    const response = await viewerCall(prompt, { step: 8, telepathicPhase: "T9", questionNumber, source, ...(interventionId ? { interventionId } : {}) });
     await persist(appendTelepathicQuestionTranscript(transcript, questionNumber, prompt, response.content, input.sessionLanguage, source), 8, input.step8Questions.mode === "manual", questionNumber);
   };
 
@@ -363,9 +364,11 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
     if (forcedQuestions) {
       for (let index = 0; index < Math.min(5, forcedQuestions.length); index += 1) {
         const command = forcedQuestions[index];
+        const viewerStepId = buildViewerStepId("telepathic", { step, telepathicPhase: "T9", questionNumber: index + 1, source: "monitor" });
+        const interventionId = monitorInterventionId(sessionId, viewerStepId);
         await input.repository.appendMonitorIntervention(monitorRunId, { decision: "INTERVENE", commandText: command, rationale: JSON.stringify({ step, exchangeNumber: index + 1, source: "operator_predefined_t9" }) });
-        await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_INTERVENTION", role: "controller", content: command, metadata: { step, exchangeNumber: index + 1, source: "operator_predefined_t9" } });
-        await runQuestion(command, index + 1, "monitor");
+        await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_INTERVENTION", role: "controller", content: command, metadata: { step, exchangeNumber: index + 1, source: "operator_predefined_t9", interventionId, viewerStepId } });
+        await runQuestion(command, index + 1, "monitor", interventionId);
       }
       return;
     }
@@ -428,9 +431,11 @@ export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRu
         break;
       }
       await input.repository.appendMonitorIntervention(monitorRunId, { decision: "INTERVENE", commandText: decision.commandText, rationale: JSON.stringify({ step, exchangeNumber, rawResponse: decision.rawResponse }) });
-      await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_INTERVENTION", role: "controller", content: decision.commandText, metadata: { step, exchangeNumber, rawResponse: decision.rawResponse } });
+      const viewerStepId = buildViewerStepId("telepathic", { step, exchangeNumber, source: "monitor_intervention" });
+      const interventionId = monitorInterventionId(sessionId, viewerStepId);
+      await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_INTERVENTION", role: "controller", content: decision.commandText, metadata: { step, exchangeNumber, rawResponse: decision.rawResponse, interventionId, viewerStepId } });
       const viewerPrompt = step === 8 ? telepathicQuestionPrompt(input.sessionLanguage, decision.commandText, exchangeNumber) : decision.commandText;
-      const response = await viewerCall(viewerPrompt, { step, exchangeNumber, source: "monitor_intervention", ...(step === 8 ? { telepathicPhase: "T9" } : {}) });
+      const response = await viewerCall(viewerPrompt, { step, exchangeNumber, source: "monitor_intervention", interventionId, ...(step === 8 ? { telepathicPhase: "T9" } : {}) });
       await persist(appendTelepathicMonitorTranscript(transcript, step, decision.commandText, response.content, input.sessionLanguage), step);
     }
   };

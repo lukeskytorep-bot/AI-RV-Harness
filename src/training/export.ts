@@ -69,6 +69,7 @@ export async function exportTrainingRun(
         language,
         title: `${session.sessionCode} — ${title}`,
         session,
+        ...(snapshot?.protocol?.id === "telepathic-protocol" ? { events: await repository.listSessionEvents(session.id), sessionLanguage: snapshot.sessionLanguage } : {}),
         revealText,
         revealFilesMarkdown: revealFiles || "—",
         scores,
