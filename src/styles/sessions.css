@@ -50,6 +50,10 @@
 .session-run-metrics > span { display: grid; gap: 2px; padding: 8px 12px; background: var(--surface); }
 .session-run-metrics small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .045em; }
 .session-run-metrics strong { font-size: 11px; }
+.session-run-metrics > span { min-width: 0; overflow-wrap: anywhere; }
+.session-run-metric-note { color: var(--muted); font-size: 11px; line-height: 1.4; }
+@media (max-width: 680px) { .session-run-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 360px) { .session-run-metrics { grid-template-columns: minmax(0, 1fr); } }
 .batch-progress-strip { display: flex; align-items: center; gap: 9px; padding: 7px 12px; border-bottom: 1px solid rgba(123, 108, 239, .15); color: var(--violet); background: var(--violet-soft); }
 .batch-progress-strip strong { font-size: 11px; }
 .batch-progress-strip span { font-size: 11px; font-weight: 800; }

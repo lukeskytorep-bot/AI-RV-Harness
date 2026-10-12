@@ -16,7 +16,7 @@ describe("mounted shared telepathy UX",()=>{
   await act(async()=>icons[0].focus());expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(pl?"Otwórz trening":"Open training");
   await act(async()=>icons[0].click());await act(async()=>icons[1].click());await act(async()=>icons[2].click());
   expect(onOpen).toHaveBeenCalledWith("s");expect(onSave).toHaveBeenCalledWith("s");expect(onArchive).toHaveBeenCalledWith("s",true);
-  const toggle=container.querySelector<HTMLButtonElement>(".telepathic-history-toggle")!;await act(async()=>toggle.click());expect(container.querySelector(".telepathic-history-card")).toBeNull();await act(async()=>toggle.click());expect(container.querySelector(".telepathic-history-card")).not.toBeNull();
+  const toggle=container.querySelector<HTMLButtonElement>(".telepathic-history-toggle")!;await act(async()=>toggle.click());expect(container.querySelector("aside")?.hidden).toBe(true);expect(toggle.getAttribute("aria-expanded")).toBe("false");await act(async()=>toggle.click());expect(container.querySelector(".telepathic-history-card")).not.toBeNull();
  });
  it("orders lead first, isolates malformed Markdown and moves focus to section and back",async()=>{
   const scroll=vi.fn();HTMLElement.prototype.scrollIntoView=scroll;
@@ -31,7 +31,7 @@ describe("mounted shared telepathy UX",()=>{
  });
  it("disables actions during execution and offers restore without starting a model",async()=>{
   const onArchive=vi.fn();await act(async()=>root.render(<TelepathicHistory pl={false} busy={false} items={[{id:"s",name:"Archived",updatedAt:"2026-10-11",status:"paused",archivedAt:"t"}]} onOpen={()=>{}} onSave={()=>{}} onArchive={onArchive}/>));
-  expect(container.querySelector(".telepathic-history-card")).toBeNull();await act(async()=>container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+  expect(container.querySelector(".telepathic-history-card")).not.toBeNull();expect(container.querySelector('input[type="checkbox"]')).toBeNull();
   await act(async()=>container.querySelector<HTMLButtonElement>('button[aria-label="Restore training"]')!.click());expect(onArchive).toHaveBeenCalledWith("s",false);
  });
 });

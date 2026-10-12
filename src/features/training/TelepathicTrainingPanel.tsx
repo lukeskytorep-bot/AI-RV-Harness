@@ -237,7 +237,7 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
   };
 
   const runRemaining = async () => {
-    if (!activeSeries || !repository) return;
+    if (!activeSeries || !repository || activeSeries.archivedAt) return;
     pauseRequested.current = false;
     await withBusy(async () => {
       let current = await repository.getTelepathicSeries(activeSeries.config.seriesId);
@@ -263,17 +263,17 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
   };
 
   const recoverBlocked = async () => {
-    if (!activeSeries) return;
+    if (!activeSeries || activeSeries.archivedAt) return;
     await withBusy(() => resumeBlockedTelepathicSeries(engineDeps(), activeSeries.config.seriesId), activeSeries.config.seriesId);
   };
 
   const resolveUncertain = async (callId: string) => {
-    if (!activeSeries) return;
+    if (!activeSeries || activeSeries.archivedAt) return;
     await withBusy(() => allowRetryForUncertainTelepathicCall(engineDeps(), activeSeries.config.seriesId, callId), activeSeries.config.seriesId);
   };
 
   const runFinal = async () => {
-    if (!activeSeries) return;
+    if (!activeSeries || activeSeries.archivedAt) return;
     await withBusy(() => runTelepathicFinalReflections(engineDeps(), activeSeries.config.seriesId), activeSeries.config.seriesId);
   };
 
@@ -289,7 +289,7 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
   };
 
   const currentViewRound = activeSeries?.rounds.find((round) => round.assignment.roundId === viewRoundId) ?? activeSeries?.rounds[Math.min(activeSeries.currentRoundIndex, Math.max(0, activeSeries.rounds.length - 1))] ?? null;
-  const unresolved = activeSeries ? unresolvedTelepathicProviderCalls(activeSeries) : [];
+  const unresolved = activeSeries && !activeSeries.archivedAt ? unresolvedTelepathicProviderCalls(activeSeries) : [];
   const unresolvedFinal = unresolved.filter((call) => call.callStage === "series_reflection" || call.roundId === "series-complete");
 
   if (!repository) return <section className="panel"><p>{pl ? "Repozytorium nie jest gotowe." : "Repository is not ready."}</p></section>;
@@ -318,7 +318,7 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
 
     {activeSeries && <>
       <TelepathicMetrics metrics={telepathicRuntimeMetrics(activeSeries)} pl={pl}/>
-      <section className="panel telepathic-exchange-panel"><div className="telepathic-section-heading"><div><GraduationCap size={18} /><span><strong>{pl ? "Aktywny trening" : "Active training"}</strong><small>{stateLabel(activeSeries.status, pl)} · {activeSeries.currentRoundIndex}/{activeSeries.rounds.length} {pl ? "ukończonych rund" : "rounds completed"}</small></span></div><button className="secondary-button" disabled={busy} onClick={() => { applyActiveSeries(null); setError(null); }}>{pl ? "Nowy trening" : "New training"}</button></div><div className="telepathic-status-grid"><span><small>{pl ? "Uczestnicy" : "Participants"}</small><strong>{activeSeries.config.participants.map((item) => item.displayName).join(" · ")}</strong></span><span><small>{pl ? "Temat" : "Topic"}</small><strong>{topicLabel(activeSeries.config.topic, pl)} · {activeSeries.config.discloseTopicToReceivers ? (pl ? "jawny" : "visible") : (pl ? "ukryty" : "hidden")}</strong></span><span><small>Viewer Learning</small><strong>{pl ? "zamrożony · tylko odczyt" : "frozen · read-only"}</strong><small>{activeSeries.config.participants.map((item) => `${item.displayName}: FG ${item.fieldGuide ? `v${item.fieldGuide.version}` : "—"} · VN ${item.viewerNotes ? `v${item.viewerNotes.version}` : "—"}`).join(" | ")}</small></span></div><div className="training-actions">{busy ? <><button className="secondary-button" onClick={() => { pauseRequested.current = true; stopController.current?.abort(new DOMException("Stopped by user","AbortError")); }}><CircleStop size={15} />{pl ? "Zatrzymaj" : "Stop"}</button><span>{pl ? "Trening działa…" : "Training is running…"}</span></> : <><button className="primary-button" disabled={(activeSeries.status === "completed" && Object.keys(activeSeries.finalReflections).length >= activeSeries.config.participants.filter(p=>p.kind==="ai").length) || activeSeries.status === "cancelled" || activeSeries.status === "blocked" || unresolved.length > 0 || Boolean(activeSeries.archivedAt)} onClick={() => void runRemaining()}><Play size={15} />{pl ? "Uruchom / kontynuuj" : "Run / continue"}</button>{activeSeries.status === "blocked" && unresolved.length === 0 && <button className="secondary-button" onClick={() => void recoverBlocked()}>{pl ? "Odblokuj i wznów z checkpointu" : "Unblock and resume from checkpoint"}</button>}</>}</div>{activeSeries.status === "blocked" && currentViewRound?.blockedReason && <div className="training-requirement-note"><span>{currentViewRound.blockedReason}</span></div>}</section>
+      <section className="panel telepathic-exchange-panel"><div className="telepathic-section-heading"><div><GraduationCap size={18} /><span><strong>{pl ? "Aktywny trening" : "Active training"}</strong><small>{stateLabel(activeSeries.status, pl)} · {activeSeries.currentRoundIndex}/{activeSeries.rounds.length} {pl ? "ukończonych rund" : "rounds completed"}</small></span></div><button className="secondary-button" disabled={busy} onClick={() => { applyActiveSeries(null); setError(null); }}>{pl ? "Nowy trening" : "New training"}</button></div><div className="telepathic-status-grid"><span><small>{pl ? "Uczestnicy" : "Participants"}</small><strong>{activeSeries.config.participants.map((item) => item.displayName).join(" · ")}</strong></span><span><small>{pl ? "Temat" : "Topic"}</small><strong>{topicLabel(activeSeries.config.topic, pl)} · {activeSeries.config.discloseTopicToReceivers ? (pl ? "jawny" : "visible") : (pl ? "ukryty" : "hidden")}</strong></span><span><small>Viewer Learning</small><strong>{pl ? "zamrożony · tylko odczyt" : "frozen · read-only"}</strong><small>{activeSeries.config.participants.map((item) => `${item.displayName}: FG ${item.fieldGuide ? `v${item.fieldGuide.version}` : "—"} · VN ${item.viewerNotes ? `v${item.viewerNotes.version}` : "—"}`).join(" | ")}</small></span></div><div className="training-actions">{busy ? <><button className="secondary-button" onClick={() => { pauseRequested.current = true; stopController.current?.abort(new DOMException("Stopped by user","AbortError")); }}><CircleStop size={15} />{pl ? "Zatrzymaj" : "Stop"}</button><span>{pl ? "Trening działa…" : "Training is running…"}</span></> : activeSeries.archivedAt ? <span>{pl ? "Zarchiwizowano · tylko odczyt. Przywróć trening z historii, aby kontynuować." : "Archived · read-only. Restore the training from history to continue."}</span> : <><button className="primary-button" disabled={(activeSeries.status === "completed" && Object.keys(activeSeries.finalReflections).length >= activeSeries.config.participants.filter(p=>p.kind==="ai").length) || activeSeries.status === "cancelled" || activeSeries.status === "blocked" || unresolved.length > 0 || Boolean(activeSeries.archivedAt)} onClick={() => void runRemaining()}><Play size={15} />{pl ? "Uruchom / kontynuuj" : "Run / continue"}</button>{activeSeries.status === "blocked" && unresolved.length === 0 && <button className="secondary-button" onClick={() => void recoverBlocked()}>{pl ? "Odblokuj i wznów z checkpointu" : "Unblock and resume from checkpoint"}</button>}</>}</div>{activeSeries.status === "blocked" && currentViewRound?.blockedReason && <div className="training-requirement-note"><span>{currentViewRound.blockedReason}</span></div>}</section>
 
       {unresolved.length > 0 && <section className="panel telepathic-exchange-panel"><strong>{pl ? "Niepewne wywołania providera" : "Uncertain provider calls"}</strong><p>{pl ? "Nie zostaną ponowione automatycznie. Dostawca mógł już przetworzyć wiadomość. Ponowienie może oznaczać dodatkowy koszt; limit dwóch prób nadal obowiązuje." : "They will not be retried automatically. If you explicitly treat an attempt as failed, the normal two-attempt limit still applies."}</p><div className="telepathic-series-history">{unresolved.map((call) => <button type="button" className="secondary-button telepathic-series-history-item" key={call.id} disabled={busy} onClick={() => void resolveUncertain(call.id)}><span><strong>{telepathicStageLabel(call.callStage,pl)} · {activeSeries.config.participants.find(p=>p.id===call.participantId)?.displayName??call.participantId}</strong><small>{call.roundId} · attempt {call.technicalAttempt}</small></span><span>{call.technicalAttempt<2 ? (pl ? "Zezwól na ponowienie" : "Allow retry") : (pl?"Rozstrzygnij wyczerpaną próbę":"Resolve exhausted attempt")}</span></button>)}</div></section>}
 

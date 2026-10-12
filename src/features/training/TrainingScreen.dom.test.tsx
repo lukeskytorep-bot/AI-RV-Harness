@@ -92,8 +92,12 @@ describe("TrainingScreen mounted interactions", () => {
   let currentRun: TrainingRunRecord;
   let repository: AppRepository;
   let archiveTrainingRun: ReturnType<typeof vi.fn>;
+  const actEnvironment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  let previousActEnvironment: boolean | undefined;
 
   beforeEach(() => {
+    previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);
@@ -130,6 +134,7 @@ describe("TrainingScreen mounted interactions", () => {
     host.remove();
     document.body.querySelectorAll('[role="tooltip"]').forEach((node) => node.remove());
     vi.restoreAllMocks();
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
   });
 
   async function mount(language: "en" | "pl" = "en") {

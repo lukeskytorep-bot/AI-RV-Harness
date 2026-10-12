@@ -35,7 +35,7 @@ describe("mounted Conversation audit regressions",()=>{
   state.transcript=[{id:"checkpoint",seriesId:"mounted",roundId:state.rounds[0].assignment.roundId,sequence:1,stage:"reflection",kind:"reflection",authorId:"a",recipientIds:[],text:"FIRST_DURABLE_RESULT",createdAt:"t"}];
   state.providerCalls=[{id:"call",seriesId:"mounted",roundId:"r",participantId:"a",callStage:"receiver_first",technicalAttempt:1,status:"succeeded",scopeKey:"k",requestSha256:"h",usage:{totalTokens:42,costUsd:0.01},createdAt:"t",updatedAt:"t"}];
   await act(async()=>vi.advanceTimersByTimeAsync(550));
-  expect(container.textContent).toContain("FIRST_DURABLE_RESULT");expect(container.textContent).toContain("Tokens: 42");expect(mock.advance).toHaveBeenCalledTimes(1);expect(signal?.aborted).toBe(false);expect(container.querySelector(".telepathic-schedule button.active")?.textContent).toBe(selected);
+  expect(container.textContent).toContain("FIRST_DURABLE_RESULT");expect(container.querySelector(".session-run-metrics > span:nth-child(2) strong")?.textContent).toBe("42");expect(mock.advance).toHaveBeenCalledTimes(1);expect(signal?.aborted).toBe(false);expect(container.querySelector(".telepathic-schedule button.active")?.textContent).toBe(selected);
   await act(async()=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent==="Stop")!.click());expect(signal?.aborted).toBe(true);
  });
  it("retains legacy answers/reflections after reveal and hides other blinds before reveal",async()=>{
@@ -59,7 +59,7 @@ describe("mounted Conversation audit regressions",()=>{
  });
  it("shows archived series with history actions and without human/recovery forms",async()=>{
   const {state,render}=fixture();state.archivedAt="t";state.archiveRevision=1;state.status="blocked";
-  await render();await act(async()=>container.querySelector<HTMLInputElement>('.telepathic-history input[type="checkbox"]')!.click());
+  await render();expect(container.querySelector('.telepathic-history input[type="checkbox"]')).toBeNull();
   await act(async()=>container.querySelector<HTMLButtonElement>('button[aria-label="Open exchange"]')!.click());
   expect(container.querySelector(".telepathic-run-head")).not.toBeNull();expect(container.querySelector(".telepathic-action-box")).toBeNull();
   expect(container.querySelector('button[aria-label="Save exchange"]')).not.toBeNull();expect(container.querySelector('button[aria-label="Restore exchange"]')).not.toBeNull();

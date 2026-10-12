@@ -1,4 +1,5 @@
 import { TooltipButton } from "../../components/TooltipButton";
+import { HistoryPanelShell } from "../../components/HistoryPanelShell";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Archive, Check, CircleStop, Database, Download, FileCheck2, GraduationCap, List, Play, ShieldCheck } from "lucide-react";
 import type { getCopy } from "../../i18n";
@@ -428,15 +429,8 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
         {!workspaceId && <div className="training-requirement-note"><ShieldCheck size={15} /><span>{text.workspaceRequired}</span></div>}
         {error && <div className="provider-error">{error}</div>}{exportMessage && <div className="storage-success"><Check size={14} />{exportMessage}</div>}
       </section>
-      <div className={`training-history-shell ${historyOpen ? "open" : "collapsed"}`}>
-        <TooltipButton
-          className="training-history-toggle"
-          label={historyOpen ? text.collapseHistory : text.expandHistory}
-          ariaExpanded={historyOpen}
-          ariaControls="training-history-panel"
-          onClick={() => setHistoryOpen((current) => !current)}
-        >{historyOpen ? "›" : "‹"}</TooltipButton>
-        <aside id="training-history-panel" className="training-runs panel" aria-hidden={!historyOpen}>
+      <HistoryPanelShell open={historyOpen} onToggle={() => setHistoryOpen(current => !current)}
+        panelId="training-history-panel" label={historyOpen ? text.collapseHistory : text.expandHistory}>
           <div className="panel-header"><span><Database size={18} /></span><h2>{text.history}</h2></div>
           {activeRun && <div className="active-training-run"><span className="training-history-title">{activeRun.name}</span><span>{activeRun.completedTargetIds.length}/{activeRun.targetIds.length}</span><progress max={activeRun.targetIds.length} value={activeRun.completedTargetIds.length} /><small>{progressLine || (isTrainingRunUserFinished(activeRun) ? text.endedByUser : activeRun.status)}</small></div>}
           <div className="training-run-list">{runs.map((run) => <TrainingRunHistoryCard
@@ -459,8 +453,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
             onSelectSession={(sessionId) => setSelectedSession({ workspaceId: run.workspaceId, sessionId })}
           />)}</div>
           {!runs.length && <p className="recent-session-empty">{text.noRuns}</p>}
-        </aside>
-      </div>
+      </HistoryPanelShell>
     </div>
     {selectedSession && repository && <SessionInspection repository={repository} workspaceId={selectedSession.workspaceId} sessionId={selectedSession.sessionId} language={language} />}
   </div>;
