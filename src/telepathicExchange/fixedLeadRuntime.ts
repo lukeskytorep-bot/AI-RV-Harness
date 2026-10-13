@@ -44,8 +44,9 @@ export async function ensureFixedLeadGuidance(state: TelepathicSeriesState, roun
         stage: "receiver_guidance", kind: "instruction", authorId: lead.id, recipientIds: [participantId], text: instruction, cycle: cycle as 1 | 2 | 3 },runtime.now());
       await runtime.save();
       if (receiver.kind === "human") return false;
+      const receiverInstruction = state.config.language === "pl" ? "Odpowiedz tylko nowymi percepcjami. Nie odgaduj celu." : "Respond with only new perceptions. Do not guess the target.";
       const text = await runtime.invoke(receiver, guidancePacket(state,round,participantId,`receiver_guidance:cycle:${cycle}:recipient:${participantId}`,
-        `${state.config.language === "pl" ? "Odpowiedz tylko nowymi percepcjami. Nie odgaduj celu." : "Respond with only new perceptions. Do not guess the target."}\nOWN_BLIND_DATA: ${JSON.stringify({first:blind.first,responses:blind.guidanceResponses})}\nLEAD_INSTRUCTION: ${instruction}`));
+        `${receiverInstruction}\nOWN_BLIND_DATA: ${JSON.stringify({first:blind.first,responses:blind.guidanceResponses})}\nLEAD_INSTRUCTION: ${instruction}`, receiverInstruction));
       if (!text) throw new Error("Receiver guidance attempts exhausted; blind remains open.");
       blind.guidanceResponses ??= [];
       blind.guidanceResponses.push({ cycle: cycle as 1 | 2 | 3, instruction, response: text });

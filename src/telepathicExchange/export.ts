@@ -1,9 +1,11 @@
+import { readableTelepathicText, telepathicMessageTitle, uniqueTelepathicEvents } from "./displayProjection";
+import { telepathicStageLabel } from "./stageLabels";
 import { visibleTranscript } from "./transcript";
 import type { TelepathicSeriesState } from "./types";
 
 export function telepathicExportDocument(state: TelepathicSeriesState): string {
   const pl=state.config.language==="pl";
-  const events=visibleTranscript(state);
+  const events=uniqueTelepathicEvents(visibleTranscript(state));
   const sections=[`# ${pl?"Seria telepatyczna":"Telepathic series"} ${state.config.seriesId}`];
   for(const round of state.rounds) {
     sections.push(`## ${pl?"Runda":"Round"} ${round.assignment.roundNumber}`);
@@ -13,8 +15,9 @@ export function telepathicExportDocument(state: TelepathicSeriesState): string {
       for(const e of events.filter(e=>e.roundId===round.assignment.roundId&&(e.authorId===p.id||e.recipientIds.includes(p.id)))) {
         // Encode each independent record in a fenced block longer than any fence
         // it contains; malformed Markdown cannot consume another participant.
-        const fence="`".repeat(Math.max(3,...(e.text.match(/`+/g) ?? []).map(m=>m.length+1)));
-        sections.push(`#### ${e.stage}`,`${fence}text\n${e.text}\n${fence}`);
+        const text=readableTelepathicText(e,pl);
+        const fence="`".repeat(Math.max(3,...(text.match(/`+/g) ?? []).map(m=>m.length+1)));
+        sections.push(`#### ${telepathicMessageTitle(e,state.config.participants,round.assignment.senderParticipantId,pl)} · ${telepathicStageLabel(e.stage,pl)}`,`${fence}text\n${text}\n${fence}`);
       }
       if(!state.transcript) {
         sections.push(pl?"Treść wysłanego pytania nie została zapisana w tej wersji.":"The sent instruction was not recorded in this version.");
@@ -23,6 +26,7 @@ export function telepathicExportDocument(state: TelepathicSeriesState): string {
     }
   }
   sections.push(`## ${pl?"Końcowe refleksje":"Final reflections"}`);
-  for(const p of state.config.participants) if(state.finalReflections[p.id]) { const text=state.finalReflections[p.id];const fence="`".repeat(Math.max(3,...(text.match(/`+/g)??[]).map(m=>m.length+1)));sections.push(`### ${p.displayName}`,`${fence}text\n${text}\n${fence}`); }
+  for(const e of events.filter(e=>e.roundId===undefined)) { const text=readableTelepathicText(e,pl);const fence="`".repeat(Math.max(3,...(text.match(/`+/g)??[]).map(m=>m.length+1)));sections.push(`### ${telepathicMessageTitle(e,state.config.participants,state.plan.rounds[0]?.senderParticipantId ?? "",pl)}`,`${fence}text\n${text}\n${fence}`); }
+
   return sections.join("\n\n");
 }

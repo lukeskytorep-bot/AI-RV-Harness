@@ -22,9 +22,10 @@ describe("STEP 4B telepathic training UI boundary", () => {
     expect(panel).toContain("runTelepathicFinalReflections");
   });
 
-  it("shows the operator full round content while leaving provider isolation to the shared engine", () => {
+  it("shows the operator readable round content while leaving provider isolation to the shared engine", () => {
     expect(panel).toContain("<TelepathicTranscript");
-    expect(panel).toContain("activeSeries.transcript ?? legacyEvents(activeSeries)");
+    expect(panel).toContain("visibleTranscript(activeSeries)");
+    expect(panel).toContain('import { visibleTranscript } from "../../telepathicExchange/transcript"');
     expect(panel).toContain("telepathicRuntimeMetrics(activeSeries)");
     expect(panel).toContain("resolveTelepathicAiRouteFromRepository");
   });

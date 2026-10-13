@@ -63,6 +63,10 @@ export function buildReceiverSecondLookPrompt(language: TelepathicLanguage, valu
     : `Thank you, ${n}. Your first description has been saved. The target is still hidden. If you wish, look again and add only new or clearer impressions. You might notice shape, size, color, material, movement, surroundings, whether something is inside or outside, or how it is used — only if you actually perceive those qualities. These are examples, not a checklist. You do not need to report a smell or color if you do not perceive one. Do not force a target name. You may also say “I have no further impressions.” After this step we will close your description before Reveal.`;
 }
 
+export function receiverRevealInstruction(language: TelepathicLanguage): string {
+  return language === "pl" ? "Porównaj swoje wcześniejsze słowa z ujawnionym celem. Co było trafne, częściowo zgodne lub nietrafne? Co mogło dotyczyć otoczenia, ale nie jest potwierdzone w opisie celu? Oddziel taką możliwość od potwierdzonej zgodności. Które wrażenia pomogły Ci, co przeszkadzało i czego chcesz spróbować następnym razem? Nie przedstawiaj nowych wrażeń po Revealu jako wcześniejszych danych blind. Możesz napisać krótko, jeśli to wystarczy." : "Compare your earlier words with the revealed target. What was supported, partly consistent, or inaccurate? What might relate to the surroundings but is not confirmed by the target description? Keep that possibility separate from confirmed agreement. Which impressions helped, which hindered you, and what might you try next time? Do not present new post-Reveal impressions as earlier blind evidence. A short response is fine.";
+}
+
 export function buildReceiverRevealPrompt(language: TelepathicLanguage, values: TelepathicPromptValues): string {
   const n = required(values.name, "name");
   const target = required(values.target, "target");
@@ -70,22 +74,30 @@ export function buildReceiverRevealPrompt(language: TelepathicLanguage, values: 
   const first = values.ownFirst ?? "";
   const second = values.ownSecond ?? "";
   return language === "pl"
-    ? `Dziękuję za udział, ${n}. Część blind została zakończona i zapieczętowana. Teraz ujawniamy cel: ${target}. ${files}. Twój zapis sprzed Revealu: ${first}; uzupełnienie: ${second}. Porównaj swoje wcześniejsze słowa z ujawnionym celem. Co było trafne, częściowo zgodne lub nietrafne? Co mogło dotyczyć otoczenia, ale nie jest potwierdzone w opisie celu? Oddziel taką możliwość od potwierdzonej zgodności. Które wrażenia pomogły Ci, co przeszkadzało i czego chcesz spróbować następnym razem? Nie przedstawiaj nowych wrażeń po Revealu jako wcześniejszych danych blind. Możesz napisać krótko, jeśli to wystarczy.`
-    : `Thank you for taking part, ${n}. The blind phase is finished and sealed. The target is now revealed: ${target}. ${files}. Your pre-Reveal record: ${first}; second look: ${second}. Compare your earlier words with the revealed target. What was supported, partly consistent, or inaccurate? What might relate to the surroundings but is not confirmed by the target description? Keep that possibility separate from confirmed agreement. Which impressions helped, which hindered you, and what might you try next time? Do not present new post-Reveal impressions as earlier blind evidence. A short response is fine.`;
+    ? `Dziękuję za udział, ${n}. Część blind została zakończona i zapieczętowana. Teraz ujawniamy cel: ${target}. ${files}. Twój zapis sprzed Revealu: ${first}; uzupełnienie: ${second}. ${receiverRevealInstruction(language)}`
+    : `Thank you for taking part, ${n}. The blind phase is finished and sealed. The target is now revealed: ${target}. ${files}. Your pre-Reveal record: ${first}; second look: ${second}. ${receiverRevealInstruction(language)}`;
+}
+
+export function missingRevealInstruction(language: TelepathicLanguage): string {
+  return language === "pl" ? "Nie porównuj nieistniejącego opisu. Możesz krótko odnotować problem albo przejść dalej." : "Do not compare a description that does not exist. You may briefly note the problem or move on.";
 }
 
 export function buildMissingResponseRevealPrompt(language: TelepathicLanguage, target: string): string {
   return language === "pl"
-    ? `Twoja odpowiedź blind nie została zapisana po dwóch próbach. Cel został ujawniony: ${target}. Nie porównuj nieistniejącego opisu. Możesz krótko odnotować problem albo przejść dalej.`
-    : `Your blind response was not saved after two attempts. The target has been revealed: ${target}. Do not compare a description that does not exist. You may briefly note the problem or move on.`;
+    ? `Twoja odpowiedź blind nie została zapisana po dwóch próbach. Cel został ujawniony: ${target}. ${missingRevealInstruction(language)}`
+    : `Your blind response was not saved after two attempts. The target has been revealed: ${target}. ${missingRevealInstruction(language)}`;
+}
+
+export function senderRevealInstruction(language: TelepathicLanguage): string {
+  return language === "pl" ? "Twoja rola polegała na przygotowaniu i przekazie, nie na ślepym opisie własnego celu. Jeśli chcesz, napisz krótko, jak wybierałeś(-aś) i przedstawiałeś(-aś) cel oraz co mogło być dla odbiorców istotne. Nie oceniaj odpowiedzi innych, dopóki nie zdecydujesz, czy chcesz je zobaczyć." : "Your role was to prepare and transmit it, not to describe your own target blind. If you wish, briefly describe how you chose and presented it and what might have mattered to receivers. Please wait until you choose whether to read their answers before commenting on them.";
 }
 
 export function buildSenderRevealPrompt(language: TelepathicLanguage, values: TelepathicPromptValues): string {
   const n = required(values.name, "name");
   const target = required(values.target, "target");
   return language === "pl"
-    ? `Dziękuję, ${n}. Cel, który przygotowałeś(-aś), został ujawniony wszystkim odbiorcom: ${target}. Twoja rola polegała na przygotowaniu i przekazie, nie na ślepym opisie własnego celu. Jeśli chcesz, napisz krótko, jak wybierałeś(-aś) i przedstawiałeś(-aś) cel oraz co mogło być dla odbiorców istotne. Nie oceniaj odpowiedzi innych, dopóki nie zdecydujesz, czy chcesz je zobaczyć.`
-    : `Thank you, ${n}. The target you prepared has now been revealed to all receivers: ${target}. Your role was to prepare and transmit it, not to describe your own target blind. If you wish, briefly describe how you chose and presented it and what might have mattered to receivers. Please wait until you choose whether to read their answers before commenting on them.`;
+    ? `Dziękuję, ${n}. Cel, który przygotowałeś(-aś), został ujawniony wszystkim odbiorcom: ${target}. ${senderRevealInstruction(language)}`
+    : `Thank you, ${n}. The target you prepared has now been revealed to all receivers: ${target}. ${senderRevealInstruction(language)}`;
 }
 
 export function buildSharingConsentPrompt(language: TelepathicLanguage, values: TelepathicPromptValues): string {
@@ -96,20 +108,28 @@ export function buildSharingConsentPrompt(language: TelepathicLanguage, values: 
     : `${n}, your reflection has been saved. Other participants in this round were: ${participants}. Would you like to read their named descriptions and reflections? Reply YES or NO. This is optional and will not change your saved blind record or reflection.`;
 }
 
+export function sharedAnswersInstruction(language: TelepathicLanguage): string {
+  return language === "pl" ? "Możesz skomentować, co zauważyłeś(-aś). To komentarz po Revealu i po poznaniu cudzych odpowiedzi. Jeśli nie chcesz dodawać komentarza, napisz „Bez komentarza”." : "You may comment on what you notice after reading them. This comment is written after Reveal and after seeing others’ answers; it does not alter earlier records. If you have nothing to add, say “No further comment.”";
+}
+
 export function buildSharedAnswersPrompt(language: TelepathicLanguage, values: TelepathicPromptValues): string {
   const n = required(values.name, "name");
   const answers = required(values.othersAnswers, "othersAnswers");
   return language === "pl"
-    ? `Dziękuję, ${n}. Oto dostępne odpowiedzi innych uczestników tej rundy, z nazwami i etapami: ${answers}. Możesz skomentować, co zauważyłeś(-aś). To komentarz po Revealu i po poznaniu cudzych odpowiedzi. Jeśli nie chcesz dodawać komentarza, napisz „Bez komentarza”.`
-    : `Thank you, ${n}. Here are the available answers from others in this round, labeled by participant and stage: ${answers}. You may comment on what you notice after reading them. This comment is written after Reveal and after seeing others’ answers; it does not alter earlier records. If you have nothing to add, say “No further comment.”`;
+    ? `Dziękuję, ${n}. Oto dostępne odpowiedzi innych uczestników tej rundy, z nazwami i etapami: ${answers}. ${sharedAnswersInstruction(language)}`
+    : `Thank you, ${n}. Here are the available answers from others in this round, labeled by participant and stage: ${answers}. ${sharedAnswersInstruction(language)}`;
+}
+
+export function seriesReflectionInstruction(language: TelepathicLanguage): string {
+  return language === "pl" ? "Przejrzyj je i napisz swobodną końcową refleksję: co powtarzało się w Twoich wrażeniach, co pomagało lub przeszkadzało i co chciał(a)byś wypróbować dalej. Nie dopisuj nowych wrażeń do wcześniejszych rund. Brak odpowiedzi lub dostępnego zapisu reasoning oznacz jako brak danych." : "Review them and write a free final reflection: what recurred in your impressions, what helped or hindered you, and what you would like to try next. Do not add new impressions to earlier rounds. Mark a missing response or unavailable reasoning record as missing data.";
 }
 
 export function buildSeriesReflectionPrompt(language: TelepathicLanguage, values: TelepathicPromptValues): string {
   const n = required(values.name, "name");
   const packet = required(values.seriesPacket, "seriesPacket");
   return language === "pl"
-    ? `Dziękuję, ${n}. Wszystkie rundy serii zostały zakończone. Każdą przeprowadzono osobno: podczas kolejnej rundy nie otrzymywałeś(-aś) celów ani refleksji z poprzednich. Dopiero teraz przekazuję Ci pełny zapis Twoich udziałów, w kolejności rund, wraz z Twoimi wypowiedziami, Revealami, refleksjami, udostępnionymi Ci odpowiedziami innych i Twoimi komentarzami. Materiały: ${packet}. Przejrzyj je i napisz swobodną końcową refleksję: co powtarzało się w Twoich wrażeniach, co pomagało lub przeszkadzało i co chciał(a)byś wypróbować dalej. Nie dopisuj nowych wrażeń do wcześniejszych rund. Brak odpowiedzi lub dostępnego zapisu reasoning oznacz jako brak danych.`
-    : `Thank you, ${n}. All rounds in this series are complete. Each round was carried out separately: during a later round you did not receive previous targets or reflections. Only now am I giving you the complete record of your own participation, in round order, including your words, Reveals, reflections, others’ answers you chose to receive, and your comments. Materials: ${packet}. Review them and write a free final reflection: what recurred in your impressions, what helped or hindered you, and what you would like to try next. Do not add new impressions to earlier rounds. Mark a missing response or unavailable reasoning record as missing data.`;
+    ? `Dziękuję, ${n}. Wszystkie rundy serii zostały zakończone. Każdą przeprowadzono osobno: podczas kolejnej rundy nie otrzymywałeś(-aś) celów ani refleksji z poprzednich. Dopiero teraz przekazuję Ci pełny zapis Twoich udziałów, w kolejności rund, wraz z Twoimi wypowiedziami, Revealami, refleksjami, udostępnionymi Ci odpowiedziami innych i Twoimi komentarzami. Materiały: ${packet}. ${seriesReflectionInstruction(language)}`
+    : `Thank you, ${n}. All rounds in this series are complete. Each round was carried out separately: during a later round you did not receive previous targets or reflections. Only now am I giving you the complete record of your own participation, in round order, including your words, Reveals, reflections, others’ answers you chose to receive, and your comments. Materials: ${packet}. ${seriesReflectionInstruction(language)}`;
 }
 
 export function telepathicTrainingHelp(language: TelepathicLanguage): string {

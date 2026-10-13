@@ -1,8 +1,17 @@
+import { Component } from "react";
+import { readableTelepathicText, telepathicMessageTitle, uniqueTelepathicEvents } from "../telepathicExchange/displayProjection";
 import { telepathicStageLabel } from "../telepathicExchange/stageLabels";
 import { ArrowUp } from "lucide-react";
 import { SafeMarkdown } from "./SafeMarkdown";
 import type { TelepathicTranscriptEvent } from "../telepathicExchange/types";
 import type { TelepathicCallPresentation } from "../telepathicExchange/executionPresentation";
+
+class TranscriptMarkdownBoundary extends Component<{ content: string }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidUpdate(previous: { content: string }) { if (previous.content !== this.props.content && this.state.failed) this.setState({ failed: false }); }
+  render() { return this.state.failed ? <pre className="telepathic-raw-fallback">{this.props.content}</pre> : <SafeMarkdown content={this.props.content}/>; }
+}
 
 interface Props { seriesId: string; roundId?: string; leadId: string; participants: Array<{id:string;displayName:string}>; events: TelepathicTranscriptEvent[]; pl: boolean; legacy?: boolean; callPresentation?: Readonly<Record<string, TelepathicCallPresentation>>; }
 export function TelepathicTranscript({seriesId,roundId,leadId,participants,events,pl,legacy,callPresentation}:Props) {
@@ -28,9 +37,10 @@ export function TelepathicTranscript({seriesId,roundId,leadId,participants,event
       <h3 id={`${prefix}-${encodeURIComponent(p.id)}`} tabIndex={-1}>{p.id===leadId ? (pl?"Prowadzący":"Lead") : `${pl?"Uczestnik":"Participant"} ${index+1}`} — {p.displayName}
         <button type="button" className="telepathic-back" title={pl?"Wróć do listy uczestników":"Back to participants"} aria-label={pl?"Wróć do listy uczestników":"Back to participants"} onClick={()=>jump(`${prefix}-nav`)}><ArrowUp size={14}/></button>
       </h3>
-      {events.filter(e=>e.roundId===roundId && (e.authorId===p.id || e.recipientIds.includes(p.id))).sort((a,b)=>a.sequence-b.sequence).map(e=><article className="telepathic-transcript-message" key={e.id}>
-        <small>{e.authorId==="controller"?(pl?"Kontroler":"Controller"):participants.find(p=>p.id===e.authorId)?.displayName ?? e.authorId} → {e.recipientIds.map(id=>participants.find(p=>p.id===id)?.displayName ?? id).join(", ") || (pl?"zapis":"record")} · {telepathicStageLabel(e.stage,pl)}{e.kind==="materials"?` · ${pl?"Materiały żądania":"Request materials"}`:""}{deliveryLabel(e)}{e.cycle ? ` · ${pl?"cykl":"cycle"} ${e.cycle}` : ""}</small>
-        <SafeMarkdown content={e.text}/>
+      {uniqueTelepathicEvents(events).filter(e=>e.seriesId===seriesId && e.roundId===roundId && (e.authorId===p.id || e.recipientIds.includes(p.id))).sort((a,b)=>a.sequence-b.sequence).map(e=><article className="telepathic-transcript-message" key={e.id}>
+        <strong className="telepathic-message-author">{telepathicMessageTitle(e,participants,leadId,pl)}</strong>
+        <small>{e.authorId==="controller"?(pl?"Kontroler":"Controller"):participants.find(p=>p.id===e.authorId)?.displayName ?? e.authorId} → {e.recipientIds.map(id=>participants.find(p=>p.id===id)?.displayName ?? id).join(", ") || (pl?"zapis":"record")} · {telepathicStageLabel(e.stage,pl)}{e.kind==="materials"?` · ${pl?"Instrukcja":"Instruction"}`:""}{deliveryLabel(e)}{e.cycle ? ` · ${pl?"cykl":"cycle"} ${e.cycle}` : ""}</small>
+        <TranscriptMarkdownBoundary content={readableTelepathicText(e,pl)}/>
       </article>)}
       {legacy&&<small>{pl?"Treść wysłanego pytania nie została zapisana w tej wersji.":"The sent instruction was not recorded in this version."}</small>}
     </section>)}

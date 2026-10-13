@@ -13,6 +13,7 @@ import {
   buildSharedAnswersPrompt,
   buildSharingConsentPrompt,
   hiddenTopicLabel,
+  receiverRevealInstruction, senderRevealInstruction, missingRevealInstruction, sharedAnswersInstruction, seriesReflectionInstruction,
 } from "./prompts";
 import type {
   TelepathicBlindSubmission,
@@ -25,6 +26,7 @@ import { telepathicProviderScopeKey } from "./types";
 import { assertTelepathicTargetIntegrity } from "./target";
 
 export interface TelepathicProviderPacket {
+  display?: import("./types").TelepathicDisplayInstruction;
   scope: TelepathicProviderScope;
   scopeKey: string;
   contextPolicy: "fresh_round_context" | "final_series_context";
@@ -63,9 +65,10 @@ export function composeTelepathicProviderMessages(
   return packet.messages.map((message) => ({ ...message }));
 }
 
-function packet(scope: TelepathicProviderScope, content: string, contextPolicy: TelepathicProviderPacket["contextPolicy"] = "fresh_round_context", images?: ProviderImageInput[]): TelepathicProviderPacket {
+function packet(scope: TelepathicProviderScope, content: string, contextPolicy: TelepathicProviderPacket["contextPolicy"] = "fresh_round_context", images?: ProviderImageInput[], displayInstruction?: string): TelepathicProviderPacket {
   return {
     scope,
+    display: { version: 1, instruction: displayInstruction ?? content },
     scopeKey: telepathicProviderScopeKey(scope),
     contextPolicy,
     continuationPolicy: "none",
@@ -150,6 +153,7 @@ export function buildReceiverSecondPacket(input: {
       `OWN_FIRST_BLIND_RECORD:\n${input.ownFirst}`,
       buildReceiverSecondLookPrompt(input.language, { name: input.name }),
     ].join("\n\n"),
+    "fresh_round_context", undefined, buildReceiverSecondLookPrompt(input.language, { name: input.name }),
   );
 }
 
@@ -195,6 +199,7 @@ Response: ${r.response}`)].filter(Boolean).join("\n\n"),
     revealPrompt,
     "fresh_round_context",
     input.images,
+    input.blind.status === "no_submission" ? missingRevealInstruction(input.language) : receiverRevealInstruction(input.language),
   );
 }
 
@@ -210,6 +215,7 @@ export async function buildSenderRevealPacket(input: {
   return packet(
     { seriesId: input.seriesId, roundId: input.roundId, participantId: input.participantId, callStage: "sender_reveal" },
     buildSenderRevealPrompt(input.language, { name: input.name, target: input.target.content }),
+    "fresh_round_context", undefined, senderRevealInstruction(input.language),
   );
 }
 
@@ -240,6 +246,7 @@ export function buildSharedAnswersPacket(input: {
   return packet(
     { seriesId: input.seriesId, roundId: input.roundId, participantId: input.participantId, callStage: "shared_answers_comment" },
     buildSharedAnswersPrompt(input.language, { name: input.name, othersAnswers: input.othersAnswers }),
+    "fresh_round_context", undefined, sharedAnswersInstruction(input.language),
   );
 }
 
@@ -258,6 +265,6 @@ export function buildFinalSeriesPacket(input: {
   return packet(
     { seriesId: input.seriesId, roundId: "series-complete", participantId: input.participantId, callStage: "series_reflection" },
     buildSeriesReflectionPrompt(input.language, { name: input.name, seriesPacket: serialized }),
-    "final_series_context",
+    "final_series_context", undefined, seriesReflectionInstruction(input.language),
   );
 }

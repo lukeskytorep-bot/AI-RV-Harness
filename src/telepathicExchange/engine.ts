@@ -258,6 +258,7 @@ async function invokeAi(
               recordTranscript(state, { id: `${record.id}:input`, roundId: record.roundId === "series-complete" ? undefined : record.roundId,
                 stage: record.callStage, kind: "materials", authorId: "controller", recipientIds: [record.participantId],
                 ...(effectivePacket.messages.some(m=>m.images?.length) ? {attachmentRefs:state.rounds.find(r=>r.assignment.roundId===record.roundId)?.target?.assets.map(a=>a.artifactId)} : {}),
+                display: effectivePacket.display ? structuredClone(effectivePacket.display) : undefined,
                 text: effectivePacket.messages.map(m => `${m.role}\n${m.content}`).join("\n\n"), providerCallId: record.id, providerCallStatus: record.status },now(deps));
               if (record.responseText !== undefined) recordTranscript(state, { id: `${record.id}:output`, roundId: record.roundId === "series-complete" ? undefined : record.roundId,
                 stage: record.callStage, kind: record.status === "failed" ? "notice" : record.callStage.includes("reflection") || record.callStage.includes("reveal") ? "reflection" : record.callStage === "sharing_consent" ? "consent" : "response",

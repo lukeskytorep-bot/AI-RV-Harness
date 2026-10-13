@@ -36,16 +36,17 @@ export function validateLeadDecision(raw: unknown, cycle: 1 | 2 | 3, activeIds: 
   if (instructions.some(i => hiddenTerms.some(t => t.trim().length >= 4 && i.instruction.toLocaleLowerCase().includes(t.toLocaleLowerCase())))) throw new Error("Guidance contains a known hidden target or geography term.");
   return structuredClone(d);
 }
-export function guidancePacket(state: TelepathicSeriesState, round: TelepathicRoundState, participantId: string, stage: string, content: string): TelepathicProviderPacket {
+export function guidancePacket(state: TelepathicSeriesState, round: TelepathicRoundState, participantId: string, stage: string, content: string, displayInstruction?: string): TelepathicProviderPacket {
   const scope = { seriesId: state.config.seriesId, roundId: round.assignment.roundId, participantId, callStage: stage };
-  return { scope, scopeKey: telepathicProviderScopeKey(scope), contextPolicy: "fresh_round_context", continuationPolicy: "none", messages: [{ role: "user", content }] };
+  return { ...(displayInstruction === undefined ? {} : { display: { version: 1 as const, instruction: displayInstruction } }), scope, scopeKey: telepathicProviderScopeKey(scope), contextPolicy: "fresh_round_context", continuationPolicy: "none", messages: [{ role: "user", content }] };
 }
 export function buildLeadDecisionPacket(state: TelepathicSeriesState, round: TelepathicRoundState, cycle: 1 | 2 | 3): TelepathicProviderPacket {
   const active = round.assignment.receiverParticipantIds.filter(id => !round.guidance?.finishedParticipantIds.includes(id));
+  const instruction = state.config.language === "pl" ? "Zdecyduj o następnym cyklu. Możesz zakończyć teraz. Zwróć wyłącznie JSON." : "Decide the next guidance cycle. You may finish now. Return only JSON.";
   const packet = guidancePacket(state, round, round.assignment.senderParticipantId, `lead_guidance:cycle:${cycle}`,
-    `${state.config.language === "pl" ? "Zdecyduj o następnym cyklu. Możesz zakończyć teraz. Zwróć wyłącznie JSON." : "Decide the next guidance cycle. You may finish now. Return only JSON."}\n` +
+    `${instruction}\n` +
     `CONTRACT: {"cycle":${cycle},"finishRound":boolean,"finishParticipantIds":string[],"broadcast":{"recipientIds":string[],"instruction":string},"individual":[{"participantId":string,"instruction":string}]}\n` +
     `CURRENT_ROUND_DATA:\n${JSON.stringify({ target: round.target?.content, geography: round.assignment.targetGeography, activeIds: active,
-      answers: Object.fromEntries(Object.entries(round.blindByParticipant).map(([id,b]) => [id,{first:b.first,guidanceResponses:b.guidanceResponses}])), decisions: round.guidance?.decisions })}`);
+      answers: Object.fromEntries(Object.entries(round.blindByParticipant).map(([id,b]) => [id,{first:b.first,guidanceResponses:b.guidanceResponses}])), decisions: round.guidance?.decisions })}`, instruction);
   return { ...packet, messages: [{ role: "system", content: state.config.leadInstruction ?? leadInstructions(state.config.language) }, ...packet.messages] };
 }

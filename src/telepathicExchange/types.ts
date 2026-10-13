@@ -264,6 +264,11 @@ export interface TelepathicGuidanceState {
   finishedParticipantIds: string[];
   closed: boolean;
 }
+export interface TelepathicDisplayInstruction {
+  version: 1;
+  instruction: string;
+}
+
 export interface TelepathicTranscriptEvent {
   id: string;
   seriesId: string;
@@ -276,6 +281,8 @@ export interface TelepathicTranscriptEvent {
   text: string;
   providerCallId?: string;
   providerCallStatus?: TelepathicProviderCallRecord["status"];
+  /** Exact human-readable prompt fragment; technical request remains in text/ledger. */
+  display?: TelepathicDisplayInstruction;
   cycle?: 1 | 2 | 3;
   attachmentRefs?: string[];
   createdAt: string;
