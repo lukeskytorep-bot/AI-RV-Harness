@@ -276,3 +276,18 @@ describe("Field Guide Update", () => {
     expect(chat).not.toHaveBeenCalled();
   });
 });
+
+for(const recovery of ["length","json","capacity"] as const) it(`B2 Training Field Guide ${recovery} keeps C and forwards 32K/48K headroom on every call`,async()=>{
+ const h=integrationHarness(),budgets:number[]=[];
+ const chat=vi.fn(async (request:Parameters<NonNullable<Parameters<typeof runFieldGuideUpdate>[0]["chat"]>>[0])=>{
+  budgets.push(request.settings.effective.maxOutputTokens!);
+  if(recovery==="length"&&budgets.length===1||recovery!=="length"&&budgets.length===2)return {content:"partial",finishReason:"length",usage:{}};
+  if(budgets.length===1&&recovery==="json")return response("malformed JSON");
+  if(budgets.length===1&&recovery==="capacity")return response(JSON.stringify({decision:"UPDATE",fieldGuide:"x".repeat(9000),changeSummary:"too long"}));
+  return response('{"decision":"NO_CHANGE","changeSummary":"The guide remains useful"}');
+ });
+ const result=await runFieldGuideUpdate({repository:h.repository,trainingRun:h.run,sessionId:"session-1",postRevealReview:"Review",providerConfig:provider,model,chat,budgetPolicy:"training_reveal"});
+ expect(result?.status).toBe("NO_CHANGE");
+ expect(budgets).toEqual(recovery==="length"?[2048+32768,2048+49152]:[2048+32768,2048+32768,2048+49152]);
+ expect(h.sessionFrozen.capacityTokens).toBe(2048);expect(h.created).toHaveLength(0);
+});

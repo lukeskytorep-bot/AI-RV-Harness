@@ -43,7 +43,7 @@ for (const role of ["judge", "live_monitor", "post_reveal_viewer", "post_reveal_
     if (role === "live_monitor") await evaluateMonitor({ providerConfig: provider, model, language: "en", phase: 1, blindTranscript: "blind", chat });
     if (role === "post_reveal_viewer") await sendPostRevealTurn({ repository: repository as never, sessionId: "s", existingTranscript: "", providerConfig: provider, model, content: "Review", chat });
     if (role === "post_reveal_monitor") await sendMonitorPostRevealReview({ repository: repository as never, sessionId: "s", existingTranscript: "", providerConfig: provider, model, chat });
-    expect(budgets).toEqual(length ? [16384, 32768] : [16384]);
+    expect(budgets).toEqual(role === "live_monitor" ? (length ? [16384,32768] : [16384]) : (length ? [32768,49152] : [32768]));
   });
 }
 for (const role of ["judge", "live_monitor", "post_reveal_viewer", "post_reveal_monitor"] as const) it(`${role}: low ceiling blocks an ineffective second paid attempt`, async () => {
@@ -55,12 +55,12 @@ for (const role of ["judge", "live_monitor", "post_reveal_viewer", "post_reveal_
     : () => sendMonitorPostRevealReview({ repository: repository as never, sessionId: "s", existingTranscript: "", providerConfig: provider, model: limited, chat });
   await expect(run()).rejects.toThrow(); expect(chat).toHaveBeenCalledTimes(1);
 });
-for (const kind of ["field_guide_update", "viewer_notes_reflection"] as const) for (const training of [false, true]) it(`${kind}: keeps C + ${training ? '16/32K' : '8/16K'} unchanged`, async () => {
+for (const kind of ["field_guide_update", "viewer_notes_reflection"] as const) for (const training of [false, true]) it(`${kind}: keeps C + ${training ? '32/48K' : '8/16K'} unchanged`, async () => {
   const seen: number[] = [];
   await callWithAnalyticalOutputRecovery({ model, messages: [{ role: "user", content: "Update" }], operationKind: kind, learningObjectCapacityTokens: 4096, budgetPolicy: training ? "training_reveal" : "default", call: async settings => {
     seen.push(settings.effective.maxOutputTokens!); return { content: "complete", finishReason: seen.length === 1 ? "length" : "stop", usage: {} };
   } });
-  expect(seen).toEqual(training ? [4096 + 16384, 4096 + 32768] : [4096 + 8192, 4096 + 16384]);
+  expect(seen).toEqual(training ? [4096 + 32768, 4096 + 49152] : [4096 + 8192, 4096 + 16384]);
 });
 function draft(output = 8192): ResearchConfig {
   return { schemaVersion: 1, name: "Budget", workspaceId: "w", templateType: "custom", sessionLanguage: "en", protocol: { id: "full-rcp", version: "1.5a" }, targetIds: ["t"], repetitions: 1, requireUnusedTargets: false,
@@ -94,14 +94,16 @@ it("existing frozen 8K Research is byte-preserved, including the absent Judge ma
   const config = draft(); config.conditions = config.conditions.map(c => ({ ...c, viewerOutputPolicy: { version: 1, initialTokens: 8192, recoveryTokens: 16384, preserveConfiguredBudget: false } }));
   const wire = stableStringify(config); expect(stableStringify(freezeResearchViewerOutputPolicy(config))).toBe(wire);
 });
-for (const fresh of [false, true]) it(`Research Judge uses ${fresh ? 'new 16/32K' : 'legacy 8/16K'} for missing scores without re-freezing accepted results`, async () => {
+for (const generation of ["legacy","v1","v2"] as const) it(`Research Judge uses frozen ${generation} for missing scores without re-freezing accepted results`, async () => {
+  const fresh=generation!=="legacy";
   const base = repo(); const config = fresh ? freezeResearchViewerOutputPolicy(draft()) : draft();
+  if(generation==="v1")config.judgeOutputPolicy={version:1,initialTokens:16384,recoveryTokens:32768};
   const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "custom", state: "SessionsComplete", config, createdAt: "t", updatedAt: "t" };
   let status = "SessionComplete"; let budgets: number[] = [];
   transport.chat.mockImplementation(async request => { budgets.push(request.settings.effective.maxOutputTokens); return { content: judgeJson, finishReason: budgets.length === 1 ? "length" : "stop", usage: {} }; });
   const repository = { ...base, getResearchProject: vi.fn(async () => project), listResearchAssignments: vi.fn(async () => [{ id: "a", sessionId: "s", anonymousSessionId: "BlindSession_ABCDEF12", judgeOrder: 1, status }]),
     listProviderConfigs: vi.fn(async () => [provider]), listProviderModels: vi.fn(async () => [model]), setResearchProjectState: vi.fn(), updateResearchAssignment: vi.fn(async (_id, _session, next) => { status = next; }), markResearchScoresFrozen: vi.fn() } as unknown as AppRepository;
-  await judgeResearch({ repository, projectId: "r" }); expect(budgets).toEqual(fresh ? [16384, 32768] : [8192, 16384]);
+  await judgeResearch({ repository, projectId: "r" }); expect(budgets).toEqual(generation==="v1"?[16384,32768]:fresh ? [32768, 49152] : [8192, 16384]);
   expect(stableStringify(project.config)).toBe(stableStringify(config));
   budgets = []; await judgeResearch({ repository, projectId: "r" }); expect(budgets).toEqual([]);
 });
@@ -120,10 +122,11 @@ for (const frozenViewer of [false, true]) it(`createAndLockResearch persists pol
   expect(project.config.viewerControl?.maxOutputTokens).toBe(initial);
   expect(project.config.conditions.every(c => c.requestedSettings.maxOutputTokens === initial && c.effectiveSettings?.effective.maxOutputTokens === initial && c.viewerOutputPolicy?.initialTokens === initial)).toBe(true);
   expect(project.configHash).toBe(await sha256Text(stableStringify(project.config)));
-  expect(project.config.judgeOutputPolicy).toEqual({ version: 1, initialTokens: 16384, recoveryTokens: 32768 });
+  expect(project.config.judgeOutputPolicy).toEqual({ version: 2, initialTokens: 32768, recoveryTokens: 49152 });
+  expect(project.config.postRevealOutputPolicy).toEqual({ version: 2, initialTokens: 32768, recoveryTokens: 49152 });
   expect(transport.chat).not.toHaveBeenCalled();
 });
-for (const repair of ["json", "language"] as const) it(`Judge ${repair} repair keeps score candidates and uses its own bounded 16/32K recovery`, async () => {
+for (const repair of ["json", "language"] as const) it(`Judge ${repair} repair keeps score candidates and uses its own bounded 32/48K recovery`, async () => {
   const repository = repo(); const budgets: number[] = [];
   const wrongLanguage = JSON.stringify({ ...JSON.parse(judgeJson), strongestMatches: ["zgodność struktury"], conciseRationale: "Opis jest trafny." });
   const chat = vi.fn(async request => {
@@ -132,7 +135,7 @@ for (const repair of ["json", "language"] as const) it(`Judge ${repair} repair k
       finishReason: budgets.length === 2 ? "length" : "stop", usage: {} };
   });
   const result = await runBlindJudging({ repository: repository as unknown as JudgeRepository, sessionId: "s", language: "en", judges: [{ providerConfig: provider, model }], chat });
-  expect(budgets).toEqual([16384, 16384, 32768]);
+  expect(budgets).toEqual([32768, 32768, 49152]);
   expect(result.scores[0]).toMatchObject({ gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 1, confabulationControl: 1, total: 6 });
   expect(repository.recordFrozenJudgeResult).toHaveBeenCalledTimes(1);
 });

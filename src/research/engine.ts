@@ -1,3 +1,4 @@
+import { CURRENT_ANALYTICAL_OUTPUT_POLICY, analyticalBudgetPolicyForSnapshot } from "../providers/outputRecovery";
 import { aggregateJudgeScores } from "../domain/scoring";
 import { runBlindJudging, selectMissingJudgeSelections, type JudgeSelection } from "../judge/engine";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
@@ -26,8 +27,14 @@ export async function createAndLockResearch(
   config: ResearchConfig,
   inventory: ResearchPreflightInventory,
 ): Promise<{ project: ResearchProjectRecord; preflight: ResearchPreflightResult }> {
+  // This API creates a new project, never resumes an existing locked one.
+  // Even a draft with an already frozen blind policy needs explicit analysis
+  // defaults before its new hash is computed. Existing explicit policies stay.
   const lockedConfig: ResearchConfig = { ...freezeResearchViewerOutputPolicy(config, inventory.models),
-    judgeOutputPolicy: config.judgeOutputPolicy ?? { version: 1, initialTokens: 16384, recoveryTokens: 32768 } };
+    judgeOutputPolicy: config.judgeOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY),
+    postRevealOutputPolicy: config.postRevealOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY) };
+  analyticalBudgetPolicyForSnapshot(lockedConfig.judgeOutputPolicy);
+  analyticalBudgetPolicyForSnapshot(lockedConfig.postRevealOutputPolicy);
   const preflight = runResearchPreflight(lockedConfig, inventory);
   if (!preflight.ok) throw new Error("Research Preflight contains blocking failures.");
   const project = await repository.createResearchProject(lockedConfig);
@@ -52,7 +59,8 @@ export function freezeResearchViewerOutputPolicy(config: ResearchConfig, models:
   const recovery = Math.max(initial, VIEWER_OUTPUT_RECOVERY_TOKENS);
   return {
     ...config,
-    judgeOutputPolicy: config.judgeOutputPolicy ?? { version: 1, initialTokens: 16384, recoveryTokens: 32768 },
+    judgeOutputPolicy: config.judgeOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY),
+    postRevealOutputPolicy: config.postRevealOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY),
     ...(config.viewerControl ? { viewerControl: { ...config.viewerControl, maxOutputTokens: initial } } : {}),
     conditions: config.conditions.map((condition, index) => {
       const requestedSettings = { ...condition.requestedSettings, maxOutputTokens: initial };
@@ -83,6 +91,7 @@ export async function executeResearchSessions(input: {
   onProgress?: (progress: { completed: number; total: number; anonymousSessionId: string; session?: SessionProgress }) => void;
 }): Promise<void> {
   const project = await requireProject(input.repository, input.projectId);
+  analyticalBudgetPolicyForSnapshot(project.config.postRevealOutputPolicy);
   if (!["Locked", "Running", "Interrupted"].includes(project.state)) throw new Error(`Research sessions cannot run from state ${project.state}.`);
   let protocol;
   try {
@@ -266,6 +275,7 @@ export async function executeResearchSessions(input: {
       sessionLanguage,
       requestedSettings,
       ...(condition.viewerOutputPolicy ? { viewerOutputPolicy: condition.viewerOutputPolicy } : {}),
+      ...(project.config.postRevealOutputPolicy ? { postRevealOutputPolicy: project.config.postRevealOutputPolicy } : {}),
       maxRetries: project.config.sessionPolicy?.maxRetries,
       requestTimeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
       operationKind: "research_viewer" as const,
@@ -353,6 +363,10 @@ function validateResearchResumeSnapshot(input: {
   snapshot: NonNullable<Awaited<ReturnType<ResearchRepository["getSessionSnapshot"]>>>;
 }): void {
   const { project, assignment, condition, provider, model, protocol, session, snapshot } = input;
+  analyticalBudgetPolicyForSnapshot(project.config.postRevealOutputPolicy);
+  if (stableStringify(snapshot.postRevealOutputPolicy ?? null) !== stableStringify(project.config.postRevealOutputPolicy ?? null)) {
+    throw new Error("Research Resume refused post-Reveal output policy drift from the frozen Session Snapshot.");
+  }
   if (session.id !== assignment.sessionId || session.targetId !== assignment.targetId || session.researchProjectId !== project.id) {
     throw new Error("Research Resume refused a session whose assignment/target/project identity does not match.");
   }
@@ -428,9 +442,7 @@ export async function judgeResearch(input: {
     input.repository.listProviderModels(),
   ]);
   const policy = project.config.judgeOutputPolicy;
-  if (policy && (policy.version !== 1 || policy.initialTokens !== 16384 || policy.recoveryTokens !== 32768)) {
-    throw new Error("Unsupported frozen Research Judge output policy.");
-  }
+  const judgeBudgetPolicy = policy ? analyticalBudgetPolicyForSnapshot(policy) : "legacy_analytical";
   const judgeSelections = resolveJudgeSelections(project.config, providers, models);
   await input.repository.setResearchProjectState(project.id, "Judging");
   let completed = assignments.filter((assignment) => assignment.status === "Judged").length;
@@ -455,7 +467,7 @@ export async function judgeResearch(input: {
       timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
       signal: input.signal,
       streamWorkflowContext: "research",
-      budgetPolicy: policy ? "default" : "legacy_analytical",
+      budgetPolicy: judgeBudgetPolicy,
     });
     const frozen = await input.repository.listJudgeScores(assignment.sessionId);
     if (frozen.length !== judgeSelections.length || frozen.some((score) => !score.frozenAt)) throw new Error("Judge score freeze verification failed.");

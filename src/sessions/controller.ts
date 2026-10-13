@@ -1,3 +1,4 @@
+import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
 import { focusResumeMetrics, prepareSessionFocus, focusSnapshotFields, focusFingerprint, startFocusPass, completeFocusPass } from "./sessionFocusLifecycle";
 import { assertFocusPassesComplete, focusFeedbackIntroduction, focusTranscriptContent, focusPasses, focusMetadata, focusOpening, type SessionFocusPlan } from "./sessionFocus";
 import { resolveGenerationSettings } from "../providers/capabilities";
@@ -68,6 +69,7 @@ export interface AutomaticRcpRunInput {
   sessionLanguage: InterfaceLanguage;
   requestedSettings: GenerationSettings;
   viewerOutputPolicy?: { version: 1; initialTokens: number; recoveryTokens: number; preserveConfiguredBudget: boolean };
+  postRevealOutputPolicy?: FrozenAnalyticalOutputPolicy;
   signal?: AbortSignal;
   maxRetries?: number;
   requestTimeoutMs?: number;
@@ -241,6 +243,9 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     });
     await input.repository.appendSessionEvent(sessionId, { eventType: "SESSION_CREATED", role: "controller", metadata: { sessionCode } });
   }
+  const frozenPostRevealOutputPolicy = input.postRevealOutputPolicy
+    ?? (input.resumeSession && input.repository.getSessionSnapshot
+      ? (await input.repository.getSessionSnapshot(input.resumeSession.id))?.postRevealOutputPolicy : undefined);
   const snapshot: SessionSnapshot = {
     schemaVersion: 4,
     ...focusSnapshotFields(sessionFocus,input.providerConfig,input.model),
@@ -262,6 +267,7 @@ export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promi
     capabilitySnapshot: JSON.parse(JSON.stringify(input.model.capabilities)) as Record<string, unknown>,
     capabilityCapturedAt: input.model.capabilities.capturedAt,
     generationSettings: effectiveSettings,
+    ...(frozenPostRevealOutputPolicy ? { postRevealOutputPolicy: structuredClone(frozenPostRevealOutputPolicy) } : {}),
     viewerOutputPolicy: input.viewerOutputPolicy ?? { version: VIEWER_OUTPUT_POLICY_VERSION, initialTokens: VIEWER_OUTPUT_INITIAL_TOKENS, recoveryTokens: VIEWER_OUTPUT_RECOVERY_TOKENS, preserveConfiguredBudget: input.operationKind === "research_viewer" },
     sessionLanguage: input.sessionLanguage,
     protocol: {

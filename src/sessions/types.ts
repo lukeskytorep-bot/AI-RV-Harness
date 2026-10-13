@@ -1,3 +1,4 @@
+import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
 import type { SessionFocusPlan } from "./sessionFocus";
 import type { InterfaceLanguage } from "../types";
 import type { EffectiveGenerationSettings, ProviderKind } from "../providers/types";
@@ -122,6 +123,7 @@ export interface SessionSnapshot {
   capabilityCapturedAt: string;
   generationSettings: EffectiveGenerationSettings;
   viewerOutputPolicy?: { version: 1; initialTokens: number; recoveryTokens: number; preserveConfiguredBudget: boolean };
+  postRevealOutputPolicy?: FrozenAnalyticalOutputPolicy;
   sessionLanguage: InterfaceLanguage;
   sessionFocus?: SessionFocusPlan;
   sessionFocusInstructionVersion?: 1;

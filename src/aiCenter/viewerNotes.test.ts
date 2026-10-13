@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../providers/native", () => ({
   discoverOpenRouterModelEndpoints: vi.fn(async () => ({ data: { endpoints: [
-    { tag: "test/large", context_length: 262_144, max_completion_tokens: 32_768 },
+    { tag: "test/large", context_length: 262_144, max_completion_tokens: 65_536 },
   ] } })),
   providerChatAttempt: vi.fn(),
 }));
@@ -165,7 +165,7 @@ describe("Viewer Notes", () => {
   });
 
 
-  it("uses the exact prompt snapshot and exact post-update Field Guide version when running Reflection", async () => {
+  it.each(["legacy","training-length","training-json","training-capacity"] as const)("uses the exact prompt snapshot and post-update Field Guide for Reflection: %s", async scenario => {
     const providerConfig: ProviderConfig = { id: "provider", provider: "openrouter", label: "Provider", credentialId: "credential", enabled: true, createdAt: "now", updatedAt: "now" };
     const model: ProviderModel = {
       providerConfigId: providerConfig.id,
@@ -204,11 +204,20 @@ describe("Viewer Notes", () => {
       commitViewerNoteReflection: commit,
       failViewerNoteReflection: vi.fn(async () => undefined),
     } as unknown as AppRepository;
-    const chat = vi.fn(async (_request: Parameters<NonNullable<Parameters<typeof runViewerNoteReflection>[0]["chat"]>>[0]) => ({ content: '{"decision":"NO_CHANGE","notes":null,"changeSummary":"Distinct procedural notes remain sufficient"}', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, providerRequestId: "req" }));
+    const budgets:number[]=[];
+    const chat = vi.fn(async (request: Parameters<NonNullable<Parameters<typeof runViewerNoteReflection>[0]["chat"]>>[0]) => {
+      budgets.push(request.settings.effective.maxOutputTokens!);
+      if(scenario==="training-length"&&budgets.length===1||["training-json","training-capacity"].includes(scenario)&&budgets.length===2)return {content:"partial",finishReason:"length",usage:{}};
+      if(scenario==="training-json"&&budgets.length===1)return {content:"malformed JSON",usage:{}};
+      if(scenario==="training-capacity"&&budgets.length===1)return {content:JSON.stringify({decision:"UPDATE",notes:"x".repeat(6000),changeSummary:"too long"}),usage:{}};
+      return { content: '{"decision":"NO_CHANGE","notes":null,"changeSummary":"Distinct procedural notes remain sufficient"}', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, providerRequestId: "req" };
+    });
 
-    const result = await runViewerNoteReflection({ repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: "fg-after-sha" }, chat });
+    const result = await runViewerNoteReflection({ repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: "fg-after-sha" }, chat, ...(scenario!=="legacy"?{budgetPolicy:"training_reveal" as const}:{}) });
 
     expect(result).toEqual({ status: "NO_CHANGE" });
+    expect(budgets).toEqual(scenario==="legacy"?[8192]:scenario==="training-length"?[1024+32768,1024+49152]:[1024+32768,1024+32768,1024+49152]);
+    expect(snapshot.viewerNotes?.capacityTokens).toBe(1024);
     const userPrompt = chat.mock.calls[0][0].messages.find((message: { role: string; content: string }) => message.role === "user")?.content ?? "";
     expect(userPrompt).toContain(effectivePrompt);
     expect(userPrompt).toContain("guide after this exact training");

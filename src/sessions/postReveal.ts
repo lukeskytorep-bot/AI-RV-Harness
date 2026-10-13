@@ -9,7 +9,7 @@ import { parsePostRevealTranscript } from "./postRevealTranscript";
 import type { InterfaceLanguage } from "../types";
 import { buildEffectiveMonitorPrompt } from "../resources/systemPrompts";
 import { politeRevealTransition } from "./courtesy";
-import { analyticalOutputBudget, callWithAnalyticalOutputRecovery, isOutputLimitFailure, type AnalyticalBudgetPolicy } from "../providers/outputRecovery";
+import { analyticalBudgetPolicyForSnapshot, analyticalOutputBudget, callWithAnalyticalOutputRecovery, isOutputLimitFailure, type AnalyticalBudgetPolicy } from "../providers/outputRecovery";
 import { providerErrorDetails } from "../providers/providerError";
 import { appendPostRevealReviewCheckpoint, getPostRevealReviewRecoveryState, hasPendingAutomaticViewerInstruction } from "./postRevealRecovery";
 import { captureSessionContinuationState, hydrateSessionMessageContinuation, validateFrozenSessionContinuationRoute, validateSessionContinuationBudget } from "./providerContinuation";
@@ -56,6 +56,7 @@ export async function sendPostRevealTurn(input: {
     input.repository.listTargetClarifications(input.sessionId),
   ]);
   if (!snapshot || !reveal) throw new Error("Sealed session snapshot and Reveal are required for post-reveal discussion.");
+  const budgetPolicy = snapshot.researchProjectId ? analyticalBudgetPolicyForSnapshot(snapshot.postRevealOutputPolicy) : input.budgetPolicy;
   if (snapshot.providerConfigId !== input.providerConfig.id || snapshot.modelId !== input.model.modelId) {
     throw new Error("Post-reveal discussion must use the Viewer route captured in the Session Snapshot.");
   }
@@ -117,7 +118,7 @@ export async function sendPostRevealTurn(input: {
   }
   if (!input.reuseExistingUserTurn) messages.push({ role: "user", content });
   validateSessionContinuationBudget(messages);
-  analyticalOutputBudget({ model: input.model, messages, operationKind: "post_reveal_viewer", attempt: 0, ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}) });
+  analyticalOutputBudget({ model: input.model, messages, operationKind: "post_reveal_viewer", attempt: 0, ...(budgetPolicy ? { budgetPolicy } : {}) });
   if (!input.reuseExistingUserTurn) await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
   const automaticTrainingReview = supportedAutomaticPostRevealReviewRequests(language).includes(content);
   const response = (await callWithAnalyticalOutputRecovery({
@@ -125,7 +126,7 @@ export async function sendPostRevealTurn(input: {
     messages,
     operationKind: "post_reveal_viewer",
     requestedSettings: snapshot.generationSettings?.requested,
-    ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
+    ...(budgetPolicy ? { budgetPolicy } : {}),
     ...(automaticTrainingReview ? { recoveryInstruction: postRevealOutputRecoveryInstruction(language), recoveryReasoningMaxTokens: 10_000, recoveryReasoningMaxTokensSupported: frozenSupportsExactReasoningMaxTokens(snapshot.capabilitySnapshot), allowOpenRouterEndpointRecoveryEscalation: true } : {}),
     call: (settings, _attempt, attemptMessages) => executeProviderChat({
       config: input.providerConfig,
@@ -501,6 +502,7 @@ export async function sendMonitorPostRevealReview(input: {
     model: input.model,
     messages,
     operationKind: "post_reveal_monitor",
+    ...(snapshot.researchProjectId ? { budgetPolicy: analyticalBudgetPolicyForSnapshot(snapshot.postRevealOutputPolicy) } : {}),
     call: (settings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "post-reveal.monitor", streamWorkflowContext: input.streamWorkflowContext, attempt: input.chat, ...(input.onProviderAttemptStart ? { onAttemptStart: () => input.onProviderAttemptStart?.() } : {}) }),
   })).response;
   const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "monitor", response.content);

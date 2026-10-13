@@ -1,3 +1,4 @@
+import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
 import type { JudgeComponentScores } from "../domain/scoring";
 import type { EffectiveGenerationSettings, GenerationSettings, ModelCapabilities } from "../providers/types";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
@@ -145,7 +146,9 @@ export interface ResearchConfig {
   evaluationMode?: "save_only" | "ai_judges";
   judges: ResearchJudgeDefinition[];
   /** Frozen for new projects; absent means the historical Judge 8K/16K contract. */
-  judgeOutputPolicy?: { version: 1; initialTokens: 16384; recoveryTokens: 32768 };
+  judgeOutputPolicy?: FrozenAnalyticalOutputPolicy;
+  /** Frozen independently of blind output; absent preserves the historical 16K/32K analysis. */
+  postRevealOutputPolicy?: FrozenAnalyticalOutputPolicy;
   randomization: { matchedTargets: true; randomizedExecution: true; randomizedJudgeOrder: true };
 }
 

@@ -384,3 +384,16 @@ describe("automatic RCP controller", () => {
     expect(rcpPhasePrompt("pl", 2, "1234 5678")).not.toMatch(/szkic ASCII/i);
   });
 });
+
+it("B2 RCP freezes the analytical policy independently of actual blind requests",async()=>{
+ const snapshots:SessionSnapshot[]=[],budgets:number[]=[];
+ const policy={version:2 as const,initialTokens:32768 as const,recoveryTokens:49152 as const};
+ let calls=0;
+ await runAutomaticRcpSession({repository:fakeRepository([],snapshots),workspaceId:"w",profileId:"p",providerConfig:config,model,protocol:getFullRcp("en"),sessionLanguage:"en",requestedSettings:{maxOutputTokens:8192},operationKind:"research_viewer",viewerOutputPolicy:{version:1,initialTokens:16384,recoveryTokens:32768,preserveConfiguredBudget:false},postRevealOutputPolicy:policy,chat:async request=>{
+  budgets.push(request.settings.effective.maxOutputTokens!);return {content:`Blind sensory evidence ${++calls}`,finishReason:"stop",usage:{}};
+ }});
+ expect(snapshots[0].postRevealOutputPolicy).toEqual(policy);
+ expect(snapshots[0].postRevealOutputPolicy).not.toBe(policy);
+ expect(budgets.length).toBeGreaterThan(0);expect(new Set(budgets)).toEqual(new Set([16384]));
+ expect(JSON.parse(JSON.stringify(snapshots[0])).postRevealOutputPolicy).toEqual(policy);
+});

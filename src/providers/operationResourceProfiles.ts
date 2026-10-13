@@ -182,6 +182,6 @@ export function resolveOperationResourceProfile(input: {
 export function learningObjectOutputAllowance(capacityTokens: number, attempt: 0 | 1, trainingReveal = false): number {
   const capacity = Math.max(1, Math.floor(capacityTokens));
   return capacity + (attempt === 0
-    ? trainingReveal ? 16_384 : LEARNING_OBJECT_INITIAL_HEADROOM_TOKENS
-    : trainingReveal ? 32_768 : LEARNING_OBJECT_RECOVERY_HEADROOM_TOKENS);
+    ? trainingReveal ? 32_768 : LEARNING_OBJECT_INITIAL_HEADROOM_TOKENS
+    : trainingReveal ? 49_152 : LEARNING_OBJECT_RECOVERY_HEADROOM_TOKENS);
 }

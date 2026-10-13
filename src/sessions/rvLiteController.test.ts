@@ -379,3 +379,14 @@ describe("automatic RV Lite controller", () => {
     expect(firstPrompt).not.toContain("Nemo");
   });
 });
+
+it("B2 RV Lite freezes the analytical policy independently of actual blind requests",async()=>{
+ const snapshots:SessionSnapshot[]=[],budgets:number[]=[];
+ const policy={version:2 as const,initialTokens:32768 as const,recoveryTokens:49152 as const};let calls=0;
+ await runAutomaticRvLiteSession({repository:repository([],snapshots),workspaceId:"w",profileId:"p",profileName:"P",providerConfig:config,model,protocol:getRvLite("en"),sessionLanguage:"en",requestedSettings:{maxOutputTokens:8192},operationKind:"research_viewer",viewerOutputPolicy:{version:1,initialTokens:16384,recoveryTokens:32768,preserveConfiguredBudget:false},postRevealOutputPolicy:policy,chat:async request=>{
+  budgets.push(request.settings.effective.maxOutputTokens!);return {content:`Blind sensory evidence ${++calls}`,finishReason:"stop",usage:{}};
+ }});
+ expect(snapshots[0].postRevealOutputPolicy).toEqual(policy);expect(snapshots[0].postRevealOutputPolicy).not.toBe(policy);
+ expect(budgets).toEqual([16384,16384,16384,16384]);
+ expect(JSON.parse(JSON.stringify(snapshots[0])).postRevealOutputPolicy).toEqual(policy);
+});

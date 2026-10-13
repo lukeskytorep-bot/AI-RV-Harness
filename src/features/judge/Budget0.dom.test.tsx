@@ -24,7 +24,7 @@ for (const length of [false, true]) it(`ordinary Judge screen dispatches ${lengt
     const start = [...host.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === getCopy("en").runJudges)!;
     expect(start.disabled).toBe(false); await act(async () => { start.click(); await completed; });
     expect(host.querySelector(".provider-error")?.textContent).toBeUndefined();
-    expect(budgets).toEqual(length ? [16384, 32768] : [16384]); expect(freeze).toHaveBeenCalledTimes(1);
+    expect(budgets).toEqual(length ? [32768, 49152] : [32768]); expect(freeze).toHaveBeenCalledTimes(1);
     expect(repository.updateRvSessionState).toHaveBeenCalledWith("s", "Completed");
   } finally { await act(async () => root.unmount()); host.remove(); }
 });

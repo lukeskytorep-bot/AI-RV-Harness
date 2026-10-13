@@ -666,5 +666,5 @@ for (const length of [false, true]) it(`BUDGET-0 Training dispatches Judge ${len
   } });
   const outcome = await executeTrainingRun(input(run({ targetIds: ["t1"], judgeModelRoutes: [judgeModel.route] }), testHarness, { judges: [{ providerConfig: provider, model: judgeModel }] }));
   expect(outcome.run.status).toBe("Completed");
-  expect(budgets).toEqual(length ? [16384, 32768] : [16384]);
+  expect(budgets).toEqual(length ? [32768, 49152] : [32768]);
 });

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../providers/native", () => ({
   discoverOpenRouterModelEndpoints: vi.fn(async () => ({ data: { endpoints: [
-    { tag: "test/large", context_length: 262_144, max_completion_tokens: 32_768 },
+    { tag: "test/large", context_length: 262_144, max_completion_tokens: 65_536 },
   ] } })),
   providerChatAttempt: vi.fn(),
 }));
@@ -82,7 +82,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
       ...model,
       capabilities: {
         ...model.capabilities,
-        maxOutputTokens: 32_768,
+        maxOutputTokens: 65_536,
         reasoning: { supported: true, efforts: ["high"], supportsMaxTokens: true, confidence: "provider_metadata" },
       },
     };
@@ -101,9 +101,9 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
       .mockResolvedValueOnce({ content: "Complete review", finishReason: "stop", usage: {} });
     await sendPostRevealTurn({ repository, sessionId: "s", existingTranscript: "", providerConfig: config, model: recoveryModel, content: automaticPostRevealReviewRequest("en"), chat });
     expect(chat).toHaveBeenCalledTimes(2);
-    expect(chat.mock.calls[0][0].settings.effective).toMatchObject({ reasoningEffort: "high", maxOutputTokens: 16384 });
+    expect(chat.mock.calls[0][0].settings.effective).toMatchObject({ reasoningEffort: "high", maxOutputTokens: 32768 });
     expect(chat.mock.calls[0][0].settings.effective.reasoningMaxTokens).toBeUndefined();
-    expect(chat.mock.calls[1][0].settings.effective).toMatchObject({ reasoningMaxTokens: 10_000, maxOutputTokens: 32_768 });
+    expect(chat.mock.calls[1][0].settings.effective).toMatchObject({ reasoningMaxTokens: 10_000, maxOutputTokens: 49_152 });
     expect(chat.mock.calls[1][0].settings.effective.reasoningEffort).toBeUndefined();
     expect(chat.mock.calls[1][0].messages.at(-1)?.content).toContain("[ANALYTICAL OUTPUT RECOVERY]");
     expect(chat.mock.calls[1][0].messages.at(-1)?.content).toContain("Focus only on the required analysis");
@@ -390,12 +390,12 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
         return transcript;
       }),
     };
-    const highCapacityModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 32_768 } };
+    const highCapacityModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 65_536 } };
     const chat = vi.fn()
       .mockRejectedValueOnce(new Error("provider returned reasoning without a final assistant response [finish-reason=length]"))
       .mockResolvedValueOnce({ content: "Complete Viewer review", finishReason: "stop", usage: {} });
     await sendPostRevealTurn({ repository, sessionId: "s", existingTranscript: "", providerConfig: config, model: highCapacityModel, content: "Review the session.", chat });
-    expect(chat.mock.calls.map((call) => call[0].settings.effective.maxOutputTokens)).toEqual([16384, 32768]);
+    expect(chat.mock.calls.map((call) => call[0].settings.effective.maxOutputTokens)).toEqual([32768, 49152]);
     expect(repository.appendPostRevealTurn.mock.calls.filter((call) => call[1] === "user")).toHaveLength(1);
     expect(repository.appendPostRevealTurn.mock.calls.filter((call) => call[1] === "assistant")).toHaveLength(1);
   });

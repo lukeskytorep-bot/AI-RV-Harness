@@ -2,10 +2,25 @@ import { resolveGenerationSettings } from "./capabilities";
 import { getOperationResourceProfile, learningObjectOutputAllowance, type OperationKind } from "./operationResourceProfiles";
 import type { EffectiveGenerationSettings, GenerationSettings, ProviderChatResponse, ProviderMessage, ProviderModel } from "./types";
 
-export const ANALYTICAL_OUTPUT_INITIAL_TOKENS = 16384;
-export const ANALYTICAL_OUTPUT_RECOVERY_TOKENS = 32768;
+export const ANALYTICAL_OUTPUT_INITIAL_TOKENS = 32768;
+export const ANALYTICAL_OUTPUT_RECOVERY_TOKENS = 49152;
+// Immutable v1 pair for live Monitor and accepted frozen Research.
+export const FROZEN_ANALYTICAL_V1_INITIAL_TOKENS = 16384;
+export const FROZEN_ANALYTICAL_V1_RECOVERY_TOKENS = 32768;
+export type FrozenAnalyticalOutputPolicy =
+  | { version: 1; initialTokens: 16384; recoveryTokens: 32768 }
+  | { version: 2; initialTokens: 32768; recoveryTokens: 49152 };
+export const CURRENT_ANALYTICAL_OUTPUT_POLICY: FrozenAnalyticalOutputPolicy = Object.freeze({ version: 2, initialTokens: 32768, recoveryTokens: 49152 });
+
+export function analyticalBudgetPolicyForSnapshot(policy: FrozenAnalyticalOutputPolicy | undefined): AnalyticalBudgetPolicy {
+  if (!policy) return "frozen_analytical_v1";
+  if (policy.version === 1 && policy.initialTokens === 16384 && policy.recoveryTokens === 32768) return "frozen_analytical_v1";
+  if (policy.version === 2 && policy.initialTokens === 32768 && policy.recoveryTokens === 49152) return "default";
+  throw new Error("Unsupported frozen analytical output policy.");
+}
+
 export const ANALYTICAL_CONTEXT_SAFETY_TOKENS = 1024;
-export type AnalyticalBudgetPolicy = "default" | "training_reveal" | "legacy_analytical";
+export type AnalyticalBudgetPolicy = "default" | "training_reveal" | "legacy_analytical" | "frozen_analytical_v1";
 
 export function estimateProviderMessageTokens(messages: ProviderMessage[]): number {
   const textTokens = Math.ceil(messages.reduce((sum, message) => sum + message.content.length, 0) / 3.5);
@@ -31,6 +46,7 @@ function preferredAnalyticalOutputTokens(input: {
   }
   // Existing locked Research has no new Judge snapshot: preserve its historical pair.
   if (input.budgetPolicy === "legacy_analytical") return input.attempt === 0 ? 8192 : 16384;
+  if (input.budgetPolicy === "frozen_analytical_v1") return input.attempt === 0 ? FROZEN_ANALYTICAL_V1_INITIAL_TOKENS : FROZEN_ANALYTICAL_V1_RECOVERY_TOKENS;
   return input.attempt === 0 ? ANALYTICAL_OUTPUT_INITIAL_TOKENS : ANALYTICAL_OUTPUT_RECOVERY_TOKENS;
 }
 
