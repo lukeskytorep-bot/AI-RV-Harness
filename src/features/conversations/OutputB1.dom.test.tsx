@@ -49,8 +49,8 @@ for(const scenario of ["fresh-conversation","saved-conversation","old-conversati
   try {
    await act(async()=>{root.render(<ChatPanel copy={getCopy("en")} settings={settings} profile={profile} workspace={workspace} repository={repository} fixedMode={mode}/>);});
    if(scenario==="manual-retry") {
-    expect(button("Retry response")?.disabled).toBe(false);
-    await act(async()=>{button("Retry response")!.click();});
+    expect(button("Resume")?.disabled).toBe(false);
+    await act(async()=>{button("Resume")!.click();});
    } else {
     if(mode==="manual_rv") await act(async()=>{container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();});
     const input=container.querySelector<HTMLTextAreaElement>("textarea")!;expect(input.disabled).toBe(false);

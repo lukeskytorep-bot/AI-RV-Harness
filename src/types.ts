@@ -28,7 +28,15 @@ export interface ChatAttachmentAttemptMetadata {
   images: Array<{ name: string; mimeType?: string; state: ChatAttachmentDeliveryState }>;
 }
 
+export interface ChatResponseRecovery {
+  state: "prepared" | "dispatched" | "stopped" | "uncertain" | "retry_approved" | "ended" | "complete";
+  attempts: Array<{ id: string; startedAt: string; dispatched: boolean; outcome?: "stopped" | "uncertain" | "complete"; reason?: "user_stop" | "view_closed" | "cancelled" | "provider_failure"; lateResponse?: { content: string; usage: Record<string, unknown>; providerRequestId?: string; finishReason?: string } }>;
+  endedAt?: string;
+  retryApprovedAt?: string;
+}
+
 export interface ChatMessageMetadata {
+  responseRecovery?: ChatResponseRecovery;
   attachmentAttempts?: ChatAttachmentAttemptMetadata[];
   viewerOutputAttempts?: Array<Record<string, unknown>>;
   viewerOutputAccepted?: Record<string, unknown>;

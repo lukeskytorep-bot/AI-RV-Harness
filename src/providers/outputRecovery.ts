@@ -104,6 +104,7 @@ export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOp
   messages: ProviderMessage[];
   requestedSettings?: GenerationSettings;
   minimumUsefulTokens?: number;
+  signal?: AbortSignal;
   recoveryInstruction?: string;
   recoveryReasoningMaxTokens?: number;
   recoveryReasoningMaxTokensSupported?: boolean;
@@ -112,6 +113,7 @@ export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOp
 }): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; attempt: 0 | 1 }> {
   let firstBudget = 0;
   for (const attempt of [0, 1] as const) {
+    input.signal?.throwIfAborted();
     const attemptMessages = attempt === 1 && input.recoveryInstruction?.trim()
       ? input.messages.map((message, index) => index === input.messages.length - 1 && message.role === "user"
         ? { ...message, content: `${message.content}\n\n[ANALYTICAL OUTPUT RECOVERY]\n${input.recoveryInstruction!.trim()}` }
@@ -142,9 +144,11 @@ export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOp
     }
     try {
       const response = await input.call(settings, attempt, attemptMessages);
+      if (input.signal?.aborted) throw Object.assign(new DOMException("Analytical response arrived after cancellation", "AbortError"), { providerResponse: response });
       assertCompleteAnalyticalResponse(response);
       return { response, settings, attempt };
     } catch (cause) {
+      if (input.signal?.aborted) throw cause;
       if (attempt === 0 && isOutputLimitFailure(cause)) continue;
       throw cause;
     }

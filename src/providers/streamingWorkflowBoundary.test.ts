@@ -10,7 +10,7 @@ describe("S2 streaming workflow boundaries", () => {
     const messages = read("src/chat/ChatMessageList.tsx");
     const engine = read("src/chat/engine.ts");
     expect(panel).toContain("streamingAssistant");
-    expect(panel).toContain("onStreamEvent: handleVisibleStreamEvent");
+    expect(panel).toContain("if (!responseController.signal.aborted) handleVisibleStreamEvent(event)");
     expect(messages).toContain("provisional-stream");
     expect(engine).toContain('streamWorkflowContext: "manual_rv"');
     expect(engine).toContain('streamWorkflowContext: "conversation"');

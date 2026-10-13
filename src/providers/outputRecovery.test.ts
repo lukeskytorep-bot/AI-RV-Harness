@@ -436,3 +436,10 @@ describe("analytical output recovery", () => {
   });
 
 });
+
+it("S1 analytical recovery never starts a second callback after Stop", async () => {
+  const controller = new AbortController();
+  const call = vi.fn(async () => { controller.abort(); return { content: "partial", finishReason: "length", usage: {} }; });
+  await expect(callWithAnalyticalOutputRecovery({ model, messages: [], operationKind: "judge", signal: controller.signal, call })).rejects.toMatchObject({ name: "AbortError" });
+  expect(call).toHaveBeenCalledTimes(1);
+});

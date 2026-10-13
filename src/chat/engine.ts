@@ -1,3 +1,4 @@
+import { chatResponseNeedsResolution, withChatResponseOperation } from "./responseRecovery";
 import { DEFAULT_CONVERSATION_MAX_OUTPUT_TOKENS } from "../startupDefaults";
 import { chatOutputTokens, MANUAL_RV_OUTPUT_BUDGET_PROFILE } from "./outputPolicy";
 import { buildConversationPayload, buildManualRvPayload, type ScopedChatMessage } from "../domain/chatContext";
@@ -170,9 +171,11 @@ export async function sendChatTurn(input: {
   onStreamEvent?: (event: ProviderStreamEvent) => void;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
   allowTextOnlyContinuation?: boolean;
+  allowRetryWithoutImages?: boolean;
+  onUserPrepared?: (user: ChatMessage) => void | Promise<void>;
   resolveBindingEndpoint?: (config: ProviderConfig) => Promise<string>;
 }): Promise<{ user: ChatMessage; assistant: ChatMessage; response: ProviderChatResponse }> {
-  return executeChatTurn(input, true);
+  return withChatResponseOperation(input.threadId, () => executeChatTurn(input, true));
 }
 
 async function hydrateConversationContinuationPersistence(input: {
@@ -200,18 +203,27 @@ async function hydrateConversationContinuationPersistence(input: {
 }
 
 export async function retryChatTurn(input: Omit<Parameters<typeof sendChatTurn>[0], "content">): Promise<{ user: ChatMessage; assistant: ChatMessage; response: ProviderChatResponse }> {
-  const history = await input.repository.listChatMessages(input.threadId);
-  const last = history.at(-1);
-  if (!last || last.role !== "user") throw new Error("There is no unanswered user message to retry.");
-  return executeChatTurn({ ...input, content: last.content }, false);
+  return withChatResponseOperation(input.threadId, async () => {
+    const history = await input.repository.listChatMessages(input.threadId);
+    const last = history.at(-1);
+    if (!last || last.role !== "user") throw new Error("There is no unanswered user message to retry.");
+    if (last.metadata?.responseRecovery?.state === "ended") throw new Error("This response was ended and cannot be resumed.");
+    if (input.imageNames?.length && !input.images?.length && !input.allowRetryWithoutImages) throw new Error("Image bytes are unavailable. Explicit image-free retry approval is required.");
+    if (chatResponseNeedsResolution(last)) throw new Error("The previous response outcome is uncertain. Explicit retry approval is required.");
+    return executeChatTurn({ ...input, content: last.content }, false);
+  });
 }
 
 async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], appendUser: boolean): Promise<{ user: ChatMessage; assistant: ChatMessage; response: ProviderChatResponse }> {
+  input.signal?.throwIfAborted();
   const content = input.content.trim();
   if (!content) throw new Error("Message cannot be empty.");
   if (input.model.providerConfigId !== input.providerConfig.id) throw new Error("Model/provider route mismatch.");
 
   const storedHistory = await input.repository.listChatMessages(input.threadId);
+  if (appendUser && storedHistory.at(-1)?.role === "user" && storedHistory.at(-1)?.metadata?.responseRecovery && !["ended", "complete"].includes(storedHistory.at(-1)!.metadata!.responseRecovery!.state)) {
+    throw new Error("End or recover the unanswered response before sending a new message.");
+  }
   if (input.mode === "conversation") {
     // Hydrate through the existing guarded persistence path first. This ensures
     // malformed persisted continuation is converted into the normal controlled
@@ -295,6 +307,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   }
   const settings = resolveGenerationSettings(input.model.capabilities, { ...input.requestedSettings, maxOutputTokens });
   if (settings.omitted.length) throw new Error(`Unsupported generation settings: ${settings.omitted.join(", ")}`);
+  input.signal?.throwIfAborted();
   let user = appendUser ? await input.repository.appendChatMessage(input.threadId, "user", content) : storedHistory.at(-1)!;
   const attemptNumber = (user.metadata?.attachmentAttempts?.length ?? 0) + 1;
   const hasAttachmentMetadata = Boolean(input.sources?.length || input.imageNames?.length);
@@ -303,7 +316,26 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   }
   let response: ProviderChatResponse;
   let providerAttemptStarted = false;
+  const responseAttempt = { id: crypto.randomUUID(), startedAt: new Date().toISOString(), dispatched: false };
+  const priorResponseAttempts = user.metadata?.responseRecovery?.attempts ?? [];
+  const persistResponseState = async (state: NonNullable<ChatMessage["metadata"]>["responseRecovery"]) => {
+    const current = (await input.repository.listChatMessages(input.threadId)).find(message => message.id === user.id);
+    if (!current || current.metadata?.responseRecovery?.state === "ended") throw new Error("This response was ended and cannot be resumed.");
+    const metadata = { ...current.metadata, responseRecovery: state };
+    await input.repository.updateChatMessageMetadata(user.id, metadata);
+    user = { ...user, metadata };
+  };
+  await persistResponseState({ state: "prepared", attempts: [...priorResponseAttempts, responseAttempt] });
+  const markDispatched = async () => {
+    input.signal?.throwIfAborted();
+    providerAttemptStarted = true;
+    responseAttempt.dispatched = true;
+    await persistResponseState({ state: "dispatched", attempts: [...priorResponseAttempts, responseAttempt] });
+    input.signal?.throwIfAborted();
+  };
   try {
+    await input.onUserPrepared?.(user);
+    input.signal?.throwIfAborted();
     if (input.mode === "manual_rv") {
       const recovered = await callViewerWithOutputRecovery({
         model: input.model,
@@ -323,15 +355,17 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
           timeoutMs: input.timeoutMs,
           signal: input.signal,
           configuredRetries: input.maxRetries,
+          rejectResponseAfterAbort: true,
           operationId: "chat.manual-rv",
           operationKind: "manual_rv_viewer",
           streamWorkflowContext: "manual_rv",
           onStreamEvent: input.onStreamEvent,
-          onAttemptStart: () => { providerAttemptStarted = true; },
+          onAttemptStart: markDispatched,
           attempt: input.chat,
         }),
       });
       response = recovered.response;
+      input.signal?.throwIfAborted();
       user = await recordManualRvAcceptedOutput(input.repository, user, {
         ...viewerOutputAcceptedMetadata(recovered),
         ...(response.finishReason ? { finishReason: response.finishReason } : {}),
@@ -347,14 +381,23 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
         timeoutMs: input.timeoutMs,
         signal: input.signal,
         configuredRetries: input.maxRetries,
+        rejectResponseAfterAbort: true,
         operationId: "chat.conversation",
         streamWorkflowContext: "conversation",
         onStreamEvent: input.onStreamEvent,
-        onAttemptStart: () => { providerAttemptStarted = true; },
+        onAttemptStart: markDispatched,
         attempt: input.chat,
       });
     }
   } catch (cause) {
+    const stopped = Boolean(input.signal?.aborted || cause instanceof DOMException && cause.name === "AbortError");
+    const late = (cause as { providerResponse?: ProviderChatResponse })?.providerResponse;
+    const beforeDispatch = cause instanceof ProviderExecutionError && cause.causeError.details.phase === "before_dispatch";
+    const state = providerAttemptStarted && (stopped || !beforeDispatch) ? "uncertain" : "stopped";
+    await persistResponseState({ state, attempts: [...priorResponseAttempts, { ...responseAttempt, outcome: state,
+      reason: stopped ? (input.signal?.reason?.message === "Stopped by user" ? "user_stop" : input.signal?.reason?.message === "Conversation view closed" ? "view_closed" : "cancelled") : "provider_failure",
+      ...(late ? { lateResponse: { content: late.content, usage: { ...late.usage }, ...(late.providerRequestId ? { providerRequestId: late.providerRequestId } : {}), ...(late.finishReason ? { finishReason: late.finishReason } : {}) } } : {}),
+    }] });
     if (hasAttachmentMetadata) {
       const beforeDispatch = cause instanceof ProviderExecutionError
         ? cause.causeError.details.phase === "before_dispatch"
@@ -366,6 +409,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
     }
     throw cause;
   }
+  input.signal?.throwIfAborted();
   if (hasAttachmentMetadata) {
     user = await replaceLastAttachmentAttempt(input.repository, user, attachmentAttemptMetadata(input, attemptNumber, input.images?.length ? "included_in_request" : "not_included"));
   }
@@ -394,9 +438,11 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
           visibleContent: response.content,
         });
   }
+  input.signal?.throwIfAborted();
   const assistant = continuationCapture?.state
     ? await input.repository.appendAssistantMessageWithProviderState(input.threadId, response.content, continuationCapture.state)
     : await input.repository.appendChatMessage(input.threadId, "assistant", response.content);
+  await persistResponseState({ state: "complete", attempts: [...priorResponseAttempts, { ...responseAttempt, outcome: "complete" }] });
   if (continuationCapture?.state) rememberConversationContinuationState(input.threadId, assistant.id, continuationCapture.state);
   else if (continuationCapture?.issue) rememberConversationContinuationIssue(input.threadId, assistant.id, continuationCapture.issue);
   if (input.mode === "conversation" && input.conversationContextKey) saveConversationViewerContextKey(input.threadId, input.conversationContextKey);

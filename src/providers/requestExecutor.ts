@@ -68,6 +68,7 @@ export function providerChatOnce(request: Parameters<ProviderChatAttempt>[0], at
 }
 
 export interface ExecuteProviderRequestInput<T> {
+  rejectResponseAfterAbort?: boolean;
   operationId: string;
   configuredRetries?: number;
   signal?: AbortSignal;
@@ -98,7 +99,9 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
     physicalAttempts += 1;
     try {
       await input.onAttemptStart?.(context);
+      input.signal?.throwIfAborted();
       const value = await input.executeAttempt(context);
+      if (input.rejectResponseAfterAbort && input.signal?.aborted) throw Object.assign(new DOMException("Provider response arrived after cancellation", "AbortError"), { providerResponse: value });
       return {
         value,
         report: {
@@ -143,6 +146,7 @@ export async function executeProviderChat(input: {
   settings: EffectiveGenerationSettings;
   timeoutMs?: number;
   signal?: AbortSignal;
+  rejectResponseAfterAbort?: boolean;
   configuredRetries?: number;
   operationId?: string;
   operationKind?: OperationKind;
@@ -156,6 +160,7 @@ export async function executeProviderChat(input: {
   onAttemptFailure?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptFailure"];
   onAttemptStart?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptStart"];
 }): Promise<ProviderChatResponse> {
+  input.signal?.throwIfAborted();
   const attempt = input.attempt ?? providerChatAttempt;
   if ((attempt as ProviderChatAttempt & { [PROVIDER_EXECUTOR_BRAND]?: boolean })[PROVIDER_EXECUTOR_BRAND]) {
     throw new Error("Nested provider retry executor detected. Pass a one-attempt transport callback instead.");
@@ -197,6 +202,7 @@ export async function executeProviderChat(input: {
   const presentLiveStream = transportEnvelope.presentationMode === "live" && Boolean(input.onStreamEvent);
   const internalStreamHandler = input.internalOnStreamEvent || presentLiveStream
     ? (event: ProviderStreamEvent) => {
+        if (input.signal?.aborted) return;
         input.internalOnStreamEvent?.(event);
         if (presentLiveStream) input.onStreamEvent?.(event);
       }
@@ -207,6 +213,7 @@ export async function executeProviderChat(input: {
       operationId: input.operationId ?? "provider.chat",
       configuredRetries: input.configuredRetries,
       signal: input.signal,
+      rejectResponseAfterAbort: input.rejectResponseAfterAbort,
       onAttemptFailure: input.onAttemptFailure,
       onAttemptStart: input.onAttemptStart,
       executeAttempt: () => attempt({

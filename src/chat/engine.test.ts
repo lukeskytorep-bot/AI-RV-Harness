@@ -1,3 +1,4 @@
+import { approveChatResponseRetry } from "./responseRecovery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
@@ -684,8 +685,9 @@ describe("Conversation Viewer context continuity boundary", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0].metadata?.attachmentAttempts?.[0].images[0].state).toBe("uncertain");
 
+    await approveChatResponseRetry(repository, "attachments-uncertain");
     await retryChatTurn({
-      repository, threadId: "attachments-uncertain", mode: "conversation", language: "en", providerConfig: provider, model: visionModel,
+      repository, threadId: "attachments-uncertain", mode: "conversation", language: "en", providerConfig: provider, model: visionModel, allowRetryWithoutImages: true,
       images: [], imageNames: ["target.webp"], imageMimeTypes: ["image/webp"],
       chat: async () => ({ content: "text-only retry", usage: {} }),
     });

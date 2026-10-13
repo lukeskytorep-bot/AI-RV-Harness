@@ -38,6 +38,7 @@ export function loadPendingChatTurn(threadId: string, messages: ChatMessage[]): 
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PendingChatTurn;
     const last = messages.at(-1);
+    if (last?.metadata?.responseRecovery?.state === "ended") return null;
     if (parsed.threadId !== threadId || !last || last.role !== "user" || last.content.trim() !== parsed.content.trim()) return null;
     // Sanitize legacy records that may still contain image bytes from older releases.
     // Preserve only safe name/MIME metadata and overwrite localStorage immediately.
