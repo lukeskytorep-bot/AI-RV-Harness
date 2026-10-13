@@ -83,7 +83,7 @@ function topicLabel(config: TelepathicSeriesConfig): string {
 }
 
 export function createTelepathicSeriesState(config: TelepathicSeriesConfig, timestamp = new Date().toISOString()): TelepathicSeriesState {
-  if (config.outputBudgetPolicyVersion !== undefined && config.outputBudgetPolicyVersion !== TELEPATHIC_OUTPUT_POLICY_VERSION) throw new Error("Unsupported Telepathic output policy version.");
+  if (config.outputBudgetPolicyVersion !== undefined && ![2, 3].includes(config.outputBudgetPolicyVersion)) throw new Error("Unsupported Telepathic output policy version.");
   const plan = planTelepathicSeries(config);
   if (config.protocolVersion === "fixed_lead_v1") {
     const areas = assignTargetGeographies(plan.rounds.length);
@@ -97,7 +97,7 @@ export function createTelepathicSeriesState(config: TelepathicSeriesConfig, time
   }));
   return {
     schemaVersion: 1,
-    config: { ...structuredClone(config), ...(config.protocolVersion === "fixed_lead_v1" ? { leadInstruction: leadInstructions(config.language), outputBudgetPolicyVersion: TELEPATHIC_OUTPUT_POLICY_VERSION } : {}) },
+    config: { ...structuredClone(config), ...(config.protocolVersion === "fixed_lead_v1" ? { leadInstruction: leadInstructions(config.language), outputBudgetPolicyVersion: config.outputBudgetPolicyVersion ?? TELEPATHIC_OUTPUT_POLICY_VERSION } : {}) },
     plan,
     currentRoundIndex: 0,
     status: "ready",
@@ -219,7 +219,7 @@ async function invokeAi(
   await deps.store.assertTelepathicSeriesLease(packet.scope.seriesId);
   const route = preResolvedRoute ?? await deps.resolveRoute(participantItem);
   assertResolvedRouteMatchesParticipant(participantItem, route);
-  const outputBudget = state.config.protocolVersion === "fixed_lead_v1" ? scopeOutputBudget(packet.scope.callStage, route.model.capabilities.maxOutputTokens, existing, state.config.outputBudgetPolicyVersion) : undefined;
+  const outputBudget = state.config.protocolVersion === "fixed_lead_v1" ? scopeOutputBudget(packet.scope.callStage, route.model.capabilities.maxOutputTokens, existing, state.config.outputBudgetPolicyVersion ?? 2) : undefined;
   const requestHash = await telepathicRequestFingerprint(effectivePacket, route, state.config.protocolVersion === "fixed_lead_v1", outputBudget);
   if (state.config.protocolVersion === "fixed_lead_v1" && existing.some(call => call.requestSha256 !== requestHash)) throw new Error("Telepathic request fingerprint/settings changed after its durable attempt was prepared.");
   await deps.store.assertTelepathicSeriesLease(packet.scope.seriesId);

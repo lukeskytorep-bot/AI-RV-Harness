@@ -171,16 +171,17 @@ for(const backend of ["sqlite","browser"] as const) it(`${backend}: a completed 
  }finally{db.close();}
 });
 
-it("backs up and restores frozen Telepathic output policy and diagnostics in SQLite and Browser", async () => {
+for(const version of [1,2,3] as const) it(`backs up and restores Telepathic output v${version} in SQLite and Browser`, async () => {
  const {db,repository}=database();const directory=mkdtempSync(join(tmpdir(),"telepathy-budget-backup-"));
  try {
-  const state=createTelepathicSeriesState(config);
-  state.providerCalls=[{id:"budget-call",seriesId:config.seriesId,roundId:state.rounds[0].assignment.roundId,participantId:"a",callStage:"sharing_consent",technicalAttempt:2,status:"failed",scopeKey:"frozen-budget-scope",requestSha256:"frozen-request",createdAt:"now",updatedAt:"now",outputBudgetSnapshot:scopeOutputBudget("sharing_consent",32768),outputDiagnostics:{policyVersion:2,requestedMaxOutputTokens:16384,effectiveMaxOutputTokens:16384,modelMaxOutputTokens:32768,completion:"partial"},usage:{totalTokens:11,reasoningTokens:5},finishReason:"length"}];
+  const state=createTelepathicSeriesState({...config,outputBudgetPolicyVersion:version===3?3:2});
+  if(version===1)delete state.config.outputBudgetPolicyVersion;
+  state.providerCalls=[{id:"budget-call",seriesId:config.seriesId,roundId:state.rounds[0].assignment.roundId,participantId:"a",callStage:"receiver_reveal",technicalAttempt:2,status:"failed",scopeKey:"frozen-budget-scope",requestSha256:"frozen-request",createdAt:"now",updatedAt:"now",outputBudgetSnapshot:scopeOutputBudget("receiver_reveal",65536,version===1?[{technicalAttempt:1,status:"failed"} as never]:[],version===1?undefined:version),outputDiagnostics:{policyVersion:version,requestedMaxOutputTokens:version===3?49152:32768,effectiveMaxOutputTokens:version===3?49152:32768,modelMaxOutputTokens:65536,completion:"partial"},usage:{totalTokens:11,reasoningTokens:5},finishReason:"length"}];
   await repository.saveTelepathicSeries(state);await backup(db,join(directory,"budgets.sqlite"));
   const restoredDb=new DatabaseSync(join(directory,"budgets.sqlite"));
   try {
    const restored=(await database(restoredDb,false).repository.getTelepathicSeries(config.seriesId))!;
-   expect(restored.config.outputBudgetPolicyVersion).toBe(2);expect(restored.providerCalls).toEqual(state.providerCalls);
+   expect(restored.config.outputBudgetPolicyVersion).toBe(version===1?undefined:version);expect(restored.providerCalls).toEqual(state.providerCalls);
    expect(restoredDb.prepare("PRAGMA integrity_check").get()).toEqual({integrity_check:"ok"});
    const values=new Map<string,string>();const storage={getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>{values.set(key,value);}} as Storage;
    const browser=new BrowserTelepathicExchangeRepository({storage});await browser.saveTelepathicSeries(restored);

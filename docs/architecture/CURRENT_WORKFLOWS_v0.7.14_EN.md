@@ -126,3 +126,9 @@ Post-Reveal Viewer/Monitor and ordinary/Training Judge prefer 32,768 → 49,152 
 New Research freezes Judge v2 and independent postRevealOutputPolicy v2 before Experiment Lock; blind Viewer retains v1 16K/32K. Session snapshots carry the separate analysis policy, and Resume verifies project agreement. Existing post-Reveal analysis reads the snapshot policy. Research batch execution stores Reveal without adding an automatic analysis call. Historical Judge without a marker retains 8K/16K, Judge v1 retains 16K/32K, and old Research analysis without a marker remains 16K/32K. Frozen configs, hashes and accepted scores are never rewritten.
 
 Model/endpoint ceilings and available context still constrain effective limits. Recovery does not dispatch another paid attempt with the same effective limit. Existing routing and reasoning recovery remain. Implicit learning C+8K/16K is reserved for B4; Telepathy budgets are reserved for B3.
+
+## B3 — versioned Telepathy budgets
+
+New fixed-lead series select outputBudgetPolicyVersion=3. Only receiver_reveal, sender_reveal, shared_answers_comment and series_reflection prefer 32,768 → 49,152. Target, READY, guidance and blind remain 16K/32K; sharing_consent stays 8K/16K. Learning capacity does not increase; Telepathy uses frozen read-only copies.
+
+Explicit v2 series retain v2 for new scopes; historical series without a marker use v2 for new scopes. Started scopes retain their v1/v2/v3 snapshots; older records without snapshots select legacy v1. Counters, hashes, partial evidence and uncertain records are never reset. v1/v2 fingerprints match B2. Length recovery requires a larger effective budget and retains the two-attempt limit. Migrations and the runtime JSON format remain unchanged.

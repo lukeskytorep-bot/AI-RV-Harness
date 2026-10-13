@@ -1,29 +1,40 @@
 import type { TelepathicProviderCallRecord } from "./types";
 
-export const TELEPATHIC_OUTPUT_POLICY_VERSION = 2 as const;
+export const TELEPATHIC_OUTPUT_POLICY_VERSION = 3 as const;
 export type TelepathicOutputStage = "sender_target" | "sender_transmission_confirmation" | "lead_guidance"
   | "sharing_consent" | "receiver_first" | "receiver_second" | "receiver_guidance" | "receiver_reveal"
   | "sender_reveal" | "shared_answers_comment" | "series_reflection";
 
 /** Output limits, not input/context limits. One shared policy for Conversation and Training. */
-export const TELEPATHIC_OUTPUT_BUDGETS: Readonly<Record<TelepathicOutputStage, readonly [number, number]>> = {
+export const TELEPATHIC_OUTPUT_BUDGETS_V2: Readonly<Record<TelepathicOutputStage, readonly [number, number]>> = {
   sender_target: [16384, 32768], sender_transmission_confirmation: [16384, 32768], lead_guidance: [16384, 32768],
   sharing_consent: [8192, 16384], receiver_first: [16384, 32768], receiver_second: [16384, 32768],
   receiver_guidance: [16384, 32768], receiver_reveal: [16384, 32768], sender_reveal: [16384, 32768],
   shared_answers_comment: [16384, 32768], series_reflection: [16384, 32768],
 };
+// Keep v1/v2 tables independent of the current policy. Historical snapshots
+// and fingerprints must retain their exact pairs after an application update.
+export const TELEPATHIC_OUTPUT_BUDGETS: Readonly<Record<TelepathicOutputStage, readonly [number, number]>> = {
+  ...TELEPATHIC_OUTPUT_BUDGETS_V2,
+  receiver_reveal: [32768, 49152], sender_reveal: [32768, 49152],
+  shared_answers_comment: [32768, 49152], series_reflection: [32768, 49152],
+};
 const LEGACY_OUTPUT_BUDGETS: Readonly<Record<TelepathicOutputStage, readonly [number, number]>> = {
-  ...TELEPATHIC_OUTPUT_BUDGETS, sender_target: [4096, 4096], sender_transmission_confirmation: [4096, 4096],
+  ...TELEPATHIC_OUTPUT_BUDGETS_V2, sender_target: [4096, 4096], sender_transmission_confirmation: [4096, 4096],
   lead_guidance: [4096, 4096], sharing_consent: [4096, 4096], receiver_second: [4096, 4096],
 };
+for (const table of [LEGACY_OUTPUT_BUDGETS, TELEPATHIC_OUTPUT_BUDGETS_V2, TELEPATHIC_OUTPUT_BUDGETS]) {
+  for (const pair of Object.values(table)) Object.freeze(pair);
+  Object.freeze(table);
+}
 export interface TelepathicOutputBudgetSnapshot {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   stage: TelepathicOutputStage;
   attemptLimits: [number, number];
   modelMaxOutputTokens?: number;
 }
 export interface TelepathicOutputDiagnostics {
-  policyVersion?: 1 | 2;
+  policyVersion?: 1 | 2 | 3;
   requestedMaxOutputTokens?: number;
   effectiveMaxOutputTokens?: number;
   modelMaxOutputTokens?: number;
@@ -43,13 +54,13 @@ export function telepathicOutputStage(callStage: string): TelepathicOutputStage 
 function validateCeiling(value?: number): void {
   if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) throw new Error("Invalid model maximum output limit.");
 }
-function limits(version: 1 | 2, stage: TelepathicOutputStage) {
-  return (version === 1 ? LEGACY_OUTPUT_BUDGETS : TELEPATHIC_OUTPUT_BUDGETS)[stage];
+function limits(version: 1 | 2 | 3, stage: TelepathicOutputStage) {
+  return (version === 1 ? LEGACY_OUTPUT_BUDGETS : version === 2 ? TELEPATHIC_OUTPUT_BUDGETS_V2 : TELEPATHIC_OUTPUT_BUDGETS)[stage];
 }
 export function validateOutputBudgetSnapshot(snapshot: TelepathicOutputBudgetSnapshot, callStage: string, modelMaxOutputTokens?: number): void {
   const stage = telepathicOutputStage(callStage);
   validateCeiling(modelMaxOutputTokens);
-  if (!snapshot || ![1, 2].includes(snapshot.version) || snapshot.stage !== stage || !Array.isArray(snapshot.attemptLimits)
+  if (!snapshot || ![1, 2, 3].includes(snapshot.version) || snapshot.stage !== stage || !Array.isArray(snapshot.attemptLimits)
     || snapshot.attemptLimits.length !== 2 || JSON.stringify(snapshot.attemptLimits) !== JSON.stringify(limits(snapshot.version, stage))
     || snapshot.modelMaxOutputTokens !== modelMaxOutputTokens) {
     throw new Error("Frozen Telepathic output policy/model ceiling changed; dispatch blocked.");
@@ -57,16 +68,16 @@ export function validateOutputBudgetSnapshot(snapshot: TelepathicOutputBudgetSna
 }
 
 /** Freeze per logical scope. Legacy scopes keep their original fingerprint and budget, never a fresh counter. */
-export function scopeOutputBudget(callStage: string, modelMaxOutputTokens: number | undefined, existing: TelepathicProviderCallRecord[] = [], configuredVersion?: 2): TelepathicOutputBudgetSnapshot {
-  if (configuredVersion !== undefined && configuredVersion !== TELEPATHIC_OUTPUT_POLICY_VERSION) throw new Error("Unsupported Telepathic output policy version.");
+export function scopeOutputBudget(callStage: string, modelMaxOutputTokens: number | undefined, existing: TelepathicProviderCallRecord[] = [], configuredVersion?: 2 | 3): TelepathicOutputBudgetSnapshot {
+  if (configuredVersion !== undefined && ![2, 3].includes(configuredVersion)) throw new Error("Unsupported Telepathic output policy version.");
   const stage = telepathicOutputStage(callStage);
   validateCeiling(modelMaxOutputTokens);
   const snapshots = existing.flatMap(call => call.outputBudgetSnapshot ? [call.outputBudgetSnapshot] : []);
-  const version = snapshots[0]?.version ?? (existing.length ? 1 : TELEPATHIC_OUTPUT_POLICY_VERSION);
+  const version = snapshots[0]?.version ?? (existing.length ? 1 : configuredVersion ?? TELEPATHIC_OUTPUT_POLICY_VERSION);
   const snapshot = snapshots[0] ?? { version, stage, attemptLimits: [...limits(version, stage)] as [number, number], ...(modelMaxOutputTokens !== undefined ? { modelMaxOutputTokens } : {}) };
   validateOutputBudgetSnapshot(snapshot, callStage, modelMaxOutputTokens);
   if (snapshots.some(other => JSON.stringify(other) !== JSON.stringify(snapshot))
-    || version === 2 && existing.some(call => !call.outputBudgetSnapshot)) throw new Error("Inconsistent durable Telepathic output snapshots.");
+    || version >= 2 && existing.some(call => !call.outputBudgetSnapshot)) throw new Error("Inconsistent durable Telepathic output snapshots.");
   return structuredClone(snapshot);
 }
 

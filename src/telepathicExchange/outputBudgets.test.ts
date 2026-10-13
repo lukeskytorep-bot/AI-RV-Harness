@@ -1,3 +1,4 @@
+import legacyFingerprints from "./__fixtures__/outputBudgetV1V2Fingerprints.json";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderChatAttempt } from "../providers/requestExecutor";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
@@ -11,7 +12,7 @@ import { telepathicProviderScopeKey } from "./types";
 import { serializeTelepathicPlan, restoreTelepathicRuntime } from "./persistence";
 
 function ai(id: string): TelepathicParticipant { return { id, kind: "ai", displayName: id, ai: { profileId: `p-${id}`, profileName: id, workspaceId: `w-${id}`, aiIdentityId: `i-${id}`, providerConfigId: `c-${id}`, credentialId: `k-${id}`, credentialFingerprint: `f-${id}`, modelId: `m-${id}`, route: `custom_openai:m-${id}` } }; }
-function route(participant: TelepathicParticipant, ceiling = 32768): ResolvedTelepathicAiRoute {
+function route(participant: TelepathicParticipant, ceiling = 65536): ResolvedTelepathicAiRoute {
   const snapshot = participant.ai!;
   const providerConfig: ProviderConfig = { id: snapshot.providerConfigId, provider: "custom_openai", label: "Test", credentialId: snapshot.credentialId, baseUrl: "https://example.test/v1", enabled: true, createdAt: "now", updatedAt: "now" };
   const model: ProviderModel = { providerConfigId: providerConfig.id, provider: "custom_openai", modelId: snapshot.modelId, displayName: "M", route: snapshot.route, pricing: {}, recommended: false, rawMetadata: {}, refreshedAt: "now", capabilities: { contextTokens: 131072, maxOutputTokens: ceiling, inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: false, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: true, min: 0, max: 2, confidence: "provider_metadata" }, supportedParameters: ["temperature", "max_tokens"], source: "provider", capturedAt: "now" } };
@@ -28,10 +29,13 @@ function answer(stage: string): string {
 }
 const changedStages = ["sender_target", "sender_transmission_confirmation", "lead_guidance:cycle:1", "sharing_consent"];
 
-async function engineRun(mode: TelepathicMode, incomplete?: string, options: { ceiling?: number; stop?: boolean; human?: boolean; invalidJson?: boolean; failBoth?: boolean } = {}) {
+async function engineRun(mode: TelepathicMode, incomplete?: string, options: { policy?: 2 | 3; unmarked?: boolean; ceiling?: number; stop?: boolean; human?: boolean; invalidJson?: boolean; failBoth?: boolean } = {}) {
   const store = new InMemoryTelepathicExchangeStore(), frozen = config(mode);
   if (options.human) frozen.participants.push({ id: "human", kind: "human", displayName: "Human" });
-  await store.saveTelepathicSeries(createTelepathicSeriesState(frozen));
+  if(options.policy) frozen.outputBudgetPolicyVersion=options.policy;
+  const initial=createTelepathicSeriesState(frozen);
+  if(options.unmarked) delete initial.config.outputBudgetPolicyVersion;
+  await store.saveTelepathicSeries(initial);
   const requests: Array<{ stage: string; budget: number; attempt: number }> = [], abort = new AbortController();
   const providerAttempt: ProviderChatAttempt = async request => {
     const state = (await store.getTelepathicSeries("budgets"))!, call = state.providerCalls.at(-1)!;
@@ -55,8 +59,8 @@ describe("shared Telepathic output policy", () => {
         expect(request.settings.effective.maxOutputTokens).toBe(limits[technicalAttempt - 1]);
         return { content: "Complete", finishReason: "stop", providerRequestId: "generation-id", usage: { totalTokens: 12, reasoningTokens: 3 } };
       } });
-      expect(saved.find(call => call.id === result.call.id && call.status === "prepared")?.outputBudgetSnapshot?.version).toBe(2);
-      expect(result.call.outputDiagnostics).toMatchObject({ policyVersion: 2, requestedMaxOutputTokens: limits[technicalAttempt - 1], effectiveMaxOutputTokens: limits[technicalAttempt - 1], modelMaxOutputTokens: 32768, completion: "complete" });
+      expect(saved.find(call => call.id === result.call.id && call.status === "prepared")?.outputBudgetSnapshot?.version).toBe(3);
+      expect(result.call.outputDiagnostics).toMatchObject({ policyVersion: 3, requestedMaxOutputTokens: limits[technicalAttempt - 1], effectiveMaxOutputTokens: limits[technicalAttempt - 1], modelMaxOutputTokens: 65536, completion: "complete" });
       expect(result.call).toMatchObject({ providerRequestId: "generation-id", usage: { reasoningTokens: 3 } });
     }
   });
@@ -67,7 +71,7 @@ describe("shared Telepathic output policy", () => {
       expect(selected.map(request => request.budget)).toEqual(stage === "sharing_consent" ? [8192, 16384] : [16384, 32768]);
       expect(selected.map(request => request.attempt)).toEqual([1, 2]);
       expect(state.providerCalls.filter(call => call.callStage === stage)[0].outputDiagnostics?.completion).toBe("partial");
-      expect(state.config.outputBudgetPolicyVersion).toBe(2);
+      expect(state.config.outputBudgetPolicyVersion).toBe(3);
     });
     it(`${mode} does not request recovery after a complete response`, async () => {
       const run = await engineRun(mode);const state = await run.execute();expect(state.status).toBe("completed");
@@ -91,7 +95,7 @@ describe("shared Telepathic output policy", () => {
   it("resumes the second level after a durable partial and process restart without buying level one again", async () => {
     const run = await engineRun("ai_ai_training", "sender_target", { stop: true });await expect(run.execute()).rejects.toThrow();
     const state = (await run.store.getTelepathicSeries("budgets"))!, originalCall = state.providerCalls[0];
-    expect(originalCall).toMatchObject({ status: "failed", technicalAttempt: 1, outputBudgetSnapshot: { version: 2 } });
+    expect(originalCall).toMatchObject({ status: "failed", technicalAttempt: 1, outputBudgetSnapshot: { version: 3 } });
     const restarted = new InMemoryTelepathicExchangeStore();await restarted.saveTelepathicSeries(state);const budgets: number[] = [];
     const result = await runNextTelepathicAiRound({ store: restarted, resolveRoute: async p => route(p), providerAttempt: async request => {
       const current = (await restarted.getTelepathicSeries("budgets"))!.providerCalls.at(-1)!;
@@ -100,12 +104,12 @@ describe("shared Telepathic output policy", () => {
     } }, "budgets");
     expect(result.status).toBe("completed");expect(budgets).toEqual([32768]);expect(result.providerCalls[0]).toEqual(originalCall);
   });
-  it("preserves legacy scope fingerprint and count while new scopes receive version 2", async () => {
+  it("preserves legacy scope fingerprint and count while new scopes receive version 3", async () => {
     const legacy = scopeOutputBudget("sender_target", 32768, [{ technicalAttempt: 1, status: "failed" } as TelepathicProviderCallRecord]);
     expect(legacy).toMatchObject({ version: 1, attemptLimits: [4096, 4096] });
     expect(await telepathicRequestFingerprint(packet("sender_target"), route(ai("a")), true, legacy)).toBe(await telepathicRequestFingerprint(packet("sender_target"), route(ai("a")), true));
     expect(nextDurableTechnicalAttempt([{ technicalAttempt: 1, status: "failed" } as TelepathicProviderCallRecord])).toBe(2);
-    expect(scopeOutputBudget("sender_transmission_confirmation", 32768).version).toBe(2);
+    expect(scopeOutputBudget("sender_transmission_confirmation", 32768).version).toBe(3);
   });
   it("normalizes provider output-limit finish reasons before testing a clamped recovery", () => {
     const budget = scopeOutputBudget("sharing_consent", 8192);
@@ -158,4 +162,76 @@ describe("shared Telepathic output policy", () => {
     const restored = restoreTelepathicRuntime(relational, stored);expect(restored.providerCalls).toEqual(state.providerCalls);
     expect(outputAttemptBudget(restored.providerCalls[0].outputBudgetSnapshot!, 2).effective).toBe(32768);
   });
+});
+
+const analyticalStages=["receiver_reveal","sender_reveal","shared_answers_comment","series_reflection"] as const;
+for(const mode of ["ai_ai_training","conversation_exchange"] as const)for(const stage of analyticalStages)it(`B3 ${mode} ${stage} dispatches 32K/48K and persists actual diagnostics`,async()=>{
+ const run=await engineRun(mode,stage);const state=await run.execute();expect(state.status).toBe("completed");
+ const selected=state.providerCalls.filter(r=>r.callStage===stage),scopes=new Set(selected.map(c=>c.scopeKey));
+ expect(run.requests.filter(r=>r.stage===stage).map(r=>r.budget)).toEqual([...scopes].flatMap(()=>[32768,49152]));
+ for(const scope of scopes) expect(selected.filter(c=>c.scopeKey===scope).map(r=>r.outputDiagnostics)).toEqual([
+  expect.objectContaining({policyVersion:3,requestedMaxOutputTokens:32768,effectiveMaxOutputTokens:32768,completion:"partial"}),
+  expect.objectContaining({policyVersion:3,requestedMaxOutputTokens:49152,effectiveMaxOutputTokens:49152,completion:"complete"})
+ ]);
+});
+for(const row of legacyFingerprints)it(`B3 keeps exact B2 golden fingerprint for ${row.stage} v${row.version}`,async()=>{
+ const frozen=scopeOutputBudget(row.stage,65536,row.version===1?[{technicalAttempt:1,status:"failed"} as TelepathicProviderCallRecord]:[],row.version===2?2:undefined);
+ expect(frozen).toEqual(row.budget);
+ expect(await telepathicRequestFingerprint(packet(row.stage),route(ai("a")),true,frozen)).toBe(row.fingerprint);
+});
+for(const mode of ["ai_ai_training","conversation_exchange"] as const)for(const version of ["v1","v2","v3","unmarked"] as const)it(`B3 ${mode} restarts ${version} without resetting a paid attempt`,async()=>{
+ const run=await engineRun(mode,"receiver_reveal",{policy:version==="v3"?3:2,unmarked:version==="unmarked",stop:true});
+ await expect(run.execute()).rejects.toThrow();
+ const checkpoint=(await run.store.getTelepathicSeries("budgets"))!;
+ const partial=checkpoint.providerCalls.find(c=>c.callStage==="receiver_reveal")!;
+ if(version==="v1"){
+  const legacyPacket={scope:{seriesId:partial.seriesId,roundId:partial.roundId,participantId:partial.participantId,callStage:partial.callStage},scopeKey:partial.scopeKey,contextPolicy:"fresh_round_context",continuationPolicy:"none",messages:partial.requestMessages!} as TelepathicProviderPacket;
+  const snapshot=scopeOutputBudget(partial.callStage,65536,[{technicalAttempt:1,status:"failed"} as TelepathicProviderCallRecord]);
+  partial.requestSha256=await telepathicRequestFingerprint(legacyPacket,route(checkpoint.config.participants.find(p=>p.id===partial.participantId)!),true,snapshot);
+  delete partial.outputBudgetSnapshot;delete partial.outputDiagnostics;
+ }
+ const before=JSON.stringify(checkpoint.providerCalls);
+ const restart=new InMemoryTelepathicExchangeStore();await restart.saveTelepathicSeries(JSON.parse(JSON.stringify(checkpoint)));
+ const requests:Array<{stage:string;budget:number;attempt:number}>=[];
+ const deps={store:restart,resolveRoute:async(p:TelepathicParticipant)=>route(p),providerAttempt:async(request:Parameters<ProviderChatAttempt>[0])=>{
+  const call=(await restart.getTelepathicSeries("budgets"))!.providerCalls.at(-1)!;requests.push({stage:call.callStage,budget:request.settings.effective.maxOutputTokens!,attempt:call.technicalAttempt});
+  return {content:answer(call.callStage),finishReason:"stop",usage:{}};
+ }};
+ const result=mode==="ai_ai_training"?await runNextTelepathicAiRound(deps,"budgets"):await advanceTelepathicConversationSeries(deps,"budgets");
+ expect(result.status).toBe("completed");
+ expect(requests.filter(r=>r.stage==="receiver_reveal")).toEqual([{stage:"receiver_reveal",budget:version==="v3"?49152:32768,attempt:2}]);
+ expect(JSON.stringify(result.providerCalls.slice(0,checkpoint.providerCalls.length))).toBe(before);
+ if(version==="unmarked")expect(result.config.outputBudgetPolicyVersion).toBeUndefined();
+ else expect(result.config.outputBudgetPolicyVersion).toBe(version==="v3"?3:2);
+ if(version!=="v3")expect(requests.filter(r=>analyticalStages.includes(r.stage as typeof analyticalStages[number])&&r.stage!=="receiver_reveal").every(r=>r.budget===16384)).toBe(true);
+});
+for(const stage of analyticalStages)it(`B3 ${stage} low ceiling avoids the same paid recovery`,async()=>{
+ const run=await engineRun("ai_ai_training",stage,{ceiling:32768});await expect(run.execute()).rejects.toThrow("No larger output recovery");
+ expect(run.requests.filter(r=>r.stage===stage).map(r=>r.budget)).toEqual([32768]);
+});
+it("B3 validates all immutable versions and blocks mixed snapshots",()=>{
+ for(const version of [1,2,3] as const){
+  const snapshot=scopeOutputBudget("receiver_reveal",65536,version===1?[{technicalAttempt:1,status:"failed"} as TelepathicProviderCallRecord]:[],version===1?undefined:version);
+  expect(snapshot.attemptLimits).toEqual(version===3?[32768,49152]:[16384,32768]);
+ }
+ const v2=scopeOutputBudget("receiver_reveal",65536,[],2),v3=scopeOutputBudget("receiver_reveal",65536,[],3);
+ expect(()=>scopeOutputBudget("receiver_reveal",65536,[{outputBudgetSnapshot:v2},{outputBudgetSnapshot:v3}] as TelepathicProviderCallRecord[])).toThrow("Inconsistent");
+ expect(()=>scopeOutputBudget("receiver_reveal",65536,[{outputBudgetSnapshot:{...v2,attemptLimits:[32768,49152]}}] as TelepathicProviderCallRecord[])).toThrow("changed");
+});
+for(const stage of analyticalStages)it(`B3 ${stage} two incomplete attempts remain exhausted after restart`,async()=>{
+ const run=await engineRun("ai_ai_training",stage,{failBoth:true});await expect(run.execute()).rejects.toThrow();
+ expect(run.requests.filter(r=>r.stage===stage).map(r=>r.budget)).toEqual([32768,49152]);
+ const records=(await run.store.getTelepathicSeries("budgets"))!.providerCalls.filter(c=>c.callStage===stage);
+ expect(records.map(c=>c.technicalAttempt)).toEqual([1,2]);
+ const count=run.requests.length;await expect(run.execute()).rejects.toThrow(/attempts exhausted|blocked and requires operator resolution/);
+ const forced=(await run.store.getTelepathicSeries("budgets"))!;forced.status="paused";await run.store.saveTelepathicSeries(forced);
+ await expect(run.execute()).rejects.toThrow("attempts exhausted");
+ expect(run.requests).toHaveLength(count);
+ expect((await run.store.getTelepathicSeries("budgets"))!.providerCalls.filter(c=>c.callStage===stage)).toEqual(records);
+});
+it("B3 context preflight blocks a 32K reservation before persistence or paid dispatch",async()=>{
+ const resolved=route(ai("a"));resolved.model.capabilities.contextTokens=32768;
+ const attempt=vi.fn(),persist=vi.fn();
+ await expect(executeTelepathicProviderPacket({packet:packet("receiver_reveal"),route:resolved,fixedLead:true,technicalAttempt:1,attempt,hooks:{createCallId:()=>"c",now:()=>"t",persist}})).rejects.toThrow("context budget");
+ expect(attempt).not.toHaveBeenCalled();expect(persist).not.toHaveBeenCalled();
 });

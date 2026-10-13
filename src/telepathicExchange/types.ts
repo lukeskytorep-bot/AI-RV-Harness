@@ -58,7 +58,7 @@ export interface TelepathicSeriesConfig {
   schemaVersion: 1;
   protocolVersion?: "fixed_lead_v1";
   leadInstructionVersion?: string;
-  outputBudgetPolicyVersion?: 2;
+  outputBudgetPolicyVersion?: 2 | 3;
   leadInstruction?: string;
   maxGuidanceCycles?: 3;
   seriesId: string;

@@ -123,7 +123,7 @@ export async function telepathicRequestFingerprint(packet: TelepathicProviderPac
   const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,canonical(v)])) : value;
   return sha256Text(JSON.stringify(canonical({ modelId: route.model.modelId, messages, settings,
     outputCeiling: route.model.capabilities.maxOutputTokens, provider: route.providerConfig.provider,
-    baseUrl: route.providerConfig.baseUrl, outputTokenField: route.providerConfig.customOutputTokenField, route: route.model.route, ...(outputBudget?.version === 2 ? { outputBudget } : {}) })));
+    baseUrl: route.providerConfig.baseUrl, outputTokenField: route.providerConfig.customOutputTokenField, route: route.model.route, ...(outputBudget && outputBudget.version >= 2 ? { outputBudget } : {}) })));
 }
 
 export async function executeTelepathicProviderPacket(input: {

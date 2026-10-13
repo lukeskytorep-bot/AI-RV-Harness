@@ -104,3 +104,9 @@ Viewer i Monitor po Reveal oraz zwykły Judge i Judge w Training preferują 32 7
 Nowy Research zamraża Judge v2 oraz niezależne postRevealOutputPolicy v2 przed Experiment Lock; blind Viewer nadal ma swoją politykę v1 16K/32K. Snapshot sesji przenosi osobną politykę analizy, a Resume sprawdza zgodność z projektem. Analizy wykonywane przez istniejącą ścieżkę po Reveal odczytują politykę snapshotu. Batch Research zapisuje Reveal i nie uruchamia nowego automatycznego wywołania analizy. Stare Judge bez znacznika zachowują 8K/16K, Judge v1 16K/32K; stare analizy Research bez znacznika pozostają 16K/32K. Zamrożone konfiguracje, hashe i przyjęte wyniki nie są przepisywane.
 
 Ceiling modelu/endpointu i dostępny kontekst nadal ograniczają rzeczywisty limit. Gdy recovery nie może otrzymać większego limitu, nie uruchamia identycznej płatnej próby. Istniejące routing i reasoning recovery pozostają. Niejawny learning C+8K/16K czeka na B4; budżety telepatii czekają na B3.
+
+## B3 — wersjonowane budżety telepatii
+
+Nowe serie fixed-lead wybierają outputBudgetPolicyVersion=3. Tylko receiver_reveal, sender_reveal, shared_answers_comment i series_reflection mają preferowane 32 768 → 49 152. Cel, READY, prowadzenie i blind nadal 16K/32K; sharing_consent nadal 8K/16K. Nie zwiększa się pojemności learning; telepatia korzysta z jego zamrożonych kopii.
+
+Jawne serie v2 zachowują v2 dla nowych scope; historyczne serie bez znacznika używają v2 dla nowych scope. Rozpoczęty scope zachowuje swój snapshot v1/v2/v3; stare rekordy bez snapshotu wybierają legacy v1. Nie resetuje się liczników, hashów, partial evidence ani uncertain. Fingerprinty v1/v2 są zgodne z bazą B2. Druga próba wymaga większego efektywnego limitu po length, w ramach dotychczasowego limitu dwóch prób. Brak zmiany migracji i formatu runtime JSON.
