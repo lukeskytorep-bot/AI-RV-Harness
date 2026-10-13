@@ -5,19 +5,31 @@ export type PurgeEntityKind =
   | "rv_session"
   | "training"
   | "research"
-  | "target";
+  | "target"
+  | "telepathic_series";
 
 export interface DeletionPreview {
   kind: PurgeEntityKind;
   id: string;
   label: string;
   archived: boolean;
+  archiveRevision?: number;
   blockedReason?: string;
   requiresPhrase?: string;
   safetyBackupRecommended: boolean;
   viewerNotesPreserved: number;
   viewerNotesDeleted: number;
   counts: {
+    telepathicSeries: number;
+    telepathicParticipants: number;
+    telepathicRounds: number;
+    telepathicTargets: number;
+    telepathicBlindSubmissions: number;
+    telepathicReflections: number;
+    telepathicFinalReflections: number;
+    telepathicProviderCalls: number;
+    telepathicTranscriptEvents: number;
+    telepathicAttachmentFilesPreserved: number;
     profiles: number;
     workspaces: number;
     conversations: number;
@@ -49,6 +61,16 @@ export interface DeletionPreview {
 
 export function emptyDeletionCounts(): DeletionPreview["counts"] {
   return {
+    telepathicSeries: 0,
+    telepathicParticipants: 0,
+    telepathicRounds: 0,
+    telepathicTargets: 0,
+    telepathicBlindSubmissions: 0,
+    telepathicReflections: 0,
+    telepathicFinalReflections: 0,
+    telepathicProviderCalls: 0,
+    telepathicTranscriptEvents: 0,
+    telepathicAttachmentFilesPreserved: 0,
     profiles: 0,
     workspaces: 0,
     conversations: 0,

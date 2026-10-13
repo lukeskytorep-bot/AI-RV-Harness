@@ -3,7 +3,7 @@ import { assertArchiveRevision } from "../../telepathicExchange/persistence";
 import type { TelepathicSeriesState } from "../../telepathicExchange/types";
 import type { TelepathicExchangeRepository } from "../contracts/telepathicExchangeRepository";
 
-const TELEPATHIC_SERIES_KEY = "rvh.dev.telepathic_series_v1";
+import { TELEPATHIC_SERIES_KEY, readTelepathicCollection, withTelepathicCollectionWrite } from "./telepathicCollection";
 const browserFallbackLeases = new Set<string>();
 
 export interface BrowserTelepathicExchangeRepositoryDependencies {
@@ -64,10 +64,12 @@ export class BrowserTelepathicExchangeRepository implements TelepathicExchangeRe
   }
 
   async saveTelepathicSeries(state: TelepathicSeriesState): Promise<void> {
-    const all = this.readAll();
-    assertArchiveRevision(state, all.find(item => item.config.seriesId === state.config.seriesId) ?? null);
-    const next = [structuredClone(state), ...all.filter((item) => item.config.seriesId !== state.config.seriesId)];
-    this.storage.setItem(TELEPATHIC_SERIES_KEY, JSON.stringify(next));
+    await withTelepathicCollectionWrite(() => {
+      const all = readTelepathicCollection(this.storage);
+      assertArchiveRevision(state, all.find(item => item.config.seriesId === state.config.seriesId) ?? null);
+      const next = [structuredClone(state), ...all.filter((item) => item.config.seriesId !== state.config.seriesId)];
+      this.storage.setItem(TELEPATHIC_SERIES_KEY, JSON.stringify(next));
+    });
   }
 
   async withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T> {

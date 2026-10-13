@@ -82,6 +82,6 @@ export async function createDatabaseSnapshotNative(destinationPath: string): Pro
   await invoke("database_snapshot", { destinationPath });
 }
 
-export async function executeControlledPurgeNative(kind: PurgeEntityKind, id: string): Promise<void> {
-  await invoke("database_controlled_purge", { request: { kind, id } });
+export async function executeControlledPurgeNative(kind: PurgeEntityKind, id: string, expectedArchiveRevision?:number): Promise<void> {
+  await invoke("database_controlled_purge", { request: { kind, id, ...(expectedArchiveRevision===undefined?{}:{expectedArchiveRevision}) } });
 }

@@ -81,6 +81,7 @@ export interface AppRepository {
   purgeTrainingRun(id: string): Promise<void>;
   purgeResearchProject(id: string): Promise<void>;
   purgeTarget(id: string): Promise<void>;
+  purgeTelepathicSeries(id: string, expectedArchiveRevision: number): Promise<void>;
   recordTargetUsage(input: TargetUsageInput): Promise<void>;
   listTargetUsage(): Promise<TargetUsageRecord[]>;
   createTrainingRun(input: CreateTrainingRunInput): Promise<TrainingRunRecord>;

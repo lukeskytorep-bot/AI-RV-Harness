@@ -16,7 +16,7 @@ import { BrowserMonitorRepository } from "./browser/monitorRepository";
 import { BrowserJudgeRepository } from "./browser/judgeRepository";
 import { BrowserResearchRepository } from "./browser/researchRepository";
 import { BrowserExportRepository } from "./browser/exportRepository";
-import { previewBrowserPermanentDelete, purgeBrowserPermanentDelete } from "./browser/controlledPurge";
+import { previewBrowserPermanentDelete, previewBrowserTelepathicDelete, purgeBrowserPermanentDelete } from "./browser/controlledPurge";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
@@ -281,13 +281,14 @@ export class BrowserRepository implements AppRepository {
   updateTarget: AppRepository["updateTarget"] = (id, input) => this.targetsRepository.updateTarget(id, input);
   archiveTarget: AppRepository["archiveTarget"] = (id) => this.targetsRepository.archiveTarget(id);
   restoreTarget: AppRepository["restoreTarget"] = (id) => this.targetsRepository.restoreTarget(id);
-  previewPermanentDelete: AppRepository["previewPermanentDelete"] = async (kind, id) => previewBrowserPermanentDelete(localStorage, kind, id);
+  previewPermanentDelete: AppRepository["previewPermanentDelete"] = async (kind, id) => kind === "telepathic_series" ? previewBrowserTelepathicDelete(localStorage,id) : previewBrowserPermanentDelete(localStorage, kind, id);
   purgeProfile: AppRepository["purgeProfile"] = async (id) => purgeBrowserPermanentDelete(localStorage, "profile", id);
   purgeWorkspace: AppRepository["purgeWorkspace"] = async (id) => purgeBrowserPermanentDelete(localStorage, "workspace", id);
   purgeChatThread: AppRepository["purgeChatThread"] = async (id) => purgeBrowserPermanentDelete(localStorage, "conversation", id);
   purgeRvSession: AppRepository["purgeRvSession"] = async (id) => purgeBrowserPermanentDelete(localStorage, "rv_session", id);
   purgeTrainingRun: AppRepository["purgeTrainingRun"] = async (id) => purgeBrowserPermanentDelete(localStorage, "training", id);
   purgeResearchProject: AppRepository["purgeResearchProject"] = async (id) => purgeBrowserPermanentDelete(localStorage, "research", id);
+  purgeTelepathicSeries: AppRepository["purgeTelepathicSeries"] = async (id,revision) => purgeBrowserPermanentDelete(localStorage,"telepathic_series",id,revision);
   purgeTarget: AppRepository["purgeTarget"] = async (id) => purgeBrowserPermanentDelete(localStorage, "target", id);
   recordTargetUsage: AppRepository["recordTargetUsage"] = (input) => this.targetsRepository.recordTargetUsage(input);
   listTargetUsage: AppRepository["listTargetUsage"] = () => this.targetsRepository.listTargetUsage();

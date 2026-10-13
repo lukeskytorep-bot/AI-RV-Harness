@@ -62,8 +62,11 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(providerRetry).toContain('return category === "standard" ? configured : category === "single_recovery" ? 1 : 0');
     // C2-R1 intentionally extends Browser controlled purge with durable
     // continuation reset/fresh artifacts; protect the accepted R1 bytes.
-    expect(sha256(browserControlledPurge)).toBe("8f61ac511dd3226833ff1cca14190b162d6ecb32712ccaad558c59caf8410a98");
-    expect(sha256(sqliteControlledPurge)).toBe("5ed7115da8cc2bc36ddc06170c766783f19186bf4cd8672396c291ae26cfcfc4");
+    // UX-TEL-5 adds a separate Telepathy path and explicit parent guard.
+    // Normalize only that declared wiring: all accepted learning/continuation
+    // deletion bytes remain protected by the original hashes.
+    expect(sha256(normalizeTelepathicPurgeWiring(browserControlledPurge,"browser"))).toBe("8f61ac511dd3226833ff1cca14190b162d6ecb32712ccaad558c59caf8410a98");
+    expect(sha256(normalizeTelepathicPurgeWiring(sqliteControlledPurge,"sqlite"))).toBe("5ed7115da8cc2bc36ddc06170c766783f19186bf4cd8672396c291ae26cfcfc4");
     expect(sha256(migration023)).toBe("1a9d300daa180a4507c01497b52deaf84722bd710ed4617f84058932dc7838a4");
   });
 
@@ -154,3 +157,21 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(nativeCompatibility).toContain("MIGRATION_SPECS[24].sql");
   });
 });
+
+function normalizeTelepathicPurgeWiring(source:string,backend:"browser"|"sqlite"):string {
+ if(backend==="browser")return source
+  .replace('import { telepathicBrowserPreview, telepathicParentBlocked, purgeBrowserTelepathicSeries } from "./telepathicPurge";\n','')
+  .replace('export { previewBrowserTelepathicDelete } from "./telepathicPurge";\n','')
+  .replace('  if(kind==="telepathic_series")return telepathicBrowserPreview(storage,id);\n','')
+  .replace('  if((kind==="profile"||kind==="workspace")&&telepathicParentBlocked(storage,kind,id))scope.blockedReason="Delete Telepathy series referencing this Profile/Workspace first.";\n','')
+  .replace('export function purgeBrowserPermanentDelete(storage: StorageLike, kind: PurgeEntityKind, id: string, expectedArchiveRevision?:number): void | Promise<void> {','export function purgeBrowserPermanentDelete(storage: StorageLike, kind: PurgeEntityKind, id: string): void {')
+  .replace('  if(kind==="telepathic_series")return purgeBrowserTelepathicSeries(storage,id,expectedArchiveRevision);\n','');
+ return source
+  .replace('import {previewSqliteTelepathicDelete,telepathicParentPurgeQuery} from "./telepathicPurge";\n','')
+  .replace('Exclude<PurgeEntityKind, "target" | "telepathic_series">','Exclude<PurgeEntityKind, "target">')
+  .replace('    if((kind==="profile"||kind==="workspace")&&Number((await this.dependencies.select<CountRow[]>(telepathicParentPurgeQuery(kind),[id]))[0]?.n??0)>0)blockedReason="Delete Telepathy series referencing this Profile/Workspace first.";\n','')
+  .replace('    if(kind==="telepathic_series")return previewSqliteTelepathicDelete(this.dependencies,id);\n','')
+  .replace('async purge(kind: PurgeEntityKind, id: string, expectedArchiveRevision?:number)','async purge(kind: PurgeEntityKind, id: string)')
+  .replace('    if(kind==="telepathic_series"&&(!Number.isInteger(expectedArchiveRevision)||expectedArchiveRevision!==preview.archiveRevision))throw new Error("Telepathy changed after Deletion Preview.");\n','')
+  .replace('executeControlledPurgeNative(kind, id,expectedArchiveRevision)','executeControlledPurgeNative(kind, id)');
+}

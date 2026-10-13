@@ -848,6 +848,7 @@ pub enum ControlledPurgeKind {
     Training,
     Research,
     Target,
+    TelepathicSeries,
 }
 
 #[derive(Debug, Deserialize)]
@@ -855,6 +856,8 @@ pub enum ControlledPurgeKind {
 pub struct ControlledPurgeRequest {
     kind: ControlledPurgeKind,
     id: String,
+    #[serde(default)]
+    expected_archive_revision: Option<i64>,
 }
 
 async fn purge_exec(transaction: &mut Transaction<'_, Sqlite>, sql: &'static str, id: &str) -> Result<u64, String> {
@@ -870,6 +873,7 @@ async fn ensure_archived(transaction: &mut Transaction<'_, Sqlite>, table: &'sta
         "training_runs" => "SELECT COUNT(*) FROM training_runs WHERE id = $1 AND archived_at IS NOT NULL",
         "research_projects" => "SELECT COUNT(*) FROM research_projects WHERE id = $1 AND archived_at IS NOT NULL",
         "targets" => "SELECT COUNT(*) FROM targets WHERE id = $1 AND collection = 'user' AND archived_at IS NOT NULL",
+        "telepathic_series" => "SELECT COUNT(*) FROM telepathic_series WHERE id=$1 AND json_valid(plan_json) AND json_type(plan_json,'$._runtime.archivedAt')='text' AND length(trim(json_extract(plan_json,'$._runtime.archivedAt')))>0",
         _ => return Err("unsupported purge entity".to_string()),
     };
     let count: i64 = sqlx::query_scalar(sql).bind(id).fetch_one(&mut **transaction).await.map_err(|e| e.to_string())?;
@@ -884,6 +888,11 @@ pub async fn database_controlled_purge(
 ) -> Result<(), String> {
     if request.id.trim().is_empty() { return Err("purge id is empty".to_string()); }
     let pool = sqlite_pool(&db_instances).await?;
+    controlled_purge_with_pool(&pool, request).await
+}
+
+async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: ControlledPurgeRequest) -> Result<(), String> {
+    if request.id.trim().is_empty() { return Err("purge id is empty".to_string()); }
     let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
 
     let table = match request.kind {
@@ -894,8 +903,28 @@ pub async fn database_controlled_purge(
         ControlledPurgeKind::Training => "training_runs",
         ControlledPurgeKind::Research => "research_projects",
         ControlledPurgeKind::Target => "targets",
+        ControlledPurgeKind::TelepathicSeries => "telepathic_series",
     };
     ensure_archived(&mut tx, table, &request.id).await?;
+
+    if matches!(request.kind, ControlledPurgeKind::TelepathicSeries) {
+        let expected = request.expected_archive_revision.ok_or_else(|| "Telepathy purge requires the Deletion Preview archive revision.".to_string())?;
+        let actual: i64 = sqlx::query_scalar("SELECT COALESCE(json_extract(plan_json,'$._runtime.archiveRevision'),0) FROM telepathic_series WHERE id=$1")
+            .bind(&request.id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
+        if expected < 0 || expected != actual { return Err("Telepathy changed after Deletion Preview.".to_string()); }
+        let blocked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepathic_series WHERE id=$1 AND (status='running' OR (run_lease_owner IS NOT NULL AND (run_lease_expires_at IS NULL OR julianday(run_lease_expires_at) IS NULL OR run_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now'))))")
+            .bind(&request.id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
+        if blocked > 0 { return Err("Stop Telepathy execution or wait for its lease before deleting.".to_string()); }
+    }
+    if matches!(request.kind, ControlledPurgeKind::Profile | ControlledPurgeKind::Workspace) {
+        let sql = if matches!(request.kind, ControlledPurgeKind::Workspace) {
+            "SELECT COUNT(*) FROM telepathic_series s WHERE s.series_workspace_id=$1 OR EXISTS (SELECT 1 FROM telepathic_participants p WHERE p.series_id=s.id AND p.workspace_id=$1)"
+        } else {
+            "SELECT COUNT(*) FROM telepathic_series s WHERE s.series_workspace_id IN (SELECT id FROM workspaces WHERE profile_id=$1) OR EXISTS (SELECT 1 FROM telepathic_participants p WHERE p.series_id=s.id AND (p.profile_id=$1 OR p.workspace_id IN (SELECT id FROM workspaces WHERE profile_id=$1)))"
+        };
+        let count: i64 = sqlx::query_scalar(sql).bind(&request.id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
+        if count > 0 { return Err("Delete Telepathy series referencing this Profile/Workspace first.".to_string()); }
+    }
 
     if matches!(request.kind, ControlledPurgeKind::RvSession) {
         let research_owned: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rv_sessions WHERE id = $1 AND research_project_id IS NOT NULL")
@@ -960,6 +989,13 @@ pub async fn database_controlled_purge(
                 purge_exec(&mut tx, "DELETE FROM research_projects WHERE id = $1 AND archived_at IS NOT NULL", &request.id).await?;
             }
             ControlledPurgeKind::Target => { purge_exec(&mut tx, "DELETE FROM targets WHERE id = $1 AND collection = 'user' AND archived_at IS NOT NULL", &request.id).await?; }
+            ControlledPurgeKind::TelepathicSeries => {
+                // FK cascade is explicit in schema 028: participants, rounds,
+                // targets, blind, reflections and calls. Runtime evidence lives
+                // in plan_json. Global learning and external files are retained.
+                let affected = purge_exec(&mut tx, "DELETE FROM telepathic_series WHERE id=$1 AND json_type(plan_json,'$._runtime.archivedAt')='text' AND length(trim(json_extract(plan_json,'$._runtime.archivedAt')))>0", &request.id).await?;
+                if affected != 1 { return Err("Telepathy changed before deletion.".to_string()); }
+            }
         }
         Ok(())
     }.await;
@@ -976,6 +1012,64 @@ pub async fn database_controlled_purge(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn telepathic_purge_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::raw_sql("PRAGMA foreign_keys=ON; CREATE TABLE profiles(id TEXT PRIMARY KEY, archived_at TEXT); CREATE TABLE workspaces(id TEXT PRIMARY KEY, profile_id TEXT, archived_at TEXT); INSERT INTO profiles VALUES('p','t'); INSERT INTO workspaces VALUES('w','p','t'); CREATE TABLE controlled_purge_context(id INTEGER PRIMARY KEY,reason TEXT,started_at TEXT);")
+            .execute(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/028_telepathic_exchange_series.sql")).execute(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/029_telepathic_series_run_lease.sql")).execute(&pool).await.unwrap();
+        for id in ["one", "two"] {
+            sqlx::query("INSERT INTO telepathic_series(id,series_workspace_id,mode,language,status,config_json,plan_json,created_at,updated_at) VALUES($1,'w','ai_ai_training','en','paused','{}',$2,'t','t')")
+                .bind(id).bind(r#"{"_runtime":{"version":1,"archivedAt":"t","archiveRevision":1,"transcript":[{"text":"hidden"}]}}"#).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO telepathic_participants(series_id,participant_id,kind,display_name,profile_id,workspace_id) VALUES($1,'a','ai','A','p','w')").bind(id).execute(&pool).await.unwrap();
+            let round = format!("{id}-round");
+            sqlx::query("INSERT INTO telepathic_rounds(id,series_id,round_number,sender_participant_id,status) VALUES($1,$2,1,'a','blind')").bind(&round).bind(id).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO telepathic_targets(round_id,sender_participant_id,content,content_sha256,status,locked_at) VALUES($1,'a','secret','hash','locked','t')").bind(&round).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO telepathic_blind_submissions(round_id,participant_id,status,first_text,content_sha256,sealed_at) VALUES($1,'a','sealed','blind','hash','t')").bind(&round).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO telepathic_reflections(round_id,participant_id,role,reflection_text) VALUES($1,'a','receiver','reflection')").bind(&round).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO telepathic_provider_calls(id,series_id,round_id,participant_id,call_stage,technical_attempt,status,scope_key,request_sha256,created_at,updated_at) VALUES($1,$2,$3,'a','receiver_first',1,'succeeded','scope','hash','t','t')").bind(format!("{id}-call")).bind(id).bind(&round).execute(&pool).await.unwrap();
+        }
+        pool
+    }
+
+    fn telepathic_purge_request(id: &str, revision: i64) -> ControlledPurgeRequest {
+        serde_json::from_value(serde_json::json!({"kind":"telepathic_series","id":id,"expectedArchiveRevision":revision})).unwrap()
+    }
+
+    #[tokio::test]
+    async fn controlled_telepathic_purge_rechecks_revision_archive_lease_and_preserves_other_series() {
+        let pool = telepathic_purge_pool().await;
+        assert!(controlled_purge_with_pool(&pool, telepathic_purge_request("one", 0)).await.is_err());
+        sqlx::query("UPDATE telepathic_series SET plan_json=json_remove(plan_json,'$._runtime.archivedAt') WHERE id='one'").execute(&pool).await.unwrap();
+        assert!(controlled_purge_with_pool(&pool, telepathic_purge_request("one", 1)).await.is_err());
+        sqlx::query("UPDATE telepathic_series SET plan_json=json_set(plan_json,'$._runtime.archivedAt','t','$._runtime.archiveRevision',2),run_lease_owner='owner',run_lease_expires_at='2999-01-01T00:00:00.000Z' WHERE id='one'").execute(&pool).await.unwrap();
+        assert!(controlled_purge_with_pool(&pool, telepathic_purge_request("one", 2)).await.is_err());
+        let parent: ControlledPurgeRequest = serde_json::from_value(serde_json::json!({"kind":"workspace","id":"w"})).unwrap();
+        assert!(controlled_purge_with_pool(&pool, parent).await.is_err());
+        sqlx::query("UPDATE telepathic_series SET run_lease_expires_at='2000-01-01T00:00:00.000Z' WHERE id='one'").execute(&pool).await.unwrap();
+        controlled_purge_with_pool(&pool, telepathic_purge_request("one", 2)).await.unwrap();
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepathic_series WHERE id='two'").fetch_one(&pool).await.unwrap();
+        assert_eq!(remaining, 1);
+        let calls: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepathic_provider_calls").fetch_one(&pool).await.unwrap();
+        assert_eq!(calls, 1);
+        let check: String = sqlx::query_scalar("PRAGMA integrity_check").fetch_one(&pool).await.unwrap();
+        assert_eq!(check, "ok");
+        assert!(sqlx::query("PRAGMA foreign_key_check").fetch_all(&pool).await.unwrap().is_empty());
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn controlled_telepathic_purge_rolls_back_every_child_and_context_on_failure() {
+        let pool = telepathic_purge_pool().await;
+        sqlx::raw_sql("CREATE TRIGGER injected_purge_failure BEFORE DELETE ON telepathic_blind_submissions BEGIN SELECT RAISE(ABORT,'injected failure'); END;").execute(&pool).await.unwrap();
+        assert!(controlled_purge_with_pool(&pool, telepathic_purge_request("one", 1)).await.is_err());
+        let roots: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepathic_series").fetch_one(&pool).await.unwrap();
+        let targets: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepathic_targets").fetch_one(&pool).await.unwrap();
+        let context: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM controlled_purge_context").fetch_one(&pool).await.unwrap();
+        assert_eq!((roots, targets, context), (2, 2, 0));
+        pool.close().await;
+    }
 
     fn temp_read_case(label: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()

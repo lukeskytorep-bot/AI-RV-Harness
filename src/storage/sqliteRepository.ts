@@ -358,6 +358,7 @@ export class SqliteRepository implements AppRepository {
   purgeRvSession: AppRepository["purgeRvSession"] = (id) => this.controlledPurge.purge("rv_session", id);
   purgeTrainingRun: AppRepository["purgeTrainingRun"] = (id) => this.controlledPurge.purge("training", id);
   purgeResearchProject: AppRepository["purgeResearchProject"] = (id) => this.controlledPurge.purge("research", id);
+  purgeTelepathicSeries: AppRepository["purgeTelepathicSeries"] = (id,revision) => this.controlledPurge.purge("telepathic_series", id,revision);
   purgeTarget: AppRepository["purgeTarget"] = (id) => this.controlledPurge.purge("target", id);
   recordTargetUsage: AppRepository["recordTargetUsage"] = (input) => this.targetsRepository.recordTargetUsage(input);
   listTargetUsage: AppRepository["listTargetUsage"] = () => this.targetsRepository.listTargetUsage();
