@@ -19,7 +19,7 @@ describe("mounted shared telepathy UX",()=>{
   const toggle=container.querySelector<HTMLButtonElement>(".telepathic-history-toggle")!;await act(async()=>toggle.click());expect(container.querySelector("aside")?.hidden).toBe(true);expect(toggle.getAttribute("aria-expanded")).toBe("false");await act(async()=>toggle.click());expect(container.querySelector(".telepathic-history-card")).not.toBeNull();
  });
  it("orders lead first, isolates malformed Markdown and moves focus to section and back",async()=>{
-  const scroll=vi.fn();HTMLElement.prototype.scrollIntoView=scroll;
+  const scroll=vi.fn();HTMLElement.prototype.scrollTo=scroll;
   const participants=[{id:"a",displayName:"Duplicate name"},{id:"lead",displayName:"Duplicate name"},{id:"b",displayName:"B"}];
   await act(async()=>root.render(<TelepathicTranscript seriesId="s" roundId="r" leadId="lead" participants={participants} pl={false} events={[
    {id:"a-msg",seriesId:"s",roundId:"r",sequence:1,stage:"receiver_first",kind:"response",authorId:"a",recipientIds:[],text:"```\nopen fence",createdAt:"t"},

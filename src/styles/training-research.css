@@ -218,18 +218,43 @@
 .telepathic-history-archived { color:var(--muted); }
 .telepathic-icon-button { position:relative; padding:5px; display:inline-flex; }
 .telepathic-participant-nav { position:sticky; top:0; z-index:3; display:flex; flex-wrap:wrap; gap:6px; padding:8px; background:var(--panel-bg, var(--surface)); border-bottom:1px solid var(--border); }
-.telepathic-participant-section h3 { display:flex; gap:8px; align-items:center; padding-top:16px; font-size:20px; scroll-margin-top:120px; overflow-wrap:anywhere; }
+.telepathic-participant-section h3 { display:flex; gap:8px; align-items:center; padding:12px; font-size:20px; overflow-wrap:anywhere; border:1px solid var(--border); border-radius:14px; background:var(--surface-soft); }
+.telepathic-participant-section h3 > span { min-width:0; flex:1; }
 .telepathic-back { margin-left:auto; flex-shrink:0; }
-.telepathic-transcript-message { border:1px solid var(--border); border-radius:8px; padding:12px; margin:10px 0; overflow-wrap:anywhere; }
+.telepathic-transcript-message { border:1px solid var(--border); border-radius:14px; padding:12px; margin:10px 0; overflow-wrap:anywhere; }
 .telepathic-transcript-message small { opacity:.75; display:block; margin-bottom:8px; }
 @media(max-width:1220px) {
   .telepathic-with-history { flex-direction:column; }
   .telepathic-with-history > .telepathic-exchange-stack, .telepathic-history, .telepathic-history.collapsed { width:100%; flex-basis:auto; }
 }
-.telepathic-participant-nav { background:var(--surface-strong); }
+.telepathic-participant-nav { background:var(--surface-strong); max-height:30vh; overflow:auto; }
 
 .telepathic-transcript { max-height:75vh; overflow:auto; min-width:0; }
 .telepathic-transcript-message pre { overflow-x:auto; }
+
+/* Local accents inherit readable theme text; unrelated modules keep their styling. */
+.telepathic-transcript .telepathic-nav-button,
+.telepathic-transcript .telepathic-back { border-radius:999px; min-height:36px; border:1px solid color-mix(in srgb, var(--cyan) 48%, var(--border)); color:var(--text); background:color-mix(in srgb, var(--cyan) 12%, var(--surface-strong)); padding:7px 12px; cursor:pointer; }
+.telepathic-transcript .telepathic-nav-button { max-width:100%; white-space:normal; overflow-wrap:anywhere; text-align:left; }
+.telepathic-transcript .telepathic-nav-lead { border-color:color-mix(in srgb, var(--green) 48%, var(--border)); background:color-mix(in srgb, var(--green) 12%, var(--surface-strong)); }
+.telepathic-transcript .telepathic-back { display:inline-flex; align-items:center; justify-content:center; min-width:36px; padding:7px; border-color:color-mix(in srgb, var(--violet) 48%, var(--border)); background:color-mix(in srgb, var(--violet) 12%, var(--surface-strong)); }
+.telepathic-transcript .telepathic-nav-button:hover:not(:disabled),
+.telepathic-transcript .telepathic-back:hover:not(:disabled) { filter:brightness(1.12); border-color:var(--cyan); }
+.telepathic-transcript .telepathic-nav-lead:hover:not(:disabled) { border-color:var(--green); }
+.telepathic-transcript .telepathic-back:hover:not(:disabled) { border-color:var(--violet); }
+.telepathic-transcript .telepathic-nav-button:focus-visible,
+.telepathic-transcript .telepathic-back:focus-visible,
+.telepathic-participant-nav:focus-visible,
+.telepathic-participant-section h3:focus-visible { outline:2px solid var(--cyan); outline-offset:-2px; }
+.telepathic-transcript button:disabled { opacity:.5; cursor:not-allowed; }
+.telepathic-transcript .telepathic-message-author { display:block; padding:8px 10px; margin-bottom:8px; border-radius:10px; background:var(--surface-soft); }
+.telepathic-message-controller { border-left:3px solid var(--violet); }
+.telepathic-message-controller .telepathic-message-author { background:color-mix(in srgb, var(--violet) 12%, var(--surface)); }
+.telepathic-message-lead { border-left:3px solid var(--green); }
+.telepathic-message-lead .telepathic-message-author { background:color-mix(in srgb, var(--green) 12%, var(--surface)); }
+.telepathic-message-participant { border-left:3px solid var(--cyan); }
+.telepathic-message-participant .telepathic-message-author { background:color-mix(in srgb, var(--cyan) 12%, var(--surface)); }
+.telepathic-runtime-metrics > span { border-radius:14px; }
 
 /* Two local setup confirmations, shared by Training and Conversation. */
 .telepathic-setup-fields { border:0; padding:0; margin:0; min-width:0; display:grid; gap:12px; }
