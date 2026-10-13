@@ -9,12 +9,13 @@ interface Props {
   items: Item[];
   pl: boolean;
   busy: boolean;
+  loading?: boolean; error?: string | null; hasMore?: boolean; onLoadMore?(): void; onRetry?(): void;
   onOpen(id: string): void;
   onSave(id: string): void;
   onArchive(id: string, archived: boolean): void;
 }
 
-export function TelepathicHistory({ items, pl, busy, onOpen, onSave, onArchive, sessionKind = "training" }: Props) {
+export function TelepathicHistory({ items, pl, busy, onOpen, onSave, onArchive, sessionKind = "training", loading = false, error, hasMore = false, onLoadMore, onRetry }: Props) {
   const noun = sessionKind === "exchange" ? (pl ? "wymianę" : "exchange") : (pl ? "trening" : "training");
   const [open, setOpen] = useState(true);
   const panelId = useId();
@@ -38,6 +39,9 @@ export function TelepathicHistory({ items, pl, busy, onOpen, onSave, onArchive, 
         {item.archivedAt && <small className="telepathic-history-archived">{pl ? "Zarchiwizowano" : "Archived"}</small>}
       </div>
     </article>)}</div>
-    {!items.length && <p className="recent-session-empty">{pl ? "Brak zapisanych sesji." : "No saved sessions."}</p>}
+    {loading && <p role="status">{pl ? "Ładowanie historii…" : "Loading history…"}</p>}
+    {error && <div role="alert"><p>{pl ? "Nie udało się wczytać historii" : "Could not load history"}: {error}</p><button type="button" className="secondary-button" disabled={loading || busy} onClick={onRetry}>{pl ? "Spróbuj ponownie" : "Retry"}</button></div>}
+    {hasMore && <button type="button" className="secondary-button" disabled={loading || busy} onClick={onLoadMore}>{pl ? "Pokaż więcej" : "Load more"}</button>}
+    {!items.length && !loading && !error && <p className="recent-session-empty">{pl ? "Brak zapisanych sesji." : "No saved sessions."}</p>}
   </HistoryPanelShell>;
 }

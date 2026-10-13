@@ -1,8 +1,10 @@
+import type { TelepathicHistoryQuery, TelepathicHistoryPage } from "../../telepathicExchange/historySummaries";
 import type { TelepathicSeriesState } from "../../telepathicExchange/types";
 
 export interface TelepathicExchangeRepository {
   getTelepathicSeries(seriesId: string): Promise<TelepathicSeriesState | null>;
   listTelepathicSeries(seriesWorkspaceId?: string): Promise<TelepathicSeriesState[]>;
+  listTelepathicSeriesSummaries(query: TelepathicHistoryQuery): Promise<TelepathicHistoryPage>;
   saveTelepathicSeries(state: TelepathicSeriesState): Promise<void>;
   withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T>;
   assertTelepathicSeriesLease(seriesId: string): Promise<void>;

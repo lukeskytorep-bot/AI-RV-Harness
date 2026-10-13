@@ -1,3 +1,5 @@
+import { useTelepathicHistory } from "../../components/useTelepathicHistory";
+import { telepathicStatusLabel } from "../../telepathicExchange/historyStatus";
 import { TelepathicSetupStep } from "../../components/TelepathicSetupStep";
 import { useTelepathicSetupConfirmation } from "../../components/useTelepathicSetupConfirmation";
 import { telepathicStageLabel } from "../../telepathicExchange/stageLabels";
@@ -40,11 +42,8 @@ import {
 import { planTelepathicSeries } from "../../telepathicExchange/planner";
 import {
   buildTelepathicConversationView,
-  listTelepathicConversationSummaries,
   loadTelepathicConversationView,
   runTelepathicConversationUiAction,
-  telepathicConversationSummary,
-  type TelepathicConversationSeriesSummary,
   type TelepathicConversationSeriesView,
 } from "../../telepathicExchange/conversationView";
 import { resolveTelepathicAiRouteFromRepository } from "../../telepathicExchange/providerGateway";
@@ -110,9 +109,12 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   const [topic, setTopic] = useState<TelepathicTopic>("any");
   const [discloseTopic, setDiscloseTopic] = useState(false);
   const [activeSeries, setActiveSeries] = useState<TelepathicConversationSeriesView | null>(null);
-  const [seriesHistory, setSeriesHistory] = useState<TelepathicConversationSeriesSummary[]>([]);
+  const history = useTelepathicHistory(repository, "conversation_exchange", workspace.id);
+  const detailGeneration = useRef(0);
+  useEffect(() => () => { detailGeneration.current++; }, [repository, workspace.id, profiles, language]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setActiveSeries(null); setViewRoundId(null); }, [repository, workspace.id]);
   const [targetText, setTargetText] = useState("");
   const [targetImage, setTargetImage] = useState<File | null>(null);
   const [targetImageDescription, setTargetImageDescription] = useState("");
@@ -131,15 +133,16 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
     let cancelled = false;
     void (async () => {
       if (!repository) return;
-      const [configs, models] = await Promise.all([repository.listProviderConfigs(), repository.listProviderModels()]);
+      const epoch = ++detailGeneration.current;
+      const [configs, models, page] = await Promise.all([repository.listProviderConfigs(), repository.listProviderModels(), history.reset()]);
       const entries = await Promise.all(profiles.map(async (item) => [item.id, await listEligibleViewerIdentities({ repository, profileId: item.id, language, providerConfigs: configs, models })] as const));
       if (cancelled) return;
       setEligibleByProfile(Object.fromEntries(entries));
-      const history = await listTelepathicConversationSummaries(repository, workspace.id, true);
-      const recent = history.find(item=>!item.archivedAt) ?? null;
+      if (!page) return;
+      const recent = await history.recentActive(page);
+      if (cancelled || epoch !== detailGeneration.current) return;
       const recentView = recent ? await loadTelepathicConversationView(repository, recent.seriesId) : null;
-      if (!cancelled) {
-        setSeriesHistory(history);
+      if (!cancelled && epoch === detailGeneration.current) {
         setActiveSeries(recentView);
         setViewRoundId(recentView?.rounds[Math.min(recentView.currentRoundIndex, Math.max(0, recentView.rounds.length - 1))]?.assignment.roundId ?? null);
       }
@@ -255,6 +258,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
 
   const execute = async (task: () => Promise<TelepathicSeriesState>, recoverySeriesId = activeSeries?.config.seriesId): Promise<boolean> => {
     if (runGuardRef.current) return false;
+    detailGeneration.current++;
     runGuardRef.current = true;
     const epoch = executionEpoch.current;
     stopController.current = new AbortController();
@@ -265,8 +269,8 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
       const next = await runTelepathicConversationUiAction(task);
       if (epoch !== executionEpoch.current) return false;
       setActiveSeries(next);
-      const summary = telepathicConversationSummary(next);
-      setSeriesHistory((current) => [summary, ...current.filter((item) => item.seriesId !== summary.seriesId)]);
+      await history.reset();
+      if (epoch !== executionEpoch.current) return false;
       const nextVisible = next.rounds[Math.min(next.currentRoundIndex, Math.max(0, next.rounds.length - 1))];
       setViewRoundId(nextVisible?.assignment.roundId ?? null);
       return true;
@@ -278,8 +282,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
           const persisted = await loadTelepathicConversationView(repository, recoverySeriesId);
           if (persisted && epoch === executionEpoch.current) {
             setActiveSeries(persisted);
-            const summary = { seriesId: persisted.config.seriesId, roundCount: persisted.config.roundCount, status: persisted.status, updatedAt: persisted.updatedAt };
-            setSeriesHistory((current) => [summary, ...current.filter((item) => item.seriesId !== summary.seriesId)]);
+            await history.reset();
             const persistedVisible = persisted.rounds[Math.min(persisted.currentRoundIndex, Math.max(0, persisted.rounds.length - 1))];
             setViewRoundId(persistedVisible?.assignment.roundId ?? null);
           }
@@ -372,24 +375,39 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   };
 
   const openSeries = async (seriesId: string) => {
-    if (!repository) return;
-    const series = await loadTelepathicConversationView(repository, seriesId);
-    if (!series) return;
-    setActiveSeries(series);
-    const visible = series.rounds[Math.min(series.currentRoundIndex, Math.max(0, series.rounds.length - 1))];
-    setViewRoundId(visible?.assignment.roundId ?? null);
-    setError(null);
+    if (!repository || busy) return;
+    const epoch = ++detailGeneration.current;
+    try {
+      const series = await loadTelepathicConversationView(repository, seriesId);
+      if (epoch !== detailGeneration.current) return;
+      if (!series || series.config.seriesWorkspaceId !== workspace.id) throw new Error("Exchange not found in this Workspace.");
+      setActiveSeries(series);
+      const visible = series.rounds[Math.min(series.currentRoundIndex, Math.max(0, series.rounds.length - 1))];
+      setViewRoundId(visible?.assignment.roundId ?? null); setError(null);
+    } catch (cause) { if (epoch === detailGeneration.current) setError(cause instanceof Error ? cause.message : String(cause)); }
   };
+  const retryHistory = async () => {
+    const chooseInitial = history.items.length === 0 && !activeSeries;
+    const epoch = detailGeneration.current;
+    try {
+      const page = await history.retry();
+      if (!chooseInitial || !page || epoch !== detailGeneration.current) return;
+      const recent = await history.recentActive(page);
+      if (recent && epoch === detailGeneration.current) await openSeries(recent.seriesId);
+    } catch (cause) { if (epoch === detailGeneration.current) setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
 
   if (!repository || !profile) return <div className="panel telepathic-exchange-panel"><p>{pl ? "Repozytorium lub Profil nie jest gotowy." : "Repository or Profile is not ready."}</p></div>;
 
-  const historyPanel = <TelepathicHistory sessionKind="exchange" pl={pl} busy={busy} items={seriesHistory.map(item=>({id:item.seriesId,name:`${pl?"Wymiana":"Exchange"} · ${item.roundCount}`,status:item.status,updatedAt:item.updatedAt,archivedAt:item.archivedAt}))}
+  const historyPanel = <TelepathicHistory sessionKind="exchange" pl={pl} busy={busy} items={history.items.map(item=>({id:item.seriesId,name:`${pl?"Wymiana":"Exchange"} · ${item.roundCount}`,status:telepathicStatusLabel(item.status,pl),updatedAt:item.updatedAt,archivedAt:item.archivedAt}))}
+    loading={history.loading} error={history.error} hasMore={Boolean(history.nextCursor)} onLoadMore={()=>void history.loadMore()} onRetry={()=>void retryHistory()}
     onOpen={id=>{if(!busy)void openSeries(id);}}
     onSave={id=>void execute(async()=>{const state=await repository.getTelepathicSeries(id);if(!state)throw new Error("Series not found.");await saveTelepathicDocument(state);return state;})}
-    onArchive={(id,archived)=>void execute(()=>setTelepathicArchived(repository,id,archived)).then(async success=>{if(success){setActiveSeries(null);setSeriesHistory(await listTelepathicConversationSummaries(repository,workspace.id,true));}})}/>;
+    onArchive={(id,archived)=>void execute(()=>setTelepathicArchived(repository,id,archived)).then(async success=>{if(success){detailGeneration.current++;setActiveSeries(null);await history.reset();}})}/>;
 
   if (!activeSeries) return <div className="telepathic-with-history"><div className="telepathic-exchange-stack">
-    {seriesHistory.length > 0 && <section className="panel telepathic-exchange-panel">
+    {history.items.length > 0 && <section className="panel telepathic-exchange-panel">
       <div className="telepathic-section-heading"><div><RefreshCw size={18} /><span><strong>{pl ? "Zapisane wymiany" : "Saved exchanges"}</strong><small>{pl ? "Otwórz dowolną wcześniejszą serię, także wstrzymaną lub zablokowaną." : "Open any earlier series, including paused or blocked exchanges."}</small></span></div></div>
 
     </section>}
@@ -450,7 +468,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
     {activeSeries.metrics&&<TelepathicMetrics pl={pl} metrics={activeSeries.metrics}/>}
     {busy&&<button type="button" className="secondary-button" onClick={()=>stopController.current?.abort(new DOMException("Stopped by user","AbortError"))}>{pl?"Zatrzymaj":"Stop"}</button>}
     <section className="panel telepathic-exchange-panel">
-      <div className="telepathic-run-head"><div><RadioTower size={18} /><span><strong>{pl ? "Wymiana telepatyczna" : "Telepathic exchange"}</strong><small>{activeSeries.status} · {pl ? "runda" : "round"} {Math.min(activeSeries.currentRoundIndex + 1, activeSeries.rounds.length)}/{activeSeries.rounds.length}</small></span></div><div className="telepathic-run-actions"><button className="secondary-button" disabled={busy} onClick={() => void refreshSeries()}><RefreshCw size={14} />{pl ? "Odśwież" : "Refresh"}</button><button className="secondary-button" disabled={busy} onClick={() => { setActiveSeries(null); setViewRoundId(null); setError(null); }}>{pl ? "Nowa wymiana" : "New exchange"}</button></div></div>
+      <div className="telepathic-run-head"><div><RadioTower size={18} /><span><strong>{pl ? "Wymiana telepatyczna" : "Telepathic exchange"}</strong><small>{activeSeries.status} · {pl ? "runda" : "round"} {Math.min(activeSeries.currentRoundIndex + 1, activeSeries.rounds.length)}/{activeSeries.rounds.length}</small></span></div><div className="telepathic-run-actions"><button className="secondary-button" disabled={busy} onClick={() => void refreshSeries()}><RefreshCw size={14} />{pl ? "Odśwież" : "Refresh"}</button><button className="secondary-button" disabled={busy} onClick={() => { detailGeneration.current++; setActiveSeries(null); setViewRoundId(null); setError(null); }}>{pl ? "Nowa wymiana" : "New exchange"}</button></div></div>
       <div className="telepathic-schedule compact">{activeSeries.plan.rounds.map((item) => { const round = activeSeries.rounds[item.roundNumber - 1]; const selectable = Boolean(round && (round.revealedAt || item.roundNumber <= activeSeries.currentRoundIndex + 1)); return <button type="button" key={item.roundId} disabled={busy || !selectable} className={item.roundId === visibleRound?.assignment.roundId ? "active" : ""} onClick={() => setViewRoundId(item.roundId)}><strong>{item.roundNumber}</strong> → {participantName(item.senderParticipantId)}</button>; })}</div>
     </section>
 

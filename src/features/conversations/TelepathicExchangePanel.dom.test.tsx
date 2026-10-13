@@ -1,3 +1,4 @@
+import { historyPage, validateHistoryQuery, type TelepathicHistoryQuery } from "../../telepathicExchange/historySummaries";
 // @vitest-environment jsdom
 import {act} from "react";
 import {createRoot,type Root} from "react-dom/client";
@@ -19,6 +20,12 @@ function fixture(legacy=false){
  const config:TelepathicSeriesConfig={schemaVersion:1,protocolVersion:legacy?undefined:"fixed_lead_v1",leadInstructionVersion:"v1",maxGuidanceCycles:3,seriesId:"mounted",seriesWorkspaceId:"w",mode:"conversation_exchange",language:"en",participants,roundCount:2,topic:"any",discloseTopicToReceivers:false,senderPolicy:{kind:"fixed_ai",participantId:"a"}};
  const state=createTelepathicSeriesState(config);state.status="paused";
  const repository={listProviderConfigs:vi.fn(async()=>[]),listProviderModels:vi.fn(async()=>[]),listTelepathicSeries:vi.fn(async()=>[state]),getTelepathicSeries:vi.fn(async()=>structuredClone(state))} as unknown as AppRepository;
+ vi.mocked(repository).listTelepathicSeriesSummaries=vi.fn(async(query:TelepathicHistoryQuery)=>{
+  const limit=validateHistoryQuery(query);
+  const states=await repository.listTelepathicSeries();
+  return historyPage(states.filter(item=>item.config.mode===query.mode && (!query.seriesWorkspaceId || item.config.seriesWorkspaceId===query.seriesWorkspaceId) && (query.archive==="all" || Boolean(item.archivedAt)===(query.archive==="archived")) && (!query.cursor || item.updatedAt<query.cursor.updatedAt || (item.updatedAt===query.cursor.updatedAt && item.config.seriesId<query.cursor.seriesId))).map(item=>({seriesId:item.config.seriesId,mode:item.config.mode,seriesWorkspaceId:item.config.seriesWorkspaceId,status:item.status,roundCount:item.config.roundCount,createdAt:item.createdAt,updatedAt:item.updatedAt,archivedAt:item.archivedAt,participantNames:item.config.participants.map(p=>p.displayName)})),limit);
+ });
+
  const render=async(workspaceId="w")=>act(async()=>root.render(<TelepathicExchangePanel copy={getCopy("en")} settings={{...createDefaultSettings(),interfaceLanguage:"en",sessionLanguage:"en"}} profile={{id:"human",name:"Human"} as Profile} workspace={{id:workspaceId} as Workspace} profiles={[]} workspaces={[]} repository={repository}/>));
  return {state,repository,render};
 }

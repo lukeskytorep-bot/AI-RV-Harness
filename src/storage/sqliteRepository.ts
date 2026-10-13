@@ -175,6 +175,7 @@ export class SqliteRepository implements AppRepository {
   listArchivedTrainingRuns: AppRepository["listArchivedTrainingRuns"] = () => this.trainingRepository.listArchivedTrainingRuns();
   getTelepathicSeries: AppRepository["getTelepathicSeries"] = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeries(seriesId);
   listTelepathicSeries: AppRepository["listTelepathicSeries"] = (seriesWorkspaceId) => this.telepathicExchangeRepository.listTelepathicSeries(seriesWorkspaceId);
+  listTelepathicSeriesSummaries: AppRepository["listTelepathicSeriesSummaries"] = (query) => this.telepathicExchangeRepository.listTelepathicSeriesSummaries(query);
   saveTelepathicSeries: AppRepository["saveTelepathicSeries"] = (state) => this.telepathicExchangeRepository.saveTelepathicSeries(state);
   withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T> {
     return this.telepathicExchangeRepository.withTelepathicSeriesLease(seriesId, task);

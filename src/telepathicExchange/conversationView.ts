@@ -1,3 +1,4 @@
+import type { TelepathicHistoryPage, TelepathicHistoryCursor } from "./historySummaries";
 import { visibleTranscript } from "./transcript";
 import { telepathicRuntimeMetrics } from "./runtimeMetrics";
 import type { TelepathicExchangeRepository } from "../storage/contracts/telepathicExchangeRepository";
@@ -201,9 +202,9 @@ export async function loadTelepathicConversationView(repository: TelepathicExcha
   return state ? buildTelepathicConversationView(state) : null;
 }
 
-export async function listTelepathicConversationSummaries(repository: TelepathicExchangeRepository, seriesWorkspaceId: string, includeArchived = false): Promise<TelepathicConversationSeriesSummary[]> {
-  const states = await repository.listTelepathicSeries(seriesWorkspaceId);
-  return states.filter((state) => state.config.mode === "conversation_exchange" && (includeArchived || !state.archivedAt)).map(telepathicConversationSummary);
+export async function listTelepathicConversationSummaries(repository: TelepathicExchangeRepository, seriesWorkspaceId: string, includeArchived = false, cursor?: TelepathicHistoryCursor): Promise<TelepathicHistoryPage> {
+  const page = await repository.listTelepathicSeriesSummaries({ mode: "conversation_exchange", seriesWorkspaceId, archive: includeArchived ? "all" : "active", limit: 50, ...(cursor ? { cursor } : {}) });
+  return page;
 }
 
 export async function runTelepathicConversationUiAction(task: () => Promise<TelepathicSeriesState>): Promise<TelepathicConversationSeriesView> {

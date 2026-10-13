@@ -1,3 +1,4 @@
+import { useTelepathicHistory } from "../../components/useTelepathicHistory";
 import { TelepathicSetupStep } from "../../components/TelepathicSetupStep";
 import { useTelepathicSetupConfirmation } from "../../components/useTelepathicSetupConfirmation";
 import { telepathicStageLabel } from "../../telepathicExchange/stageLabels";
@@ -76,7 +77,9 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
   const [topic, setTopic] = useState<TelepathicTopic>("any");
   const [discloseTopic, setDiscloseTopic] = useState(false);
   const [activeSeries, setActiveSeries] = useState<TelepathicSeriesState | null>(null);
-  const [history, setHistory] = useState<TelepathicSeriesState[]>([]);
+  const history = useTelepathicHistory(repository, "ai_ai_training");
+  const detailGeneration = useRef(0);
+  useEffect(() => () => { detailGeneration.current++; }, [repository, profiles, language]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewRoundId, setViewRoundId] = useState<string | null>(null);
@@ -98,28 +101,27 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
     setViewRoundId(roundId ?? state.rounds[Math.min(state.currentRoundIndex, Math.max(0, state.rounds.length - 1))]?.assignment.roundId ?? null);
   };
 
-  const refreshHistory = async () => {
-    if (!repository) return;
-    const all = await repository.listTelepathicSeries();
-    setHistory(all.filter((item) => item.config.mode === "ai_ai_training").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
-  };
+  const refreshHistory = history.reset;
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       if (!repository) return;
-      const [configs, models, all] = await Promise.all([
+      const epoch = ++detailGeneration.current;
+      const [configs, models, page] = await Promise.all([
         repository.listProviderConfigs(),
         repository.listProviderModels(),
-        repository.listTelepathicSeries(),
+        history.reset(),
       ]);
       const entries = await Promise.all(profiles.map(async (profile) => [profile.id, await listEligibleViewerIdentities({ repository, profileId: profile.id, language, providerConfigs: configs, models })] as const));
       if (cancelled) return;
       setEligibleByProfile(Object.fromEntries(entries));
-      const trainingHistory = all.filter((item) => item.config.mode === "ai_ai_training").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-      setHistory(trainingHistory);
-      const recent = trainingHistory.find(item=>!item.archivedAt) ?? null;
-      applyActiveSeries(recent ? structuredClone(recent) : null);
+      if (!page) return;
+      const recent = await history.recentActive(page);
+      if (cancelled || epoch !== detailGeneration.current) return;
+      const state = recent ? await repository.getTelepathicSeries(recent.seriesId) : null;
+      if (!cancelled && epoch === detailGeneration.current) applyActiveSeries(state);
+
     })().catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause)); });
     return () => { cancelled = true; };
   }, [repository, profiles, language]);
@@ -197,6 +199,7 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
     recoverySeriesId?: string,
   ): Promise<TelepathicSeriesState | null> => {
     if (runGuard.current) return null;
+    detailGeneration.current++;
     runGuard.current = true;
     stopController.current = new AbortController();
     onBusyChange?.(true);
@@ -262,11 +265,25 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
 
   const openSeries = async (seriesId: string) => {
     if (!repository || busy) return;
-    const state = await repository.getTelepathicSeries(seriesId);
-    if (!state || state.config.mode !== "ai_ai_training") return;
-    applyActiveSeries(state);
-    setError(null);
+    const epoch = ++detailGeneration.current;
+    try {
+      const state = await repository.getTelepathicSeries(seriesId);
+      if (epoch !== detailGeneration.current) return;
+      if (!state || state.config.mode !== "ai_ai_training") throw new Error("Training series not found.");
+      applyActiveSeries(state); setError(null);
+    } catch (cause) { if (epoch === detailGeneration.current) setError(cause instanceof Error ? cause.message : String(cause)); }
   };
+  const retryHistory = async () => {
+    const chooseInitial = history.items.length === 0 && !activeSeries;
+    const epoch = detailGeneration.current;
+    try {
+      const page = await history.retry();
+      if (!chooseInitial || !page || epoch !== detailGeneration.current) return;
+      const recent = await history.recentActive(page);
+      if (recent && epoch === detailGeneration.current) await openSeries(recent.seriesId);
+    } catch (cause) { if (epoch === detailGeneration.current) setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
 
   const recoverBlocked = async () => {
     if (!activeSeries || activeSeries.archivedAt) return;
@@ -329,7 +346,7 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
 
     {activeSeries && <>
       <TelepathicMetrics metrics={telepathicRuntimeMetrics(activeSeries)} pl={pl}/>
-      <section className="panel telepathic-exchange-panel"><div className="telepathic-section-heading"><div><GraduationCap size={18} /><span><strong>{pl ? "Aktywny trening" : "Active training"}</strong><small>{stateLabel(activeSeries.status, pl)} · {activeSeries.currentRoundIndex}/{activeSeries.rounds.length} {pl ? "ukończonych rund" : "rounds completed"}</small></span></div><button className="secondary-button" disabled={busy} onClick={() => { applyActiveSeries(null); setError(null); }}>{pl ? "Nowy trening" : "New training"}</button></div><div className="telepathic-status-grid"><span><small>{pl ? "Uczestnicy" : "Participants"}</small><strong>{activeSeries.config.participants.map((item) => item.displayName).join(" · ")}</strong></span><span><small>{pl ? "Temat" : "Topic"}</small><strong>{topicLabel(activeSeries.config.topic, pl)} · {activeSeries.config.discloseTopicToReceivers ? (pl ? "jawny" : "visible") : (pl ? "ukryty" : "hidden")}</strong></span><span><small>Viewer Learning</small><strong>{pl ? "zamrożony · tylko odczyt" : "frozen · read-only"}</strong><small>{activeSeries.config.participants.map((item) => `${item.displayName}: FG ${item.fieldGuide ? `v${item.fieldGuide.version}` : "—"} · VN ${item.viewerNotes ? `v${item.viewerNotes.version}` : "—"}`).join(" | ")}</small></span></div><div className="training-actions">{busy ? <><button className="secondary-button" onClick={() => { pauseRequested.current = true; stopController.current?.abort(new DOMException("Stopped by user","AbortError")); }}><CircleStop size={15} />{pl ? "Zatrzymaj" : "Stop"}</button><span>{pl ? "Trening działa…" : "Training is running…"}</span></> : activeSeries.archivedAt ? <span>{pl ? "Zarchiwizowano · tylko odczyt. Przywróć trening z historii, aby kontynuować." : "Archived · read-only. Restore the training from history to continue."}</span> : <><button className="primary-button" disabled={(activeSeries.status === "completed" && Object.keys(activeSeries.finalReflections).length >= activeSeries.config.participants.filter(p=>p.kind==="ai").length) || activeSeries.status === "cancelled" || activeSeries.status === "blocked" || unresolved.length > 0 || Boolean(activeSeries.archivedAt)} onClick={() => void runRemaining()}><Play size={15} />{pl ? "Uruchom / kontynuuj" : "Run / continue"}</button>{activeSeries.status === "blocked" && unresolved.length === 0 && <button className="secondary-button" onClick={() => void recoverBlocked()}>{pl ? "Odblokuj i wznów z checkpointu" : "Unblock and resume from checkpoint"}</button>}</>}</div>{activeSeries.status === "blocked" && currentViewRound?.blockedReason && <div className="training-requirement-note"><span>{currentViewRound.blockedReason}</span></div>}</section>
+      <section className="panel telepathic-exchange-panel"><div className="telepathic-section-heading"><div><GraduationCap size={18} /><span><strong>{pl ? "Aktywny trening" : "Active training"}</strong><small>{stateLabel(activeSeries.status, pl)} · {activeSeries.currentRoundIndex}/{activeSeries.rounds.length} {pl ? "ukończonych rund" : "rounds completed"}</small></span></div><button className="secondary-button" disabled={busy} onClick={() => { detailGeneration.current++; applyActiveSeries(null); setError(null); }}>{pl ? "Nowy trening" : "New training"}</button></div><div className="telepathic-status-grid"><span><small>{pl ? "Uczestnicy" : "Participants"}</small><strong>{activeSeries.config.participants.map((item) => item.displayName).join(" · ")}</strong></span><span><small>{pl ? "Temat" : "Topic"}</small><strong>{topicLabel(activeSeries.config.topic, pl)} · {activeSeries.config.discloseTopicToReceivers ? (pl ? "jawny" : "visible") : (pl ? "ukryty" : "hidden")}</strong></span><span><small>Viewer Learning</small><strong>{pl ? "zamrożony · tylko odczyt" : "frozen · read-only"}</strong><small>{activeSeries.config.participants.map((item) => `${item.displayName}: FG ${item.fieldGuide ? `v${item.fieldGuide.version}` : "—"} · VN ${item.viewerNotes ? `v${item.viewerNotes.version}` : "—"}`).join(" | ")}</small></span></div><div className="training-actions">{busy ? <><button className="secondary-button" onClick={() => { pauseRequested.current = true; stopController.current?.abort(new DOMException("Stopped by user","AbortError")); }}><CircleStop size={15} />{pl ? "Zatrzymaj" : "Stop"}</button><span>{pl ? "Trening działa…" : "Training is running…"}</span></> : activeSeries.archivedAt ? <span>{pl ? "Zarchiwizowano · tylko odczyt. Przywróć trening z historii, aby kontynuować." : "Archived · read-only. Restore the training from history to continue."}</span> : <><button className="primary-button" disabled={(activeSeries.status === "completed" && Object.keys(activeSeries.finalReflections).length >= activeSeries.config.participants.filter(p=>p.kind==="ai").length) || activeSeries.status === "cancelled" || activeSeries.status === "blocked" || unresolved.length > 0 || Boolean(activeSeries.archivedAt)} onClick={() => void runRemaining()}><Play size={15} />{pl ? "Uruchom / kontynuuj" : "Run / continue"}</button>{activeSeries.status === "blocked" && unresolved.length === 0 && <button className="secondary-button" onClick={() => void recoverBlocked()}>{pl ? "Odblokuj i wznów z checkpointu" : "Unblock and resume from checkpoint"}</button>}</>}</div>{activeSeries.status === "blocked" && currentViewRound?.blockedReason && <div className="training-requirement-note"><span>{currentViewRound.blockedReason}</span></div>}</section>
 
       {unresolved.length > 0 && <section className="panel telepathic-exchange-panel"><strong>{pl ? "Niepewne wywołania providera" : "Uncertain provider calls"}</strong><p>{pl ? "Nie zostaną ponowione automatycznie. Dostawca mógł już przetworzyć wiadomość. Ponowienie może oznaczać dodatkowy koszt; limit dwóch prób nadal obowiązuje." : "They will not be retried automatically. If you explicitly treat an attempt as failed, the normal two-attempt limit still applies."}</p><div className="telepathic-series-history">{unresolved.map((call) => <button type="button" className="secondary-button telepathic-series-history-item" key={call.id} disabled={busy} onClick={() => void resolveUncertain(call.id)}><span><strong>{telepathicStageLabel(call.callStage,pl)} · {activeSeries.config.participants.find(p=>p.id===call.participantId)?.displayName??call.participantId}</strong><small>{call.roundId} · attempt {call.technicalAttempt}</small></span><span>{call.technicalAttempt<2 ? (pl ? "Zezwól na ponowienie" : "Allow retry") : (pl?"Rozstrzygnij wyczerpaną próbę":"Resolve exhausted attempt")}</span></button>)}</div></section>}
 
@@ -340,7 +357,8 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
     </>}
 
     {error && <div className="error-banner">{error}</div>}
-  </div><TelepathicHistory pl={pl} busy={busy} items={history.map(item=>({id:item.config.seriesId,name:item.config.participants.map(p=>p.displayName).join(" · "),status:stateLabel(item.status,pl),updatedAt:item.updatedAt,archivedAt:item.archivedAt}))}
+  </div><TelepathicHistory pl={pl} busy={busy} items={history.items.map(item=>({id:item.seriesId,name:item.participantNames.join(" · "),status:stateLabel(item.status,pl),updatedAt:item.updatedAt,archivedAt:item.archivedAt}))}
+    loading={history.loading} error={history.error} hasMore={Boolean(history.nextCursor)} onLoadMore={()=>void history.loadMore()} onRetry={()=>void retryHistory()}
     onOpen={id=>void openSeries(id)} onSave={id=>void withBusy(async()=>{const state=await repository.getTelepathicSeries(id);if(state) await saveTelepathicDocument(state);})}
     onArchive={(id,archived)=>void withBusy(async()=>{await setTelepathicArchived(repository,id,archived);if(activeSeries?.config.seriesId===id)applyActiveSeries(null);})}/></div>;
 }

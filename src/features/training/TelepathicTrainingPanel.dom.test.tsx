@@ -1,3 +1,4 @@
+import { historyPage, validateHistoryQuery, type TelepathicHistoryQuery } from "../../telepathicExchange/historySummaries";
 // @vitest-environment jsdom
 import {act} from "react";
 import {createRoot,type Root} from "react-dom/client";
@@ -19,6 +20,12 @@ describe("telepathic Training mounted actions",()=>{
   const config:TelepathicSeriesConfig={schemaVersion:1,protocolVersion:"fixed_lead_v1",leadInstructionVersion:"v1",maxGuidanceCycles:3,seriesId:"mounted",seriesWorkspaceId:"w",mode:"ai_ai_training",language:"en",participants,roundCount:2,topic:"any",discloseTopicToReceivers:false,senderPolicy:{kind:"fixed_ai",participantId:"lead"}};
   const state=createTelepathicSeriesState(config);state.status="paused";
   const repository={listProviderConfigs:vi.fn(async()=>[]),listProviderModels:vi.fn(async()=>[]),listTelepathicSeries:vi.fn(async()=>[state]),getTelepathicSeries:vi.fn(async()=>state)} as unknown as AppRepository;
+ vi.mocked(repository).listTelepathicSeriesSummaries=vi.fn(async(query:TelepathicHistoryQuery)=>{
+  const limit=validateHistoryQuery(query);
+  const states=await repository.listTelepathicSeries();
+  return historyPage(states.filter(item=>item.config.mode===query.mode && (!query.seriesWorkspaceId || item.config.seriesWorkspaceId===query.seriesWorkspaceId) && (query.archive==="all" || Boolean(item.archivedAt)===(query.archive==="archived")) && (!query.cursor || item.updatedAt<query.cursor.updatedAt || (item.updatedAt===query.cursor.updatedAt && item.config.seriesId<query.cursor.seriesId))).map(item=>({seriesId:item.config.seriesId,mode:item.config.mode,seriesWorkspaceId:item.config.seriesWorkspaceId,status:item.status,roundCount:item.config.roundCount,createdAt:item.createdAt,updatedAt:item.updatedAt,archivedAt:item.archivedAt,participantNames:item.config.participants.map(p=>p.displayName)})),limit);
+ });
+
   let signal:AbortSignal|undefined;mock.run.mockImplementation((deps:{signal:AbortSignal})=>{signal=deps.signal;return new Promise((_resolve,reject)=>signal!.addEventListener("abort",()=>reject(new DOMException("Stopped","AbortError")),{once:true}));});
   await act(async()=>root.render(<TelepathicTrainingPanel copy={getCopy("en")} settings={{...createDefaultSettings(),interfaceLanguage:"en",sessionLanguage:"en"}} profiles={[]} workspaces={[]} repository={repository}/>));
   expect(container.textContent).not.toContain("Run preflight");expect(container.textContent).not.toContain("Generate final");

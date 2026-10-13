@@ -1,3 +1,4 @@
+import { validateHistoryQuery, validateHistorySummary, type TelepathicHistoryQuery, type TelepathicHistoryPage, type TelepathicSeriesSummary } from "../../telepathicExchange/historySummaries";
 import { serializeTelepathicPlan, restoreTelepathicRuntime, assertArchiveRevision } from "../../telepathicExchange/persistence";
 import type { DatabaseTransactionStatement, DatabaseWriteResult } from "../databaseNative";
 import type { TelepathicExchangeRepository } from "../contracts/telepathicExchangeRepository";
@@ -177,6 +178,30 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
   }
 
 
+
+  async listTelepathicSeriesSummaries(query: TelepathicHistoryQuery): Promise<TelepathicHistoryPage> {
+    const limit = validateHistoryQuery(query);
+    const values: unknown[] = [];
+    const bind = (value: unknown) => { values.push(value); return `$${values.length}`; };
+    const where = [`mode=${bind(query.mode)}`];
+    if (query.seriesWorkspaceId !== undefined) where.push(`series_workspace_id=${bind(query.seriesWorkspaceId)}`);
+    if (query.archive !== "all") where.push(`(json_type(plan_json,'$._runtime.archivedAt') NOT IN ('text','null') OR COALESCE(json_extract(plan_json,'$._runtime.archivedAt'),'') ${query.archive === "active" ? "=" : "<>"} '')`);
+    if (query.cursor) where.push(`(updated_at < ${bind(query.cursor.updatedAt)} OR (updated_at = ${bind(query.cursor.updatedAt)} AND id < ${bind(query.cursor.seriesId)}))`);
+    const rows = await this.dependencies.select<Array<{ id: string; mode: TelepathicSeriesSummary["mode"]; series_workspace_id: string; status: TelepathicSeriesSummary["status"]; round_count: number; created_at: string; updated_at: string; archived_at: string | null; archive_type: string | null }>>(
+      `SELECT id, mode, series_workspace_id, status, json_extract(config_json,'$.roundCount') AS round_count, created_at, updated_at, json_extract(plan_json,'$._runtime.archivedAt') AS archived_at, json_type(plan_json,'$._runtime.archivedAt') AS archive_type FROM telepathic_series WHERE ${where.join(" AND ")} ORDER BY updated_at DESC, id DESC LIMIT ${bind(limit + 1)}`, values);
+    if (!rows.length) return { items: [] };
+    const pageRows = rows.slice(0, limit);
+    if (pageRows.some(row => row.archive_type !== null && row.archive_type !== "null" && row.archive_type !== "text")) throw new Error("Invalid telepathic archive metadata.");
+    const names = await this.dependencies.select<Array<{ series_id: string; display_name: string }>>(
+      `SELECT series_id, display_name FROM telepathic_participants WHERE series_id IN (${pageRows.map((_, index) => `$${index + 1}`).join(",")}) ORDER BY rowid`, pageRows.map(row => row.id));
+    const bySeries = new Map<string, string[]>();
+    for (const name of names) { const list = bySeries.get(name.series_id) ?? []; list.push(name.display_name); bySeries.set(name.series_id, list); }
+    const items = pageRows.map(row => validateHistorySummary({ seriesId: row.id, mode: row.mode, seriesWorkspaceId: row.series_workspace_id,
+      status: row.status, roundCount: row.round_count, createdAt: row.created_at, updatedAt: row.updated_at,
+      ...(row.archived_at === null || row.archived_at === "" ? {} : { archivedAt: row.archived_at }), participantNames: bySeries.get(row.id) ?? [] }));
+    const last = items.at(-1)!;
+    return { items, ...(rows.length > limit ? { nextCursor: { updatedAt: last.updatedAt, seriesId: last.seriesId } } : {}) };
+  }
 
   async listTelepathicSeries(seriesWorkspaceId?: string): Promise<TelepathicSeriesState[]> {
     const rows = await this.dependencies.select<Array<{ id: string }>>(
