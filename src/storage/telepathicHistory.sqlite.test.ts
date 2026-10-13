@@ -40,6 +40,21 @@ function database() {
   }, executeWrite: write, executeTransaction: async statements => { db.exec("BEGIN"); try { for (const statement of statements) await write(statement.query, statement.values); db.exec("COMMIT"); } catch (error) { db.exec("ROLLBACK"); throw error; } }, executeFencedTransaction: async () => { throw new Error("No leased writes in read-only history fixture"); } });
   return { db, repository, reset() { selects = 0; resultBytes = 0; }, counts() { return { selects, resultBytes }; } };
 }
+
+it("UX-TEL-4 active filter runs before LIMIT with >50 newer archives and exactly two SQLite reads per nonempty page",async()=>{
+ const native=database();const browser=new BrowserTelepathicExchangeRepository({storage:new MemoryStorage()});try{
+  for(let i=0;i<162;i++){
+   const s=fixture(i);s.config.mode="ai_ai_training";s.config.seriesWorkspaceId="w";s.archivedAt=i>=61?"2026-10-12T00:00:00Z":undefined;s.archiveRevision=i>=61?1:0;
+   await native.repository.saveTelepathicSeries(s);await browser.saveTelepathicSeries(s);
+  }
+  const detail=vi.spyOn(native.repository,"getTelepathicSeries");let cursor:TelepathicHistoryQuery["cursor"];const all:string[]=[];
+  for(const count of [50,11]){
+   const q:TelepathicHistoryQuery={mode:"ai_ai_training",seriesWorkspaceId:"w",archive:"active",limit:50,cursor};native.reset();const p=await native.repository.listTelepathicSeriesSummaries(q);
+   expect(native.counts().selects).toBe(2);expect(p).toEqual(await browser.listTelepathicSeriesSummaries(q));expect(p.items).toHaveLength(count);all.push(...p.items.map(s=>s.seriesId));cursor=p.nextCursor;
+  }
+  expect(cursor).toBeUndefined();expect(new Set(all).size).toBe(61);expect(detail).not.toHaveBeenCalled();
+ }finally{native.db.close();}
+});
 for (const mode of ["ai_ai_training", "conversation_exchange"] as const) for (const archive of ["all", "active", "archived"] as const) it(`Browser/real schema31 SQLite pages agree: ${mode}/${archive}, ties and stable participant order`, async () => {
   const native = database(); const storage = new MemoryStorage(); const browser = new BrowserTelepathicExchangeRepository({ storage });
   try {

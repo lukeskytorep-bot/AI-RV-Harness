@@ -20,7 +20,7 @@ beforeEach(() => { (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REA
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); });
 const button = (text: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === text)!;
 async function click(element: HTMLButtonElement) { await act(async () => { element.click(); }); }
-function state(index: number, mode: TelepathicMode, archived = index > 0, workspace = "w") {
+function state(index: number, mode: TelepathicMode, archived = false, workspace = "w") {
   const ai = (id: string) => ({ id, kind: "ai" as const, displayName: id, ai: { profileId: id, profileName: id, workspaceId: "w", aiIdentityId: id, providerConfigId: "c", credentialId: "k", credentialFingerprint: "f", modelId: "m", route: "m" } });
   const result = createTelepathicSeriesState({ schemaVersion: 1, seriesId: `s-${String(index).padStart(3, "0")}`, seriesWorkspaceId: workspace, mode, language: "en", protocolVersion: "fixed_lead_v1", leadInstructionVersion: "v1", maxGuidanceCycles: 3, participants: [ai("lead"), ai("receiver")], senderPolicy: { kind: "fixed_ai", participantId: "lead" }, roundCount: 1, topic: "any", discloseTopicToReceivers: false }, new Date(Date.UTC(2026, 9, 13, 1, index)).toISOString());
   result.status = "paused"; if (archived) { result.archivedAt = "archive"; result.archiveRevision = 1; }
@@ -37,14 +37,14 @@ async function fixture(mode: TelepathicMode, pl = false, count = 61) {
   });
   return { repository, page, detail, full, save, dispatch, render };
 }
-for (const mode of ["ai_ai_training", "conversation_exchange"] as const) for (const pl of [false, true]) it(`${mode}/${pl ? 'PL' : 'EN'} pages 50+11, selects old active via lightweight fallback, exports one detail`, async () => {
-  const f = await fixture(mode, pl); await f.render();
-  expect(f.page.mock.calls[0][0]).toEqual({ mode, ...(mode === "conversation_exchange" ? { seriesWorkspaceId: "w" } : {}), archive: "all", limit: 50 });
-  expect(f.page.mock.calls[1][0]).toMatchObject({ mode, archive: "active", limit: 1 });
-  expect(host.querySelectorAll(".telepathic-history article")).toHaveLength(50); expect(f.detail.mock.calls).toEqual([["s-000"]]);
+for (const mode of ["ai_ai_training", "conversation_exchange"] as const) for (const pl of [false, true]) it(`${mode}/${pl ? 'PL' : 'EN'} pages 50+11, ignores 61 newer archives before paging active rows, exports one detail`, async () => {
+  const f = await fixture(mode, pl); for(let i=61;i<122;i++)await f.repository.saveTelepathicSeries(state(i,mode,true)); f.save.mockClear(); await f.render();
+  expect(f.page.mock.calls[0][0]).toEqual({ mode, ...(mode === "conversation_exchange" ? { seriesWorkspaceId: "w" } : {}), archive: "active", limit: 50 });
+  expect(f.page).toHaveBeenCalledTimes(1);
+  expect(host.querySelectorAll(".telepathic-history article")).toHaveLength(50); expect(f.detail.mock.calls).toEqual([["s-060"]]);
   const viewed = host.querySelector(".telepathic-round-tabs button.active, .telepathic-schedule button.active")?.textContent;
   await click(button(pl ? "Pokaż więcej" : "Load more"));
-  expect(f.page.mock.calls[2][0].cursor).toBeTruthy(); expect(host.querySelectorAll(".telepathic-history article")).toHaveLength(61);
+  expect(f.page.mock.calls[1][0].cursor).toBeTruthy(); expect(host.querySelectorAll(".telepathic-history article")).toHaveLength(61);
   const toggle = host.querySelector<HTMLButtonElement>(".training-history-toggle")!; await click(toggle); await click(toggle);
   expect(host.querySelector(".telepathic-round-tabs button.active, .telepathic-schedule button.active")?.textContent).toBe(viewed);
   expect(f.full).not.toHaveBeenCalled(); expect(f.save).not.toHaveBeenCalled(); expect(f.dispatch).not.toHaveBeenCalled();
@@ -91,10 +91,10 @@ for (const mode of ["ai_ai_training", "conversation_exchange"] as const) it(`${m
 
 for (const mode of ["ai_ai_training", "conversation_exchange"] as const) for (const empty of [true, false]) it(`${mode}: ${empty ? "empty history" : "only archived history"} never loads an active detail`, async () => {
   const f = await fixture(mode, false, empty ? 0 : 2);
-  if (!empty) await f.repository.saveTelepathicSeries(state(0, mode, true));
+  if (!empty) for(let i=0;i<2;i++)await f.repository.saveTelepathicSeries(state(i,mode,true));
   f.detail.mockClear(); await f.render();
   expect(f.detail).not.toHaveBeenCalled(); expect(f.full).not.toHaveBeenCalled(); expect(f.dispatch).not.toHaveBeenCalled();
   expect(host.querySelector('[data-setup-step="1"]')).not.toBeNull();
   if (empty) expect(host.textContent).toContain("No saved sessions");
-  else expect(f.page.mock.calls.at(-1)![0]).toMatchObject({ mode, archive: "active", limit: 1 });
+  else expect(f.page.mock.calls.at(-1)![0]).toMatchObject({ mode, archive: "active", limit: 50 });
 });

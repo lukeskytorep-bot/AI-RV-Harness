@@ -13,7 +13,7 @@ vi.mock("../../aiCenter/viewerIdentitySelection",async original=>({...await orig
 vi.mock("../../providers/requestExecutor",async original=>({...await original<typeof import("../../providers/requestExecutor")>(),executeProviderChat:mock.dispatch}));
 vi.mock("../../telepathicExchange/providerGateway",async original=>({...await original<typeof import("../../telepathicExchange/providerGateway")>(),resolveTelepathicAiRouteFromRepository:async({participant,requestedSettings,repository}:{participant:{ai:Record<string,string>};requestedSettings:unknown;repository:AppRepository})=>({snapshot:participant.ai,requestedSettings,model:(await repository.listProviderModels())[0],providerConfig:{id:"c",provider:"custom_openai",credentialId:"k",baseUrl:"https://example.test/v1",enabled:true},validatedIdentity:{profileId:participant.ai.profileId,workspaceId:"w",aiIdentityId:participant.ai.aiIdentityId,credentialFingerprint:"f"}})}));
 import {BrowserTelepathicExchangeRepository} from "../../storage/browser/telepathicExchangeRepository";
-import {createTelepathicSeriesState} from "../../telepathicExchange/engine";
+import {createTelepathicSeriesState,telepathicConversationHumanStep} from "../../telepathicExchange/engine";
 import {TelepathicExchangePanel} from "./TelepathicExchangePanel";
 
 async function fixture(pl:boolean,prepare=false){
@@ -33,7 +33,13 @@ async function fixture(pl:boolean,prepare=false){
  const mount=async()=>{await render();await wait(()=>expect(host.querySelector(".telepathic-action-box")).not.toBeNull());};
  const fields=()=>[...host.querySelectorAll<HTMLTextAreaElement>(".telepathic-human-guidance textarea")];
  const type=async(index:number,text:string)=>act(async()=>{const field=fields()[index];Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(field,text);field.dispatchEvent(new Event("input",{bubbles:true}));});
- const refresh=async()=>{await act(async()=>{[...host.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent===(pl?"Odśwież":"Refresh"))!.click();await new Promise(resolve=>setTimeout(resolve,0));});};
+ const refresh=async()=>{
+  const button=()=>[...host.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent===(pl?"Odśwież":"Refresh"))!;
+  await wait(()=>expect(button().disabled).toBe(false));
+  const step=telepathicConversationHumanStep((await store.getTelepathicSeries(config.seriesId))!);
+  await act(async()=>button().click());
+  await wait(()=>expect(fields()).toHaveLength(step.kind==="lead_guidance"?step.activeIds.length:0));
+ };
  return {store,host,mount,wait,fields,type,refresh,getState:()=>store.getTelepathicSeries(config.seriesId),setState:async(next:typeof state)=>{state=next;await store.saveTelepathicSeries(state);},restart:async()=>{await act(async()=>root.unmount());root=createRoot(host);await mount();},cleanup:async()=>{await act(async()=>root.unmount());host.remove();}};
 }
 
@@ -72,6 +78,7 @@ for(const action of ["empty","explicit"] as const)it(`full Conversation ${action
   const selector=action==="explicit"?'button[type="button"]':'button[type="submit"]';
   await act(async()=>f.host.querySelector<HTMLButtonElement>(`.telepathic-human-guidance ${selector}`)!.click());
   await f.wait(async()=>expect((await f.getState())!.rounds[0].guidance!.closed).toBe(true));
+  await f.wait(async()=>expect((await f.getState())!.rounds[0].blindByParticipant.a.status).toBe("sealed"));
   const state=(await f.getState())!;expect(state.providerCalls.filter(c=>c.callStage.startsWith("receiver_guidance:"))).toHaveLength(0);expect(state.rounds[0].blindByParticipant.a.status).toBe("sealed");
   expect(state.rounds[0].guidance!.decisions[0].finishRound).toBe(action==="explicit");
   expect(state.rounds[0].guidance!.decisions[0].finishParticipantIds).toEqual(action==="explicit"?[]:["a","b","c"]);

@@ -64,12 +64,12 @@ describe("mounted Conversation audit regressions",()=>{
   state.finalReflections.a="LATE_PRIVATE_OLD_VIEW";await act(async()=>release(state));
   expect(container.textContent).not.toContain("LATE_PRIVATE_OLD_VIEW");expect(container.querySelector(".telepathic-run-head")).toBeNull();
  });
- it("shows archived series with history actions and without human/recovery forms",async()=>{
-  const {state,render}=fixture();state.archivedAt="t";state.archiveRevision=1;state.status="blocked";
+ it("keeps archived series outside current history and does not load an active detail",async()=>{
+  const {state,repository,render}=fixture();state.archivedAt="t";state.archiveRevision=1;state.status="blocked";
   await render();expect(container.querySelector('.telepathic-history input[type="checkbox"]')).toBeNull();
-  await act(async()=>container.querySelector<HTMLButtonElement>('button[aria-label="Open exchange"]')!.click());
-  expect(container.querySelector(".telepathic-run-head")).not.toBeNull();expect(container.querySelector(".telepathic-action-box")).toBeNull();
-  expect(container.querySelector('button[aria-label="Save exchange"]')).not.toBeNull();expect(container.querySelector('button[aria-label="Restore exchange"]')).not.toBeNull();
+  expect(container.querySelector('button[aria-label="Open exchange"]')).toBeNull();
+  expect(container.querySelector(".telepathic-run-head")).toBeNull();expect(container.querySelector(".telepathic-action-box")).toBeNull();
+  expect(repository.getTelepathicSeries).not.toHaveBeenCalled();
  });
 
 });

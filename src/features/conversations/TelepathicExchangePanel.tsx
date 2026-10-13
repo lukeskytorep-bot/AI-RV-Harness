@@ -264,7 +264,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
     };
   };
 
-  const execute = async (task: () => Promise<TelepathicSeriesState>, recoverySeriesId = activeSeries?.config.seriesId): Promise<boolean> => {
+  const execute = async (task: () => Promise<TelepathicSeriesState>, recoverySeriesId = activeSeries?.config.seriesId, applyResult = true): Promise<boolean> => {
     if (runGuardRef.current) return false;
     if (recoverySeriesId === activeSeries?.config.seriesId && unavailable) return false;
     detailGeneration.current++;
@@ -278,16 +278,15 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
     try {
       const next = await runTelepathicConversationUiAction(task);
       if (epoch !== executionEpoch.current) return false;
-      setActiveSeries(next);
+      if(applyResult)setActiveSeries(next);
       await history.reset();
       if (epoch !== executionEpoch.current) return false;
-      const nextVisible = next.rounds[Math.min(next.currentRoundIndex, Math.max(0, next.rounds.length - 1))];
-      setViewRoundId(nextVisible?.assignment.roundId ?? null);
+      if(applyResult){const nextVisible = next.rounds[Math.min(next.currentRoundIndex, Math.max(0, next.rounds.length - 1))];setViewRoundId(nextVisible?.assignment.roundId ?? null);}
       return true;
     } catch (cause) {
       if (epoch !== executionEpoch.current) return false;
       setError(cause instanceof Error ? cause.message : String(cause));
-      if (repository && recoverySeriesId) {
+      if (repository && recoverySeriesId && applyResult) {
         try {
           const persisted = await loadTelepathicConversationView(repository, recoverySeriesId);
           if (persisted && epoch === executionEpoch.current) {
@@ -415,7 +414,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
     loading={history.loading} error={history.error} hasMore={Boolean(history.nextCursor)} onLoadMore={()=>void history.loadMore()} onRetry={()=>void retryHistory()}
     onOpen={id=>{if(!busy)void openSeries(id);}}
     onSave={id=>void execute(async()=>{const state=await repository.getTelepathicSeries(id);if(!state)throw new Error("Series not found.");await saveTelepathicDocument(state);return state;})}
-    onArchive={(id,archived)=>void execute(()=>setTelepathicArchived(repository,id,archived)).then(async success=>{if(success){detailGeneration.current++;setActiveSeries(null);await history.reset();}})}/>;
+    onArchive={(id,archived)=>void execute(()=>setTelepathicArchived(repository,id,archived),id,false).then(success=>{if(success){history.remove(id);if(currentView.current.activeId===id){detailGeneration.current++;setActiveSeries(null);setViewRoundId(null);}}})}/>;
 
   if (!activeSeries) return <div className="telepathic-with-history"><div className="telepathic-exchange-stack">
     {history.items.length > 0 && <section className="panel telepathic-exchange-panel">

@@ -1,4 +1,5 @@
-import type { TelepathicSeriesState } from "../../telepathicExchange/types";
+import { useTelepathicHistory } from "../../components/useTelepathicHistory";
+import { TelepathicArchiveGroup } from "../../components/TelepathicArchiveGroup";
 import { setTelepathicArchived } from "../../telepathicExchange/archive";
 import {
   Archive,
@@ -19,7 +20,7 @@ import {
   Sun,
   Trash2,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { listBuiltinDocuments, readBuiltinDocument, saveBuiltinDocument, type BuiltinDocumentManifest } from "../../attachments/native";
 import { ProviderSettings } from "../../components/ProviderSettings";
@@ -237,7 +238,10 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
   const [archivedWorkspaces, setArchivedWorkspaces] = useState<Workspace[]>([]);
   const [archivedThreads, setArchivedThreads] = useState<ChatThread[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<RvSession[]>([]);
-  const [archivedTelepathicSeries,setArchivedTelepathicSeries]=useState<TelepathicSeriesState[]>([]);
+  const telepathicTrainingArchive=useTelepathicHistory(repository,"ai_ai_training",undefined,"archived");
+  const telepathicExchangeArchive=useTelepathicHistory(repository,"conversation_exchange",undefined,"archived");
+  const [restoringTelepathy,setRestoringTelepathy]=useState(false);
+  const restoreTelepathyGuard=useRef(false);
   const [archivedTrainingRuns, setArchivedTrainingRuns] = useState<TrainingRunRecord[]>([]);
   const [archivedResearchProjects, setArchivedResearchProjects] = useState<ResearchProjectRecord[]>([]);
   const [archivedTargets, setArchivedTargets] = useState<TargetRecord[]>([]);
@@ -263,7 +267,7 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
     setArchivedTrainingRuns(trainingRows);
     setArchivedResearchProjects(researchRows);
     setArchivedTargets(targetRows);
-    setArchivedTelepathicSeries((await repository.listTelepathicSeries()).filter(state=>state.archivedAt));
+    await Promise.all([telepathicTrainingArchive.reset(),telepathicExchangeArchive.reset()]);
   };
 
   useEffect(() => { if (repository) void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, [repository]);
@@ -390,7 +394,7 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
   const archivedWorkspaceIds = new Set(archivedWorkspaces.map((item) => item.id));
   const archivedProfileIds = new Set(archivedProfiles.map((item) => item.id));
   const parentBlocked = (workspaceId: string, profileId?: string) => archivedWorkspaceIds.has(workspaceId) || Boolean(profileId && archivedProfileIds.has(profileId));
-  const archiveCount = archivedTelepathicSeries.length + archivedProfiles.length + archivedWorkspaces.length + archivedThreads.length + archivedSessions.length + archivedTrainingRuns.length + archivedResearchProjects.length + archivedTargets.length;
+  const archiveCount = telepathicTrainingArchive.items.length + telepathicExchangeArchive.items.length + archivedProfiles.length + archivedWorkspaces.length + archivedThreads.length + archivedSessions.length + archivedTrainingRuns.length + archivedResearchProjects.length + archivedTargets.length;
   const restoreLabel = pl ? "Przywróć" : "Restore";
   const parentTitle = pl ? "Najpierw przywróć nadrzędny Profil i Workspace." : "Restore the parent Profile and Workspace first.";
 
@@ -401,12 +405,12 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
 
   const archiveList = <div className="archive-recovery">
     <div className="storage-backup-explainer"><Archive size={18} /><div><strong>{pl ? "Archiwum i odzyskiwanie" : "Archive and recovery"}</strong><p>{pl ? "Zarchiwizowane dane można przywrócić albo, po sprawdzeniu Deletion Preview, usunąć trwale. Permanent Delete nie jest dostępny z aktywnych widoków." : "Archived data can be restored or, after reviewing a Deletion Preview, deleted permanently. Permanent Delete is not available from active views."}</p></div></div>
-    {archiveCount === 0 ? <p className="muted">{pl ? "Archiwum jest puste." : "The archive is empty."}</p> : <div className="archive-groups">
+    {archiveCount === 0 && !telepathicTrainingArchive.loading && !telepathicExchangeArchive.loading && !telepathicTrainingArchive.error && !telepathicExchangeArchive.error ? <p className="muted">{pl ? "Archiwum jest puste." : "The archive is empty."}</p> : <div className="archive-groups">
       {archivedProfiles.length > 0 && <details open><summary>{pl ? "Profile" : "Profiles"} · {archivedProfiles.length}</summary>{archivedProfiles.map((profile) => <div className="archive-row" key={profile.id}><span><strong>{aiIsBeDisplayName(profile)}</strong><small>{profile.archivedAt ? new Date(profile.archivedAt).toLocaleString() : ""}</small></span>{archiveActions("profile", profile.id, () => repository!.restoreProfile(profile.id))}</div>)}</details>}
       {archivedWorkspaces.length > 0 && <details open><summary>Workspace · {archivedWorkspaces.length}</summary>{archivedWorkspaces.map((workspace) => <div className="archive-row" key={workspace.id}><span><strong>{workspace.name}</strong><small>{workspace.archivedAt ? new Date(workspace.archivedAt).toLocaleString() : ""}</small></span><span className="archive-row-actions"><button className="secondary-button" disabled={archivedProfileIds.has(workspace.profileId) || purgingId === workspace.id} title={archivedProfileIds.has(workspace.profileId) ? parentTitle : undefined} onClick={() => void restoreWorkspace(workspace)}>{restoreLabel}</button><button className="danger-button" disabled={purgingId === workspace.id || Boolean(busy)} onClick={() => void permanentDelete("workspace", workspace.id)}><Trash2 size={14} />{pl ? "Usuń trwale" : "Delete permanently"}</button></span></div>)}</details>}
       {archivedThreads.length > 0 && <details open><summary>{pl ? "Rozmowy / Manual RV" : "Conversations / Manual RV"} · {archivedThreads.length}</summary>{archivedThreads.map((thread) => <div className="archive-row" key={thread.id}><span><strong>{thread.title}</strong><small>{thread.mode === "manual_rv" ? "Manual RV" : (pl ? "Rozmowa" : "Conversation")} · {allWorkspaceNames.get(thread.workspaceId) ?? thread.workspaceId}</small></span>{archiveActions("conversation", thread.id, () => repository!.restoreChatThread(thread.id), archivedWorkspaceIds.has(thread.workspaceId), archivedWorkspaceIds.has(thread.workspaceId) ? parentTitle : undefined)}</div>)}</details>}
       {archivedSessions.length > 0 && <details open><summary>{pl ? "Sesje RV" : "RV Sessions"} · {archivedSessions.length}</summary>{archivedSessions.map((session) => <div className="archive-row" key={session.id}><span><strong>{session.sessionCode}</strong><small>{session.state} · {allWorkspaceNames.get(session.workspaceId) ?? session.workspaceId}</small></span>{archiveActions("rv_session", session.id, () => repository!.restoreRvSession(session.id), parentBlocked(session.workspaceId, session.profileId), parentBlocked(session.workspaceId, session.profileId) ? parentTitle : undefined)}</div>)}</details>}
-      {archivedTelepathicSeries.length>0&&<details open><summary>{pl?"Telepatia":"Telepathy"} · {archivedTelepathicSeries.length}</summary>{archivedTelepathicSeries.map(state=><div className="archive-row" key={state.config.seriesId}><span><strong>{state.config.participants.map(p=>p.displayName).join(" · ")}</strong><small>{state.status} · {state.config.roundCount} {pl?"rund":"rounds"}</small></span><button type="button" className="secondary-button" disabled={Boolean(busy)||parentBlocked(state.config.seriesWorkspaceId)} onClick={()=>void recover(async()=>{await setTelepathicArchived(repository!,state.config.seriesId,false);})}>{restoreLabel}</button></div>)}</details>}
+      {[{history:telepathicTrainingArchive,title:pl?"Telepatia — Training":"Telepathy — Training"},{history:telepathicExchangeArchive,title:pl?"Telepatia — Conversation":"Telepathy — Conversation"}].map(({history,title})=><TelepathicArchiveGroup key={title} title={title} items={history.items} loading={history.loading} error={history.error} hasMore={Boolean(history.nextCursor)} pl={pl} disabled={Boolean(busy)||restoringTelepathy} parentBlocked={parentBlocked} onLoadMore={()=>void history.loadMore()} onRetry={()=>void history.retry()} onRestore={id=>{if(!repository||restoreTelepathyGuard.current)return;restoreTelepathyGuard.current=true;setRestoringTelepathy(true);void recover(async()=>{await setTelepathicArchived(repository,id,false);}).finally(()=>{restoreTelepathyGuard.current=false;setRestoringTelepathy(false);});}}/>)}
       {archivedTrainingRuns.length > 0 && <details open><summary>Training · {archivedTrainingRuns.length}</summary>{archivedTrainingRuns.map((run) => <div className="archive-row" key={run.id}><span><strong>#{run.runNumber} · {run.name}</strong><small>{run.status} · {run.sessionIds.length} {pl ? "sesji" : "sessions"} · {allWorkspaceNames.get(run.workspaceId) ?? run.workspaceId}</small></span>{archiveActions("training", run.id, () => repository!.restoreTrainingRun(run.id), parentBlocked(run.workspaceId, run.profileId), parentBlocked(run.workspaceId, run.profileId) ? parentTitle : undefined)}</div>)}</details>}
       {archivedResearchProjects.length > 0 && <details open><summary>Research · {archivedResearchProjects.length}</summary>{archivedResearchProjects.map((project) => <div className="archive-row" key={project.id}><span><strong>{project.name}</strong><small>{project.state} · {allWorkspaceNames.get(project.workspaceId) ?? project.workspaceId}</small></span>{archiveActions("research", project.id, () => repository!.restoreResearchProject(project.id), archivedWorkspaceIds.has(project.workspaceId), archivedWorkspaceIds.has(project.workspaceId) ? parentTitle : undefined)}</div>)}</details>}
       {archivedTargets.length > 0 && <details open><summary>{pl ? "Moje cele" : "My Targets"} · {archivedTargets.length}</summary>{archivedTargets.map((target) => <div className="archive-row" key={target.id}><span><strong>{target.title}</strong><small>{userTargetKind(target) === "telepathic" ? (pl ? "Telepatyczny" : "Telepathic") : (pl ? "Ogólny" : "General")} · {target.archivedAt ? new Date(target.archivedAt).toLocaleString() : ""}</small></span>{archiveActions("target", target.id, () => repository!.restoreTarget(target.id))}</div>)}</details>}

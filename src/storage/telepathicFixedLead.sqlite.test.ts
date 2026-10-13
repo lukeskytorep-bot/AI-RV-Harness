@@ -15,6 +15,27 @@ import type { DatabaseTransactionStatement } from "./databaseNative";
 import { setTelepathicArchived } from "../telepathicExchange/archive";
 import { serializeTelepathicPlan } from "../telepathicExchange/persistence";
 import { buildHumanLeadDecision } from "../telepathicExchange/leadGuidance";
+
+it("UX-TEL-4 SQLite: archive/restore preserves checkpoint and ledger; another native owner blocks archiving",async()=>{
+ const {db,repository}=database();try{
+  const state=createTelepathicSeriesState(config);state.status="paused";state.finalReflections.a="Accepted final";
+  state.providerCalls=[{id:"ledger",seriesId:"sqlite",roundId:state.rounds[0].assignment.roundId,participantId:"a",callStage:"receiver_first",technicalAttempt:1,status:"succeeded",scopeKey:"scope",requestSha256:"fingerprint",createdAt:"t",updatedAt:"t",responseText:"accepted"}];
+  state.rounds[0].blindByParticipant.a={participantId:"a",first:"accepted",status:"sealed",providerAttemptCount:1,contentSha256:"sealed-hash",sealedAt:"t"};
+  await repository.saveTelepathicSeries(state);const before=(await repository.getTelepathicSeries("sqlite"))!;
+  const second=database(db,false).repository;
+  let release!:()=>void;let started!:()=>void;const ready=new Promise<void>(r=>{started=r;});
+  const held=repository.withTelepathicSeriesLease("sqlite",async()=>{started();await new Promise<void>(r=>{release=r;});});
+  await ready;try{await expect(setTelepathicArchived(second,"sqlite",true)).rejects.toThrow();}finally{release();await held;}
+  expect((await repository.getTelepathicSeries("sqlite"))!.archivedAt).toBeUndefined();
+  await setTelepathicArchived(second,"sqlite",true);
+  expect((await repository.listTelepathicSeriesSummaries({mode:"conversation_exchange",archive:"active"})).items).toEqual([]);
+  expect((await repository.listTelepathicSeriesSummaries({mode:"conversation_exchange",archive:"archived"})).items).toHaveLength(1);
+  await setTelepathicArchived(repository,"sqlite",false);const after=(await second.getTelepathicSeries("sqlite"))!;
+  expect(after.archiveRevision).toBe(2);expect(after.rounds).toEqual(before.rounds);expect(after.providerCalls).toEqual(before.providerCalls);expect(after.finalReflections).toEqual(before.finalReflections);expect(after.plan).toEqual(before.plan);
+  expect((await repository.listTelepathicSeriesSummaries({mode:"conversation_exchange",archive:"active"})).items).toHaveLength(1);
+  expect(db.prepare("PRAGMA integrity_check").get()).toEqual({integrity_check:"ok"});expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+ }finally{db.close();}
+});
 function database(db = new DatabaseSync(":memory:"), initialize = true, beforeTransaction?:()=>void) {
  if(initialize) {
  db.exec("CREATE TABLE workspaces(id TEXT PRIMARY KEY); INSERT INTO workspaces VALUES ('w');");
