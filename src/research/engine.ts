@@ -26,7 +26,8 @@ export async function createAndLockResearch(
   config: ResearchConfig,
   inventory: ResearchPreflightInventory,
 ): Promise<{ project: ResearchProjectRecord; preflight: ResearchPreflightResult }> {
-  const lockedConfig = freezeResearchViewerOutputPolicy(config);
+  const lockedConfig: ResearchConfig = { ...freezeResearchViewerOutputPolicy(config, inventory.models),
+    judgeOutputPolicy: config.judgeOutputPolicy ?? { version: 1, initialTokens: 16384, recoveryTokens: 32768 } };
   const preflight = runResearchPreflight(lockedConfig, inventory);
   if (!preflight.ok) throw new Error("Research Preflight contains blocking failures.");
   const project = await repository.createResearchProject(lockedConfig);
@@ -38,15 +39,29 @@ export async function createAndLockResearch(
   return { project: locked, preflight };
 }
 
-export function freezeResearchViewerOutputPolicy(config: ResearchConfig): ResearchConfig {
+/** Only called for a new draft, before preflight/hash/Experiment Lock; never by Resume. */
+export function freezeResearchViewerOutputPolicy(config: ResearchConfig, models: ProviderModel[] = []): ResearchConfig {
+  const fresh = config.conditions.filter(condition => !condition.viewerOutputPolicy);
+  if (!fresh.length) return config;
+  if (fresh.length !== config.conditions.length) throw new Error("Cannot normalize a mix of frozen and new Research Viewer policies.");
+  const preferred = Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, config.viewerControl?.maxOutputTokens ?? 0,
+    ...fresh.map(condition => condition.requestedSettings.maxOutputTokens ?? 0));
+  const capabilities = fresh.map(condition => condition.capabilitySnapshot
+    ?? models.find(model => model.providerConfigId === condition.providerConfigId && model.modelId === condition.modelId)?.capabilities);
+  const initial = Math.max(1, Math.floor(Math.min(preferred, ...capabilities.map(capability => capability?.maxOutputTokens ?? preferred))));
+  const recovery = Math.max(initial, VIEWER_OUTPUT_RECOVERY_TOKENS);
   return {
     ...config,
-    conditions: config.conditions.map((condition) => {
-      if (condition.viewerOutputPolicy) return condition;
-      const configured = Math.max(1, Math.floor(condition.requestedSettings.maxOutputTokens ?? config.viewerControl?.maxOutputTokens ?? VIEWER_OUTPUT_INITIAL_TOKENS));
-      const recovery = Math.max(configured, VIEWER_OUTPUT_RECOVERY_TOKENS);
-      const policy: ResearchViewerOutputPolicy = { version: 1, initialTokens: configured, recoveryTokens: recovery, preserveConfiguredBudget: false };
-      return { ...condition, viewerOutputPolicy: policy };
+    judgeOutputPolicy: config.judgeOutputPolicy ?? { version: 1, initialTokens: 16384, recoveryTokens: 32768 },
+    ...(config.viewerControl ? { viewerControl: { ...config.viewerControl, maxOutputTokens: initial } } : {}),
+    conditions: config.conditions.map((condition, index) => {
+      const requestedSettings = { ...condition.requestedSettings, maxOutputTokens: initial };
+      const capability = capabilities[index];
+      const policy: ResearchViewerOutputPolicy = { version: 1, initialTokens: initial, recoveryTokens: recovery, preserveConfiguredBudget: false };
+      return { ...condition, requestedSettings, viewerOutputPolicy: policy,
+        ...(capability ? { capabilitySnapshot: structuredClone(capability), effectiveSettings: resolveGenerationSettings(capability, requestedSettings) }
+          : condition.effectiveSettings ? { effectiveSettings: { ...condition.effectiveSettings, requested: requestedSettings, effective: { ...condition.effectiveSettings.effective, maxOutputTokens: initial } } } : {}),
+      };
     }),
   };
 }
@@ -412,6 +427,10 @@ export async function judgeResearch(input: {
     input.repository.listProviderConfigs(),
     input.repository.listProviderModels(),
   ]);
+  const policy = project.config.judgeOutputPolicy;
+  if (policy && (policy.version !== 1 || policy.initialTokens !== 16384 || policy.recoveryTokens !== 32768)) {
+    throw new Error("Unsupported frozen Research Judge output policy.");
+  }
   const judgeSelections = resolveJudgeSelections(project.config, providers, models);
   await input.repository.setResearchProjectState(project.id, "Judging");
   let completed = assignments.filter((assignment) => assignment.status === "Judged").length;
@@ -436,6 +455,7 @@ export async function judgeResearch(input: {
       timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
       signal: input.signal,
       streamWorkflowContext: "research",
+      budgetPolicy: policy ? "default" : "legacy_analytical",
     });
     const frozen = await input.repository.listJudgeScores(assignment.sessionId);
     if (frozen.length !== judgeSelections.length || frozen.some((score) => !score.frozenAt)) throw new Error("Judge score freeze verification failed.");

@@ -13,7 +13,9 @@ Limit generacji jest oddzielny od kontekstu wejścia. Zwiększenie limitu odpowi
 | Starszy Research bez nowego snapshotu polityki | zachowany zamrożony limit; brak cichej aktualizacji |
 | Viewer Review po Reveal w klasycznym Training | 16 384 → 32 768 |
 | Field Guide / Viewer Notes w Training Reveal | pojemność dokumentu C + 16 384 → C + 32 768 |
-| Pozostałe analizy używające domyślnej polityki | 8192 → 16 384 |
+| Judge zwykły i Training, RV post-Reveal Viewer/Monitor | 16 384 → 32 768 |
+| Live Monitor w istniejącym RCP / klasycznym Telepathic RV | 16 384 → 32 768 |
+| Judge w zamrożonym Research bez snapshotu polityki Judge | 8192 → 16 384; zgodność dla brakujących ocen |
 | Propozycje learning poza polityką Training Reveal | C + 8192 → C + 16 384 |
 
 To wartości preferowane, ograniczane przez rzeczywisty model/endpoint i dostępny kontekst. Recovery musi rzeczywiście zwiększać efektywny limit, inaczej kończy się jawnym błędem. Jawnie ustawiony większy budżet Viewera jest zachowywany tam, gdzie model go obsługuje. Pojemność C samego dokumentu pozostaje niezmieniona. Output recovery, naprawa JSON i ponowienie z powodu przekroczonej pojemności dokumentu są osobnymi operacjami; nie wolno obiecywać dwóch wywołań HTTP dla wszystkich możliwych napraw.
@@ -51,3 +53,7 @@ Testy DOM korzystają z jsdom i lokalnej adnotacji środowiska testu. Zmiany zal
 ## Kandydat: telepatia ze stałym prowadzącym
 
 Nowe serie telepatyczne używają fixed_lead_v1: geografii tylko dla twórcy, opcjonalnych cykli prowadzenia, automatycznej finalizacji AI i wspólnej transkrypcji/historii/eksportu. Odbiór native i wizualny pozostaje otwarty; wcześniejsze sekcje opisują zaakceptowaną bazę wejściową. Zobacz [opis przebiegu](TELEPATHY_FIXED_LEAD_v0.7.14_EN.md) oraz [raport wdrożenia](../reports/TELEPATHY_FIXED_LEAD_TRANSCRIPT_UX_IMPLEMENTATION_PL.md).
+
+## Zgodność BUDGET-0
+
+Nowy draft Research synchronizuje viewerControl, requested/effective settings i snapshot polityki przed preflight oraz Experiment Lock. Domyślnie jest to 16 384, z recovery co najmniej 32 768; większy jawny budżet pozostaje, a wspólny niższy limit modeli ogranicza pierwszą wartość. Nowe projekty zapisują także kontrakt Judge 16K/32K. Resume nie przepisuje istniejących polityk Viewera (również 8K) ani projektów legacy; brakujące oceny Judge w projekcie bez nowego snapshotu nadal używają 8K/16K. Pojemności learning i headroom bez zmian: Training Reveal C+16K/C+32K, pozostałe learning C+8K/C+16K. Gateway nowej Telepathy zachowuje swoją politykę, w tym sharing consent 8K/16K. Nie dodajemy live Monitora do klasycznego Training ani Research.

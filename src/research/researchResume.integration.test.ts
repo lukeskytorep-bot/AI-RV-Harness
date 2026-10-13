@@ -14,13 +14,15 @@ const model: ProviderModel = {
   capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, contextTokens: 131072, maxOutputTokens: 65536, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: [], source: "provider", capturedAt: "now" },
 };
 
-function researchDurableRepository(options?: { frozenOutputPolicy?: boolean }) {
+function researchDurableRepository(options?: { frozenOutputPolicy?: boolean; initialTokens?: number }) {
+  const initialTokens = options?.initialTokens ?? 16384;
+  const recoveryTokens = initialTokens === 8192 ? 16384 : 32768;
   const protocol = createResearchProtocolSelection("rv-lite", "en");
   const condition = {
     key: "a", label: "A", profileId: "profile", providerConfigId: provider.id, modelId: model.modelId,
-    requestedSettings: { maxOutputTokens: 16384 },
-    ...(options?.frozenOutputPolicy ? { viewerOutputPolicy: { version: 1 as const, initialTokens: 16384, recoveryTokens: 32768, preserveConfiguredBudget: false } } : {}),
-    effectiveSettings: { requested: { maxOutputTokens: 16384 }, effective: { maxOutputTokens: 16384 }, omitted: [] },
+    requestedSettings: { maxOutputTokens: initialTokens },
+    ...(options?.frozenOutputPolicy ? { viewerOutputPolicy: { version: 1 as const, initialTokens, recoveryTokens, preserveConfiguredBudget: false } } : {}),
+    effectiveSettings: { requested: { maxOutputTokens: initialTokens }, effective: { maxOutputTokens: initialTokens }, omitted: [] },
     capabilitySnapshot: structuredClone(model.capabilities),
   };
   let project: ResearchProjectRecord = {
@@ -151,4 +153,24 @@ describe("Research same-assignment Resume", () => {
     expect(durable.snapshot().viewerOutputPolicy?.preserveConfiguredBudget).toBe(true);
   });
 
+});
+
+for (const frozenOutputPolicy of [false, true]) it(`BUDGET-0 preserves already locked 8K Research ${frozenOutputPolicy ? "with snapshot and 16K recovery after crash" : "legacy single budget"}`, async () => {
+  const durable = researchDurableRepository({ frozenOutputPolicy, initialTokens: 8192 });
+  const configWire = JSON.stringify(durable.project().config);
+  const budgets: number[] = [];
+  await executeResearchSessions({ repository: durable.repository, projectId: "research", rvLiteSessionRunner: async input => (await import("../sessions/rvLiteController")).runAutomaticRvLiteSession({ ...input, chat: async ({ settings }) => {
+    budgets.push(settings.effective.maxOutputTokens!); return { content: "partial", finishReason: "length", usage: {} };
+  } }) });
+  expect(budgets).toEqual([8192]); expect(JSON.stringify(durable.project().config)).toBe(configWire);
+  if (frozenOutputPolicy) {
+    const sessionId = durable.assignment().sessionId;
+    await prepareInterruptedResearchRetry(durable.repository, "research");
+    const resumed: number[] = [];
+    await executeResearchSessions({ repository: durable.repository, projectId: "research", sessionReplayFactory: args => createSessionReplay({ ...args, liveChat: async ({ settings }) => {
+      resumed.push(settings.effective.maxOutputTokens!); return { content: "complete", finishReason: "stop", usage: {} };
+    } }) });
+    expect(resumed[0]).toBe(16384); expect(durable.assignment().sessionId).toBe(sessionId);
+    expect(JSON.stringify(durable.project().config)).toBe(configWire);
+  }
 });

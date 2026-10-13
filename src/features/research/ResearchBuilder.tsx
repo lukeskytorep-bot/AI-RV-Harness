@@ -1,10 +1,11 @@
+import { VIEWER_OUTPUT_INITIAL_TOKENS } from "../../sessions/viewerOutputRecovery";
 import { Archive, Check, ChevronRight, CircleStop, FlaskConical, LockKeyhole, Play, RotateCcw, Search, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { getCopy } from "../../i18n";
 import type { ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
 import type { JudgeScoreRecord } from "../../judge/types";
 import { resolveGenerationSettings } from "../../providers/capabilities";
-import { createAndLockResearch, executeResearchSessions, judgeResearch, prepareInterruptedResearchRetry, unblindAndComputeResearch } from "../../research/engine";
+import { createAndLockResearch, freezeResearchViewerOutputPolicy, executeResearchSessions, judgeResearch, prepareInterruptedResearchRetry, unblindAndComputeResearch } from "../../research/engine";
 import { stableStringify } from "../../research/planner";
 import { runResearchPreflight, type ResearchPreflightInventory } from "../../research/preflight";
 import type { ResearchAssignmentRecord, ResearchConditionDefinition, ResearchConfig, ResearchFieldGuideSnapshot, ResearchPreflightResult, ResearchProjectRecord, ResearchProtocolSelection, ResearchResults, ResearchTemplateType, ResearchViewerControl } from "../../research/types";
@@ -127,7 +128,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
   const [baseModelKey, setBaseModelKey] = useState("");
   const [fixedReasoning, setFixedReasoning] = useState<"" | ReasoningEffort>("");
   const [fixedTemperature, setFixedTemperature] = useState("");
-  const [researchMaxOutputTokens, setResearchMaxOutputTokens] = useState(String(settings.defaultMaxOutputTokens));
+  const [researchMaxOutputTokens, setResearchMaxOutputTokens] = useState(String(Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, settings.defaultMaxOutputTokens)));
   const [reasoningLevels, setReasoningLevels] = useState<ReasoningEffort[]>([]);
   const [temperatureValues, setTemperatureValues] = useState("0.7, 1.1, 1.5");
   const [profileIds, setProfileIds] = useState<string[]>([]);
@@ -197,7 +198,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
     const defaults = profileGenerationDefaults(baseProfile, baseModel);
     setFixedReasoning(defaults.reasoningEffort ?? "");
     setFixedTemperature(defaults.temperature === undefined ? "" : String(defaults.temperature));
-    setResearchMaxOutputTokens(String(Math.min(baseModel?.capabilities.maxOutputTokens ?? settings.defaultMaxOutputTokens, settings.defaultMaxOutputTokens)));
+    setResearchMaxOutputTokens(String(Math.min(baseModel?.capabilities.maxOutputTokens ?? Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, settings.defaultMaxOutputTokens), Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, settings.defaultMaxOutputTokens))));
     setReasoningLevels([]); setProfileIds(baseProfile ? [baseProfile.id] : []); setModelKeys([]); setPreflight(null); setPreflightConfig(null); setDryRun(null);
   }, [template, baseModelKey, baseProfile?.id, baseProfile?.defaultViewerReasoningEffort, baseProfile?.defaultViewerTemperature, settings.defaultMaxOutputTokens]);
   useEffect(() => {
@@ -210,7 +211,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
         || (sharedCapabilities.temperatureMax !== undefined && numeric > sharedCapabilities.temperatureMax)) setFixedTemperature("");
     }
     if (sharedCapabilities.maxOutputTokens) {
-      setResearchMaxOutputTokens((current) => String(Math.min(Number(current) || settings.defaultMaxOutputTokens, sharedCapabilities.maxOutputTokens!)));
+      setResearchMaxOutputTokens((current) => String(Math.min(Number(current) || Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, settings.defaultMaxOutputTokens), sharedCapabilities.maxOutputTokens!)));
     }
     setPreflight(null); setPreflightConfig(null); setDryRun(null);
   }, [sharedCapabilities.reasoningEfforts.join("|"), sharedCapabilities.temperatureSupported, sharedCapabilities.temperatureMin, sharedCapabilities.temperatureMax, sharedCapabilities.maxOutputTokens]);
@@ -254,8 +255,10 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
       if (!model || !isRouteAllowedForCredential(key, baseProfile.credentialId, providers, models)) throw new Error(copy.judgeRequiresModels);
       return { providerConfigId: model.providerConfigId, modelId: model.modelId };
     });
-    const maxOutputTokens = Number(researchMaxOutputTokens);
-    if (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 1 || (sharedCapabilities.maxOutputTokens !== undefined && maxOutputTokens > sharedCapabilities.maxOutputTokens)) throw new Error(copy.researchOutputOutOfRange);
+    const configuredOutputTokens = Number(researchMaxOutputTokens);
+    if (!Number.isInteger(configuredOutputTokens) || configuredOutputTokens < 1 || (sharedCapabilities.maxOutputTokens !== undefined && configuredOutputTokens > sharedCapabilities.maxOutputTokens)) throw new Error(copy.researchOutputOutOfRange);
+    const maxOutputTokens = Math.min(Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, configuredOutputTokens), sharedCapabilities.maxOutputTokens ?? Infinity);
+    if (maxOutputTokens !== configuredOutputTokens) setResearchMaxOutputTokens(String(maxOutputTokens));
     if (template !== "reasoning" && fixedReasoning && !sharedCapabilities.reasoningEfforts.includes(fixedReasoning)) throw new Error(copy.researchReasoningUnavailable);
     const fixedTemperatureNumber = fixedTemperature.trim() ? Number(fixedTemperature) : undefined;
     if (template !== "temperature" && fixedTemperatureNumber !== undefined) {
@@ -387,7 +390,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
         : fixedTemperatureNumber !== undefined ? { mode: "fixed", value: fixedTemperatureNumber } : { mode: "provider_default" },
       maxOutputTokens,
     };
-    return {
+    return freezeResearchViewerOutputPolicy({
       schemaVersion: 1, name: name.trim(), workspaceId: workspace.id, templateType: template, sessionLanguage: language,
       protocol: createResearchProtocolSelection(researchProtocolId, language), targetIds: [...selectedTargetIds], targetSelection: { source: targetSource, mode: targetSelectionMode, ...(targetSelectionMode === "random" ? { requestedCount: randomTargetCount } : {}) }, repetitions, requireUnusedTargets: unusedOnly,
       sessionPolicy: { requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, defaultMaxOutputTokens: settings.defaultMaxOutputTokens, sessionCodePrefix: settings.sessionCodePrefix },
@@ -402,7 +405,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
       viewerNotesControl: { mode: template === "viewer_notes" ? "experiment" : viewerNotesMode === "current" ? "current" : "off" },
       ...(template === "system_prompt" ? { promptResearchSource } : {}),
       conditions, evaluationMode, judges, randomization: { matchedTargets: true, randomizedExecution: true, randomizedJudgeOrder: true },
-    };
+    }, models);
   };
 
   const preview = async () => {

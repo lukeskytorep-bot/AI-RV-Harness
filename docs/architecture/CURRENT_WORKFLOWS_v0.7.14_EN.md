@@ -13,7 +13,9 @@ Output allowance and input context are separate limits. A larger output allowanc
 | Legacy Research without the new policy snapshot | preserve its locked configured budget | compatibility path; no silent policy upgrade |
 | Classic Training post-Reveal Viewer review | 16,384 → 32,768 | `budgetPolicy: training_reveal` in `src/providers/outputRecovery.ts` |
 | Classic Training Field Guide and Viewer Notes proposals | document capacity C + 16,384 → C + 32,768 | `learningObjectOutputAllowance()` in `src/providers/operationResourceProfiles.ts` |
-| Other analytical operations using the default policy | 8,192 → 16,384 | analytical recovery; not a universal Viewer policy |
+| Judge (ordinary and Training), RV post-Reveal Viewer/Monitor | 16,384 → 32,768 | analytical recovery |
+| Live Monitor in existing RCP / classic Telepathic RV | 16,384 → 32,768 | existing Monitor engine, model ceiling retained |
+| Judge in already locked Research without a Judge policy snapshot | 8,192 → 16,384 | legacy contract for missing scores; accepted scores unchanged |
 | Learning-object proposals outside Training Reveal policy | C + 8,192 → C + 16,384 | capacity-bound resource profile |
 
 These are preferred generation allowances, subject to the selected model/endpoint and available context. Known smaller limits can reduce the effective allowance; recovery must actually increase it or stop explicitly. An explicitly selected larger Viewer budget is preserved where supported. OpenRouter analytical Training Reveal requests use endpoint-capacity discovery rather than trusting an aggregate model limit alone. A policy change never authorizes silently changing the requested model.
@@ -73,3 +75,7 @@ Automated tests and source gates cover contracts and regressions. They do not pr
 ## Fixed-lead telepathy candidate
 
 New telepathic series implement fixed_lead_v1 with geography, optional lead cycles, automatic AI finalization and role-safe transcript/history/export. This is a candidate pending native/visual acceptance; existing sections above describe the accepted input baseline. See [candidate workflow and ownership](TELEPATHY_FIXED_LEAD_v0.7.14_EN.md) and [implementation evidence](../reports/TELEPATHY_FIXED_LEAD_TRANSCRIPT_UX_IMPLEMENTATION_PL.md).
+
+## BUDGET-0 compatibility
+
+New Research drafts normalize Viewer control, requested/effective settings and output-policy snapshots together before preflight and Experiment Lock. The default is 16,384 with recovery at least 32,768; supported larger explicit budgets remain, while a shared smaller model ceiling limits the first allowance. New projects also freeze the Judge 16K/32K contract. Existing frozen Viewer policies (including 8K) and legacy projects are never rewritten by Resume; missing Judge scores in projects without the new Judge snapshot keep 8K/16K. Learning capacities and headroom are unchanged: Training Reveal uses C+16K/C+32K, other learning uses C+8K/C+16K. New Telepathy fixed-lead gateway budgets, including sharing consent 8K/16K, are unchanged. No live Monitor role is added to classic Training or Research.

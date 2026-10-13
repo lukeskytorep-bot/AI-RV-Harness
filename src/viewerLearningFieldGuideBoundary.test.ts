@@ -33,6 +33,9 @@ import nativeCompatibility from "../src-tauri/src/ux_data_compatibility.rs?raw";
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
 const normalizeS2MonitorStreamingWiring = (value: string) => value
+    // BUDGET-0 permits exactly the shared analytical import and 16K/32K selector.
+    .replace('import { ANALYTICAL_OUTPUT_INITIAL_TOKENS, ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";\n', "")
+    .replace('attempt > 0 ? ANALYTICAL_OUTPUT_RECOVERY_TOKENS : ANALYTICAL_OUTPUT_INITIAL_TOKENS', 'attempt > 0 ? 8192 : 4096')
   .replace(', ProviderStreamEvent } from "../providers/types";', ' } from "../providers/types";')
   .replace('import type { StreamWorkflowContext } from "../providers/streamPresentation";\n', "")
   .replace('  streamWorkflowContext?: StreamWorkflowContext;\n  onStreamEvent?: (event: ProviderStreamEvent) => void;\n', "")

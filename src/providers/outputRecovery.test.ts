@@ -31,7 +31,7 @@ const model: ProviderModel = {
 };
 
 describe("analytical output recovery", () => {
-  it("uses 8192 first and 16384 once after a reasoning-only length failure", async () => {
+  it("uses 16384 first and one recovery clamped to the real 32000 output ceiling", async () => {
     const budgets: number[] = [];
     const call = vi.fn(async (settings) => {
       budgets.push(settings.effective.maxOutputTokens ?? 0);
@@ -39,7 +39,7 @@ describe("analytical output recovery", () => {
       return { content: "final answer", usage: {} };
     });
     const result = await callWithAnalyticalOutputRecovery({ model, messages: [{ role: "user", content: "Evaluate" }], operationKind: "judge", call });
-    expect(budgets).toEqual([8192, 16384]);
+    expect(budgets).toEqual([16384, 32000]);
     expect(result.attempt).toBe(1);
     expect(call).toHaveBeenCalledTimes(2);
   });
@@ -67,9 +67,9 @@ describe("analytical output recovery", () => {
       recoveryReasoningMaxTokensSupported: true,
       call,
     });
-    expect(seen[0]).toMatchObject({ effort: "high", reasoningMax: undefined, output: 8192 });
+    expect(seen[0]).toMatchObject({ effort: "high", reasoningMax: undefined, output: 16384 });
     expect(seen[0].prompt).toBe("Frozen packet");
-    expect(seen[1]).toMatchObject({ effort: undefined, reasoningMax: 10_000, output: 16384 });
+    expect(seen[1]).toMatchObject({ effort: undefined, reasoningMax: 10_000, output: 32000 });
     expect(seen[1].prompt).toContain("Frozen packet");
     expect(seen[1].prompt).toContain("RECOVERY ONLY");
   });
@@ -162,7 +162,7 @@ describe("analytical output recovery", () => {
       operationKind: "post_reveal_viewer",
       attempt: 1,
       allowOpenRouterEndpointRecoveryEscalation: true,
-    })).toBe(16384);
+    })).toBe(32768);
 
     const learningModelLevel10240 = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 10240 } };
     expect(analyticalOutputBudget({
@@ -212,7 +212,7 @@ describe("analytical output recovery", () => {
     })).toBe(10240);
   });
 
-  it("routes Viewer Review recovery 16384 past model-level 8192 to a PROVEN_FIT OpenRouter endpoint", async () => {
+  it("routes Viewer Review recovery 32768 past model-level 8192 to a PROVEN_FIT OpenRouter endpoint", async () => {
     const limitedModel = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 8192 } };
     const config: ProviderConfig = { id: "pc-review-routing", provider: "openrouter", label: "OR", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
     const endpointDiscovery = vi.fn(async () => ({ data: { endpoints: [
@@ -246,7 +246,7 @@ describe("analytical output recovery", () => {
     });
     expect(result.attempt).toBe(1);
     expect(dispatched[0]).toMatchObject({ output: 8192, required: 8192 });
-    expect(dispatched[1]).toMatchObject({ output: 16384, required: 16384, routing: ["large-route"] });
+    expect(dispatched[1]).toMatchObject({ output: 32768, required: 32768, routing: ["large-route"] });
     // Endpoint metadata stay fresh-cached between the two analytical attempts.
     // Recovery reclassifies the cached snapshot for the larger budget; it must
     // not require a second discovery network call.
@@ -321,7 +321,7 @@ describe("analytical output recovery", () => {
     });
     expect(result.attempt).toBe(1);
     expect(physical).toBe(2);
-    expect(dispatchedBudgets).toEqual([8192, 16384]);
+    expect(dispatchedBudgets).toEqual([8192, 32768]);
     expect(endpointDiscovery).toHaveBeenCalledTimes(1);
   });
 
@@ -424,8 +424,8 @@ describe("analytical output recovery", () => {
     expect(budgets).toEqual([18432, 34816]);
   });
 
-  it("does not change the default budgets outside Training Reveal", () => {
-    expect(analyticalOutputBudget({ model, messages: [{ role: "user", content: "Review" }], operationKind: "post_reveal_viewer", attempt: 0 })).toBe(8192);
+  it("raises default analysis while preserving learning headroom outside Training Reveal", () => {
+    expect(analyticalOutputBudget({ model, messages: [{ role: "user", content: "Review" }], operationKind: "post_reveal_viewer", attempt: 0 })).toBe(16384);
     expect(analyticalOutputBudget({ model, messages: [{ role: "user", content: "Notes" }], operationKind: "viewer_notes_reflection", learningObjectCapacityTokens: 2048, attempt: 0 })).toBe(10240);
   });
 

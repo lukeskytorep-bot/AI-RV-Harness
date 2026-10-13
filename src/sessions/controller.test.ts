@@ -289,7 +289,7 @@ describe("automatic RCP controller", () => {
     expect(result.state).toBe("AwaitingReveal");
     expect(viewerCalls).toBe(6);
     expect(monitorCalls).toBe(6);
-    expect(monitorBudgets.slice(0, 2)).toEqual([4096, 8192]);
+    expect(monitorBudgets.slice(0, 2)).toEqual([16384, 32768]);
     expect(log.filter((entry) => entry === "event:MONITOR_PROVIDER_ERROR")).toHaveLength(1);
   });
 

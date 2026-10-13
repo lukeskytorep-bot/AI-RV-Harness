@@ -165,7 +165,7 @@ describe("blind Judge engine", () => {
   });
 
   it("retries one reasoning-only length failure with a larger budget", async () => {
-    const highCapacityModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, contextTokens: 100_000, maxOutputTokens: 16_384 } };
+    const highCapacityModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, contextTokens: 100_000, maxOutputTokens: 32_768 } };
     const repository: JudgeRepository = {
       getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "en" }),
       getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Tower", hash: "hash" }),
@@ -177,7 +177,7 @@ describe("blind Judge engine", () => {
       .mockRejectedValueOnce(new Error("provider returned reasoning without a final assistant response [finish-reason=length]"))
       .mockResolvedValueOnce({ content: judgeJson, usage: {} });
     await runBlindJudging({ repository, sessionId: "s", language: "en", judges: [{ providerConfig: provider, model: highCapacityModel }], chat });
-    expect(chat.mock.calls.map((call) => call[0].settings.effective.maxOutputTokens)).toEqual([8192, 16384]);
+    expect(chat.mock.calls.map((call) => call[0].settings.effective.maxOutputTokens)).toEqual([16384, 32768]);
   });
 
   it("repairs one complete malformed JSON response without changing the Judge route", async () => {

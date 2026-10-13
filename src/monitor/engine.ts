@@ -1,3 +1,4 @@
+import { ANALYTICAL_OUTPUT_INITIAL_TOKENS, ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat } from "../providers/requestExecutor";
 import type { ProviderAttemptContext } from "../providers/requestExecutor";
@@ -59,7 +60,7 @@ export function parseMonitorDecision(raw: string): MonitorDecision {
 }
 
 export function monitorOutputTokenBudget(model: ProviderModel, attempt: number): number {
-  const requested = attempt > 0 ? 8192 : 4096;
+  const requested = attempt > 0 ? ANALYTICAL_OUTPUT_RECOVERY_TOKENS : ANALYTICAL_OUTPUT_INITIAL_TOKENS;
   const routeLimit = model.capabilities.maxOutputTokens;
   return Math.max(1, Math.floor(routeLimit ? Math.min(routeLimit, requested) : requested));
 }

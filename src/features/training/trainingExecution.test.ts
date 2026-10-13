@@ -1,3 +1,4 @@
+import { runBlindJudging } from "../../judge/engine";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
@@ -651,4 +652,19 @@ describe("Training execution", () => {
     expect(testHarness.reflect).toHaveBeenCalledOnce();
     expect(testHarness.reflect).toHaveBeenCalledWith(expect.objectContaining({ viewerReview: "Stored review" }));
   });
+});
+
+for (const length of [false, true]) it(`BUDGET-0 Training dispatches Judge ${length ? "16/32K" : "16K once"} through the shared engine`, async () => {
+  const testHarness = harness();
+  const judgeModel = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 65536 } };
+  const budgets: number[] = [];
+  const content = JSON.stringify({ scores: { gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 1, confabulationControl: 1 }, strongestMatches: ["structure"], majorMissesContradictions: [], confabulationObservations: [], conciseRationale: "Good structural match." });
+  testHarness.repository.recordFrozenJudgeResult = vi.fn(async (run, score) => ({ ...score, judgeIndex: run.judgeIndex, modelRoute: run.modelRoute, total: 6, frozenAt: "now", createdAt: "now" }));
+  testHarness.dependencies!.runBlindJudging = (request) => runBlindJudging({ ...request, chat: async ({ settings }) => {
+    budgets.push(settings.effective.maxOutputTokens!);
+    return { content, finishReason: length && budgets.length === 1 ? "length" : "stop", usage: {} };
+  } });
+  const outcome = await executeTrainingRun(input(run({ targetIds: ["t1"], judgeModelRoutes: [judgeModel.route] }), testHarness, { judges: [{ providerConfig: provider, model: judgeModel }] }));
+  expect(outcome.run.status).toBe("Completed");
+  expect(budgets).toEqual(length ? [16384, 32768] : [16384]);
 });

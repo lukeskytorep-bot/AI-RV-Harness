@@ -144,6 +144,8 @@ export interface ResearchConfig {
   conditions: ResearchConditionDefinition[];
   evaluationMode?: "save_only" | "ai_judges";
   judges: ResearchJudgeDefinition[];
+  /** Frozen for new projects; absent means the historical Judge 8K/16K contract. */
+  judgeOutputPolicy?: { version: 1; initialTokens: 16384; recoveryTokens: 32768 };
   randomization: { matchedTargets: true; randomizedExecution: true; randomizedJudgeOrder: true };
 }
 

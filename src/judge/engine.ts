@@ -13,7 +13,7 @@ import { createId } from "../storage/repository";
 import type { InterfaceLanguage } from "../types";
 import { getJudgePrompt } from "./prompt";
 import { JUDGE_RUBRIC_VERSION, type JudgeNarrative, type JudgeScoreRecord, type JudgingResult } from "./types";
-import { callWithAnalyticalOutputRecovery } from "../providers/outputRecovery";
+import { callWithAnalyticalOutputRecovery, type AnalyticalBudgetPolicy } from "../providers/outputRecovery";
 
 export type JudgeRepository = Pick<
   AppRepository,
@@ -31,6 +31,8 @@ export interface RunJudgingInput {
   language: InterfaceLanguage;
   judges: JudgeSelection[];
   anonymousSessionId?: string;
+  /** Explicit legacy compatibility for missing scores in already locked Research. */
+  budgetPolicy?: AnalyticalBudgetPolicy;
   loadImage?: (artifact: RevealArtifactRecord) => Promise<ProviderImageInput>;
   maxRetries?: number;
   timeoutMs?: number;
@@ -113,6 +115,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
       model: judge.model,
       messages,
       operationKind: "judge",
+      budgetPolicy: input.budgetPolicy,
       call: (settings) => chat({
         config: judge.providerConfig,
         modelId: judge.model.modelId,
@@ -134,6 +137,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
         model: judge.model,
         messages: repairMessages,
         operationKind: "judge",
+      budgetPolicy: input.budgetPolicy,
         call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: repairMessages, settings }),
       });
       response = repaired.response;
@@ -149,6 +153,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
         model: judge.model,
         messages: correctionMessages,
         operationKind: "judge",
+      budgetPolicy: input.budgetPolicy,
         call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: correctionMessages, settings }),
       })).response;
       parsed = parseJudgeOutput(response.content);
