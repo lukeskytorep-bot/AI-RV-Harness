@@ -3,6 +3,14 @@ import type { TelepathicProviderPacket } from "./packets";
 import { telepathicProviderScopeKey, type LeadGuidanceDecision, type TelepathicSeriesState, type TelepathicRoundState } from "./types";
 
 export const LEAD_INSTRUCTION_VERSION = "fixed_lead_guidance_v1";
+/** Blank human fields explicitly finish those current receivers; no broadcast fallback. */
+export function buildHumanLeadDecision(cycle:1|2|3,activeIds:string[],fields:Readonly<Record<string,string>>):LeadGuidanceDecision {
+  const individual=activeIds.flatMap(participantId=>{
+    const instruction=fields[participantId]?.trim()??"";
+    return instruction ? [{participantId,instruction}] : [];
+  });
+  return {cycle,finishRound:false,finishParticipantIds:activeIds.filter(id=>!fields[id]?.trim()),individual};
+}
 export function leadInstructions(language: "pl" | "en"): string {
   // Reuse the editable Monitor's neutral tasking guidance. Its opening blind
   // identity/access paragraphs and post-Reveal paragraph do not apply to a

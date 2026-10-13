@@ -96,3 +96,9 @@ Edward confirmed green CI for UX-TEL-2A. The navigation scope mentioned above is
 
 Both Telepathy panels use the shared transcript renderer. Participant navigation scrolls only its own container, subtracts the measured sticky navigation height, and focuses the destination without moving the page. Back returns the transcript to scrollTop 0. Each mounted instance has unique IDs. Checkpoint updates preserve focus and position; changing series or round resets local scroll. Hover and keyboard focus use TooltipButton. Theme accents and rounded metric tiles are scoped to Telepathy. Request construction, stored evidence, budgets and database contracts are unchanged. Real browser/Tauri visual and scroll acceptance is still required.
 
+## UX-TEL-3 — human guidance and own targets
+
+Edward confirmed green CI for UX-TEL-2B. Conversation now presents one question/instruction field per currently active receiver. Trimmed nonempty fields produce individual questions; empty fields explicitly finish those receivers' guidance in this round. There is no human broadcast field or recipient checkbox. The adjacent seal action closes guidance explicitly. The draft component is keyed by current series, round and cycle: checkpoint updates keep drafts; context changes and restart clear unsaved drafts. Busy, uncertain calls and unavailable ownership disable the form. The engine validates the current ready checkpoint under its existing lease; a saved finish decision must be applied by Resume before the next guidance cycle is offered. Cycles remain bounded to three.
+
+Human target preparation shows category and asks for one target of the person's own, without requiring the planner's geography. Only newly recorded human target instructions change. Historical events, locked targets and hashes are preserved. AI sender prompts and geography assignments remain unchanged. UX-TEL-3 is an audit candidate; native CI and desktop visual acceptance remain separate.
+

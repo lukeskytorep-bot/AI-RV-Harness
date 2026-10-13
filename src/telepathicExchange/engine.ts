@@ -522,7 +522,7 @@ export function telepathicConversationHumanStep(state: TelepathicSeriesState): T
   if (state.config.protocolVersion === "fixed_lead_v1" && !round.revealedAt && round.target?.status === "transmission_ready") {
     if (isSender && round.assignment.receiverParticipantIds.every(id => round.blindByParticipant[id]?.first) && !round.guidance?.closed) {
       const pending = round.guidance?.decisions.at(-1);
-      const answered = !pending || [...(pending.broadcast?.recipientIds ?? []), ...(pending.individual?.map(i => i.participantId) ?? [])].every(id => round.blindByParticipant[id]?.guidanceResponses?.some(r => r.cycle === pending.cycle));
+      const answered = !pending || (!pending.finishRound && pending.finishParticipantIds.every(id=>round.guidance?.finishedParticipantIds.includes(id)) && [...(pending.broadcast?.recipientIds ?? []), ...(pending.individual?.map(i => i.participantId) ?? [])].every(id => round.blindByParticipant[id]?.guidanceResponses?.some(r => r.cycle === pending.cycle)));
       if (answered && (pending?.cycle ?? 0) < 3) return { kind: "lead_guidance", roundNumber: round.assignment.roundNumber, cycle: ((pending?.cycle ?? 0)+1) as 1|2|3, activeIds: round.assignment.receiverParticipantIds.filter(id => !round.guidance?.finishedParticipantIds.includes(id)) };
     }
     if (!isSender) {
@@ -665,6 +665,7 @@ async function ensureGuidance(deps: TelepathicExchangeEngineDependencies, state:
 
 export async function saveHumanLeadGuidance(deps: TelepathicExchangeEngineDependencies, seriesId: string, decision: LeadGuidanceDecision): Promise<TelepathicSeriesState> {
   return mutateTelepathicSeries(deps,seriesId,async(state,round,human) => {
+    if (telepathicConversationHumanStep(state).kind !== "lead_guidance" || unresolvedTelepathicProviderCalls(state).length) throw new Error("Human lead guidance requires the current ready checkpoint.");
     if (state.config.protocolVersion !== "fixed_lead_v1" || round.assignment.senderParticipantId !== human.id || round.revealedAt) throw new Error("Human lead decision is unavailable.");
     round.guidance ??= { decisions: [], finishedParticipantIds: [], closed: false };
     if (round.guidance.closed || round.assignment.receiverParticipantIds.some(id => !round.blindByParticipant[id]?.first)) throw new Error("Guidance is closed or initial answers are missing.");
@@ -723,8 +724,7 @@ export async function advanceTelepathicConversationSeries(deps: TelepathicExchan
         if (sender.kind === "ai") await ensureTarget(deps, state, round, sender);
         else if (!round.target || round.target.status !== "transmission_ready") {
           round.status = "preparing_target";
-          const area=state.config.language==="pl"?round.assignment.targetGeography?.labelPl:round.assignment.targetGeography?.labelEn;
-          recordTranscript(state,{id:`${round.assignment.roundId}:human-target-instruction`,roundId:round.assignment.roundId,stage:"sender_target",kind:"instruction",authorId:"controller",recipientIds:[sender.id],text:state.config.language==="pl"?`Przygotuj jeden cel. Kategoria: ${state.config.topic}. Obszar: ${area??"—"}. Zapisz i zamroź go, następnie potwierdź przekaz.`:`Prepare one target. Category: ${state.config.topic}. Area: ${area??"—"}. Save and lock it, then confirm transmission.`},now(deps));
+          recordTranscript(state,{id:`${round.assignment.roundId}:human-target-instruction`,roundId:round.assignment.roundId,stage:"sender_target",kind:"instruction",authorId:"controller",recipientIds:[sender.id],text:state.config.language==="pl"?`Przygotuj i opisz jeden własny cel. Kategoria: ${state.config.topic ?? "any"}. Zapisz i zamroź go, następnie potwierdź przekaz.`:`Prepare and describe one target of your own. Category: ${state.config.topic ?? "any"}. Save and lock it, then confirm transmission.`},now(deps));
           state.status = "paused";
           await saveCheckpoint(deps, state);
           return structuredClone(state);

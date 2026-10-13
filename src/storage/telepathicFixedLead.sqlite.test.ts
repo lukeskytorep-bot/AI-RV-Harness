@@ -14,6 +14,7 @@ import type { TelepathicSeriesConfig } from "../telepathicExchange/types";
 import type { DatabaseTransactionStatement } from "./databaseNative";
 import { setTelepathicArchived } from "../telepathicExchange/archive";
 import { serializeTelepathicPlan } from "../telepathicExchange/persistence";
+import { buildHumanLeadDecision } from "../telepathicExchange/leadGuidance";
 function database(db = new DatabaseSync(":memory:"), initialize = true, beforeTransaction?:()=>void) {
  if(initialize) {
  db.exec("CREATE TABLE workspaces(id TEXT PRIMARY KEY); INSERT INTO workspaces VALUES ('w');");
@@ -89,6 +90,28 @@ function routeForA(): ResolvedTelepathicAiRoute {
   model:{providerConfigId:"c",provider:"custom_openai",modelId:"m",route:"m",capabilities:{contextTokens:64000,maxOutputTokens:32768,inputModalities:["text"],outputModalities:["text"],supportsVision:false,supportsStreaming:false,reasoning:{supported:true,efforts:["low","high"],confidence:"provider_metadata"},temperature:{supported:true,min:0,max:2,confidence:"provider_metadata"},supportedParameters:["temperature","reasoning","max_tokens"],source:"provider",capturedAt:"t"},pricing:{}} as ProviderModel,
   requestedSettings:{temperature:0.5,reasoningEffort:"low"},validatedIdentity:{profileId:"p",workspaceId:"w",aiIdentityId:"i",credentialFingerprint:"f"}};
 }
+
+describe("UX-TEL-3 durable human decisions",()=>{
+ for(const backend of ["sqlite","browser"] as const)it(`${backend}: save, reload before dispatch, one recipient, explicit finishes, then empty decision seals`,async()=>{
+  const {db,repository}=backend==="sqlite"?database():browser();try{
+   const cfg:TelepathicSeriesConfig={...config,participants:[config.participants[0],...['a','b','c'].map(id=>({...config.participants[1],id,displayName:id}))]};
+   await repository.saveTelepathicSeries(createTelepathicSeriesState(cfg));
+   const deps={store:repository,resolveRoute:async()=>routeForA(),providerAttempt:async()=>({content:"A new rounded shape",finishReason:"stop",usage:{}})};
+   await advanceTelepathicConversationSeries(deps,"sqlite");await saveHumanTelepathicTarget(deps,"sqlite",{content:"OWN TARGET"});await confirmHumanTelepathicTransmission(deps,"sqlite");
+   const initial=await advanceTelepathicConversationSeries(deps,"sqlite");const target=JSON.stringify(initial.rounds[0].target);
+   await saveHumanLeadGuidance(deps,"sqlite",buildHumanLeadDecision(1,["a","b","c"],{a:"Describe motion",b:"  \n",stale:"wrong ID"}));
+   const checkpoint=(await repository.getTelepathicSeries("sqlite"))!;expect(checkpoint.rounds[0].guidance!.decisions[0]).toEqual({cycle:1,finishRound:false,finishParticipantIds:["b","c"],individual:[{participantId:"a",instruction:"Describe motion"}]});
+   expect(telepathicConversationHumanStep(checkpoint).kind).toBe("none");
+   let state=await advanceTelepathicConversationSeries(deps,"sqlite");expect(state.providerCalls.filter(c=>c.callStage.startsWith("receiver_guidance:")).map(c=>c.participantId)).toEqual(["a"]);
+   expect(telepathicConversationHumanStep(state)).toMatchObject({kind:"lead_guidance",cycle:2,activeIds:["a"]});
+   await saveHumanLeadGuidance(deps,"sqlite",buildHumanLeadDecision(2,["a"],{}));
+   const saved=(await repository.getTelepathicSeries("sqlite"))!;expect(telepathicConversationHumanStep(saved).kind).toBe("none");
+   state=await advanceTelepathicConversationSeries(deps,"sqlite");expect(state.rounds[0].guidance!.closed).toBe(true);expect(state.rounds[0].blindByParticipant.a.status).toBe("sealed");expect(JSON.stringify(state.rounds[0].target)).toBe(target);
+   const reloaded=(await repository.getTelepathicSeries("sqlite"))!;expect(reloaded.rounds[0].guidance).toEqual(state.rounds[0].guidance);expect(reloaded.providerCalls.filter(c=>c.callStage.startsWith("receiver_guidance:"))).toHaveLength(1);
+   if(backend==="sqlite"){const native=db as DatabaseSync;expect(native.prepare("PRAGMA integrity_check").get()).toEqual({integrity_check:"ok"});expect(native.prepare("PRAGMA foreign_key_check").all()).toEqual([]);}
+  }finally{db.close();}
+ });
+});
 describe("both durable backends use the engine's frozen step contract",()=>{
  for(const backend of ["sqlite","browser"] as const) {
   for(const drift of ["temperature","reasoning","endpoint","budgetRestart"] as const) it(`${backend}: ${drift} after restart of a length attempt`,async()=>{

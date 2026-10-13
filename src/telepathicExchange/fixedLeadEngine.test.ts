@@ -7,6 +7,7 @@ import { createTelepathicSeriesState,runNextTelepathicAiRound,advanceTelepathicC
 import { InMemoryTelepathicExchangeStore } from "./store";
 import { buildTelepathicConversationView } from "./conversationView";
 import { telepathicRuntimeMetrics } from "./runtimeMetrics";
+import { buildHumanLeadDecision } from "./leadGuidance";
 function ai(id: string): TelepathicParticipant {
   return {
     id,
@@ -81,6 +82,73 @@ function answer(request:Parameters<ProviderChatAttempt>[0],cycles:number) {
   if(content.includes("YES or NO")) return "NO";
   return "A complete description or reflection.";
 }
+
+describe("UX-TEL-3 human individual fields with the executable engine",()=>{
+ async function ready(ids:string[]= ["a","b","c"],language:"pl"|"en"="en") {
+  const store=new InMemoryTelepathicExchangeStore();
+  const cfg:TelepathicSeriesConfig={...config,seriesId:"human-fields",language,mode:"conversation_exchange",participants:[{id:"human",kind:"human",displayName:"Edward"},...ids.map(ai)],senderPolicy:{kind:"human_only",humanParticipantId:"human"}};
+  const requests:Array<Parameters<ProviderChatAttempt>[0]>=[];
+  const deps={store,resolveRoute,providerAttempt:(async request=>{requests.push(request);return {content:answer(request,0),finishReason:"stop",usage:{}};}) as ProviderChatAttempt};
+  await store.saveTelepathicSeries(createTelepathicSeriesState(cfg));
+  await advanceTelepathicConversationSeries(deps,cfg.seriesId);
+  expect(requests).toHaveLength(0);
+  await saveHumanTelepathicTarget(deps,cfg.seriesId,{content:"human own frozen subject"});await confirmHumanTelepathicTransmission(deps,cfg.seriesId);
+  const state=await advanceTelepathicConversationSeries(deps,cfg.seriesId);
+  return {deps,store,state,requests,id:cfg.seriesId};
+ }
+ for(const ids of [["a","b"],["a","b","c"]])for(const selection of ["one","all","empty","space"] as const)it(`${ids.length} receivers / ${selection}: persists explicit IDs, dispatches only non-empty questions`,async()=>{
+  const f=await ready(ids);const fields=Object.fromEntries(ids.map(id=>[id,selection==="all" || selection==="one"&&id==="a"?`  Describe new movement for ${id}  `:selection==="space"?" \n\t ":""]));
+  const decision=buildHumanLeadDecision(1,ids,{...fields,stale:"Must never dispatch"});
+  const snapshot=JSON.stringify(f.state.rounds[0].target);
+  const saved=await saveHumanLeadGuidance(f.deps,f.id,decision);
+  expect(saved.rounds[0].guidance!.decisions[0]).toEqual(decision);expect(decision.broadcast).toBeUndefined();
+  expect(telepathicConversationHumanStep(saved).kind).toBe("none");
+  expect(f.requests).toHaveLength(ids.length);
+  const state=await advanceTelepathicConversationSeries(f.deps,f.id);
+  const called=state.providerCalls.filter(c=>c.callStage.startsWith("receiver_guidance:"));
+  const expected=ids.filter(id=>fields[id].trim());expect(called.map(c=>c.participantId)).toEqual(expected);
+  expect(called).toHaveLength(expected.length);expect(state.rounds[0].guidance!.finishedParticipantIds).toEqual(ids.filter(id=>!fields[id].trim()));
+  expect(JSON.stringify(state.rounds[0].target)).toBe(snapshot);
+  expect(state.config.participants.map(p=>p.id)).toEqual(["human",...ids]);
+  if(!expected.length){expect(state.rounds[0].guidance!.closed).toBe(true);expect(state.rounds[0].blindByParticipant.a.status).toBe("sealed");}
+ });
+ it("restarts between save and dispatch, resumes cycles 1–3 once, never reopens sealed blind",async()=>{
+  const f=await ready(["a","b"]);
+  for(const cycle of [1,2,3] as const){
+   const state=(await f.store.getTelepathicSeries(f.id))!;expect(telepathicConversationHumanStep(state)).toMatchObject({kind:"lead_guidance",cycle});
+   await saveHumanLeadGuidance(f.deps,f.id,buildHumanLeadDecision(cycle,["a","b"],{a:`Describe new movement ${cycle}`,b:`Describe new shape ${cycle}`}));
+   const restart=new InMemoryTelepathicExchangeStore();await restart.saveTelepathicSeries((await f.store.getTelepathicSeries(f.id))!);f.store=restart;f.deps={...f.deps,store:restart};
+   const completed=await advanceTelepathicConversationSeries(f.deps,f.id);
+   expect(completed.providerCalls.filter(c=>c.callStage.startsWith(`receiver_guidance:cycle:${cycle}:`))).toHaveLength(2);
+  }
+  const final=(await f.store.getTelepathicSeries(f.id))!;
+  expect(final.rounds[0].guidance!.closed).toBe(true);expect(final.rounds[0].blindByParticipant.a.guidanceResponses).toHaveLength(3);
+  const before=JSON.stringify(final);
+  await expect(saveHumanLeadGuidance(f.deps,f.id,{cycle:3,finishRound:true,finishParticipantIds:[]})).rejects.toThrow();
+  expect(JSON.stringify(await f.store.getTelepathicSeries(f.id))).toBe(before);
+ });
+ it("explicit seal ignores drafts and generates no receiver guidance calls",async()=>{
+  const f=await ready();await saveHumanLeadGuidance(f.deps,f.id,{cycle:1,finishRound:true,finishParticipantIds:[]});const state=await advanceTelepathicConversationSeries(f.deps,f.id);
+  expect(state.providerCalls.filter(c=>c.callStage.startsWith("receiver_guidance:"))).toHaveLength(0);expect(state.rounds[0].guidance!.closed).toBe(true);
+ });
+ for(const blocked of ["archive","uncertain","dispatched","cancelled"] as const)it(`${blocked} cannot mutate a human guidance decision`,async()=>{
+  const f=await ready();const state=(await f.store.getTelepathicSeries(f.id))!;
+  if(blocked==="archive")state.archivedAt="t";
+  else if(blocked==="cancelled")state.status="cancelled";
+  else state.providerCalls.push({...state.providerCalls[0],id:"unknown-call",status:blocked});
+  await f.store.saveTelepathicSeries(state);const before=JSON.stringify(state);
+  await expect(saveHumanLeadGuidance(f.deps,f.id,buildHumanLeadDecision(1,["a","b","c"],{}))).rejects.toThrow();
+  expect(JSON.stringify(await f.store.getTelepathicSeries(f.id))).toBe(before);
+ });
+ for(const language of ["pl","en"] as const)it(`${language}: own target instruction omits assigned geography, keeps historical instruction byte-identical`,async()=>{
+  const f=await ready(["a","b"],language);const state=(await f.store.getTelepathicSeries(f.id))!;
+  const instruction=state.transcript!.find(e=>e.id.endsWith("human-target-instruction"))!;
+  expect(instruction.text).not.toMatch(/Obszar:|Area:/);expect(instruction.text).toContain(language==="pl"?"własny cel":"of your own");
+  const pending=createTelepathicSeriesState({...state.config,seriesId:"historical"});pending.transcript=[{...instruction,seriesId:"historical",roundId:pending.rounds[0].assignment.roundId,id:`${pending.rounds[0].assignment.roundId}:human-target-instruction`,text:"HISTORICAL INSTRUCTION Area: ORIGINAL"}];
+  await f.store.saveTelepathicSeries(pending);const historical=JSON.stringify(pending.transcript[0]);
+  const refreshed=await advanceTelepathicConversationSeries(f.deps,"historical");expect(JSON.stringify(refreshed.transcript![0])).toBe(historical);
+ });
+});
 describe("fixed lead executable engine",()=>{
   for(const cycles of [0,1,2,3]) it(`runs ${cycles} optional cycles, seals every response and finalizes automatically`,async()=>{
     const store=new InMemoryTelepathicExchangeStore();await store.saveTelepathicSeries(createTelepathicSeriesState(config));

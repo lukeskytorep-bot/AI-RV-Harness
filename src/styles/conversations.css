@@ -129,6 +129,16 @@
 .telepathic-action-box textarea { width: 100%; resize: vertical; }
 .telepathic-action-box blockquote { margin: 0; padding: 9px 11px; border-left: 3px solid var(--border-strong); background: var(--surface-soft); white-space: pre-wrap; }
 .telepathic-action-row, .telepathic-image-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.telepathic-human-guidance-fields { border:0; margin:0; padding:0; min-width:0; display:grid; gap:14px; }
+.telepathic-human-guidance-fields > label { display:grid; gap:6px; min-width:0; overflow-wrap:anywhere; }
+.telepathic-human-guidance-fields textarea { width:100%; min-width:0; resize:vertical; }
+.telepathic-guidance-actions { align-items:stretch; }
+.telepathic-guidance-actions > button { flex:1 1 240px; min-width:0; white-space:normal; border-radius:14px; padding:12px; color:var(--text); }
+.telepathic-guidance-actions > .primary-button { background:color-mix(in srgb, var(--green) 18%, var(--surface-strong)); border:1px solid color-mix(in srgb, var(--green) 55%, var(--border)); }
+.telepathic-guidance-actions > .secondary-button { background:color-mix(in srgb, var(--violet) 12%, var(--surface-strong)); border:1px solid color-mix(in srgb, var(--violet) 45%, var(--border)); }
+.telepathic-guidance-actions > button:hover:enabled { border-color:var(--cyan); }
+.telepathic-guidance-actions > button:focus-visible { outline:2px solid var(--cyan); outline-offset:2px; }
+.telepathic-guidance-actions > button:disabled { opacity:.5; cursor:not-allowed; }
 .telepathic-image-row label { position: relative; overflow: hidden; }
 .telepathic-image-row input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 @media (max-width: 760px) { .telepathic-config-grid, .telepathic-route-grid { grid-template-columns: 1fr; } .telepathic-run-head { align-items: flex-start; flex-direction: column; } }

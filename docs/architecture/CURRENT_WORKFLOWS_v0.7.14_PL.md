@@ -74,3 +74,9 @@ Edward potwierdził zielone CI UX-TEL-2A. Wskazany wyżej zakres nawigacji jest 
 
 Oba panele telepatii używają wspólnego renderera transkryptu. Nawigacja przewija wyłącznie własny kontener, odejmuje zmierzoną wysokość przyklejonej listy i ustawia focus bez przesuwania strony. Powrót ustawia scrollTop transkryptu na 0. Każda instancja ma unikalne ID. Checkpoint zachowuje focus i pozycję; zmiana serii lub rundy zeruje lokalny scroll. TooltipButton obsługuje hover i focus klawiatury. Akcenty motywów i zaokrąglone metryki są ograniczone do telepatii. Requesty, dowody, budżety i kontrakty bazy pozostają bez zmian. Odbiór wizualny i rzeczywisty scroll w przeglądarce/Tauri nadal wymagają sprawdzenia.
 
+## UX-TEL-3 — prowadzenie przez człowieka i własny cel
+
+Edward potwierdził zielone CI UX-TEL-2B. Conversation ma po jednym polu pytania/instrukcji na aktywnego odbiorcę. Niepuste pole po trim daje indywidualne pytanie; puste jawnie kończy prowadzenie tej osoby w bieżącej rundzie. Nie ma wspólnego pola broadcast ani checkboxów odbiorców. Sąsiadujący przycisk zamyka blind jawną operacją. Komponent pól ma klucz bieżącej serii/rundy/cyklu: checkpoint zachowuje szkic, zmiana kontekstu lub restart usuwa niezapisany szkic. Busy, niepewne wywołania i niedostępny właściciel blokują formularz. Silnik pod istniejącym lease wymaga gotowego checkpointu; zapisane zakończenie musi zostać zastosowane przez Resume przed udostępnieniem kolejnego cyklu. Limit pozostaje trzy cykle.
+
+Przy tworzeniu celu człowiek widzi kategorię i prośbę o własny cel, bez wymogu geografii planera. Zmiana dotyczy wyłącznie nowych instrukcji w transkrypcie. Dawne wydarzenia, zamrożone cele i hashe pozostają zachowane. Prompty nadawcy AI i przypisania geograficzne bez zmian. UX-TEL-3 pozostaje kandydatem do audytu; native CI i wizualny odbiór desktopowy są osobnymi kontrolami.
+
