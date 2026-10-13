@@ -55,12 +55,12 @@ for (const role of ["judge", "live_monitor", "post_reveal_viewer", "post_reveal_
     : () => sendMonitorPostRevealReview({ repository: repository as never, sessionId: "s", existingTranscript: "", providerConfig: provider, model: limited, chat });
   await expect(run()).rejects.toThrow(); expect(chat).toHaveBeenCalledTimes(1);
 });
-for (const kind of ["field_guide_update", "viewer_notes_reflection"] as const) for (const training of [false, true]) it(`${kind}: keeps C + ${training ? '32/48K' : '8/16K'} unchanged`, async () => {
+for (const kind of ["field_guide_update", "viewer_notes_reflection"] as const) it(`${kind}: keeps explicit C + 32/48K`, async () => {
   const seen: number[] = [];
-  await callWithAnalyticalOutputRecovery({ model, messages: [{ role: "user", content: "Update" }], operationKind: kind, learningObjectCapacityTokens: 4096, budgetPolicy: training ? "training_reveal" : "default", call: async settings => {
+  await callWithAnalyticalOutputRecovery({ model, messages: [{ role: "user", content: "Update" }], operationKind: kind, learningObjectCapacityTokens: 4096, budgetPolicy: "training_reveal", call: async settings => {
     seen.push(settings.effective.maxOutputTokens!); return { content: "complete", finishReason: seen.length === 1 ? "length" : "stop", usage: {} };
   } });
-  expect(seen).toEqual(training ? [4096 + 32768, 4096 + 49152] : [4096 + 8192, 4096 + 16384]);
+  expect(seen).toEqual([4096 + 32768, 4096 + 49152]);
 });
 function draft(output = 8192): ResearchConfig {
   return { schemaVersion: 1, name: "Budget", workspaceId: "w", templateType: "custom", sessionLanguage: "en", protocol: { id: "full-rcp", version: "1.5a" }, targetIds: ["t"], repetitions: 1, requireUnusedTargets: false,

@@ -130,7 +130,7 @@ describe("analytical output recovery", () => {
     expect(physical).toHaveBeenCalledTimes(3);
   });
 
-  it("uses capacity + 8192 first and capacity + 16384 once for learning-object output recovery", async () => {
+  it("uses explicit capacity + 32768 first and capacity + 49152 once for learning-object output recovery", async () => {
     const budgets: number[] = [];
     const call = vi.fn(async (settings) => {
       budgets.push(settings.effective.maxOutputTokens ?? 0);
@@ -142,9 +142,10 @@ describe("analytical output recovery", () => {
       messages: [{ role: "user", content: "Reflect" }],
       operationKind: "viewer_notes_reflection",
       learningObjectCapacityTokens: 1024,
+      budgetPolicy: "training_reveal",
       call,
     });
-    expect(budgets).toEqual([9216, 17408]);
+    expect(budgets).toEqual([33792, 50176]);
     expect(result.attempt).toBe(1);
   });
 
@@ -170,25 +171,26 @@ describe("analytical output recovery", () => {
       messages: [{ role: "user", content: "Update" }],
       operationKind: "field_guide_update",
       learningObjectCapacityTokens: 2048,
+      budgetPolicy: "training_reveal",
       attempt: 0,
-    })).toBe(10240);
+    })).toBe(34816);
     expect(analyticalOutputBudget({
       model: learningModelLevel10240,
       messages: [{ role: "user", content: "Update" }],
       operationKind: "field_guide_update",
       learningObjectCapacityTokens: 2048,
+      budgetPolicy: "training_reveal",
       attempt: 1,
       allowOpenRouterEndpointRecoveryEscalation: true,
-    })).toBe(18432);
+    })).toBe(51200);
   });
 
-  it("keeps ordinary OpenRouter recovery clamped unless the Stage 1 endpoint escalation is explicitly enabled", () => {
+  it("keeps ordinary analytical OpenRouter recovery clamped without explicit escalation", () => {
     const limitedModel = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 8192 } };
     expect(analyticalOutputBudget({
       model: limitedModel,
       messages: [{ role: "user", content: "Existing capacity retry" }],
-      operationKind: "field_guide_update",
-      learningObjectCapacityTokens: 2048,
+      operationKind: "post_reveal_viewer",
       attempt: 1,
     })).toBe(8192);
   });
@@ -208,6 +210,7 @@ describe("analytical output recovery", () => {
       messages: [{ role: "user", content: "Reflect" }],
       operationKind: "viewer_notes_reflection",
       learningObjectCapacityTokens: 2048,
+      budgetPolicy: "training_reveal",
       attempt: 1,
     })).toBe(10240);
   });
@@ -253,12 +256,12 @@ describe("analytical output recovery", () => {
     expect(endpointDiscovery).toHaveBeenCalledTimes(1);
   });
 
-  it("routes learning-object recovery capacity+16384 past model-level capacity+8192", async () => {
+  it("routes explicit learning recovery C+49152 past the generic model ceiling", async () => {
     const learningModel = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 10240 } };
     const config: ProviderConfig = { id: "pc-learning-routing", provider: "openrouter", label: "OR", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
     const endpointDiscovery = vi.fn(async () => ({ data: { endpoints: [
       { tag: "small-route", context_length: 65536, max_completion_tokens: 10240 },
-      { tag: "large-route", context_length: 131072, max_completion_tokens: 32768 },
+      { tag: "large-route", context_length: 131072, max_completion_tokens: 51200 },
     ] } }));
     const outputs: number[] = [];
     const routed: Array<string[] | undefined> = [];
@@ -268,6 +271,7 @@ describe("analytical output recovery", () => {
       messages: [{ role: "user", content: "Frozen Field Guide packet" }],
       operationKind: "field_guide_update",
       learningObjectCapacityTokens: 2048,
+      budgetPolicy: "training_reveal",
       allowOpenRouterEndpointRecoveryEscalation: true,
       call: (settings, attempt) => executeProviderChat({
         config,
@@ -286,7 +290,7 @@ describe("analytical output recovery", () => {
         },
       }),
     });
-    expect(outputs).toEqual([10240, 18432]);
+    expect(outputs).toEqual([34816, 51200]);
     expect(routed[1]).toEqual(["large-route"]);
   });
 
@@ -372,6 +376,7 @@ describe("analytical output recovery", () => {
       messages: [{ role: "user", content: "Reflect" }],
       operationKind: "viewer_notes_reflection",
       learningObjectCapacityTokens: 1024,
+      budgetPolicy: "training_reveal",
       call,
     })).rejects.toThrow(/incomplete assistant response/);
     expect(call).toHaveBeenCalledTimes(2);
@@ -424,9 +429,10 @@ describe("analytical output recovery", () => {
     expect(budgets).toEqual([34816, 51200]);
   });
 
-  it("raises default analysis while preserving learning headroom outside Training Reveal", () => {
+  it("keeps default analysis independent from explicit learning headroom", () => {
     expect(analyticalOutputBudget({ model, messages: [{ role: "user", content: "Review" }], operationKind: "post_reveal_viewer", attempt: 0 })).toBe(32768);
-    expect(analyticalOutputBudget({ model, messages: [{ role: "user", content: "Notes" }], operationKind: "viewer_notes_reflection", learningObjectCapacityTokens: 2048, attempt: 0 })).toBe(10240);
+    expect(analyticalOutputBudget({ model, messages: [{ role: "user", content: "Notes" }], operationKind: "viewer_notes_reflection", learningObjectCapacityTokens: 2048,
+      budgetPolicy: "training_reveal", attempt: 0 })).toBe(34816);
   });
 
 });

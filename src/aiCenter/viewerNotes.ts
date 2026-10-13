@@ -1,3 +1,4 @@
+import { assertLearningBudgetPolicy, type LearningBudgetPolicy } from "../providers/operationResourceProfiles";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat } from "../providers/requestExecutor";
 import { credentialIdentityFingerprint } from "../providers/native";
@@ -18,7 +19,7 @@ import type {
   ViewerNotesSessionSnapshot,
 } from "./types";
 import { loadRevealImageForJudge } from "../artifacts/native";
-import { analyticalOutputBudget, callWithAnalyticalOutputRecovery, type AnalyticalBudgetPolicy } from "../providers/outputRecovery";
+import { analyticalOutputBudget, callWithAnalyticalOutputRecovery } from "../providers/outputRecovery";
 import { assertViewerNoteBasePair, viewerNoteBaseFromSnapshot } from "./baseVersion";
 import { requireExistingViewerIdentity } from "./viewerIdentitySelection";
 
@@ -387,16 +388,6 @@ export function validateViewerNoteContent(content: string, capacity: ViewerNoteC
   if (dangerous.test(content)) throw new Error("Viewer Notes contain a reserved control delimiter.");
 }
 
-export function reflectionOutputPreflight(model: ProviderModel, capacity: ViewerNoteCapacity, prompt: string): number {
-  return analyticalOutputBudget({
-    model,
-    messages: [{ role: "user", content: prompt }],
-    operationKind: "viewer_notes_reflection",
-    attempt: 0,
-    learningObjectCapacityTokens: capacity,
-  });
-}
-
 export function viewerNoteReflectionCompletesStage(status: string): status is ViewerNoteReflectionResult["status"] {
   return status === "UPDATE" || status === "NO_CHANGE" || status === "STALE_BASE";
 }
@@ -432,7 +423,7 @@ export async function runViewerNoteReflection(input: {
   timeoutMs?: number;
   maxRetries?: number;
   signal?: AbortSignal;
-  budgetPolicy?: AnalyticalBudgetPolicy;
+  budgetPolicy: LearningBudgetPolicy;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<ViewerNoteReflectionResult | null> {
   const [snapshot, reveal, evidence] = await Promise.all([
@@ -449,6 +440,7 @@ export async function runViewerNoteReflection(input: {
   const alreadyCompleted = priorRuns.find((run) => run.sourceSnapshot.sessionId === input.sessionId && viewerNoteReflectionCompletesStage(run.status));
   if (alreadyCompleted && viewerNoteReflectionCompletesStage(alreadyCompleted.status)) return { status: alreadyCompleted.status };
 
+  assertLearningBudgetPolicy(input.budgetPolicy);
   const frozenPrompt = snapshot.rvSystemPrompt;
   if (!frozenPrompt?.fullContent.trim()) throw new Error("Viewer Notes Reflection requires the exact effective Viewer prompt frozen in the Session Snapshot.");
   if (await sha256Text(frozenPrompt.fullContent) !== frozenPrompt.contentSha256) throw new Error("Frozen Viewer prompt hash does not match its Session Snapshot content.");
@@ -525,7 +517,7 @@ export async function runViewerNoteReflection(input: {
     { role: "user", content: prompt, ...(images.length ? { images } : {}) },
   ];
   try {
-    analyticalOutputBudget({ model: input.model, messages: reflectionMessages, operationKind: "viewer_notes_reflection", attempt: 0, learningObjectCapacityTokens: packet.capacityTokens, ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}) });
+    analyticalOutputBudget({ model: input.model, messages: reflectionMessages, operationKind: "viewer_notes_reflection", attempt: 0, learningObjectCapacityTokens: packet.capacityTokens, budgetPolicy: input.budgetPolicy });
   } catch (cause) {
     await input.repository.failViewerNoteReflection(runId, "FAILED_OUTPUT_PREFLIGHT", cause instanceof Error ? cause.message : String(cause));
     return null;
@@ -539,7 +531,7 @@ export async function runViewerNoteReflection(input: {
       operationKind: "viewer_notes_reflection",
       requestedSettings: snapshot.generationSettings.requested,
       learningObjectCapacityTokens: packet.capacityTokens,
-      ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
+      budgetPolicy: input.budgetPolicy,
       recoveryInstruction: viewerNotesOutputRecoveryInstruction(snapshot.sessionLanguage),
       recoveryReasoningMaxTokens: 10_000,
       recoveryReasoningMaxTokensSupported: frozenSupportsExactReasoningMaxTokens(snapshot.capabilitySnapshot),
@@ -566,7 +558,7 @@ export async function runViewerNoteReflection(input: {
         messages: repairMessages,
         operationKind: "viewer_notes_reflection",
         learningObjectCapacityTokens: packet.capacityTokens,
-        ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
+        budgetPolicy: input.budgetPolicy,
         call: (repairSettings) => executeProviderChat({
           config: input.providerConfig,
           modelId: input.model.modelId,
@@ -611,7 +603,7 @@ export async function runViewerNoteReflection(input: {
           operationKind: "viewer_notes_reflection",
           requestedSettings: snapshot.generationSettings.requested,
           learningObjectCapacityTokens: packet.capacityTokens,
-          ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
+          budgetPolicy: input.budgetPolicy,
           call: (retrySettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: retryMessages, settings: retrySettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.capacity-retry", ...(input.budgetPolicy === "training_reveal" ? { operationKind: "viewer_notes_reflection" as const } : {}), attempt: input.chat }),
         });
         finalResponse = retry.response;
@@ -632,7 +624,7 @@ export async function runViewerNoteReflection(input: {
             messages: repairMessages,
             operationKind: "viewer_notes_reflection",
             learningObjectCapacityTokens: packet.capacityTokens,
-            ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
+            budgetPolicy: input.budgetPolicy,
             call: (repairSettings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: repairMessages, settings: repairSettings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "viewer-notes.capacity-json-repair", ...(input.budgetPolicy === "training_reveal" ? { operationKind: "viewer_notes_reflection" as const } : {}), attempt: input.chat }),
           });
           finalResponse = repair.response;

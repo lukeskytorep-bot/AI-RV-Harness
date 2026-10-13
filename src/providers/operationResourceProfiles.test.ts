@@ -69,10 +69,10 @@ describe("ORP1 operation resource profiles", () => {
     }
   });
 
-  it("adds exactly 8192/16384 tokens of generation headroom above every supported learning-object capacity", () => {
+  it("adds exactly 32768/49152 tokens of generation headroom above every supported learning-object capacity", () => {
     for (const capacity of [1024, 2048, 4096, 8192]) {
-      expect(learningObjectOutputAllowance(capacity, 0)).toBe(capacity + 8192);
-      expect(learningObjectOutputAllowance(capacity, 1)).toBe(capacity + 16384);
+      expect(learningObjectOutputAllowance(capacity, 0, "training_reveal")).toBe(capacity + 32768);
+      expect(learningObjectOutputAllowance(capacity, 1, "training_reveal")).toBe(capacity + 49152);
     }
   });
 

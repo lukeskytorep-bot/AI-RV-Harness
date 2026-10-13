@@ -149,7 +149,7 @@ describe("Field Guide Update", () => {
   it.each(["pl", "en"] as const)("executes %s NO_CHANGE with the matching frozen language and lexicon", async (language) => {
     const h = integrationHarness({ language });
     const chat = vi.fn(async () => response('{"decision":"NO_CHANGE","changeSummary":"No durable new signature"}'));
-    const result = await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
+    const result = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
     expect(result?.status).toBe("NO_CHANGE");
     expect(result?.audit.language).toBe(language);
     expect(result?.audit.lexiconId).toBe(`ai-field-perception-lexicon.${language}`);
@@ -158,8 +158,8 @@ describe("Field Guide Update", () => {
   it("stores NO_CHANGE durably and is idempotent on Resume", async () => {
     const h = integrationHarness();
     const chat = vi.fn(async () => response('{"decision":"NO_CHANGE","changeSummary":"Existing guide remains useful"}'));
-    const first = await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
-    const second = await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
+    const first = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
+    const second = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
     expect(first?.status).toBe("NO_CHANGE");
     expect(second?.audit.packetSha256).toBe(first?.audit.packetSha256);
     expect(chat).toHaveBeenCalledTimes(1);
@@ -171,8 +171,8 @@ describe("Field Guide Update", () => {
     const chat = vi.fn()
       .mockRejectedValueOnce(new Error("temporary provider outage"))
       .mockResolvedValueOnce(response('{"decision":"NO_CHANGE","changeSummary":"Existing guide remains useful"}', "recovered"));
-    const first = await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
-    const second = await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
+    const first = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
+    const second = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
     expect(first?.status).toBe("FAILED_PROVIDER");
     expect(second?.status).toBe("NO_CHANGE");
     expect(chat).toHaveBeenCalledTimes(2);
@@ -182,7 +182,7 @@ describe("Field Guide Update", () => {
   it.each(["pl", "en"] as const)("executes %s UPDATE with same-language provenance", async (language) => {
     const h = integrationHarness({ language });
     const chat = vi.fn(async () => response('{"decision":"UPDATE","fieldGuide":"Geometric pressure with rhythmic reflection is more useful than temperature alone.","changeSummary":"Refined a durable perceptual distinction"}'));
-    const result = await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
+    const result = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
     expect(result?.status).toBe("UPDATE");
     expect(h.created).toHaveLength(1);
     expect(h.created[0].language).toBe(language);
@@ -193,7 +193,7 @@ describe("Field Guide Update", () => {
     const h = integrationHarness();
     const frozenBefore = structuredClone(h.sessionFrozen);
     const chat = vi.fn(async () => response('{"decision":"UPDATE","fieldGuide":"Vertical geometric pressure plus rhythmic reflection is more useful than coldness alone.","changeSummary":"Refined lighthouse-like structural signature without target identity"}'));
-    const result = await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
+    const result = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
     expect(result?.status).toBe("UPDATE");
     expect(h.created).toHaveLength(1);
     expect(h.created[0].previousVersionId).toBe("fg-v1");
@@ -211,7 +211,7 @@ describe("Field Guide Update", () => {
     const chat = vi.fn()
       .mockResolvedValueOnce(response(JSON.stringify({ decision: "UPDATE", fieldGuide: huge, changeSummary: "too long" }), "r1"))
       .mockResolvedValueOnce(response('{"decision":"NO_CHANGE","changeSummary":"Cannot improve within the limit"}', "r2"));
-    const result = await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
+    const result = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
     expect(result?.status).toBe("NO_CHANGE");
     expect(result?.audit.attemptCount).toBe(2);
     expect(chat).toHaveBeenCalledTimes(2);
@@ -226,7 +226,7 @@ describe("Field Guide Update", () => {
       .mockResolvedValueOnce(response(JSON.stringify({ decision: "UPDATE", fieldGuide: huge, changeSummary: "too long" }), "r1"))
       .mockResolvedValueOnce({ content: "", reasoningContent: "thinking", finishReason: "length", providerRequestId: "r2", usage: {} })
       .mockResolvedValueOnce(response('{"decision":"NO_CHANGE","changeSummary":"Recovered within the capacity limit"}', "r3"));
-    const result = await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat, budgetPolicy: "training_reveal" });
+    const result = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
     expect(result?.status).toBe("NO_CHANGE");
     expect(chat).toHaveBeenCalledTimes(3);
     expect(result?.audit.attemptCount).toBe(3);
@@ -237,7 +237,7 @@ describe("Field Guide Update", () => {
     const h = integrationHarness();
     const huge = "x".repeat(9000);
     const chat = vi.fn(async () => response(JSON.stringify({ decision: "UPDATE", fieldGuide: huge, changeSummary: "still too long" })));
-    const result = await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
+    const result = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
     expect(result?.status).toBe("FAILED_CAPACITY");
     expect(chat).toHaveBeenCalledTimes(2);
     expect(h.created).toHaveLength(0);
@@ -257,7 +257,7 @@ describe("Field Guide Update", () => {
         expect(JSON.stringify(request.messages)).toContain("deterministic JSON formatter");
         return response('{"decision":"NO_CHANGE","fieldGuide":null,"changeSummary":"No reliable new signature"}', "repair");
       });
-    const result = await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
+    const result = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
     expect(result?.status).toBe("NO_CHANGE");
     expect(chat).toHaveBeenCalledTimes(2);
   });
@@ -265,29 +265,41 @@ describe("Field Guide Update", () => {
   it("rejects route or identity drift before a paid provider call", async () => {
     const h = integrationHarness();
     const chat = vi.fn();
-    await expect(runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model: { ...model, modelId: "other" }, chat })).rejects.toThrow("exact Viewer route");
+    await expect(runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model: { ...model, modelId: "other" }, chat })).rejects.toThrow("exact Viewer route");
     expect(chat).not.toHaveBeenCalled();
   });
 
   it("never runs for Research sessions", async () => {
     const h = integrationHarness({ research: true });
     const chat = vi.fn();
-    expect(await runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat })).toBeNull();
+    expect(await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat })).toBeNull();
     expect(chat).not.toHaveBeenCalled();
   });
 });
 
-for(const recovery of ["length","json","capacity"] as const) it(`B2 Training Field Guide ${recovery} keeps C and forwards 32K/48K headroom on every call`,async()=>{
+for(const recovery of ["length","json","capacity","capacity-json"] as const) it(`B2 Training Field Guide ${recovery} keeps C and forwards 32K/48K headroom on every call`,async()=>{
  const h=integrationHarness(),budgets:number[]=[];
  const chat=vi.fn(async (request:Parameters<NonNullable<Parameters<typeof runFieldGuideUpdate>[0]["chat"]>>[0])=>{
   budgets.push(request.settings.effective.maxOutputTokens!);
-  if(recovery==="length"&&budgets.length===1||recovery!=="length"&&budgets.length===2)return {content:"partial",finishReason:"length",usage:{}};
+  if(recovery==="capacity-json"&&budgets.length===2)return response("malformed JSON");
+  if(recovery==="capacity-json"&&budgets.length===3)return {content:"partial",finishReason:"length",usage:{}};
+  if(recovery==="length"&&budgets.length===1||["json","capacity"].includes(recovery)&&budgets.length===2)return {content:"partial",finishReason:"length",usage:{}};
   if(budgets.length===1&&recovery==="json")return response("malformed JSON");
-  if(budgets.length===1&&recovery==="capacity")return response(JSON.stringify({decision:"UPDATE",fieldGuide:"x".repeat(9000),changeSummary:"too long"}));
+  if(budgets.length===1&&["capacity","capacity-json"].includes(recovery))return response(JSON.stringify({decision:"UPDATE",fieldGuide:"x".repeat(9000),changeSummary:"too long"}));
   return response('{"decision":"NO_CHANGE","changeSummary":"The guide remains useful"}');
  });
  const result=await runFieldGuideUpdate({repository:h.repository,trainingRun:h.run,sessionId:"session-1",postRevealReview:"Review",providerConfig:provider,model,chat,budgetPolicy:"training_reveal"});
  expect(result?.status).toBe("NO_CHANGE");
- expect(budgets).toEqual(recovery==="length"?[2048+32768,2048+49152]:[2048+32768,2048+32768,2048+49152]);
+ expect(budgets).toEqual(recovery==="capacity-json"?[2048+32768,2048+32768,2048+32768,2048+49152]:recovery==="length"?[2048+32768,2048+49152]:[2048+32768,2048+32768,2048+49152]);
  expect(h.sessionFrozen.capacityTokens).toBe(2048);expect(h.created).toHaveLength(0);
+});
+
+for (const invalid of [undefined, "default", "legacy_analytical"] as const) it(`B4 Field Guide rejects ${invalid} before provider or audit mutation`, async () => {
+  const h = integrationHarness();
+  const before = JSON.stringify(h.run);
+  const chat = vi.fn();
+  await expect(runFieldGuideUpdate({ repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat, budgetPolicy: invalid as "training_reveal" })).rejects.toThrow(/explicit training_reveal/);
+  expect(chat).not.toHaveBeenCalled();
+  expect(JSON.stringify(h.run)).toBe(before);
+  expect(h.created).toHaveLength(0);
 });

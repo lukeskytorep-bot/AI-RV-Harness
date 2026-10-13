@@ -1,5 +1,5 @@
 import { resolveGenerationSettings } from "./capabilities";
-import { getOperationResourceProfile, learningObjectOutputAllowance, type OperationKind } from "./operationResourceProfiles";
+import { getOperationResourceProfile, learningObjectOutputAllowance, type OperationKind, type LearningBudgetPolicy } from "./operationResourceProfiles";
 import type { EffectiveGenerationSettings, GenerationSettings, ProviderChatResponse, ProviderMessage, ProviderModel } from "./types";
 
 export const ANALYTICAL_OUTPUT_INITIAL_TOKENS = 32768;
@@ -28,18 +28,17 @@ export function estimateProviderMessageTokens(messages: ProviderMessage[]): numb
   return textTokens + imageTokens;
 }
 
-function preferredAnalyticalOutputTokens(input: {
-  operationKind: OperationKind;
-  attempt: 0 | 1;
-  learningObjectCapacityTokens?: number;
-  budgetPolicy?: AnalyticalBudgetPolicy;
-}): number {
+export type AnalyticalOutputOperation =
+  | { operationKind: "field_guide_update" | "viewer_notes_reflection"; learningObjectCapacityTokens: number; budgetPolicy: LearningBudgetPolicy }
+  | { operationKind: Exclude<OperationKind, "field_guide_update" | "viewer_notes_reflection">; learningObjectCapacityTokens?: never; budgetPolicy?: AnalyticalBudgetPolicy };
+
+function preferredAnalyticalOutputTokens(input: AnalyticalOutputOperation & { attempt: 0 | 1 }): number {
   const profile = getOperationResourceProfile(input.operationKind);
-  if (profile.outputPolicy === "capacity_bound_learning_object") {
+  if (input.operationKind === "field_guide_update" || input.operationKind === "viewer_notes_reflection") {
     if (!input.learningObjectCapacityTokens || input.learningObjectCapacityTokens <= 0) {
       throw new Error(`Operation ${input.operationKind} requires a positive learning-object capacity.`);
     }
-    return learningObjectOutputAllowance(input.learningObjectCapacityTokens, input.attempt, input.budgetPolicy === "training_reveal");
+    return learningObjectOutputAllowance(input.learningObjectCapacityTokens, input.attempt, input.budgetPolicy);
   }
   if (profile.outputPolicy !== "reasoning_heavy_analytical") {
     throw new Error(`Operation ${input.operationKind} does not use analytical output recovery.`);
@@ -50,15 +49,12 @@ function preferredAnalyticalOutputTokens(input: {
   return input.attempt === 0 ? ANALYTICAL_OUTPUT_INITIAL_TOKENS : ANALYTICAL_OUTPUT_RECOVERY_TOKENS;
 }
 
-export function analyticalOutputBudget(input: {
+export function analyticalOutputBudget(input: AnalyticalOutputOperation & {
   model: ProviderModel;
   messages: ProviderMessage[];
-  operationKind: OperationKind;
   attempt: 0 | 1;
-  learningObjectCapacityTokens?: number;
   minimumUsefulTokens?: number;
   allowOpenRouterEndpointRecoveryEscalation?: boolean;
-  budgetPolicy?: AnalyticalBudgetPolicy;
 }): number {
   const preferred = preferredAnalyticalOutputTokens(input);
   // OpenRouter analytical recovery must reach endpoint-level capacity discovery
@@ -103,18 +99,15 @@ export function assertCompleteAnalyticalResponse(response: ProviderChatResponse)
   }
 }
 
-export async function callWithAnalyticalOutputRecovery(input: {
+export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOperation & {
   model: ProviderModel;
   messages: ProviderMessage[];
-  operationKind: OperationKind;
   requestedSettings?: GenerationSettings;
-  learningObjectCapacityTokens?: number;
   minimumUsefulTokens?: number;
   recoveryInstruction?: string;
   recoveryReasoningMaxTokens?: number;
   recoveryReasoningMaxTokensSupported?: boolean;
   allowOpenRouterEndpointRecoveryEscalation?: boolean;
-  budgetPolicy?: AnalyticalBudgetPolicy;
   call: (settings: EffectiveGenerationSettings, attempt: 0 | 1, messages: ProviderMessage[]) => Promise<ProviderChatResponse>;
 }): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; attempt: 0 | 1 }> {
   let firstBudget = 0;
@@ -124,16 +117,7 @@ export async function callWithAnalyticalOutputRecovery(input: {
         ? { ...message, content: `${message.content}\n\n[ANALYTICAL OUTPUT RECOVERY]\n${input.recoveryInstruction!.trim()}` }
         : message)
       : input.messages;
-    const budget = analyticalOutputBudget({
-      model: input.model,
-      messages: attemptMessages,
-      operationKind: input.operationKind,
-      attempt,
-      learningObjectCapacityTokens: input.learningObjectCapacityTokens,
-      minimumUsefulTokens: input.minimumUsefulTokens,
-      allowOpenRouterEndpointRecoveryEscalation: input.allowOpenRouterEndpointRecoveryEscalation,
-      ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
-    });
+    const budget = analyticalOutputBudget({ ...input, messages: attemptMessages, attempt });
     if (attempt === 1 && budget <= firstBudget) throw new Error(`Provider exhausted the available analytical output budget; this route cannot increase beyond ${firstBudget} tokens.`);
     if (attempt === 0) firstBudget = budget;
     const requestedSettings: GenerationSettings = { ...input.requestedSettings, maxOutputTokens: budget };

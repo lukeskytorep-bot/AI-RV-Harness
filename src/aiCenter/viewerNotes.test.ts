@@ -165,7 +165,7 @@ describe("Viewer Notes", () => {
   });
 
 
-  it.each(["legacy","training-length","training-json","training-capacity"] as const)("uses the exact prompt snapshot and post-update Field Guide for Reflection: %s", async scenario => {
+  it.each(["training-complete","training-length","training-json","training-capacity","training-capacity-json","missing-policy","wrong-policy"] as const)("uses the exact prompt snapshot and post-update Field Guide for Reflection: %s", async scenario => {
     const providerConfig: ProviderConfig = { id: "provider", provider: "openrouter", label: "Provider", credentialId: "credential", enabled: true, createdAt: "now", updatedAt: "now" };
     const model: ProviderModel = {
       providerConfigId: providerConfig.id,
@@ -207,16 +207,30 @@ describe("Viewer Notes", () => {
     const budgets:number[]=[];
     const chat = vi.fn(async (request: Parameters<NonNullable<Parameters<typeof runViewerNoteReflection>[0]["chat"]>>[0]) => {
       budgets.push(request.settings.effective.maxOutputTokens!);
+      if (scenario === "training-capacity-json" && budgets.length === 2) return { content: "malformed JSON", usage: {} };
+      if (scenario === "training-capacity-json" && budgets.length === 3) return { content: "partial", finishReason: "length", usage: {} };
       if(scenario==="training-length"&&budgets.length===1||["training-json","training-capacity"].includes(scenario)&&budgets.length===2)return {content:"partial",finishReason:"length",usage:{}};
       if(scenario==="training-json"&&budgets.length===1)return {content:"malformed JSON",usage:{}};
-      if(scenario==="training-capacity"&&budgets.length===1)return {content:JSON.stringify({decision:"UPDATE",notes:"x".repeat(6000),changeSummary:"too long"}),usage:{}};
+      if(["training-capacity", "training-capacity-json"].includes(scenario)&&budgets.length===1)return {content:JSON.stringify({decision:"UPDATE",notes:"x".repeat(6000),changeSummary:"too long"}),usage:{}};
       return { content: '{"decision":"NO_CHANGE","notes":null,"changeSummary":"Distinct procedural notes remain sufficient"}', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, providerRequestId: "req" };
     });
 
-    const result = await runViewerNoteReflection({ repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: "fg-after-sha" }, chat, ...(scenario!=="legacy"?{budgetPolicy:"training_reveal" as const}:{}) });
+    const budgetPolicy = (scenario === "missing-policy" ? undefined : scenario === "wrong-policy" ? "default" : "training_reveal") as "training_reveal";
+    const before = JSON.stringify(snapshot);
+    const operation = runViewerNoteReflection({ budgetPolicy, repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: "fg-after-sha" }, chat });
+
+    if (scenario === "missing-policy" || scenario === "wrong-policy") {
+      await expect(operation).rejects.toThrow(/explicit training_reveal/);
+      expect(chat).not.toHaveBeenCalled();
+      expect(begin).not.toHaveBeenCalled();
+      expect(commit).not.toHaveBeenCalled();
+      expect(JSON.stringify(snapshot)).toBe(before);
+      return;
+    }
+    const result = await operation;
 
     expect(result).toEqual({ status: "NO_CHANGE" });
-    expect(budgets).toEqual(scenario==="legacy"?[8192]:scenario==="training-length"?[1024+32768,1024+49152]:[1024+32768,1024+32768,1024+49152]);
+    expect(budgets).toEqual(scenario==="training-capacity-json"?[1024+32768,1024+32768,1024+32768,1024+49152]:scenario==="training-complete"?[1024+32768]:scenario==="training-length"?[1024+32768,1024+49152]:[1024+32768,1024+32768,1024+49152]);
     expect(snapshot.viewerNotes?.capacityTokens).toBe(1024);
     const userPrompt = chat.mock.calls[0][0].messages.find((message: { role: string; content: string }) => message.role === "user")?.content ?? "";
     expect(userPrompt).toContain(effectivePrompt);
@@ -243,7 +257,7 @@ describe("Viewer Notes", () => {
     const model = { modelId: "viewer", route: "route" } as ProviderModel;
     // The completed-run check happens before route/prompt reconstruction and therefore before any paid call.
     Object.assign(snapshot, { sessionId: "session_1", providerConfigId: "provider", modelId: "viewer", modelRoute: "route" });
-    const result = await runViewerNoteReflection({ repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "LEGACY_UNRECORDED", versionId: "legacy", versionNumber: 1, contentSha256: "legacy" }, chat });
+    const result = await runViewerNoteReflection({ budgetPolicy: "training_reveal", repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "LEGACY_UNRECORDED", versionId: "training-complete", versionNumber: 1, contentSha256: "training-complete" }, chat });
     expect(result?.status).toBe(status);
     expect(chat).not.toHaveBeenCalled();
   });
@@ -258,7 +272,7 @@ describe("Viewer Notes", () => {
       commitViewerNoteReflection: vi.fn(),
       listFieldGuideVersions: vi.fn(),
     } as unknown as AppRepository;
-    const result = await runViewerNoteReflection({ repository, sessionId: "session_1", viewerReview: "review", providerConfig: { id: "provider" } as ProviderConfig, model: {} as ProviderModel, fieldGuideAfterTrainingUpdate: { updateStatus: "LEGACY_UNRECORDED", versionId: "legacy", versionNumber: 1, contentSha256: "legacy" }, chat: vi.fn() });
+    const result = await runViewerNoteReflection({ budgetPolicy: "training_reveal", repository, sessionId: "session_1", viewerReview: "review", providerConfig: { id: "provider" } as ProviderConfig, model: {} as ProviderModel, fieldGuideAfterTrainingUpdate: { updateStatus: "LEGACY_UNRECORDED", versionId: "training-complete", versionNumber: 1, contentSha256: "training-complete" }, chat: vi.fn() });
     expect(result).toBeNull();
     expect(repository.getViewerNoteBundle).not.toHaveBeenCalled();
     expect(repository.beginViewerNoteReflection).not.toHaveBeenCalled();
