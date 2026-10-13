@@ -86,6 +86,7 @@ export interface TelepathicConversationSeriesView {
   finalReflections: Record<string, string>;
   humanStep: TelepathicConversationHumanStep;
   recoveryCalls: TelepathicConversationRecoveryCallView[];
+  repetitionStopped?: boolean;
   legacyTranscript?: boolean;
   transcript?: TelepathicSeriesState["transcript"];
   metrics?: ReturnType<typeof telepathicRuntimeMetrics>;
@@ -188,6 +189,7 @@ export function buildTelepathicConversationView(state: TelepathicSeriesState): T
     finalReflections: structuredClone(state.finalReflections),
     humanStep: telepathicConversationHumanStep(state),
     recoveryCalls,
+    ...(state.status === "blocked" && state.providerCalls.at(-1)?.finishReason === "repetition_runaway" ? { repetitionStopped: true } : {}),
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
   };

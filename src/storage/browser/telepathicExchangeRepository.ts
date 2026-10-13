@@ -88,6 +88,20 @@ export class BrowserTelepathicExchangeRepository implements TelepathicExchangeRe
     try { return await task(); } finally { this.activeLeases.delete(seriesId); browserFallbackLeases.delete(seriesId); }
   }
 
+  async getTelepathicSeriesLeaseState(seriesId: string): Promise<"idle" | "local" | "other" | "unknown"> {
+    if (this.activeLeases.has(seriesId)) {
+      await this.assertTelepathicSeriesLease(seriesId);
+      return this.activeLeases.get(seriesId)?.signal.aborted ? "unknown" : "local";
+    }
+    const locks = globalThis.navigator?.locks;
+    if (locks) {
+      // Probe the same lock as execution, without dispatching or writing state.
+      // query() is not supported by every Web Locks implementation.
+      return locks.request(`rvh-telepathic-series:${seriesId}`, { mode: "exclusive", ifAvailable: true }, lock => lock ? "idle" : "other");
+    }
+    return browserFallbackLeases.has(seriesId) ? "other" : "idle";
+  }
+
   async assertTelepathicSeriesLease(seriesId: string): Promise<void> {
     if (!this.activeLeases.has(seriesId)) throw new Error("Telepathic series lease is not active.");
   }

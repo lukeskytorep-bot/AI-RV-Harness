@@ -94,6 +94,8 @@ export interface AppRepository {
   withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T>;
   assertTelepathicSeriesLease(seriesId: string): Promise<void>;
   telepathicSeriesLeaseSignal(seriesId: string): AbortSignal | undefined;
+  /** Read-only ownership check; no provider dispatch or lease acquisition. */
+  getTelepathicSeriesLeaseState?(seriesId: string): Promise<"idle" | "local" | "other" | "unknown">;
   archiveTrainingRun(id: string): Promise<void>;
   restoreTrainingRun(id: string): Promise<void>;
   ensureAiIdentity(input: EnsureAiIdentityInput): Promise<AiIdentity>;

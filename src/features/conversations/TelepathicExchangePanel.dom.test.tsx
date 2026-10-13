@@ -19,7 +19,7 @@ function fixture(legacy=false){
  const participants=[{id:"human",kind:"human" as const,displayName:"Human"},{id:"a",kind:"ai" as const,displayName:"A",ai:{profileId:"a",profileName:"A",workspaceId:"w",aiIdentityId:"a",providerConfigId:"a",credentialId:"a",credentialFingerprint:"a",modelId:"a",route:"a"}}];
  const config:TelepathicSeriesConfig={schemaVersion:1,protocolVersion:legacy?undefined:"fixed_lead_v1",leadInstructionVersion:"v1",maxGuidanceCycles:3,seriesId:"mounted",seriesWorkspaceId:"w",mode:"conversation_exchange",language:"en",participants,roundCount:2,topic:"any",discloseTopicToReceivers:false,senderPolicy:{kind:"fixed_ai",participantId:"a"}};
  const state=createTelepathicSeriesState(config);state.status="paused";
- const repository={listProviderConfigs:vi.fn(async()=>[]),listProviderModels:vi.fn(async()=>[]),listTelepathicSeries:vi.fn(async()=>[state]),getTelepathicSeries:vi.fn(async()=>structuredClone(state))} as unknown as AppRepository;
+ const repository={getTelepathicSeriesLeaseState:async()=>"idle" as const,listProviderConfigs:vi.fn(async()=>[]),listProviderModels:vi.fn(async()=>[]),listTelepathicSeries:vi.fn(async()=>[state]),getTelepathicSeries:vi.fn(async()=>structuredClone(state))} as unknown as AppRepository;
  vi.mocked(repository).listTelepathicSeriesSummaries=vi.fn(async(query:TelepathicHistoryQuery)=>{
   const limit=validateHistoryQuery(query);
   const states=await repository.listTelepathicSeries();

@@ -158,6 +158,22 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
     }
   }
 
+  async getTelepathicSeriesLeaseState(seriesId: string): Promise<"idle" | "local" | "other" | "unknown"> {
+    const local = this.activeLeases.get(seriesId);
+    if (local && !local.lost) {
+      try { await this.assertTelepathicSeriesLease(seriesId); return "local"; }
+      catch { /* Re-read ownership after fencing marks the local lease lost. */ }
+    }
+    const rows = await this.dependencies.select<Array<{ run_lease_owner: string | null; run_lease_expires_at: string | null }>>(
+      "SELECT run_lease_owner, run_lease_expires_at FROM telepathic_series WHERE id=$1", [seriesId]);
+    const row = rows[0];
+    if (!row) return "unknown";
+    if (row.run_lease_owner && row.run_lease_expires_at && row.run_lease_expires_at > new Date().toISOString()) return "other";
+    // Acquisition uses strict '<', so equality remains unavailable until expiry.
+    if (row.run_lease_owner && row.run_lease_expires_at === new Date().toISOString()) return "unknown";
+    return "idle";
+  }
+
   async assertTelepathicSeriesLease(seriesId: string): Promise<void> {
     const lease = this.activeLeases.get(seriesId);
     if (!lease || lease.lost) throw new Error("Telepathic series lease was lost or is not active.");

@@ -182,6 +182,7 @@ export class SqliteRepository implements AppRepository {
   }
   assertTelepathicSeriesLease: AppRepository["assertTelepathicSeriesLease"] = (seriesId) => this.telepathicExchangeRepository.assertTelepathicSeriesLease(seriesId);
   telepathicSeriesLeaseSignal: AppRepository["telepathicSeriesLeaseSignal"] = (seriesId) => this.telepathicExchangeRepository.telepathicSeriesLeaseSignal(seriesId);
+  getTelepathicSeriesLeaseState: NonNullable<AppRepository["getTelepathicSeriesLeaseState"]> = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeriesLeaseState(seriesId);
 
   async archiveTrainingRun(id: string): Promise<void> {
     const run = (await this.trainingRepository.listTrainingRuns()).find((item) => item.id === id);

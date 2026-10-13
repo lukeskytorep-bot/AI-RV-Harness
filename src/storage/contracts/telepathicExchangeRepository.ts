@@ -9,4 +9,6 @@ export interface TelepathicExchangeRepository {
   withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T>;
   assertTelepathicSeriesLease(seriesId: string): Promise<void>;
   telepathicSeriesLeaseSignal(seriesId: string): AbortSignal | undefined;
+  /** Read-only ownership check; no provider dispatch or lease acquisition. */
+  getTelepathicSeriesLeaseState?(seriesId: string): Promise<"idle" | "local" | "other" | "unknown">;
 }
