@@ -64,6 +64,7 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
       ...(values.requestTimeoutMs ? { requestTimeoutMs: Number(values.requestTimeoutMs) } : {}),
       ...(values.maxRetries ? { maxRetries: Number(values.maxRetries) } : {}),
       ...(values.defaultMaxOutputTokens ? { defaultMaxOutputTokens: Number(values.defaultMaxOutputTokens) } : {}),
+      ...(values.conversationOutputBudgetVersion ? { conversationOutputBudgetVersion: Number(values.conversationOutputBudgetVersion) } : {}),
       ...(values.conversationMaxOutputTokens ? { conversationMaxOutputTokens: Number(values.conversationMaxOutputTokens) } : {}),
       ...(values.rvSessionMaxOutputTokens ? { rvSessionMaxOutputTokens: Number(values.rvSessionMaxOutputTokens) } : {}),
       ...(values.defaultRevealSource ? { defaultRevealSource: values.defaultRevealSource as AppSettings["defaultRevealSource"] } : {}),

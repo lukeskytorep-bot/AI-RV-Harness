@@ -231,3 +231,11 @@ describe("Viewer output recovery", () => {
   });
 
 });
+
+for(const operationKind of ["rv_session_viewer","training_blind_viewer","research_viewer"] as const) it(`B1 preserves default blind ${operationKind} requests at 16K/32K`,async()=>{
+ const budgets:number[]=[];
+ await callViewerWithOutputRecovery({model,baseSettings:base,operationKind,messages:[{role:"user",content:"blind"}],call:async settings=>{
+  budgets.push(settings.effective.maxOutputTokens!);return {content:"answer",finishReason:budgets.length===1?"length":"stop",usage:{}};
+ }});
+ expect(budgets).toEqual([16384,32768]);
+});

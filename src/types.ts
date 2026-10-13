@@ -51,6 +51,8 @@ export interface AppSettings {
   maxRetries: number;
   defaultMaxOutputTokens: number;
   conversationMaxOutputTokens: number;
+  /** One-time Conversation factory budget upgrade; later user choices survive. */
+  conversationOutputBudgetVersion?: number;
   rvSessionMaxOutputTokens: number;
   maxSessionCostUsd: number;
   defaultRevealSource: "external" | "automatic";

@@ -1,3 +1,5 @@
+import { DEFAULT_CONVERSATION_MAX_OUTPUT_TOKENS } from "../startupDefaults";
+import { chatOutputTokens, MANUAL_RV_OUTPUT_BUDGET_PROFILE } from "./outputPolicy";
 import { buildConversationPayload, buildManualRvPayload, type ScopedChatMessage } from "../domain/chatContext";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat, ProviderExecutionError } from "../providers/requestExecutor";
@@ -21,7 +23,7 @@ import type { AppRepository } from "../storage/repository";
 import { ProviderContinuationPersistenceError } from "../storage/providerContinuationState";
 import type { ChatMessage, ChatMode, InterfaceLanguage } from "../types";
 import type { WorkspaceSource } from "../sources/types";
-import { DEFAULT_UNKNOWN_OUTPUT_LIMIT, estimateContextBudget } from "./contextBudget";
+import { estimateContextBudget } from "./contextBudget";
 import { buildLocalTemporalContext } from "./temporalContext";
 import { loadConversationViewerContextKey, saveConversationViewerContextKey, viewerLearningSystemMessages, type ConversationViewerLearningSnapshot } from "./viewerLearning";
 
@@ -280,8 +282,9 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
         model: input.model,
         explicitRequested: requestedOutputTokens,
         recoveryLevel: 0,
+        budgetProfile: MANUAL_RV_OUTPUT_BUDGET_PROFILE,
       })
-      : requestedOutputTokens ?? input.model.capabilities.maxOutputTokens ?? DEFAULT_UNKNOWN_OUTPUT_LIMIT,
+      : requestedOutputTokens ?? chatOutputTokens("conversation", DEFAULT_CONVERSATION_MAX_OUTPUT_TOKENS, input.model),
   );
   if (maxOutputTokens < 1 || (input.model.capabilities.maxOutputTokens && maxOutputTokens > input.model.capabilities.maxOutputTokens)) {
     throw new Error("Maximum output tokens must be a positive integer within the selected model limit.");
@@ -306,6 +309,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
         model: input.model,
         baseSettings: settings,
         operationKind: "manual_rv_viewer",
+        budgetProfile: MANUAL_RV_OUTPUT_BUDGET_PROFILE,
         messages,
         abortSignal: input.signal,
         onIncompleteAttempt: async (attempt) => {

@@ -12,9 +12,16 @@ export const VIEWER_OUTPUT_POLICY_VERSION = 1;
 export const VIEWER_OUTPUT_INITIAL_TOKENS = 16_384;
 export const VIEWER_OUTPUT_RECOVERY_TOKENS = 32_768;
 
+export interface ViewerOutputBudgetProfile {
+  readonly version: number;
+  readonly initialTokens: number;
+  readonly recoveryTokens: number;
+}
+
 export type ViewerOutputCompletion = "complete" | "output_limit" | "repetition_runaway" | "empty" | "provider_error" | "refusal";
 
 export interface ViewerOutputAttemptRecord {
+  viewerOutputPolicyVersion?: number;
   attemptId: string;
   semanticAttempt: 1 | 2;
   recoveryLevel: 0 | 1;
@@ -82,8 +89,11 @@ export function viewerOutputPreferredBudget(input: {
   recoveryLevel: 0 | 1;
   preserveConfiguredBudget?: boolean;
   configuredBudget?: number;
+  budgetProfile?: ViewerOutputBudgetProfile;
 }): number {
-  const standardPreferred = input.recoveryLevel === 0 ? VIEWER_OUTPUT_INITIAL_TOKENS : VIEWER_OUTPUT_RECOVERY_TOKENS;
+  const standardPreferred = input.recoveryLevel === 0
+    ? input.budgetProfile?.initialTokens ?? VIEWER_OUTPUT_INITIAL_TOKENS
+    : input.budgetProfile?.recoveryTokens ?? VIEWER_OUTPUT_RECOVERY_TOKENS;
   let preferred = input.preserveConfiguredBudget
     ? Math.max(1, Math.floor(input.configuredBudget ?? input.explicitRequested ?? standardPreferred))
     : input.explicitRequested !== undefined && input.explicitRequested > standardPreferred
@@ -101,7 +111,8 @@ export function viewerOutputPreferredBudget(input: {
 }
 
 /**
- * Standard Viewer policy for ordinary RV/Training/manual-RV sessions.
+ * Default Viewer policy for automatic RV/Training. Manual RV selects its own
+ * explicit budget profile at the chat call site.
  * Research can preserve its locked output budget until the project explicitly
  * freezes a policy version in a later compatibility step.
  */
@@ -111,6 +122,7 @@ export function viewerOutputAttemptSettings(input: {
   operationKind?: OperationKind;
   recoveryLevel: 0 | 1;
   preserveConfiguredBudget?: boolean;
+  budgetProfile?: ViewerOutputBudgetProfile;
   lockedPolicy?: { initialTokens: number; recoveryTokens: number; preserveConfiguredBudget: boolean };
 }): EffectiveGenerationSettings {
   const configured = configuredOutputTokens(input.baseSettings, input.model);
@@ -122,6 +134,7 @@ export function viewerOutputAttemptSettings(input: {
     recoveryLevel: input.recoveryLevel,
     preserveConfiguredBudget: input.preserveConfiguredBudget,
     configuredBudget: configured,
+    budgetProfile: input.budgetProfile,
   });
 
   const requested = { ...input.baseSettings.requested, maxOutputTokens: preferred };
@@ -135,7 +148,7 @@ export function viewerOutputAttemptSettings(input: {
 
 export function viewerOutputAttemptMetadata(attempt: ViewerOutputAttemptRecord): Record<string, unknown> {
   return {
-    viewerOutputPolicyVersion: VIEWER_OUTPUT_POLICY_VERSION,
+    viewerOutputPolicyVersion: attempt.viewerOutputPolicyVersion ?? VIEWER_OUTPUT_POLICY_VERSION,
     accepted: false,
     reason: attempt.completion,
     semanticAttempt: attempt.semanticAttempt,
@@ -153,10 +166,10 @@ export function viewerOutputAttemptMetadata(attempt: ViewerOutputAttemptRecord):
   };
 }
 
-export function viewerOutputAcceptedMetadata(result: { settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2; attemptId?: string }): Record<string, unknown> {
+export function viewerOutputAcceptedMetadata(result: { settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2; attemptId?: string; viewerOutputPolicyVersion?: number }): Record<string, unknown> {
   const effective = result.settings.effective.maxOutputTokens;
   return {
-    viewerOutputPolicyVersion: VIEWER_OUTPUT_POLICY_VERSION,
+    viewerOutputPolicyVersion: result.viewerOutputPolicyVersion ?? VIEWER_OUTPUT_POLICY_VERSION,
     accepted: true,
     ...(result.attemptId ? { attemptId: result.attemptId } : {}),
     semanticAttempt: result.semanticAttempt,
@@ -203,6 +216,7 @@ export async function callViewerWithOutputRecovery(input: {
   operationKind?: OperationKind;
   messages: ProviderMessage[];
   preserveConfiguredBudget?: boolean;
+  budgetProfile?: ViewerOutputBudgetProfile;
   lockedPolicy?: { initialTokens: number; recoveryTokens: number; preserveConfiguredBudget: boolean };
   call: (settings: EffectiveGenerationSettings, semanticAttempt: 1 | 2, attempt: ViewerOutputDispatchAttempt) => Promise<ProviderChatResponse>;
   onIncompleteAttempt?: (attempt: ViewerOutputAttemptRecord) => void | Promise<void>;
@@ -211,7 +225,7 @@ export async function callViewerWithOutputRecovery(input: {
   priorIncompleteReason?: "output_limit" | "repetition_runaway";
   sessionLanguage?: InterfaceLanguage;
   abortSignal?: AbortSignal;
-}): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2; attemptId?: string; attempts: ViewerOutputAttemptRecord[] }> {
+}): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2; attemptId?: string; viewerOutputPolicyVersion?: number; attempts: ViewerOutputAttemptRecord[] }> {
   const kind = effectiveOperationKind(input.operationKind);
   if (!isViewerOutputRecoveryOperation(kind)) {
     const budget = input.baseSettings.effective.maxOutputTokens ?? input.baseSettings.requested.maxOutputTokens ?? 1;
@@ -239,6 +253,7 @@ export async function callViewerWithOutputRecovery(input: {
       recoveryLevel,
       preserveConfiguredBudget: input.lockedPolicy?.preserveConfiguredBudget ?? input.preserveConfiguredBudget,
       lockedPolicy: input.lockedPolicy,
+      budgetProfile: input.budgetProfile,
     });
     const budget = settings.effective.maxOutputTokens!;
     const context = estimateContextBudget(input.messages, input.model.capabilities.contextTokens, budget);
@@ -293,9 +308,10 @@ export async function callViewerWithOutputRecovery(input: {
         completion = "repetition_runaway";
       }
     }
-    if (completion === "complete") return { response, settings, semanticAttempt, attemptId: dispatchAttempt.attemptId, attempts };
+    if (completion === "complete") return { response, settings, semanticAttempt, attemptId: dispatchAttempt.attemptId, viewerOutputPolicyVersion: input.budgetProfile?.version ?? VIEWER_OUTPUT_POLICY_VERSION, attempts };
 
     const record: ViewerOutputAttemptRecord = {
+      viewerOutputPolicyVersion: input.budgetProfile?.version ?? VIEWER_OUTPUT_POLICY_VERSION,
       semanticAttempt,
       recoveryLevel,
       completion,

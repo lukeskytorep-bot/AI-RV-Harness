@@ -11,7 +11,7 @@ import { estimateContextBudget } from "../../chat/contextBudget";
 import { ConversationContinuationBreakError, estimateConversationContinuationMemoryBytes } from "../../chat/continuationMemory";
 import { buildChatProviderMessages, retryChatTurn, sendChatTurn } from "../../chat/engine";
 import { buildChatMarkdownExport } from "../../chat/export";
-import { defaultChatOutputTokens } from "../../chat/outputPreference";
+import { chatOutputTokens } from "../../chat/outputPolicy";
 import { clearPendingChatTurn, loadPendingChatTurn, savePendingChatTurn, type PendingChatTurn } from "../../chat/pendingTurn";
 import { conversationViewerContextKey, defaultConversationViewerLearningEnabled, loadConversationViewerLearningPreference, loadExistingConversationViewerLearningSnapshot, saveConversationViewerLearningPreference, type ConversationViewerLearningSnapshot } from "../../chat/viewerLearning";
 import { resolveSessionLanguage } from "../../domain/localization";
@@ -175,7 +175,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
 
   const selectedSources = sources.filter((source) => activeSourceIds.includes(source.id));
   const configuredOutputTokens = mode === "conversation" ? settings.conversationMaxOutputTokens : settings.rvSessionMaxOutputTokens;
-  const effectiveMaxOutputTokens = defaultChatOutputTokens(configuredOutputTokens, selectedModel?.capabilities.maxOutputTokens);
+  const effectiveMaxOutputTokens = chatOutputTokens(mode, configuredOutputTokens, selectedModel);
   const attachedProtocol = mode === "manual_rv" && manualProtocol !== "none"
     ? manualProtocol === "rcp"
       ? getFullRcp(language).content

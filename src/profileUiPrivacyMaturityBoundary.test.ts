@@ -21,7 +21,12 @@ describe("PROFILE-UI-PRIVACY-MATURITY-1 boundary", () => {
   it("preserves the previous single output setting as the upgrade seed", () => {
     const app = read("./App.tsx");
     expect(app).toContain("outputSettingsNeedUpgrade");
-    expect(app).toContain("storedSettings.defaultMaxOutputTokens ?? nextSettings.defaultMaxOutputTokens");
+    expect(app).toContain("applyStoredOutputSettings(nextSettings, storedSettings)");
+    const defaults = read("./startupDefaults.ts");
+    expect(defaults).toContain("const legacyOutput = storedSettings.defaultMaxOutputTokens");
+    expect(defaults).toContain("storedSettings.conversationMaxOutputTokens ?? legacyOutput ?? nextSettings.conversationMaxOutputTokens");
+    expect(app).toContain("(storedSettings.conversationOutputBudgetVersion ?? 0) < CONVERSATION_OUTPUT_BUDGET_VERSION");
+    expect(defaults).toContain("storedSettings.rvSessionMaxOutputTokens ?? legacyOutput ?? nextSettings.rvSessionMaxOutputTokens");
   });
 
   it("keeps Research experimental wording while removing Viewer Learning experimental labels", () => {

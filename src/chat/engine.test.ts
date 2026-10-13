@@ -116,7 +116,7 @@ describe("chat engine isolation", () => {
       chat: async (request) => { captured = request; return { content: "Contact", usage: {} }; },
     });
     expect(captured?.messages[0]).toEqual({ role: "system", content: "FIXED PROFILE VIEWER PROMPT" });
-    expect(captured?.settings.effective).toEqual({ reasoningEffort: "high", temperature: 0.9, maxOutputTokens: 16384 });
+    expect(captured?.settings.effective).toEqual({ reasoningEffort: "high", temperature: 0.9, maxOutputTokens: 32768 });
   });
 
   it("Manual RV clamps the first attempt to an 8K model limit and does not repeat the same capped budget after length", async () => {
@@ -141,7 +141,7 @@ describe("chat engine isolation", () => {
     expect(budgets).toEqual([8192]);
   });
 
-  it("Manual RV retries one length-limited turn at 32K without appending the partial assistant", async () => {
+  it("Manual RV retries one length-limited turn at 48K without appending the partial assistant", async () => {
     const repository = repo([]);
     const budgets: number[] = [];
     let calls = 0;
@@ -155,7 +155,7 @@ describe("chat engine isolation", () => {
           : { content: "complete", finishReason: "stop", usage: {} };
       },
     });
-    expect(budgets).toEqual([16384, 32768]);
+    expect(budgets).toEqual([32768, 49152]);
     expect(result.assistant.content).toBe("complete");
     const stored = await repository.listChatMessages("manual-recovery");
     expect(stored.map((message) => message.content)).toEqual(["Start", "complete"]);
@@ -695,4 +695,77 @@ describe("Conversation Viewer context continuity boundary", () => {
     expect(messages[0].metadata?.attachmentAttempts?.[1].images[0]).toMatchObject({ name: "target.webp", mimeType: "image/webp", state: "not_included" });
   });
 
+});
+
+describe("B1 actual chat requests", () => {
+  it("Conversation without an explicit output setting dispatches factory 16K", async () => {
+    const chat=vi.fn(async()=>({content:"Complete",finishReason:"stop",usage:{}}));
+    await sendChatTurn({repository:repo([]),threadId:"b1-default",mode:"conversation",language:"en",providerConfig:provider,model,content:"Hello",chat});
+    expect(chat.mock.calls).toHaveLength(1);
+    // Inspect the request at the provider adapter boundary.
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({settings:expect.objectContaining({requested:expect.objectContaining({maxOutputTokens:16384}),effective:expect.objectContaining({maxOutputTokens:16384})})}));
+  });
+  it("Conversation preserves saved 8K and does not introduce length recovery", async () => {
+    const budgets:number[]=[];
+    await sendChatTurn({repository:repo([]),threadId:"b1-saved",mode:"conversation",language:"en",providerConfig:provider,model,content:"Hello",requestedSettings:{maxOutputTokens:8192},chat:async request=>{
+      budgets.push(request.settings.effective.maxOutputTokens!);return {content:"partial",finishReason:"length",usage:{}};
+    }});
+    expect(budgets).toEqual([8192]);
+  });
+  it("complete Manual RV dispatches 32K once, including an operator Reveal turn",async()=>{
+    const repository=repo([]),budgets:number[]=[];
+    await sendChatTurn({repository,threadId:"b1-reveal",mode:"manual_rv",language:"en",providerConfig:provider,model,content:"Reveal: target is a tower. Analyze.",requestedSettings:{maxOutputTokens:8192},chat:async request=>{
+      budgets.push(request.settings.effective.maxOutputTokens!);expect(request.messages.at(-1)?.content).toContain("Reveal:");return {content:"Complete analysis",finishReason:"stop",usage:{}};
+    }});
+    expect(budgets).toEqual([32768]);
+    expect((await repository.listChatMessages("b1-reveal"))[0].metadata?.viewerOutputAccepted).toMatchObject({viewerOutputPolicyVersion:2,requestedMaxOutputTokens:32768,effectiveMaxOutputTokens:32768,semanticAttempt:1});
+  });
+  it("manual Retry uses the same 32K/48K profile without another user message or rewriting old evidence",async()=>{
+    const oldEvidence={viewerOutputPolicyVersion:1,semanticAttempt:1,content:"OLD PARTIAL",requestedMaxOutputTokens:16384,effectiveMaxOutputTokens:16384};
+    const repository=repo([{id:"old-user",threadId:"b1-retry",role:"user",content:"Reveal: inspect this target",createdAt:"old",metadata:{viewerOutputAttempts:[oldEvidence]}}]);
+    const budgets:number[]=[];
+    await retryChatTurn({repository,threadId:"b1-retry",mode:"manual_rv",language:"en",providerConfig:provider,model,requestedSettings:{maxOutputTokens:8192},chat:async request=>{
+      budgets.push(request.settings.effective.maxOutputTokens!);return {content:budgets.length===1?"New partial":"New complete",finishReason:budgets.length===1?"length":"stop",usage:{}};
+    }});
+    expect(budgets).toEqual([32768,49152]);
+    const messages=await repository.listChatMessages("b1-retry");
+    expect(messages.map(m=>m.role)).toEqual(["user","assistant"]);
+    expect(messages[0].metadata?.viewerOutputAttempts?.[0]).toEqual(oldEvidence);
+    expect(messages[0].metadata?.viewerOutputAttempts?.[1]).toMatchObject({viewerOutputPolicyVersion:2,effectiveMaxOutputTokens:32768});
+    expect(messages[0].metadata?.viewerOutputAccepted).toMatchObject({viewerOutputPolicyVersion:2,effectiveMaxOutputTokens:49152,semanticAttempt:2});
+  });
+  for(const ceiling of [32768,40000]) it(`Manual RV respects model ceiling ${ceiling} and avoids ineffective recovery`,async()=>{
+    const capped={...model,capabilities:{...model.capabilities,maxOutputTokens:ceiling}};
+    const budgets:number[]=[];
+    const run=sendChatTurn({repository:repo([]),threadId:`b1-cap-${ceiling}`,mode:"manual_rv",language:"en",providerConfig:provider,model:capped,content:"Start",chat:async request=>{
+      budgets.push(request.settings.effective.maxOutputTokens!);return {content:"partial",finishReason:budgets.length===1?"length":"stop",usage:{}};
+    }});
+    if(ceiling===32768){await expect(run).rejects.toMatchObject({reason:"no_larger_recovery_budget"});expect(budgets).toEqual([32768]);}
+    else{await run;expect(budgets).toEqual([32768,40000]);}
+  });
+  it("two incomplete Manual RV attempts retain both records and never dispatch a third",async()=>{
+    const repository=repo([]),budgets:number[]=[];
+    await expect(sendChatTurn({repository,threadId:"b1-two-length",mode:"manual_rv",language:"en",providerConfig:provider,model,content:"Start",chat:async request=>{
+      budgets.push(request.settings.effective.maxOutputTokens!);return {content:`partial ${budgets.length}`,finishReason:"length",usage:{}};
+    }})).rejects.toMatchObject({reason:"output_limit"});
+    expect(budgets).toEqual([32768,49152]);
+    const messages=await repository.listChatMessages("b1-two-length");expect(messages.map(m=>m.role)).toEqual(["user"]);
+    expect(messages[0].metadata?.viewerOutputAttempts?.map(a=>a.effectiveMaxOutputTokens)).toEqual([32768,49152]);
+  });
+  it("recovery exceeding the context window is blocked before another paid dispatch",async()=>{
+    const limited={...model,capabilities:{...model.capabilities,contextTokens:40000}};
+    const budgets:number[]=[];
+    await expect(sendChatTurn({repository:repo([]),threadId:"b1-context",mode:"manual_rv",language:"en",providerConfig:provider,model:limited,content:"Start",chat:async request=>{
+      budgets.push(request.settings.effective.maxOutputTokens!);return {content:"partial",finishReason:"length",usage:{}};
+    }})).rejects.toMatchObject({reason:"context_limit"});
+    expect(budgets).toEqual([32768]);
+  });
+  it("reasoning and temperature remain identical through Manual RV recovery",async()=>{
+    const configured={...model,capabilities:{...model.capabilities,reasoning:{supported:true,efforts:["high" as const],confidence:"provider_metadata" as const},temperature:{supported:true,min:0,max:2,confidence:"provider_metadata" as const},supportedParameters:["reasoning","temperature","max_tokens"]}};
+    const settings:unknown[]=[];
+    await sendChatTurn({repository:repo([]),threadId:"b1-reasoning",mode:"manual_rv",language:"en",providerConfig:provider,model:configured,content:"Start",requestedSettings:{reasoningEffort:"high",temperature:0.7},chat:async request=>{
+      settings.push(request.settings.effective);return {content:"answer",finishReason:settings.length===1?"length":"stop",usage:{}};
+    }});
+    expect(settings).toEqual([{reasoningEffort:"high",temperature:0.7,maxOutputTokens:32768},{reasoningEffort:"high",temperature:0.7,maxOutputTokens:49152}]);
+  });
 });
