@@ -146,6 +146,25 @@ describe("TrainingScreen mounted interactions", () => {
     await flush();
   }
 
+  for (const language of ["pl", "en"] as const) it(`S3.1 ${language}: Stop next to pause remains stopping until execution settles`, async () => {
+    const provider = { id: "pc", provider: "custom_openai", credentialId: "k", enabled: true, label: "P" };
+    const model = { providerConfigId: "pc", provider: "custom_openai", modelId: "m", route: "route", capabilities: { inputModalities: ["text"], outputModalities: ["text"], reasoning: { supported: false, efforts: [] }, temperature: { supported: true }, supportedParameters: [] }, pricing: {} };
+    (repository.listProviderConfigs as ReturnType<typeof vi.fn>).mockResolvedValue([provider]);
+    (repository.listProviderModels as ReturnType<typeof vi.fn>).mockResolvedValue([model]);
+    currentRun={...currentRun,modelRoute:"pc::m"};
+    mocks.prepareResume.mockResolvedValue(currentRun);
+    const task = deferred<{run: TrainingRunRecord;error?: string}>();let signal!: AbortSignal;
+    mocks.executeTraining.mockImplementation(request => { signal=request.signal;return task.promise; });
+    const settings = {...createDefaultSettings(),interfaceLanguage: language};
+    await act(async()=>root.render(<TrainingScreen copy={getCopy(language)} settings={settings} profiles={[{id:"p",name:"P",credentialId:"k",createdAt:"t",updatedAt:"t"}]} workspaces={[]} repository={repository}/>));await flush();
+    await click(buttonByText(host,language==="pl"?"Wznów":"Resume"));await flush();
+    const stop=buttonByText(host,"Stop");expect(stop.disabled).toBe(false);
+    const pause=buttonByText(host,language==="pl"?"Pauza po bieżącej sesji":"Pause after current session");expect(pause.parentElement).toBe(stop.parentElement);
+    await click(pause);expect(signal.aborted).toBe(false);await click(stop);expect(signal.aborted).toBe(true);expect(signal.reason.message).toBe("Stopped by user");
+    expect(buttonByText(host,language==="pl"?"Zatrzymywanie…":"Stopping…").disabled).toBe(true);expect(buttonByText(host,language==="pl"?"Zakończ trening":"End training").disabled).toBe(true);
+    await act(async()=>task.resolve({run:currentRun,error:"Stopped by user"}));await flush();expect(buttonByText(host,language==="pl"?"Wznów":"Resume").disabled).toBe(false);expect(mocks.executeTraining).toHaveBeenCalledTimes(1);
+  });
+
   it("persists End training, removes Resume/End and keeps sessions/history actions", async () => {
     mocks.endTraining.mockImplementation(async () => {
       currentRun = { ...currentRun, status: "Interrupted", termination: { reason: "user_finished", endedAt: "2026-10-10T13:00:00.000Z" } };

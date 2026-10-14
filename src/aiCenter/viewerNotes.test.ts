@@ -165,7 +165,7 @@ describe("Viewer Notes", () => {
   });
 
 
-  it.each(["training-complete","training-length","training-json","training-capacity","training-capacity-json","missing-policy","wrong-policy"] as const)("uses the exact prompt snapshot and post-update Field Guide for Reflection: %s", async scenario => {
+  it.each(["training-complete","training-length","training-json","training-capacity","training-capacity-json","stop-length","stop-json","missing-policy","wrong-policy"] as const)("uses the exact prompt snapshot and post-update Field Guide for Reflection: %s", async scenario => {
     const providerConfig: ProviderConfig = { id: "provider", provider: "openrouter", label: "Provider", credentialId: "credential", enabled: true, createdAt: "now", updatedAt: "now" };
     const model: ProviderModel = {
       providerConfigId: providerConfig.id,
@@ -204,9 +204,10 @@ describe("Viewer Notes", () => {
       commitViewerNoteReflection: commit,
       failViewerNoteReflection: vi.fn(async () => undefined),
     } as unknown as AppRepository;
-    const budgets:number[]=[];
+    const budgets:number[]=[];const stopController=new AbortController();
     const chat = vi.fn(async (request: Parameters<NonNullable<Parameters<typeof runViewerNoteReflection>[0]["chat"]>>[0]) => {
       budgets.push(request.settings.effective.maxOutputTokens!);
+      if(scenario==="stop-length" || scenario==="stop-json"){stopController.abort(new DOMException("Stopped by user","AbortError"));return scenario==="stop-length"?{content:"partial",finishReason:"length",usage:{}}:{content:"malformed JSON",usage:{}};}
       if (scenario === "training-capacity-json" && budgets.length === 2) return { content: "malformed JSON", usage: {} };
       if (scenario === "training-capacity-json" && budgets.length === 3) return { content: "partial", finishReason: "length", usage: {} };
       if(scenario==="training-length"&&budgets.length===1||["training-json","training-capacity"].includes(scenario)&&budgets.length===2)return {content:"partial",finishReason:"length",usage:{}};
@@ -217,7 +218,7 @@ describe("Viewer Notes", () => {
 
     const budgetPolicy = (scenario === "missing-policy" ? undefined : scenario === "wrong-policy" ? "default" : "training_reveal") as "training_reveal";
     const before = JSON.stringify(snapshot);
-    const operation = runViewerNoteReflection({ budgetPolicy, repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: "fg-after-sha" }, chat });
+    const operation = runViewerNoteReflection({ budgetPolicy, repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: "fg-after-sha" }, chat,signal:stopController.signal });
 
     if (scenario === "missing-policy" || scenario === "wrong-policy") {
       await expect(operation).rejects.toThrow(/explicit training_reveal/);
@@ -228,6 +229,7 @@ describe("Viewer Notes", () => {
       return;
     }
     const result = await operation;
+    if(scenario==="stop-length" || scenario==="stop-json"){expect(result).toBeNull();expect(chat).toHaveBeenCalledTimes(1);expect(commit).not.toHaveBeenCalled();expect(JSON.stringify(snapshot)).toBe(before);return;}
 
     expect(result).toEqual({ status: "NO_CHANGE" });
     expect(budgets).toEqual(scenario==="training-capacity-json"?[1024+32768,1024+32768,1024+32768,1024+49152]:scenario==="training-complete"?[1024+32768]:scenario==="training-length"?[1024+32768,1024+49152]:[1024+32768,1024+32768,1024+49152]);

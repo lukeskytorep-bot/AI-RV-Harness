@@ -122,6 +122,7 @@ export async function sendPostRevealTurn(input: {
   if (!input.reuseExistingUserTurn) await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
   const automaticTrainingReview = supportedAutomaticPostRevealReviewRequests(language).includes(content);
   const response = (await callWithAnalyticalOutputRecovery({
+    signal: input.signal,
     model: input.model,
     messages,
     operationKind: "post_reveal_viewer",
@@ -285,6 +286,7 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
           attempt,
         });
         if (input.afterViewerReview) {
+          input.signal?.throwIfAborted();
           try {
             await input.afterViewerReview({ content: viewerResult.response.content, transcript: viewerResult.transcript, response: viewerResult.response });
           } catch (cause) {
@@ -318,6 +320,7 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
       }
     }
 
+    input.signal?.throwIfAborted();
     if (!input.monitor) return transcript;
 
     monitorCompleted = parsePostRevealTranscript(transcript).some((turn) => turn.role === "monitor");
@@ -499,6 +502,7 @@ export async function sendMonitorPostRevealReview(input: {
   ].filter(Boolean).join("\n\n");
   const messages: ProviderMessage[] = [{ role: "system", content: system }, { role: "user", content: packet, ...(images.length ? { images } : {}) }];
   const response = (await callWithAnalyticalOutputRecovery({
+    signal: input.signal,
     model: input.model,
     messages,
     operationKind: "post_reveal_monitor",

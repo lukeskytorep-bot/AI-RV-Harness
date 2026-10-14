@@ -461,6 +461,7 @@ export async function runFieldGuideUpdate(input: {
     const messages: ProviderMessage[] = [{ role: "system", content: system }, { role: "user", content: prompt, ...(images.length ? { images } : {}) }];
     analyticalOutputBudget({ model: input.model, messages, operationKind: "field_guide_update", attempt: 0, learningObjectCapacityTokens: frozen.capacityTokens, budgetPolicy: input.budgetPolicy });
     const result = await callWithAnalyticalOutputRecovery({
+      signal: input.signal,
       model: input.model,
       messages,
       operationKind: "field_guide_update",
@@ -512,6 +513,7 @@ export async function runFieldGuideUpdate(input: {
         { role: "user", content: buildFieldGuideRepairPrompt(response.content) },
       ];
       const repaired = await callWithAnalyticalOutputRecovery({
+      signal: input.signal,
         model: input.model,
         messages,
         operationKind: "field_guide_update",

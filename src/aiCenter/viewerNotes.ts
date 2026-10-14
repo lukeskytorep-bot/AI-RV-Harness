@@ -526,6 +526,7 @@ export async function runViewerNoteReflection(input: {
   let settings: ReturnType<typeof resolveGenerationSettings>;
   try {
     const result = await callWithAnalyticalOutputRecovery({
+      signal: input.signal,
       model: input.model,
       messages: reflectionMessages,
       operationKind: "viewer_notes_reflection",
@@ -554,6 +555,7 @@ export async function runViewerNoteReflection(input: {
         { role: "user", content: buildReflectionRepairPrompt(finalResponse.content) },
       ];
       const repair = await callWithAnalyticalOutputRecovery({
+      signal: input.signal,
         model: input.model,
         messages: repairMessages,
         operationKind: "viewer_notes_reflection",
@@ -598,6 +600,7 @@ export async function runViewerNoteReflection(input: {
       reflectionAttemptCount = 2;
       try {
         const retry = await callWithAnalyticalOutputRecovery({
+      signal: input.signal,
           model: input.model,
           messages: retryMessages,
           operationKind: "viewer_notes_reflection",
@@ -620,6 +623,7 @@ export async function runViewerNoteReflection(input: {
             { role: "user", content: buildReflectionRepairPrompt(finalResponse.content) },
           ];
           const repair = await callWithAnalyticalOutputRecovery({
+      signal: input.signal,
             model: input.model,
             messages: repairMessages,
             operationKind: "viewer_notes_reflection",

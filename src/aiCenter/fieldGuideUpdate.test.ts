@@ -303,3 +303,9 @@ for (const invalid of [undefined, "default", "legacy_analytical"] as const) it(`
   expect(JSON.stringify(h.run)).toBe(before);
   expect(h.created).toHaveLength(0);
 });
+
+for(const responseKind of ["length","json"] as const)it(`S3.1 Field Guide Stop after ${responseKind} never starts recovery or creates a version`,async()=>{
+ const h=integrationHarness();const controller=new AbortController();const chat=vi.fn(async()=>{controller.abort(new DOMException("Stopped by user","AbortError"));return responseKind==="length"?{content:"partial",finishReason:"length",usage:{}}:response("malformed JSON");});
+ const result=await runFieldGuideUpdate({repository:h.repository,trainingRun:h.run,sessionId:"session-1",postRevealReview:"Review",providerConfig:provider,model,chat,signal:controller.signal,budgetPolicy:"training_reveal"});
+ expect(result?.status).toBe("FAILED_PROVIDER");expect(chat).toHaveBeenCalledTimes(1);expect(h.created).toHaveLength(0);
+});

@@ -421,3 +421,13 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
     expect(repository.appendPostRevealTurn.mock.calls.filter((call) => call[1] === "assistant")).toHaveLength(1);
   });
 });
+
+it("S3.1 Stop after the accepted Viewer review prevents Monitor dispatch; Resume reuses Viewer",async()=>{
+ let transcript="";const controller=new AbortController();
+ const repository={getSessionSnapshot:vi.fn().mockResolvedValue({providerConfigId:"pc",modelId:"viewer",sessionLanguage:"en",workspaceId:"workspace",monitor:{providerConfigId:"pc-monitor",modelId:"monitor",effectivePrompt:"Monitor prompt"}}),getReveal:vi.fn().mockResolvedValue({source:"external_text",text:"Stone",hash:"h"}),getViewerEvidence:vi.fn().mockResolvedValue("sealed evidence"),listTargetClarifications:vi.fn().mockResolvedValue([]),listMonitorRuns:vi.fn().mockResolvedValue([]),listMonitorInterventions:vi.fn().mockResolvedValue([]),appendPostRevealTurn:vi.fn(async(_id:string,role:string,content:string)=>{transcript+=JSON.stringify({role,content})+"\n";return transcript;})};
+ const monitorConfig={...config,id:"pc-monitor"};const monitorModel={...model,providerConfigId:"pc-monitor",modelId:"monitor",route:"openrouter:monitor"};
+ const chat=vi.fn(async({signal}:{signal:AbortSignal})=>{expect(signal.aborted).toBe(false);return{content:"Accepted review",usage:{}};});
+ await expect(runAutomaticPostRevealReview({repository:repository as never,sessionId:"s",viewer:{providerConfig:config,model},monitor:{providerConfig:monitorConfig,model:monitorModel},signal:controller.signal,chat:chat as never,afterViewerReview:async()=>{controller.abort(new DOMException("Stopped by user","AbortError"));}})).rejects.toThrow();
+ expect(chat).toHaveBeenCalledTimes(1);expect(transcript).toContain("Accepted review");expect(repository.appendPostRevealTurn.mock.calls.map(c=>c[1])).toEqual(["user","assistant"]);
+ const resumed=await runAutomaticPostRevealReview({repository:repository as never,sessionId:"s",existingTranscript:transcript,viewer:{providerConfig:config,model},monitor:{providerConfig:monitorConfig,model:monitorModel},signal:new AbortController().signal,chat:chat as never});expect(chat).toHaveBeenCalledTimes(2);expect(resumed).toContain('"role":"monitor"');
+});

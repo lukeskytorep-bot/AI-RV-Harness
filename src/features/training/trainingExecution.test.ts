@@ -668,3 +668,37 @@ for (const length of [false, true]) it(`BUDGET-0 Training dispatches Judge ${len
   expect(outcome.run.status).toBe("Completed");
   expect(budgets).toEqual(length ? [32768, 49152] : [32768]);
 });
+
+describe("S3.1 Stop boundaries",()=>{
+ it("pre-aborted input makes no Running write or model dependency call",async()=>{
+  const h=harness();const controller=new AbortController();controller.abort(new DOMException("Stopped by user","AbortError"));
+  const result=await executeTrainingRun(input(run(),h,{signal:controller.signal}));
+  expect(result.run.status).toBe("Interrupted");expect(h.updates.some(u=>u.status==="Running")).toBe(false);expect(h.runSession).not.toHaveBeenCalled();expect(h.prepareFieldGuide).not.toHaveBeenCalled();
+ });
+ it("Stop after accepted Review saves it, never enters FG/VN, and Resume reuses it",async()=>{
+  const h=harness();const controller=new AbortController();const review=h.dependencies.runAutomaticPostRevealReview as ReturnType<typeof vi.fn>;const original=review.getMockImplementation()! as (...args: any[]) => Promise<string>;
+  review.mockImplementationOnce(async(request)=>{const value=await original(request);controller.abort();return value;});
+  const stopped=await executeTrainingRun(input(run({targetIds:["t1"]}),h,{signal:controller.signal}));
+  expect(stopped.run.activeTargetCheckpoint?.stage).toBe("review_completed");expect(h.fieldGuideUpdate).not.toHaveBeenCalled();expect(h.reflect).not.toHaveBeenCalled();
+  const resumed=await executeTrainingRun(input(stopped.run,h));expect(resumed.run.status).toBe("Completed");expect(review).toHaveBeenCalledTimes(1);expect(h.runSession).toHaveBeenCalledTimes(1);expect(h.fieldGuideUpdate).toHaveBeenCalledTimes(1);
+ });
+ for(const stage of ["field-guide","viewer-notes"] as const)it(`Stop with null ${stage} does not advance its checkpoint or call Judge`,async()=>{
+  const h=harness();const controller=new AbortController();const callback=stage==="field-guide"?h.fieldGuideUpdate:h.reflect;
+  callback.mockImplementationOnce(async()=>{controller.abort();return null;});
+  const stopped=await executeTrainingRun(input(run({targetIds:["t1"]}),h,{signal:controller.signal,judges:[{providerConfig:provider,model}]}));
+  expect(stopped.run.status).toBe("Interrupted");expect(stopped.run.activeTargetCheckpoint?.stage).toBe(stage==="field-guide"?"review_completed":"field_guide_update_completed");expect(h.dependencies.runBlindJudging).not.toHaveBeenCalled();expect(stopped.run.completedTargetIds).toEqual([]);
+  if(stage==="field-guide")expect(h.reflect).not.toHaveBeenCalled();
+  const resumed=await executeTrainingRun(input(stopped.run,h));expect(resumed.run.status).toBe("Completed");expect(h.runSession).toHaveBeenCalledTimes(1);
+ });
+ it("enabled Viewer Notes returning null without abort remains incomplete, then resumes successfully",async()=>{
+  const h=harness();const get=(h.repository.getSessionSnapshot as ReturnType<typeof vi.fn>).getMockImplementation()! as (id:string)=>Promise<any>;
+  vi.spyOn(h.repository,"getSessionSnapshot").mockImplementation(async id=>{const snapshot=await get(id);return snapshot?({...snapshot,viewerNotes:{enabled:true,aiIdentityId:"identity"}} as never):null;});
+  const stopped=await executeTrainingRun(input(run({targetIds:["t1"]}),h));expect(stopped.run.status).toBe("Interrupted");expect(stopped.run.activeTargetCheckpoint?.stage).toBe("field_guide_update_completed");expect(stopped.error).toContain("did not complete");
+  h.reflect.mockResolvedValueOnce({status:"NO_CHANGE"} as never);const resumed=await executeTrainingRun(input(stopped.run,h));expect(resumed.run.status).toBe("Completed");expect(h.runSession).toHaveBeenCalledTimes(1);expect(h.fieldGuideUpdate).toHaveBeenCalledTimes(1);
+ });
+ it("End appearing after Review blocks the next learning stage and is never overwritten",async()=>{
+  const h=harness();const review=h.dependencies.runAutomaticPostRevealReview as ReturnType<typeof vi.fn>;const original=review.getMockImplementation()! as (...args: any[]) => Promise<string>;
+  review.mockImplementationOnce(async request=>{const value=await original(request);h.setTrainingRun(run({termination:{reason:"user_finished",endedAt:"end"}}));return value;});
+  const result=await executeTrainingRun(input(run(),h));expect(result.run.termination?.reason).toBe("user_finished");expect(h.fieldGuideUpdate).not.toHaveBeenCalled();expect(h.reflect).not.toHaveBeenCalled();
+ });
+});

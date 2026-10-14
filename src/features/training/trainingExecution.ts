@@ -1,4 +1,4 @@
-import { prepareViewerNotesForSession, runViewerNoteReflection } from "../../aiCenter/viewerNotes";
+import { prepareViewerNotesForSession, runViewerNoteReflection, viewerNoteReflectionCompletesStage } from "../../aiCenter/viewerNotes";
 import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
 import { sha256Text } from "../../application/sha256";
 import { fieldGuideUpdateCompletesStage, runFieldGuideUpdate } from "../../aiCenter/fieldGuideUpdate";
@@ -255,13 +255,22 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
       ...(input.rvSystemPrompt ? { rvSystemPrompt: input.rvSystemPrompt } : {}),
     },
   };
+  const assertCanContinue = async () => {
+    input.signal?.throwIfAborted();
+    const latest = (await input.repository.listTrainingRuns()).find(run => run.id === working.id);
+    if (!latest) throw new Error("Training run is no longer available.");
+    if (isTrainingRunUserFinished(latest)) throw userFinishedTrainingError();
+    if (latest.archivedAt) throw new Error("Restore the archived Training run before execution.");
+    input.signal?.throwIfAborted();
+  };
   const execution = working.executionSnapshot!;
   input.onRunChange?.(working);
 
   try {
+    await assertCanContinue();
     await input.repository.updateTrainingRun(working.id, { status: "Running", currentIndex: working.currentIndex, executionSnapshot: execution });
     for (let index = working.currentIndex; index < working.targetIds.length; index += 1) {
-      if (input.signal?.aborted) throw new DOMException("Training cancelled", "AbortError");
+      await assertCanContinue();
       const targetId = working.targetIds[index];
       if (completed.has(targetId)) continue;
       const target = targetById.get(targetId);
@@ -269,6 +278,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
       input.onProgress?.({ index, total: working.targetIds.length, target });
 
       let checkpoint = working.activeTargetCheckpoint?.targetId === targetId ? working.activeTargetCheckpoint : undefined;
+      await assertCanContinue();
       if (!checkpoint) {
         const fieldGuide = await dependencies.prepareFieldGuideForSession({
           repository: input.repository,
@@ -305,6 +315,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
       }
 
       if (checkpoint.stage === "blind_initializing") {
+        await assertCanContinue();
         const init = checkpoint.blindInitialization;
         if (!init) throw new Error("Training Resume cannot recover a blind_initializing checkpoint without its frozen initialization packet.");
         const existingSession = await input.repository.getRvSession(checkpoint.sessionId);
@@ -371,6 +382,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
       }
 
       if (checkpoint.stage === "blind_running") {
+        await assertCanContinue();
         const frozen = await frozenBlindResumeInput(input, checkpoint, target);
         if (frozen.session.state === "Revealed") {
           await ensurePersistedTrainingBlindReveal({ repository: input.repository, sessionId: checkpoint.sessionId, targetId: checkpoint.targetId });
@@ -431,6 +443,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
       );
 
       if (checkpoint.stage === "session_revealed") {
+        await assertCanContinue();
         const storedReview = await loadStoredViewerReview();
         viewerReview = storedReview?.content ?? null;
         viewerReviewRequest = storedReview?.request ?? null;
@@ -457,12 +470,14 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
       }
 
       if (checkpoint.stage === "review_completed") {
+        await assertCanContinue();
         if (!viewerReview) {
           const storedReview = await loadStoredViewerReview();
           viewerReview = storedReview?.content ?? null;
           viewerReviewRequest = storedReview?.request ?? null;
         }
         if (!viewerReview) throw new Error("Completed automatic Viewer Review is required before Field Guide Update.");
+        await assertCanContinue();
         const fieldGuideResult = await dependencies.runFieldGuideUpdate({
           repository: input.repository,
           trainingRun: working,
@@ -475,6 +490,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
           signal: input.signal,
           budgetPolicy: "training_reveal",
         });
+        if (!fieldGuideResult) await assertCanContinue();
         if (fieldGuideResult && !fieldGuideUpdateCompletesStage(fieldGuideResult.status)) {
           throw new Error(`Field Guide Update did not complete (${fieldGuideResult.status}).${fieldGuideResult.audit.failureMessage ? ` ${fieldGuideResult.audit.failureMessage}` : ""}`);
         }
@@ -497,6 +513,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
       }
 
       if (checkpoint.stage === "field_guide_update_completed") {
+        await assertCanContinue();
         if (!checkpoint.fieldGuideAfterUpdate) {
           const fieldGuideAfterUpdate = await resolveTrainingFieldGuideAfterUpdate({ repository: input.repository, trainingRun: working, checkpoint });
           checkpoint = { ...checkpoint, fieldGuideAfterUpdate };
@@ -508,7 +525,8 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
         if (!fieldGuideAfterTrainingUpdate) throw new Error("Training checkpoint is missing the exact Field Guide version required by Viewer Notes Reflection.");
         if (!viewerReview) viewerReview = (await loadStoredViewerReview())?.content ?? null;
         if (!viewerReview) throw new Error("Completed automatic Viewer Review is required before Viewer Notes Reflection.");
-        await dependencies.runViewerNoteReflection({
+        await assertCanContinue();
+        const reflectionResult = await dependencies.runViewerNoteReflection({
           repository: input.repository,
           sessionId: checkpoint.sessionId,
           viewerReview,
@@ -520,7 +538,12 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
           signal: input.signal,
           budgetPolicy: "training_reveal",
         });
+        if (!reflectionResult) await assertCanContinue();
         const sessionSnapshot = await input.repository.getSessionSnapshot(checkpoint.sessionId);
+        if (!sessionSnapshot) throw new Error("Viewer Notes checkpoint requires the durable Session Snapshot.");
+        if (sessionSnapshot.viewerNotes?.enabled && (!reflectionResult || !viewerNoteReflectionCompletesStage(reflectionResult.status))) {
+          throw new Error("Viewer Notes Reflection did not complete; the checkpoint remains resumable.");
+        }
         const reflectionPacketSha256 = sessionSnapshot?.viewerNotes?.enabled
           ? (await input.repository.listViewerNoteReflectionRuns(sessionSnapshot.viewerNotes.aiIdentityId))
               .filter((run) => run.sourceSessionId === checkpoint!.sessionId && run.status !== "PENDING")
@@ -536,10 +559,11 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
         input.onRunChange?.(working);
       }
 
-      if (input.signal?.aborted) throw new DOMException("Training cancelled", "AbortError");
+      await assertCanContinue();
       if (input.judges.length && checkpoint.stage === "viewer_notes_reflection_completed") {
         const existingScores = await input.repository.listJudgeScores(checkpoint.sessionId);
         const missingJudges = selectMissingJudgeSelections(existingScores, input.judges);
+        await assertCanContinue();
         if (missingJudges.length) {
           await dependencies.runBlindJudging({
             repository: input.repository,
@@ -557,7 +581,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
         await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
         input.onRunChange?.(working);
       }
-      if (input.signal?.aborted) throw new DOMException("Training cancelled", "AbortError");
+      await assertCanContinue();
       await input.repository.updateRvSessionState(checkpoint.sessionId, "Completed");
 
       completed.add(target.id);
@@ -585,6 +609,7 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
       }
     }
 
+    await assertCanContinue();
     working = { ...working, status: "Completed", currentIndex: working.targetIds.length, completedAt: now(), updatedAt: now() };
     await input.repository.updateTrainingRun(working.id, { status: "Completed", currentIndex: working.currentIndex, completedAt: working.completedAt });
     input.onRunChange?.(working);

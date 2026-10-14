@@ -139,6 +139,8 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const [batchPreflightSignature, setBatchPreflightSignature] = useState<string | null>(null);
   const [metadataOpen, setMetadataOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => () => abortRef.current?.abort(new DOMException("RV view closed", "AbortError")), [workspace.id, repository]);
   const runGuardRef = useRef(new AsyncRunGuard());
   const resolvedLanguage = resolveSessionLanguage(settings.interfaceLanguage, sessionLanguage);
   const rcp = getFullRcp(resolvedLanguage);
@@ -158,7 +160,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, aiIdentityId: selectedIdentity?.identity.id ?? null, modelId: selectedModel?.modelId ?? null, protocol, liteVariant, sessionFocus: activeSessionFocus, specialTaskOptions, specialTaskText, telepathicQuestionMode, telepathicQuestions, customProtocolVersionId, runType, viewerNotesEnabled, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens: selectedModel ? Math.min(settings.rvSessionMaxOutputTokens, selectedModel.capabilities.maxOutputTokens ?? settings.rvSessionMaxOutputTokens) : settings.rvSessionMaxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
   const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : protocol === "telepathic" ? 9 : 6;
-  const running = sessionRunning || batchRunning || progress?.state === "BlindRunning" || progress?.state === "Preflight";
+  const running = sessionRunning || batchRunning || Boolean(postRevealBusy && abortRef.current) || progress?.state === "BlindRunning" || progress?.state === "Preflight";
   useEffect(() => { onBusyChange?.(sessionRunning || batchRunning); return () => onBusyChange?.(false); }, [sessionRunning, batchRunning, onBusyChange]);
   const recoveryInspectionKey = recentSessions.map((session) => `${session.id}:${session.state}:${session.updatedAt}`).join("|");
 
@@ -320,8 +322,12 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
 
   const automaticReview = async (sessionId: string, updateVisibleTranscript: boolean): Promise<string> => {
     if (!repository) return "";
+    const controller = abortRef.current ?? new AbortController();
+    const ownsController = !abortRef.current;
+    if (ownsController) { abortRef.current = controller; setStopping(false); }
     if (updateVisibleTranscript) setPostRevealBusy(true);
     try {
+      controller.signal.throwIfAborted();
       const snapshot = await repository.getSessionSnapshot(sessionId);
       if (!snapshot) throw new Error(copy.postRevealRouteUnavailable);
       const viewerProvider = providerConfigs.find((item) => item.id === snapshot.providerConfigId);
@@ -347,6 +353,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         ...(capturedMonitorProvider && capturedMonitorModel ? { monitor: { providerConfig: capturedMonitorProvider, model: capturedMonitorModel } } : {}),
         timeoutMs: settings.requestTimeoutMs,
         streamWorkflowContext: "rv_session",
+        signal: controller.signal,
         maxRetries: settings.maxRetries,
       });
       if (updateVisibleTranscript) setPostRevealTranscript(transcript);
@@ -360,6 +367,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
       throw cause;
     } finally {
       if (updateVisibleTranscript) setPostRevealBusy(false);
+      if (ownsController && abortRef.current === controller) { abortRef.current = null; setStopping(false); }
     }
   };
 
@@ -426,6 +434,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     setManualQuestionText("");
     const controller = new AbortController();
     abortRef.current = controller;
+    setStopping(false);
     const requestedSettings = {
       ...(reasoning ? { reasoningEffort: reasoning } : {}),
       ...(temperature.trim() ? { temperature: Number(temperature) } : {}),
@@ -521,6 +530,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
       onBusyChange?.(false);
       setManualQuestionHandle(null);
       abortRef.current = null;
+      setStopping(false);
       try {
         const sessions = await repository.listRvSessions(workspace.id);
         setRecentSessions(sessions.filter((session) => !session.researchProjectId));
@@ -626,6 +636,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     setManualQuestionText("");
     const controller = new AbortController();
     abortRef.current = controller;
+    setStopping(false);
     try {
       const snapshot = await repository.getSessionSnapshot(session.id);
       if (!snapshot?.telepathic) throw new Error(settings.interfaceLanguage === "pl" ? "Brak snapshota sesji telepatycznej." : "The telepathic session snapshot is unavailable.");
@@ -665,6 +676,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
       onBusyChange?.(false);
       setManualQuestionHandle(null);
       abortRef.current = null;
+      setStopping(false);
       try {
         setRecentSessions((await repository.listRvSessions(workspace.id)).filter((item) => !item.researchProjectId));
       } catch (cause) {
@@ -684,6 +696,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     setManualQuestionText("");
     const controller = new AbortController();
     abortRef.current = controller;
+    setStopping(false);
     try {
       const snapshot = await repository.getSessionSnapshot(session.id);
       if (!snapshot) throw new Error(settings.interfaceLanguage === "pl" ? "Brak zapisanego snapshota tej sesji." : "The saved session snapshot is unavailable.");
@@ -760,6 +773,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
       onBusyChange?.(false);
       setManualQuestionHandle(null);
       abortRef.current = null;
+      setStopping(false);
       try { setRecentSessions((await repository.listRvSessions(workspace.id)).filter((item) => !item.researchProjectId)); }
       catch (cause) { setRunError(cause instanceof Error ? cause.message : String(cause)); }
     }
@@ -934,7 +948,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
           <div className="live-session">
             <div className="live-session-head">
               <div><span className={`session-state ${progress.state.toLowerCase()}`}>{progress.state === "AwaitingReveal" ? "🔒" : progress.state === "Revealed" || progress.state === "Completed" ? "🔓" : "●"} {progress.state}</span><strong>{progress.sessionCode}</strong>{progress.phase && progress.state === "BlindRunning" && <small>{progress.passCount && <>{settings.interfaceLanguage === "pl" ? "Sesja" : "Session"} {progress.passIndex}/{progress.passCount} · </>}{copy.runningPhase} {progress.phase}/{progress.stepCount ?? activeStepCount}</small>}</div>
-              {running && <button className="stop-button" onClick={() => abortRef.current?.abort()}><CircleStop size={17} />{copy.stopSession}</button>}
+              {running && <button className="stop-button" disabled={stopping} onClick={() => { setStopping(true); abortRef.current?.abort(new DOMException("Stopped by user", "AbortError")); }}><CircleStop size={17} />{stopping ? (settings.interfaceLanguage === "pl" ? "Zatrzymywanie…" : "Stopping…") : copy.stopSession}</button>}
             </div>
             {executionScope === "batch" && batchProgress && <div className="batch-progress-strip"><strong>{copy.batchProgress}</strong><span>{batchProgress.current} / {batchProgress.total}</span><small>{copy.completedSessions}: {batchProgress.completed}</small></div>}
             {progress.metrics && <div className="session-run-metrics"><span><small>{copy.apiCalls}</small><strong>{progress.metrics.requestCount}</strong></span>{progress.metrics.totalTokens !== undefined && <span><small>{copy.tokens}</small><strong>{Math.round(progress.metrics.totalTokens).toLocaleString()}</strong></span>}{progress.metrics.costUsd !== undefined && <span><small>{copy.cost}</small><strong>${progress.metrics.costUsd.toFixed(4)}</strong></span>}<span><small>{copy.elapsed}</small><strong>{formatDuration(progress.metrics.sessionDurationMs)}</strong></span></div>}
