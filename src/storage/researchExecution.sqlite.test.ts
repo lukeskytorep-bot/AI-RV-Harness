@@ -3,6 +3,9 @@ import {readFileSync,readdirSync,mkdtempSync,rmSync} from "node:fs";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {beforeEach,afterEach,it,expect,vi} from "vitest";
+// Real file-backed SQLite setup and execution can exceed Vitest defaults on Windows CI.
+// Scope the allowance to these integration tests; application deadlines are unchanged.
+vi.setConfig({hookTimeout:60_000,testTimeout:60_000});
 const bridge=vi.hoisted(()=>({invoke:vi.fn()}));
 vi.mock("@tauri-apps/api/core",()=>({invoke:bridge.invoke}));
 vi.mock("@tauri-apps/plugin-sql",()=>({default:{load:async()=>({close:async()=>undefined})}}));
@@ -75,7 +78,12 @@ async function ownership(request:any){const key=`rvh.workflow.v1:${request.profi
 }
 beforeEach(async()=>{
  directory=mkdtempSync(join(tmpdir(),"rvh-owner-"));db=new DatabaseSync(join(directory,"source.sqlite"));db.exec("PRAGMA foreign_keys=ON");
- const migrations=new URL("../../src-tauri/migrations/",import.meta.url);for(const file of readdirSync(migrations).filter(file=>file.endsWith(".sql")).sort())db.exec(readFileSync(new URL(file,migrations),"utf8"));
+ // Keep foreign keys enabled before BEGIN; migration PRAGMAs cannot enable them inside it.
+ db.exec("PRAGMA foreign_keys=ON");
+ const migrations=new URL("../../src-tauri/migrations/",import.meta.url);
+ // A single committed fixture transaction avoids hundreds of durable autocommits on Windows.
+ transaction(()=>{for(const file of readdirSync(migrations).filter(file=>file.endsWith(".sql")).sort())db.exec(readFileSync(new URL(file,migrations),"utf8"));});
+ expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({foreign_keys:1});
  db.exec("INSERT INTO profiles(id,display_name,created_at,updated_at) VALUES('p','P','t','t'); INSERT INTO workspaces(id,profile_id,name,kind,created_at,updated_at,last_opened_at) VALUES('w','p','W','rv','t','t','t');");
  bridge.invoke.mockImplementation(async(command:string,args:any)=>{if(command==="database_initialize")return;if(command==="database_select_readonly")return select(args.query,args.values);if(command==="database_workflow_ownership")return ownership(args.request);if(command==="database_execute_write")return{rowsAffected:transaction(()=>statement(args.statement))};if(command==="database_execute_write_batch")return transaction(()=>args.statements.map(statement));throw new Error(command);});
  const repository=await SqliteRepository.connect();await repository.createRvSession({id:"s",sessionCode:"S",workspaceId:"w",profileId:"p",runType:"automatic"});await repository.updateRvSessionState("s","Interrupted");await repository.appendSessionEvent("s",{eventType:"VIEWER_OUTPUT_ATTEMPT",role:"controller",metadata:{technicalAttempt:2,status:"uncertain",requestSha256:"frozen-hash",usage:{totalTokens:29}}});await repository.updatePreRevealTranscript("s","accepted blind");
