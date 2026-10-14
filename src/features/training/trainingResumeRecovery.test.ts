@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 import { serializePostRevealTurn } from "../../sessions/postRevealTranscript";
 import { supportedAutomaticPostRevealReviewRequests } from "../../sessions/postReveal";
@@ -20,7 +21,7 @@ function run(overrides: Partial<TrainingRunRecord> = {}): TrainingRunRecord {
 
 function repository(transcript = "") {
   const events: Array<Record<string, unknown>> = [{ id: "e1", sessionId: "s", sequenceNumber: 1, eventType: "POST_REVEAL_REVIEW_CHECKPOINT", role: "controller", content: null, metadata: { stage: "viewer", status: "uncertain", attempt: 1 }, createdAt: "now" }];
-  const repo = {
+  const repo = workflowTestRepository({
     _events: events,
     listTrainingRuns: vi.fn(async () => [run()]),
     getRvSession: vi.fn(async () => ({ id: "s", postRevealTranscript: transcript })),
@@ -28,7 +29,7 @@ function repository(transcript = "") {
     getSessionSnapshot: vi.fn(async () => ({ monitor: null })),
     appendSessionEvent: vi.fn(async (_sessionId: string, event: Record<string, unknown>) => { events.push({ ...event, createdAt: "later" }); }),
     withPostRevealReviewLease: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>) => task()),
-  };
+  });
   return repo;
 }
 
@@ -90,11 +91,11 @@ describe("Training uncertain Viewer Review Resume", () => {
       status: "Interrupted",
       termination: { reason: "user_finished", endedAt: "2026-10-10T12:00:00.000Z" },
     });
-    const repository = {
+    const repository = workflowTestRepository({
       listTrainingRuns: vi.fn(async () => [terminal]),
       getRvSession: vi.fn(),
       withPostRevealReviewLease: vi.fn(),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     const confirm = vi.fn(async () => true);
     await expect(prepareTrainingRunResume({ repository, runId: terminal.id, fallbackLanguage: "en", confirmUncertainViewerReview: confirm })).rejects.toThrow("ended by the user");
     expect(repository.getRvSession).not.toHaveBeenCalled();

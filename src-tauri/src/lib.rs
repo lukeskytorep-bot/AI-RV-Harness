@@ -4,6 +4,7 @@ mod providers;
 mod artifacts;
 mod storage;
 mod database;
+mod workflow_ownership;
 mod dialogs;
 mod documents;
 #[cfg(test)]
@@ -68,6 +69,7 @@ pub fn run() {
             database::database_execute_write_batch,
             database::database_execute_telepathic_fenced_write_batch,
             database::database_execute_post_reveal_review_fenced_write_batch,
+            workflow_ownership::database_workflow_ownership,
             database::database_snapshot,
             database::database_controlled_purge
         ])

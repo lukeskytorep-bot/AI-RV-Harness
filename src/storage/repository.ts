@@ -18,6 +18,12 @@ import type { TelepathicSeriesState } from "../telepathicExchange/types";
 
 
 export interface AppRepository {
+  withWorkflowOwnership<T>(scope: import("../application/workflowOwnership").WorkflowScope, task: (owned: AppRepository, signal: AbortSignal) => Promise<T>): Promise<T>;
+  getWorkflowResearchProjectId(sessionId:string):Promise<string|undefined>;
+  getResearchExecutionTermination(projectId:string):Promise<import("../research/executionLifecycle").ResearchExecutionTermination|null>;
+  endResearchExecution(projectId:string,endedAt?:string):Promise<import("../research/executionLifecycle").ResearchExecutionTermination>;
+  getWorkflowProfileId(sessionId: string): Promise<string>;
+  getWorkflowOwnership(profileId: string): Promise<"idle" | "local" | "other" | "unknown">;
   listProfiles(): Promise<Profile[]>;
   listArchivedProfiles(): Promise<Profile[]>;
   createProfile(input: CreateProfileInput): Promise<Profile>;

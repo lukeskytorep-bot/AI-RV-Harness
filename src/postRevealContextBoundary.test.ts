@@ -53,8 +53,8 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     for (const runner of ["runAutomaticRvLiteSession", "runAutomaticRcpSession", "runAutomaticCustomSession", "runAutomaticTelepathicSession"]) {
       expect(rvSessions).toContain(`${runner}({`);
     }
-    expect(rvSessions.match(/await finishRevealedSession\(result\);/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
-    expect(rvSessions).toContain("await automaticReview(progress.sessionId, true);");
+    expect(rvSessions.match(/await finishRevealedSession\(result,repository,signal\);/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
+    expect(rvSessions).toContain("await automaticReview(progress.sessionId, true,repository,signal);");
   });
 
   it("keeps Research free of automatic post-Reveal discussion before Judge scores are frozen", () => {
@@ -119,7 +119,10 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     const telepathic = source("src/sessions/telepathicController.ts");
     expect(telepathic).toContain('streamWorkflowContext: input.streamWorkflowContext ?? "rv_session"');
     expect(telepathic).toContain('source: "live_monitor"');
-    const telepathicWithoutS2OrFieldGuideWiring = normalizeS2TelepathicStreamingWiring(telepathic)
+    const telepathicWithoutS2OrFieldGuideWiring = normalizeS2TelepathicStreamingWiring(telepathic
+      .replace(/^import \{ withAutomaticWorkflow, withRvWorkflow \} from "\.\.\/application\/workflowOwnership";\n/, "")
+      .replace(/async function (runAutomaticTelepathicSession|resumeTelepathicManualQuestionStage)Owned\(/g,"export async function $1(")
+      .replace(/\nexport const runAutomaticTelepathicSession = [\s\S]*$/, ""))
       .replace("  lockedViewerBaseVocabulary,\n", "")
       .replace("  LOCKED_BASE_VOCABULARY_VERSION,\n", "")
       .replace(/^\s*\{ id: "locked-viewer-base-vocabulary"[^\n]*\n/m, "")

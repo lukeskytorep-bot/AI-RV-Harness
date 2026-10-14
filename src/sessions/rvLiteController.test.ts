@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderContinuationState } from "../providers/continuationContract";
 import anthropicFixture from "../providers/continuation-fixtures/anthropic-thinking-blocks.json";
@@ -17,7 +18,7 @@ const model: ProviderModel = {
 const target: TargetRecord = { id: "training_1", collection: "training", title: "Secret target", revealText: "SECRET REVEAL", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" };
 
 function repository(log: string[], snapshots: SessionSnapshot[] = []) {
-  return {
+  return workflowTestRepository({
     listSessionEvents: async () => [],
     createRvSession: async () => ({} as never),
     updateRvSessionState: async (_id: string, state: string) => { log.push(`state:${state}`); },
@@ -28,7 +29,7 @@ function repository(log: string[], snapshots: SessionSnapshot[] = []) {
     sealPreReveal: async () => { log.push("sealed"); },
     acceptReveal: async () => { log.push("reveal"); },
     recordTargetUsage: async () => undefined,
-  } as unknown as Pick<AppRepository, "listSessionEvents" | "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "appendSessionEventWithProviderState" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage">;
+  } as unknown as Pick<AppRepository, "listSessionEvents" | "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "appendSessionEventWithProviderState" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage">);
 }
 
 describe("automatic RV Lite controller", () => {

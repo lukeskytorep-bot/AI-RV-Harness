@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getTelepathicProtocol } from "../resources/protocolRegistry";
@@ -13,7 +14,7 @@ const model: ProviderModel = {
 };
 
 function repository(log: string[], snapshots: SessionSnapshot[] = []) {
-  return {
+  return workflowTestRepository({
     listSessionEvents: async () => [],
     createRvSession: async () => ({} as never),
     updateRvSessionState: async (_id: string, state: string) => { log.push(`state:${state}`); },
@@ -25,7 +26,7 @@ function repository(log: string[], snapshots: SessionSnapshot[] = []) {
     recordTargetUsage: async () => undefined,
     createMonitorRun: async () => "monitor_1",
     appendMonitorIntervention: async () => undefined,
-  } as unknown as Pick<AppRepository, "listSessionEvents" | "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage" | "createMonitorRun" | "appendMonitorIntervention">;
+  } as unknown as Pick<AppRepository, "listSessionEvents" | "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage" | "createMonitorRun" | "appendMonitorIntervention">);
 }
 
 describe("automatic Telepathic Protocol controller", () => {
@@ -226,7 +227,7 @@ describe("automatic Telepathic Protocol controller", () => {
     ];
     let transcript = session.preRevealTranscript;
     const prompts: string[] = [];
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: async () => snapshot,
       listSessionEvents: async () => events,
       updateRvSessionState: async () => undefined,
@@ -241,7 +242,7 @@ describe("automatic Telepathic Protocol controller", () => {
       saveSessionSnapshot: async () => undefined,
       createMonitorRun: async () => "monitor",
       appendMonitorIntervention: async () => undefined,
-    } as unknown as Parameters<typeof resumeTelepathicManualQuestionStage>[0]["repository"];
+    } as unknown as Parameters<typeof resumeTelepathicManualQuestionStage>[0]["repository"]);
 
     const result = await resumeTelepathicManualQuestionStage({
       repository, session, providerConfig: config, model,

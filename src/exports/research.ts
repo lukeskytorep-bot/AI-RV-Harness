@@ -13,9 +13,10 @@ export async function exportResearchPackage(repository: AppRepository, projectId
   const project = await repository.getResearchProject(projectId);
   const results = await repository.getResearchResults(projectId);
   if (!project) throw new Error("Research project not found.");
-  const saveOnly = project.config.judges.length === 0 && project.state === "SessionsComplete";
+  const termination=await repository.getResearchExecutionTermination(projectId);
+  const saveOnly = project.config.judges.length === 0 && project.state === "SessionsComplete" || Boolean(termination && !results);
   const completedWithScores = project.state === "Complete" && Boolean(results);
-  if (!saveOnly && !completedWithScores) throw new Error("Research sessions must be complete before export.");
+  if (!saveOnly && !completedWithScores && !termination) throw new Error("Research sessions must be complete before export.");
   const [assignments, mappings, conditions, sessions] = await Promise.all([
     repository.listResearchAssignments(projectId), repository.listBlindingMappings(projectId), repository.listResearchConditions(projectId), repository.listRvSessions(project.workspaceId),
   ]);
@@ -30,6 +31,7 @@ export async function exportResearchPackage(repository: AppRepository, projectId
   const snapshots: Record<string, unknown> = {};
   const blindingKey: Array<Record<string, unknown>> = [];
   const privatePrefix = saveOnly ? "private_master/" : "";
+  if(termination)files.push({relativePath:`${privatePrefix}master/execution_termination.json`,content:pretty(termination)});
 
   if (saveOnly) {
     files.push({ relativePath: "external_evaluation/JUDGE_SYSTEM_PROMPT.txt", content: `${getJudgePrompt(project.config.sessionLanguage)}\n` });
@@ -56,6 +58,8 @@ export async function exportResearchPackage(repository: AppRepository, projectId
       repository.getReveal(session.id), repository.getViewerEvidence(session.id), repository.getSessionSnapshot(session.id), repository.listJudgeScores(session.id), repository.listTargetClarifications(session.id),
     ]);
     const base = `sessions/${assignment.anonymousSessionId}`;
+    if(termination)files.push({relativePath:`${privatePrefix}master/${base}/judge_scores.json`,content:pretty(judgeScores)});
+    if(termination)files.push({relativePath:`${privatePrefix}master/${base}/session_events.json`,content:pretty(await repository.listSessionEvents(session.id))});
     if (!saveOnly) {
       files.push({ relativePath: `${base}/pre_reveal.md`, content: session.preRevealTranscript });
       files.push({ relativePath: `${base}/viewer_evidence.md`, content: viewerEvidence });
@@ -70,17 +74,20 @@ export async function exportResearchPackage(repository: AppRepository, projectId
     let exportedArtifacts: Array<{ artifactId: string; mimeType: string; size: number; sha256: string; exportedPath: string }> = [];
     if (reveal) {
       exportedArtifacts = (reveal.artifactManifest ?? []).map((artifact, index) => {
-        const relativePath = artifactExportPath(assignment.anonymousSessionId, index, artifact, saveOnly);
+        const relativePath = artifactExportPath(assignment.anonymousSessionId, index, artifact, saveOnly,Boolean(termination && (!session.preRevealSealedAt || !session.preRevealHash)));
         artifactCopies.push({ sourcePath: artifact.path, relativePath });
         return { artifactId: artifact.artifactId, mimeType: artifact.mimeType, size: artifact.size, sha256: artifact.sha256, exportedPath: relativePath };
       });
       if (!saveOnly) files.push({ relativePath: `${base}/reveal.json`, content: pretty({ source: reveal.source, text: reveal.text, hash: reveal.hash, artifacts: exportedArtifacts }) });
+      // Incomplete evidence stays private and is never offered for external evaluation.
+      if(!termination || session.preRevealSealedAt && session.preRevealHash) {
       const packet = buildJudgePacket({ anonymousSessionId: assignment.anonymousSessionId, preRevealEvidence: viewerEvidence, reveal: { ...(reveal.text ? { text: reveal.text } : {}), ...(exportedArtifacts.some((artifact) => artifact.mimeType.startsWith("image/")) ? { imageRefs: exportedArtifacts.filter((artifact) => artifact.mimeType.startsWith("image/")).map((_, index) => `reveal_image_${index + 1}`) } : {}) }, rubricVersion: JUDGE_RUBRIC_VERSION });
       files.push({ relativePath: `${saveOnly ? "external_evaluation" : "judge_packets"}/${assignment.anonymousSessionId}.json`, content: pretty(saveOnly ? { ...packet, artifactFiles: exportedArtifacts } : packet) });
       if (saveOnly) files.push({
         relativePath: `external_evaluation/${assignment.anonymousSessionId}.md`,
         content: humanJudgePacketMarkdown(assignment.anonymousSessionId, viewerEvidence, reveal.text ?? "", exportedArtifacts, project.config.sessionLanguage),
       });
+      }
     }
     if (!saveOnly) files.push({ relativePath: `judges/${assignment.anonymousSessionId}.json`, content: pretty(judgeScores) });
     files.push({
@@ -110,13 +117,24 @@ export async function exportResearchPackage(repository: AppRepository, projectId
   files.push({ relativePath: "summary.html", content: summaryHtml(project.name, project.config.sessionLanguage, results, assignments.length, saveOnly) });
   files.push({ relativePath: "README.md", content: researchReadme(project.name, assignments.length, project.config.sessionLanguage, saveOnly, Boolean(results)) });
 
+  if(termination){
+    const pl=project.config.sessionLanguage==="pl";
+    const saved=assignments.filter(assignment=>assignment.sessionId).length;
+    const status=pl?`Wykonanie zakończone przez użytkownika. Zachowane sesje: ${saved}/${assignments.length}.`:`Execution ended by user. Saved sessions: ${saved}/${assignments.length}.`;
+    const location=saveOnly
+      ? (pl?"Zapisane sesje, zdarzenia, niepewne próby i oceny znajdują się w private_master. Klucz odślepienia pozostaje w tym prywatnym folderze. Folder external_evaluation zawiera tylko dostępne anonimowe pakiety z zapieczętowanymi dowodami i Reveal.":"Saved sessions, events, uncertain attempts and scores are in private_master. Keep that folder and its blinding key private. external_evaluation contains only available anonymous packets with sealed evidence and Reveal.")
+      : (pl?"Zapisane sesje znajdują się w sessions, zdarzenia i zachowane oceny w master/sessions, wyniki w results, a klucz odślepienia w blinding. Folder judge_packets zawiera dostępne anonimowe pakiety z zapieczętowanymi dowodami i Reveal.":"Saved sessions are in sessions, events and preserved scores in master/sessions, results in results, and the blinding key in blinding. judge_packets contains available anonymous packets with sealed evidence and Reveal.");
+    const readme=`# ${project.name}\n\n${status}\n\n${pl?"Pakiet zawiera zachowany przebieg, także sesje nieukończone i częściowe oceny. Nie oznacza ukończenia badania.":"This package preserves saved work, including incomplete sessions and partial scores. It does not mark the study complete."}\n\n${location}\n`;
+    const file=files.find(file=>file.relativePath==="README.md");if(file)file.content=readme;
+    if(!results){for(const name of ["summary.md","summary.html"]){const file=files.find(file=>file.relativePath===name);if(file)file.content=name.endsWith("html")?`<!doctype html><html lang="${project.config.sessionLanguage}"><meta charset="utf-8"><title>Research</title><body><h1>${escapeHtml(project.name)}</h1><p>${status}</p></body></html>`:`# ${project.name}\n\n${status}\n`;}}
+  }
   const manifestEntries = await Promise.all(files.map(async (file) => ({ path: file.relativePath, kind: "text", sha256: await sha256Text(file.content) })));
   for (const assignment of assignments) {
     if (!assignment.sessionId) continue;
     const reveal = await repository.getReveal(assignment.sessionId);
     for (let index = 0; index < (reveal?.artifactManifest?.length ?? 0); index += 1) {
       const artifact = reveal!.artifactManifest![index];
-      manifestEntries.push({ path: artifactExportPath(assignment.anonymousSessionId, index, artifact, saveOnly), kind: "artifact", sha256: artifact.sha256 });
+      manifestEntries.push({ path: artifactExportPath(assignment.anonymousSessionId, index, artifact, saveOnly,Boolean(termination && (!sessionById.get(assignment.sessionId)?.preRevealSealedAt || !sessionById.get(assignment.sessionId)?.preRevealHash))), kind: "artifact", sha256: artifact.sha256 });
     }
   }
   const manifest = { schemaVersion: 1, projectId, generatedAt: new Date().toISOString(), entries: manifestEntries };
@@ -203,8 +221,8 @@ function pretty(value: unknown): string { return JSON.stringify(value, null, 2) 
 function csvCell(value: string | number): string { const text = String(value); return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text; }
 function escapePipe(value: string): string { return value.replaceAll("|", "\\|").replaceAll("\n", " "); }
 function extensionFor(artifact: RevealArtifactRecord): string { return ({ "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "text/plain": "txt", "text/markdown": "md" } as Record<string, string>)[artifact.mimeType] ?? "bin"; }
-function artifactExportPath(anonymousSessionId: string, index: number, artifact: RevealArtifactRecord, saveOnly: boolean): string {
-  const root = saveOnly ? `external_evaluation/${anonymousSessionId}_artifacts` : `sessions/${anonymousSessionId}/reveal_artifacts`;
+function artifactExportPath(anonymousSessionId: string, index: number, artifact: RevealArtifactRecord, saveOnly: boolean, privateOnly=false): string {
+  const root = privateOnly?`private_master/sessions/${anonymousSessionId}/reveal_artifacts`:saveOnly ? `external_evaluation/${anonymousSessionId}_artifacts` : `sessions/${anonymousSessionId}/reveal_artifacts`;
   return `${root}/artifact_${index + 1}.${extensionFor(artifact)}`;
 }
 async function sha256Text(text: string): Promise<string> { const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)); return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join(""); }

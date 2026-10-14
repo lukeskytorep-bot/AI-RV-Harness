@@ -1,3 +1,4 @@
+import { withWorkflow } from "../../application/workflowOwnership";
 import { prepareViewerNotesForSession, runViewerNoteReflection, viewerNoteReflectionCompletesStage } from "../../aiCenter/viewerNotes";
 import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
 import { sha256Text } from "../../application/sha256";
@@ -234,7 +235,7 @@ async function resolveTrainingFieldGuideAfterUpdate(input: {
   return { updateStatus: "LEGACY_UNRECORDED", versionId: frozen.versionId, versionNumber: frozen.versionNumber, contentSha256: frozen.contentSha256 };
 }
 
-export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promise<TrainingExecutionOutcome> {
+async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<TrainingExecutionOutcome> {
   const persisted = (await input.repository.listTrainingRuns()).find((run) => run.id === input.initial.id);
   if (!persisted) throw new Error("Training run is no longer available.");
   if (isTrainingRunUserFinished(persisted)) return { run: persisted, error: userFinishedTrainingError().message };
@@ -626,4 +627,11 @@ export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promis
     input.onRunChange?.(working);
     return { run: working, error: message };
   }
+}
+
+export async function executeTrainingRun(input:ExecuteTrainingRunInput):Promise<TrainingExecutionOutcome> {
+ const persisted=(await input.repository.listTrainingRuns()).find(run=>run.id===input.initial.id);
+ if(!persisted)throw new Error("Training run is no longer available.");
+ if(isTrainingRunUserFinished(persisted))return {run:persisted,error:userFinishedTrainingError().message};
+ return withWorkflow(input.repository,{profileId:persisted.profileId,entity:{kind:"training",id:persisted.id},signal:input.signal},(repository,signal)=>executeTrainingRunOwned({...input,repository,signal}));
 }

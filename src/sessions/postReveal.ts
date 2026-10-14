@@ -1,3 +1,5 @@
+import { withRvWorkflow } from "../application/workflowOwnership";
+import { inheritAbortOwnership } from "../application/abortOwnership";
 import { focusFeedbackIntroduction } from "./sessionFocus";
 import { loadRevealImageForJudge } from "../artifacts/native";
 import { resolveGenerationSettings } from "../providers/capabilities";
@@ -30,7 +32,7 @@ function postRevealOutputRecoveryInstruction(language: InterfaceLanguage): strin
     : "This is the second attempt because the previous response exhausted the available output limit without producing a complete final answer. Focus only on the required analysis of the completed session and return a complete final answer. Do not expand the analysis into additional tasks or rewrite the sealed blind material.";
 }
 
-export async function sendPostRevealTurn(input: {
+async function sendPostRevealTurnOwned(input: {
   repository: PostRevealRepository;
   sessionId: string;
   existingTranscript: string;
@@ -172,6 +174,7 @@ function combineAbortSignals(primary?: AbortSignal, lease?: AbortSignal): AbortS
   if (primary.aborted) return primary;
   if (lease.aborted) return lease;
   const controller = new AbortController();
+  inheritAbortOwnership(controller.signal,primary,lease);
   const abort = (event: Event) => {
     const signal = event.target as AbortSignal;
     controller.abort(signal.reason);
@@ -406,7 +409,7 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
   }
 }
 
-export async function runAutomaticPostRevealReview(input: Parameters<typeof runAutomaticPostRevealReviewUnlocked>[0]): Promise<string> {
+async function runAutomaticPostRevealReviewOwned(input: Parameters<typeof runAutomaticPostRevealReviewUnlocked>[0]): Promise<string> {
   if (!input.repository.withPostRevealReviewLease) return runAutomaticPostRevealReviewUnlocked(input);
   return input.repository.withPostRevealReviewLease<string>(input.sessionId, async (): Promise<string> => {
     await input.repository.assertPostRevealReviewLease?.(input.sessionId);
@@ -457,7 +460,7 @@ export function findCompletedAutomaticViewerReview(transcript: string, language:
   return findCompletedAutomaticViewerReviewRecord(transcript, language)?.content ?? null;
 }
 
-export async function sendMonitorPostRevealReview(input: {
+async function sendMonitorPostRevealReviewOwned(input: {
   repository: MonitorPostRevealRepository;
   sessionId: string;
   existingTranscript: string;
@@ -512,3 +515,9 @@ export async function sendMonitorPostRevealReview(input: {
   const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "monitor", response.content);
   return { transcript, response };
 }
+
+export const sendPostRevealTurn = (input: Parameters<typeof sendPostRevealTurnOwned>[0]) => withRvWorkflow(input.repository as AppRepository,input.sessionId,input.signal,(repository,signal)=>sendPostRevealTurnOwned({...input,repository,signal}));
+
+export const sendMonitorPostRevealReview = (input: Parameters<typeof sendMonitorPostRevealReviewOwned>[0]) => withRvWorkflow(input.repository as AppRepository,input.sessionId,input.signal,(repository,signal)=>sendMonitorPostRevealReviewOwned({...input,repository,signal}));
+
+export const runAutomaticPostRevealReview = (input: Parameters<typeof runAutomaticPostRevealReviewOwned>[0]) => withRvWorkflow(input.repository as AppRepository,input.sessionId,input.signal,(repository,signal)=>runAutomaticPostRevealReviewOwned({...input,repository,signal}));

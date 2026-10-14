@@ -1,3 +1,4 @@
+import { inheritAbortOwnership } from "../application/abortOwnership";
 import type { InterfaceLanguage } from "../types";
 import type { ProviderStreamEvent } from "../providers/types";
 import {
@@ -61,6 +62,7 @@ export function createStreamingRepetitionGuard(input: {
   language?: InterfaceLanguage;
 } = {}): StreamingRepetitionGuard {
   const controller = new AbortController();
+  inheritAbortOwnership(controller.signal,input.parentSignal);
   let content = "";
   let charsSinceScan = 0;
   let providerRequestId: string | undefined;

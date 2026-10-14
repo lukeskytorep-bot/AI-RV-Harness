@@ -1,3 +1,4 @@
+import { withRvWorkflow } from "../application/workflowOwnership";
 import { buildJudgePacket } from "../domain/judgePacket";
 import { aggregateJudgeScores, computeJudgeTotal, validateJudgeScores, type JudgeComponentScores } from "../domain/scoring";
 import { resolveGenerationSettings } from "../providers/capabilities";
@@ -37,6 +38,8 @@ export interface RunJudgingInput {
   maxRetries?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onResponse?:(response:ProviderChatResponse)=>Promise<void>;
+  onAttemptStart?:Parameters<typeof executeProviderChat>[0]["onAttemptStart"];
   streamWorkflowContext?: StreamWorkflowContext;
   chat?: (request: {
     config: ProviderConfig;
@@ -52,7 +55,7 @@ interface ParsedJudgeOutput {
   narrative: JudgeNarrative;
 }
 
-export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingResult> {
+async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResult> {
   if (input.judges.length < 1 || input.judges.length > 3) throw new RangeError("Select between 1 and 3 Judges.");
   for (const judge of input.judges) validateJudgeRoute(judge);
 
@@ -88,7 +91,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
   });
   const packetWire = JSON.stringify(packet);
   const packetHash = await sha256Text(packetWire);
-  const chat = (request: Parameters<NonNullable<RunJudgingInput["chat"]>>[0]) => executeProviderChat({
+  const chat = async (request: Parameters<NonNullable<RunJudgingInput["chat"]>>[0]) => {const response=await executeProviderChat({
     ...request,
     timeoutMs: input.timeoutMs,
     signal: input.signal,
@@ -96,7 +99,8 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
     operationId: "judge.evaluate",
     streamWorkflowContext: input.streamWorkflowContext,
     attempt: input.chat,
-  });
+    onAttemptStart:input.onAttemptStart,
+  });await input.onResponse?.(response);return response;};
   const scores: JudgeScoreRecord[] = [...existing];
   const pending: Array<{ judge: JudgeSelection; parsed: ParsedJudgeOutput; judgeIndex: number }> = [];
 
@@ -112,6 +116,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
       { role: "user", content: `${languageDirective}\n\n${packetWire}`, ...(judgeImages.length ? { images: judgeImages } : {}) },
     ];
     const initial = await callWithAnalyticalOutputRecovery({
+      signal:input.signal,preserveCompleteAfterAbort:true,
       model: judge.model,
       messages,
       operationKind: "judge",
@@ -134,6 +139,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
         { role: "user", content: buildJudgeRepairPrompt(response.content, language) },
       ];
       const repaired = await callWithAnalyticalOutputRecovery({
+        signal:input.signal,preserveCompleteAfterAbort:true,
         model: judge.model,
         messages: repairMessages,
         operationKind: "judge",
@@ -150,6 +156,7 @@ export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingRe
         : "Correct only the language of all textual values to English. Keep exactly the same numeric scores, add no data, and return only JSON with the same schema.";
       const correctionMessages: ProviderMessage[] = [...messages, { role: "assistant", content: response.content }, { role: "user", content: correction }];
       response = (await callWithAnalyticalOutputRecovery({
+        signal:input.signal,preserveCompleteAfterAbort:true,
         model: judge.model,
         messages: correctionMessages,
         operationKind: "judge",
@@ -285,3 +292,5 @@ function narrativeMatchesLanguage(narrative: JudgeNarrative, language: Interface
 }
 
 export { computeJudgeTotal };
+
+export const runBlindJudging = (input: Parameters<typeof runBlindJudgingOwned>[0]) => withRvWorkflow(input.repository as AppRepository,input.sessionId,input.signal,(repository,signal)=>runBlindJudgingOwned({...input,repository,signal}));

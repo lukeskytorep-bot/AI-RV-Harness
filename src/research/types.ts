@@ -153,6 +153,8 @@ export interface ResearchConfig {
 }
 
 export interface ResearchProjectRecord {
+  /** Mutable execution marker outside Experiment Lock/config. Native stores it in reserved app_settings. */
+  executionTermination?:import("./executionLifecycle").ResearchExecutionTermination;
   id: string;
   workspaceId: string;
   name: string;

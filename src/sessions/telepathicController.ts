@@ -1,3 +1,4 @@
+import { withAutomaticWorkflow, withRvWorkflow } from "../application/workflowOwnership";
 import { monitorInterventionId } from "./monitorInterventions";
 import { evaluateMonitor, isIncompleteMonitorResponse, type MonitorDecision } from "../monitor/engine";
 import { MONITOR_PROMPT_VERSION } from "../monitor/prompt";
@@ -141,7 +142,7 @@ export interface ResumeTelepathicManualStageInput {
 
 class TelepathicRunStop extends Error {}
 
-export async function runAutomaticTelepathicSession(input: AutomaticTelepathicRunInput): Promise<AutomaticTelepathicRunResult> {
+async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunInput): Promise<AutomaticTelepathicRunResult> {
   validate(input);
   const effectiveSettings = resolveGenerationSettings(input.model.capabilities, input.requestedSettings);
   if (effectiveSettings.omitted.length) throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
@@ -542,7 +543,7 @@ export function telepathicManualRecoveryState(events: SessionEventRecord[]): Tel
   return questionsCompleted ? "step9" : "questions";
 }
 
-export async function resumeTelepathicManualQuestionStage(input: ResumeTelepathicManualStageInput): Promise<AutomaticTelepathicRunResult> {
+async function resumeTelepathicManualQuestionStageOwned(input: ResumeTelepathicManualStageInput): Promise<AutomaticTelepathicRunResult> {
   const snapshot = await input.repository.getSessionSnapshot(input.session.id);
   if (!snapshot?.telepathic || snapshot.protocol.id !== "telepathic-protocol" || snapshot.telepathic.step8QuestionMode !== "manual" || snapshot.monitor) {
     throw new Error("This session is not a resumable manual Step 8 Telepathic Protocol session.");
@@ -891,3 +892,6 @@ function notify(
     ...(telepathicQuestionCount !== undefined ? { telepathicQuestionCount } : {}),
   });
 }
+
+export const runAutomaticTelepathicSession = (input: Parameters<typeof runAutomaticTelepathicSessionOwned>[0]) => withAutomaticWorkflow(input, runAutomaticTelepathicSessionOwned);
+export const resumeTelepathicManualQuestionStage = (input: Parameters<typeof resumeTelepathicManualQuestionStageOwned>[0]) => withRvWorkflow(input.repository as AppRepository,input.session.id,input.signal,(repository,signal)=>resumeTelepathicManualQuestionStageOwned({...input,repository,signal}));

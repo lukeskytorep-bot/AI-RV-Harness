@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../../testing/workflowRepository";
 import { describe, expect, it } from "vitest";
 import { BrowserTrainingRepository } from "../../storage/browser/trainingRepository";
 import type { TrainingRunRecord } from "../../training/types";
@@ -29,7 +30,7 @@ describe("endTrainingRun", () => {
     const storage = new MemoryStorage();
     const original = run();
     storage.setItem("rvh.dev.training_runs", JSON.stringify([original]));
-    const repository = new BrowserTrainingRepository({ storage, now: () => "updated" });
+    const repository = workflowTestRepository(new BrowserTrainingRepository({ storage, now: () => "updated" }));
     const ended = await endTrainingRun(repository as never, original.id, "2026-10-10T12:00:00.000Z");
     expect(ended).toMatchObject({
       status: "Interrupted",
@@ -46,7 +47,7 @@ describe("endTrainingRun", () => {
     const storage = new MemoryStorage();
     const original = run();
     storage.setItem("rvh.dev.training_runs", JSON.stringify([original]));
-    const repository = new BrowserTrainingRepository({ storage, now: () => "updated" });
+    const repository = workflowTestRepository(new BrowserTrainingRepository({ storage, now: () => "updated" }));
     await endTrainingRun(repository as never, original.id, "first");
     const second = await endTrainingRun(repository as never, original.id, "second");
     expect(second.termination?.endedAt).toBe("first");
@@ -60,7 +61,7 @@ describe("endTrainingRun", () => {
       completedAt: "completed",
     });
     storage.setItem("rvh.dev.training_runs", JSON.stringify([completed]));
-    const repository = new BrowserTrainingRepository({ storage, now: () => "updated" });
+    const repository = workflowTestRepository(new BrowserTrainingRepository({ storage, now: () => "updated" }));
     await expect(endTrainingRun(repository as never, completed.id, "later")).rejects.toThrow("cannot be ended");
     const stored = (await repository.listTrainingRuns())[0];
     expect(stored.status).toBe("Completed");

@@ -1,3 +1,6 @@
+import { useWorkflowOwnership } from "../../components/useWorkflowOwnership";
+import { researchScope, canEndResearchExecution, type ResearchExecutionTermination } from "../../research/executionLifecycle";
+import { getUncertainResearchJudges, resolveResearchJudgeAttempt } from "../../research/judgeRecovery";
 import { VIEWER_OUTPUT_INITIAL_TOKENS } from "../../sessions/viewerOutputRecovery";
 import { Archive, Check, ChevronRight, CircleStop, FlaskConical, LockKeyhole, Play, RotateCcw, Search, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -540,9 +543,9 @@ function PreflightPanel({ copy, preflight }: { copy: Copy; preflight: ResearchPr
   return <section className="panel research-review-panel"><div className="research-review-head"><span className={preflight.ok ? "preflight-ok" : "preflight-fail"}>{preflight.ok ? <Check size={18} /> : <X size={18} />}</span><div><strong>{preflight.ok ? copy.preflightPassed : copy.preflightFailed}</strong><small>{copy.viewerCalls}: {preflight.estimatedViewerCalls} · {copy.judgeCalls}: {preflight.estimatedJudgeCalls}</small></div></div><div className="preflight-list">{preflight.checks.map((check) => <div key={check.id} className={check.level}><span>{check.level === "pass" ? "✓" : check.level === "warning" ? "!" : "×"}</span><p>{check.message}</p></div>)}</div></section>;
 }
 
-function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: { copy: Copy; repository: AppRepository; project: ResearchProjectRecord; onRefresh: () => Promise<void>; onBack: () => void }) {
+export function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: { copy: Copy; repository: AppRepository; project: ResearchProjectRecord; onRefresh: () => Promise<void>; onBack: () => void }) {
   const dialogs = useAppDialogs();
-  const [busy, setBusy] = useState<"sessions" | "judging" | "unblind" | "export" | null>(null);
+  const [busy, setBusy] = useState<"sessions" | "judging" | "unblind" | "export" | "recovery" | "end" | "archive" | null>(null);
   const [progress, setProgress] = useState(0);
   const [total, setTotal] = useState(0);
   const [currentAnonymous, setCurrentAnonymous] = useState("");
@@ -553,6 +556,42 @@ function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: {
   const [assignments, setAssignments] = useState<ResearchAssignmentRecord[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const operationGuard=useRef(false);
+  const [stopping,setStopping]=useState(false);
+  const [termination,setTermination]=useState<ResearchExecutionTermination|null|undefined>(undefined);
+  const [uncertainJudges,setUncertainJudges]=useState<Array<{sessionId:string;modelRoute:string}>>([]);
+  const ownership=useWorkflowOwnership(repository,`research:${project.id}`);
+  const pl=copy.home!=="Home";
+  const unavailable=ownership.unavailable || termination===undefined;
+  const refreshRuntime=async()=>{
+    const marker=await repository.getResearchExecutionTermination(project.id);
+    setTermination(current=>current ?? marker);
+    setUncertainJudges(marker?[]:await getUncertainResearchJudges(repository,project.id));
+  };
+  useEffect(()=>{
+    let closed=false;
+    const refresh=async()=>{try{const marker=await repository.getResearchExecutionTermination(project.id);if(!closed)setTermination(current=>current ?? marker);}catch{if(!closed)setTermination(undefined);}};
+    void refresh();const timer=setInterval(()=>void refresh(),500);
+    return()=>{closed=true;clearInterval(timer);abortRef.current?.abort(new DOMException("Research view closed","AbortError"));};
+  },[repository,project.id]);
+  useEffect(()=>{let closed=false;void getUncertainResearchJudges(repository,project.id).then(rows=>{if(!closed)setUncertainJudges(rows);}).catch(()=>undefined);return()=>{closed=true;};},[repository,project.id,project.state,busy]);
+  const perform=async(phase:NonNullable<typeof busy>,work:(owned:AppRepository,signal?:AbortSignal)=>Promise<void>,admin=false)=>{
+    if(operationGuard.current || unavailable || termination && !["end","archive","export"].includes(phase))return;
+    operationGuard.current=true;setBusy(phase);setStopping(false);setError(null);
+    let refreshed=false;
+    const controller=["sessions","judging","unblind"].includes(phase)?new AbortController():null;abortRef.current=controller;
+    try{
+      if(phase==="end" || phase==="export"){await work(repository);await onRefresh();await refreshRuntime();refreshed=true;}
+      else {
+        const scope=researchScope(project.id,controller?.signal);
+        if(admin)scope.entity.allowEnded=true;
+        await repository.withWorkflowOwnership(scope,async(owned,signal)=>{try{await work(owned,signal);}finally{await onRefresh();await refreshRuntime();refreshed=true;}});
+      }
+    }catch(cause){setError(message(cause));if(!refreshed)await onRefresh().catch(refreshError=>setError(message(refreshError)));}
+    finally{abortRef.current=null;setStopping(false);setBusy(null);operationGuard.current=false;}
+  };
+  const stop=()=>{if(!abortRef.current || abortRef.current.signal.aborted)return;setStopping(true);abortRef.current.abort(new DOMException("Research stopped by user","AbortError"));};
+
 
   useEffect(() => { void repository.getResearchResults(project.id).then(setResults); }, [repository, project.id, project.state]);
   useEffect(() => { void repository.listResearchAssignments(project.id).then(setAssignments); }, [repository, project.id, project.state]);
@@ -560,29 +599,22 @@ function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: {
     if (!["Running", "Interrupted"].includes(project.state)) { setRecoverableCount(0); return; }
     void repository.listResearchAssignments(project.id).then((items) => setRecoverableCount(items.filter((item) => item.sessionId && !["SessionComplete", "Judged", "ResumeApproved"].includes(item.status)).length));
   }, [repository, project.id, project.state]);
-  const runSessions = async () => {
-    const controller = new AbortController(); abortRef.current = controller; setBusy("sessions"); setError(null);
-    try { await executeResearchSessions({ repository, projectId: project.id, signal: controller.signal, onProgress: (value) => { setProgress(value.completed); setTotal(value.total); setCurrentAnonymous(value.anonymousSessionId); } }); await onRefresh(); }
-    catch (cause) { setError(message(cause)); await onRefresh(); } finally { abortRef.current = null; setBusy(null); }
-  };
-  const runJudging = async () => { setBusy("judging"); setError(null); try { await judgeResearch({ repository, projectId: project.id, onProgress: (value) => { setProgress(value.completed); setTotal(value.total); setCurrentAnonymous(value.anonymousSessionId); } }); await onRefresh(); } catch (cause) { setError(message(cause)); await onRefresh(); } finally { setBusy(null); } };
-  const unblind = async () => { setBusy("unblind"); setError(null); try { setResults(await unblindAndComputeResearch(repository, project.id)); await onRefresh(); } catch (cause) { setError(message(cause)); } finally { setBusy(null); } };
-  const exportPackage = async () => {
-    const destination = await chooseDirectory(copy.researchExportChooseFolder);
-    if (!destination) return;
-    setBusy("export"); setError(null);
-    try { const exported = await exportResearchPackage(repository, project.id, destination); setExportPath(exported.directory); }
-    catch (cause) { setError(message(cause)); }
-    finally { setBusy(null); }
-  };
-  const recover = async () => {
-    if (!recoverableCount) return;
-    const confirmed = await dialogs.confirm({ title: copy.dialogWarningTitle, description: copy.researchRecoveryConfirm, confirmLabel: copy.dialogContinue, cancelLabel: copy.cancel, severity: "warning" });
-    if (!confirmed) return;
-    setError(null);
-    try { await prepareInterruptedResearchRetry(repository, project.id); setRecoverableCount(0); await onRefresh(); } catch (cause) { setError(message(cause)); }
-  };
-  const archiveProject = async () => {
+  const progressUpdate=(value:{completed:number;total:number;anonymousSessionId:string})=>{setProgress(value.completed);setTotal(value.total);setCurrentAnonymous(value.anonymousSessionId);};
+  const runSessions=()=>perform("sessions",(owned,signal)=>executeResearchSessions({repository:owned,projectId:project.id,signal,onProgress:progressUpdate}));
+  const runJudging=()=>perform("judging",(owned,signal)=>judgeResearch({repository:owned,projectId:project.id,signal,onProgress:progressUpdate}));
+  const unblind=()=>perform("unblind",async(owned,signal)=>{setResults(await unblindAndComputeResearch(owned,project.id,signal));});
+  const exportPackage=()=>perform("export",async owned=>{const destination=await chooseDirectory(copy.researchExportChooseFolder);if(!destination)return;const exported=await exportResearchPackage(owned,project.id,destination);setExportPath(exported.directory);});
+  const recover=()=>perform("recovery",async owned=>{
+    if(!recoverableCount)return;
+    const confirmed=await dialogs.confirm({title:copy.dialogWarningTitle,description:copy.researchRecoveryConfirm,confirmLabel:copy.dialogContinue,cancelLabel:copy.cancel,severity:"warning"});
+    if(confirmed){await prepareInterruptedResearchRetry(owned,project.id);setRecoverableCount(0);}
+  });
+  const resolveJudges=()=>perform("recovery",async owned=>{
+    const confirmed=await dialogs.confirm({title:copy.dialogWarningTitle,description:pl?"Poprzednia próba Judge mogła zostać opłacona bez zapisanego wyniku. Oznaczyć te próby jako nieudane, aby umożliwić ręczne wznowienie?":"A previous Judge attempt may have been charged without a saved result. Mark these attempts failed to allow manual Resume?",confirmLabel:copy.dialogContinue,cancelLabel:copy.cancel,severity:"warning"});
+    if(confirmed)for(const item of await getUncertainResearchJudges(owned,project.id))await resolveResearchJudgeAttempt(owned,project.id,item.sessionId,item.modelRoute);
+  });
+  const endExecution=()=>perform("end",async owned=>{const marker=await owned.endResearchExecution(project.id);setTermination(marker);});
+  const archiveProject = () => perform("archive",async repository=>{
     const pl = copy.home !== "Home";
     const confirmed = await dialogs.confirm({
       title: pl ? "Archiwizować Research?" : "Archive Research?",
@@ -595,14 +627,12 @@ function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: {
       severity: "warning",
     });
     if (!confirmed) return;
-    setError(null);
-    try { await repository.archiveResearchProject(project.id); await onRefresh(); onBack(); }
-    catch (cause) { setError(message(cause)); }
-  };
+    await repository.archiveResearchProject(project.id);onBack();
+  },true);
 
-  const sessionsReady = ["Locked", "Running", "Interrupted"].includes(project.state);
+  const sessionsReady = !termination && ["Locked", "Running", "Interrupted"].includes(project.state);
   const saveOnly = project.config.judges.length === 0;
-  const judgingReady = !saveOnly && ["SessionsComplete", "Judging"].includes(project.state);
+  const judgingReady = !termination && !saveOnly && ["SessionsComplete", "Judging"].includes(project.state);
   const saveOnlyExportReady = saveOnly && project.state === "SessionsComplete";
   const completedAssignments = assignments.filter((assignment) => assignment.sessionId && ["SessionComplete", "Judged"].includes(assignment.status));
   const resultBySessionId = new Map((results?.sessions ?? []).map((session) => [session.sessionId, session]));
@@ -613,9 +643,9 @@ function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: {
       <section className="panel research-run-card">
         <div className="research-state-head"><div><small>{copy.currentState}</small><strong>{project.state}</strong></div>{project.lockedAt && <span className="status-chip ready"><LockKeyhole size={12} />{copy.configLocked}</span>}</div>
         <div className="research-run-meta"><span>{copy.plannedSessions}<strong>{project.config.targetIds.length * project.config.repetitions * project.config.conditions.length}</strong></span><span>{copy.researchConditions}<strong>{project.config.conditions.length}</strong></span><span>{copy.researchEvaluation}<strong>{saveOnly ? copy.saveOnly : `${project.config.judges.length} AI Judge`}</strong></span></div>
-        {busy && <div className="research-live-progress"><span className="loader-orb" /><div><strong>{busy === "export" ? (saveOnly ? copy.exportSavedSessions : copy.exportResearchPackage) : `${copy.researchProgress} · ${progress}/${total || "…"}`}</strong><small>{currentAnonymous}</small></div>{busy === "sessions" && <button className="stop-button" onClick={() => abortRef.current?.abort()}><CircleStop size={15} />STOP</button>}</div>}
-        {!busy && <div className="research-stage-actions">{recoverableCount > 0 && <button className="secondary-button recovery-button" onClick={() => void recover()}>{copy.preserveResearchRecovery} · {recoverableCount}</button>}{sessionsReady && <button className="primary-button" disabled={!isTauriRuntime() || recoverableCount > 0} onClick={() => void runSessions()}><Play size={15} />{project.state === "Locked" ? copy.startResearch : copy.resumeResearch}</button>}{saveOnlyExportReady && <button className="primary-button" disabled={!isTauriRuntime()} onClick={() => void exportPackage()}>{copy.exportSavedSessions}</button>}{judgingReady && <button className="primary-button" disabled={!isTauriRuntime()} onClick={() => void runJudging()}><ShieldCheck size={15} />{copy.runResearchJudging}</button>}{project.state === "ScoresFrozen" && <button className="primary-button unblind-button" onClick={() => void unblind()}><LockKeyhole size={15} />{copy.unblindCalculate}</button>}{project.state === "Complete" && <><button className="secondary-button" onClick={() => void repository.getResearchResults(project.id).then(setResults)}><RotateCcw size={14} />{copy.researchResults}</button><button className="primary-button" disabled={!isTauriRuntime()} onClick={() => void exportPackage()}>{copy.exportResearchPackage}</button></>}<button className="secondary-button" onClick={() => void archiveProject()}><Archive size={14} />{copy.home === "Home" ? "Archive" : "Archiwizuj"}</button></div>}
-        {saveOnlyExportReady && <p className="research-recovery-note">{copy.saveOnlyReadyLead}</p>}{recoverableCount > 0 && <p className="research-recovery-note">{copy.researchRecoveryRequired}</p>}{exportPath && <div className="export-success"><Check size={14} /><span><strong>{copy.exportComplete}</strong><small>{exportPath}</small></span></div>}{!isTauriRuntime() && (sessionsReady || saveOnlyExportReady) && <p className="research-runtime-note">{copy.researchRequiresDesktop}</p>}{error && <div className="provider-error">{error}</div>}
+        {busy && <div className="research-live-progress"><span className="loader-orb" /><div><strong>{busy === "export" ? (saveOnly ? copy.exportSavedSessions : copy.exportResearchPackage) : `${copy.researchProgress} · ${progress}/${total || "…"}`}</strong><small>{currentAnonymous}</small></div>{["sessions","judging","unblind"].includes(busy) && <button className="stop-button" disabled={stopping} title={pl?"Zatrzymaj wykonywanie. Rozpoczęte wywołanie może zostać naliczone przez dostawcę.":"Stop execution. A started request may still be charged by the provider."} onClick={stop}><CircleStop size={15} />{stopping?(pl?"Zatrzymywanie…":"Stopping…"):"STOP"}</button>}</div>}
+        {!busy && <div className="research-stage-actions">{!termination && recoverableCount > 0 && <button className="secondary-button recovery-button" disabled={unavailable} onClick={() => void recover()}>{copy.preserveResearchRecovery} · {recoverableCount}</button>}{sessionsReady && <button className="primary-button" disabled={unavailable || !isTauriRuntime() || recoverableCount > 0} onClick={() => void runSessions()}><Play size={15} />{project.state === "Locked" ? copy.startResearch : copy.resumeResearch}</button>}{saveOnlyExportReady && <button className="primary-button" disabled={unavailable || !isTauriRuntime()} onClick={() => void exportPackage()}>{copy.exportSavedSessions}</button>}{judgingReady && <button className="primary-button" disabled={unavailable || uncertainJudges.length>0 || !isTauriRuntime()} onClick={() => void runJudging()}><ShieldCheck size={15} />{project.state==="Judging"?(pl?"Wznów ocenianie":"Resume judging"):copy.runResearchJudging}</button>}{!termination && ["ScoresFrozen","Unblinded"].includes(project.state) && <button disabled={unavailable} className="primary-button unblind-button" onClick={() => void unblind()}><LockKeyhole size={15} />{project.state==="Unblinded"?(pl?"Wznów obliczenie wyników":"Resume results calculation"):copy.unblindCalculate}</button>}{project.state === "Complete" && <><button className="secondary-button" onClick={() => void repository.getResearchResults(project.id).then(setResults)}><RotateCcw size={14} />{copy.researchResults}</button><button className="primary-button" disabled={unavailable || !isTauriRuntime()} onClick={() => void exportPackage()}>{copy.exportResearchPackage}</button></>}{!termination && uncertainJudges.length>0 && <button className="secondary-button" disabled={unavailable} onClick={()=>void resolveJudges()}>{pl?"Rozstrzygnij niepewne próby Judge":"Resolve uncertain Judge attempts"}</button>}{!termination && canEndResearchExecution(project) && <button className="secondary-button" disabled={unavailable} onClick={()=>void endExecution()}>{pl?"Zakończ wykonanie":"End execution"}</button>}{termination && <button className="primary-button" disabled={unavailable || !isTauriRuntime()} onClick={()=>void exportPackage()}>{pl?"Zapisz zachowany przebieg":"Export saved work"}</button>}<button className="secondary-button" disabled={unavailable} onClick={() => void archiveProject()}><Archive size={14} />{copy.home === "Home" ? "Archive" : "Archiwizuj"}</button></div>}
+        {termination && <p className="research-recovery-note" role="status">{pl?"Wykonanie zakończone przez użytkownika. Zapisane sesje i wyniki pozostają dostępne.":"Execution ended by user. Saved sessions and results remain available."}</p>}{ownership.unavailable && <small role="status">{ownership.state==="other"?(pl?"Praca trwa w innym oknie":"Work is running in another window"):(pl?"Sprawdzanie stanu wykonania":"Checking execution state")}</small>}{saveOnlyExportReady && <p className="research-recovery-note">{copy.saveOnlyReadyLead}</p>}{!termination && recoverableCount > 0 && <p className="research-recovery-note">{copy.researchRecoveryRequired}</p>}{exportPath && <div className="export-success"><Check size={14} /><span><strong>{copy.exportComplete}</strong><small>{exportPath}</small></span></div>}{!isTauriRuntime() && (sessionsReady || saveOnlyExportReady) && <p className="research-runtime-note">{copy.researchRequiresDesktop}</p>}{error && <div className="provider-error">{error}</div>}
       </section>
       <aside className="panel research-lock-summary"><strong>{copy.experimentLock}</strong><code>{project.configHash ?? "—"}</code><p>{copy.lockWarning}</p>{project.config.viewerControl && <div className="research-lock-controls"><span><small>{copy.baseViewerModel}</small><strong>{project.config.viewerControl.model.mode === "fixed" ? project.config.viewerControl.model.modelId : copy.testedVariableBelow}</strong></span><span><small>{copy.researchReasoning}</small><strong>{project.config.viewerControl.reasoning.mode === "fixed" ? project.config.viewerControl.reasoning.value?.toUpperCase() : project.config.viewerControl.reasoning.mode === "provider_default" ? copy.autoProviderDefault : copy.testedVariableBelow}</strong></span><span><small>{copy.researchTemperature}</small><strong>{project.config.viewerControl.temperature.mode === "fixed" ? project.config.viewerControl.temperature.value : project.config.viewerControl.temperature.mode === "provider_default" ? copy.autoProviderDefault : copy.testedVariableBelow}</strong></span></div>}<div className="research-lock-controls"><span><small>{copy.viewerNotesSetting}</small><strong>{project.config.viewerNotesControl?.mode === "current" ? "CURRENT" : project.config.viewerNotesControl?.mode === "experiment" ? copy.testedVariableBelow : "OFF"}</strong></span><span><small>{copy.fieldGuideSetting}</small><strong>{project.config.fieldGuideControl?.mode === "history" ? "HISTORY" : project.config.fieldGuideControl?.mode === "current" ? "CURRENT" : "OFF"} · {copy.frozenStatus}</strong></span>{project.config.promptResearchSource && <span><small>{copy.promptResearchSource}</small><strong>{project.config.promptResearchSource === "manual" ? "MANUAL" : "HISTORY"}</strong></span>}</div><ul>{project.config.conditions.map((condition) => <li key={condition.key}>{condition.label}{condition.fieldGuide ? ` · FG v${condition.fieldGuide.versionNumber} · ${condition.fieldGuide.contentSha256.slice(0, 10)}…` : ""}</li>)}</ul></aside>
     </div>

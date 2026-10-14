@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { expect, it, vi } from "vitest";
 import { analyticalOutputBudget, analyticalBudgetPolicyForSnapshot, callWithAnalyticalOutputRecovery, type FrozenAnalyticalOutputPolicy } from "./outputRecovery";
 import { sendPostRevealTurn, sendMonitorPostRevealReview } from "../sessions/postReveal";
@@ -14,7 +15,7 @@ for(const policy of [undefined,v1,v2]) for(const role of ["viewer","monitor"] as
  let transcript="";
  const snapshot={researchProjectId:"r",providerConfigId:"p",modelId:"m",sessionLanguage:"en",generationSettings:{requested:{reasoningEffort:"high",temperature:0.5},effective:{},omitted:[]},monitor:{providerConfigId:"p",modelId:"m",effectivePrompt:"Monitor"},...(policy?{postRevealOutputPolicy:policy}:{})} as unknown as SessionSnapshot;
  const before=stableStringify(snapshot);
- const repository={getSessionSnapshot:async()=>snapshot,getReveal:async()=>({source:"external_text" as const,text:"Tower",hash:"h"}),getViewerEvidence:async()=>"tall",listTargetClarifications:async()=>[],listMonitorRuns:async()=>[],listMonitorInterventions:async()=>[],appendPostRevealTurn:async(_id:string,turnRole:string,content:string)=>transcript+=JSON.stringify({role:turnRole,content})+"\n"};
+ const repository=workflowTestRepository({getSessionSnapshot:async()=>snapshot,getReveal:async()=>({source:"external_text" as const,text:"Tower",hash:"h"}),getViewerEvidence:async()=>"tall",listTargetClarifications:async()=>[],listMonitorRuns:async()=>[],listMonitorInterventions:async()=>[],appendPostRevealTurn:async(_id:string,turnRole:string,content:string)=>transcript+=JSON.stringify({role:turnRole,content})+"\n"});
  const budgets:number[]=[];
  const chat=vi.fn(async request=>{budgets.push(request.settings.effective.maxOutputTokens);return {content:"Complete analysis",finishReason:budgets.length===1?"length":"stop",usage:{}};});
  if(role==="viewer")await sendPostRevealTurn({repository,sessionId:"s",existingTranscript:"",providerConfig:provider,model,content:"Analyze",budgetPolicy:"training_reveal",chat});

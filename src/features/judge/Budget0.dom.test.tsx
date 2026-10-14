@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../../testing/workflowRepository";
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -18,7 +19,7 @@ for (const length of [false, true]) it(`ordinary Judge screen dispatches ${lengt
   let done!: () => void; const completed = new Promise<void>(resolve => { done = resolve; });
   transport.chat.mockImplementation(async request => { budgets.push(request.settings.effective.maxOutputTokens); return { content: JSON.stringify({ scores: { gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 1, confabulationControl: 1 }, strongestMatches: ["structure"], majorMissesContradictions: [], confabulationObservations: [], conciseRationale: "Good structural match." }), finishReason: length && budgets.length === 1 ? "length" : "stop", usage: {} }; });
   const freeze = vi.fn(async (run, score) => ({ ...score, judgeIndex: run.judgeIndex, modelRoute: run.modelRoute, total: 6, frozenAt: "t", createdAt: "t" }));
-  const repository = { getSessionSnapshot: vi.fn(async () => ({ sessionLanguage: "en" })), getReveal: vi.fn(async () => ({ text: "Tower", hash: "h" })), getViewerEvidence: vi.fn(async () => "Tall structure"), listJudgeScores: vi.fn(async () => []), recordFrozenJudgeResult: freeze, updateRvSessionState: vi.fn() } as unknown as AppRepository;
+  const repository = workflowTestRepository({ getSessionSnapshot: vi.fn(async () => ({ sessionLanguage: "en" })), getReveal: vi.fn(async () => ({ text: "Tower", hash: "h" })), getViewerEvidence: vi.fn(async () => "Tall structure"), listJudgeScores: vi.fn(async () => []), recordFrozenJudgeResult: freeze, updateRvSessionState: vi.fn() } as unknown as AppRepository);
   try {
     await act(async () => root.render(<JudgeEvaluation copy={getCopy("en")} repository={repository} sessionId="s" language="en" models={[model]} providerConfigs={[config]} profile={{ id: "p", name: "P", credentialId: "c", createdAt: "t", updatedAt: "t" }} defaultModelKey="pc::m" onCompleted={done} />));
     const start = [...host.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === getCopy("en").runJudges)!;

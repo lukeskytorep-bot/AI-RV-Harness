@@ -1,3 +1,4 @@
+import { withWorkflow } from "../../application/workflowOwnership";
 import type { AppRepository } from "../../storage/repository";
 import type { TrainingRunRecord } from "../../training/types";
 import type { InterfaceLanguage } from "../../types";
@@ -12,7 +13,7 @@ export interface TrainingResumeDecisionCopy {
   cancelLabel: string;
 }
 
-export async function prepareTrainingRunResume(input: {
+async function prepareTrainingRunResumeOwned(input: {
   repository: AppRepository;
   runId: string;
   fallbackLanguage: InterfaceLanguage;
@@ -67,4 +68,9 @@ export async function prepareTrainingRunResume(input: {
   const finalRun = (await input.repository.listTrainingRuns()).find((run) => run.id === input.runId) ?? current;
   if (isTrainingRunUserFinished(finalRun)) throw userFinishedTrainingError();
   return finalRun;
+}
+
+export async function prepareTrainingRunResume(input:Parameters<typeof prepareTrainingRunResumeOwned>[0]) {
+ const run=(await input.repository.listTrainingRuns()).find(run=>run.id===input.runId);if(!run)throw new Error("Training run no longer available");
+ return withWorkflow(input.repository,{profileId:run.profileId,entity:{kind:"training",id:run.id}},repository=>prepareTrainingRunResumeOwned({...input,repository}));
 }

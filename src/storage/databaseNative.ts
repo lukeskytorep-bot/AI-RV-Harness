@@ -85,3 +85,11 @@ export async function createDatabaseSnapshotNative(destinationPath: string): Pro
 export async function executeControlledPurgeNative(kind: PurgeEntityKind, id: string, expectedArchiveRevision?:number): Promise<void> {
   await invoke("database_controlled_purge", { request: { kind, id, ...(expectedArchiveRevision===undefined?{}:{expectedArchiveRevision}) } });
 }
+
+export async function workflowOwnershipNative<T>(request: Record<string, unknown>): Promise<T> {
+  return invoke<T>("database_workflow_ownership", { request });
+}
+export async function executeWorkflowOwnedDatabaseTransaction(context: import("../application/workflowOwnership").WorkflowContext, statements: DatabaseTransactionStatement[], postRevealFence?: { sessionId: string; leaseOwner: string; leaseVersion: number }): Promise<number[]> {
+  if (context.closed) throw new Error("Workflow ownership has settled; late writes are refused.");
+  return workflowOwnershipNative<number[]>({ action: "write", profileId: context.profileId, owner: context.owner, version: context.version, entities: context.entities, statements: statements.map(statement=>({ operation:operationForWriteQuery(statement.query), values:statement.values??[] })), ...(postRevealFence ? { postRevealFence } : {}) });
+}

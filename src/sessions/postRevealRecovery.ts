@@ -1,3 +1,4 @@
+import { withRvWorkflow } from "../application/workflowOwnership";
 import type { AppRepository } from "../storage/repository";
 import { parsePostRevealTranscript } from "./postRevealTranscript";
 
@@ -117,7 +118,7 @@ export async function getPostRevealReviewRecoveryState(
   };
 }
 
-export async function resolveUncertainPostRevealReviewStage(input: {
+async function resolveUncertainPostRevealReviewStageOwned(input: {
   repository: Pick<AppRepository, "listSessionEvents" | "appendSessionEvent">;
   sessionId: string;
   stage: PostRevealReviewStage;
@@ -136,3 +137,5 @@ export async function resolveUncertainPostRevealReviewStage(input: {
     message: "Operator resolved the uncertain attempt as failed; retry is now allowed.",
   });
 }
+
+export const resolveUncertainPostRevealReviewStage = (input:Parameters<typeof resolveUncertainPostRevealReviewStageOwned>[0]) => withRvWorkflow(input.repository as AppRepository,input.sessionId,undefined,repository=>resolveUncertainPostRevealReviewStageOwned({...input,repository}));

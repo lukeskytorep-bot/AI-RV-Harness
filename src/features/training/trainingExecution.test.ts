@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../../testing/workflowRepository";
 import { runBlindJudging } from "../../judge/engine";
 import { describe, expect, it, vi } from "vitest";
 
@@ -88,7 +89,7 @@ function harness(sessionFailureAt?: string) {
     capturedAt: "now",
     sourceKind: "factory-baseline" as const,
   };
-  const repository = {
+  const repository = workflowTestRepository({
     updateTrainingRun: vi.fn(async (_id: string, update: Record<string, unknown>) => {
       updates.push(update);
       if (persistedTrainingRun) {
@@ -151,7 +152,7 @@ function harness(sessionFailureAt?: string) {
     listViewerNoteReflectionRuns: vi.fn(async () => []),
     listJudgeScores: vi.fn(async () => []),
     listFieldGuideVersions: vi.fn(async () => fieldGuideVersions as never),
-  } as unknown as AppRepository;
+  } as unknown as AppRepository);
   const reflect = vi.fn(async (_request: { fieldGuideAfterTrainingUpdate: TrainingFieldGuidePostUpdateCheckpoint; [key: string]: unknown }) => null);
   const fieldGuideUpdate = vi.fn(async (request: Parameters<RunFieldGuideUpdateDependency>[0]): Promise<Awaited<ReturnType<RunFieldGuideUpdateDependency>>> => {
     const snapshot = await repository.getSessionSnapshot(request.sessionId);

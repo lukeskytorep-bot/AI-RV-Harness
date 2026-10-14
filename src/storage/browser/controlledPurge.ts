@@ -94,6 +94,7 @@ function trainingSessionIds(runs: TrainingRunRecord[]): Set<string> {
 }
 
 function terminalResearch(project: ResearchProjectRecord): boolean {
+  if(project.executionTermination)return true;
   return ["Complete", "Interrupted", "Failed"].includes(project.state);
 }
 

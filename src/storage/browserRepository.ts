@@ -1,3 +1,6 @@
+import { validateResearchTermination, researchScope, canEndResearchExecution, researchTermination } from "../research/executionLifecycle";
+import { ownBrowserWorkflow, browserOwnershipState } from "./browser/workflowOwnership";
+import type { WorkflowScope } from "../application/workflowOwnership";
 import type { CreateProfileInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
@@ -39,6 +42,33 @@ function write<T>(key: string, value: T): void {
 }
 
 export class BrowserRepository implements AppRepository {
+  async getResearchExecutionTermination(projectId:string):Promise<import("../research/executionLifecycle").ResearchExecutionTermination|null>{
+    // Deliberately fail closed for corrupt runtime data; the marker is outside frozen config.
+    const projects=JSON.parse(localStorage.getItem("rvh.dev.research_projects")??"[]") as Array<import("../research/types").ResearchProjectRecord>;
+    const project=projects.find(project=>project.id===projectId);
+    return project && "executionTermination" in project?validateResearchTermination(project.executionTermination):null;
+  }
+  async endResearchExecution(projectId:string,endedAt=new Date().toISOString()):Promise<import("../research/executionLifecycle").ResearchExecutionTermination>{
+    return this.withWorkflowOwnership({...researchScope(projectId),terminal:true,entity:{kind:"research",id:projectId,allowEnded:true}},async owned=>{
+      const current=await owned.getResearchProject(projectId);if(!current)throw new Error("Research project not found");
+      const existing=await owned.getResearchExecutionTermination(projectId);if(existing)return existing;
+      if(!canEndResearchExecution(current))throw new Error("Research execution cannot be ended in this state");
+      const marker=researchTermination(current,endedAt);
+      const projects=JSON.parse(localStorage.getItem("rvh.dev.research_projects")??"[]") as Array<import("../research/types").ResearchProjectRecord>;
+      localStorage.setItem("rvh.dev.research_projects",JSON.stringify(projects.map(project=>project.id===projectId?{...project,executionTermination:marker}:project)));
+      return marker;
+    });
+  }
+  async getWorkflowResearchProjectId(sessionId:string):Promise<string|undefined>{return (await this.getRvSession(sessionId))?.researchProjectId;}
+  async getWorkflowProfileId(sessionId:string):Promise<string> {
+    const session=await this.getRvSession(sessionId);
+    const profileId=session?.profileId ?? (await this.getSessionSnapshot(sessionId))?.profileId;
+    if(!profileId)throw new Error("RV ownership requires the durable Profile identity.");
+    return profileId;
+  }
+  withWorkflowOwnership<T>(scope:WorkflowScope,task:(owned:AppRepository,signal:AbortSignal)=>Promise<T>):Promise<T> {return ownBrowserWorkflow(this,scope,task);}
+  getWorkflowOwnership(profileId:string){return browserOwnershipState(this,profileId);}
+
   private readonly profilesRepository = new BrowserProfilesRepository();
   private readonly workspacesConversationsRepository = new BrowserWorkspacesConversationsRepository();
   private readonly researchRepository = new BrowserResearchRepository();

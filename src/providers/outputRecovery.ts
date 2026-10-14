@@ -105,6 +105,7 @@ export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOp
   requestedSettings?: GenerationSettings;
   minimumUsefulTokens?: number;
   signal?: AbortSignal;
+  preserveCompleteAfterAbort?:boolean;
   recoveryInstruction?: string;
   recoveryReasoningMaxTokens?: number;
   recoveryReasoningMaxTokensSupported?: boolean;
@@ -144,7 +145,7 @@ export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOp
     }
     try {
       const response = await input.call(settings, attempt, attemptMessages);
-      if (input.signal?.aborted) throw Object.assign(new DOMException("Analytical response arrived after cancellation", "AbortError"), { providerResponse: response });
+      if (input.signal?.aborted && !input.preserveCompleteAfterAbort) throw Object.assign(new DOMException("Analytical response arrived after cancellation", "AbortError"), { providerResponse: response });
       assertCompleteAnalyticalResponse(response);
       return { response, settings, attempt };
     } catch (cause) {

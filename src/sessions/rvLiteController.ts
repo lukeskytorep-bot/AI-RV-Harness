@@ -1,3 +1,4 @@
+import { withAutomaticWorkflow, withRvWorkflow } from "../application/workflowOwnership";
 import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
 import { focusResumeMetrics, prepareSessionFocus, focusSnapshotFields, focusFingerprint, startFocusPass, completeFocusPass } from "./sessionFocusLifecycle";
 import { focusFeedbackIntroduction, focusTranscriptContent, focusPasses, focusMetadata, focusOpening, type SessionFocusPlan } from "./sessionFocus";
@@ -94,7 +95,7 @@ export interface AutomaticRvLiteRunInput {
   onSessionCreated?: (sessionId: string, sessionCode: string) => void | Promise<void>;
 }
 
-export async function runAutomaticRvLiteSession(input: AutomaticRvLiteRunInput): Promise<{ sessionId: string; sessionCode: string; state: "AwaitingReveal" | "Revealed" | "Interrupted"; transcript: string; stopReason?: string }> {
+async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): Promise<{ sessionId: string; sessionCode: string; state: "AwaitingReveal" | "Revealed" | "Interrupted"; transcript: string; stopReason?: string }> {
   const sessionFocus=await prepareSessionFocus(input);
   let currentPassIndex:1|2=1;
   const originalProgress=input.onProgress;
@@ -439,3 +440,5 @@ async function stop(input: AutomaticRvLiteRunInput, sessionId: string, sessionCo
 function notify(input: AutomaticRvLiteRunInput, sessionId: string, sessionCode: string, state: RvSessionState, transcript: string, phase?: number, stopReason?: string, metrics?: SessionRequestMetrics, startedAtMs?: number): void {
   input.onProgress?.({ sessionId, sessionCode, state, transcript, phase, stopReason, ...(metrics && startedAtMs !== undefined ? { metrics: snapshotSessionMetrics(metrics, startedAtMs) } : {}) });
 }
+
+export const runAutomaticRvLiteSession = (input: Parameters<typeof runAutomaticRvLiteSessionOwned>[0]) => withAutomaticWorkflow(input, runAutomaticRvLiteSessionOwned);

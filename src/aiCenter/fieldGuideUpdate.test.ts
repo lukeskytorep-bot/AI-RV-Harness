@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../providers/native", () => ({
@@ -76,7 +77,7 @@ function integrationHarness(options: { language?: "pl" | "en"; research?: boolea
     rvSystemPrompt: { id: "rv", version: "1", language, contentSha256: "r", fullContent: "prompt", fieldGuide: sessionFrozen }, revealSource: "automatic",
     ...(options.research ? { researchProjectId: "research-1" } : {}), applicationVersion: "0.7.13", createdAt: "now",
   } as never;
-  const repository = {
+  const repository = workflowTestRepository({
     getSessionSnapshot: vi.fn(async () => snapshot),
     getReveal: vi.fn(async () => ({ source: "automatic_target", text: "A lighthouse on a rocky coast.", hash: "reveal-hash", artifactManifest: [] })),
     getViewerEvidence: vi.fn(async () => "Tall hard vertical, cool, rhythmic light."),
@@ -91,7 +92,7 @@ function integrationHarness(options: { language?: "pl" | "en"; research?: boolea
       created.push(activeVersion);
       return activeVersion;
     }),
-  } as unknown as AppRepository;
+  } as unknown as AppRepository);
   return { repository, get run() { return currentRun; }, created, snapshot, sessionFrozen, get activeVersion() { return activeVersion; } };
 }
 

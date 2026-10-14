@@ -1,6 +1,8 @@
+import { withWorkflow } from "../../application/workflowOwnership";
+import { useWorkflowOwnership } from "../../components/useWorkflowOwnership";
 import { TooltipButton } from "../../components/TooltipButton";
 import { HistoryPanelShell } from "../../components/HistoryPanelShell";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type ComponentProps } from "react";
 import { Archive, Check, CircleStop, Database, Download, FileCheck2, GraduationCap, List, Play, ShieldCheck } from "lucide-react";
 import type { getCopy } from "../../i18n";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
@@ -114,6 +116,9 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   const [selectedSession, setSelectedSession] = useState<{ workspaceId: string; sessionId: string } | null>(null);
   const [historyOpen, setHistoryOpen] = useState(true);
   const [trainingOperationPending, setTrainingOperationPending] = useState(false);
+  const ownership=useWorkflowOwnership(repository,activeRun?.profileId ?? profile?.id);
+  const activeRecoverable=Boolean(activeRun && canResumeOrEndTrainingRun(activeRun));
+  useEffect(()=>{if(!busy && profile?.id && activeRun?.profileId!==profile.id)setActiveRun(runs.find(run=>run.profileId===profile.id && canResumeOrEndTrainingRun(run))??null);},[profile?.id,runs,busy,activeRun?.profileId]);
   const pauseRequested = useRef(false);
   const executionAbort = useRef<AbortController | null>(null);
   const trainingOperationGuard = useRef(false);
@@ -199,6 +204,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     }
     if (!selectedTargets.length) { setError(text.targetsRequired); return; }
 
+    await withWorkflow(repository,{profileId:profile.id,entity:{kind:"profile",id:profile.id}},async repository=>{
     const now = new Date();
     const run = await repository.createTrainingRun({
       name: `${text.trainingRun} ${runs.length + 1} · ${now.toLocaleDateString()}`,
@@ -235,13 +241,16 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     setRuns((current) => [run, ...current]);
     setTargets(latestTargets);
     setTargetUsage(latestUsage);
-    await execute(run, latestTargets);
-    } finally {
+    await execute(run, latestTargets,repository);
+    });
+    } catch(cause) {setError(errorText(cause));}
+    finally {
       releaseTrainingOperation();
     }
   };
 
-  const execute = async (initial: TrainingRunRecord, targetCatalogue: TargetRecord[] = targets) => {
+  const execute = async (initial: TrainingRunRecord, targetCatalogue: TargetRecord[] = targets, operationRepository=repository) => {
+    const repository=operationRepository;
     if (!repository) return;
     const runProfile = profiles.find((item) => item.id === initial.profileId);
     const runProvider = providers.find((item) => item.credentialId === runProfile?.credentialId);
@@ -293,7 +302,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   };
 
   const resumeExisting = async (run: TrainingRunRecord) => {
-    if (!repository || isTrainingRunUserFinished(run)) return;
+    if (!repository || isTrainingRunUserFinished(run) || busy || ownership.unavailable && run.profileId===activeRun?.profileId) return;
     const releaseTrainingOperation = acquireTrainingOperation(trainingOperationGuard, setTrainingOperationPending);
     if (!releaseTrainingOperation) return;
     try {
@@ -318,7 +327,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   };
 
   const endExisting = async (run: TrainingRunRecord) => {
-    if (!repository || busy || !canResumeOrEndTrainingRun(run)) return;
+    if (!repository || busy || ownership.unavailable && run.profileId===activeRun?.profileId || !canResumeOrEndTrainingRun(run)) return;
     const releaseTrainingOperation = acquireTrainingOperation(trainingOperationGuard, setTrainingOperationPending);
     if (!releaseTrainingOperation) return;
     setError(null);
@@ -357,7 +366,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
       }
 
       setError(null);
-      await repository.archiveTrainingRun(run.id);
+      await withWorkflow(repository,{profileId:run.profileId,entity:{kind:"profile",id:run.profileId},terminal:true},owned=>owned.archiveTrainingRun(run.id));
       if (activeRun?.id === run.id) setActiveRun(null);
       if (expandedRunId === run.id) setExpandedRunId(null);
       if (selectedSession && run.sessionIds.includes(selectedSession.sessionId)) setSelectedSession(null);
@@ -402,7 +411,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     <div className={`training-layout ${historyOpen ? "history-open" : "history-collapsed"}`}>
       <section className="panel training-config">
         <TrainingSection title={text.identity}>
-          <div className="training-grid"><label>{text.aiIsBe}<select value={profileId} onChange={(event) => setProfileId(event.target.value)}>{profiles.map((item) => <option key={item.id} value={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></label></div>
+          <div className="training-grid"><label>{text.aiIsBe}<select disabled={busy || trainingOperationPending} value={profileId} onChange={(event) => setProfileId(event.target.value)}>{profiles.map((item) => <option key={item.id} value={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></label></div>
           <div className="training-viewer-row">
             <div className="training-viewer-model-card" role="group" aria-label={text.viewerModel}>
               <span>{text.viewerModel}</span>
@@ -428,16 +437,18 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
         {mode === "partial" && <TrainingSection title={text.categories}><div className="training-category-grid">{TRAINING_CATEGORIES.map((category) => { const pool = availability.categories[category]; return <label key={category}><span>{TRAINING_CATEGORY_LABELS[category][settings.interfaceLanguage]}<small>{formatTrainingAvailability(pool, settings.targetRepeatPolicy, pl)}</small></span><input type="number" min={0} max={pool.available} value={counts[category] ?? 0} onChange={(event) => setCounts((current) => ({ ...current, [category]: Math.max(0, Math.floor(Number(event.target.value) || 0)) }))} /></label>; })}<label className="training-my-targets"><span>{text.user}<small>{formatTrainingAvailability(availability.myTargets, settings.targetRepeatPolicy, pl)}</small></span><input type="number" min={0} max={availability.myTargets.available} value={myTargetsCount} onChange={(event) => setMyTargetsCount(Math.max(0, Math.floor(Number(event.target.value) || 0)))} /></label></div></TrainingSection>}
         <TrainingSection title="AI Judge"><div className="training-grid two"><label>{text.judgeCount}<select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))}><option value={0}>0 · {text.none}</option><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>{Array.from({ length: judgeCount }, (_, index) => <label key={index}>Judge {index + 1}<ModelRouteSelect role="judge" profile={profile} providers={providers} models={models} value={judgeRoutes[index]} onChange={(next) => setJudgeRoutes((current) => current.map((value, itemIndex) => itemIndex === index ? next : value))} emptyLabel={text.selectModel} /></label>)}</div></TrainingSection>
         <TrainingSection title={text.execution}>{mode === "full" && roundCount > 1 && <label className="training-check"><input type="checkbox" checked={pauseAfterBlock} onChange={(event) => setPauseAfterBlock(event.target.checked)} /><span><strong>{text.pauseRounds}</strong><small>{text.pauseRoundsLead}</small></span></label>}<div className="training-preflight"><span><small>{text.sessions}</small><strong>{plannedSessionCount}</strong></span><span><small>{text.viewerCalls}</small><strong>{baselineViewerCalls}</strong></span><span><small>{text.judgeCalls}</small><strong>{plannedSessionCount * judgeCount}</strong></span><span><small>{text.curriculum}</small><strong>{mode === "full" ? `${FACTORY_CURRICULUM_ID}:${FACTORY_CURRICULUM_VERSION} · ${roundCount}×${FACTORY_ROUND_SIZE}` : text.partial}</strong></span><span><small>{text.repeatPolicy}</small><strong>{settings.targetRepeatPolicy === "avoid_profile" ? text.avoidProfile : text.allowRepeat}</strong></span></div><small className="training-preflight-note">{text.viewerCallNote}</small></TrainingSection>
-        <div className="training-actions">{busy ? <><button className="secondary-button" onClick={() => { pauseRequested.current = true; }}><CircleStop size={15} />{text.pauseAfterSession}</button><button type="button" className="stop-button" disabled={stopping} title={pl ? "Zatrzymaj teraz i zachowaj checkpoint. Wznowienie wymaga ręcznej decyzji." : "Stop now and retain the checkpoint. Resume requires your action."} onClick={() => { setStopping(true); executionAbort.current?.abort(new DOMException("Stopped by user", "AbortError")); }}><CircleStop size={15}/>{stopping ? (pl ? "Zatrzymywanie…" : "Stopping…") : "Stop"}</button><span>{progressLine}</span></> : <span className="disabled-action-help" title={!workspaceId ? text.workspaceRequired : plannedSessionCount <= 0 ? text.targetsRequired : !fullSelectionValid && mode === "full" ? text.noRoundsAvailable : undefined}><button className="primary-button" disabled={!ready || trainingOperationPending} onClick={() => void startNew()}><Play size={15} />{mode === "full" ? `${text.startFull} · ${plannedSessionCount}` : `${text.startPartial} · ${plannedSessionCount}`}</button></span>}</div>
+        <div className="training-actions">{busy ? <><button className="secondary-button" onClick={() => { pauseRequested.current = true; }}><CircleStop size={15} />{text.pauseAfterSession}</button><button type="button" className="stop-button" disabled={stopping} title={pl ? "Zatrzymaj teraz i zachowaj checkpoint. Wznowienie wymaga ręcznej decyzji." : "Stop now and retain the checkpoint. Resume requires your action."} onClick={() => { setStopping(true); executionAbort.current?.abort(new DOMException("Stopped by user", "AbortError")); }}><CircleStop size={15}/>{stopping ? (pl ? "Zatrzymywanie…" : "Stopping…") : "Stop"}</button><span>{progressLine}</span></> : activeRecoverable && activeRun ? <><button type="button" className="secondary-button training-resume-button" disabled={trainingOperationPending || ownership.unavailable} onClick={()=>void resumeExisting(activeRun)}><Play size={15}/>{text.resume}</button><button type="button" className="secondary-button training-end-button" disabled={trainingOperationPending || ownership.unavailable} onClick={()=>void endExisting(activeRun)}><CircleStop size={15}/>{text.endTraining}</button></> : <span className="disabled-action-help" title={!workspaceId ? text.workspaceRequired : plannedSessionCount <= 0 ? text.targetsRequired : !fullSelectionValid && mode === "full" ? text.noRoundsAvailable : undefined}><button className="primary-button" disabled={!ready || trainingOperationPending || ownership.unavailable} onClick={() => void startNew()}><Play size={15} />{mode === "full" ? `${text.startFull} · ${plannedSessionCount}` : `${text.startPartial} · ${plannedSessionCount}`}</button></span>}</div>
+        {(busy || activeRecoverable) && activeRun && <div className="active-training-run"><strong>{activeRun.name}</strong><span>{activeRun.completedTargetIds.length}/{activeRun.targetIds.length}</span><progress max={activeRun.targetIds.length} value={activeRun.completedTargetIds.length}/><small>{progressLine || activeRun.status}</small></div>}
+        {ownership.unavailable && <small role="status">{ownership.state==="other"?(pl?"Praca trwa w innym oknie":"Work is running in another window"):(pl?"Sprawdzanie stanu wykonania":"Checking execution state")}</small>}
         {!workspaceId && <div className="training-requirement-note"><ShieldCheck size={15} /><span>{text.workspaceRequired}</span></div>}
         {error && <div className="provider-error">{error}</div>}{exportMessage && <div className="storage-success"><Check size={14} />{exportMessage}</div>}
       </section>
       <HistoryPanelShell open={historyOpen} onToggle={() => setHistoryOpen(current => !current)}
         panelId="training-history-panel" label={historyOpen ? text.collapseHistory : text.expandHistory}>
           <div className="panel-header"><span><Database size={18} /></span><h2>{text.history}</h2></div>
-          {activeRun && <div className="active-training-run"><span className="training-history-title">{activeRun.name}</span><span>{activeRun.completedTargetIds.length}/{activeRun.targetIds.length}</span><progress max={activeRun.targetIds.length} value={activeRun.completedTargetIds.length} /><small>{progressLine || (isTrainingRunUserFinished(activeRun) ? text.endedByUser : activeRun.status)}</small></div>}
-          <div className="training-run-list">{runs.map((run) => <TrainingRunHistoryCard
+          <div className="training-run-list">{runs.filter(run=>!((busy || activeRecoverable) && activeRun?.id===run.id)).map((run) => <OwnedTrainingRunHistoryCard
             key={run.id}
+            repository={repository}
             run={run}
             expanded={expandedRunId === run.id}
             selectedSessionId={selectedSession?.sessionId ?? null}
@@ -580,4 +591,9 @@ function labels(pl: boolean) {
   } : {
     training: "AI Training", lead: "Controlled RV Lite training series using factory and user-added training targets.", viewerModel: "Viewer model", useViewerNotes: "Use Viewer Notes", enabledByDefault: "Enabled by default", viewerNotesHelp: "Notes are used in the session and may be updated after Reveal and the Viewer's own review. Monitor and Judge are excluded.", packError: "The factory pack does not contain the complete 94-target set:", trainingRun: "Training", identity: "AI IS-BE", aiIsBe: "AI IS-BE", noModel: "No Viewer model", noProvider: "No profile connection", protocol: "RV Lite variant", coreLead: "The four core steps only.", extendedLead: "Four steps with deepening between Steps 3 and 4.", scope: "Training scope", full: "Full Training", fullLead: "1–10 rounds, one session from each of the 8 factory categories per round.", partial: "Partial Training", partialLead: "Choose categories and target counts.", rounds: "Full Training", roundCount: "Number of rounds", roundRange: "Range 1–10", dynamicMaximum: "Maximum for the selected Profile", roundLimit: "The selected round count exceeds the available pool in", noRoundsAvailable: "No complete round is available without target reuse. Limiting category:", noRoundsGuidance: "Add targets to that category, use Partial Training, or change the repeat setting in Settings.", partialOnly: "Partial Training only", categories: "Categories", factory: "Factory", user: "My Targets", available: "available", judgeCount: "AI Judge count", none: "no evaluation", selectModel: "Select model", execution: "Execution and checkpoints", pauseRounds: "Pause after each round", pauseRoundsLead: "With multiple rounds, Training pauses after each complete group of 8 sessions, but not after the final session of the whole run.", sessions: "Sessions", viewerCalls: "Viewer calls (baseline)", viewerCallNote: "Baseline per session: 4 RV Lite calls + Post-Reveal Review + Field Guide Update + Viewer Notes Reflection when Viewer Notes are enabled. Recovery/repair can add a call only when required by the existing domain contract.", judgeCalls: "Judge calls", curriculum: "Curriculum", repeatPolicy: "Repeat policy", avoidProfile: "Avoid targets used by this Profile", allowRepeat: "Allow target reuse", costCeiling: "RV session cost ceiling", rvOnly: "· RV portion only", notConfigured: "not configured", startFull: "Start Full Training", startPartial: "Start partial training", pauseAfterSession: "Pause after current session", session: "Session", step: "step", pausedCheckpoint: "Training paused at a durable checkpoint.", completed: "Training completed.", sessionInterrupted: "The training session was interrupted.", routeMissing: "The Viewer model route for this training run is unavailable.", judgeMissing: "A selected Judge route is unavailable.", targetMissing: "Missing target", exported: "Training package saved", history: "Recent training runs", resume: "Resume", export: "Save complete training", noRuns: "No training runs yet.", chooseExportFolder: "Choose where to save the complete training", showSessions: "Show sessions", hideSessions: "Hide sessions", saveTraining: "Save training", archive: "Archive", archiveAction: "Archive training", endTraining: "End training", endedByUser: "Ended by user", collapseHistory: "Collapse training history", expandHistory: "Expand training history", archiveTraining: "Archive training?", trainingChangedBeforeArchive: "The Training run changed state while archive confirmation was open. Refresh the history and try again.", archiveTrainingLead: "The Training run and its sessions will leave active views but remain safely stored and can be restored from Archive and recovery.", workspaceRequired: "The selected Profile has no active RV Workspace or legacy combined Workspace. Restore or create a compatible RV Workspace for this Profile before starting Training.", targetsRequired: "Select at least one training target.",
   };
+}
+
+function OwnedTrainingRunHistoryCard({repository,...props}:ComponentProps<typeof TrainingRunHistoryCard>&{repository:AppRepository|null}) {
+ const ownership=useWorkflowOwnership(repository,props.run.profileId);
+ return <TrainingRunHistoryCard {...props} operationUnavailable={props.operationUnavailable || ownership.unavailable} archiveDisabled={props.archiveDisabled || ownership.unavailable}/>;
 }

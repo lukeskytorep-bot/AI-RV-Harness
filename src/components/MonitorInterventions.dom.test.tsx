@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -23,9 +24,9 @@ const config: ProviderConfig = { id: "p", provider: "openrouter", label: "P", cr
 const model: ProviderModel = { providerConfigId: "p", provider: "openrouter", modelId: "m", displayName: "M", route: "openrouter:m", pricing: {}, recommended: false, rawMetadata: {}, refreshedAt: "now", capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: [], maxOutputTokens: 65536, contextTokens: 131072, source: "provider", capturedAt: "now" } };
 const command = "Observe the new spatial relations.";
 async function run(language: "pl" | "en", kind: "normal" | "live-t9" | "predefined-t9", repeated = false, continuation = false) {
-  const repository = Object.assign(new BrowserSessionsRepository({ storage: localStorage, isResearchScoresFrozen: () => false }), {
+  const repository = workflowTestRepository(Object.assign(new BrowserSessionsRepository({ storage: localStorage, isResearchScoresFrozen: () => false }), {
     createMonitorRun: async () => "mr", appendMonitorIntervention: async () => {}, recordTargetUsage: async () => {},
-  }) as unknown as AppRepository;
+  }) as unknown as AppRepository);
   const viewerRequests: ProviderMessage[][] = [], monitorRequests: ProviderMessage[][] = [];
   const perStep = new Map<number, number>();
   const input = { repository, workspaceId: "w", profileId: "p", providerConfig: config, model, protocol: getTelepathicProtocol(language), sessionLanguage: language, requestedSettings: { maxOutputTokens: 1024 }, step8Questions: kind === "predefined-t9" ? { mode: "predefined" as const, questions: [command] } : { mode: "monitor" as const }, monitor: { providerConfig: config, model }, maxRetries: 0 };

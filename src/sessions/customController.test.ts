@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
@@ -13,13 +14,13 @@ const model: ProviderModel = {
 const protocol: CustomProtocolVersion = { protocolId: "custom", versionId: "cv1", displayName: "Custom", version: "v1", language: "en", steps: ["Observe {{SESSION_CODE}}", "Deepen only prior evidence"], contentHash: "hash", createdAt: "now" };
 
 function repository(log: string[], snapshots: SessionSnapshot[] = []) {
-  return {
+  return workflowTestRepository({
     listSessionEvents: async () => [],
     createRvSession: async () => ({} as never), updateRvSessionState: async () => undefined,
     appendSessionEvent: async (_id: string, event: { eventType: string }) => { log.push(event.eventType); },
     updatePreRevealTranscript: async () => { log.push("saved"); }, saveSessionSnapshot: async (_id: string, snapshot: SessionSnapshot) => { snapshots.push(snapshot); },
     sealPreReveal: async () => { log.push("sealed"); }, acceptReveal: async () => undefined, recordTargetUsage: async () => undefined,
-  } as unknown as Pick<AppRepository, "listSessionEvents" | "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage">;
+  } as unknown as Pick<AppRepository, "listSessionEvents" | "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage">);
 }
 
 describe("automatic Custom Protocol controller", () => {

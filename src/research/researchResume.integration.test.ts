@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderConfig, ProviderModel } from "../providers/types";
@@ -49,7 +50,7 @@ function researchDurableRepository(options?: { frozenOutputPolicy?: boolean; ini
     }
     return record;
   };
-  const repository = {
+  const repository = workflowTestRepository({
     getResearchProject: vi.fn(async () => structuredClone(project)),
     setResearchProjectState: vi.fn(async (_id: string, state: ResearchProjectRecord["state"]) => { project = { ...project, state }; }),
     listResearchAssignments: vi.fn(async () => [structuredClone(assignment)]),
@@ -85,7 +86,7 @@ function researchDurableRepository(options?: { frozenOutputPolicy?: boolean; ini
     getReveal: vi.fn(async () => reveal ? structuredClone(reveal) : null),
     recordTargetUsage: vi.fn(async (value: { targetId: string; profileId?: string; researchProjectId?: string; sessionId?: string }) => { if (!usage.some((item) => item.targetId === value.targetId && item.sessionId === value.sessionId)) usage.push({ ...value, id: `u${usage.length + 1}`, usedAt: "now" }); }),
     listTargetUsage: vi.fn(async () => structuredClone(usage) as never),
-  } as unknown as AppRepository;
+  } as unknown as AppRepository);
   return { repository, events, assignment: () => assignment, project: () => project, session: () => session!, snapshot: () => snapshot! };
 }
 

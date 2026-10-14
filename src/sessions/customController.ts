@@ -1,3 +1,4 @@
+import { withAutomaticWorkflow, withRvWorkflow } from "../application/workflowOwnership";
 import { focusResumeMetrics, prepareSessionFocus, focusSnapshotFields, focusFingerprint, startFocusPass, completeFocusPass } from "./sessionFocusLifecycle";
 import { focusFeedbackIntroduction, focusTranscriptContent, focusPasses, focusMetadata, focusOpening, type SessionFocusPlan } from "./sessionFocus";
 import { resolveGenerationSettings } from "../providers/capabilities";
@@ -81,7 +82,7 @@ export interface AutomaticCustomRunInput {
   onProgress?: (progress: SessionProgress) => void;
 }
 
-export async function runAutomaticCustomSession(input: AutomaticCustomRunInput): Promise<{ sessionId: string; sessionCode: string; state: "AwaitingReveal" | "Revealed" | "Interrupted"; transcript: string; stopReason?: string }> {
+async function runAutomaticCustomSessionOwned(input: AutomaticCustomRunInput): Promise<{ sessionId: string; sessionCode: string; state: "AwaitingReveal" | "Revealed" | "Interrupted"; transcript: string; stopReason?: string }> {
   const sessionFocus=await prepareSessionFocus(input);
   let currentPassIndex:1|2=1;
   const originalProgress=input.onProgress;
@@ -322,3 +323,5 @@ async function stop(input: AutomaticCustomRunInput, sessionId: string, sessionCo
 function notify(input: AutomaticCustomRunInput, sessionId: string, sessionCode: string, state: RvSessionState, transcript: string, phase?: number, stopReason?: string, metrics?: SessionRequestMetrics, startedAtMs?: number): void {
   input.onProgress?.({ sessionId, sessionCode, state, transcript, phase, stopReason, ...(metrics && startedAtMs !== undefined ? { metrics: snapshotSessionMetrics(metrics, startedAtMs) } : {}) });
 }
+
+export const runAutomaticCustomSession = (input: Parameters<typeof runAutomaticCustomSessionOwned>[0]) => withAutomaticWorkflow(input, runAutomaticCustomSessionOwned);

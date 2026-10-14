@@ -1,8 +1,9 @@
+import { withWorkflow } from "../../application/workflowOwnership";
 import type { AppRepository } from "../../storage/repository";
 import { canResumeOrEndTrainingRun, isTrainingRunUserFinished } from "../../training/runLifecycle";
 import type { TrainingRunRecord } from "../../training/types";
 
-export async function endTrainingRun(
+async function endTrainingRunOwned(
   repository: AppRepository,
   runId: string,
   endedAt = new Date().toISOString(),
@@ -21,4 +22,9 @@ export async function endTrainingRun(
   if (!persisted) throw new Error("Training run is no longer available after ending it.");
   if (!isTrainingRunUserFinished(persisted)) throw new Error("Training end marker was not persisted.");
   return persisted;
+}
+
+export async function endTrainingRun(repository:AppRepository,runId:string,endedAt=new Date().toISOString()):Promise<TrainingRunRecord> {
+ const current=(await repository.listTrainingRuns()).find(run=>run.id===runId);if(!current)throw new Error("Training run is no longer available.");if(isTrainingRunUserFinished(current))return current;
+ return withWorkflow(repository,{profileId:current.profileId,terminal:true,entity:{kind:"profile",id:current.profileId}},owned=>endTrainingRunOwned(owned,runId,endedAt));
 }

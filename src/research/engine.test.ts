@@ -1,3 +1,4 @@
+import {workflowTestRepository} from "../testing/workflowRepository";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -43,7 +44,7 @@ describe("Research evidence boundaries", () => {
     };
     const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "custom", state: "Locked", config: { ...config, templateType: "custom", conditions: [condition] }, createdAt: "now", updatedAt: "now" };
     const sessionRunner = vi.fn();
-    const repo = {
+    const repo = workflowTestRepository({
       getResearchProject: vi.fn().mockResolvedValue(project),
       listResearchAssignments: vi.fn().mockResolvedValue([{ id: "assignment", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "Pending" }]),
       listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: "hash", createdAt: "now" }]),
@@ -54,7 +55,7 @@ describe("Research evidence boundaries", () => {
       setResearchProjectState: vi.fn(),
       updateResearchAssignment: vi.fn(),
       initializeResearchSession: vi.fn(async (_assignmentId, input) => ({ ...input, state: "Draft", preRevealTranscript: "", postRevealTranscript: "", createdAt: "now", updatedAt: "now" })),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     sessionRunner.mockImplementation(async (input) => {
       const sessionId = input.sessionIdentity?.id ?? "session";
       const sessionCode = input.sessionIdentity?.sessionCode ?? "RV-TEST";
@@ -87,7 +88,7 @@ describe("Research evidence boundaries", () => {
       return { sessionId, sessionCode, state: "Revealed" as const, transcript: "evidence" };
     });
     const updateResearchAssignment = vi.fn();
-    const repo = {
+    const repo = workflowTestRepository({
       getResearchProject: vi.fn().mockResolvedValue(project),
       listResearchAssignments: vi.fn().mockResolvedValue([{ id: "assignment", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "Pending" }]),
       listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: "hash", createdAt: "now" }]),
@@ -99,7 +100,7 @@ describe("Research evidence boundaries", () => {
       setResearchProjectState: vi.fn(),
       updateResearchAssignment,
       initializeResearchSession: vi.fn(async (_assignmentId, input) => ({ ...input, state: "Draft", preRevealTranscript: "", postRevealTranscript: "", createdAt: "now", updatedAt: "now" })),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     await executeResearchSessions({ repository: repo, projectId: "r", sessionRunner: rcpRunner, rvLiteSessionRunner });
     expect(rcpRunner).not.toHaveBeenCalled();
     expect(rvLiteSessionRunner).toHaveBeenCalledTimes(1);
@@ -125,7 +126,7 @@ describe("Research evidence boundaries", () => {
       await input.onSessionCreated?.(sessionId, sessionCode);
       return { sessionId, sessionCode, state: "Revealed" as const, transcript: "evidence" };
     });
-    const baseRepo = {
+    const baseRepo = workflowTestRepository({
       getResearchProject: vi.fn().mockResolvedValue(project),
       listResearchAssignments: vi.fn().mockResolvedValue([{ id: "assignment", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "RetryApproved" }]),
       listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: "hash", createdAt: "now" }]),
@@ -135,15 +136,15 @@ describe("Research evidence boundaries", () => {
       listProfiles: vi.fn().mockResolvedValue([{ id: "p", name: "P", credentialId: "c", createdAt: "now", updatedAt: "now" }]),
       setResearchProjectState: vi.fn(), updateResearchAssignment: vi.fn(),
       initializeResearchSession: vi.fn(async (_assignmentId, input) => ({ ...input, state: "Draft", preRevealTranscript: "", postRevealTranscript: "", createdAt: "now", updatedAt: "now" })),
-    };
-    const repo = { ...baseRepo, listResearchConditions: vi.fn().mockResolvedValue([stored]) } as unknown as AppRepository;
+    });
+    const repo = workflowTestRepository({ ...baseRepo, listResearchConditions: vi.fn().mockResolvedValue([stored]) } as unknown as AppRepository);
     await executeResearchSessions({ repository: repo, projectId: "r", sessionRunner });
     expect(sessionRunner).toHaveBeenCalledTimes(1);
 
     const drifted = structuredClone(stored);
     drifted.config.viewerNotes!.versionId = "v4";
     drifted.config.viewerNotes!.versionNumber = 4;
-    const driftRepo = { ...baseRepo, listResearchConditions: vi.fn().mockResolvedValue([drifted]), setResearchProjectState: vi.fn() } as unknown as AppRepository;
+    const driftRepo = workflowTestRepository({ ...baseRepo, listResearchConditions: vi.fn().mockResolvedValue([drifted]), setResearchProjectState: vi.fn() } as unknown as AppRepository);
     await expect(executeResearchSessions({ repository: driftRepo, projectId: "r", sessionRunner: vi.fn() })).rejects.toThrow("snapshot drift");
     expect(driftRepo.setResearchProjectState).toHaveBeenCalledWith("r", "Interrupted");
   });
@@ -169,7 +170,7 @@ describe("Research evidence boundaries", () => {
       return { sessionId, sessionCode, state: "Revealed" as const, transcript: "evidence" };
     });
     const getFieldGuideBundle = vi.fn().mockRejectedValue(new Error("active guide must not be read during Resume"));
-    const baseRepo = {
+    const baseRepo = workflowTestRepository({
       getResearchProject: vi.fn().mockResolvedValue(project),
       listResearchAssignments: vi.fn().mockResolvedValue([{ id: "assignment", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "RetryApproved" }]),
       listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: "hash", createdAt: "now" }]),
@@ -177,15 +178,15 @@ describe("Research evidence boundaries", () => {
       listProviderConfigs: vi.fn().mockResolvedValue([provider]), listProviderModels: vi.fn().mockResolvedValue([model]), listProfiles: vi.fn().mockResolvedValue([{ id: "p", name: "P", credentialId: "c", createdAt: "now", updatedAt: "now" }]),
       setResearchProjectState: vi.fn(), updateResearchAssignment: vi.fn(), getFieldGuideBundle,
       initializeResearchSession: vi.fn(async (_assignmentId, input) => ({ ...input, state: "Draft", preRevealTranscript: "", postRevealTranscript: "", createdAt: "now", updatedAt: "now" })),
-    };
-    const repo = { ...baseRepo, listResearchConditions: vi.fn().mockResolvedValue([stored]) } as unknown as AppRepository;
+    });
+    const repo = workflowTestRepository({ ...baseRepo, listResearchConditions: vi.fn().mockResolvedValue([stored]) } as unknown as AppRepository);
     await executeResearchSessions({ repository: repo, projectId: "r", sessionRunner });
     expect(sessionRunner).toHaveBeenCalledTimes(1);
     expect(getFieldGuideBundle).not.toHaveBeenCalled();
 
     const drifted = structuredClone(stored);
     drifted.config.fieldGuide.versionId = "fg-v4";
-    const driftRepo = { ...baseRepo, listResearchConditions: vi.fn().mockResolvedValue([drifted]), setResearchProjectState: vi.fn() } as unknown as AppRepository;
+    const driftRepo = workflowTestRepository({ ...baseRepo, listResearchConditions: vi.fn().mockResolvedValue([drifted]), setResearchProjectState: vi.fn() } as unknown as AppRepository);
     await expect(executeResearchSessions({ repository: driftRepo, projectId: "r", sessionRunner: vi.fn() })).rejects.toThrow("Field Guide snapshot drift");
     expect(driftRepo.setResearchProjectState).toHaveBeenCalledWith("r", "Interrupted");
   });
@@ -194,14 +195,14 @@ describe("Research evidence boundaries", () => {
     const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "Interrupted", config, createdAt: "now", updatedAt: "now" };
     const updateRvSessionState = vi.fn();
     const updateResearchAssignment = vi.fn();
-    const repo = {
+    const repo = workflowTestRepository({
       getResearchProject: vi.fn().mockResolvedValue(project),
       listResearchAssignments: vi.fn().mockResolvedValue([{ id: "a", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", sessionId: "partial", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "Interrupted" }]),
       getRvSession: vi.fn().mockResolvedValue({ id: "partial", state: "Interrupted" }),
       updateRvSessionState,
       updateResearchAssignment,
       setResearchProjectState: vi.fn(),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     expect(await prepareInterruptedResearchRetry(repo, "r")).toBe(1);
     expect(updateRvSessionState).toHaveBeenCalledWith("partial", "Interrupted", expect.stringContaining("same locked assignment/session"));
     expect(updateResearchAssignment).toHaveBeenCalledWith("a", "partial", "ResumeApproved");
@@ -211,13 +212,13 @@ describe("Research evidence boundaries", () => {
     const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "Interrupted", config, createdAt: "now", updatedAt: "now" };
     const updateRvSessionState = vi.fn();
     const updateResearchAssignment = vi.fn();
-    const repo = {
+    const repo = workflowTestRepository({
       getResearchProject: vi.fn().mockResolvedValue(project),
       listResearchAssignments: vi.fn().mockResolvedValue([{ id: "a", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", sessionId: "partial", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "Interrupted" }]),
       updateRvSessionState,
       updateResearchAssignment,
       setResearchProjectState: vi.fn(),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     await prepareInterruptedResearchRestart(repo, "r", "a");
     expect(updateRvSessionState).toHaveBeenCalledWith("partial", "Interrupted", expect.stringContaining("RESTART"));
     expect(updateResearchAssignment).toHaveBeenCalledWith("a", undefined, "RestartApproved");
@@ -227,7 +228,7 @@ describe("Research evidence boundaries", () => {
     const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "SessionsComplete", config, createdAt: "now", updatedAt: "now" };
     const mappings = vi.fn(() => { throw new Error("Judge path touched Blinding Key"); });
     const states: ResearchState[] = [];
-    const repo = {
+    const repo = workflowTestRepository({
       getResearchProject: vi.fn().mockResolvedValue(project),
       listResearchAssignments: vi.fn().mockResolvedValue([{ id: "a", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", sessionId: "s", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "SessionComplete" }]),
       listProviderConfigs: vi.fn().mockResolvedValue([provider]),
@@ -236,7 +237,7 @@ describe("Research evidence boundaries", () => {
       updateResearchAssignment: vi.fn(),
       setResearchProjectState: vi.fn(async (_id: string, state: ResearchState) => { states.push(state); }),
       listBlindingMappings: mappings,
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     await judgeResearch({ repository: repo, projectId: "r" });
     expect(mappings).not.toHaveBeenCalled();
     expect(states).toEqual(["Judging", "ScoresFrozen"]);
@@ -246,7 +247,7 @@ describe("Research evidence boundaries", () => {
     const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "ScoresFrozen", config: { ...config, judges: [{ providerConfigId: "pc", modelId: "m" }] }, scoresFrozenAt: "now", createdAt: "now", updatedAt: "now" };
     let state: ResearchState = "ScoresFrozen";
     let saved: ResearchResults | null = null;
-    const repo = {
+    const repo = workflowTestRepository({
       getResearchProject: vi.fn(async () => ({ ...project, state })),
       getResearchResults: vi.fn(async () => saved),
       setResearchProjectState: vi.fn(async (_id: string, next: ResearchState) => { state = next; }),
@@ -258,7 +259,7 @@ describe("Research evidence boundaries", () => {
       }),
       listResearchConditions: vi.fn().mockResolvedValue([{ id: "cond", researchProjectId: "r", conditionKey: "a", config: config.conditions[0] }]),
       saveResearchResults: vi.fn(async (_id: string, results) => { saved = results; }),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     const results = await unblindAndComputeResearch(repo, "r");
     expect(results.conditions[0].meanTotal).toBe(6);
     expect(state).toBe("Complete");
@@ -271,7 +272,7 @@ describe("Research evidence boundaries", () => {
     const listBlindingMappings = vi.fn()
       .mockRejectedValueOnce(new Error("temporary mapping read failure"))
       .mockResolvedValue([{ id: "map", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "cond", pairKey: "pair", mappingHash: "h", createdAt: "now" }]);
-    const repo = {
+    const repo = workflowTestRepository({
       getResearchProject: vi.fn(async () => ({ ...project, state })),
       getResearchResults: vi.fn(async () => saved),
       setResearchProjectState: vi.fn(async (_id: string, next: ResearchState) => { state = next; }),
@@ -280,7 +281,7 @@ describe("Research evidence boundaries", () => {
       listBlindingMappings,
       listResearchConditions: vi.fn().mockResolvedValue([{ id: "cond", researchProjectId: "r", conditionKey: "a", config: config.conditions[0] }]),
       saveResearchResults: vi.fn(async (_id: string, results) => { saved = results; }),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
 
     await expect(unblindAndComputeResearch(repo, "r")).rejects.toThrow("temporary mapping read failure");
     expect(state).toBe("Unblinded");

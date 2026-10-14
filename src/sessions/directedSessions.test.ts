@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { sendPostRevealTurn } from "./postReveal";
 import { renderCompleteSessionMarkdown } from "../exports/sessionDocument";
 import { buildJudgePacket } from "../domain/judgePacket";
@@ -31,7 +32,7 @@ const plan:SessionFocusPlan={version:1,first:"location",second:"activity"};
 function setup(storage=new MemoryStorage()) {
  const sessions=new BrowserSessionsRepository({storage,isResearchScoresFrozen:()=>false});
  const usage=vi.fn(async()=>{});
- const repository=Object.assign(sessions,{recordTargetUsage:usage}) as unknown as AppRepository;
+ const repository=workflowTestRepository(Object.assign(sessions,{recordTargetUsage:usage}) as unknown as AppRepository);
  return {repository,storage,usage};
 }
 function common(repository:AppRepository){return {repository,workspaceId:"w",profileId:"u",providerConfig:config,model,sessionLanguage:"en" as const,requestedSettings:{maxOutputTokens:1024},sessionFocus:plan,maxRetries:0};}
@@ -157,9 +158,11 @@ describe("directed automatic sessions",()=>{
   const result=await runner("rcp",repository,{chat:async()=>{if(++calls===8)throw new Error("provider timeout with unknown dispatch");return response(calls);}});
   const session=(await repository.getRvSession(result.sessionId))!,snapshot=(await repository.getSessionSnapshot(session.id))!;
   const liveChat=vi.fn(async()=>response(++calls));
-  const replay=await createSessionReplay({repository,session,events:await repository.listSessionEvents(session.id),liveChat});
+  let replay=await createSessionReplay({repository,session,events:await repository.listSessionEvents(session.id),liveChat});
   await expect(runner("rcp",replay.repository,{resumeSession:session,requestedSettings:{maxOutputTokens:2048},chat:replay.chat})).rejects.toThrow(/configuration changed/);
+  replay=await createSessionReplay({repository,session,events:await repository.listSessionEvents(session.id),liveChat});
   await expect(runner("rcp",replay.repository,{resumeSession:session,providerConfig:{...config,baseUrl:"https://changed.invalid"},chat:replay.chat})).rejects.toThrow(/configuration changed/);
+  replay=await createSessionReplay({repository,session,events:await repository.listSessionEvents(session.id),liveChat});
   const blocked=await runner("rcp",replay.repository,{resumeSession:session,resumeContinuationRoute:snapshot.continuationRoute,chat:replay.chat});expect(blocked.state).toBe("Interrupted");expect(liveChat).not.toHaveBeenCalled();expect(calls).toBe(8);
  });
  it("keeps both parts readable in export, Judge and post-Reveal feedback without altering blind evidence",async()=>{

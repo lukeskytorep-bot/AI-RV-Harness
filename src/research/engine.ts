@@ -1,3 +1,6 @@
+import { withResearchExecution } from "./executionLifecycle";
+import { assertAbortOwnership } from "../application/abortOwnership";
+import { getUncertainResearchJudges, recordResearchJudgeAttempt } from "./judgeRecovery";
 import { CURRENT_ANALYTICAL_OUTPUT_POLICY, analyticalBudgetPolicyForSnapshot } from "../providers/outputRecovery";
 import { aggregateJudgeScores } from "../domain/scoring";
 import { runBlindJudging, selectMissingJudgeSelections, type JudgeSelection } from "../judge/engine";
@@ -81,7 +84,7 @@ function newResearchSessionIdentity(project: ResearchProjectRecord, assignment: 
   return { id, sessionCode: `${prefix}-${compact}` };
 }
 
-export async function executeResearchSessions(input: {
+async function executeResearchSessionsOwned(input: {
   repository: ResearchRepository;
   projectId: string;
   signal?: AbortSignal;
@@ -90,6 +93,7 @@ export async function executeResearchSessions(input: {
   sessionReplayFactory?: typeof createSessionReplay;
   onProgress?: (progress: { completed: number; total: number; anonymousSessionId: string; session?: SessionProgress }) => void;
 }): Promise<void> {
+  if(input.signal?.aborted)return;
   const project = await requireProject(input.repository, input.projectId);
   analyticalBudgetPolicyForSnapshot(project.config.postRevealOutputPolicy);
   if (!["Locked", "Running", "Interrupted"].includes(project.state)) throw new Error(`Research sessions cannot run from state ${project.state}.`);
@@ -186,6 +190,8 @@ export async function executeResearchSessions(input: {
     let sessionIdentity: { id: string; sessionCode: string } | undefined;
     let initializationExistingSession: Awaited<ReturnType<ResearchRepository["getRvSession"]>> | undefined;
 
+    if(input.signal?.aborted){await input.repository.setResearchProjectState(project.id,"Interrupted");return;}
+    await assertAbortOwnership(input.signal);
     if (!assignment.sessionId || assignment.status === "RestartApproved") {
       sessionIdentity = newResearchSessionIdentity(project, assignment);
       const initialized = await input.repository.initializeResearchSession(assignment.id, {
@@ -295,6 +301,8 @@ export async function executeResearchSessions(input: {
       onSessionCreated,
       onProgress,
     };
+    if(input.signal?.aborted){await input.repository.setResearchProjectState(project.id,"Interrupted");return;}
+    await assertAbortOwnership(input.signal);
     const result = protocol.id === "full-rcp"
       ? await (input.sessionRunner ?? runAutomaticRcpSession)({
           ...common,
@@ -320,10 +328,10 @@ export async function executeResearchSessions(input: {
     completed += 1;
     input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId });
   }
-  await input.repository.setResearchProjectState(project.id, "SessionsComplete");
+  await input.repository.setResearchProjectState(project.id, input.signal?.aborted?"Interrupted":"SessionsComplete");
 }
 
-export async function prepareInterruptedResearchRetry(repository: ResearchRepository, projectId: string): Promise<number> {
+async function prepareInterruptedResearchRetryOwned(repository: ResearchRepository, projectId: string): Promise<number> {
   const project = await requireProject(repository, projectId);
   if (!["Interrupted", "Running"].includes(project.state)) throw new Error("Explicit Research Resume approval is available only for an interrupted/running project with a preserved partial session.");
   const assignments = await repository.listResearchAssignments(projectId);
@@ -342,7 +350,7 @@ export async function prepareInterruptedResearchRetry(repository: ResearchReposi
 }
 
 /** Explicitly abandons a partial session and permits a new attempt for the same locked assignment. */
-export async function prepareInterruptedResearchRestart(repository: ResearchRepository, projectId: string, assignmentId: string): Promise<void> {
+async function prepareInterruptedResearchRestartOwned(repository: ResearchRepository, projectId: string, assignmentId: string): Promise<void> {
   const project = await requireProject(repository, projectId);
   if (!["Interrupted", "Running"].includes(project.state)) throw new Error("Research restart is available only for an interrupted/running project.");
   const assignment = (await repository.listResearchAssignments(projectId)).find((item) => item.id === assignmentId);
@@ -427,12 +435,14 @@ async function ensurePersistedResearchReveal(input: {
   if (!usage.some((record) => record.sessionId === input.sessionId && record.targetId === input.targetId)) throw new Error("Research Reveal finalization did not persist target usage.");
 }
 
-export async function judgeResearch(input: {
+async function judgeResearchOwned(input: {
   repository: ResearchRepository;
   projectId: string;
   signal?: AbortSignal;
+  judgeRunner?:typeof runBlindJudging;
   onProgress?: (progress: { completed: number; total: number; anonymousSessionId: string }) => void;
 }): Promise<void> {
+  if(input.signal?.aborted)return;
   const project = await requireProject(input.repository, input.projectId);
   if (!["SessionsComplete", "Judging"].includes(project.state)) throw new Error(`Research judging cannot run from state ${project.state}.`);
   if (project.config.judges.length === 0) throw new Error("This Research project is configured for Save only / external evaluation.");
@@ -444,11 +454,21 @@ export async function judgeResearch(input: {
   const policy = project.config.judgeOutputPolicy;
   const judgeBudgetPolicy = policy ? analyticalBudgetPolicyForSnapshot(policy) : "legacy_analytical";
   const judgeSelections = resolveJudgeSelections(project.config, providers, models);
+  if((await getUncertainResearchJudges(input.repository,project.id)).length)throw new Error("Research Judge has an uncertain paid attempt; resolve it explicitly before Resume.");
+  // Durable not-sent markers distinguish queued Judges from historical unrecorded attempts.
+  for(const assignment of assignments){
+    if(!assignment.sessionId)continue;
+    const scores=await input.repository.listJudgeScores(assignment.sessionId);
+    const events=await input.repository.listSessionEvents(assignment.sessionId);
+    for(const judge of selectMissingJudgeSelections(scores,judgeSelections))if(!events.some(event=>event.eventType==="RESEARCH_JUDGE_ATTEMPT" && event.metadata?.modelRoute===judge.model.route))await recordResearchJudgeAttempt(input.repository,assignment.sessionId,judge.model.route,"pending");
+  }
   await input.repository.setResearchProjectState(project.id, "Judging");
   let completed = assignments.filter((assignment) => assignment.status === "Judged").length;
 
   // Deliberately do not read Blinding Mappings or Research Conditions in this function.
   for (const assignment of assignments.sort((a, b) => a.judgeOrder - b.judgeOrder)) {
+    if(input.signal?.aborted)return;
+    await assertAbortOwnership(input.signal);
     if (!assignment.sessionId) throw new Error("A Research assignment has no completed session.");
     const existing = await input.repository.listJudgeScores(assignment.sessionId);
     const missingJudges = selectMissingJudgeSelections(existing, judgeSelections);
@@ -457,29 +477,40 @@ export async function judgeResearch(input: {
       completed += assignment.status === "Judged" ? 0 : 1;
       continue;
     }
-    await runBlindJudging({
+    for(const judge of missingJudges){
+      if(input.signal?.aborted)return;
+      await assertAbortOwnership(input.signal);
+      let dispatched=false;
+      try{await (input.judgeRunner ?? runBlindJudging)({
       repository: input.repository,
       sessionId: assignment.sessionId,
       language: project.config.sessionLanguage,
-      judges: missingJudges,
+      judges: [judge],
+      onResponse:async response=>{await input.repository.appendSessionEvent(assignment.sessionId!,{eventType:"RESEARCH_JUDGE_RESPONSE",role:"controller",content:response.content,metadata:{modelRoute:judge.model.route,usage:response.usage,providerRequestId:response.providerRequestId,finishReason:response.finishReason}});},
       anonymousSessionId: assignment.anonymousSessionId,
       maxRetries: project.config.sessionPolicy?.maxRetries,
       timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
       signal: input.signal,
       streamWorkflowContext: "research",
       budgetPolicy: judgeBudgetPolicy,
-    });
+      onAttemptStart:async attempt=>{await recordResearchJudgeAttempt(input.repository,assignment.sessionId!,judge.model.route,"dispatched",attempt);dispatched=true;},
+      });
+      if(dispatched)await recordResearchJudgeAttempt(input.repository,assignment.sessionId,judge.model.route,"completed");
+      }catch(cause){if(dispatched)await recordResearchJudgeAttempt(input.repository,assignment.sessionId,judge.model.route,"uncertain");throw cause;}
+    }
     const frozen = await input.repository.listJudgeScores(assignment.sessionId);
     if (frozen.length !== judgeSelections.length || frozen.some((score) => !score.frozenAt)) throw new Error("Judge score freeze verification failed.");
     await input.repository.updateResearchAssignment(assignment.id, assignment.sessionId, "Judged");
     completed += 1;
     input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId });
   }
+  if(input.signal?.aborted)return;
   await verifyAllResearchScoresFrozen(input.repository, project.id, project.config.judges.length);
   await input.repository.setResearchProjectState(project.id, "ScoresFrozen");
 }
 
-export async function unblindAndComputeResearch(repository: ResearchRepository, projectId: string): Promise<ResearchResults> {
+async function unblindAndComputeResearchOwned(repository: ResearchRepository, projectId: string, signal?:AbortSignal): Promise<ResearchResults> {
+  signal?.throwIfAborted();
   let project = await requireProject(repository, projectId);
   const existingResults = await repository.getResearchResults(projectId);
   if (project.state === "Complete" && existingResults) return existingResults;
@@ -492,6 +523,7 @@ export async function unblindAndComputeResearch(repository: ResearchRepository, 
   }
   await verifyAllResearchScoresFrozen(repository, projectId, project.config.judges.length);
 
+  signal?.throwIfAborted();
   // This is the explicit evidence boundary: state is marked Unblinded before the key is read.
   // If computation or persistence fails after this point, a later call may safely resume from
   // Unblinded because the key has already been exposed and every frozen score is re-verified.
@@ -508,6 +540,7 @@ export async function unblindAndComputeResearch(repository: ResearchRepository, 
   const conditionById = new Map(conditions.map((condition) => [condition.id, condition]));
   const sessions: UnblindedSessionResult[] = [];
   for (const assignment of assignments) {
+    await assertAbortOwnership(signal);
     if (!assignment.sessionId) throw new Error("Cannot compute results for an assignment without a session.");
     const mapping = mappingByAnonymous.get(assignment.anonymousSessionId);
     const condition = mapping ? conditionById.get(mapping.conditionId) : undefined;
@@ -545,6 +578,7 @@ export async function unblindAndComputeResearch(repository: ResearchRepository, 
     pairwise: computePairwiseStatistics(sessions),
     computedAt: new Date().toISOString(),
   };
+  signal?.throwIfAborted();
   await repository.saveResearchResults(projectId, results, await sha256Text(stableStringify(results)));
   await repository.setResearchProjectState(projectId, "Complete");
   return results;
@@ -591,3 +625,9 @@ function capabilityMethodSignature(capabilities: ProviderModel["capabilities"]):
     source: capabilities.source,
   });
 }
+
+export const executeResearchSessions=(input:Parameters<typeof executeResearchSessionsOwned>[0])=>withResearchExecution(input.repository,input.projectId,input.signal,(repository,signal)=>executeResearchSessionsOwned({...input,repository,signal}));
+export const judgeResearch=(input:Parameters<typeof judgeResearchOwned>[0])=>withResearchExecution(input.repository,input.projectId,input.signal,(repository,signal)=>judgeResearchOwned({...input,repository,signal}));
+export const prepareInterruptedResearchRetry=(repository:ResearchRepository,projectId:string)=>withResearchExecution(repository,projectId,undefined,owned=>prepareInterruptedResearchRetryOwned(owned,projectId));
+export const prepareInterruptedResearchRestart=(repository:ResearchRepository,projectId:string,assignmentId:string)=>withResearchExecution(repository,projectId,undefined,owned=>prepareInterruptedResearchRestartOwned(owned,projectId,assignmentId));
+export const unblindAndComputeResearch=(repository:ResearchRepository,projectId:string,signal?:AbortSignal)=>withResearchExecution(repository,projectId,signal,(owned,signal)=>unblindAndComputeResearchOwned(owned,projectId,signal));

@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
@@ -60,12 +61,12 @@ describe("Training blind durable Resume", () => {
   it("persists blind_running from onSessionCreated before an interrupted blind session returns", async () => {
     let current = training({ status: "Running", executionSnapshot: undefined });
     const updates: Array<Record<string, unknown>> = [];
-    const repository = {
+    const repository = workflowTestRepository({
       updateTrainingRun: vi.fn(async (_id: string, update: Record<string, unknown>) => { updates.push(update); current = { ...current, ...update } as TrainingRunRecord; }),
       listTrainingRuns: vi.fn(async () => [current]),
       getRvSession: vi.fn(async () => null),
       getSessionSnapshot: vi.fn(async () => null),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     const runAutomaticRvLiteSession = vi.fn(async (request: { sessionIdentity?: { id: string; sessionCode: string }; onSessionCreated?: (sessionId: string, sessionCode: string) => Promise<void> | void }) => {
       const identity = request.sessionIdentity!;
       await request.onSessionCreated?.(identity.id, identity.sessionCode);
@@ -94,7 +95,7 @@ describe("Training blind durable Resume", () => {
     let durableState: "Interrupted" | "Revealed" = "Interrupted";
     const durableEvents: Array<{ eventType: string; metadata?: Record<string, unknown> }> = [];
     const durableUsage: Array<{ sessionId: string; targetId: string }> = [];
-    const repository = {
+    const repository = workflowTestRepository({
       updateTrainingRun: vi.fn(async (_id: string, update: Record<string, unknown>) => { current = { ...current, ...update } as TrainingRunRecord; }),
       listTrainingRuns: vi.fn(async () => [current]),
       getRvSession: vi.fn(async () => ({ id: "session_t1", workspaceId: "workspace", profileId: profile.id, sessionCode: "RV-1", state: durableState, runType: "automatic", preRevealTranscript: "P1 accepted", preRevealSealedAt: durableState === "Revealed" ? "now" : undefined, postRevealTranscript: "", targetId: "t1", createdAt: "now", updatedAt: "now" })),
@@ -105,7 +106,7 @@ describe("Training blind durable Resume", () => {
       listTargetUsage: vi.fn(async () => durableUsage as never),
       recordTargetUsage: vi.fn(async (value: { sessionId?: string; targetId: string }) => { if (value.sessionId) durableUsage.push({ sessionId: value.sessionId, targetId: value.targetId }); }),
       listRvSessions: vi.fn(async () => [{ id: "session_t1", postRevealTranscript: "" }] as never),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     const runAutomaticRvLiteSession = vi.fn(async (request: Record<string, unknown>) => {
       expect((request.resumeSession as { id: string }).id).toBe("session_t1");
       expect(request.requestedSettings).toEqual(snapshot.generationSettings.requested);
@@ -140,12 +141,12 @@ describe("Training blind durable Resume", () => {
     } });
     let current = initial;
     const existingSession = { id: "session_init", workspaceId: "workspace", profileId: profile.id, sessionCode: "RV-INIT", state: "Preflight", runType: "automatic", preRevealTranscript: "", postRevealTranscript: "", targetId: "t1", createdAt: "now", updatedAt: "now" };
-    const repository = {
+    const repository = workflowTestRepository({
       updateTrainingRun: vi.fn(async (_id: string, update: Record<string, unknown>) => { current = { ...current, ...update } as TrainingRunRecord; }),
       listTrainingRuns: vi.fn(async () => [current]),
       getRvSession: vi.fn(async () => existingSession),
       getSessionSnapshot: vi.fn(async () => undefined),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     const runAutomaticRvLiteSession = vi.fn(async (request: { resumeSession?: { id: string }; sessionIdentity?: unknown; onSessionCreated?: (sessionId: string, sessionCode: string) => Promise<void> | void }) => {
       expect(request.resumeSession?.id).toBe("session_init");
       expect(request.sessionIdentity).toBeUndefined();
@@ -166,13 +167,13 @@ describe("Training blind durable Resume", () => {
       blindInitialization: { sessionCode: "RV-1", automaticRevealHash: reveal.hash, rvSystemPrompt: { id: "prompt", version: "1", content: "FROZEN", contentSha256: "hash" }, viewerNotes: { enabled: false, aiIdentityId: "identity", noteType: "viewer_self_notes" as const, content: "", contentSha256: "empty-notes-hash", estimatedTokens: 0, estimatorVersion: "conservative-char-v1" as const, capacityTokens: 2048 as const, modelRoute: model.route, capturedAt: "now" } },
     } });
     let current = initial;
-    const repository = {
+    const repository = workflowTestRepository({
       updateTrainingRun: vi.fn(async (_id: string, update: Record<string, unknown>) => { current = { ...current, ...update } as TrainingRunRecord; }),
       listTrainingRuns: vi.fn(async () => [current]),
       getRvSession: vi.fn(async () => ({ id: "session_t1", workspaceId: "workspace", profileId: profile.id, sessionCode: "RV-1", state: "Interrupted", runType: "automatic", preRevealTranscript: "", postRevealTranscript: "", targetId: "t1", createdAt: "now", updatedAt: "now" })),
       getSessionSnapshot: vi.fn(async () => snapshot),
       listSessionEvents: vi.fn(async () => []),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     const runAutomaticRvLiteSession = vi.fn(async () => ({ sessionId: "session_t1", sessionCode: "RV-1", state: "Interrupted" as const, transcript: "", stopReason: "AUTO-STOP" }));
     const dependencies = { runAutomaticRvLiteSession } as unknown as NonNullable<ExecuteTrainingRunInput["dependencies"]>;
     const outcome = await executeTrainingRun(baseInput(repository, initial, dependencies));
@@ -182,7 +183,7 @@ describe("Training blind durable Resume", () => {
   it("does not rerun blind when the session was already Revealed before the Training checkpoint advanced", async () => {
     const initial = training({ activeTargetCheckpoint: { targetId: "t1", sessionId: "session_t1", stage: "blind_running" } });
     let current = initial;
-    const repository = {
+    const repository = workflowTestRepository({
       updateTrainingRun: vi.fn(async (_id: string, update: Record<string, unknown>) => { current = { ...current, ...update } as TrainingRunRecord; }),
       listTrainingRuns: vi.fn(async () => [current]),
       getRvSession: vi.fn(async () => ({ id: "session_t1", workspaceId: "workspace", profileId: profile.id, sessionCode: "RV-1", state: "Revealed", runType: "automatic", preRevealTranscript: "complete", preRevealSealedAt: "now", postRevealTranscript: "", targetId: "t1", createdAt: "now", updatedAt: "now" })),
@@ -191,7 +192,7 @@ describe("Training blind durable Resume", () => {
       listSessionEvents: vi.fn(async () => [{ id: "e1", sessionId: "session_t1", sequenceNumber: 1, eventType: "REVEAL_ACCEPTED", metadata: { source: "automatic_target", targetId: "t1" }, createdAt: "now" }] as never),
       listTargetUsage: vi.fn(async () => [{ id: "u1", sessionId: "session_t1", targetId: "t1", usedAt: "now" }] as never),
       listRvSessions: vi.fn(async () => [{ id: "session_t1", postRevealTranscript: "" }] as never),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     const runAutomaticRvLiteSession = vi.fn();
     const dependencies = {
       runAutomaticRvLiteSession,

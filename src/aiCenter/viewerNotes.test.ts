@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../providers/native", () => ({
@@ -190,7 +191,7 @@ describe("Viewer Notes", () => {
     const afterGuide = { id: "fg-after", aiIdentityId: "identity", language: "en", versionNumber: 5, content: "guide after this exact training", contentSha256: "fg-after-sha", estimatedTokens: 6, estimatorVersion: "conservative-char-v1", capacityTokensAtCreation: 2048, activationStatus: "active", sourceSessionId: "session_1", sourceSnapshot: { schemaVersion: 1, sourceKind: "training-reflection", profileId: "profile", capturedAt: "now", sourceSessionId: "session_1", fieldGuideUpdatePacketSha256: "field-packet" }, createdAt: "now" };
     const begin = vi.fn(async (input: Parameters<AppRepository["beginViewerNoteReflection"]>[0]) => ({ ...input, noteType: "viewer_self_notes", attemptCount: 0, status: "PENDING", createdAt: "now" }));
     const commit = vi.fn(async () => ({ status: "NO_CHANGE" as const }));
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn(async () => snapshot),
       getReveal: vi.fn(async () => ({ source: "automatic_target", text: "Reveal", hash: "reveal-sha", artifactManifest: [] })),
       getViewerEvidence: vi.fn(async () => "sealed evidence"),
@@ -203,7 +204,7 @@ describe("Viewer Notes", () => {
       beginViewerNoteReflection: begin,
       commitViewerNoteReflection: commit,
       failViewerNoteReflection: vi.fn(async () => undefined),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     const budgets:number[]=[];const stopController=new AbortController();
     const chat = vi.fn(async (request: Parameters<NonNullable<Parameters<typeof runViewerNoteReflection>[0]["chat"]>>[0]) => {
       budgets.push(request.settings.effective.maxOutputTokens!);
@@ -248,13 +249,13 @@ describe("Viewer Notes", () => {
   ] as const)("does not rerun a completed %s Reflection", async (packetVersion: "viewer-notes-reflection-v1" | "viewer-notes-reflection-v2", status: "UPDATE" | "NO_CHANGE") => {
     const snapshot = { viewerNotes: { enabled: true, aiIdentityId: "identity" }, researchProjectId: undefined } as unknown as SessionSnapshot;
     const chat = vi.fn();
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn(async () => snapshot),
       getReveal: vi.fn(async () => ({ text: "Reveal" })),
       getViewerEvidence: vi.fn(async () => "evidence"),
       getViewerNoteBundle: vi.fn(async () => ({ identity: { id: "identity" } })),
       listViewerNoteReflectionRuns: vi.fn(async () => [{ id: "old-run", sourceSnapshot: { sessionId: "session_1" }, status, packetJson: JSON.stringify({ packetVersion }), reflectionPacketSha256: "old-hash" }]),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     const providerConfig = { id: "provider" } as ProviderConfig;
     const model = { modelId: "viewer", route: "route" } as ProviderModel;
     // The completed-run check happens before route/prompt reconstruction and therefore before any paid call.
@@ -265,7 +266,7 @@ describe("Viewer Notes", () => {
   });
 
   it("keeps Research read-only by exiting before Viewer Notes or Field Guide updates", async () => {
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn(async () => ({ viewerNotes: { enabled: true }, researchProjectId: "research-1" })),
       getReveal: vi.fn(async () => ({ text: "Reveal" })),
       getViewerEvidence: vi.fn(async () => "evidence"),
@@ -273,7 +274,7 @@ describe("Viewer Notes", () => {
       beginViewerNoteReflection: vi.fn(),
       commitViewerNoteReflection: vi.fn(),
       listFieldGuideVersions: vi.fn(),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     const result = await runViewerNoteReflection({ budgetPolicy: "training_reveal", repository, sessionId: "session_1", viewerReview: "review", providerConfig: { id: "provider" } as ProviderConfig, model: {} as ProviderModel, fieldGuideAfterTrainingUpdate: { updateStatus: "LEGACY_UNRECORDED", versionId: "training-complete", versionNumber: 1, contentSha256: "training-complete" }, chat: vi.fn() });
     expect(result).toBeNull();
     expect(repository.getViewerNoteBundle).not.toHaveBeenCalled();

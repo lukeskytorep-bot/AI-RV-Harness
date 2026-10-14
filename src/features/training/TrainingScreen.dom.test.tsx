@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../../testing/workflowRepository";
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -103,7 +104,7 @@ describe("TrainingScreen mounted interactions", () => {
     root = createRoot(host);
     currentRun = makeRun();
     archiveTrainingRun = vi.fn().mockResolvedValue(undefined);
-    repository = {
+    repository = workflowTestRepository({
       listProviderConfigs: vi.fn().mockResolvedValue([]),
       listProviderModels: vi.fn().mockResolvedValue([]),
       listTargets: vi.fn().mockResolvedValue([]),
@@ -116,7 +117,7 @@ describe("TrainingScreen mounted interactions", () => {
       getSessionSnapshot: vi.fn().mockResolvedValue(null),
       listTargetClarifications: vi.fn().mockResolvedValue([]),
       listSessionEvents: vi.fn().mockResolvedValue([]),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     mocks.confirm.mockReset().mockResolvedValue(false);
     mocks.prepareResume.mockReset().mockResolvedValue(null);
     mocks.endTraining.mockReset();
@@ -158,11 +159,11 @@ describe("TrainingScreen mounted interactions", () => {
     const settings = {...createDefaultSettings(),interfaceLanguage: language};
     await act(async()=>root.render(<TrainingScreen copy={getCopy(language)} settings={settings} profiles={[{id:"p",name:"P",credentialId:"k",createdAt:"t",updatedAt:"t"}]} workspaces={[]} repository={repository}/>));await flush();
     await click(buttonByText(host,language==="pl"?"Wznów":"Resume"));await flush();
-    const stop=buttonByText(host,"Stop");expect(stop.disabled).toBe(false);
+    const stop=buttonByText(host,"Stop");const slot=stop.parentElement;expect(stop.disabled).toBe(false);
     const pause=buttonByText(host,language==="pl"?"Pauza po bieżącej sesji":"Pause after current session");expect(pause.parentElement).toBe(stop.parentElement);
     await click(pause);expect(signal.aborted).toBe(false);await click(stop);expect(signal.aborted).toBe(true);expect(signal.reason.message).toBe("Stopped by user");
-    expect(buttonByText(host,language==="pl"?"Zatrzymywanie…":"Stopping…").disabled).toBe(true);expect(buttonByText(host,language==="pl"?"Zakończ trening":"End training").disabled).toBe(true);
-    await act(async()=>task.resolve({run:currentRun,error:"Stopped by user"}));await flush();expect(buttonByText(host,language==="pl"?"Wznów":"Resume").disabled).toBe(false);expect(mocks.executeTraining).toHaveBeenCalledTimes(1);
+    expect(buttonByText(host,language==="pl"?"Zatrzymywanie…":"Stopping…").disabled).toBe(true);expect([...host.querySelectorAll("button")].some(button=>button.textContent?.includes(language==="pl"?"Zakończ trening":"End training"))).toBe(false);
+    await act(async()=>task.resolve({run:currentRun,error:"Stopped by user"}));await flush();expect(buttonByText(host,language==="pl"?"Wznów":"Resume").disabled).toBe(false);expect(buttonByText(host,language==="pl"?"Wznów":"Resume").parentElement).toBe(slot);expect(host.querySelectorAll(".active-training-run")).toHaveLength(1);expect(mocks.executeTraining).toHaveBeenCalledTimes(1);
   });
 
   it("persists End training, removes Resume/End and keeps sessions/history actions", async () => {

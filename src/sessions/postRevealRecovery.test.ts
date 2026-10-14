@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { automaticPostRevealReviewRequest, runAutomaticPostRevealReview } from "./postReveal";
@@ -26,7 +27,7 @@ function makeRepository(input?: { transcript?: string; monitor?: boolean; checkp
     createdAt: `t-${index + 1}`,
   }));
   let leaseHeld = false;
-  const repository = {
+  const repository = workflowTestRepository({
     withPostRevealReviewLease: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> => {
       if (leaseHeld) throw new Error("Automatic post-Reveal review is already running for this session.");
       leaseHeld = true;
@@ -69,8 +70,8 @@ function makeRepository(input?: { transcript?: string; monitor?: boolean; checkp
       transcript += serializePostRevealTurn(role, content);
       return transcript;
     }),
-  };
-  return { repository, getTranscript: () => transcript, events };
+  });
+  return workflowTestRepository({ repository, getTranscript: () => transcript, events });
 }
 
 describe("STEP 5B post-Reveal review recovery", () => {

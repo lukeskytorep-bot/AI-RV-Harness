@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
@@ -35,7 +36,7 @@ function durableRepository() {
     }
     return record;
   };
-  const repository = {
+  const repository = workflowTestRepository({
     createRvSession: vi.fn(async (input: Record<string, unknown>) => {
       if (session) throw new Error("UNIQUE constraint failed: rv_sessions.id");
       session = { ...input, state: "Created", preRevealTranscript: "", postRevealTranscript: "", createdAt: "now", updatedAt: "now" } as unknown as RvSession;
@@ -62,7 +63,7 @@ function durableRepository() {
       if (!usage.some((item) => item.targetId === value.targetId && item.sessionId === value.sessionId)) usage.push({ ...value, id: `u${usage.length + 1}`, usedAt: "now" });
     }),
     listTargetUsage: vi.fn(async () => structuredClone(usage) as never),
-  } as unknown as AppRepository;
+  } as unknown as AppRepository);
   return {
     repository,
     session: () => session!,
@@ -137,7 +138,7 @@ describe("Training blind real RV Lite replay", () => {
 
   it("fires the session-created callback only after the immutable snapshot is durable", async () => {
     const log: string[] = [];
-    const repository = {
+    const repository = workflowTestRepository({
       listSessionEvents: vi.fn(async () => []),
       createRvSession: vi.fn(async () => { log.push("session"); }),
       updateRvSessionState: vi.fn(async () => undefined),
@@ -147,7 +148,7 @@ describe("Training blind real RV Lite replay", () => {
       sealPreReveal: vi.fn(async () => undefined),
       acceptReveal: vi.fn(async () => undefined),
       recordTargetUsage: vi.fn(async () => undefined),
-    } as unknown as AppRepository;
+    } as unknown as AppRepository);
     await runAutomaticRvLiteSession({
       repository,
       workspaceId: "w",

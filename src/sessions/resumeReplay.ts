@@ -65,7 +65,8 @@ export async function createSessionReplay(input: {
   let replayIndex = 0;
   let pendingReplayStepId: string | undefined;
   let live = false;
-  const base = input.repository;
+  let base = input.repository;
+  let ownershipEntered = false;
 
   const beginLiveContinuation = async (viewerAttempt?: Record<string, unknown>, mode: "viewer" | "finalization" = "viewer"): Promise<void> => {
     if (live) return;
@@ -133,7 +134,15 @@ export async function createSessionReplay(input: {
   };
 
   const repository = new Proxy(base, {
-    get(target, property, receiver) {
+    get(_target, property) {
+      if (property === "withWorkflowOwnership") return async <T>(scope: Parameters<AppRepository["withWorkflowOwnership"]>[0], task: (owned:AppRepository, signal:AbortSignal)=>Promise<T>):Promise<T> => {
+        if(ownershipEntered)throw new Error("Resume replay ownership has already been used; rebuild replay before another execution.");
+        if(typeof base.withWorkflowOwnership!=="function")throw new Error("Workflow ownership capability is required for Resume replay.");
+        return base.withWorkflowOwnership(scope,async (owned,signal)=>{
+          ownershipEntered=true;base=owned;
+          return task(repository,signal);
+        });
+      };
       if (property === "createRvSession") return async () => input.session;
       if (property === "createMonitorRun" && !live) return async () => {
         if (!input.monitorRun) throw new Error("The saved AI Monitor run required for continuation is unavailable.");
@@ -190,8 +199,8 @@ export async function createSessionReplay(input: {
         return base.recordTargetUsage(...args);
       };
       if (!live && typeof property === "string" && SUPPRESSED_REPLAY_WRITES.has(property)) return async () => undefined;
-      const value = Reflect.get(target, property, receiver) as unknown;
-      return typeof value === "function" ? value.bind(target) : value;
+      const value = Reflect.get(base, property) as unknown;
+      return typeof value === "function" ? value.bind(base) : value;
     },
   }) as AppRepository;
 

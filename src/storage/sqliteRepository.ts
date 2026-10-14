@@ -1,3 +1,8 @@
+import { validateResearchTermination, researchTerminationKey, researchScope, canEndResearchExecution } from "../research/executionLifecycle";
+import { registerAbortOwnership } from "../application/abortOwnership";
+import { ownSqliteWorkflow } from "./sqlite/workflowOwnership";
+import type { WorkflowContext, WorkflowScope } from "../application/workflowOwnership";
+import { workflowOwnershipNative, executeWorkflowOwnedDatabaseTransaction } from "./databaseNative";
 import Database from "@tauri-apps/plugin-sql";
 import type { CreateProfileInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput } from "../types";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
@@ -37,6 +42,26 @@ type CustomProtocolRow = {
 };
 
 export class SqliteRepository implements AppRepository {
+  async getResearchExecutionTermination(projectId:string):Promise<import("../research/executionLifecycle").ResearchExecutionTermination|null>{
+    const rows=await selectDatabaseReadonly<Array<{value:string}>>("SELECT value FROM app_settings WHERE key=$1",[researchTerminationKey(projectId)]);
+    return rows[0]?validateResearchTermination(JSON.parse(rows[0].value)):null;
+  }
+  async endResearchExecution(projectId:string,endedAt=new Date().toISOString()):Promise<import("../research/executionLifecycle").ResearchExecutionTermination>{
+    return this.withWorkflowOwnership({...researchScope(projectId),terminal:true,entity:{kind:"research",id:projectId,allowEnded:true}},async owned=>{
+      const current=await owned.getResearchProject(projectId);if(!current)throw new Error("Research project not found");
+      const existing=await owned.getResearchExecutionTermination(projectId);if(existing)return existing;
+      if(!canEndResearchExecution(current))throw new Error("Research execution cannot be ended in this state");
+      const context=(owned as SqliteRepository).workflowContext!;
+      return validateResearchTermination(await workflowOwnershipNative({action:"endResearch",profileId:context.profileId,owner:context.owner,version:context.version,endedAt}));
+    });
+  }
+  async getWorkflowResearchProjectId(sessionId:string):Promise<string|undefined>{return (await this.getRvSession(sessionId))?.researchProjectId;}
+  async getWorkflowProfileId(sessionId:string):Promise<string> {
+    const session=await this.getRvSession(sessionId);
+    const profileId=session?.profileId ?? (await this.getSessionSnapshot(sessionId))?.profileId;
+    if(!profileId)throw new Error("RV ownership requires the durable Profile identity.");
+    return profileId;
+  }
   private readonly writes = new SqliteWriteCoordinator();
   private readonly profilesRepository: SqliteProfilesRepository;
   private readonly targetsRepository: SqliteTargetsRepository;
@@ -53,7 +78,7 @@ export class SqliteRepository implements AppRepository {
   private readonly exportRepository: SqliteExportRepository;
   private readonly controlledPurge: SqliteControlledPurge;
 
-  private constructor(private readonly db: Database) {
+  private constructor(private readonly db: Database, private readonly workflowContext?:WorkflowContext) {
     this.profilesRepository = new SqliteProfilesRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
@@ -81,7 +106,7 @@ export class SqliteRepository implements AppRepository {
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
       executeTransaction: (statements) => this.executeTransaction(statements),
-      executePostRevealReviewFencedTransaction: (input) => executePostRevealReviewFencedDatabaseTransaction(input),
+      executePostRevealReviewFencedTransaction: (input) => this.workflowContext ? executeWorkflowOwnedDatabaseTransaction(this.workflowContext,input.statements,input) : executePostRevealReviewFencedDatabaseTransaction(input),
       isResearchScoresFrozen: (projectId) => this.researchRepository.isScoresFrozen(projectId),
     });
     this.trainingRepository = new SqliteTrainingRepository({
@@ -129,13 +154,29 @@ export class SqliteRepository implements AppRepository {
   }
 
   private executeWrite(query: string, bindValues?: unknown[]) {
-    return this.writes.run(() => executeDatabaseWrite(query, bindValues ?? []));
+    return this.writes.run(async () => this.workflowContext ? { rowsAffected:(await executeWorkflowOwnedDatabaseTransaction(this.workflowContext,[{query,values:bindValues??[]}]))[0] } : executeDatabaseWrite(query, bindValues ?? []));
   }
 
   private executeTransaction(statements: DatabaseTransactionStatement[]) {
-    return this.writes.run(() => executeDatabaseTransaction(statements));
+    return this.writes.run(() => this.workflowContext ? executeWorkflowOwnedDatabaseTransaction(this.workflowContext,statements) : executeDatabaseTransaction(statements));
   }
 
+  private readonly workflowOwners = new Map<string,string>();
+  async getWorkflowOwnership(profileId:string):Promise<"idle"|"local"|"other"|"unknown"> {
+    try { const state=await workflowOwnershipNative<{active:boolean;owner:string|null}>({action:"inspect",profileId});return state.active ? (state.owner===this.workflowOwners.get(profileId)?"local":"other") : "idle"; } catch {return "unknown";}
+  }
+  async withWorkflowOwnership<T>(scope:WorkflowScope,task:(repository:AppRepository,signal:AbortSignal)=>Promise<T>):Promise<T> {
+    if(this.workflowContext) {
+      if(scope.terminal)throw new Error("End requires the active workflow to settle first");
+      const context=this.workflowContext;if(context.closed || context.profileId!==scope.profileId)throw new Error("Invalid or settled workflow ownership scope");
+      const nested={...context,entities:[...context.entities.filter(entity=>entity.kind!==scope.entity.kind).map(entity=>({...entity,allowEnded:scope.entity.kind==="research"?entity.allowEnded:false})),scope.entity]};
+      await workflowOwnershipNative({action:"check",profileId:context.profileId,owner:context.owner,version:context.version,entities:nested.entities});
+      const ended=new AbortController();nested.signal=AbortSignal.any([context.signal,...(scope.signal?[scope.signal]:[]),ended.signal]);
+      registerAbortOwnership(nested.signal,async()=>{if(nested.closed)throw new Error("Workflow ownership has settled");await workflowOwnershipNative({action:"check",profileId:nested.profileId,owner:nested.owner,version:nested.version,entities:nested.entities.map(entity=>({...entity,allowEnded:false}))});});
+      try{return await task(new SqliteRepository(this.db,nested),nested.signal);}finally{nested.closed=true;ended.abort(new DOMException("Workflow settled","AbortError"));}
+    }
+    return ownSqliteWorkflow(scope,context=>new SqliteRepository(this.db,context),task,owner=>{if(owner)this.workflowOwners.set(scope.profileId,owner);else this.workflowOwners.delete(scope.profileId);});
+  }
   async createDatabaseSnapshot(destinationPath: string): Promise<void> {
     await this.writes.run(() => createDatabaseSnapshotNative(destinationPath));
   }
@@ -412,7 +453,7 @@ export class SqliteRepository implements AppRepository {
     return { ...input, steps: [...input.steps] };
   }
 
-  createRvSession: AppRepository["createRvSession"] = (input) => this.sessionsRepository.createRvSession(input);
+  createRvSession: AppRepository["createRvSession"] = async (input) => { const session=await this.sessionsRepository.createRvSession(input);if(this.workflowContext)this.workflowContext.entities=[...this.workflowContext.entities.filter(entity=>entity.kind!=="rv"),{kind:"rv",id:session.id,profileId:session.profileId}];return session; };
   updateRvSessionState: AppRepository["updateRvSessionState"] = (id, state, stopReason) => this.sessionsRepository.updateRvSessionState(id, state, stopReason);
   appendSessionEvent: AppRepository["appendSessionEvent"] = (sessionId, event) => this.sessionsRepository.appendSessionEvent(sessionId, event);
   appendSessionEventWithProviderState: AppRepository["appendSessionEventWithProviderState"] = (sessionId, event, state) => this.sessionsRepository.appendSessionEventWithProviderState(sessionId, event, state);

@@ -1,3 +1,4 @@
+import { withAutomaticWorkflow, withRvWorkflow } from "../application/workflowOwnership";
 import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
 import { focusResumeMetrics, prepareSessionFocus, focusSnapshotFields, focusFingerprint, startFocusPass, completeFocusPass } from "./sessionFocusLifecycle";
 import { assertFocusPassesComplete, focusFeedbackIntroduction, focusTranscriptContent, focusPasses, focusMetadata, focusOpening, type SessionFocusPlan } from "./sessionFocus";
@@ -133,7 +134,7 @@ export interface AutomaticRcpRunResult {
   stopReason?: string;
 }
 
-export async function runAutomaticRcpSession(input: AutomaticRcpRunInput): Promise<AutomaticRcpRunResult> {
+async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise<AutomaticRcpRunResult> {
   const sessionFocus=await prepareSessionFocus(input);
   let currentPassIndex:1|2=1;
   const originalProgress=input.onProgress;
@@ -706,7 +707,7 @@ export function appendSpecialTaskTranscript(current: string, phase: number, comm
   return current ? `${current}\n\n${block}` : block;
 }
 
-export async function submitExternalReveal(repository: SessionRepository, sessionId: string, text: string, artifactManifest: RevealArtifactRecord[] = [], language: InterfaceLanguage = "en"): Promise<void> {
+async function submitExternalRevealOwned(repository: SessionRepository, sessionId: string, text: string, artifactManifest: RevealArtifactRecord[] = [], language: InterfaceLanguage = "en"): Promise<void> {
   const snapshot=repository.getSessionSnapshot ? await repository.getSessionSnapshot(sessionId) : null;
   if(snapshot?.sessionFocus && !repository.getRvSession)throw new Error("Focused Reveal requires durable sealing evidence.");
   assertFocusPassesComplete(snapshot,await repository.listSessionEvents(sessionId),snapshot?.sessionFocus ? await repository.getRvSession!(sessionId) : undefined);
@@ -722,3 +723,6 @@ export async function submitExternalReveal(repository: SessionRepository, sessio
 }
 
 export { sha256Text };
+
+export const runAutomaticRcpSession = (input: Parameters<typeof runAutomaticRcpSessionOwned>[0]) => withAutomaticWorkflow(input, runAutomaticRcpSessionOwned);
+export const submitExternalReveal = (repository: Parameters<typeof submitExternalRevealOwned>[0],sessionId:string,text:string,artifactManifest:RevealArtifactRecord[]=[],language:InterfaceLanguage="en") => withRvWorkflow(repository as AppRepository,sessionId,undefined,owned=>submitExternalRevealOwned(owned,sessionId,text,artifactManifest,language));

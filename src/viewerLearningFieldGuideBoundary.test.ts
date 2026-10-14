@@ -65,9 +65,11 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     // C2-R1 intentionally extends Browser controlled purge with durable
     // continuation reset/fresh artifacts; protect the accepted R1 bytes.
     // UX-TEL-5 adds a separate Telepathy path and explicit parent guard.
-    // Normalize only that declared wiring: all accepted learning/continuation
+    // S4 classifies the separate Research execution marker as terminal for purge.
+    expect(browserControlledPurge).toContain("if(project.executionTermination)return true;");
+    // Normalize only those declared additions: all accepted learning/continuation
     // deletion bytes remain protected by the original hashes.
-    expect(sha256(normalizeTelepathicPurgeWiring(browserControlledPurge,"browser"))).toBe("8f61ac511dd3226833ff1cca14190b162d6ecb32712ccaad558c59caf8410a98");
+    expect(sha256(normalizeTelepathicPurgeWiring(browserControlledPurge.replace("  if(project.executionTermination)return true;\n", ""),"browser"))).toBe("8f61ac511dd3226833ff1cca14190b162d6ecb32712ccaad558c59caf8410a98");
     expect(sha256(normalizeTelepathicPurgeWiring(sqliteControlledPurge,"sqlite"))).toBe("5ed7115da8cc2bc36ddc06170c766783f19186bf4cd8672396c291ae26cfcfc4");
     expect(sha256(migration023)).toBe("1a9d300daa180a4507c01497b52deaf84722bd710ed4617f84058932dc7838a4");
   });

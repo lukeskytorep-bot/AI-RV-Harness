@@ -525,9 +525,9 @@ impl DatabaseWriteOperation {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseWriteStatement {
-    operation: DatabaseWriteOperation,
+    pub(crate) operation: DatabaseWriteOperation,
     #[serde(default)]
-    values: Vec<JsonValue>,
+    pub(crate) values: Vec<JsonValue>,
 }
 
 #[derive(Debug, Serialize)]
@@ -536,14 +536,61 @@ pub struct DatabaseWriteResult {
     rows_affected: u64,
 }
 
-async fn execute_statement(
-    transaction: &mut Transaction<'_, Sqlite>,
-    statement: DatabaseWriteStatement,
-) -> Result<u64, String> {
+pub(crate) async fn execute_statement(transaction:&mut Transaction<'_,Sqlite>,statement:DatabaseWriteStatement)->Result<u64,String>{
+    execute_statement_internal(transaction,statement,None).await
+}
+pub(crate) async fn execute_statement_internal(
+    transaction:&mut Transaction<'_,Sqlite>,statement:DatabaseWriteStatement,owned_research:Option<&str>,
+)->Result<u64,String>{
     if statement.values.len() != statement.operation.expected_values() {
         return Err("database write operation received an invalid value count".to_string());
     }
+    let session_value_index = match statement.operation {
+        DatabaseWriteOperation::SessionsUpdateRvSessions01 | DatabaseWriteOperation::SessionsUpdateRvSessions02 | DatabaseWriteOperation::SessionsUpdateRvSessions03 => Some(2),
+        DatabaseWriteOperation::SessionsInsertSessionEvents01 | DatabaseWriteOperation::SessionsInsertTargetClarifications01 | DatabaseWriteOperation::JudgeInsertJudgeRuns01 => Some(1),
+        DatabaseWriteOperation::SessionsUpdateRvSessions04 => Some(3),
+        DatabaseWriteOperation::SessionsInsertSessionSnapshots01 | DatabaseWriteOperation::SessionsInsertReveals01 => Some(0),
+        _ => None,
+    };
+    if let Some(index) = session_value_index {
+        if let Some(session_id) = statement.values.get(index).and_then(JsonValue::as_str) {
+            let ended: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_events WHERE session_id=$1 AND event_type='RV_USER_FINISHED'")
+                .bind(session_id).fetch_one(&mut **transaction).await.map_err(|error|error.to_string())?;
+            if ended > 0 { return Err("RV session was ended by the user; active writes are refused".into()); }
+        }
+    }
+    let research_id_index=match statement.operation {
+        DatabaseWriteOperation::ResearchUpdateResearchProjects01 | DatabaseWriteOperation::ResearchUpdateResearchProjects02=>Some(1),
+        DatabaseWriteOperation::ResearchUpdateResearchProjects03 | DatabaseWriteOperation::ResearchUpdateResearchProjects04 => Some(2),
+        DatabaseWriteOperation::ResearchInsertResearchConditions01 | DatabaseWriteOperation::ResearchInsertResearchAssignments01 | DatabaseWriteOperation::ResearchInsertBlindingMappings01 | DatabaseWriteOperation::ResearchInsertResearchResults01=>Some(1),
+        DatabaseWriteOperation::SessionsInsertRvSessions01=>Some(6),
+        DatabaseWriteOperation::TargetsInsertTargetUsage01=>Some(3),
+        _=>None,
+    };
+    let mut research_id=research_id_index.and_then(|index|statement.values.get(index)).and_then(JsonValue::as_str).map(str::to_owned);
+    if matches!(statement.operation,DatabaseWriteOperation::ResearchUpdateResearchAssignments01) {
+        if let Some(id)=statement.values.get(2).and_then(JsonValue::as_str){research_id=sqlx::query_scalar("SELECT research_project_id FROM research_assignments WHERE id=$1").bind(id).fetch_optional(&mut **transaction).await.map_err(|e|e.to_string())?;}
+    }else if let Some(index)=session_value_index {
+        if let Some(id)=statement.values.get(index).and_then(JsonValue::as_str){
+            research_id=sqlx::query_scalar::<_,Option<String>>("SELECT research_project_id FROM rv_sessions WHERE id=$1").bind(id).fetch_optional(&mut **transaction).await.map_err(|e|e.to_string())?.flatten();
+        }
+    }
+    if matches!(statement.operation,DatabaseWriteOperation::JudgeInsertJudgeScores01) {
+        if let Some(id)=statement.values.get(1).and_then(JsonValue::as_str){research_id=sqlx::query_scalar::<_,Option<String>>("SELECT s.research_project_id FROM judge_runs j JOIN rv_sessions s ON s.id=j.session_id WHERE j.id=$1").bind(id).fetch_optional(&mut **transaction).await.map_err(|e|e.to_string())?.flatten();}
+    }
+    if let Some(id)=research_id {
+        if let Some(owned_id)=owned_research {if id!=owned_id {return Err("Research write scope mismatch".into());}}
+        let active:i64=sqlx::query_scalar("SELECT COUNT(*) FROM app_settings WHERE key='rvh.workflow.v1:research:' || $1 AND json_extract(value,'$.owner') IS NOT NULL AND json_extract(value,'$.expiresAt') > strftime('%Y-%m-%dT%H:%M:%fZ','now')").bind(&id).fetch_one(&mut **transaction).await.map_err(|e|e.to_string())?;
+        if active>0 && owned_research!=Some(id.as_str()) {return Err("Research ownership is required for active writes".into());}
+        let ended:i64=sqlx::query_scalar("SELECT COUNT(*) FROM app_settings WHERE key='rvh.research.end.v1:' || $1").bind(&id).fetch_one(&mut **transaction).await.map_err(|e|e.to_string())?;
+        if ended>0 && !matches!(statement.operation,DatabaseWriteOperation::ResearchUpdateResearchProjects01|DatabaseWriteOperation::ResearchUpdateResearchProjects02) {return Err("Research execution was ended by the user; active writes are refused".into());}
+    }
+    if owned_research.is_some() && matches!(statement.operation,DatabaseWriteOperation::AiCenterUpdateAiIdentities01|DatabaseWriteOperation::AiCenterInsertAiIdentities01|DatabaseWriteOperation::AiCenterInsertAiNoteSettings01|DatabaseWriteOperation::AiCenterUpdateAiNoteSettings01|DatabaseWriteOperation::AiCenterUpdateAiNoteSettings02|DatabaseWriteOperation::AiCenterInsertAiNoteReflectionRuns01|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns01|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns02|DatabaseWriteOperation::AiCenterInsertAiNoteVersions01|DatabaseWriteOperation::AiCenterInsertAiNoteActivationEvents01|DatabaseWriteOperation::AiCenterUpdateAiNoteSettings03|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns03|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns04|DatabaseWriteOperation::AiCenterInsertAiNoteActivationEvents02|DatabaseWriteOperation::AiCenterUpdateAiNoteVersions01|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns05|DatabaseWriteOperation::AiCenterUpdateAiNoteActivationEvents01|DatabaseWriteOperation::AiCenterUpdateAiNoteVersions02|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns06|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns07|DatabaseWriteOperation::AiCenterUpdateAiNoteActivationEvents02|DatabaseWriteOperation::FieldGuideInsertSettings01|DatabaseWriteOperation::FieldGuideInsertVersions01|DatabaseWriteOperation::FieldGuideInsertActivationEvents01|DatabaseWriteOperation::FieldGuideUpdateSettings01|DatabaseWriteOperation::FieldGuideUpdateLegacyBaselines01|DatabaseWriteOperation::FieldGuideUpdateSettings02) {return Err("Research learning is read-only".into());}
     let mut query = sqlx::query(statement.operation.sql());
+    if matches!(statement.operation, DatabaseWriteOperation::SettingsModelsInsertAppSettings01 | DatabaseWriteOperation::SettingsModelsDeleteAppSettings01)
+        && statement.values.first().and_then(JsonValue::as_str).is_some_and(|key| key.starts_with("rvh.workflow.v1:") || key.starts_with("rvh.research.end.v1:")) {
+        return Err("Workflow ownership keys are reserved for the ownership command".into());
+    }
     for value in statement.values {
         query = match value {
             JsonValue::Null => query.bind(Option::<String>::None),
@@ -570,7 +617,7 @@ async fn execute_statement(
     Ok(rows)
 }
 
-async fn sqlite_pool(db_instances: &State<'_, DbInstances>) -> Result<sqlx::SqlitePool, String> {
+pub(crate) async fn sqlite_pool(db_instances: &State<'_, DbInstances>) -> Result<sqlx::SqlitePool, String> {
     let instances = db_instances.0.read().await;
     match instances.get(DATABASE_URL) {
         Some(DbPool::Sqlite(pool)) => Ok(pool.clone()),
@@ -941,7 +988,7 @@ async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: Controlled
             "SELECT COUNT(*) FROM training_runs t WHERE json_valid(t.record_json) AND COALESCE(json_extract(t.record_json, '$.status'), '') != 'Completed' AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(t.record_json, '$.targetIds'), '[]')) WHERE value = $1)"
         ).bind(&request.id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
         let unfinished_research: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM research_projects r WHERE r.state NOT IN ('Complete','Interrupted','Failed') AND json_valid(r.config_json) AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(r.config_json, '$.targetIds'), '[]')) WHERE value = $1)"
+            "SELECT COUNT(*) FROM research_projects r WHERE r.state NOT IN ('Complete','Interrupted','Failed') AND NOT EXISTS (SELECT 1 FROM app_settings WHERE key='rvh.research.end.v1:' || r.id) AND json_valid(r.config_json) AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(r.config_json, '$.targetIds'), '[]')) WHERE value = $1)"
         ).bind(&request.id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
         if unfinished_training > 0 || unfinished_research > 0 {
             return Err("Target is still required by unfinished work.".to_string());
@@ -955,6 +1002,7 @@ async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: Controlled
     let result: Result<(), String> = async {
         match request.kind {
             ControlledPurgeKind::Profile => {
+                purge_exec(&mut tx, "DELETE FROM app_settings WHERE key IN (SELECT 'rvh.research.end.v1:' || id FROM research_projects WHERE workspace_id IN (SELECT id FROM workspaces WHERE profile_id=$1)) OR key IN (SELECT 'rvh.workflow.v1:research:' || id FROM research_projects WHERE workspace_id IN (SELECT id FROM workspaces WHERE profile_id=$1))", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM target_usage WHERE profile_id = $1 OR session_id IN (SELECT id FROM rv_sessions WHERE profile_id = $1) OR research_project_id IN (SELECT id FROM research_projects WHERE workspace_id IN (SELECT id FROM workspaces WHERE profile_id = $1))", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM ai_note_activation_events WHERE ai_identity_id IN (SELECT id FROM ai_identities WHERE profile_id = $1)", &request.id).await?;
                 purge_exec(&mut tx, "UPDATE ai_note_settings SET active_version_id = NULL WHERE ai_identity_id IN (SELECT id FROM ai_identities WHERE profile_id = $1)", &request.id).await?;
@@ -965,9 +1013,11 @@ async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: Controlled
                 purge_exec(&mut tx, "DELETE FROM ai_identities WHERE profile_id = $1", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM rv_sessions WHERE profile_id = $1", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM training_runs WHERE json_valid(record_json) AND (json_extract(record_json, '$.profileId') = $1 OR json_extract(record_json, '$.workspaceId') IN (SELECT id FROM workspaces WHERE profile_id = $1))", &request.id).await?;
+                purge_exec(&mut tx, "DELETE FROM app_settings WHERE key = 'rvh.workflow.v1:' || $1", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM profiles WHERE id = $1 AND archived_at IS NOT NULL", &request.id).await?;
             }
             ControlledPurgeKind::Workspace => {
+                purge_exec(&mut tx, "DELETE FROM app_settings WHERE key IN (SELECT 'rvh.research.end.v1:' || id FROM research_projects WHERE workspace_id=$1) OR key IN (SELECT 'rvh.workflow.v1:research:' || id FROM research_projects WHERE workspace_id=$1)", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM target_usage WHERE session_id IN (SELECT id FROM rv_sessions WHERE workspace_id = $1) OR research_project_id IN (SELECT id FROM research_projects WHERE workspace_id = $1)", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM training_runs WHERE json_valid(record_json) AND json_extract(record_json, '$.workspaceId') = $1", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM workspaces WHERE id = $1 AND archived_at IS NOT NULL", &request.id).await?;
@@ -983,6 +1033,7 @@ async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: Controlled
                 purge_exec(&mut tx, "DELETE FROM training_runs WHERE id = $1 AND archived_at IS NOT NULL", &request.id).await?;
             }
             ControlledPurgeKind::Research => {
+                purge_exec(&mut tx, "DELETE FROM app_settings WHERE key IN (SELECT 'rvh.research.end.v1:' || id FROM research_projects WHERE id=$1) OR key IN (SELECT 'rvh.workflow.v1:research:' || id FROM research_projects WHERE id=$1)", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM target_usage WHERE research_project_id = $1 OR session_id IN (SELECT id FROM rv_sessions WHERE research_project_id = $1)", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM exports WHERE research_project_id = $1", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM rv_sessions WHERE research_project_id = $1", &request.id).await?;

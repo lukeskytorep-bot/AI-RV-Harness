@@ -1,3 +1,7 @@
+import { inheritAbortOwnership } from "../../application/abortOwnership";
+import { withRvWorkflow, withWorkflow } from "../../application/workflowOwnership";
+import { useWorkflowOwnership } from "../../components/useWorkflowOwnership";
+import { endRvSession, isRvSessionEnded } from "../../sessions/termination";
 import { SessionFocusControls } from "./SessionFocusControls";
 import { focusPasses, type SessionFocusPlan } from "../../sessions/sessionFocus";
 import {
@@ -77,6 +81,9 @@ import { BatchEvaluation, JudgeEvaluation } from "../judge";
 
 export function RvSessionPanel({ copy, settings, profile, workspace, repository, onBusyChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; repository: AppRepository | null; onBusyChange?: (busy: boolean) => void }) {
   const dialogs = useAppDialogs();
+  const ownership=useWorkflowOwnership(repository,profile?.id);
+  const [endedSessions,setEndedSessions]=useState<Record<string,true>>({});
+  const [endingSession,setEndingSession]=useState<string|null>(null);
   const [executionScope, setExecutionScope] = useState<"single" | "batch">("single");
   const [runType, setRunType] = useState<"automatic" | "monitor">("automatic");
   const [viewerNotesEnabled, setViewerNotesEnabled] = useState(true);
@@ -164,6 +171,20 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const running = sessionRunning || batchRunning || Boolean(postRevealBusy && abortRef.current) || progress?.state === "BlindRunning" || progress?.state === "Preflight";
   useEffect(() => { onBusyChange?.(sessionRunning || batchRunning); return () => onBusyChange?.(false); }, [sessionRunning, batchRunning, onBusyChange]);
   const recoveryInspectionKey = recentSessions.map((session) => `${session.id}:${session.state}:${session.updatedAt}`).join("|");
+  useEffect(()=>{
+    let cancelled=false;if(!repository)return;
+    const ids=[...new Set([...recentSessions.map(session=>session.id),...(progress?.sessionId?[progress.sessionId]:[])])];
+    void Promise.all(ids.map(async id=>[id,await isRvSessionEnded(repository,id)] as const)).then(rows=>{if(!cancelled)setEndedSessions(Object.fromEntries(rows.filter(row=>row[1]).map(([id])=>[id,true])));}).catch(()=>undefined);
+    return()=>{cancelled=true;};
+  },[repository,recoveryInspectionKey,progress?.sessionId,endingSession]);
+  const endingSessionRef=useRef<string|null>(null);
+  const endStoredSession=async(sessionId:string)=>{
+    if(!repository || running || postRevealBusy || endingSessionRef.current || ownership.unavailable)return;
+    endingSessionRef.current=sessionId;setEndingSession(sessionId);setRunError(null);
+    try{await endRvSession(repository,sessionId);setEndedSessions(current=>({...current,[sessionId]:true}));}
+    catch(cause){setRunError(cause instanceof Error?cause.message:String(cause));}
+    finally{endingSessionRef.current=null;setEndingSession(null);}
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -321,11 +342,14 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     setRunError(null);
   };
 
-  const automaticReview = async (sessionId: string, updateVisibleTranscript: boolean): Promise<string> => {
+  const automaticReview = async (sessionId: string, updateVisibleTranscript: boolean, operationRepository=repository, ownershipSignal?:AbortSignal): Promise<string> => {
+    const repository=operationRepository;
     if (!repository) return "";
     const controller = abortRef.current ?? new AbortController();
     const ownsController = !abortRef.current;
     if (ownsController) { abortRef.current = controller; setStopping(false); }
+    const signal=ownershipSignal?AbortSignal.any([ownershipSignal,controller.signal]):controller.signal;
+    inheritAbortOwnership(signal,ownershipSignal,controller.signal);
     if (updateVisibleTranscript) setPostRevealBusy(true);
     try {
       controller.signal.throwIfAborted();
@@ -354,7 +378,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         ...(capturedMonitorProvider && capturedMonitorModel ? { monitor: { providerConfig: capturedMonitorProvider, model: capturedMonitorModel } } : {}),
         timeoutMs: settings.requestTimeoutMs,
         streamWorkflowContext: "rv_session",
-        signal: controller.signal,
+        signal,
         maxRetries: settings.maxRetries,
       });
       if (updateVisibleTranscript) setPostRevealTranscript(transcript);
@@ -372,18 +396,19 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     }
   };
 
-  const finishRevealedSession = async (result: { sessionId: string; state: string }) => {
+  const finishRevealedSession = async (result: { sessionId: string; state: string }, operationRepository=repository, ownershipSignal?:AbortSignal) => {
+    const repository=operationRepository;
     if (result.state !== "Revealed") return;
     if (executionScope === "single" && repository) {
       const storedReveal = await repository.getReveal(result.sessionId);
       setAcceptedRevealText(storedReveal?.text ?? "");
       setAcceptedRevealArtifacts(storedReveal?.artifactManifest ?? []);
     }
-    await automaticReview(result.sessionId, executionScope === "single");
+    await automaticReview(result.sessionId, executionScope === "single",repository,ownershipSignal);
   };
 
   const start = async () => {
-    if (!repository || !profile || !selectedIdentity || !activeProvider || !selectedModel || !viewerRouteReady || postRevealBusyGuardRef.current) return;
+    if (!repository || !profile || !selectedIdentity || !activeProvider || !selectedModel || !viewerRouteReady || postRevealBusyGuardRef.current || ownership.unavailable) return;
     try {
       await requireWorkspaceViewerRoute({ repository, workspace, profile, identityId: selectedIdentity.identity.id, providerConfig: activeProvider, model: selectedModel });
     } catch (cause) {
@@ -403,8 +428,10 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     if (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature)) return;
     const batchTargets = executionScope === "batch" ? selectBatchTargets(batchPool, batchCount) : [];
     if (!runGuardRef.current.tryAcquire()) return;
-    setSessionRunning(true);
-    onBusyChange?.(true);
+    const controller = new AbortController();
+    abortRef.current = controller;setStopping(false);setSessionRunning(true);onBusyChange?.(true);
+    try {
+    await withWorkflow(repository,{profileId:profile.id,entity:{kind:"profile",id:profile.id},signal:controller.signal},async(repository,signal)=>{
     let rvSystemPrompt;
     try {
       if (!selectedIdentity) throw new Error(settings.interfaceLanguage === "pl" ? "Wybrana tożsamość Viewera nie jest dostępna." : "The selected Viewer identity is unavailable.");
@@ -413,9 +440,6 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
       rvSystemPrompt = await viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
     } catch (cause) {
       setRunError(cause instanceof Error ? cause.message : String(cause));
-      runGuardRef.current.release();
-      setSessionRunning(false);
-      onBusyChange?.(false);
       return;
     }
     setActiveTargetId(executionScope === "single" ? automaticTarget?.id ?? null : null);
@@ -433,9 +457,6 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     setBatchProgress(null);
     setManualQuestionHandle(null);
     setManualQuestionText("");
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setStopping(false);
     const requestedSettings = {
       ...(reasoning ? { reasoningEffort: reasoning } : {}),
       ...(temperature.trim() ? { temperature: Number(temperature) } : {}),
@@ -444,13 +465,13 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     const runOne = async (target: TargetRecord | null) => {
       const viewerNotes = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: viewerNotesEnabled, aiIdentityId: selectedIdentity.identity.id });
       if (protocol === "lite") {
-        const result = await runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, sessionFocus: activeSessionFocus, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
-        await finishRevealedSession(result);
+        const result = await runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, sessionFocus: activeSessionFocus, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        await finishRevealedSession(result,repository,signal);
         return result;
       }
       if (protocol === "custom" && selectedCustomProtocol) {
-        const result = await runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, sessionFocus: activeSessionFocus, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
-        await finishRevealedSession(result);
+        const result = await runAutomaticCustomSession({ repository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: selectedCustomProtocol, sessionLanguage: resolvedLanguage, requestedSettings, sessionFocus: activeSessionFocus, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), signal: signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        await finishRevealedSession(result,repository,signal);
         return result;
       }
       if (protocol === "telepathic") {
@@ -468,7 +489,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
           viewerNotes,
           step8Questions: { mode: telepathicQuestionMode, ...(telepathicQuestions.length ? { questions: telepathicQuestions } : {}) },
           ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
-          signal: controller.signal,
+          signal: signal,
           maxRetries: settings.maxRetries,
           requestTimeoutMs: settings.requestTimeoutMs,
           sessionCodePrefix: settings.sessionCodePrefix,
@@ -477,7 +498,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
           ...(target ? { automaticTarget: target } : {}),
           ...(runType === "monitor" && monitorModel && monitorProvider ? { monitor: { providerConfig: monitorProvider, model: monitorModel, editablePrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, resolvedLanguage) } } : {}),
         });
-        await finishRevealedSession(result);
+        await finishRevealedSession(result,repository,signal);
         return result;
       }
       const result = await runAutomaticRcpSession({
@@ -495,7 +516,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         humanIsBeDisplayName: humanIsBeDisplayName(profile),
         ...(specialTask ? { specialTask } : {}),
         ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
-        signal: controller.signal,
+        signal: signal,
         maxRetries: settings.maxRetries,
         requestTimeoutMs: settings.requestTimeoutMs,
         sessionCodePrefix: settings.sessionCodePrefix,
@@ -503,7 +524,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         ...(target ? { automaticTarget: target } : {}),
         ...(runType === "monitor" && monitorModel && monitorProvider ? { monitor: { providerConfig: monitorProvider, model: monitorModel, editablePrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, resolvedLanguage) } } : {}),
       });
-      await finishRevealedSession(result);
+      await finishRevealedSession(result,repository,signal);
       return result;
     };
     try {
@@ -511,7 +532,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         setBatchRunning(true);
         await runOrdinaryBatch({
           targets: batchTargets,
-          signal: controller.signal,
+          signal: signal,
           onProgress: setBatchProgress,
           onSessionComplete: (result) => setBatchResults((current) => [...current, result]),
           runSession: async (target) => {
@@ -525,13 +546,6 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     } catch (cause) {
       setRunError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      runGuardRef.current.release();
-      setSessionRunning(false);
-      setBatchRunning(false);
-      onBusyChange?.(false);
-      setManualQuestionHandle(null);
-      abortRef.current = null;
-      setStopping(false);
       try {
         const sessions = await repository.listRvSessions(workspace.id);
         setRecentSessions(sessions.filter((session) => !session.researchProjectId));
@@ -539,12 +553,19 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         setRunError(cause instanceof Error ? cause.message : String(cause));
       }
     }
+    });
+    } catch(cause) {setRunError(cause instanceof Error?cause.message:String(cause));}
+    finally {
+      runGuardRef.current.release();setSessionRunning(false);setBatchRunning(false);onBusyChange?.(false);setManualQuestionHandle(null);
+      if(abortRef.current===controller)abortRef.current=null;setStopping(false);
+    }
   };
 
   const submitReveal = async () => {
-    if (!repository || !progress?.sessionId) return;
+    if (!repository || !progress?.sessionId || ownership.unavailable || endedSessions[progress.sessionId]) return;
     setRunError(null);
     try {
+      await withRvWorkflow(repository,progress.sessionId,undefined,async(repository,signal)=>{
       const submittedText = revealText.trim();
       await submitExternalReveal(repository, progress.sessionId, submittedText, revealArtifacts, resolvedLanguage);
       setProgress((current) => current ? { ...current, state: "Revealed" } : current);
@@ -552,8 +573,9 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
       setAcceptedRevealArtifacts([...revealArtifacts]);
       setRevealText("");
       setRevealArtifacts([]);
-      await automaticReview(progress.sessionId, true);
+      await automaticReview(progress.sessionId, true,repository,signal);
       setRecentSessions((await repository.listRvSessions(workspace.id)).filter((session) => !session.researchProjectId));
+      });
     } catch (cause) {
       setRunError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -796,7 +818,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     if (!confirmed) return;
     setRunError(null);
     try {
-      await repository.archiveRvSession(session.id);
+      await withWorkflow(repository,{profileId:session.profileId,entity:{kind:"profile",id:session.profileId},terminal:true},owned=>owned.archiveRvSession(session.id));
       if (progress?.sessionId === session.id) { setProgress(null); setStreamPreview(null); setPostRevealTranscript(""); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); }
       setRecentSessions((await repository.listRvSessions(workspace.id)).filter((item) => !item.researchProjectId));
     } catch (cause) { setRunError(cause instanceof Error ? cause.message : String(cause)); }
@@ -804,13 +826,13 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
 
   const preserveInterrupted = async (session: RvSession) => {
     if (!repository) return;
-    await repository.updateRvSessionState(session.id, "Interrupted", "RECOVERY: incomplete blind run preserved after restart");
+    await withRvWorkflow(repository,session.id,undefined,owned=>owned.updateRvSessionState(session.id, "Interrupted", "RECOVERY: incomplete blind run preserved after restart"));
     setRecentSessions((await repository.listRvSessions(workspace.id)).filter((item) => !item.researchProjectId));
   };
 
   const completeWithoutEvaluation = async () => {
     if (!repository || !progress?.sessionId) return;
-    await repository.updateRvSessionState(progress.sessionId, "Completed");
+    await withRvWorkflow(repository,progress.sessionId,undefined,owned=>owned.updateRvSessionState(progress.sessionId, "Completed"));
     setProgress((current) => current ? { ...current, state: "Completed" } : current);
     setRecentSessions((await repository.listRvSessions(workspace.id)).filter((session) => !session.researchProjectId));
   };
@@ -848,6 +870,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
 
   const resumePostRevealReview = async (session: RvSession) => {
     if (!repository || postRevealBusyGuardRef.current) return;
+    if(endedSessions[session.id] || ownership.unavailable || endingSession)return;
     if (sessionRunning || batchRunning || !runGuardRef.current.tryAcquire()) return;
     postRevealBusyGuardRef.current = true;
     const controller = new AbortController();
@@ -877,7 +900,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   };
 
   const resolvePostRevealUncertain = async (session: RvSession, recovery: PostRevealReviewRecoveryState) => {
-    if (!repository || postRevealBusyGuardRef.current || !recovery.nextStage) return;
+    if (!repository || ownership.unavailable || endedSessions[session.id] || endingSessionRef.current || postRevealBusyGuardRef.current || !recovery.nextStage) return;
     postRevealBusyGuardRef.current = true;
     setPostRevealBusy(true);
     onBusyChange?.(true);
@@ -962,6 +985,9 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
             <div className="live-session-head">
               <div><span className={`session-state ${progress.state.toLowerCase()}`}>{progress.state === "AwaitingReveal" ? "🔒" : progress.state === "Revealed" || progress.state === "Completed" ? "🔓" : "●"} {progress.state}</span><strong>{progress.sessionCode}</strong>{progress.phase && progress.state === "BlindRunning" && <small>{progress.passCount && <>{settings.interfaceLanguage === "pl" ? "Sesja" : "Session"} {progress.passIndex}/{progress.passCount} · </>}{copy.runningPhase} {progress.phase}/{progress.stepCount ?? activeStepCount}</small>}</div>
               {!historyReview && stopControl}
+              {!running && !historyReview && !endedSessions[progress.sessionId] && postRevealRecoveries[progress.sessionId] && (()=>{const session=recentSessions.find(session=>session.id===progress.sessionId);const recovery=postRevealRecoveries[progress.sessionId];return session?<><button type="button" className="secondary-button" disabled={ownership.unavailable || endingSession!==null || postRevealBusy || recovery.requiresDecision} onClick={()=>void resumePostRevealReview(session)}>{settings.interfaceLanguage==="pl"?"Wznów opinię po Revealu":"Resume post-Reveal review"}</button>{recovery.requiresDecision && <button type="button" className="secondary-button" disabled={ownership.unavailable || postRevealBusy} onClick={()=>void resolvePostRevealUncertain(session,recovery)}>{settings.interfaceLanguage==="pl"?"Oznacz próbę jako nieudaną":"Treat attempt as failed"}</button>}</>:null;})()}
+              {!running && !historyReview && !endedSessions[progress.sessionId] && progress.state!=="Completed" && <button type="button" className="secondary-button" disabled={ownership.unavailable || endingSession!==null || postRevealBusy} onClick={()=>void endStoredSession(progress.sessionId)}>{settings.interfaceLanguage==="pl"?"Zakończ sesję":"End session"}</button>}
+              {endedSessions[progress.sessionId] && <small>{settings.interfaceLanguage==="pl"?"Zakończona przez użytkownika":"Ended by user"}</small>}
             </div>
             {executionScope === "batch" && batchProgress && <div className="batch-progress-strip"><strong>{copy.batchProgress}</strong><span>{batchProgress.current} / {batchProgress.total}</span><small>{copy.completedSessions}: {batchProgress.completed}</small></div>}
             {progress.metrics && <div className="session-run-metrics"><span><small>{copy.apiCalls}</small><strong>{progress.metrics.requestCount}</strong></span>{progress.metrics.totalTokens !== undefined && <span><small>{copy.tokens}</small><strong>{Math.round(progress.metrics.totalTokens).toLocaleString()}</strong></span>}{progress.metrics.costUsd !== undefined && <span><small>{copy.cost}</small><strong>${progress.metrics.costUsd.toFixed(4)}</strong></span>}<span><small>{copy.elapsed}</small><strong>{formatDuration(progress.metrics.sessionDurationMs)}</strong></span></div>}
@@ -969,17 +995,17 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
             {streamPreview?.content && <section className={`session-stream-preview ${streamPreview.role}`} aria-live="polite"><small>{streamPreview.role === "monitor" ? (settings.interfaceLanguage === "pl" ? "AI Monitor · odpowiedź w toku" : "AI Monitor · streaming") : (settings.interfaceLanguage === "pl" ? "AI Viewer · odpowiedź w toku" : "AI Viewer · streaming")}</small><SafeMarkdown content={streamPreview.content} /></section>}
             {!progress.transcript && liveBlindEvents.length === 0 && !streamPreview?.content && <div className="session-wait"><span className="loader-orb" /><p>{progress.state === "Preflight" ? "Preflight" : `${copy.runningPhase} ${progress.phase ?? 1}`}</p></div>}
             {progress.awaitingStep8Questions && manualQuestionHandle && <section className="telepathic-question-stage"><div><BrainCircuit size={18} /><span><strong>{settings.interfaceLanguage === "pl" ? "Krok 8 zakończony — pytania T9" : "Step 8 complete — T9 questions"}</strong><small>{settings.interfaceLanguage === "pl" ? `Zadane pytania: ${progress.telepathicQuestionCount ?? 0}. Możesz zadawać kolejne pojedynczo.` : `Questions asked: ${progress.telepathicQuestionCount ?? 0}. You may ask more, one at a time.`}</small></span></div><textarea rows={3} value={manualQuestionText} onChange={(event) => setManualQuestionText(event.target.value)} disabled={manualQuestionBusy} placeholder={settings.interfaceLanguage === "pl" ? "Wpisz pytanie do AI Viewera…" : "Enter a question for the AI Viewer…"} /><div className="telepathic-question-actions"><button className="secondary-button" disabled={!manualQuestionText.trim() || manualQuestionBusy} onClick={() => void askManualTelepathicQuestion()}>{manualQuestionBusy ? copy.sending : (settings.interfaceLanguage === "pl" ? "Zadaj pytanie" : "Ask question")}</button><button className="primary-button" disabled={manualQuestionBusy} onClick={finishManualTelepathicQuestions}>{settings.interfaceLanguage === "pl" ? "Zakończ Krok 8 i przejdź do Kroku 9" : "Finish Step 8 and continue to Step 9"}</button></div></section>}
-            {progress.state === "AwaitingReveal" && <div className="reveal-box"><div><LockKeyhole size={18} /><span><strong>{copy.awaitingReveal}</strong><small>{copy.blindRunComplete}</small></span></div><textarea rows={5} value={revealText} onChange={(event) => setRevealText(event.target.value)} placeholder={copy.revealPlaceholder} /><div className="reveal-artifact-row"><label className="secondary-button reveal-file-button">{copy.revealFiles}<input type="file" multiple accept=".txt,.md,image/png,image/jpeg,image/webp,image/gif" disabled={artifactBusy} onChange={(event) => void attachRevealFiles(event.target.files)} /></label>{artifactBusy && <small>{copy.storingFile}</small>}{revealArtifacts.map((artifact) => <span className="reveal-artifact-chip" key={`${artifact.artifactId}-${artifact.originalFileName}`}>{artifact.mimeType.startsWith("image/") ? "▣" : "≡"} {artifact.originalFileName}</span>)}</div>{revealArtifacts.some((artifact) => artifact.mimeType.startsWith("image/")) && <small className="vision-guard-note">{copy.imageJudgeGuard}</small>}<button className="primary-button" disabled={artifactBusy || (!revealText.trim() && !revealArtifacts.length)} onClick={() => void submitReveal()}>{copy.submitReveal}</button></div>}
+            {progress.state === "AwaitingReveal" && !endedSessions[progress.sessionId] && <div className="reveal-box"><div><LockKeyhole size={18} /><span><strong>{copy.awaitingReveal}</strong><small>{copy.blindRunComplete}</small></span></div><textarea rows={5} value={revealText} onChange={(event) => setRevealText(event.target.value)} placeholder={copy.revealPlaceholder} /><div className="reveal-artifact-row"><label className="secondary-button reveal-file-button">{copy.revealFiles}<input type="file" multiple accept=".txt,.md,image/png,image/jpeg,image/webp,image/gif" disabled={artifactBusy} onChange={(event) => void attachRevealFiles(event.target.files)} /></label>{artifactBusy && <small>{copy.storingFile}</small>}{revealArtifacts.map((artifact) => <span className="reveal-artifact-chip" key={`${artifact.artifactId}-${artifact.originalFileName}`}>{artifact.mimeType.startsWith("image/") ? "▣" : "≡"} {artifact.originalFileName}</span>)}</div>{revealArtifacts.some((artifact) => artifact.mimeType.startsWith("image/")) && <small className="vision-guard-note">{copy.imageJudgeGuard}</small>}<button className="primary-button" disabled={ownership.unavailable || endingSession!==null || artifactBusy || (!revealText.trim() && !revealArtifacts.length)} onClick={() => void submitReveal()}>{copy.submitReveal}</button></div>}
             {(progress.state === "Revealed" || progress.state === "Completed") && <>
               <div className="reveal-success"><Check size={18} /><div><strong>🔓 {copy.revealAccepted}</strong><p>{copy.blindRunComplete}</p></div></div>
               {(acceptedRevealText || acceptedRevealArtifacts.length > 0) && <section className="accepted-reveal-panel"><small>{copy.targetReveal}</small>{acceptedRevealText && <SafeMarkdown content={acceptedRevealText} />}{acceptedRevealArtifacts.length > 0 && <div className="reveal-artifact-row">{acceptedRevealArtifacts.map((artifact) => <span className="reveal-artifact-chip" key={`${artifact.artifactId}-${artifact.sha256}`}>{artifact.mimeType.startsWith("image/") ? "▣" : "≡"} {artifact.originalFileName}</span>)}</div>}</section>}
               {(acceptedRevealText || acceptedRevealArtifacts.length > 0) && <div className="save-reveal-target"><input value={saveTargetTitle} onChange={(event) => setSaveTargetTitle(event.target.value)} placeholder={copy.targetName} disabled={targetSaved} /><button className="secondary-button" disabled={!saveTargetTitle.trim() || targetSaved} onClick={() => void saveExternalRevealTarget()}>{targetSaved ? copy.savedToTargets : copy.saveRevealTarget}</button></div>}
-              {executionScope === "single" && <section className="post-reveal-discussion"><div className="post-reveal-head"><div><strong>{copy.postRevealDiscussion}</strong><p>{copy.postRevealEvidenceGuard}</p></div><span>POST-REVEAL</span></div><div className="post-reveal-review-action"><div><strong>{settings.interfaceLanguage === "pl" ? "Automatyczna opinia po Revealu" : "Automatic post-Reveal review"}</strong><small>{postRevealBusy ? (settings.interfaceLanguage === "pl" ? "Viewer analizuje sesję…" : "The Viewer is reviewing the session…") : (settings.interfaceLanguage === "pl" ? "Viewer, a przy sesji monitorowanej także Monitor, otrzymuje Reveal automatycznie." : "The Viewer, and the Monitor for a monitored run, receives the Reveal automatically.")}</small></div><span className={`status-chip ${postRevealBusy ? "next" : "ready"}`}>{postRevealBusy ? copy.sending : (settings.interfaceLanguage === "pl" ? "AUTOMATYCZNIE" : "AUTOMATIC")}</span></div>{postRevealTranscript && <div className="post-reveal-turns">{parsePostRevealTranscript(postRevealTranscript).map((turn, index) => <article className={turn.role} key={`${turn.role}-${index}`}><small>{turn.role === "user" ? (settings.interfaceLanguage === "pl" ? "Polecenie po Revealu" : "Post-Reveal instruction") : turn.role === "monitor" ? copy.aiMonitorReview : aiIsBeDisplayName(profile)}</small><SafeMarkdown content={turn.content} /></article>)}</div>}<details className="post-reveal-conversation"><summary>{settings.interfaceLanguage === "pl" ? "Porozmawiaj z Viewerem o celu" : "Discuss the target with the Viewer"}</summary><p>{settings.interfaceLanguage === "pl" ? "Opcjonalna, dwustronna rozmowa po zakończonej sesji. Viewer może również zadawać pytania o Reveal." : "An optional two-way discussion after the completed session. The Viewer may also ask questions about the Reveal."}</p><div className="post-reveal-compose"><textarea rows={3} value={postRevealText} onChange={(event) => setPostRevealText(event.target.value)} placeholder={copy.postRevealPlaceholder} disabled={postRevealBusy} /><button className="secondary-button" disabled={!postRevealText.trim() || postRevealBusy} onClick={() => void discussPostReveal()}>{postRevealBusy ? copy.sending : copy.sendPostReveal}</button></div></details></section>}
-              {executionScope === "single" && <JudgeEvaluation copy={copy} repository={repository} sessionId={progress.sessionId} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} profile={profile} defaultModelKey={resolveRoleDefault(profile, "judge", providerConfigs, allModels)} maxRetries={settings.maxRetries} timeoutMs={settings.requestTimeoutMs} onCompleted={() => { setProgress((current) => current ? { ...current, state: "Completed" } : current); void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId))); }} />}
-              {executionScope === "single" && progress.state === "Revealed" && <button className="secondary-button save-only-button" onClick={() => void completeWithoutEvaluation()}>{copy.saveOnly}</button>}
+              {executionScope === "single" && <section className="post-reveal-discussion"><div className="post-reveal-head"><div><strong>{copy.postRevealDiscussion}</strong><p>{copy.postRevealEvidenceGuard}</p></div><span>POST-REVEAL</span></div><div className="post-reveal-review-action"><div><strong>{settings.interfaceLanguage === "pl" ? "Automatyczna opinia po Revealu" : "Automatic post-Reveal review"}</strong><small>{postRevealBusy ? (settings.interfaceLanguage === "pl" ? "Viewer analizuje sesję…" : "The Viewer is reviewing the session…") : (settings.interfaceLanguage === "pl" ? "Viewer, a przy sesji monitorowanej także Monitor, otrzymuje Reveal automatycznie." : "The Viewer, and the Monitor for a monitored run, receives the Reveal automatically.")}</small></div><span className={`status-chip ${postRevealBusy ? "next" : "ready"}`}>{postRevealBusy ? copy.sending : (settings.interfaceLanguage === "pl" ? "AUTOMATYCZNIE" : "AUTOMATIC")}</span></div>{postRevealTranscript && <div className="post-reveal-turns">{parsePostRevealTranscript(postRevealTranscript).map((turn, index) => <article className={turn.role} key={`${turn.role}-${index}`}><small>{turn.role === "user" ? (settings.interfaceLanguage === "pl" ? "Polecenie po Revealu" : "Post-Reveal instruction") : turn.role === "monitor" ? copy.aiMonitorReview : aiIsBeDisplayName(profile)}</small><SafeMarkdown content={turn.content} /></article>)}</div>}<details className="post-reveal-conversation"><summary>{settings.interfaceLanguage === "pl" ? "Porozmawiaj z Viewerem o celu" : "Discuss the target with the Viewer"}</summary><p>{settings.interfaceLanguage === "pl" ? "Opcjonalna, dwustronna rozmowa po zakończonej sesji. Viewer może również zadawać pytania o Reveal." : "An optional two-way discussion after the completed session. The Viewer may also ask questions about the Reveal."}</p><div className="post-reveal-compose"><textarea rows={3} value={postRevealText} onChange={(event) => setPostRevealText(event.target.value)} placeholder={copy.postRevealPlaceholder} disabled={Boolean(endedSessions[progress.sessionId]) || ownership.unavailable || postRevealBusy} /><button className="secondary-button" disabled={Boolean(endedSessions[progress.sessionId]) || ownership.unavailable || !postRevealText.trim() || postRevealBusy} onClick={() => void discussPostReveal()}>{postRevealBusy ? copy.sending : copy.sendPostReveal}</button></div></details></section>}
+              {executionScope === "single" && <JudgeEvaluation readOnly={Boolean(endedSessions[progress.sessionId]) || ownership.unavailable} copy={copy} repository={repository} sessionId={progress.sessionId} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} profile={profile} defaultModelKey={resolveRoleDefault(profile, "judge", providerConfigs, allModels)} maxRetries={settings.maxRetries} timeoutMs={settings.requestTimeoutMs} onCompleted={() => { setProgress((current) => current ? { ...current, state: "Completed" } : current); void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId))); }} />}
+              {executionScope === "single" && progress.state === "Revealed" && !endedSessions[progress.sessionId] && <button disabled={ownership.unavailable || endingSession!==null || postRevealBusy} className="secondary-button save-only-button" onClick={() => void completeWithoutEvaluation()}>{copy.saveOnly}</button>}
               {executionScope === "single" && <div className="session-export-action"><button className="secondary-button" disabled={!isTauriRuntime() || sessionExportBusy} onClick={() => void saveCurrentSession()}><Download size={15} />{sessionExportBusy ? copy.savingSession : copy.saveSession}</button>{sessionExportPath && <div className="storage-success">{copy.sessionExported}: {sessionExportPath}</div>}</div>}
             </>}
-            {progress.state === "Interrupted" && <><div className="provider-error"><CircleStop size={16} /><span><strong>{copy.interrupted}</strong>{recoverableSessions[progress.sessionId] ? <><small>{settings.interfaceLanguage === "pl" ? "Provider modelu nie zwrócił kompletnej odpowiedzi. Dotychczasowy przebieg został zapisany i można go kontynuować." : "The model provider did not return a complete response. The completed portion was saved and can be continued."}</small>{progress.stopReason && <details><summary>{settings.interfaceLanguage === "pl" ? "Szczegół techniczny" : "Technical detail"}</summary>{progress.stopReason}</details>}</> : progress.stopReason ? ` · ${progress.stopReason}` : ""}</span></div>{recoverableSessions[progress.sessionId] && (() => { const interruptedSession = recentSessions.find((item) => item.id === progress.sessionId); return interruptedSession ? <div className="session-resume-actions"><button className="primary-button" disabled={sessionRunning || batchRunning || postRevealBusy} onClick={() => void runCapturedSession(interruptedSession, true)}>{settings.interfaceLanguage === "pl" ? "Kontynuuj sesję" : "Continue session"}</button><button className="secondary-button" disabled={sessionRunning || batchRunning || postRevealBusy} onClick={() => void runCapturedSession(interruptedSession, false)}>{settings.interfaceLanguage === "pl" ? "Rozpocznij ponownie" : "Start again"}</button></div> : null; })()}</>}
+            {progress.state === "Interrupted" && !endedSessions[progress.sessionId] && <><div className="provider-error"><CircleStop size={16} /><span><strong>{copy.interrupted}</strong>{recoverableSessions[progress.sessionId] ? <><small>{settings.interfaceLanguage === "pl" ? "Provider modelu nie zwrócił kompletnej odpowiedzi. Dotychczasowy przebieg został zapisany i można go kontynuować." : "The model provider did not return a complete response. The completed portion was saved and can be continued."}</small>{progress.stopReason && <details><summary>{settings.interfaceLanguage === "pl" ? "Szczegół techniczny" : "Technical detail"}</summary>{progress.stopReason}</details>}</> : progress.stopReason ? ` · ${progress.stopReason}` : ""}</span></div>{recoverableSessions[progress.sessionId] && (() => { const interruptedSession = recentSessions.find((item) => item.id === progress.sessionId); return interruptedSession ? <div className="session-resume-actions"><button className="primary-button" disabled={ownership.unavailable || endingSession!==null || sessionRunning || batchRunning || postRevealBusy} onClick={() => void runCapturedSession(interruptedSession, true)}>{settings.interfaceLanguage === "pl" ? "Kontynuuj sesję" : "Continue session"}</button><button className="secondary-button" disabled={ownership.unavailable || endingSession!==null || sessionRunning || batchRunning || postRevealBusy} onClick={() => void runCapturedSession(interruptedSession, false)}>{settings.interfaceLanguage === "pl" ? "Rozpocznij ponownie" : "Start again"}</button></div> : null; })()}</>}
             {executionScope === "batch" && batchResults.length > 0 && !batchRunning && <BatchEvaluation copy={copy} repository={repository} sessions={batchResults} language={resolvedLanguage} models={allModels} providerConfigs={providerConfigs} profile={profile} defaultModelKey={resolveRoleDefault(profile, "judge", providerConfigs, allModels)} maxRetries={settings.maxRetries} timeoutMs={settings.requestTimeoutMs} onCompleted={() => void repository?.listRvSessions(workspace.id).then((sessions) => setRecentSessions(sessions.filter((session) => !session.researchProjectId)))} />}
             {!running && <button className="secondary-button new-session-button" onClick={() => { setProgress(null); setStreamPreview(null); setRunError(null); setActiveTargetId(null); setAcceptedRevealText(""); setAcceptedRevealArtifacts([]); setPostRevealTranscript(""); setPostRevealText(""); setSessionExportPath(null); setBatchResults([]); setBatchProgress(null); }}>{copy.newAutomaticSession}</button>}
           </div>
@@ -1020,7 +1046,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         </ConfigBlock>
         {protocol === "lite" && <ConfigBlock label={settings.interfaceLanguage === "pl" ? "Wariant RV Lite" : "RV Lite variant"}><div className="choice-grid two"><Choice active={liteVariant === "core"} onClick={() => setLiteVariant("core")} icon={<FileCheck2 size={18} />} title="Core" meta={settings.interfaceLanguage === "pl" ? "4 podstawowe kroki" : "4 core steps"} /><Choice active={liteVariant === "extended"} onClick={() => setLiteVariant("extended")} icon={<Sparkles size={18} />} title="Extended" meta={settings.interfaceLanguage === "pl" ? "4 kroki + pogłębianie po kroku 3" : "4 steps + deepening after Step 3"} /></div></ConfigBlock>}
         {protocol === "telepathic" && <ConfigBlock label={settings.interfaceLanguage === "pl" ? "Pytania po Kroku 8 (T9)" : "Questions after Step 8 (T9)"}><div className="choice-grid two">{runType === "automatic" && executionScope === "single" && <Choice active={telepathicQuestionMode === "manual"} onClick={() => setTelepathicQuestionMode("manual")} icon={<MessageCircle size={18} />} title={settings.interfaceLanguage === "pl" ? "Zatrzymaj i pytaj ręcznie" : "Pause for manual questions"} />}{runType === "monitor" && <Choice active={telepathicQuestionMode === "monitor"} onClick={() => setTelepathicQuestionMode("monitor")} icon={<BrainCircuit size={18} />} title={settings.interfaceLanguage === "pl" ? "AI Monitor wybiera pytania" : "AI Monitor chooses questions"} />}<Choice active={telepathicQuestionMode === "predefined"} onClick={() => setTelepathicQuestionMode("predefined")} icon={<FileCheck2 size={18} />} title={settings.interfaceLanguage === "pl" ? "Pytania wpisane przed sesją" : "Pre-entered questions"} /></div>{telepathicQuestionMode === "predefined" && <label className="telepathic-predefined-questions"><span>{settings.interfaceLanguage === "pl" ? "Jedno pytanie w każdym wierszu" : "One question per line"}</span><textarea rows={5} value={telepathicQuestionsText} onChange={(event) => setTelepathicQuestionsText(event.target.value)} placeholder={settings.interfaceLanguage === "pl" ? "Co jest najważniejszą intencją podmiotu?\nJak podmiot postrzega najbliższe otoczenie?" : "What is the subject's most important intention?\nHow does the subject perceive the immediate surroundings?"} /><small>{runType === "monitor" ? (settings.interfaceLanguage === "pl" ? `${Math.min(telepathicQuestions.length, 5)}/5 pytań Monitora` : `${Math.min(telepathicQuestions.length, 5)}/5 Monitor questions`) : (settings.interfaceLanguage === "pl" ? `${telepathicQuestions.length} pytań` : `${telepathicQuestions.length} questions`)}</small></label>}<small>{settings.interfaceLanguage === "pl" ? "Zadania specjalne są wyłączone dla Protokołu Telepatycznego. Po Krokach 3, 4 i 5 kontroler wykona dodatkowe obowiązkowe pogłębienie." : "Special Tasks are disabled for the Telepathic Protocol. The controller performs an additional mandatory deepening after Steps 3, 4, and 5."}</small></ConfigBlock>}
-        {runType === "automatic" && protocol !== "telepathic" && <SessionFocusControls value={sessionFocus} onChange={setSessionFocus} language={settings.interfaceLanguage} disabled={sessionRunning || batchRunning || postRevealBusy} />}
+        {runType === "automatic" && protocol !== "telepathic" && <SessionFocusControls value={sessionFocus} onChange={setSessionFocus} language={settings.interfaceLanguage} disabled={ownership.unavailable || endingSession!==null || sessionRunning || batchRunning || postRevealBusy} />}
         {(protocol === "rcp" || protocol === "lite") && <details className="special-task-disclosure"><summary><span><strong>{settings.interfaceLanguage === "pl" ? "Zadanie specjalne — opcjonalne" : "Special task — optional"}</strong><small>{specialTaskOptions.length || specialTaskText.trim() ? (settings.interfaceLanguage === "pl" ? "Skonfigurowano" : "Configured") : (settings.interfaceLanguage === "pl" ? "Rozwiń, aby ustawić" : "Expand to configure")}</small></span><ChevronRight size={15} /></summary><div className="special-task-builder"><p>{protocol === "rcp" ? (settings.interfaceLanguage === "pl" ? "Zadanie zostanie przekazane bezpośrednio po Fazie 4." : "The task is supplied immediately after Phase 4.") : (settings.interfaceLanguage === "pl" ? "Zadanie zostanie przekazane bezpośrednio po kroku 3." : "The task is supplied immediately after Step 3.")}</p><p>{settings.interfaceLanguage === "pl" ? "Służy do neutralnego skierowania Viewera lub Monitora ku konkretnej osobie, istocie, strukturze, obiektowi, aktywności albo zdarzeniu będącemu częścią celu. Po sesji Target Reveal musi jasno wyjaśnić, co oznaczało każde użyte oznaczenie, np. Subject A lub Object A, aby Viewer mógł porównać dane z celem." : "It neutrally directs the Viewer or Monitor toward a specific subject, structure, object, activity, or event that is part of the target. After the session, the Target Reveal must clearly explain every label used, such as Subject A or Object A, so the Viewer can compare the data with the target."}</p><div>{SPECIAL_TASK_OPTIONS.map((option) => <label key={option}><input type="checkbox" checked={specialTaskOptions.includes(option)} onChange={(event) => setSpecialTaskOptions((current) => event.target.checked ? [...current, option] : current.filter((item) => item !== option))} /><span>{specialTaskOptionLabel(option, settings.interfaceLanguage)}</span></label>)}</div><textarea rows={3} value={specialTaskText} onChange={(event) => setSpecialTaskText(event.target.value)} placeholder={settings.interfaceLanguage === "pl" ? "Lub wpisz własne neutralne zadanie…" : "Or enter a custom neutral task…"} />{specialTaskUsesMappedLabels(specialTask) && <small className="special-task-warning"><ShieldCheck size={13} />{settings.interfaceLanguage === "pl" ? "W Target Reveal opisz jednoznacznie, czym są użyte oznaczenia Subject/Structure/Object A–C." : "The Target Reveal must clearly define every Subject/Structure/Object A–C label used here."}</small>}</div></details>}
         {protocol === "custom" && <ConfigBlock label={copy.customProtocolSelect}>
           <div className="custom-protocol-select"><select value={customProtocolVersionId} onChange={(event) => setCustomProtocolVersionId(event.target.value)}><option value="">{copy.noCustomProtocols}</option>{customProtocols.map((item) => <option key={item.versionId} value={item.versionId}>{item.displayName} · {item.version}</option>)}</select><div className="custom-protocol-buttons"><button className="secondary-button" onClick={() => { setCustomBuilderNew(true); setCustomBuilderOpen(true); }}><Plus size={15} />{copy.newCustomProtocol}</button>{selectedCustomProtocol && <button className="secondary-button" onClick={() => { setCustomBuilderNew(false); setCustomBuilderOpen(true); }}>{copy.editCustomProtocol}</button>}</div><small>{copy.customMonitorNote}</small></div>
@@ -1059,10 +1085,11 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
           {eligibleTargets.length ? <select className="session-language-select" value={selectedTargetId} onChange={(event) => setSelectedTargetId(event.target.value)}><option value="__random__">🎲 {copy.randomTarget}</option>{eligibleTargets.map((target) => <option key={target.id} value={target.id}>{copy.myTargets} · {localizedTargetTitle(target, resolvedLanguage)}</option>)}</select> : <div className="route-summary target-empty-warning"><Crosshair size={16} /><span><strong>{copy.noEligibleTargets}</strong><small>{copy.noEligibleTargetsLead}</small></span></div>}
         </ConfigBlock>}</> : <ConfigBlock label={copy.targetPool}><div className="batch-config"><label><span>{copy.targetPool}</span><strong>{copy.myTargets}</strong></label><label><span>{copy.batchCount}</span><input type="number" min={1} max={Math.max(1, batchPool.length)} value={batchCount} onChange={(event) => setBatchCount(Math.max(1, Number(event.target.value) || 1))} /></label><small>{copy.eligibleTargets}: {batchPool.length}</small>{batchPool.length === 0 && <small className="target-source-error">{copy.noEligibleTargetsLead}</small>}<div className="batch-preflight-actions"><button className="secondary-button" onClick={preflightBatch}>{copy.runPreflight}</button>{batchPreflightSignature === batchConfigSignature && <span className="status-chip ready"><Check size={12} />{copy.preflightPassed}</span>}</div></div></ConfigBlock>}
         <div className="start-block">
-          <button className="primary-button start-button" disabled={postRevealBusy || !viewerRouteReady || !isTauriRuntime() || !activeProvider || !selectedModel || settings.rvSessionMaxOutputTokens <= 0 || (runType === "monitor" && (!canSelectMonitor(protocol) || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (protocol === "telepathic" && telepathicQuestionMode === "predefined" && (!telepathicQuestions.length || (runType === "monitor" && telepathicQuestions.length > 5))) || (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
+          <button className="primary-button start-button" disabled={ownership.unavailable || endingSession!==null || postRevealBusy || !viewerRouteReady || !isTauriRuntime() || !activeProvider || !selectedModel || settings.rvSessionMaxOutputTokens <= 0 || (runType === "monitor" && (!canSelectMonitor(protocol) || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (protocol === "telepathic" && telepathicQuestionMode === "predefined" && (!telepathicQuestions.length || (runType === "monitor" && telepathicQuestions.length > 5))) || (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
           <p>{activeProvider ? copy.controllerReady : copy.configureProviderFirst}</p>
         </div>
         </>}
+        {ownership.unavailable && <small role="status">{ownership.state==="other"?(settings.interfaceLanguage==="pl"?"Praca trwa w innym oknie":"Work is running in another window"):(settings.interfaceLanguage==="pl"?"Sprawdzanie stanu wykonania":"Checking execution state")}</small>}
         {runError && <div className="provider-error session-error">{runError}</div>}
       </div>
       <button className="session-metadata-toggle" title={metadataOpen ? (settings.interfaceLanguage === "pl" ? "Ukryj informacje o protokole" : "Hide protocol information") : (settings.interfaceLanguage === "pl" ? "Pokaż informacje o protokole" : "Show protocol information")} onClick={() => setMetadataOpen((current) => !current)}>{metadataOpen ? "›" : "‹"}</button>
@@ -1070,25 +1097,27 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         <details className="panel recent-sessions-side" open>
           <summary><Clock3 size={15} /><strong>{copy.recentSessions}</strong><span>{recentSessions.length}</span></summary>
           {recentSessions.length ? <div className="recent-session-list">{recentSessions.map((session) => {
-            const recovery = telepathicRecovery[session.id];
-            const incomplete = session.state === "BlindRunning" || session.state === "Preflight";
-            const providerRecovery = Boolean(recoverableSessions[session.id]);
-            const postRevealRecovery = postRevealRecoveries[session.id];
+            const ended=Boolean(endedSessions[session.id]);
+            const recovery = ended?undefined:telepathicRecovery[session.id];
+            const incomplete = !ended && (session.state === "BlindRunning" || session.state === "Preflight");
+            const providerRecovery = !ended && progress?.sessionId!==session.id && Boolean(recoverableSessions[session.id]);
+            const postRevealRecovery = ended || progress?.sessionId===session.id?undefined:postRevealRecoveries[session.id];
             const recoveryLabel = recovery === "questions"
               ? (settings.interfaceLanguage === "pl" ? "Wznów pytania Kroku 8" : "Resume Step 8 questions")
               : recovery === "step9"
                 ? (settings.interfaceLanguage === "pl" ? "Kontynuuj do Kroku 9" : "Continue to Step 9")
                 : (settings.interfaceLanguage === "pl" ? "Dokończ zapis i Reveal" : "Finish sealing and Reveal");
             return <div key={session.id}>
-              <div className="recent-session-row"><button className="recent-session-open" disabled={incomplete} onClick={() => void loadStoredSession(session)}><span><strong>{session.sessionCode}</strong><small>{session.state}{historyFocusCounts[session.id] ? ` · ${historyFocusCounts[session.id]} ${settings.interfaceLanguage === "pl" ? (historyFocusCounts[session.id] === 1 ? "sesja" : "sesje") : (historyFocusCounts[session.id] === 1 ? "session" : "sessions")}` : ""}</small></span><ChevronRight size={13} /></button><button className="icon-button" disabled={incomplete || sessionRunning || batchRunning || postRevealBusy} title={settings.interfaceLanguage === "pl" ? (incomplete ? "Najpierw zakończ albo oznacz sesję jako przerwaną." : "Archiwizuj sesję") : (incomplete ? "Complete or mark the session interrupted first." : "Archive session")} onClick={() => void archiveStoredSession(session)}><Archive size={14} /></button></div>
-              {incomplete && <div className="session-recovery"><small>{recovery ? (settings.interfaceLanguage === "pl" ? "Znaleziono bezpieczny checkpoint Protokołu Telepatycznego." : "A safe Telepathic Protocol checkpoint was found.") : copy.recoveryRequired}</small>{recovery && <button disabled={sessionRunning || batchRunning || postRevealBusy} onClick={() => void resumeTelepathicSession(session)}>{recoveryLabel}</button>}<button disabled={sessionRunning || batchRunning || postRevealBusy} onClick={() => void preserveInterrupted(session)}>{copy.markInterrupted}</button></div>}
-              {providerRecovery && <div className="session-recovery"><small>{settings.interfaceLanguage === "pl" ? "Sesja może zostać bezpiecznie wznowiona od nieudanego wywołania." : "The session can safely resume from the failed call."}</small><button disabled={sessionRunning || batchRunning || postRevealBusy} onClick={() => void runCapturedSession(session, true)}>{settings.interfaceLanguage === "pl" ? "Kontynuuj" : "Continue"}</button><button disabled={sessionRunning || batchRunning || postRevealBusy} onClick={() => void runCapturedSession(session, false)}>{settings.interfaceLanguage === "pl" ? "Od początku" : "Start again"}</button></div>}
+              <div className="recent-session-row"><button className="recent-session-open" disabled={incomplete} onClick={() => void loadStoredSession(session)}><span><strong>{session.sessionCode}</strong><small>{ended?(settings.interfaceLanguage==="pl"?"Zakończona przez użytkownika":"Ended by user"):session.state}{historyFocusCounts[session.id] ? ` · ${historyFocusCounts[session.id]} ${settings.interfaceLanguage === "pl" ? (historyFocusCounts[session.id] === 1 ? "sesja" : "sesje") : (historyFocusCounts[session.id] === 1 ? "session" : "sessions")}` : ""}</small></span><ChevronRight size={13} /></button><button className="icon-button" disabled={ownership.unavailable || endingSession!==null || incomplete || sessionRunning || batchRunning || postRevealBusy} title={settings.interfaceLanguage === "pl" ? (incomplete ? "Najpierw zakończ albo oznacz sesję jako przerwaną." : "Archiwizuj sesję") : (incomplete ? "Complete or mark the session interrupted first." : "Archive session")} onClick={() => void archiveStoredSession(session)}><Archive size={14} /></button></div>
+              {incomplete && <div className="session-recovery"><small>{recovery ? (settings.interfaceLanguage === "pl" ? "Znaleziono bezpieczny checkpoint Protokołu Telepatycznego." : "A safe Telepathic Protocol checkpoint was found.") : copy.recoveryRequired}</small>{recovery && <button disabled={ownership.unavailable || endingSession!==null || sessionRunning || batchRunning || postRevealBusy} onClick={() => void resumeTelepathicSession(session)}>{recoveryLabel}</button>}<button disabled={ownership.unavailable || endingSession!==null || sessionRunning || batchRunning || postRevealBusy} onClick={() => void preserveInterrupted(session)}>{copy.markInterrupted}</button></div>}
+              {providerRecovery && <div className="session-recovery"><small>{settings.interfaceLanguage === "pl" ? "Sesja może zostać bezpiecznie wznowiona od nieudanego wywołania." : "The session can safely resume from the failed call."}</small><button disabled={ownership.unavailable || endingSession!==null || sessionRunning || batchRunning || postRevealBusy} onClick={() => void runCapturedSession(session, true)}>{settings.interfaceLanguage === "pl" ? "Kontynuuj" : "Continue"}</button><button disabled={ownership.unavailable || endingSession!==null || sessionRunning || batchRunning || postRevealBusy} onClick={() => void runCapturedSession(session, false)}>{settings.interfaceLanguage === "pl" ? "Od początku" : "Start again"}</button></div>}
+              {!ended && progress?.sessionId!==session.id && (incomplete || providerRecovery || postRevealRecovery || session.state==="Interrupted" || session.state==="AwaitingReveal") && <button type="button" className="secondary-button" disabled={ownership.unavailable || endingSession!==null || running || postRevealBusy} onClick={()=>void endStoredSession(session.id)}>{settings.interfaceLanguage==="pl"?"Zakończ sesję":"End session"}</button>}
               {postRevealRecovery && <div className="session-recovery"><small>{postRevealRecovery.requiresDecision
                 ? (settings.interfaceLanguage === "pl" ? `Opinia po Revealu zatrzymała się po niepewnym wywołaniu (${postRevealRecovery.nextStage === "viewer" ? "Viewer" : "Monitor"}). Najpierw rozstrzygnij próbę.` : `Post-Reveal review stopped after an uncertain ${postRevealRecovery.nextStage === "viewer" ? "Viewer" : "Monitor"} call. Resolve the attempt first.`)
                 : (settings.interfaceLanguage === "pl" ? `Opinia po Revealu jest nieukończona. Wznowienie rozpocznie pierwszy brakujący etap: ${postRevealRecovery.nextStage === "viewer" ? "Viewer" : "Monitor"}.` : `Post-Reveal review is incomplete. Resume will start at the first missing stage: ${postRevealRecovery.nextStage === "viewer" ? "Viewer" : "Monitor"}.`)}</small>
                 {postRevealRecovery.requiresDecision
-                  ? <button disabled={sessionRunning || batchRunning || postRevealBusy} onClick={() => void resolvePostRevealUncertain(session, postRevealRecovery)}>{settings.interfaceLanguage === "pl" ? "Oznacz próbę jako nieudaną" : "Treat attempt as failed"}</button>
-                  : <button disabled={sessionRunning || batchRunning || postRevealBusy} onClick={() => void resumePostRevealReview(session)}>{settings.interfaceLanguage === "pl" ? "Wznów opinię po Revealu" : "Resume post-Reveal review"}</button>}
+                  ? <button disabled={ownership.unavailable || endingSession!==null || sessionRunning || batchRunning || postRevealBusy} onClick={() => void resolvePostRevealUncertain(session, postRevealRecovery)}>{settings.interfaceLanguage === "pl" ? "Oznacz próbę jako nieudaną" : "Treat attempt as failed"}</button>
+                  : <button disabled={ownership.unavailable || endingSession!==null || sessionRunning || batchRunning || postRevealBusy} onClick={() => void resumePostRevealReview(session)}>{settings.interfaceLanguage === "pl" ? "Wznów opinię po Revealu" : "Resume post-Reveal review"}</button>}
               </div>}
             </div>;
           })}</div> : <p className="recent-session-empty">{copy.noSessions}</p>}

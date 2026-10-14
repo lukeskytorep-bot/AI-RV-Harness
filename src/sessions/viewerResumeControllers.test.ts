@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getFullRcp, getRvLite, getTelepathicProtocol } from "../resources/protocolRegistry";
@@ -23,7 +24,7 @@ function memoryRepository() {
     events.push(structuredClone(record));
     return record;
   };
-  const repository = {
+  const repository = workflowTestRepository({
     createRvSession: async () => ({} as never),
     updateRvSessionState: async () => undefined,
     appendSessionEvent: append,
@@ -36,8 +37,8 @@ function memoryRepository() {
     recordTargetUsage: async () => undefined,
     createMonitorRun: async () => "monitor",
     appendMonitorIntervention: async () => undefined,
-  } as unknown as AppRepository;
-  return { repository, events };
+  } as unknown as AppRepository);
+  return workflowTestRepository({ repository, events });
 }
 
 function interruptedSession(id: string, sessionCode: string): RvSession {

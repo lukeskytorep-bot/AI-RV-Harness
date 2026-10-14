@@ -1,3 +1,4 @@
+import { withRvWorkflow } from "../application/workflowOwnership";
 import { assertLearningBudgetPolicy, type LearningBudgetPolicy } from "../providers/operationResourceProfiles";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat } from "../providers/requestExecutor";
@@ -413,7 +414,7 @@ async function resolveFieldGuideAfterTrainingUpdate(
   return { ...checkpoint, content: exact.content };
 }
 
-export async function runViewerNoteReflection(input: {
+async function runViewerNoteReflectionOwned(input: {
   repository: AppRepository;
   sessionId: string;
   viewerReview: string;
@@ -680,3 +681,5 @@ export function aiIdentityMatchesRoute(identity: AiIdentity, config: ProviderCon
   const credential = viewerCredentialIdentity(config);
   return identity.provider === config.provider && identity.credentialFingerprint === credential.fingerprint && identity.modelRoute === model.route && identity.role === "viewer";
 }
+
+export const runViewerNoteReflection = (input: Parameters<typeof runViewerNoteReflectionOwned>[0]) => withRvWorkflow(input.repository as AppRepository,input.sessionId,input.signal,(repository,signal)=>runViewerNoteReflectionOwned({...input,repository,signal}));

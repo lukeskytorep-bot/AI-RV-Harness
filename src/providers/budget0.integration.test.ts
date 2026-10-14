@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { sha256Text } from "../application/sha256";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel, ProviderChatResponse } from "./types";
@@ -20,7 +21,7 @@ const judgeJson = JSON.stringify({ scores: { gestalt: 2, verifiableFeatures: 2, 
 function repo() {
   let transcript = "";
   const scores: unknown[] = [];
-  return {
+  return workflowTestRepository({
     getSessionSnapshot: vi.fn(async () => ({ sessionLanguage: "en", workspaceId: "w", providerConfigId: "pc", modelId: "m", generationSettings: { requested: {}, effective: {}, omitted: [] }, monitor: { providerConfigId: "pc", modelId: "m", effectivePrompt: "Monitor" } })),
     getReveal: vi.fn(async () => ({ source: "external_text", text: "Tower", hash: "h" })), getViewerEvidence: vi.fn(async () => "Tall structure"),
     listTargetClarifications: vi.fn(async () => []), listMonitorRuns: vi.fn(async () => []), listMonitorInterventions: vi.fn(async () => []),
@@ -28,7 +29,7 @@ function repo() {
     listJudgeScores: vi.fn(async () => scores), recordFrozenJudgeResult: vi.fn(async (run, score) => {
       const result = { ...score, judgeIndex: run.judgeIndex, modelRoute: run.modelRoute, total: 6, frozenAt: "t", createdAt: "t" }; scores.push(result); return result;
     }),
-  };
+  });
 }
 beforeEach(() => { transport.chat.mockReset(); });
 for (const role of ["judge", "live_monitor", "post_reveal_viewer", "post_reveal_monitor"] as const) for (const length of [false, true]) {
@@ -101,8 +102,8 @@ for (const generation of ["legacy","v1","v2"] as const) it(`Research Judge uses 
   const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "custom", state: "SessionsComplete", config, createdAt: "t", updatedAt: "t" };
   let status = "SessionComplete"; let budgets: number[] = [];
   transport.chat.mockImplementation(async request => { budgets.push(request.settings.effective.maxOutputTokens); return { content: judgeJson, finishReason: budgets.length === 1 ? "length" : "stop", usage: {} }; });
-  const repository = { ...base, getResearchProject: vi.fn(async () => project), listResearchAssignments: vi.fn(async () => [{ id: "a", sessionId: "s", anonymousSessionId: "BlindSession_ABCDEF12", judgeOrder: 1, status }]),
-    listProviderConfigs: vi.fn(async () => [provider]), listProviderModels: vi.fn(async () => [model]), setResearchProjectState: vi.fn(), updateResearchAssignment: vi.fn(async (_id, _session, next) => { status = next; }), markResearchScoresFrozen: vi.fn() } as unknown as AppRepository;
+  const repository = workflowTestRepository({ ...base, getResearchProject: vi.fn(async () => project), listResearchAssignments: vi.fn(async () => [{ id: "a", sessionId: "s", anonymousSessionId: "BlindSession_ABCDEF12", judgeOrder: 1, status }]),
+    listProviderConfigs: vi.fn(async () => [provider]), listProviderModels: vi.fn(async () => [model]), setResearchProjectState: vi.fn(), updateResearchAssignment: vi.fn(async (_id, _session, next) => { status = next; }), markResearchScoresFrozen: vi.fn() } as unknown as AppRepository);
   await judgeResearch({ repository, projectId: "r" }); expect(budgets).toEqual(generation==="v1"?[16384,32768]:fresh ? [32768, 49152] : [8192, 16384]);
   expect(stableStringify(project.config)).toBe(stableStringify(config));
   budgets = []; await judgeResearch({ repository, projectId: "r" }); expect(budgets).toEqual([]);

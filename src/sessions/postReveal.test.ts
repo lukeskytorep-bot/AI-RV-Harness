@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../providers/native", () => ({
@@ -86,7 +87,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
         reasoning: { supported: true, efforts: ["high"], supportsMaxTokens: true, confidence: "provider_metadata" },
       },
     };
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({ providerConfigId: "pc", modelId: "viewer", sessionLanguage: "en", capabilitySnapshot: { reasoning: { supportsMaxTokens: true } }, generationSettings: { requested: { reasoningEffort: "high" }, effective: {}, omitted: [] } }),
       getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Stone lighthouse", hash: "h" }),
       getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
@@ -95,7 +96,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
         transcript += `${JSON.stringify({ role, content })}\n`;
         return transcript;
       }),
-    };
+    });
     const chat = vi.fn()
       .mockResolvedValueOnce({ content: "", reasoningContent: "long reasoning", finishReason: "length", usage: {} })
       .mockResolvedValueOnce({ content: "Complete review", finishReason: "stop", usage: {} });
@@ -111,7 +112,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
 
   it("persists after-feedback turns separately and labels sealed evidence read-only", async () => {
     let transcript = "";
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({ providerConfigId: "pc", modelId: "viewer", sessionLanguage: "en" }),
       getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Stone lighthouse", hash: "h" }),
       getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
@@ -120,7 +121,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
         transcript += `${JSON.stringify({ role, content })}\n`;
         return transcript;
       }),
-    };
+    });
     const chat = vi.fn(async ({ messages }) => ({ content: "My blind structure description overlaps the lighthouse shape.", usage: {}, messages }));
     const result = await sendPostRevealTurn({ repository, sessionId: "s", existingTranscript: "", providerConfig: config, model, content: "Compare my session with the feedback.", chat });
     const request = chat.mock.calls[0][0];
@@ -146,7 +147,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
       transcript += serializePostRevealTurn("assistant", content);
       return transcript;
     });
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({
         schemaVersion: 4,
         providerConfigId: "pc", credentialId: "cred", provider: "openrouter", modelId: "viewer", modelRoute: "openrouter:viewer", sessionLanguage: "en",
@@ -165,7 +166,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
         return transcript;
       }),
       appendPostRevealTurnWithProviderState,
-    };
+    });
     const chat = vi.fn(async ({ messages }: { messages: ProviderMessage[] }) => {
       const priorAssistant = messages.find((message) => message.role === "assistant" && message.content === "First answer");
       expect(priorAssistant?.continuationState).toEqual(prior.state);
@@ -191,7 +192,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
     const existingTranscript = `${serializePostRevealTurn("user", "First post-Reveal question")}${serializePostRevealTurn("assistant", "Visible fixture answer.")}`;
     let transcript = existingTranscript;
     const appendPostRevealTurnWithProviderState = vi.fn(async (_id: string, content: string) => { transcript += serializePostRevealTurn("assistant", content); return transcript; });
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({
         schemaVersion: 4, providerConfigId: "google-pc", credentialId: "cred", provider: "google", modelId: "gemini-3.8-flash", modelRoute: "google:gemini-3.8-flash", sessionLanguage: "en",
         continuationRoute: { transport: "google-native", normalizedEndpoint: "https://generativelanguage.googleapis.com/v1beta", providerConfigId: "google-pc", credentialId: "cred", requestedModelId: "gemini-3.8-flash", stateFormat: "google-thought-parts", stateFormatVersion: 1 },
@@ -203,7 +204,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
       getSessionEventProviderState: vi.fn().mockResolvedValue({ ownerId: "post-google-1", format: prior.state.format, formatVersion: 1, transport: "google-native", replayFingerprint: prior.state.replayFingerprint, state: prior.state, payloadSha256: "a".repeat(64), payloadSizeBytes: 1, createdAt: "now" }),
       appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant" | "monitor", content: string) => { transcript += serializePostRevealTurn(role, content); return transcript; }),
       appendPostRevealTurnWithProviderState,
-    };
+    });
     const chat = vi.fn(async ({ messages }: { messages: ProviderMessage[] }) => {
       const priorAssistant = messages.find((message) => message.role === "assistant" && message.content === "Visible fixture answer.");
       expect(priorAssistant?.continuationState).toEqual(prior.state);
@@ -218,7 +219,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
     const anthropicConfig: ProviderConfig = { ...config, id: "anthropic-pc", provider: "anthropic", label: "Anthropic" };
     const anthropicModel: ProviderModel = { ...model, providerConfigId: "anthropic-pc", provider: "anthropic", modelId: "claude-fixture", route: "anthropic:claude-fixture" };
     let transcript = `${serializePostRevealTurn("user", "First question")}${serializePostRevealTurn("assistant", "First answer")}`;
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({
         schemaVersion: 4, providerConfigId: "anthropic-pc", credentialId: "cred", provider: "anthropic", modelId: "claude-fixture", modelRoute: "anthropic:claude-fixture", sessionLanguage: "en",
         continuationRoute: { transport: "anthropic-native", normalizedEndpoint: "https://api.anthropic.com/v1", providerConfigId: "anthropic-pc", credentialId: "cred", requestedModelId: "claude-fixture", stateFormat: "anthropic-thinking-blocks", stateFormatVersion: 1, prefixPolicy: "append-only" },
@@ -227,7 +228,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
       getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
       listTargetClarifications: vi.fn().mockResolvedValue([{ id: "c1", sessionId: "s", content: "New clarification", createdAt: "now" }]),
       appendPostRevealTurn: vi.fn(async (_id: string, role: "user" | "assistant" | "monitor", content: string) => { transcript += serializePostRevealTurn(role, content); return transcript; }),
-    };
+    });
     const chat = vi.fn(async ({ messages }: { messages: ProviderMessage[] }) => {
       expect(messages.some((message) => message.continuationState?.transport === "anthropic-native")).toBe(false);
       return { content: "Text-only Anthropic post-Reveal answer.", usage: {} };
@@ -239,7 +240,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
 
   it("fails closed when a frozen post-Reveal assistant turn has no matching Session event", async () => {
     const existingTranscript = `${serializePostRevealTurn("user", "First question")}${serializePostRevealTurn("assistant", "Persisted assistant answer")}`;
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({
         schemaVersion: 4, providerConfigId: "pc", credentialId: "cred", provider: "openrouter", modelId: "viewer", modelRoute: "openrouter:viewer", sessionLanguage: "en",
         continuationRoute: { transport: "openrouter", normalizedEndpoint: "https://openrouter.ai/api/v1", providerConfigId: "pc", credentialId: "cred", requestedModelId: "viewer", stateFormat: "openrouter-reasoning-details", stateFormatVersion: 1 },
@@ -251,7 +252,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
       getSessionEventProviderState: vi.fn(),
       appendPostRevealTurnWithProviderState: vi.fn(),
       appendPostRevealTurn: vi.fn(),
-    };
+    });
     const chat = vi.fn().mockResolvedValue({ content: "must not run", usage: {} });
 
     await expect(sendPostRevealTurn({
@@ -272,7 +273,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
   it("marks malformed post-Reveal state invalid and blocks the next call before dispatch", async () => {
     let transcript = "";
     const events: Array<{ id: string; sessionId: string; sequenceNumber: number; createdAt: string; eventType: string; role?: "assistant"; content?: string; metadata?: Record<string, unknown> }> = [];
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({
         schemaVersion: 4, providerConfigId: "pc", credentialId: "cred", provider: "openrouter", modelId: "viewer", modelRoute: "openrouter:viewer", sessionLanguage: "en",
         continuationRoute: { transport: "openrouter", normalizedEndpoint: "https://openrouter.ai/api/v1", providerConfigId: "pc", credentialId: "cred", requestedModelId: "viewer", stateFormat: "openrouter-reasoning-details", stateFormatVersion: 1 },
@@ -290,7 +291,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
         }
         return transcript;
       }),
-    };
+    });
     const malformedChat = vi.fn().mockResolvedValue({
       content: "Visible answer survives",
       reasoningDetails: [{ type: "reasoning.text", text: "private", format: "future-format-v9", index: 0 }],
@@ -309,7 +310,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
 
   it("automatically stores the Viewer review first and the Monitor review second", async () => {
     let transcript = "";
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({
         providerConfigId: "pc", modelId: "viewer", sessionLanguage: "pl", workspaceId: "workspace",
         monitor: { providerConfigId: "pc-monitor", modelId: "monitor", effectivePrompt: "Monitor prompt" },
@@ -323,7 +324,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
         transcript += `${JSON.stringify({ role, content })}\n`;
         return transcript;
       }),
-    };
+    });
     const monitorConfig: ProviderConfig = { ...config, id: "pc-monitor", label: "Monitor" };
     const monitorModel: ProviderModel = { ...model, providerConfigId: "pc-monitor", modelId: "monitor", displayName: "Monitor", route: "openrouter:monitor" };
     const chat = vi.fn(async ({ config: usedConfig }: { config: ProviderConfig }) => ({ content: usedConfig.id === "pc" ? "Ocena Viewera" : "Ocena Monitora", usage: {} }));
@@ -352,7 +353,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
 
   it("keeps the already persisted Viewer review when the Monitor call fails", async () => {
     let transcript = "";
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({
         providerConfigId: "pc", modelId: "viewer", sessionLanguage: "en", workspaceId: "workspace",
         monitor: { providerConfigId: "pc-monitor", modelId: "monitor", effectivePrompt: "Monitor prompt" },
@@ -366,7 +367,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
         transcript += `${JSON.stringify({ role, content })}\n`;
         return transcript;
       }),
-    };
+    });
     const monitorConfig: ProviderConfig = { ...config, id: "pc-monitor", label: "Monitor" };
     const monitorModel: ProviderModel = { ...model, providerConfigId: "pc-monitor", modelId: "monitor", displayName: "Monitor", route: "openrouter:monitor" };
     const chat = vi.fn(async ({ config: usedConfig }: { config: ProviderConfig }) => {
@@ -380,7 +381,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
 
   it("retries one reasoning-only Viewer review without duplicating the persisted user turn", async () => {
     let transcript = "";
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({ providerConfigId: "pc", modelId: "viewer", sessionLanguage: "en", generationSettings: { requested: { reasoningEffort: "high" } } }),
       getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Lighthouse", hash: "h" }),
       getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
@@ -389,7 +390,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
         transcript += `${JSON.stringify({ role, content })}\n`;
         return transcript;
       }),
-    };
+    });
     const highCapacityModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 65_536 } };
     const chat = vi.fn()
       .mockRejectedValueOnce(new Error("provider returned reasoning without a final assistant response [finish-reason=length]"))
@@ -402,7 +403,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
 
   it("retries a Viewer body-read failure without duplicating either persisted turn", async () => {
     let transcript = "";
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({ providerConfigId: "pc", modelId: "viewer", sessionLanguage: "en" }),
       getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Lighthouse", hash: "h" }),
       getViewerEvidence: vi.fn().mockResolvedValue("tall hard structure"),
@@ -411,7 +412,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
         transcript += `${JSON.stringify({ role, content })}\n`;
         return transcript;
       }),
-    };
+    });
     const chat = vi.fn()
       .mockRejectedValueOnce(new ProviderCallError({ code: "response_body_read", message: "body closed", phase: "reading_body" }))
       .mockResolvedValueOnce({ content: "Recovered review", usage: {} });
@@ -424,7 +425,7 @@ Clearly separate this post-Reveal analysis from the earlier blind data and do no
 
 it("S3.1 Stop after the accepted Viewer review prevents Monitor dispatch; Resume reuses Viewer",async()=>{
  let transcript="";const controller=new AbortController();
- const repository={getSessionSnapshot:vi.fn().mockResolvedValue({providerConfigId:"pc",modelId:"viewer",sessionLanguage:"en",workspaceId:"workspace",monitor:{providerConfigId:"pc-monitor",modelId:"monitor",effectivePrompt:"Monitor prompt"}}),getReveal:vi.fn().mockResolvedValue({source:"external_text",text:"Stone",hash:"h"}),getViewerEvidence:vi.fn().mockResolvedValue("sealed evidence"),listTargetClarifications:vi.fn().mockResolvedValue([]),listMonitorRuns:vi.fn().mockResolvedValue([]),listMonitorInterventions:vi.fn().mockResolvedValue([]),appendPostRevealTurn:vi.fn(async(_id:string,role:string,content:string)=>{transcript+=JSON.stringify({role,content})+"\n";return transcript;})};
+ const repository=workflowTestRepository({getSessionSnapshot:vi.fn().mockResolvedValue({providerConfigId:"pc",modelId:"viewer",sessionLanguage:"en",workspaceId:"workspace",monitor:{providerConfigId:"pc-monitor",modelId:"monitor",effectivePrompt:"Monitor prompt"}}),getReveal:vi.fn().mockResolvedValue({source:"external_text",text:"Stone",hash:"h"}),getViewerEvidence:vi.fn().mockResolvedValue("sealed evidence"),listTargetClarifications:vi.fn().mockResolvedValue([]),listMonitorRuns:vi.fn().mockResolvedValue([]),listMonitorInterventions:vi.fn().mockResolvedValue([]),appendPostRevealTurn:vi.fn(async(_id:string,role:string,content:string)=>{transcript+=JSON.stringify({role,content})+"\n";return transcript;})});
  const monitorConfig={...config,id:"pc-monitor"};const monitorModel={...model,providerConfigId:"pc-monitor",modelId:"monitor",route:"openrouter:monitor"};
  const chat=vi.fn(async({signal}:{signal:AbortSignal})=>{expect(signal.aborted).toBe(false);return{content:"Accepted review",usage:{}};});
  await expect(runAutomaticPostRevealReview({repository:repository as never,sessionId:"s",viewer:{providerConfig:config,model},monitor:{providerConfig:monitorConfig,model:monitorModel},signal:controller.signal,chat:chat as never,afterViewerReview:async()=>{controller.abort(new DOMException("Stopped by user","AbortError"));}})).rejects.toThrow();

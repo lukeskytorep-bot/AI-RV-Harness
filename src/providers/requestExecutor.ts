@@ -1,3 +1,4 @@
+import { assertAbortOwnership } from "../application/abortOwnership";
 import { discoverOpenRouterModelEndpoints, providerChatAttempt } from "./native";
 import { normalizeProviderCallError, ProviderCallError } from "./providerError";
 import {
@@ -90,6 +91,7 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
 
   while (true) {
     if (input.signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
+    await assertAbortOwnership(input.signal);
     const context: ProviderAttemptContext = {
       operationId: input.operationId,
       logicalRequestId,
@@ -100,6 +102,7 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
     try {
       await input.onAttemptStart?.(context);
       input.signal?.throwIfAborted();
+      await assertAbortOwnership(input.signal);
       const value = await input.executeAttempt(context);
       if (input.rejectResponseAfterAbort && input.signal?.aborted) throw Object.assign(new DOMException("Provider response arrived after cancellation", "AbortError"), { providerResponse: value });
       return {

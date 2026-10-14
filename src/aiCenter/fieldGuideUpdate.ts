@@ -1,3 +1,4 @@
+import { withRvWorkflow } from "../application/workflowOwnership";
 import { assertLearningBudgetPolicy, type LearningBudgetPolicy } from "../providers/operationResourceProfiles";
 import { loadRevealImageForJudge } from "../artifacts/native";
 import { sha256Text } from "../application/sha256";
@@ -339,7 +340,7 @@ export function fieldGuideUpdateCompletesStage(status: FieldGuideUpdateStatus): 
   return status === "UPDATE" || status === "NO_CHANGE" || status === "FAILED_CAPACITY" || status === "STALE_BASE";
 }
 
-export async function runFieldGuideUpdate(input: {
+async function runFieldGuideUpdateOwned(input: {
   repository: AppRepository;
   trainingRun: TrainingRunRecord;
   sessionId: string;
@@ -615,3 +616,5 @@ export async function runFieldGuideUpdate(input: {
 export function fieldGuideSnapshotForUpdate(snapshot: FieldGuideSessionSnapshot): Pick<FieldGuideSessionSnapshot, "versionId" | "contentSha256" | "content" | "capacityTokens"> {
   return { versionId: snapshot.versionId, contentSha256: snapshot.contentSha256, content: snapshot.content, capacityTokens: snapshot.capacityTokens };
 }
+
+export const runFieldGuideUpdate = (input: Parameters<typeof runFieldGuideUpdateOwned>[0]) => withRvWorkflow(input.repository as AppRepository,input.sessionId,input.signal,(repository,signal)=>runFieldGuideUpdateOwned({...input,repository,signal}));
