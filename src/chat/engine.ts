@@ -208,9 +208,26 @@ export async function retryChatTurn(input: Omit<Parameters<typeof sendChatTurn>[
     const last = history.at(-1);
     if (!last || last.role !== "user") throw new Error("There is no unanswered user message to retry.");
     if (last.metadata?.responseRecovery?.state === "ended") throw new Error("This response was ended and cannot be resumed.");
-    if (input.imageNames?.length && !input.images?.length && !input.allowRetryWithoutImages) throw new Error("Image bytes are unavailable. Explicit image-free retry approval is required.");
+    // The durable user record is authoritative; optional caller fields cannot
+    // erase the original image requirement, including after a cache loss.
+    const recordedImages = [...(last.metadata?.attachmentAttempts ?? [])].reverse().find(attempt => attempt.images.length)?.images ?? [];
+    const recordedNames = recordedImages.map(image => image.name);
+    const images = input.images ?? [];
+    const explicitImageFree = input.allowRetryWithoutImages === true && images.length === 0;
+    if (recordedNames.length) {
+      const namesMatch = input.imageNames?.length === recordedNames.length
+        && input.imageNames.every((name, index) => name === recordedNames[index]);
+      const omittedNames = !input.imageNames?.length;
+      if (!namesMatch && !(explicitImageFree && omittedNames)) throw new Error("Retry image list does not match the durable user message. Explicit image-free retry approval is required if image bytes are unavailable.");
+      if (images.length && (images.length !== recordedImages.length || recordedImages.some((image, index) => image.mimeType && images[index].mimeType !== image.mimeType))) {
+        throw new Error("Retry image bytes/count or MIME type does not match the durable user message.");
+      }
+    }
+    if ((recordedNames.length || input.imageNames?.length) && !images.length && !explicitImageFree) throw new Error("Image bytes are unavailable. Explicit image-free retry approval is required.");
     if (chatResponseNeedsResolution(last)) throw new Error("The previous response outcome is uncertain. Explicit retry approval is required.");
-    return executeChatTurn({ ...input, content: last.content }, false);
+    return executeChatTurn({ ...input, content: last.content,
+      ...(recordedNames.length ? { imageNames: recordedNames, imageMimeTypes: recordedImages.map(image => image.mimeType ?? "") } : {}),
+    }, false);
   });
 }
 

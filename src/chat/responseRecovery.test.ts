@@ -114,3 +114,54 @@ it("S1 ownership query reports another window and fails closed on query error", 
     expect(await chatResponseOperationState("thread")).toBe("unknown");
   } finally { vi.unstubAllGlobals(); }
 });
+
+async function imageRecoveryFixture(state: "uncertain" | "retry_approved" = "retry_approved") {
+  const f = await fixture();
+  const user = await f.repository.appendChatMessage(f.input.threadId, "user", "Target");
+  await f.repository.updateChatMessageMetadata(user.id, {
+    attachmentAttempts: [{ attemptNumber: 1, createdAt: "old", sources: [], images: [{ name: "target.png", mimeType: "image/png", state: "uncertain" }] }],
+    responseRecovery: { state, attempts: [{ id: "original", startedAt: "old", dispatched: true, outcome: "uncertain" }] },
+  });
+  return f;
+}
+for (const imageNames of [undefined, [], ["different.png"]]) it(`P2 rejects omitted/empty/mismatched image names: ${JSON.stringify(imageNames)}`, async () => {
+  const { repository, input } = await imageRecoveryFixture();
+  const before = await repository.listChatMessages(input.threadId); const chat = vi.fn();
+  await expect(retryChatTurn({ ...input, imageNames, chat })).rejects.toThrow(/image/i);
+  expect(chat).not.toHaveBeenCalled(); expect(await repository.listChatMessages(input.threadId)).toEqual(before);
+});
+it("P2 explicit image-free retry preserves the omitted image in the appended audit", async () => {
+  const { repository, input } = await imageRecoveryFixture(); const before = await repository.listChatMessages(input.threadId);
+  const chat = vi.fn(async () => ({ content: "Text answer", usage: {} }));
+  await retryChatTurn({ ...input, allowRetryWithoutImages: true, chat });
+  const after = (await repository.listChatMessages(input.threadId))[0];
+  expect(after.metadata?.attachmentAttempts?.[0]).toEqual(before[0].metadata?.attachmentAttempts?.[0]);
+  expect(after.metadata?.attachmentAttempts?.[1].images).toEqual([{ name: "target.png", mimeType: "image/png", state: "not_included" }]);
+  expect(chat).toHaveBeenCalledTimes(1);
+});
+it("P2 correct named image retry dispatches original image requirement without image-free consent", async () => {
+  const { repository, input } = await imageRecoveryFixture(); const before = await repository.listChatMessages(input.threadId);
+  const image = { mimeType: "image/png", dataBase64: "AAAA" };
+  const vision = { ...model, capabilities: { ...model.capabilities, supportsVision: true, inputModalities: ["text", "image"] } };
+  const chat = vi.fn(async (request: Parameters<NonNullable<Parameters<typeof retryChatTurn>[0]["chat"]>>[0]) => { expect(request.messages.at(-1)?.images).toEqual([image]); return { content: "Image answer", usage: {} }; });
+  await retryChatTurn({ ...input, model: vision, imageNames: ["target.png"], images: [image], chat });
+  const after = (await repository.listChatMessages(input.threadId))[0];
+  expect(after.metadata?.attachmentAttempts?.[0]).toEqual(before[0].metadata?.attachmentAttempts?.[0]);
+  expect(after.metadata?.attachmentAttempts?.[1].images[0].state).toBe("included_in_request");
+});
+it("P2 uncertain approval never authorizes dropping the recorded image", async () => {
+  const { repository, input } = await imageRecoveryFixture("uncertain"); await approveChatResponseRetry(repository, input.threadId);
+  const before = await repository.listChatMessages(input.threadId); const chat = vi.fn();
+  await expect(retryChatTurn({ ...input, chat })).rejects.toThrow(/image/i);
+  expect(chat).not.toHaveBeenCalled(); expect(await repository.listChatMessages(input.threadId)).toEqual(before);
+});
+for (const images of [[{ mimeType: "image/jpeg", dataBase64: "AAAA" }], [{ mimeType: "image/png", dataBase64: "AAAA" }, { mimeType: "image/png", dataBase64: "BBBB" }]]) it("P2 rejects MIME/count mismatch before any audit mutation", async () => {
+  const { repository, input } = await imageRecoveryFixture(); const before = await repository.listChatMessages(input.threadId); const chat = vi.fn();
+  await expect(retryChatTurn({ ...input, imageNames: ["target.png"], images, chat })).rejects.toThrow(/match/);
+  expect(chat).not.toHaveBeenCalled(); expect(await repository.listChatMessages(input.threadId)).toEqual(before);
+});
+it("P2 image-free consent does not permit a conflicting nonempty image list", async () => {
+  const { repository, input } = await imageRecoveryFixture(); const before = await repository.listChatMessages(input.threadId); const chat = vi.fn();
+  await expect(retryChatTurn({ ...input, imageNames: ["different.png"], allowRetryWithoutImages: true, chat })).rejects.toThrow(/match/);
+  expect(chat).not.toHaveBeenCalled(); expect(await repository.listChatMessages(input.threadId)).toEqual(before);
+});

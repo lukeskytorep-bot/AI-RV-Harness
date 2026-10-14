@@ -63,3 +63,8 @@ export async function chatResponseOperationState(threadId: string): Promise<"idl
     return snapshot.held?.some(lock => lock.name === `rvh-chat-response:${threadId}`) ? "other" : "idle";
   } catch { return "unknown"; }
 }
+
+export function hasUnfinishedChatResponse(message: ChatMessage | undefined): boolean {
+  return message?.role === "user" && Boolean(message.metadata?.responseRecovery)
+    && !["ended", "complete"].includes(message.metadata!.responseRecovery!.state);
+}

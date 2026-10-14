@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { endChatResponse } from "../chat/responseRecovery";
+import { endChatResponse, hasUnfinishedChatResponse } from "../chat/responseRecovery";
 import { retryChatTurn } from "../chat/engine";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { SqliteWorkspacesConversationsRepository } from "./sqlite/workspacesConversationsRepository";
@@ -32,5 +32,25 @@ it("S1 SQLite End retains ledger across backup/restore and blocks direct retry",
     await expect(retryChatTurn({ repository: fresh, threadId: "thread", providerConfig: {} as ProviderConfig, model: {} as ProviderModel, mode: "conversation", language: "en" })).rejects.toThrow(/ended/);
     expect(restored.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
     expect(await fresh.listChatMessages("thread")).toEqual(messages);
+  } finally { restored?.close(); db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+it("P1 restored SQLite preserves an unfinished response that can be ended without cache", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rvh-chat-cacheless-"));
+  const db = new DatabaseSync(join(dir, "source.sqlite")); let restored: DatabaseSync | undefined;
+  try {
+    db.exec("CREATE TABLE chat_messages(id TEXT PRIMARY KEY,thread_id TEXT,role TEXT,content TEXT,metadata_json TEXT,created_at TEXT)");
+    const metadata = { responseRecovery: { state: "uncertain", attempts: [{ id: "paid-attempt", startedAt: "old", dispatched: true, outcome: "uncertain" }] } };
+    db.prepare("INSERT INTO chat_messages VALUES(?,?,?,?,?,?)").run("user", "thread", "user", "Question", JSON.stringify(metadata), "old");
+    await backup(db, join(dir, "backup.sqlite"));
+    restored = new DatabaseSync(join(dir, "backup.sqlite"));
+    const fresh = repository(restored); const before = (await fresh.listChatMessages("thread"))[0];
+    expect(hasUnfinishedChatResponse(before)).toBe(true);
+    await endChatResponse(fresh, "thread");
+    const after = (await fresh.listChatMessages("thread"))[0];
+    expect(hasUnfinishedChatResponse(after)).toBe(false);
+    expect(after.metadata?.responseRecovery?.state).toBe("ended");
+    expect(after.metadata?.responseRecovery?.attempts).toEqual(before.metadata?.responseRecovery?.attempts);
+    expect(restored.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
   } finally { restored?.close(); db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
