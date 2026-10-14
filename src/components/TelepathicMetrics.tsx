@@ -1,9 +1,10 @@
+import type { ReactNode } from "react";
 import type { telepathicRuntimeMetrics } from "../telepathicExchange/runtimeMetrics";
 
-interface Props { metrics: ReturnType<typeof telepathicRuntimeMetrics>; pl: boolean; }
+interface Props { metrics: ReturnType<typeof telepathicRuntimeMetrics>; pl: boolean; actions?: ReactNode; }
 
 /** The RV metric tiles, with Telepathy's missing-data and request-time semantics. */
-export function TelepathicMetrics({ metrics: m, pl }: Props) {
+export function TelepathicMetrics({ metrics: m, pl, actions }: Props) {
   const missing = (count: number) => pl ? `brak pełnych danych: ${count} wywołań` : `missing complete data: ${count} calls`;
   const unavailable = pl ? "brak danych" : "unavailable";
   const source = (estimated: boolean) => estimated ? (pl ? "szacunkowy" : "estimated") : (pl ? "zgłoszony przez dostawcę" : "provider-reported");
@@ -19,5 +20,6 @@ export function TelepathicMetrics({ metrics: m, pl }: Props) {
         : source(m.costSource === "estimated")}</span>}
     </span>
     <span><small>{pl ? "Czas wywołań" : "Request time"}</small><strong>{(m.activeElapsedMs / 1000).toFixed(1)} s</strong></span>
+    {actions && <div className="telepathic-metric-actions">{actions}</div>}
   </div>;
 }

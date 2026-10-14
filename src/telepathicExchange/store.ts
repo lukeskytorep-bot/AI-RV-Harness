@@ -1,3 +1,4 @@
+import { assertArchiveRevision } from "./persistence";
 import type { TelepathicSeriesState } from "./types";
 
 export interface TelepathicExchangeStore {
@@ -18,6 +19,7 @@ export class InMemoryTelepathicExchangeStore implements TelepathicExchangeStore 
   }
 
   async saveTelepathicSeries(state: TelepathicSeriesState): Promise<void> {
+    assertArchiveRevision(state, this.states.get(state.config.seriesId) ?? null);
     this.states.set(state.config.seriesId, structuredClone(state));
   }
 

@@ -71,14 +71,18 @@ async function fixture(mode: Mode, language: "pl" | "en" = "en", native = false,
  mock.dispatch.mockImplementation(({signal}: {signal:AbortSignal}) => new Promise((resolve,reject)=>{
   pending.push({resolve,reject}); signal.addEventListener("abort",()=>reject(signal.reason),{once:true});
  }));
- const button = (text: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes(text));
+ const button = (text: string) => {
+  const buttons = [...container.querySelectorAll<HTMLButtonElement>("button")];
+  if (text === "Zatrzymaj") text = "Stop";
+  return buttons.find(b => b.textContent?.includes(text)) ?? (["Run / continue", "Continue / Resume", "Uruchom / kontynuuj", "Kontynuuj / Resume"].includes(text) ? buttons.find(b => b.textContent?.trim() === (language === "pl" ? "Wznów" : "Resume")) : undefined);
+ };
  const runText = language === "pl" ? (mode === "ai_ai_training" ? "Uruchom / kontynuuj" : "Kontynuuj / Resume") : (mode === "ai_ai_training" ? "Run / continue" : "Continue / Resume");
  const wait = async (assert:()=>unknown) => vi.waitFor(async()=>{await act(async()=>{await new Promise(resolve=>setTimeout(resolve,0));});await assert();},{timeout:4000,interval:25});
  const mount = async () => {await render();await wait(()=>expect(button(runText)?.disabled).toBe(false));};
  const run = async (count=1) => {await act(async()=>button(runText)!.click());await wait(()=>expect(mock.dispatch).toHaveBeenCalledTimes(count));};
  const noAlarm = (historicalFailure = false) => {expect(container.textContent).not.toMatch(/Series blocked|Seria zatrzymana|Uncertain provider calls|Niepewne wywołania providera/);if (!historicalFailure) expect(container.textContent).not.toMatch(/delivery unconfirmed|wysłanie niepotwierdzone/);expect(button(language === "pl" ? "Zezwól na ponowienie" : "Allow retry")).toBeUndefined();};
  const waiting = async (historicalFailure = false) => {await wait(()=>expect(container.textContent).toContain(language === "pl" ? "Oczekiwanie na odpowiedź" : "Waiting for response"));noAlarm(historicalFailure);if (historicalFailure && mode === "ai_ai_training") {const headings=[...container.querySelectorAll(".telepathic-transcript-message small")].map(node=>node.textContent);expect(headings[0]).toContain("delivery unconfirmed");expect(headings.at(-1)).toContain("Waiting for response");}expect(button(language === "pl" ? "Zatrzymaj" : "Stop")).toBeTruthy();};
- const stop = async () => {await act(async()=>button(language === "pl" ? "Zatrzymaj" : "Stop")!.click());await wait(()=>expect(button(language === "pl" ? "Zatrzymaj" : "Stop")).toBeUndefined());};
+ const stop = async () => {await act(async()=>button(language === "pl" ? "Zatrzymaj" : "Stop")!.click());await wait(()=>expect(button("Stop")?.disabled ?? true).toBe(true));};
  return {store,db,config,container,pending,button,wait,mount,run,waiting,stop,noAlarm,
   async remount(snapshot?: typeof state, adapter: TelepathicExchangeRepository = store) {await act(async()=>root.unmount());await vi.waitFor(async()=>expect(await store.getTelepathicSeriesLeaseState!("execution")).toBe("idle"));if(snapshot) await store.saveTelepathicSeries(snapshot);repository=facade(adapter);root=createRoot(container);await render();},
   async externalRun() {const controller = new AbortController();const deps = {store,signal:controller.signal,resolveRoute:async(p:typeof config.participants[number])=>resolveTelepathicAiRouteFromRepository({repository,participant:p,requestedSettings:profileGenerationDefaults(profiles.find(profile=>profile.id === p.ai!.profileId)!,model)})};const task = (mode === "ai_ai_training" ? runNextTelepathicAiRound : advanceTelepathicConversationSeries)(deps,"execution").catch(()=>undefined);await vi.waitFor(()=>expect(pending.length).toBe(1));return {controller,task};},
@@ -96,7 +100,7 @@ for (const mode of ["conversation_exchange","ai_ai_training"] as const) {
    await act(async()=>f.pending[0].resolve({content:mode === "conversation_exchange" ? JSON.stringify({cycle:1,finishRound:false,finishParticipantIds:[],individual:[{participantId:"human",instruction:"Describe movement"}]}) : "A stone bridge over a river.",finishReason:"stop",usage:{totalTokens:12}}));
    await f.wait(async()=>expect((await f.store.getTelepathicSeries("execution"))!.providerCalls[0].status).toBe("succeeded"));
    if (mode === "ai_ai_training") {await f.wait(()=>expect(mock.dispatch).toHaveBeenCalledTimes(2));await f.waiting();await f.stop();}
-   else {await f.wait(()=>expect(f.button(language === "pl" ? "Zatrzymaj" : "Stop")).toBeUndefined());f.noAlarm();expect(mock.dispatch).toHaveBeenCalledTimes(1);}
+   else {await f.wait(()=>expect(f.button("Stop")?.disabled ?? true).toBe(true));f.noAlarm();expect(mock.dispatch).toHaveBeenCalledTimes(1);}
    expect((await f.store.getTelepathicSeries("execution"))!.providerCalls[0].usage?.totalTokens).toBe(12);
   } finally {await f.cleanup();}
  });
@@ -127,7 +131,7 @@ for (const mode of ["conversation_exchange","ai_ai_training"] as const) {
   let external: Awaited<ReturnType<typeof f.externalRun>> | undefined;
   try {
    external=await f.externalRun();await f.observeOther();await f.wait(()=>expect(f.container.textContent).toContain(language === "pl" ? "Praca trwa w innym oknie" : "Work is running in another window"));
-   f.noAlarm();expect(f.container.querySelector(".telepathic-transcript-message small")?.textContent).toContain(language === "pl" ? "Praca trwa w innym oknie" : "Work is running in another window");expect(f.button(language === "pl" ? "Zatrzymaj" : "Stop")).toBeUndefined();expect(mock.dispatch).toHaveBeenCalledTimes(1);
+   f.noAlarm();expect(f.container.querySelector(".telepathic-transcript-message small")?.textContent).toContain(language === "pl" ? "Praca trwa w innym oknie" : "Work is running in another window");expect(f.button("Stop")?.disabled ?? true).toBe(true);expect(mock.dispatch).toHaveBeenCalledTimes(1);
    await act(async()=>external!.controller.abort(new DOMException("Interrupted owner","AbortError")));await external.task;
    await f.wait(()=>expect(f.button(language === "pl" ? "Zezwól na ponowienie" : "Allow retry")?.disabled).toBe(false));expect(mock.dispatch).toHaveBeenCalledTimes(1);
   } finally {external?.controller.abort();await external?.task;await f.cleanup();}
@@ -137,7 +141,7 @@ for (const mode of ["conversation_exchange","ai_ai_training"] as const) {
   try {
    await f.mount();await f.run();await f.waiting();const persisted=(await f.store.getTelepathicSeries("execution"))!;
    f.db!.db.prepare("UPDATE telepathic_series SET run_lease_owner='replacement-owner', run_lease_version=run_lease_version+1, run_lease_expires_at=? WHERE id='execution'").run(new Date(Date.now()+60000).toISOString());
-   await f.wait(()=>expect(f.button("Stop")).toBeUndefined());await f.wait(()=>expect(f.container.textContent).toContain("Work is running in another window"));
+   await f.wait(()=>expect(f.button("Stop")?.disabled ?? true).toBe(true));await f.wait(()=>expect(f.container.textContent).toContain("Work is running in another window"));
    expect(f.container.textContent).toMatch(/Lost fence|lease was lost/);expect(f.button("Allow retry")).toBeUndefined();expect((await f.store.getTelepathicSeries("execution"))!.providerCalls).toEqual(persisted.providerCalls);expect(mock.dispatch).toHaveBeenCalledTimes(1);
    f.db!.db.exec("UPDATE telepathic_series SET run_lease_owner=NULL, run_lease_expires_at=NULL WHERE id='execution'");await f.wait(()=>expect(f.button("Allow retry")?.disabled).toBe(false));
    expect(f.db!.db.prepare("PRAGMA integrity_check").get()).toEqual({integrity_check:"ok"});expect(f.db!.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -146,7 +150,7 @@ for (const mode of ["conversation_exchange","ai_ai_training"] as const) {
  it(`${mode}: pre-dispatch route failure retains its actual reason without an uncertain result`, async()=>{
   const f=await fixture(mode);
   try {await f.mount();mock.routeError=new Error("Route unavailable before dispatch");await act(async()=>f.button(mode === "ai_ai_training" ? "Run / continue" : "Continue / Resume")!.click());
-   await f.wait(()=>expect(f.container.textContent).toContain("Route unavailable before dispatch"));expect((await f.store.getTelepathicSeries("execution"))!.providerCalls).toHaveLength(0);expect(mock.dispatch).not.toHaveBeenCalled();expect(f.button("Allow retry")).toBeUndefined();await f.wait(()=>expect(f.button("Unblock and resume")).toBeTruthy());
+   await f.wait(()=>expect(f.container.textContent).toContain("Route unavailable before dispatch"));expect((await f.store.getTelepathicSeries("execution"))!.providerCalls).toHaveLength(0);expect(mock.dispatch).not.toHaveBeenCalled();expect(f.button("Allow retry")).toBeUndefined();await f.wait(()=>expect(f.button("Resume")?.disabled).toBe(false));
   }finally {await f.cleanup();}
  });
  it(`${mode}: repetition is visibly different from uncertain delivery`, async()=>{
@@ -183,9 +187,49 @@ for (const mode of ["conversation_exchange","ai_ai_training"] as const) {
    const heading=f.container.querySelector(".telepathic-transcript-message small");expect(heading?.textContent).toContain(language === "pl" ? "Oczekiwanie na odpowiedź" : "Waiting for response");
    const dispatched=(await f.store.getTelepathicSeries("execution"))!;expect(dispatched.providerCalls[0].status).toBe("dispatched");expect(dispatched.providerCalls[0].callStage).toBe("series_reflection");
    await act(async()=>f.pending[0].resolve({content:"Accepted local final reflection",finishReason:"stop",usage:{}}));
-   await f.wait(()=>expect(f.container.textContent).toContain("Accepted local final reflection"));await f.wait(()=>expect(f.button(language === "pl" ? "Zatrzymaj" : "Stop")).toBeUndefined());f.noAlarm();
+   await f.wait(()=>expect(f.container.textContent).toContain("Accepted local final reflection"));await f.wait(()=>expect(f.button("Stop")?.disabled ?? true).toBe(true));f.noAlarm();
    expect(f.container.querySelector(".telepathic-transcript-message small")?.textContent).not.toMatch(/Waiting for response|Oczekiwanie na odpowiedź|unconfirmed|niepotwierdzone/);expect((await f.store.getTelepathicSeries("execution"))!.providerCalls[0].status).toBe("succeeded");expect(mock.dispatch).toHaveBeenCalledTimes(1);
   }finally {await f.cleanup();}
  });
 
 }
+
+for (const mode of ["conversation_exchange", "ai_ai_training"] as const) for (const language of ["pl", "en"] as const) it(`S2 metric Stop/stopping/End whole series: ${mode}/${language}`, async () => {
+ const f = await fixture(mode, language); let release!: () => void;
+ mock.dispatch.mockImplementation(({signal}: {signal: AbortSignal}) => new Promise((_resolve,reject) => { release = () => reject(signal.reason); }));
+ try {
+  await f.mount(); await f.run(); await f.waiting();
+  expect(f.button("Stop")?.closest(".telepathic-runtime-metrics")).not.toBeNull();
+  await act(async()=>f.button("Stop")!.click());
+  expect(f.button(language === "pl" ? "Zatrzymywanie…" : "Stopping…")?.disabled).toBe(true);
+  expect(f.button(language === "pl" ? "Zakończ" : "End")).toBeUndefined();
+  await act(async()=>release());
+  await f.wait(()=>expect(f.button(language === "pl" ? "Zakończ" : "End")?.disabled).toBe(false));
+  expect(f.button(language === "pl" ? "Wznów" : "Resume")?.disabled).toBe(true);
+  const before = (await f.store.getTelepathicSeries("execution"))!;
+  expect(before.providerCalls[0].status).toBe("uncertain");
+  await act(async()=>f.button(language === "pl" ? "Zakończ" : "End")!.click());
+  await f.wait(async()=>expect((await f.store.getTelepathicSeries("execution"))?.termination?.reason).toBe("user_finished"));
+  const ended = (await f.store.getTelepathicSeries("execution"))!;
+  expect(ended.status).toBe("cancelled"); expect(ended.providerCalls).toEqual(before.providerCalls); expect(ended.rounds).toEqual(before.rounds);
+  expect(ended.finalReflections).toEqual(before.finalReflections); expect(mock.dispatch).toHaveBeenCalledTimes(1);
+  await f.remount();
+  expect(f.button(language === "pl" ? "Zakończ" : "End")).toBeUndefined();
+  expect(f.button(language === "pl" ? "Wznów" : "Resume")).toBeUndefined();
+  const newLabel = mode === "conversation_exchange" ? (language === "pl" ? "Nowa wymiana" : "New exchange") : (language === "pl" ? "Nowy trening" : "New training");
+  expect(f.button(newLabel)?.disabled).toBe(false);
+ } finally { release?.(); await f.cleanup(); }
+});
+
+for(const mode of ["conversation_exchange","ai_ai_training"] as const) it(`S2 ${mode}: failed End save keeps recovery actions and allows a manual retry`,async()=>{
+ const original=BrowserTelepathicExchangeRepository.prototype.saveTelepathicSeries;let fail=true;
+ const write=vi.spyOn(BrowserTelepathicExchangeRepository.prototype,"saveTelepathicSeries").mockImplementation(async function(this: BrowserTelepathicExchangeRepository,state){if(fail && state.termination)throw new Error("End checkpoint write failed");return original.call(this,state);});
+ const f=await fixture(mode);
+ try{
+  await f.mount();const before=await f.store.getTelepathicSeries("execution");await act(async()=>f.button("End")!.click());
+  await f.wait(()=>expect(f.container.textContent).toContain("End checkpoint write failed"));await f.wait(()=>expect(f.button("End")?.disabled).toBe(false));
+  expect(await f.store.getTelepathicSeries("execution")).toEqual(before);expect(f.button("Resume")?.disabled).toBe(false);expect(mock.dispatch).not.toHaveBeenCalled();
+  fail=false;await act(async()=>{f.button("End")!.click();f.button("End")?.click();});
+  await f.wait(async()=>expect((await f.store.getTelepathicSeries("execution"))!.termination?.reason).toBe("user_finished"));expect(mock.dispatch).not.toHaveBeenCalled();
+ }finally{write.mockRestore();await f.cleanup();}
+});

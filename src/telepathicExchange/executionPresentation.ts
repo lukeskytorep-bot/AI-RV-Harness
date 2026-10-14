@@ -30,5 +30,6 @@ export function telepathicExecutionPresentation(input: {
     return "working";
   }
   if (input.lease === "unknown") return "checking";
+  if (input.status === "cancelled") return "idle";
   return input.status === "blocked" || input.calls.length > 0 ? "recovery" : "idle";
 }

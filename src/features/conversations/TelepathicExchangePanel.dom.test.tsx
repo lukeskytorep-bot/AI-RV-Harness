@@ -38,7 +38,7 @@ describe("mounted Conversation audit regressions",()=>{
   await render();
   await act(async()=>container.querySelector<HTMLButtonElement>(".telepathic-schedule button")!.click());
   const selected=container.querySelector(".telepathic-schedule button.active")?.textContent;
-  await act(async()=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent?.includes("Continue / Resume"))!.click());
+  await act(async()=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>(b.textContent?.includes("Continue / Resume") || b.textContent?.trim()==="Resume"))!.click());
   state.transcript=[{id:"checkpoint",seriesId:"mounted",roundId:state.rounds[0].assignment.roundId,sequence:1,stage:"reflection",kind:"reflection",authorId:"a",recipientIds:[],text:"FIRST_DURABLE_RESULT",createdAt:"t"}];
   state.providerCalls=[{id:"call",seriesId:"mounted",roundId:"r",participantId:"a",callStage:"receiver_first",technicalAttempt:1,status:"succeeded",scopeKey:"k",requestSha256:"h",usage:{totalTokens:42,costUsd:0.01},createdAt:"t",updatedAt:"t"}];
   await act(async()=>vi.advanceTimersByTimeAsync(550));
@@ -55,7 +55,7 @@ describe("mounted Conversation audit regressions",()=>{
  it("rejects a late polling result after workspace change",async()=>{
   vi.useFakeTimers();const {state,repository,render}=fixture();state.rounds[0].blindByParticipant.human={participantId:"human",first:"own",status:"first_complete",providerAttemptCount:0};
   mock.advance.mockImplementation((deps:{signal:AbortSignal})=>new Promise((_resolve,reject)=>deps.signal.addEventListener("abort",()=>reject(new DOMException("Stopped","AbortError")),{once:true})));
-  await render();await act(async()=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent?.includes("Continue / Resume"))!.click());
+  await render();await act(async()=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>(b.textContent?.includes("Continue / Resume") || b.textContent?.trim()==="Resume"))!.click());
   let release!: (value: typeof state)=>void;
   vi.mocked(repository.getTelepathicSeries).mockImplementationOnce(()=>new Promise(resolve=>{release=resolve as typeof release;}));
   await act(async()=>vi.advanceTimersByTimeAsync(550));

@@ -34,7 +34,7 @@ for(const mode of ["conversation_exchange","ai_ai_training"] as const) for(const
   const render=()=>act(async()=>root.render(mode==="ai_ai_training"?<TelepathicTrainingPanel copy={getCopy("en")} settings={createDefaultSettings()} profiles={profiles} workspaces={[]} repository={repository}/>:<TelepathicExchangePanel copy={getCopy("en")} settings={createDefaultSettings()} profiles={profiles} workspaces={[]} profile={{id:"human",name:"Human"} as Profile} workspace={workspace} repository={repository}/>));
   let release!: (response: unknown)=>void;
   mock.dispatch.mockImplementationOnce(()=>new Promise(resolve=>{release=resolve;}));await render();
-  const run=()=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent?.includes(mode==="ai_ai_training"?"Run / continue":"Continue / Resume"))!;
+  const run=()=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>(b.textContent?.includes(mode==="ai_ai_training"?"Run / continue":"Continue / Resume") || b.textContent?.trim()==="Resume"))!;
   await act(async()=>{run().click();await vi.waitFor(()=>expect(mock.dispatch).toHaveBeenCalledTimes(1),{timeout:3000});});expect(mock.dispatch).toHaveBeenCalledTimes(1);
   await act(async()=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent==="Stop")!.click());
   await act(async()=>{release({content:"partial",finishReason:"length",usage:{}});await vi.waitFor(async()=>expect((await store.getTelepathicSeries("panel-recovery"))?.status).toBe("paused"),{timeout:3000});});

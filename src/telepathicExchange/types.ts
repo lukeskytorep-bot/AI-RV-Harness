@@ -229,6 +229,7 @@ export interface TelepathicRoundState {
 }
 
 export interface TelepathicSeriesState {
+  termination?: { reason: "user_finished"; endedAt: string };
   schemaVersion: 1;
   config: TelepathicSeriesConfig;
   plan: TelepathicSeriesPlan;

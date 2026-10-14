@@ -260,3 +260,12 @@
 .telepathic-setup-fields { border:0; padding:0; margin:0; min-width:0; display:grid; gap:12px; }
 .telepathic-setup-step h3 { margin:0; font-size:14px; }
 .telepathic-setup-step > .training-actions { margin-top:12px; }
+
+.telepathic-runtime-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)) auto; }
+.telepathic-metric-actions { margin-left: auto; display: flex; align-items: center; }
+.telepathic-series-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.telepathic-series-actions .compact-telepathic-button { min-height: 32px; padding: 5px 9px; border-radius: 10px; flex: 0 0 auto; }
+.telepathic-series-actions button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.telepathic-series-actions button:disabled { opacity: .5; cursor: default; }
+@media (max-width: 680px) { .telepathic-runtime-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .telepathic-metric-actions { grid-column: 1 / -1; } }
+@media (max-width: 360px) { .telepathic-runtime-metrics { grid-template-columns: minmax(0, 1fr); } }

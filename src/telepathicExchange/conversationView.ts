@@ -92,6 +92,7 @@ export interface TelepathicConversationSeriesView {
   metrics?: ReturnType<typeof telepathicRuntimeMetrics>;
   archivedAt?: string;
   finalization?: TelepathicSeriesState["finalization"];
+  termination?: TelepathicSeriesState["termination"];
   createdAt: string;
   updatedAt: string;
 }
@@ -182,7 +183,7 @@ export function buildTelepathicConversationView(state: TelepathicSeriesState): T
       senderPolicy: structuredClone(state.config.senderPolicy),
     },
     plan: { ...structuredClone(state.plan), rounds: rounds.map(r => structuredClone(r.assignment)) },
-    transcript: visibleTranscript(state), legacyTranscript: state.transcript === undefined, metrics: telepathicRuntimeMetrics(state), archivedAt: state.archivedAt, finalization: state.finalization,
+    transcript: visibleTranscript(state), legacyTranscript: state.transcript === undefined, metrics: telepathicRuntimeMetrics(state), archivedAt: state.archivedAt, finalization: state.finalization, termination: state.termination,
     currentRoundIndex: state.currentRoundIndex,
     status: state.status,
     rounds,

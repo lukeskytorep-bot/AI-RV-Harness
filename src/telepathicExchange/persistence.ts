@@ -5,6 +5,7 @@ import type { TelepathicSeriesPlan, TelepathicSeriesState } from "./types";
  * migration changes are needed. The extension is decoded only by this repository.
  */
 interface RuntimeExtension {
+  termination?: TelepathicSeriesState["termination"];
   version: 1;
   rounds: Record<string, { guidance?: TelepathicSeriesState["rounds"][number]["guidance"]; blind: Record<string, NonNullable<TelepathicSeriesState["rounds"][number]["blindByParticipant"][string]["guidanceResponses"]>> }>;
   calls: Record<string, Pick<TelepathicSeriesState["providerCalls"][number], "usage" | "elapsedMs" | "physicalAttempts" | "costSource" | "finishReason" | "requestMessages" | "requestSettings" | "outputBudgetSnapshot" | "outputDiagnostics">>;
@@ -16,7 +17,7 @@ interface RuntimeExtension {
 }
 export function serializeTelepathicPlan(state: TelepathicSeriesState): string {
   const runtime: RuntimeExtension = {
-    version: 1,
+    version: 1, termination: state.termination,
     rounds: Object.fromEntries(state.rounds.map(round => [round.assignment.roundId, { guidance: round.guidance,
       blind: Object.fromEntries(Object.values(round.blindByParticipant).filter(blind => blind.guidanceResponses).map(blind => [blind.participantId, blind.guidanceResponses!])) }])),
     calls: Object.fromEntries(state.providerCalls.map(({ id,usage,elapsedMs,physicalAttempts,costSource,finishReason,requestMessages,requestSettings,outputBudgetSnapshot,outputDiagnostics }) => [id,{usage,elapsedMs,physicalAttempts,costSource,finishReason,requestMessages,requestSettings,outputBudgetSnapshot,outputDiagnostics}])),
@@ -40,9 +41,10 @@ export function restoreTelepathicRuntime(state: TelepathicSeriesState, storedPla
     }
   }
   for (const call of state.providerCalls) Object.assign(call, runtime.calls[call.id]);
-  return Object.assign(state, { transcript: runtime.transcript, finalization: runtime.finalization,
+  return Object.assign(state, { termination: runtime.termination, transcript: runtime.transcript, finalization: runtime.finalization,
     activeElapsedMs: runtime.activeElapsedMs, archivedAt: runtime.archivedAt, archiveRevision: runtime.archiveRevision });
 }
 export function assertArchiveRevision(state: TelepathicSeriesState, previous: TelepathicSeriesState | null): void {
+  if (previous?.termination && (state.status !== "cancelled" || JSON.stringify(state.termination) !== JSON.stringify(previous.termination))) throw new Error("Ended telepathic series cannot be resumed or rewritten.");
   if (previous && (state.archiveRevision ?? 0) < (previous.archiveRevision ?? 0)) throw new Error("Stale telepathic archive revision.");
 }

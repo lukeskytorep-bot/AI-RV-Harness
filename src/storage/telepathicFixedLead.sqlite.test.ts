@@ -9,7 +9,7 @@ import { DatabaseSync,backup } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { describe,it,expect } from "vitest";
 import { SqliteTelepathicExchangeRepository } from "./sqlite/telepathicExchangeRepository";
-import { telepathicConversationHumanStep,advanceTelepathicConversationSeries,saveHumanTelepathicTarget,confirmHumanTelepathicTransmission,saveHumanTelepathicFirstBlind,sealHumanTelepathicBlind,saveHumanTelepathicReflection,saveHumanTelepathicSharing,saveHumanLeadGuidance,saveHumanGuidanceResponse,createTelepathicSeriesState } from "../telepathicExchange/engine";
+import { endTelepathicSeries,telepathicConversationHumanStep,advanceTelepathicConversationSeries,saveHumanTelepathicTarget,confirmHumanTelepathicTransmission,saveHumanTelepathicFirstBlind,sealHumanTelepathicBlind,saveHumanTelepathicReflection,saveHumanTelepathicSharing,saveHumanLeadGuidance,saveHumanGuidanceResponse,createTelepathicSeriesState } from "../telepathicExchange/engine";
 import type { TelepathicSeriesConfig } from "../telepathicExchange/types";
 import type { DatabaseTransactionStatement } from "./databaseNative";
 import { setTelepathicArchived } from "../telepathicExchange/archive";
@@ -188,4 +188,44 @@ for(const version of [1,2,3] as const) it(`backs up and restores Telepathic outp
    const browserLoaded=(await browser.getTelepathicSeries(config.seriesId))!;expect(browserLoaded.providerCalls).toEqual(state.providerCalls);
   }finally{restoredDb.close();}
  }finally{db.close();rmSync(directory,{recursive:true,force:true});}
+});
+
+describe("S2 durable whole-series End",()=>{
+ for(const backend of ["browser","sqlite"] as const) it(`${backend}: End preserves uncertain evidence, survives archive/restore and rejects stale writes`,async()=>{
+  const {repository,db}=backend==="browser"?browser():database();
+  try{
+   const state=createTelepathicSeriesState(config);state.status="blocked";
+   state.providerCalls=[{id:"uncertain",seriesId:"sqlite",roundId:state.rounds[0].assignment.roundId,participantId:"a",callStage:"receiver_first",technicalAttempt:2,status:"uncertain",scopeKey:"scope",requestSha256:"frozen-hash",createdAt:"t",updatedAt:"t",responseText:"partial evidence",usage:{totalTokens:29}}];
+   await repository.saveTelepathicSeries(state);
+   const deps={store:repository,resolveRoute:async()=>{throw new Error("provider must not be reached");}};
+   const ended=await endTelepathicSeries(deps,"sqlite");
+   expect(ended.termination?.reason).toBe("user_finished");expect(ended.providerCalls).toEqual(state.providerCalls);expect(ended.rounds).toEqual(state.rounds);
+   expect(await endTelepathicSeries(deps,"sqlite")).toEqual(ended);
+   await expect(repository.saveTelepathicSeries(state)).rejects.toThrow(/Ended/);
+   await setTelepathicArchived(repository,"sqlite",true);await setTelepathicArchived(repository,"sqlite",false);
+   const restored=(await repository.getTelepathicSeries("sqlite"))!;expect(restored.termination).toEqual(ended.termination);expect(restored.status).toBe("cancelled");expect(restored.providerCalls).toEqual(state.providerCalls);
+   await expect(advanceTelepathicConversationSeries(deps,"sqlite")).rejects.toThrow(/ended/);
+  }finally{db.close();}
+ });
+ it("SQLite: another lease owner blocks End; backup/reopen keeps the terminal marker",async()=>{
+  const {db,repository}=database();const dir=mkdtempSync(join(tmpdir(),"s2-end-"));
+  try{
+   await repository.saveTelepathicSeries(createTelepathicSeriesState(config));const second=database(db,false).repository;
+   let release!:()=>void;let ready!:()=>void;const started=new Promise<void>(r=>{ready=r;});
+   const held=repository.withTelepathicSeriesLease("sqlite",async()=>{ready();await new Promise<void>(r=>{release=r;});});
+   await started;try{await expect(endTelepathicSeries({store:second,resolveRoute:async()=>{throw new Error("must not dispatch");}},"sqlite")).rejects.toThrow();}finally{release();await held;}
+   const ended=await endTelepathicSeries({store:second,resolveRoute:async()=>{throw new Error("must not dispatch");}},"sqlite");await backup(db,join(dir,"backup.sqlite"));
+   const reopened=new DatabaseSync(join(dir,"backup.sqlite"));try{const repo=database(reopened,false).repository;expect((await repo.getTelepathicSeries("sqlite"))!.termination).toEqual(ended.termination);await expect(advanceTelepathicConversationSeries({store:repo,resolveRoute:async()=>{throw new Error("must not dispatch");}},"sqlite")).rejects.toThrow(/ended/);expect(reopened.prepare("PRAGMA integrity_check").get()).toEqual({integrity_check:"ok"});expect(reopened.prepare("PRAGMA foreign_key_check").all()).toEqual([]);}finally{reopened.close();}
+  }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+ });
+ for(const fenced of [false,true]) it(`SQLite: raced terminal parent rolls back all stale child writes (fenced=${fenced})`,async()=>{
+  let race=false;const db=new DatabaseSync(":memory:");
+  const {repository}=database(db,true,()=>{if(race){race=false;db.exec("UPDATE telepathic_series SET status='cancelled',plan_json=json_set(plan_json,'$._runtime.termination',json('{\"reason\":\"user_finished\",\"endedAt\":\"end\"}')) WHERE id='sqlite'");}});
+  try{
+   const state=createTelepathicSeriesState(config);state.finalReflections.a="accepted";await repository.saveTelepathicSeries(state);
+   const stale=structuredClone(state);stale.finalReflections.a="late stale result";stale.config.participants[1].displayName="stale";stale.rounds[0].reflectionsByParticipant.a={participantId:"a",role:"receiver",reflection:"stale"};race=true;
+   const save=()=>repository.saveTelepathicSeries(stale);await expect(fenced?repository.withTelepathicSeriesLease("sqlite",save):save()).rejects.toThrow(/revision conflict/);
+   const actual=(await repository.getTelepathicSeries("sqlite"))!;expect(actual.status).toBe("cancelled");expect(actual.termination?.reason).toBe("user_finished");expect(actual.finalReflections).toEqual(state.finalReflections);expect(actual.rounds).toEqual(state.rounds);expect(actual.config).toEqual(state.config);
+  }finally{db.close();}
+ });
 });

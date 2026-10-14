@@ -31,7 +31,7 @@ describe("telepathic Training mounted actions",()=>{
   expect(container.textContent).not.toContain("Run preflight");expect(container.textContent).not.toContain("Generate final");
   const roundButtons=container.querySelectorAll<HTMLButtonElement>(".telepathic-round-tabs button");await act(async()=>roundButtons[1].click());const selected=container.querySelector(".telepathic-round-tabs button.active")?.textContent;
   await act(async()=>container.querySelector<HTMLButtonElement>(".telepathic-history-toggle")!.click());expect(container.querySelector(".telepathic-round-tabs button.active")?.textContent).toBe(selected);
-  const run=[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent?.includes("Run / continue"))!;
+  const run=[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>(b.textContent?.includes("Run / continue") || b.textContent?.trim()==="Resume"))!;
   await act(async()=>{run.click();await Promise.resolve();});expect(signal?.aborted).toBe(false);
   const stop=[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent==="Stop")!;expect(stop).toBeTruthy();await act(async()=>stop.click());expect(signal?.aborted).toBe(true);expect(mock.run).toHaveBeenCalledTimes(1);expect(container.textContent).not.toContain("Uncertain provider calls");
  });

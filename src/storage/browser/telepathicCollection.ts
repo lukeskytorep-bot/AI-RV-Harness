@@ -21,7 +21,8 @@ export function readTelepathicCollection(storage: StorageLike): TelepathicSeries
 // validation and commit; provider calls must run outside this short lock.
 export async function withTelepathicCollectionWrite<T>(task: () => T): Promise<T> {
   const locks = globalThis.navigator?.locks;
-  if (locks) return locks.request(TELEPATHIC_COLLECTION_LOCK, { mode: "exclusive" }, task);
+  // Reject through the callback promise so a failed guard releases the lock.
+  if (locks) return locks.request(TELEPATHIC_COLLECTION_LOCK, { mode: "exclusive" }, async () => task());
   // Existing save support without cross-tab coordination. Permanent Delete
   // requires Web Locks and rejects before reaching this fallback.
   return task();

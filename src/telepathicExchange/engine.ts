@@ -36,6 +36,10 @@ import { lockTelepathicTarget, markTelepathicTargetTransmissionReady } from "./t
 import { withTelepathicTrainingLearning } from "./trainingLearning";
 
 
+function assertSeriesNotEnded(state: TelepathicSeriesState): void {
+  if (state.termination?.reason === "user_finished" || state.status === "cancelled") throw new Error("Telepathic series was ended and cannot be resumed or changed.");
+}
+
 function checkStop(deps: TelepathicExchangeEngineDependencies): void { deps.signal?.throwIfAborted(); }
 function combinedSignal(deps: TelepathicExchangeEngineDependencies, seriesId: string): AbortSignal | undefined {
   const signals = [deps.signal, deps.store.telepathicSeriesLeaseSignal(seriesId)].filter((s): s is AbortSignal => Boolean(s));
@@ -557,6 +561,7 @@ async function mutateTelepathicSeries<T>(deps: TelepathicExchangeEngineDependenc
   return withTelepathicSeriesRunLock(deps, seriesId, async () => {
     const state = await deps.store.getTelepathicSeries(seriesId);
     if (!state) throw new Error("Telepathic series not found.");
+    assertSeriesNotEnded(state);
     if (state.archivedAt) throw new Error("Telepathic series is archived. Restore it before changing it.");
     const round = state.rounds[state.currentRoundIndex];
     if (!round) throw new Error("Telepathic series has no current round.");
@@ -705,6 +710,7 @@ export async function advanceTelepathicConversationSeries(deps: TelepathicExchan
   return withTelepathicSeriesRunLock(deps, seriesId, async () => {
     const state = await deps.store.getTelepathicSeries(seriesId);
     if (!state) throw new Error("Telepathic series not found.");
+    assertSeriesNotEnded(state);
     if (state.config.mode !== "conversation_exchange") throw new Error("This controller runs Conversation telepathic exchange only.");
     if (state.config.protocolVersion === "fixed_lead_v1" && state.currentRoundIndex >= state.rounds.length && state.finalization !== "completed") return finalizeSeries(deps,state);
   if (state.archivedAt) throw new Error("Restore the archived series before Resume.");
@@ -784,6 +790,7 @@ export async function runNextTelepathicAiRound(deps: TelepathicExchangeEngineDep
   return withTelepathicSeriesRunLock(deps, seriesId, async () => {
   const state = await deps.store.getTelepathicSeries(seriesId);
   if (!state) throw new Error("Telepathic series not found.");
+    assertSeriesNotEnded(state);
     if (state.config.protocolVersion === "fixed_lead_v1" && state.currentRoundIndex >= state.rounds.length && state.finalization !== "completed") return finalizeSeries(deps,state);
   if (state.archivedAt) throw new Error("Restore the archived series before Resume.");
   if (state.status === "completed" || state.status === "cancelled") return state;
@@ -839,6 +846,7 @@ export async function resumeBlockedTelepathicSeries(deps: TelepathicExchangeEngi
   return withTelepathicSeriesRunLock(deps, seriesId, async () => {
     const state = await deps.store.getTelepathicSeries(seriesId);
     if (!state) throw new Error("Telepathic series not found.");
+    assertSeriesNotEnded(state);
     if (state.archivedAt) throw new Error("Restore the archived series before recovery.");
     if (state.status !== "blocked") return state;
     const unresolved = unresolvedTelepathicProviderCalls(state);
@@ -858,6 +866,7 @@ export async function allowRetryForUncertainTelepathicCall(deps: TelepathicExcha
   return withTelepathicSeriesRunLock(deps, seriesId, async () => {
     const state = await deps.store.getTelepathicSeries(seriesId);
     if (!state) throw new Error("Telepathic series not found.");
+    assertSeriesNotEnded(state);
     if (state.archivedAt) throw new Error("Restore the archived series before recovery.");
     const call = state.providerCalls.find((item) => item.id === callId);
     if (!call || (call.status !== "uncertain" && call.status !== "dispatched")) throw new Error("The selected provider call is not awaiting operator resolution.");
@@ -883,6 +892,7 @@ export async function allowRetryForUncertainTelepathicCall(deps: TelepathicExcha
 }
 
 async function finalizeSeries(deps: TelepathicExchangeEngineDependencies, state: TelepathicSeriesState): Promise<TelepathicSeriesState> {
+  assertSeriesNotEnded(state);
   const seriesId=state.config.seriesId;
   checkStop(deps);
   if(state.archivedAt)throw new Error("Restore the archived series before Resume.");
@@ -917,6 +927,25 @@ export async function runTelepathicFinalReflections(deps: TelepathicExchangeEngi
   return withTelepathicSeriesRunLock(deps,seriesId,async()=>{
     const state=await deps.store.getTelepathicSeries(seriesId);
     if(!state) throw new Error("Telepathic series not found.");
+    assertSeriesNotEnded(state);
     return finalizeSeries(deps,state);
+  });
+}
+
+/** End the whole series, including interrupted finalization, without resolving
+ * uncertain delivery or invoking any participant. The same run lease fences it. */
+export async function endTelepathicSeries(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState> {
+  return withTelepathicSeriesRunLock(deps, seriesId, async () => {
+    const state = await deps.store.getTelepathicSeries(seriesId);
+    if (!state) throw new Error("Telepathic series not found.");
+    if (state.termination?.reason === "user_finished") return state;
+    if (state.archivedAt) throw new Error("Restore the archived series before ending it.");
+    if (state.status === "cancelled" || (state.status === "completed" && state.finalization !== "pending" && state.finalization !== "blocked" && state.finalization !== "running" && Object.keys(state.finalReflections).length >= state.config.participants.filter(p => p.kind === "ai").length)) throw new Error("This series has no unfinished work to end.");
+    state.termination = { reason: "user_finished", endedAt: now(deps) };
+    state.status = "cancelled";
+    await saveCheckpoint(deps, state);
+    const persisted = await deps.store.getTelepathicSeries(seriesId);
+    if (!persisted?.termination || persisted.status !== "cancelled") throw new Error("Telepathic series end marker was not persisted.");
+    return persisted;
   });
 }
