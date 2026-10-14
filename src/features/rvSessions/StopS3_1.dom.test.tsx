@@ -14,20 +14,31 @@ vi.mock("../../aiCenter/viewerNotes",async importOriginal=>({...await importOrig
 vi.mock("../../sessions/controller",async importOriginal=>({...await importOriginal<object>(),runAutomaticRcpSession:mocks.blind}));
 vi.mock("../../sessions/postReveal",async importOriginal=>({...await importOriginal<object>(),runAutomaticPostRevealReview:mocks.review}));
 import {RvSessionPanel} from "./RvSessionPanel";
-for(const language of ["pl","en"] as const)it(`S3.1 ${language}: existing RV Stop reaches automatic post-Reveal and stays stopping until settle`,async()=>{
+import {automaticPostRevealReviewRequest} from "../../sessions/postReveal";
+for(const history of [false,true]) for(const language of ["pl","en"] as const)it(`S3.1 ${language}/history=${history}: existing RV Stop reaches automatic post-Reveal and stays stopping until settle`,async()=>{
  (globalThis as {IS_REACT_ACT_ENVIRONMENT?:boolean}).IS_REACT_ACT_ENVIRONMENT=true;
- const host=document.createElement("div");document.body.append(host);const root=createRoot(host);let release!:()=>void;let signal!:AbortSignal;
+ const host=document.createElement("div");document.body.append(host);const root=createRoot(host);let release!:()=>void;let signal!:AbortSignal;let finishRefresh!:()=>void;let refreshing=false;const nextCallback=vi.fn();
  const provider={id:"pc",provider:"custom_openai",credentialId:"k",enabled:true,label:"P"};const model={providerConfigId:"pc",provider:"custom_openai",modelId:"m",route:"route",displayName:"M",capabilities:{inputModalities:["text"],outputModalities:["text"],reasoning:{supported:false,efforts:[]},temperature:{supported:false},supportedParameters:[]},pricing:{}};
  mocks.identities.mockResolvedValue([{identity:{id:"i",displayName:"Viewer"},providerConfig:provider,model}]);
  mocks.blind.mockImplementation(async request=>{request.onProgress({sessionId:"s",state:"Revealed",transcript:"accepted blind"});return{sessionId:"s",state:"Revealed",transcript:"accepted blind"};});
- mocks.review.mockImplementation(request=>{signal=request.signal;return new Promise((_resolve,reject)=>{release=()=>reject(signal.reason);});});
- const repository={listProviderConfigs:async()=>[provider],listProviderModels:async()=>[model],listTargets:async()=>[{id:"t",collection:"user",sourceMetadata:{},title:"T",revealText:"target",tags:[],createdAt:"t",updatedAt:"t"}],listRvSessions:async()=>[],listSessionEvents:async()=>[],listCustomProtocols:async()=>[],getReveal:async()=>({text:"target",hash:"h",artifactManifest:[]}),getSessionSnapshot:async()=>({providerConfigId:"pc",modelId:"m",modelRoute:"route",provider:"custom_openai",capabilitySnapshot:{}}),listJudgeScores:async()=>[],listTargetClarifications:async()=>[]} as unknown as AppRepository;
+ mocks.review.mockImplementation(request=>{signal=request.signal;return new Promise((_resolve,reject)=>{release=()=>{if(signal.aborted)reject(signal.reason);else{nextCallback();reject(new Error("Unexpected continuation"));}};});});
+ const saved={id:"history-session",sessionCode:"HISTORY-REVIEW",state:"Revealed",preRevealTranscript:"accepted blind",postRevealTranscript:JSON.stringify({role:"user",content:automaticPostRevealReviewRequest(language)})+"\n"+JSON.stringify({role:"assistant",content:"Accepted historical Viewer review"})+"\n",createdAt:"t",updatedAt:"t"};
+ const before=JSON.stringify(saved);
+ const repository={listProviderConfigs:async()=>[provider],listProviderModels:async()=>[model],listTargets:async()=>[{id:"t",collection:"user",sourceMetadata:{},title:"T",revealText:"target",tags:[],createdAt:"t",updatedAt:"t"}],listRvSessions:async()=>history?[saved]:[],getRvSession:async()=>{if(history&&signal?.aborted){refreshing=true;await new Promise<void>(resolve=>{finishRefresh=resolve;});}return saved;},listSessionEvents:async()=>[],listCustomProtocols:async()=>[],getReveal:async()=>({text:"target",hash:"h",artifactManifest:[]}),getSessionSnapshot:async()=>({providerConfigId:"pc",modelId:"m",modelRoute:"route",provider:"custom_openai",sessionLanguage:language,...(history?{monitor:{providerConfigId:"pc",modelId:"m"}}:{}),capabilitySnapshot:{}}),listJudgeScores:async()=>[],listTargetClarifications:async()=>[]} as unknown as AppRepository;
  const copy=getCopy(language);const button=(text:string)=>[...host.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent?.includes(text));
  try{
   await act(async()=>root.render(<RvSessionPanel repository={repository} profile={{id:"p",name:"P",credentialId:"k",createdAt:"t",updatedAt:"t"}} workspace={{id:"w",profileId:"p",name:"W",kind:"rv",createdAt:"t",updatedAt:"t",lastOpenedAt:"t"}} settings={{...createDefaultSettings(),interfaceLanguage:language,defaultRevealSource:"automatic"}} copy={copy}/>));
-  await vi.waitFor(()=>expect(button(copy.startSession)?.disabled).toBe(false));await act(async()=>button(copy.startSession)!.click());await vi.waitFor(()=>expect(signal).toBeTruthy());
+  await vi.waitFor(()=>expect(button(copy.startSession)?.disabled).toBe(false));if(history){
+   expect(host.querySelector(".live-session")).toBeNull();
+   const toggle=host.querySelector<HTMLButtonElement>(".session-metadata-toggle")!;await act(async()=>toggle.click());
+   const label=language==="pl"?"Wznów opinię po Revealu":"Resume post-Reveal review";
+   await vi.waitFor(()=>expect(button(label)?.disabled).toBe(false));await act(async()=>button(label)!.click());
+  }else await act(async()=>button(copy.startSession)!.click());
+  await vi.waitFor(()=>expect(signal).toBeTruthy());
+  if(history){expect(host.querySelector('[data-session-id="history-session"]')?.textContent).toContain("HISTORY-REVIEW");expect(button(copy.startSession)?.disabled).toBe(true);}
   expect(host.querySelectorAll(".stop-button")).toHaveLength(1);await act(async()=>button(copy.stopSession)!.click());expect(signal.aborted).toBe(true);
   expect(button(language==="pl"?"Zatrzymywanie…":"Stopping…")?.disabled).toBe(true);await act(async()=>release());
-  await vi.waitFor(()=>expect(host.textContent).not.toContain(language==="pl"?"Zatrzymywanie…":"Stopping…"));expect(mocks.blind).toHaveBeenCalledTimes(1);expect(mocks.review).toHaveBeenCalledTimes(1);
- }finally{release?.();await act(async()=>root.unmount());host.remove();mocks.blind.mockReset();mocks.review.mockReset();}
+  if(history){await vi.waitFor(()=>expect(refreshing).toBe(true));expect(button(language==="pl"?"Zatrzymywanie…":"Stopping…")?.disabled).toBe(true);await act(async()=>finishRefresh());expect(JSON.stringify(saved)).toBe(before);}
+  await vi.waitFor(()=>expect(host.textContent).not.toContain(language==="pl"?"Zatrzymywanie…":"Stopping…"));expect(mocks.blind).toHaveBeenCalledTimes(history?0:1);expect(nextCallback).not.toHaveBeenCalled();expect(mocks.review).toHaveBeenCalledTimes(1);
+ }finally{finishRefresh?.();release?.();await act(async()=>root.unmount());host.remove();mocks.blind.mockReset();mocks.review.mockReset();}
 });
