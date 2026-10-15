@@ -69,6 +69,17 @@ describe("Viewer identity route selection", () => {
     expect(preferredViewerIdentityId(items, "same")).toBe("");
   });
 
+  it("prefers the Profile credential when two connections have the same model slug", async () => {
+    const c1 = config("one"); const c2 = config("two"); bind(c1, c2);
+    const m1 = model(c1.id, "same"); const m2 = model(c2.id, "same");
+    const items = await listEligibleViewerIdentities({ repository: repo({ identities: [identity("ai-one",c1,m1),identity("ai-two",c2,m2)] }),profileId:"profile",language:"en",providerConfigs:[c1,c2],models:[m1,m2] });
+    expect(preferredViewerIdentityId(items,"same",c2.credentialId)).toBe("ai-two");
+  });
+  it("does not silently substitute another credential for an unavailable Profile default", async () => {
+    const c = config("one"); bind(c); const m = model(c.id,"same");
+    const items = await listEligibleViewerIdentities({ repository: repo({ identities: [identity("ai-one",c,m)] }),profileId:"profile",language:"en",providerConfigs:[c],models:[m] });
+    expect(preferredViewerIdentityId(items,"same","unavailable-credential")).toBe("");
+  });
   it("does not silently choose the first identity when multiple eligible identities have no Profile default", async () => {
     const c = config("pc"); bind(c);
     const gemma = model(c.id, "gemma"); const qwen = model(c.id, "qwen");

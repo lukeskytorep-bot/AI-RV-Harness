@@ -14,7 +14,7 @@ import type { ChatMode, Profile, Workspace } from "../../types";
 
 const mock=vi.hoisted(()=>({chat:vi.fn(),eligible:[] as EligibleViewerIdentity[]}));
 vi.mock("../../providers/native",async original=>({...await original<typeof import("../../providers/native")>(),providerChatAttempt:mock.chat}));
-vi.mock("../../aiCenter/viewerIdentitySelection",async original=>({...await original<typeof import("../../aiCenter/viewerIdentitySelection")>(),listEligibleViewerIdentities:async()=>mock.eligible,requireWorkspaceViewerRoute:async()=>mock.eligible[0].identity}));
+vi.mock("../../aiCenter/viewerIdentitySelection",async original=>({...await original<typeof import("../../aiCenter/viewerIdentitySelection")>(),inspectViewerIdentities:async()=>({identities:mock.eligible,issues:[]}),requireWorkspaceViewerRoute:async()=>mock.eligible[0].identity}));
 vi.mock("../../aiCenter/fieldGuide",async original=>({...await original<typeof import("../../aiCenter/fieldGuide")>(),prepareFieldGuideForSession:async()=>({}),viewerSystemPromptSnapshotFromFieldGuide:async()=>({content:"FIXED MANUAL VIEWER PROMPT"})}));
 
 const provider:ProviderConfig={id:"p",provider:"custom_openai",label:"Fixture",baseUrl:"https://example.test/v1",credentialId:"c",enabled:true,createdAt:"t",updatedAt:"t"};

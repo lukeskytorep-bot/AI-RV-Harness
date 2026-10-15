@@ -8,11 +8,11 @@ import app from "./App.tsx?raw";
 
 describe("PROFILE-IDENTITY-ROUTE-SELECTION-1 boundaries", () => {
   it("selects Viewer identities instead of arbitrary provider models in Conversation and RV Sessions", () => {
-    expect(chatPanel).toContain("listEligibleViewerIdentities");
+    expect(chatPanel).toContain("useViewerRoutes");
     expect(chatPanel).toContain("value={viewerIdentityId}");
     expect(chatPanel).toContain("viewerIdentityLabel(item, settings.interfaceLanguage)");
     expect(chatPanel).not.toContain("onChange={(event) => setModelId(event.target.value)}");
-    expect(rvPanel).toContain("listEligibleViewerIdentities");
+    expect(rvPanel).toContain("useViewerRoutes");
     expect(rvPanel).toContain("value={viewerIdentityId}");
     expect(rvPanel).not.toContain("onChange={(event) => setModelId(event.target.value)}");
   });

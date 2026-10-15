@@ -9,7 +9,7 @@ import {createDefaultSettings} from "../../startupDefaults";
 const mocks=vi.hoisted(()=>({identities:vi.fn(),blind:vi.fn(),review:vi.fn()}));
 vi.mock("../../components/AppDialogProvider",()=>({useAppDialogs:()=>({confirm:vi.fn(),information:vi.fn()})}));
 vi.mock("../../storage",async original=>({...await original<object>(),isTauriRuntime:()=>true}));
-vi.mock("../../aiCenter/viewerIdentitySelection",()=>({listEligibleViewerIdentities:mocks.identities,preferredViewerIdentityId:()=>"i",requireWorkspaceViewerRoute:async()=>undefined,viewerIdentityLabel:()=>"Viewer"}));
+vi.mock("../../aiCenter/viewerIdentitySelection",()=>({inspectViewerIdentities:async(input: unknown)=>({identities:await mocks.identities(input),issues:[]}),preferredViewerIdentityId:()=>"i",requireWorkspaceViewerRoute:async()=>undefined,viewerIdentityLabel:()=>"Viewer"}));
 vi.mock("../../sessions/controller",async original=>({...await original<object>(),runAutomaticRcpSession:mocks.blind}));
 vi.mock("../../sessions/postReveal",async original=>({...await original<object>(),runAutomaticPostRevealReview:mocks.review}));
 import {RvSessionPanel} from "./RvSessionPanel";

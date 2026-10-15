@@ -9,7 +9,7 @@ import type {AppRepository} from "../../storage/repository";
 const mocks=vi.hoisted(()=>({identities:vi.fn(),review:vi.fn(),blind:vi.fn()}));
 vi.mock("../../components/AppDialogProvider",()=>({useAppDialogs:()=>({confirm:vi.fn(),information:vi.fn()})}));
 vi.mock("../../storage",async importOriginal=>({...await importOriginal<object>(),isTauriRuntime:()=>true}));
-vi.mock("../../aiCenter/viewerIdentitySelection",()=>({listEligibleViewerIdentities:mocks.identities,preferredViewerIdentityId:()=>"i",requireWorkspaceViewerRoute:async()=>undefined,viewerIdentityLabel:()=>"Viewer"}));
+vi.mock("../../aiCenter/viewerIdentitySelection",()=>({inspectViewerIdentities:async(input: unknown)=>({identities:await mocks.identities(input),issues:[]}),preferredViewerIdentityId:()=>"i",requireWorkspaceViewerRoute:async()=>undefined,viewerIdentityLabel:()=>"Viewer"}));
 vi.mock("../../aiCenter/fieldGuide",async importOriginal=>({...await importOriginal<object>(),prepareFieldGuideForSession:async()=>({}),viewerSystemPromptSnapshotFromFieldGuide:async()=>({})}));
 vi.mock("../../aiCenter/viewerNotes",async importOriginal=>({...await importOriginal<object>(),prepareViewerNotesForSession:async()=>({enabled:false})}));
 vi.mock("../../sessions/controller",async importOriginal=>({...await importOriginal<object>(),runAutomaticRcpSession:mocks.blind}));

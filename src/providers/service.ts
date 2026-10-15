@@ -1,3 +1,4 @@
+import { notifyProviderRoutesChanged } from "./changes";
 import type { AppRepository } from "../storage/repository";
 import { createId } from "../storage/repository";
 import { deleteCredentialSecret, discoverModels, hasCredentialSecret, rebindCredentialSecret, storeCredentialSecret } from "./native";
@@ -34,7 +35,7 @@ export async function addProvider(
   const providerId = createId("provider");
   await storeCredentialSecret(credentialId, apiKey, input.provider, input.baseUrl?.trim() || undefined);
   try {
-    return await repository.createProviderConfig({
+    const config = await repository.createProviderConfig({
       id: providerId,
       provider: input.provider,
       label,
@@ -44,6 +45,8 @@ export async function addProvider(
       ...(input.provider === "custom_openai" && input.customOutputTokenField ? { customOutputTokenField: input.customOutputTokenField } : {}),
       fingerprint: await credentialFingerprint(apiKey),
     });
+    notifyProviderRoutesChanged();
+    return config;
   } catch (error) {
     await deleteCredentialSecret(credentialId).catch(() => undefined);
     throw error;
@@ -58,10 +61,12 @@ export async function refreshProviderModels(repository: AppRepository, config: P
     const models = (await discoverModels(config)).slice(0, PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER);
     await repository.replaceProviderModels(config.id, models);
     await repository.updateProviderConnectionStatus(config.id, "ok");
+    notifyProviderRoutesChanged();
     return models;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await repository.updateProviderConnectionStatus(config.id, "error", message);
+    notifyProviderRoutesChanged();
     throw error;
   }
 }
@@ -79,6 +84,7 @@ export async function rebindProviderCredential(
     credentialHint(apiKey),
     await credentialFingerprint(apiKey),
   );
+  notifyProviderRoutesChanged();
   await refreshProviderModels(repository, config);
 }
 
@@ -90,9 +96,11 @@ export async function updateCustomOpenAiOutputTokenField(
 ): Promise<void> {
   if (config.provider !== "custom_openai") throw new Error("Output-token wire override is available only for Custom OpenAI-compatible providers.");
   await repository.updateProviderCustomOutputTokenField(config.id, field);
+  notifyProviderRoutesChanged();
 }
 
 export async function removeProvider(repository: AppRepository, config: ProviderConfig): Promise<void> {
   await deleteCredentialSecret(config.credentialId);
   await repository.deleteProviderConfig(config.id);
+  notifyProviderRoutesChanged();
 }

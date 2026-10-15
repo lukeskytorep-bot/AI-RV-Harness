@@ -7,11 +7,13 @@ describe("STEP-2 Profile/Workspace route boundary", () => {
   it("invalidates stale Viewer selection while Conversation and RV Sessions reload the new Workspace/Profile route", () => {
     const chat = read("./features/conversations/ChatPanel.tsx");
     const rv = read("./features/rvSessions/RvSessionPanel.tsx");
+    const hook = read("./components/useViewerRoutes.ts");
+    expect(hook).toContain("state?.key === key");
+    expect(hook).toContain("workspace.profileId !== profile.id");
+    expect(hook).toContain("if (cancelled) return;");
+    expect(hook).toContain("cancelled = true");
     for (const source of [chat, rv]) {
-      expect(source).toContain("setViewerRouteReadyKey(null)");
-      expect(source).toContain('setViewerIdentityId("")');
-      expect(source).toContain("setViewerIdentities([])");
-      expect(source).toContain("workspace.profileId !== profile.id");
+      expect(source).toContain("useViewerRoutes");
       expect(source).toContain("requireWorkspaceViewerRoute");
     }
   });

@@ -1,6 +1,6 @@
 import type { FieldGuideLanguage } from "./fieldGuideTypes";
 import type { AiIdentity } from "./types";
-import { normalizedViewerBaseUrl as normalizedBaseUrl, prepareProfileViewerRoute, requireViewerRoute, resolveViewerCredential, ViewerRouteError } from "./viewerIdentityRoute";
+import { normalizedViewerBaseUrl as normalizedBaseUrl, prepareProfileViewerRoute, requireViewerRoute, resolveViewerCredential, ViewerRouteError, type ViewerRouteFailureCode } from "./viewerIdentityRoute";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import type { Profile, Workspace } from "../types";
@@ -28,13 +28,17 @@ function exactBindingMatches(identity: AiIdentity, config: ProviderConfig, model
     && model.provider === config.provider;
 }
 
-export async function listEligibleViewerIdentities(input: {
+export interface ViewerIdentityListing {
+  identities: EligibleViewerIdentity[];
+  issues: { providerConfigId?: string; code: ViewerRouteFailureCode }[];
+}
+export async function inspectViewerIdentities(input: {
   repository: AppRepository;
   profileId: string;
   language: FieldGuideLanguage;
   providerConfigs: ProviderConfig[];
   models: ProviderModel[];
-}): Promise<EligibleViewerIdentity[]> {
+}): Promise<ViewerIdentityListing> {
   const identities = await input.repository.listAiIdentities(input.profileId);
   const [trainingRuns, archivedTrainingRuns] = await Promise.all([
     input.repository.listTrainingRuns(),
@@ -42,16 +46,25 @@ export async function listEligibleViewerIdentities(input: {
   ]);
   const allTrainingRuns = [...trainingRuns, ...archivedTrainingRuns].filter((run) => run.profileId === input.profileId);
 
+  const issues: ViewerIdentityListing["issues"] = [];
+  const credentials = new Map<string, Awaited<ReturnType<typeof resolveViewerCredential>>>();
+  await Promise.all(input.providerConfigs.filter(config => config.enabled).map(async config => {
+    const result = await resolveViewerCredential(config);
+    credentials.set(config.id, result);
+    if (!result.ok) issues.push({ providerConfigId: config.id, code: result.code });
+  }));
   const eligible: EligibleViewerIdentity[] = [];
   for (const identity of identities) {
-    if (identity.role !== "viewer" || identity.routeStatus !== "available") continue;
+    if (identity.role !== "viewer") continue;
+    if (identity.routeStatus !== "available") { issues.push({ providerConfigId: identity.providerConfigId, code: "binding_mismatch" }); continue; }
     const providerConfig = input.providerConfigs.find((config) => config.id === identity.providerConfigId);
-    if (!providerConfig) continue;
+    if (!providerConfig || !providerConfig.enabled) { issues.push({ providerConfigId: identity.providerConfigId, code: "configuration_missing" }); continue; }
     const model = input.models.find((candidate) => candidate.providerConfigId === providerConfig.id && candidate.modelId === identity.modelId && candidate.route === identity.modelRoute);
-    if (!model) continue;
-    const result = await resolveViewerCredential(providerConfig);
-    const currentCredentialFingerprint = result.ok ? result.value : null;
-    if (!currentCredentialFingerprint || !exactBindingMatches(identity, providerConfig, model, currentCredentialFingerprint)) continue;
+    if (!model) { issues.push({ providerConfigId: providerConfig.id, code: "model_missing" }); continue; }
+    const result = credentials.get(providerConfig.id);
+    const currentCredentialFingerprint = result?.ok ? result.value : null;
+    if (!currentCredentialFingerprint) continue;
+    if (!exactBindingMatches(identity, providerConfig, model, currentCredentialFingerprint)) { issues.push({ providerConfigId: providerConfig.id, code: "binding_mismatch" }); continue; }
 
     const otherLanguage: FieldGuideLanguage = input.language === "en" ? "pl" : "en";
     const [fieldGuide, otherLanguageFieldGuide, viewerNotes] = await Promise.all([
@@ -72,10 +85,18 @@ export async function listEligibleViewerIdentities(input: {
     });
   }
 
-  return eligible.sort((left, right) => right.identity.lastUsedAt.localeCompare(left.identity.lastUsedAt));
+  return { identities: eligible.sort((left, right) => right.identity.lastUsedAt.localeCompare(left.identity.lastUsedAt)), issues };
 }
 
-export function preferredViewerIdentityId(items: EligibleViewerIdentity[], profileDefaultModelId?: string): string {
+export async function listEligibleViewerIdentities(input: Parameters<typeof inspectViewerIdentities>[0]): Promise<EligibleViewerIdentity[]> {
+  return (await inspectViewerIdentities(input)).identities;
+}
+
+export function preferredViewerIdentityId(items: EligibleViewerIdentity[], profileDefaultModelId?: string, credentialId?: string): string {
+  if (credentialId) {
+    const matches = items.filter(item => item.providerConfig.credentialId === credentialId && (!profileDefaultModelId || item.model.modelId === profileDefaultModelId));
+    return matches.length === 1 ? matches[0].identity.id : "";
+  }
   if (items.length === 1) return items[0].identity.id;
   if (!profileDefaultModelId) return "";
   const matches = items.filter((item) => item.identity.modelId === profileDefaultModelId);

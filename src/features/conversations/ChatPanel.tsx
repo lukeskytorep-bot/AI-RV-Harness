@@ -1,9 +1,11 @@
+import { useViewerRoutes } from "../../components/useViewerRoutes";
+import { ViewerRouteNotice } from "../../components/ViewerRouteNotice";
 import { approveChatResponseRetry, chatResponseNeedsResolution, chatResponseOperationState, endChatResponse, hasUnfinishedChatResponse } from "../../chat/responseRecovery";
 import { CircleStop, Play, Archive, ArrowRight, Crosshair, Download, FileCheck2, KeyRound, LockKeyhole, MessageCircle, Paperclip, Pencil, Plus, RadioTower, ShieldCheck, Sparkles, Waves, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { prepareViewerNotesForSession, viewerNotesSystemBlock } from "../../aiCenter/viewerNotes";
-import { listEligibleViewerIdentities, preferredViewerIdentityId, requireWorkspaceViewerRoute, viewerIdentityLabel, type EligibleViewerIdentity } from "../../aiCenter/viewerIdentitySelection";
+import { requireWorkspaceViewerRoute, viewerIdentityLabel } from "../../aiCenter/viewerIdentitySelection";
 import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
 import { chooseAndImportAttachments } from "../../attachments/native";
 import { ChatMessageList } from "../../chat/ChatMessageList";
@@ -46,15 +48,10 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   const [threadTitle, setThreadTitle] = useState("");
   const [savedThreadTitle, setSavedThreadTitle] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [providerConfigs, setProviderConfigs] = useState<ProviderConfig[]>([]);
-  const [models, setModels] = useState<ProviderModel[]>([]);
-  const [viewerIdentities, setViewerIdentities] = useState<EligibleViewerIdentity[]>([]);
   const [sources, setSources] = useState<WorkspaceSource[]>([]);
   const [activeSourceIds, setActiveSourceIds] = useState<string[]>([]);
   const [chatImages, setChatImages] = useState<ProviderImageInput[]>([]);
   const [chatImageNames, setChatImageNames] = useState<string[]>([]);
-  const [viewerIdentityId, setViewerIdentityId] = useState("");
-  const [viewerRouteReadyKey, setViewerRouteReadyKey] = useState<string | null>(null);
   const [viewerLearningEnabled, setViewerLearningEnabled] = useState(false);
   const [viewerLearningSnapshot, setViewerLearningSnapshot] = useState<ConversationViewerLearningSnapshot | null>(null);
   const [input, setInput] = useState("");
@@ -75,11 +72,10 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   const operationGuardRef = useRef(new AsyncRunGuard());
   const dialogs = useAppDialogs();
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
+  const { providerConfigs, models, viewerIdentities, viewerIdentityId, setViewerIdentityId, viewerRouteReady, status: viewerRouteStatus, retry: retryViewerRoute } = useViewerRoutes({ repository, profile, workspace, language });
   const selectedIdentity = viewerIdentities.find((item) => item.identity.id === viewerIdentityId) ?? null;
   const activeProvider = selectedIdentity?.providerConfig ?? null;
   const selectedModel = selectedIdentity?.model ?? null;
-  const viewerRouteKey = `${workspace.id}:${profile?.id ?? "missing"}`;
-  const viewerRouteReady = viewerRouteReadyKey === viewerRouteKey && workspace.profileId === profile?.id;
 
   useEffect(() => { onBusyChange?.(sending); return () => onBusyChange?.(false); }, [sending, onBusyChange]);
 
@@ -89,31 +85,12 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
 
   useEffect(() => {
     let cancelled = false;
-    setViewerRouteReadyKey(null);
-    setViewerIdentityId("");
-    setViewerIdentities([]);
-    void (async () => {
-      if (!repository || !profile || workspace.profileId !== profile.id) return;
-      const [configs, nextSources] = await Promise.all([
-        repository.listProviderConfigs(),
-        repository.listWorkspaceSources(workspace.id),
-      ]);
-      if (cancelled) return;
-      setProviderConfigs(configs);
-      const nextModels = await repository.listProviderModels();
-      const eligible = await listEligibleViewerIdentities({ repository, profileId: profile.id, language, providerConfigs: configs, models: nextModels });
-      if (cancelled) return;
-      setModels(nextModels);
-      setViewerIdentities(eligible);
-      setSources(nextSources);
-      setChatImages([]);
-      setChatImageNames([]);
-      setViewerIdentityId(preferredViewerIdentityId(eligible, profile.defaultViewerModelId));
-      setViewerRouteReadyKey(`${workspace.id}:${profile.id}`);
-      setError(null);
-    })();
+    setSources([]); setChatImages([]); setChatImageNames([]);
+    if (repository) void repository.listWorkspaceSources(workspace.id).then(items => {
+      if (!cancelled) setSources(items);
+    }).catch(() => { if (!cancelled) setError(copy.viewerRouteLoadFailed); });
     return () => { cancelled = true; };
-  }, [repository, workspace.id, profile?.id, profile?.defaultViewerModelId, language]);
+  }, [repository, workspace.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -705,12 +682,12 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         </span>
       </div>
       <div className="chat-model-bar">
-        <span><KeyRound size={14} />{activeProvider?.label ?? copy.credentialPending}</span>
-        <select value={viewerIdentityId} onChange={(event) => setViewerIdentityId(event.target.value)} disabled={!viewerRouteReady || !viewerIdentities.length || sending}>
-          <option value="">{viewerIdentities.length ? copy.selectModel : (settings.interfaceLanguage === "pl" ? "Brak tożsamości Viewera" : "No Viewer identity")}</option>
+        <span><KeyRound size={14} />{activeProvider?.label ?? (viewerRouteStatus === "configuration_missing" ? copy.credentialPending : copy.viewerRouteSelect)}</span>
+        <select aria-label={copy.viewerRouteSelect} value={viewerIdentityId} onChange={(event) => setViewerIdentityId(event.target.value)} disabled={!viewerRouteReady || !viewerIdentities.length || sending}>
+          <option value="">{copy.viewerRouteSelect}</option>
           {viewerIdentities.map((item) => <option key={item.identity.id} value={item.identity.id}>{viewerIdentityLabel(item, settings.interfaceLanguage)}</option>)}
         </select>
-        {!viewerIdentities.length && <small>{settings.interfaceLanguage === "pl" ? "Dodaj model Viewera w Profilu lub rozpocznij Training. Conversation nie tworzy nowej tożsamości automatycznie." : "Add a Viewer model in Profile or start Training. Conversation does not create a new identity automatically."}</small>}
+        <ViewerRouteNotice copy={copy} status={viewerRouteStatus} onRetry={retryViewerRoute} disabled={sending} />
         {mode === "conversation" && <label className="manual-notes-toggle" title={settings.interfaceLanguage === "pl" ? "Dołącz read-only Field Guide i Viewer Notes dokładnie wybranej tożsamości." : "Attach the exact selected identity's read-only Field Guide and Viewer Notes."}><span>{settings.interfaceLanguage === "pl" ? "Użyj Viewer Learning" : "Use Viewer Learning"}</span><input type="checkbox" checked={viewerLearningEnabled} disabled={sending || !viewerLearningSnapshot} onChange={(event) => { const enabled = event.target.checked; setViewerLearningEnabled(enabled); if (threadId) saveConversationViewerLearningPreference(threadId, enabled); }} /></label>}
         <span className={`chat-context-meter ${contextBudget.level}`} title={contextBudget.contextLimit === undefined
           ? `${copy.estimatedContext}: ~${contextBudget.estimatedInputTokens.toLocaleString()} + ${contextBudget.reservedOutputTokens.toLocaleString()} output tokens`

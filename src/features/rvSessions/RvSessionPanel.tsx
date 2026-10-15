@@ -1,3 +1,5 @@
+import { useViewerRoutes } from "../../components/useViewerRoutes";
+import { ViewerRouteNotice } from "../../components/ViewerRouteNotice";
 import { inheritAbortOwnership } from "../../application/abortOwnership";
 import { withRvWorkflow, withWorkflow } from "../../application/workflowOwnership";
 import { useWorkflowOwnership } from "../../components/useWorkflowOwnership";
@@ -75,7 +77,7 @@ import {
 } from "../../sessions/telepathicController";
 import { prepareViewerNotesForSession } from "../../aiCenter/viewerNotes";
 import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
-import { listEligibleViewerIdentities, preferredViewerIdentityId, requireWorkspaceViewerRoute, viewerIdentityLabel, type EligibleViewerIdentity } from "../../aiCenter/viewerIdentitySelection";
+import { requireWorkspaceViewerRoute, viewerIdentityLabel } from "../../aiCenter/viewerIdentitySelection";
 import { reasoningCapabilityLead, reasoningOptionLabel } from "../../providers/reasoningPresentation";
 import { BatchEvaluation, JudgeEvaluation } from "../judge";
 
@@ -102,17 +104,12 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const [revealSource, setRevealSource] = useState<"automatic" | "external">(settings.defaultRevealSource);
   const [sessionLanguage, setSessionLanguage] = useState<SessionLanguageSetting>(settings.sessionLanguage);
   const [resourceOpen, setResourceOpen] = useState(false);
-  const [providerConfigs, setProviderConfigs] = useState<ProviderConfig[]>([]);
-  const [allModels, setAllModels] = useState<ProviderModel[]>([]);
-  const [viewerIdentities, setViewerIdentities] = useState<EligibleViewerIdentity[]>([]);
   const [targets, setTargets] = useState<TargetRecord[]>([]);
   const [customProtocols, setCustomProtocols] = useState<CustomProtocolVersion[]>([]);
   const [customProtocolVersionId, setCustomProtocolVersionId] = useState("");
   const [customBuilderOpen, setCustomBuilderOpen] = useState(false);
   const [customBuilderNew, setCustomBuilderNew] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState("__random__");
-  const [viewerIdentityId, setViewerIdentityId] = useState("");
-  const [viewerRouteReadyKey, setViewerRouteReadyKey] = useState<string | null>(null);
   const [monitorModelKey, setMonitorModelKey] = useState("");
   const [reasoning, setReasoning] = useState<"" | ReasoningEffort>("");
   const [temperature, setTemperature] = useState("");
@@ -156,11 +153,10 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const telepathic = getTelepathicProtocol(resolvedLanguage);
   const telepathicQuestions = telepathicQuestionsText.split(/\r?\n/).map((question) => question.trim()).filter(Boolean);
   const specialTask: SpecialTaskInput | undefined = specialTaskOptions.length || specialTaskText.trim() ? { selectedOptions: specialTaskOptions, ...(specialTaskText.trim() ? { customText: specialTaskText.trim() } : {}) } : undefined;
+  const { providerConfigs, models: allModels, viewerIdentities, viewerIdentityId, setViewerIdentityId, viewerRouteReady, status: viewerRouteStatus, retry: retryViewerRoute } = useViewerRoutes({ repository, profile, workspace, language: resolvedLanguage });
   const selectedIdentity = viewerIdentities.find((item) => item.identity.id === viewerIdentityId) ?? null;
   const activeProvider = selectedIdentity?.providerConfig ?? null;
   const selectedModel = selectedIdentity?.model ?? null;
-  const viewerRouteKey = `${workspace.id}:${profile?.id ?? "missing"}`;
-  const viewerRouteReady = viewerRouteReadyKey === viewerRouteKey && workspace.profileId === profile?.id;
   const monitorModel = findCredentialScopedModelByRouteKey(monitorModelKey, profile?.credentialId, providerConfigs, allModels);
   const monitorProvider = monitorModel ? providerConfigs.find((item) => item.id === monitorModel.providerConfigId) ?? null : null;
   const eligibleTargets = targets.filter((target) => targetIsEligibleForProtocol(target, protocol));
@@ -202,31 +198,21 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
 
   useEffect(() => {
     let cancelled = false;
-    setViewerRouteReadyKey(null);
-    setViewerIdentityId("");
-    setViewerIdentities([]);
-    void (async () => {
-      if (!repository || !profile || workspace.profileId !== profile.id) return;
-      const configs = await repository.listProviderConfigs();
-      if (cancelled) return;
-      setProviderConfigs(configs);
-      const [everyModel, targetCatalog, sessionHistory] = await Promise.all([
-        repository.listProviderModels(),
-        repository.listTargets(),
-        repository.listRvSessions(workspace.id),
-      ]);
-      const eligible = await listEligibleViewerIdentities({ repository, profileId: profile.id, language: resolvedLanguage, providerConfigs: configs, models: everyModel });
-      if (cancelled) return;
-      setViewerIdentities(eligible);
-      setAllModels(everyModel);
-      setTargets(targetCatalog);
-      setRecentSessions(sessionHistory.filter((session) => !session.researchProjectId));
-      setViewerIdentityId(preferredViewerIdentityId(eligible, profile.defaultViewerModelId));
-      setViewerRouteReadyKey(`${workspace.id}:${profile.id}`);
-      setMonitorModelKey(resolveRoleDefault(profile, "monitor", configs, everyModel));
-    })();
+    if (repository) void Promise.all([repository.listTargets(), repository.listRvSessions(workspace.id)]).then(([catalog, history]) => {
+      if (!cancelled) { setTargets(catalog); setRecentSessions(history.filter(session => !session.researchProjectId)); }
+    }).catch(() => { if (!cancelled) setRunError(copy.viewerRouteLoadFailed); });
     return () => { cancelled = true; };
-  }, [repository, profile?.id, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profile?.defaultMonitorProviderConfigId, profile?.defaultMonitorModelId, workspace.id, resolvedLanguage]);
+  }, [repository, workspace.id]);
+
+  const monitorRouteContext = useRef("");
+  useEffect(() => {
+    if (!viewerRouteReady) return;
+    const context = JSON.stringify([profile?.id, profile?.credentialId, profile?.defaultMonitorProviderConfigId, profile?.defaultMonitorModelId]);
+    const sameContext = monitorRouteContext.current === context;
+    monitorRouteContext.current = context;
+    setMonitorModelKey(current => sameContext && findCredentialScopedModelByRouteKey(current, profile?.credentialId, providerConfigs, allModels)
+      ? current : resolveRoleDefault(profile, "monitor", providerConfigs, allModels));
+  }, [viewerRouteReady, profile?.id, profile?.credentialId, profile?.defaultMonitorProviderConfigId, profile?.defaultMonitorModelId, providerConfigs, allModels]);
 
   useEffect(() => {
     setProgress(null);
@@ -305,12 +291,31 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     return () => { cancelled = true; };
   }, [repository, recoveryInspectionKey]);
 
+  const generationScope = useRef("");
+  const initializedGenerationContext = useRef<string | null>(null);
   useEffect(() => {
-    if (!selectedModel) return;
+    const scope = JSON.stringify([workspace.id, profile?.id, profile?.credentialId]);
+    if (generationScope.current !== scope) {
+      generationScope.current = scope;
+      initializedGenerationContext.current = null;
+    }
+    // Loading temporarily removes the selected route. Keep the last valid
+    // context, but never enable dispatch until the hook has revalidated it.
+    if (!viewerRouteReady || !selectedIdentity || !selectedModel) return;
     const profileDefaults = profileGenerationDefaults(profile, selectedModel);
+    const capabilities = selectedModel.capabilities;
+    const context = JSON.stringify([
+      scope, selectedIdentity.identity.id, activeProvider?.id, activeProvider?.credentialId, activeProvider?.baseUrl,
+      selectedModel.modelId, selectedModel.route, profile?.defaultViewerModelId,
+      profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profileDefaults,
+      capabilities.reasoning.supported, capabilities.reasoning.mandatory, [...capabilities.reasoning.efforts].sort(),
+      capabilities.temperature.supported, capabilities.temperature.min, capabilities.temperature.max, capabilities.temperature.default,
+    ]);
+    if (initializedGenerationContext.current === context) return;
+    initializedGenerationContext.current = context;
     setReasoning(profileDefaults.reasoningEffort ?? "");
     setTemperature(profileDefaults.temperature === undefined ? "" : String(profileDefaults.temperature));
-  }, [selectedIdentity?.identity.id, selectedModel?.modelId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature]);
+  }, [viewerRouteReady, selectedIdentity?.identity.id, selectedModel, activeProvider, workspace.id, profile?.id, profile?.credentialId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature]);
 
   useEffect(() => {
     if (protocol !== "telepathic") return;
@@ -1052,14 +1057,14 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
           <div className="custom-protocol-select"><select value={customProtocolVersionId} onChange={(event) => setCustomProtocolVersionId(event.target.value)}><option value="">{copy.noCustomProtocols}</option>{customProtocols.map((item) => <option key={item.versionId} value={item.versionId}>{item.displayName} · {item.version}</option>)}</select><div className="custom-protocol-buttons"><button className="secondary-button" onClick={() => { setCustomBuilderNew(true); setCustomBuilderOpen(true); }}><Plus size={15} />{copy.newCustomProtocol}</button>{selectedCustomProtocol && <button className="secondary-button" onClick={() => { setCustomBuilderNew(false); setCustomBuilderOpen(true); }}>{copy.editCustomProtocol}</button>}</div><small>{copy.customMonitorNote}</small></div>
         </ConfigBlock>}
         <ConfigBlock label={copy.providerConnection}>
-          <div className="route-summary">{activeProvider ? <><KeyRound size={16} /><span><strong>{activeProvider.label}</strong><small>{activeProvider.credentialHint ?? "••••••••"}</small></span></> : <><KeyRound size={16} /><span><strong>{copy.credentialPending}</strong><small>{copy.configureProviderFirst}</small></span></>}</div>
+          <div className="route-summary">{activeProvider ? <><KeyRound size={16} /><span><strong>{activeProvider.label}</strong><small>{activeProvider.credentialHint ?? "••••••••"}</small></span></> : <><KeyRound size={16} /><span><strong>{viewerRouteStatus === "configuration_missing" ? copy.credentialPending : copy.viewerRouteSelect}</strong></span></>}</div>
         </ConfigBlock>
         <ConfigBlock label={copy.viewerModel}>
-          <select value={viewerIdentityId} onChange={(event) => setViewerIdentityId(event.target.value)} disabled={!viewerRouteReady || !viewerIdentities.length}>
-            <option value="">{viewerIdentities.length ? copy.selectModel : (settings.interfaceLanguage === "pl" ? "Brak tożsamości Viewera" : "No Viewer identity")}</option>
+          <select aria-label={copy.viewerRouteSelect} value={viewerIdentityId} onChange={(event) => setViewerIdentityId(event.target.value)} disabled={!viewerRouteReady || !viewerIdentities.length}>
+            <option value="">{copy.viewerRouteSelect}</option>
             {viewerIdentities.map((item) => <option key={item.identity.id} value={item.identity.id}>{viewerIdentityLabel(item, settings.interfaceLanguage)}</option>)}
           </select>
-          {!viewerIdentities.length && <small>{settings.interfaceLanguage === "pl" ? "Dodaj model Viewera w Profilu lub rozpocznij Training. RV Sessions nie tworzą nowej tożsamości automatycznie." : "Add a Viewer model in Profile or start Training. RV Sessions do not create a new identity automatically."}</small>}
+        <ViewerRouteNotice copy={copy} status={viewerRouteStatus} onRetry={retryViewerRoute} disabled={sessionRunning || batchRunning} />
         </ConfigBlock>
         {selectedModel && <ConfigBlock label="Generation">
           <div className="generation-grid">
@@ -1086,7 +1091,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         </ConfigBlock>}</> : <ConfigBlock label={copy.targetPool}><div className="batch-config"><label><span>{copy.targetPool}</span><strong>{copy.myTargets}</strong></label><label><span>{copy.batchCount}</span><input type="number" min={1} max={Math.max(1, batchPool.length)} value={batchCount} onChange={(event) => setBatchCount(Math.max(1, Number(event.target.value) || 1))} /></label><small>{copy.eligibleTargets}: {batchPool.length}</small>{batchPool.length === 0 && <small className="target-source-error">{copy.noEligibleTargetsLead}</small>}<div className="batch-preflight-actions"><button className="secondary-button" onClick={preflightBatch}>{copy.runPreflight}</button>{batchPreflightSignature === batchConfigSignature && <span className="status-chip ready"><Check size={12} />{copy.preflightPassed}</span>}</div></div></ConfigBlock>}
         <div className="start-block">
           <button className="primary-button start-button" disabled={ownership.unavailable || endingSession!==null || postRevealBusy || !viewerRouteReady || !isTauriRuntime() || !activeProvider || !selectedModel || settings.rvSessionMaxOutputTokens <= 0 || (runType === "monitor" && (!canSelectMonitor(protocol) || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (protocol === "telepathic" && telepathicQuestionMode === "predefined" && (!telepathicQuestions.length || (runType === "monitor" && telepathicQuestions.length > 5))) || (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
-          <p>{activeProvider ? copy.controllerReady : copy.configureProviderFirst}</p>
+          {activeProvider && <p>{copy.controllerReady}</p>}
         </div>
         </>}
         {ownership.unavailable && <small role="status">{ownership.state==="other"?(settings.interfaceLanguage==="pl"?"Praca trwa w innym oknie":"Work is running in another window"):(settings.interfaceLanguage==="pl"?"Sprawdzanie stanu wykonania":"Checking execution state")}</small>}
