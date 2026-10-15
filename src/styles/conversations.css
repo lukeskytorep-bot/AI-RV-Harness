@@ -68,7 +68,7 @@
 .external-project-link:hover { text-decoration: underline; }
 .accepted-reveal-panel { display: grid; gap: 10px; padding: 15px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
 .accepted-reveal-panel > small { color: var(--muted); font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
-.chat-message { display: grid; grid-template-columns: 31px minmax(0, 1fr); align-items: start; gap: 9px; max-width: 860px; }
+.chat-message { display: grid; grid-template-columns: 31px minmax(0, 1fr); align-items: start; gap: 9px; width: 100%; min-width: 0; max-width: none; }
 .chat-message > span { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; color: #fff; background: linear-gradient(145deg, #6f61e9, #bc5da0); font-size: 11px; font-weight: 800; }
 .chat-message.assistant > span { color: var(--cyan); background: var(--cyan-soft); }
 .chat-message > div { min-width: 0; padding: 9px 11px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
