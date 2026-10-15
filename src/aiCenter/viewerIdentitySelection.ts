@@ -1,8 +1,7 @@
 import type { FieldGuideLanguage } from "./fieldGuideTypes";
 import type { AiIdentity } from "./types";
-import { credentialIdentityFingerprint } from "../providers/native";
+import { normalizedViewerBaseUrl as normalizedBaseUrl, prepareProfileViewerRoute, requireViewerRoute, resolveViewerCredential, ViewerRouteError } from "./viewerIdentityRoute";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
-import { isTauriRuntime } from "../storage";
 import type { AppRepository } from "../storage/repository";
 import type { Profile, Workspace } from "../types";
 
@@ -15,25 +14,6 @@ export interface EligibleViewerIdentity {
   viewerNotesVersionNumber?: number;
 }
 
-function normalizedBaseUrl(baseUrl?: string): string | undefined {
-  const clean = baseUrl?.trim().replace(/\/+$/, "").toLowerCase();
-  return clean || undefined;
-}
-
-function metadataCredentialFingerprint(config: ProviderConfig): string {
-  return config.credentialFingerprint?.trim() || `${config.provider}:${config.credentialId}`;
-}
-
-async function currentIdentityCredentialFingerprint(config: ProviderConfig): Promise<string | null> {
-  if (!isTauriRuntime()) return metadataCredentialFingerprint(config);
-  try {
-    const fingerprint = (await credentialIdentityFingerprint(config.credentialId)).trim();
-    return fingerprint || null;
-  } catch {
-    return null;
-  }
-}
-
 function exactBindingMatches(identity: AiIdentity, config: ProviderConfig, model: ProviderModel, currentCredentialFingerprint: string): boolean {
   return identity.role === "viewer"
     && identity.routeStatus === "available"
@@ -44,7 +24,8 @@ function exactBindingMatches(identity: AiIdentity, config: ProviderConfig, model
     && (identity.normalizedBaseUrl ?? undefined) === normalizedBaseUrl(config.baseUrl)
     && identity.modelId === model.modelId
     && identity.modelRoute === model.route
-    && model.providerConfigId === config.id;
+    && model.providerConfigId === config.id
+    && model.provider === config.provider;
 }
 
 export async function listEligibleViewerIdentities(input: {
@@ -68,7 +49,8 @@ export async function listEligibleViewerIdentities(input: {
     if (!providerConfig) continue;
     const model = input.models.find((candidate) => candidate.providerConfigId === providerConfig.id && candidate.modelId === identity.modelId && candidate.route === identity.modelRoute);
     if (!model) continue;
-    const currentCredentialFingerprint = await currentIdentityCredentialFingerprint(providerConfig);
+    const result = await resolveViewerCredential(providerConfig);
+    const currentCredentialFingerprint = result.ok ? result.value : null;
     if (!currentCredentialFingerprint || !exactBindingMatches(identity, providerConfig, model, currentCredentialFingerprint)) continue;
 
     const otherLanguage: FieldGuideLanguage = input.language === "en" ? "pl" : "en";
@@ -118,9 +100,9 @@ export async function requireExistingViewerIdentity(input: {
   model: ProviderModel;
 }): Promise<AiIdentity> {
   const identity = (await input.repository.listAiIdentities(input.profileId)).find((item) => item.id === input.identityId);
-  const currentCredentialFingerprint = await currentIdentityCredentialFingerprint(input.providerConfig);
+  const currentCredentialFingerprint = requireViewerRoute(await resolveViewerCredential(input.providerConfig));
   if (!identity || !currentCredentialFingerprint || !exactBindingMatches(identity, input.providerConfig, input.model, currentCredentialFingerprint)) {
-    throw new Error("The selected Viewer identity is no longer available for this Profile and exact provider route.");
+    throw new ViewerRouteError("binding_mismatch");
   }
   return identity;
 }
@@ -151,25 +133,7 @@ export async function ensureProfileViewerIdentity(input: {
   profileId: string;
   credentialId?: string;
   modelId?: string;
-}): Promise<AiIdentity | null> {
-  if (!input.credentialId || !input.modelId) return null;
-  const configs = await input.repository.listProviderConfigs();
-  const config = configs.find((item) => item.credentialId === input.credentialId && item.enabled);
-  if (!config) return null;
-  const model = (await input.repository.listProviderModels(config.id)).find((item) => item.modelId === input.modelId);
-  if (!model) return null;
-  const fingerprint = await currentIdentityCredentialFingerprint(config);
-  if (!fingerprint) return null;
-  return input.repository.ensureAiIdentity({
-    profileId: input.profileId,
-    credentialFingerprint: fingerprint,
-    credentialDisplay: `…${fingerprint.slice(-4).toUpperCase()}`,
-    providerConfigId: config.id,
-    provider: config.provider,
-    ...(normalizedBaseUrl(config.baseUrl) ? { baseUrl: normalizedBaseUrl(config.baseUrl) } : {}),
-    modelId: model.modelId,
-    modelRoute: model.route,
-    modelDisplayName: model.displayName,
-    role: "viewer",
-  });
+}): Promise<AiIdentity> {
+  const prepared = requireViewerRoute(await prepareProfileViewerRoute(input));
+  return input.repository.ensureAiIdentity({ ...prepared, profileId: input.profileId });
 }

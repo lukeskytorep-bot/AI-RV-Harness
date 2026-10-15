@@ -1,9 +1,10 @@
+import { profileSaveErrorMessage } from "../../application/viewerProfileSave";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { FormDialog } from "../../components/FormDialog";
 import { ModelRouteSelect } from "../../components/ModelRouteSelect";
 import { PROVIDER_LABELS } from "../../components/ProviderSettings";
-import type { getCopy } from "../../i18n";
+import { getCopy } from "../../i18n";
 import { preferredModelOrder, resolveRoleDefault } from "../../modelRoutes";
 import { defaultTemperatureForModel, reasoningEffortForModel } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderKind, ProviderModel, ReasoningEffort } from "../../providers/types";
@@ -60,7 +61,7 @@ export function CreateProfileDialog({ copy, repository, onCancel, onCreate }: Cr
     try {
       await onCreate(aiName, humanName || undefined, note || undefined, setup.buildAiConfiguration());
     } catch (cause) {
-      setSubmitError(cause instanceof Error ? cause.message : String(cause));
+      setSubmitError(profileSaveErrorMessage(cause, copy === getCopy("pl") ? "pl" : "en"));
     } finally {
       setSaving(false);
     }
@@ -160,7 +161,7 @@ export function EditProfileDialog({ copy, profile, providers, models, onCancel, 
       const aiConfiguration = aiTouched ? { ...buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey, providers, models), defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, interfaceLanguage) } : undefined;
       await onSave(name, humanName || undefined, note, aiConfiguration);
     }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    catch (cause) { setError(profileSaveErrorMessage(cause, copy === getCopy("pl") ? "pl" : "en")); }
     finally { setSaving(false); }
   };
   const selectViewer = (modelId: string) => {

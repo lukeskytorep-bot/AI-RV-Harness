@@ -20,7 +20,7 @@ import {
   Sun,
   Users,
 } from "lucide-react";
-import { ensureProfileViewerIdentity } from "./aiCenter/viewerIdentitySelection";
+import { saveViewerProfile, profileSaveErrorMessage, type ViewerProfileSaveSession } from "./application/viewerProfileSave";
 import rosehipLogo from "./assets/rosehip-logo.png";
 import {
   Component,
@@ -74,7 +74,6 @@ import { profileNeedingInitialSetup } from "./profileModelDefaults";
 import { ModelRouteSelect } from "./components/ModelRouteSelect";
 import { aiIsBeDisplayName } from "./domain/isBeIdentity";
 import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from "./targets/telepathicBundled";
-import { createProfileWithInitialWorkspaces } from "./application/profileWorkspace";
 import { resolveOpenedWorkspaceSelection, resolveProfileWorkspaceSelection } from "./application/profileSelection";
 import { isWorkspaceCompatible, latestCompatibleWorkspace } from "./domain/workspaceKind";
 
@@ -308,10 +307,13 @@ export default function App() {
     }
   };
 
+  const profileSaveSession = useRef<ViewerProfileSaveSession>({});
+  useEffect(() => { if (!profileDialog) profileSaveSession.current = {}; }, [profileDialog]);
+
   const createProfile = async (name: string, humanName: string | undefined, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => {
     if (!repository) return;
-    const { profile, conversationWorkspace, rvWorkspace } = await createProfileWithInitialWorkspaces(repository, { name, humanName, note, aiConfiguration });
-    await ensureProfileViewerIdentity({ repository, profileId: profile.id, credentialId: aiConfiguration.credentialId, modelId: aiConfiguration.defaultViewerModelId });
+    const saved = await saveViewerProfile({ repository, values: { name, humanName, note, aiConfiguration }, session: profileSaveSession.current });
+    const { profile, conversationWorkspace, rvWorkspace } = saved.created!;
     const [nextProfiles, nextWorkspaces] = await Promise.all([repository.listProfiles(), repository.listWorkspaces()]);
     setProfiles(nextProfiles);
     setWorkspaces(nextWorkspaces);
@@ -550,35 +552,26 @@ function FirstRunSetup({
   const setup = useProfileSetupController({ copy, repository, existingProfile });
   const busy = setup.busy || saving;
 
+  const profileSaveSession = useRef<ViewerProfileSaveSession>({});
+
   const finish = async (skipOptional = false) => {
     if (!setup.selectedProvider || !setup.viewerModel || busy) return;
     setSaving(true);
     setSaveError(null);
     try {
       const aiConfiguration = setup.buildAiConfiguration(skipOptional);
-      let profile: Profile;
-      let initialConversationWorkspace: Workspace | undefined;
-      let initialRvWorkspace: Workspace | undefined;
-      if (existingProfile) {
-        profile = { ...existingProfile, name: profileName.trim(), humanName: humanName.trim() || undefined, ...aiConfiguration, updatedAt: new Date().toISOString() };
-        await repository.updateProfile(existingProfile.id, { name: profileName, humanName, note: existingProfile.note });
-        await repository.setProfileAiConfiguration(existingProfile.id, aiConfiguration);
-      } else {
-        const created = await createProfileWithInitialWorkspaces(repository, { name: profileName, humanName, aiConfiguration });
-        profile = created.profile;
-        initialConversationWorkspace = created.conversationWorkspace;
-        initialRvWorkspace = created.rvWorkspace;
-      }
-      const viewerIdentity = await ensureProfileViewerIdentity({
+      const saved = await saveViewerProfile({
         repository,
-        profileId: profile.id,
-        credentialId: aiConfiguration.credentialId,
-        modelId: aiConfiguration.defaultViewerModelId,
+        values: { name: profileName.trim(), humanName: humanName.trim() || undefined, note: existingProfile?.note, aiConfiguration },
+        existingProfileId: existingProfile?.id,
+        session: profileSaveSession.current,
       });
-      if (!viewerIdentity) throw new Error("Viewer identity could not be created for the selected Profile setup route.");
+      const profile = saved.profile;
+      const initialConversationWorkspace = saved.created?.conversationWorkspace;
+      const initialRvWorkspace = saved.created?.rvWorkspace;
       await onComplete(profile, initialConversationWorkspace, initialRvWorkspace);
     } catch (cause) {
-      setSaveError(cause instanceof Error ? cause.message : String(cause));
+      setSaveError(profileSaveErrorMessage(cause, copy === getCopy("pl") ? "pl" : "en"));
       setSaving(false);
     }
   };

@@ -35,7 +35,7 @@ function fixture(mode: TelepathicMode, pl = false) {
   const workspace = { id: "human-w", profileId: "human", name: "Human", kind: "conversation", createdAt: "t" } as Workspace;
   let workspaces = profiles.map(p => ({ id: `w-${p.id}`, profileId: p.id, name: `Workspace ${p.id}`, kind: mode === "ai_ai_training" ? "rv" : "conversation", createdAt: "t" } as Workspace));
   const configs = profiles.map(p => ({ id: `provider-${p.id}`, label: p.id, provider: "openrouter", credentialId: `cred-${p.id}`, credentialFingerprint: `fp-${p.id}`, enabled: true } as ProviderConfig));
-  const models = configs.map(c => ({ providerConfigId: c.id, modelId: "model", route: "route", displayName: "Model" } as ProviderModel));
+  const models = configs.map(c => ({ providerConfigId: c.id, provider: c.provider, modelId: "model", route: "route", displayName: "Model" } as ProviderModel));
   const identities = profiles.map((p, index) => ({ id: `identity-${p.id}`, profileId: p.id, providerConfigId: configs[index].id, provider: "openrouter", credentialFingerprint: `fp-${p.id}`, modelId: "model", modelRoute: "route", modelDisplayName: "Model", role: "viewer", routeStatus: "available", lastUsedAt: "t" } as AiIdentity));
   const repository = Object.assign(new BrowserTelepathicExchangeRepository({ storage: localStorage }), {
     listProviderConfigs: vi.fn(async () => configs), listProviderModels: vi.fn(async () => models),
@@ -165,7 +165,7 @@ it("Training enforces the existing six-profile maximum before participants can b
   f.setProfiles([...f.profiles, ...extras]);
   f.setWorkspaces([...f.workspaces, ...extras.map(p => ({ id: `w-${p.id}`, profileId: p.id, kind: "rv", name: p.id, createdAt: "t" } as Workspace))]);
   vi.mocked(f.repository.listProviderConfigs).mockImplementation(async () => f.profiles.map(p => ({ id: `provider-${p.id}`, label: p.id, provider: "openrouter", credentialId: `cred-${p.id}`, credentialFingerprint: `fp-${p.id}`, enabled: true } as ProviderConfig)));
-  vi.mocked(f.repository.listProviderModels).mockImplementation(async () => f.profiles.map(p => ({ providerConfigId: `provider-${p.id}`, modelId: "model", route: "route", displayName: "Model" } as ProviderModel)));
+  vi.mocked(f.repository.listProviderModels).mockImplementation(async () => f.profiles.map(p => ({ providerConfigId: `provider-${p.id}`, provider: "openrouter", modelId: "model", route: "route", displayName: "Model" } as ProviderModel)));
   f.identities.push(...extras.map(p => ({ ...f.identities[0], id: `identity-${p.id}`, profileId: p.id, providerConfigId: `provider-${p.id}`, credentialFingerprint: `fp-${p.id}` })));
   await f.render(); for (let index = 0; index < 6; index++) await f.pick(index);
   expect(step(1).querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[6].disabled).toBe(true);

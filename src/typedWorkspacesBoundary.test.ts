@@ -38,7 +38,7 @@ describe("Stage 5 typed Workspace boundary", () => {
     expect(profileWorkspace).toContain('kind: "conversation"');
     expect(profileWorkspace).toContain('kind: "rv"');
     expect(profileWorkspace).toContain("archiveProfile(profile.id)");
-    expect(app.match(/createProfileWithInitialWorkspaces/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(app.match(/saveViewerProfile/g)?.length).toBeGreaterThanOrEqual(3);
   });
 
   it("keeps typed screens isolated while allowing legacy_combined on both", () => {

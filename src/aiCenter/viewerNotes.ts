@@ -2,7 +2,6 @@ import { withRvWorkflow } from "../application/workflowOwnership";
 import { assertLearningBudgetPolicy, type LearningBudgetPolicy } from "../providers/operationResourceProfiles";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat } from "../providers/requestExecutor";
-import { credentialIdentityFingerprint } from "../providers/native";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import { sha256Text } from "../application/sha256";
 import type { SessionSnapshot } from "../sessions/types";
@@ -12,7 +11,6 @@ import type { TrainingFieldGuidePostUpdateCheckpoint } from "../training/types";
 import type {
   AiIdentity,
   BeginViewerNoteReflectionInput,
-  EnsureAiIdentityInput,
   ViewerNoteBundle,
   ViewerNoteCapacity,
   ViewerNoteReflectionResult,
@@ -22,6 +20,7 @@ import type {
 import { loadRevealImageForJudge } from "../artifacts/native";
 import { analyticalOutputBudget, callWithAnalyticalOutputRecovery } from "../providers/outputRecovery";
 import { assertViewerNoteBasePair, viewerNoteBaseFromSnapshot } from "./baseVersion";
+import { ensureViewerIdentityForRoute, normalizedViewerBaseUrl, prepareViewerRoute } from "./viewerIdentityRoute";
 import { requireExistingViewerIdentity } from "./viewerIdentitySelection";
 
 export const VIEWER_NOTES_ESTIMATOR_VERSION = "conservative-char-v1" as const;
@@ -32,32 +31,7 @@ export function estimateViewerNoteTokens(content: string): number {
   return Math.ceil((content.length / 3.5) * 1.15);
 }
 
-export function normalizeBaseUrl(baseUrl?: string): string | undefined {
-  const clean = baseUrl?.trim().replace(/\/+$/, "").toLowerCase();
-  return clean || undefined;
-}
-
-export function viewerCredentialIdentity(config: ProviderConfig): { fingerprint: string; display: string } {
-  const fallback = `${config.provider}:${config.credentialId}`;
-  const fingerprint = config.credentialFingerprint?.trim() || fallback;
-  return { fingerprint, display: `…${fingerprint.slice(-4).toUpperCase()}` };
-}
-
-export function buildViewerIdentityInput(profileId: string, config: ProviderConfig, model: ProviderModel, secureFingerprint?: string): EnsureAiIdentityInput {
-  const credential = secureFingerprint ? { fingerprint: secureFingerprint, display: `…${secureFingerprint.slice(-4).toUpperCase()}` } : viewerCredentialIdentity(config);
-  return {
-    profileId,
-    credentialFingerprint: credential.fingerprint,
-    credentialDisplay: credential.display,
-    providerConfigId: config.id,
-    provider: config.provider,
-    ...(normalizeBaseUrl(config.baseUrl) ? { baseUrl: normalizeBaseUrl(config.baseUrl) } : {}),
-    modelId: model.modelId,
-    modelRoute: model.route,
-    modelDisplayName: model.displayName,
-    role: "viewer",
-  };
-}
+export const normalizeBaseUrl = normalizedViewerBaseUrl;
 
 export async function prepareViewerNotesForSession(input: {
   repository: AppRepository;
@@ -71,10 +45,7 @@ export async function prepareViewerNotesForSession(input: {
   if (input.aiIdentityId) {
     identity = await requireExistingViewerIdentity({ repository: input.repository, profileId: input.profileId, identityId: input.aiIdentityId, providerConfig: input.providerConfig, model: input.model });
   } else {
-    let secureFingerprint: string | undefined;
-    try { secureFingerprint = await credentialIdentityFingerprint(input.providerConfig.credentialId); }
-    catch { secureFingerprint = input.providerConfig.credentialFingerprint; }
-    identity = await input.repository.ensureAiIdentity(buildViewerIdentityInput(input.profileId, input.providerConfig, input.model, secureFingerprint));
+    identity = await ensureViewerIdentityForRoute(input);
   }
   const bundle = await input.repository.getViewerNoteBundle(identity.id);
   const active = bundle?.activeVersion;
@@ -677,9 +648,15 @@ export function currentViewerNotesLabel(bundle: ViewerNoteBundle): string {
   return bundle.activeVersion ? `v${bundle.activeVersion.versionNumber}` : "No notes yet";
 }
 
-export function aiIdentityMatchesRoute(identity: AiIdentity, config: ProviderConfig, model: ProviderModel): boolean {
-  const credential = viewerCredentialIdentity(config);
-  return identity.provider === config.provider && identity.credentialFingerprint === credential.fingerprint && identity.modelRoute === model.route && identity.role === "viewer";
+export async function aiIdentityMatchesRoute(identity: AiIdentity, config: ProviderConfig, model: ProviderModel): Promise<boolean> {
+  const result = await prepareViewerRoute(config, model);
+  if (!result.ok) return false;
+  const route = result.value;
+  return identity.role === "viewer" && identity.routeStatus === "available"
+    && identity.providerConfigId === route.providerConfigId && identity.provider === route.provider
+    && identity.credentialFingerprint === route.credentialFingerprint
+    && identity.normalizedBaseUrl === route.baseUrl
+    && identity.modelId === route.modelId && identity.modelRoute === route.modelRoute;
 }
 
 export const runViewerNoteReflection = (input: Parameters<typeof runViewerNoteReflectionOwned>[0]) => withRvWorkflow(input.repository as AppRepository,input.sessionId,input.signal,(repository,signal)=>runViewerNoteReflectionOwned({...input,repository,signal}));
