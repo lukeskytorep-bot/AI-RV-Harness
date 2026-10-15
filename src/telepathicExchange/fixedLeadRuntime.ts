@@ -1,3 +1,4 @@
+import { parseLeadDecisionResponse } from "./leadDecisionResponse";
 import { sealBlindSubmission } from "./blind";
 import { buildLeadDecisionPacket, guidanceInstructions, guidancePacket, validateLeadDecision } from "./leadGuidance";
 import { recordTranscript } from "./transcript";
@@ -27,8 +28,7 @@ export async function ensureFixedLeadGuidance(state: TelepathicSeriesState, roun
       if (lead.kind === "human") return false;
       const raw = await runtime.invoke(lead, buildLeadDecisionPacket(state, round, cycle as 1 | 2 | 3));
       if (!raw) throw new Error("Lead decision attempts exhausted.");
-      try { decision = validateRoundLeadDecision(round, JSON.parse(raw),cycle as 1 | 2 | 3); }
-      catch (error) { throw new Error("Invalid lead decision; no questions were invented or dispatched.", { cause: error }); }
+      decision = parseLeadDecisionResponse(raw, round, cycle as 1 | 2 | 3);
       round.guidance.decisions.push(decision);
       await runtime.save();
     }

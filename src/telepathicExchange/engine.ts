@@ -1,3 +1,4 @@
+import { parseLeadDecisionResponse } from "./leadDecisionResponse";
 import { TELEPATHIC_OUTPUT_POLICY_VERSION, scopeOutputBudget, nextDurableTechnicalAttempt, lengthRecoveryUnavailable } from "./outputBudgets";
 import { recordTranscript } from "./transcript";
 import { ensureFixedLeadGuidance, validateRoundLeadDecision } from "./fixedLeadRuntime";
@@ -196,8 +197,7 @@ async function invokeAi(
   const succeeded = [...existing].reverse().find((call) => call.status === "succeeded" && call.responseText !== undefined);
   const validateDecisionResponse = packet.scope.callStage.startsWith("lead_guidance:cycle:") ? (text: string) => {
     const round = state.rounds.find(r=>r.assignment.roundId===packet.scope.roundId)!;
-    try { validateRoundLeadDecision(round, JSON.parse(text), Number(packet.scope.callStage.split(":").at(-1)) as 1|2|3); }
-    catch (error) { throw new Error("Invalid lead decision; no questions were invented or dispatched.", {cause:error}); }
+    parseLeadDecisionResponse(text, round, Number(packet.scope.callStage.split(":").at(-1)) as 1|2|3);
   } : undefined;
   if (succeeded) {
     // Older candidates recorded transport success before domain validation.
@@ -266,6 +266,7 @@ async function invokeAi(
                 text: effectivePacket.messages.map(m => `${m.role}\n${m.content}`).join("\n\n"), providerCallId: record.id, providerCallStatus: record.status },now(deps));
               if (record.responseText !== undefined) recordTranscript(state, { id: `${record.id}:output`, roundId: record.roundId === "series-complete" ? undefined : record.roundId,
                 stage: record.callStage, kind: record.status === "failed" ? "notice" : record.callStage.includes("reflection") || record.callStage.includes("reveal") ? "reflection" : record.callStage === "sharing_consent" ? "consent" : "response",
+                ...(record.status === "failed" && record.errorMessage?.startsWith("Invalid lead decision") ? { decisionRejectionReason: record.errorMessage } : {}),
                 authorId: record.participantId, recipientIds: [], text: record.status === "failed" ? `[${record.errorMessage?.startsWith("Invalid lead decision") ? "REJECTED DECISION" : "INCOMPLETE"} · ${record.finishReason ?? "unknown"}]\n${record.responseText ?? ""}` : record.responseText ?? "", providerCallId: record.id, providerCallStatus: record.status },now(deps));
             }
             state.activeElapsedMs = state.providerCalls.reduce((total,c) => total + (c.elapsedMs ?? 0),0);

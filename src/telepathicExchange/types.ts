@@ -282,6 +282,8 @@ export interface TelepathicTranscriptEvent {
   text: string;
   providerCallId?: string;
   providerCallStatus?: TelepathicProviderCallRecord["status"];
+  /** Durable validation reason; raw response stays in text and providerCalls. */
+  decisionRejectionReason?: string;
   /** Exact human-readable prompt fragment; technical request remains in text/ledger. */
   display?: TelepathicDisplayInstruction;
   cycle?: 1 | 2 | 3;

@@ -1,3 +1,4 @@
+import { leadDecisionErrorMessage } from "../telepathicExchange/leadDecisionResponse";
 import { Component, useEffect, useId, useRef } from "react";
 import { readableTelepathicText, telepathicMessageTitle, uniqueTelepathicEvents } from "../telepathicExchange/displayProjection";
 import { telepathicStageLabel } from "../telepathicExchange/stageLabels";
@@ -58,7 +59,10 @@ export function TelepathicTranscript({seriesId,roundId,leadId,participants,event
       {uniqueTelepathicEvents(events).filter(e=>e.seriesId===seriesId && e.roundId===roundId && (e.authorId===p.id || e.recipientIds.includes(p.id))).sort((a,b)=>a.sequence-b.sequence).map(e=><article className={`telepathic-transcript-message ${e.authorId==="controller" ? "telepathic-message-controller" : e.authorId===leadId ? "telepathic-message-lead" : "telepathic-message-participant"}`} key={e.id}>
         <strong className="telepathic-message-author">{telepathicMessageTitle(e,participants,leadId,pl)}</strong>
         <small>{e.authorId==="controller"?(pl?"Kontroler":"Controller"):participants.find(p=>p.id===e.authorId)?.displayName ?? e.authorId} → {e.recipientIds.map(id=>participants.find(p=>p.id===id)?.displayName ?? id).join(", ") || (pl?"zapis":"record")} · {telepathicStageLabel(e.stage,pl)}{e.kind==="materials"?` · ${pl?"Instrukcja":"Instruction"}`:""}{deliveryLabel(e)}{e.cycle ? ` · ${pl?"cykl":"cycle"} ${e.cycle}` : ""}</small>
-        <TranscriptMarkdownBoundary content={readableTelepathicText(e,pl)}/>
+        {e.kind === "notice" && e.stage.startsWith("lead_guidance:cycle:") && (e.decisionRejectionReason || e.text.startsWith("[REJECTED DECISION"))
+          ? <><p role="status">{leadDecisionErrorMessage(e.decisionRejectionReason ?? "Invalid lead decision",pl)}</p>
+            <details><summary>{pl ? "Szczegóły odrzuconej decyzji" : "Rejected decision details"}</summary><pre className="telepathic-raw-fallback">{e.text}</pre></details></>
+          : <TranscriptMarkdownBoundary content={readableTelepathicText(e,pl)}/> }
       </article>)}
       {legacy&&<small>{pl?"Treść wysłanego pytania nie została zapisana w tej wersji.":"The sent instruction was not recorded in this version."}</small>}
     </section>)}

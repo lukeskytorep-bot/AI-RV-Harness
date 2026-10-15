@@ -84,6 +84,7 @@ export function uniqueTelepathicEvents(events: TelepathicTranscriptEvent[]): Tel
 
 export function telepathicMessageTitle(event: TelepathicTranscriptEvent, participants: Array<{id:string;displayName:string}>, leadId: string, pl: boolean): string {
   const name = participants.find(p => p.id === event.authorId)?.displayName ?? event.authorId;
+  if (event.kind === "notice" && event.stage.startsWith("lead_guidance:cycle:") && (event.decisionRejectionReason || event.text.startsWith("[REJECTED DECISION"))) return `${pl ? "Odrzucona decyzja" : "Rejected decision"} — ${name}`;
   if (event.authorId === "controller") return pl ? "Kontroler programu" : "Program controller";
   if (event.stage === "series_reflection") return `${pl ? "Refleksja końcowa" : "Final reflection"} — ${name}`;
   if ((event.kind === "reflection" || event.stage === "reflection")) return `${pl ? "Refleksja po Revealu" : "Post-Reveal reflection"} — ${name}`;
