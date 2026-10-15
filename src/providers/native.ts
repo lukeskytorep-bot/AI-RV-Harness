@@ -1,9 +1,10 @@
+import { parseProviderResponseEvidence } from "./responseEvidence";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { isTauriRuntime } from "../storage";
 import { normalizeModelDiscovery } from "./capabilities";
 import type { EffectiveRequestEnvelope } from "./effectiveRequestEnvelope";
 import { detailedProviderDiagnosticsEnabled, recordProviderDebug } from "./debug";
-import { normalizeProviderCallError } from "./providerError";
+import { normalizeProviderCallError, ProviderCallError } from "./providerError";
 import type {
   EffectiveGenerationSettings,
   ProviderChatResponse,
@@ -17,6 +18,7 @@ import type {
 import type { ProviderTimeoutPolicy } from "./streamingPolicy";
 
 type NativeChatResponse = {
+  response_evidence?: unknown;
   content: string;
   reasoning_content?: string | null;
   reasoning_details?: unknown[] | null;
@@ -153,7 +155,8 @@ export async function providerChatAttempt(input: {
       emitStreamEvents: Boolean(input.onStreamEvent),
     });
   } catch (cause) {
-    const normalized = normalizeProviderCallError(cause);
+    const original = normalizeProviderCallError(cause);
+    const normalized = new ProviderCallError({ ...original.details, transportRequestId: requestId }, { cause: original });
     recordProviderDebug({
       provider: input.config.provider,
       modelId: input.modelId,
@@ -195,6 +198,7 @@ export async function providerChatAttempt(input: {
     ...(input.transportEnvelope ? { transport: structuredClone(input.transportEnvelope) } : {}),
   });
   return {
+    ...(parseProviderResponseEvidence(response.response_evidence) ? { responseEvidence: parseProviderResponseEvidence(response.response_evidence) } : {}),
     content: response.content,
     reasoningContent: response.reasoning_content ?? undefined,
     reasoningDetails: response.reasoning_details ?? undefined,

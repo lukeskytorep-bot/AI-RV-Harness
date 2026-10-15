@@ -12,6 +12,7 @@ mod errors;
 mod reasoning;
 mod request_builders;
 mod response_parsers;
+mod response_evidence;
 mod streaming;
 mod transport;
 mod validation;
@@ -256,6 +257,8 @@ struct ProviderUsage {
 
 #[derive(Debug, Serialize)]
 pub struct ProviderChatResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_evidence: Option<Box<response_evidence::ProviderResponseEvidence>>,
     content: String,
     reasoning_content: Option<String>,
     reasoning_details: Option<Vec<Value>>,
@@ -294,6 +297,8 @@ pub struct ProviderCallError {
     provider_request_id: Option<Box<str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     semantic_output_started: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_evidence: Option<Box<response_evidence::ProviderResponseEvidence>>,
 }
 
 impl ProviderCallError {
@@ -308,6 +313,7 @@ impl ProviderCallError {
             retry_after_ms: None,
             provider_request_id: None,
             semantic_output_started: None,
+            response_evidence: None,
         }
     }
 
@@ -435,6 +441,36 @@ pub async fn provider_discover_model_endpoints(request: ProviderEndpointRequest)
     discover_openrouter_model_endpoints(&request).await
 }
 
+fn parse_finished_chat_response(
+    provider: ProviderKind,
+    payload: &Value,
+    request_id: Option<String>,
+    semantic_output_started: bool,
+    response_evidence: Box<response_evidence::ProviderResponseEvidence>,
+) -> Result<ProviderChatResponse, ProviderCallError> {
+    let mut parsed = parse_chat_response(provider, payload.clone(), request_id.clone()).map_err(|message| {
+        let (provider_error_type, provider_code) = provider_error_metadata(payload);
+        let code = if provider_error_type.is_some() || provider_code.is_some() {
+            "provider_error"
+        } else if message.to_ascii_lowercase().contains("empty") && !message.to_ascii_lowercase().contains("reasoning without") {
+            "empty_assistant_response"
+        } else {
+            "unknown"
+        };
+        let mut failure = ProviderCallError::new(code, message, "validating_response");
+        failure.provider_error_type = provider_error_type;
+        failure.provider_code = provider_code;
+        failure.provider_request_id = request_id.map(String::into_boxed_str);
+        failure.response_evidence = Some(response_evidence.clone());
+        if semantic_output_started {
+            failure.semantic_output_started = Some(true);
+        }
+        failure
+    })?;
+    parsed.response_evidence = Some(response_evidence);
+    Ok(parsed)
+}
+
 #[tauri::command]
 pub async fn provider_chat(
     request: ProviderChatRequest,
@@ -472,7 +508,7 @@ pub async fn provider_chat(
             builder
         }
     };
-    let (payload, request_id, semantic_output_started, continuation_diagnostics) = if use_streaming {
+    let (payload, request_id, semantic_output_started, continuation_diagnostics, response_evidence) = if use_streaming {
         let streamed = send_openrouter_streaming_chat_request(
             builder,
             request.request_id.as_deref(),
@@ -486,6 +522,7 @@ pub async fn provider_chat(
             streamed.request_id,
             streamed.semantic_output_started,
             Some(streamed.continuation_diagnostics),
+            streamed.response_evidence,
         )
     } else {
         let (payload, request_id) = send_chat_request(
@@ -494,31 +531,15 @@ pub async fn provider_chat(
             &secret,
         )
         .await?;
-        (payload, request_id, false, None)
+        let evidence = response_evidence::finished(Some(&payload), request_id.as_deref(), "body_read");
+        (payload, request_id, false, None, evidence)
     };
     let debug_response = request.detailed_diagnostics.then(|| {
         let mut value = payload.clone();
         scrub_debug_value(&mut value, &secret, None);
         value
     });
-    let mut parsed = parse_chat_response(request.provider, payload.clone(), request_id.clone()).map_err(|message| {
-        let (provider_error_type, provider_code) = provider_error_metadata(&payload);
-        let code = if provider_error_type.is_some() || provider_code.is_some() {
-            "provider_error"
-        } else if message.to_ascii_lowercase().contains("empty") && !message.to_ascii_lowercase().contains("reasoning without") {
-            "empty_assistant_response"
-        } else {
-            "unknown"
-        };
-        let mut failure = ProviderCallError::new(code, message, "validating_response");
-        failure.provider_error_type = provider_error_type;
-        failure.provider_code = provider_code;
-        failure.provider_request_id = request_id.map(String::into_boxed_str);
-        if semantic_output_started {
-            failure.semantic_output_started = Some(true);
-        }
-        failure
-    })?;
+    let mut parsed = parse_finished_chat_response(request.provider, &payload, request_id, semantic_output_started, response_evidence)?;
     parsed.continuation_diagnostics = continuation_diagnostics;
     parsed.debug_payload = Some(ProviderDebugPayload {
         endpoint: debug_endpoint,

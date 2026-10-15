@@ -47,6 +47,7 @@ pub(super) fn parse_openai_compatible_response(payload: Value, request_id: Optio
         .and_then(Value::as_u64)
         .or_else(|| usage.get("reasoning_tokens").and_then(Value::as_u64));
     Ok(ProviderChatResponse {
+        response_evidence: None,
         content,
         reasoning_content: normalized.reasoning_content,
         reasoning_details,
@@ -128,6 +129,7 @@ pub(super) fn parse_google_response(payload: Value, request_id: Option<String>) 
     }
     let usage = payload.get("usageMetadata").unwrap_or(&Value::Null);
     Ok(ProviderChatResponse {
+        response_evidence: None,
         content,
         reasoning_content: normalized.reasoning_content,
         reasoning_details: (!reasoning_details.is_empty()).then_some(reasoning_details),
@@ -213,6 +215,7 @@ pub(super) fn parse_anthropic_response(payload: Value, request_id: Option<String
     let input = usage.get("input_tokens").and_then(Value::as_u64);
     let output = usage.get("output_tokens").and_then(Value::as_u64);
     Ok(ProviderChatResponse {
+        response_evidence: None,
         content,
         reasoning_content: normalized.reasoning_content,
         reasoning_details: (!reasoning_details.is_empty()).then_some(reasoning_details),

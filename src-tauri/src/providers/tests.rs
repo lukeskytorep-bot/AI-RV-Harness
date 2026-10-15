@@ -2144,3 +2144,87 @@ fn openrouter_cross_language_bridge_replays_ts_restored_state_in_rust_request_bu
     assert_eq!(replayed, expected_details);
     std::fs::write(output_path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
 }
+
+// R1: transport completion and semantic validation remain independent.
+async fn r1_body_fixture(body: &str, extra_length: usize) -> Result<(Value, Option<String>), ProviderCallError> {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let wire = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nX-Request-Id: r1-header\r\nConnection: close\r\n\r\n{}", body.len() + extra_length, body);
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_simulator_request(&mut socket).await;
+        socket.write_all(wire.as_bytes()).await.unwrap();
+        socket.shutdown().await.unwrap();
+    });
+    let result = super::transport::send_chat_request(reqwest::Client::new().post(format!("http://{address}")), None, "test-secret").await;
+    server.await.unwrap();
+    result
+}
+
+#[tokio::test]
+async fn r1_full_body_reasoning_only_rejection_keeps_safe_finished_evidence() {
+    let body = json!({"id":"gen-r1","choices":[{"message":{"content":"","reasoning":"PRIVATE_REASONING"},"finish_reason":"stop"}],"usage":{"completion_tokens":20,"completion_tokens_details":{"reasoning_tokens":19},"total_tokens":25}});
+    let (payload, id) = r1_body_fixture(&body.to_string(), 0).await.unwrap();
+    let proof = super::response_evidence::finished(Some(&payload), id.as_deref(), "body_read");
+    let failure = parse_finished_chat_response(ProviderKind::Openrouter, &payload, id, false, proof).unwrap_err();
+    let wire = serde_json::to_value(&failure).unwrap();
+    assert_eq!(wire["responseEvidence"]["transportOutcome"], "response_finished");
+    assert_eq!(wire["responseEvidence"]["boundary"], "body_read");
+    assert_eq!(wire["responseEvidence"]["finishReason"], "stop");
+    assert_eq!(wire["responseEvidence"]["generationId"], "gen-r1");
+    assert_eq!(wire["responseEvidence"]["usage"]["reasoningTokens"], 19);
+    assert!(wire["responseEvidence"]["usage"]["costUsd"].is_null());
+    assert!(!serde_json::to_string(&wire).unwrap().contains("PRIVATE_REASONING"));
+}
+
+#[tokio::test]
+async fn r1_complete_invalid_json_is_finished_but_broken_body_is_not() {
+    let failure = r1_body_fixture("not valid json", 0).await.unwrap_err();
+    assert_eq!(failure.code.as_ref(), "invalid_provider_json");
+    assert!(failure.response_evidence.is_some());
+    let failure = r1_body_fixture("{", 100).await.unwrap_err();
+    assert!(failure.response_evidence.is_none());
+}
+
+#[test]
+fn r1_full_rejected_structure_and_empty_content_keep_proof() {
+    for payload in [json!({"choices":[]}), json!({"choices":[{"message":{"content":""},"finish_reason":"stop"}]})] {
+        let proof = super::response_evidence::finished(Some(&payload), None, "body_read");
+        let failure = parse_finished_chat_response(ProviderKind::Openrouter, &payload, None, false, proof).unwrap_err();
+        assert!(failure.response_evidence.is_some());
+    }
+}
+
+#[test]
+fn r1_done_reasoning_only_is_rejected_with_proof_and_final_content_stays_accepted() {
+    for content in ["", "The actual final response"] {
+        let mut accumulator = OpenRouterStreamAccumulator::default();
+        accumulator.process_data_with_events(&json!({"id":"gen-r1","choices":[{"delta":{"reasoning":"PRIVATE","content":content},"finish_reason":"stop"}],"usage":{"total_tokens":25}}).to_string(), "secret", Some("header")).unwrap();
+        accumulator.process_data_with_events("[DONE]", "secret", Some("header")).unwrap();
+        let streamed = accumulator.finish(Some("header".into())).unwrap();
+        let result = parse_finished_chat_response(ProviderKind::Openrouter, &streamed.payload, streamed.request_id, streamed.semantic_output_started, streamed.response_evidence);
+        let proof = if content.is_empty() { result.unwrap_err().response_evidence.unwrap() } else { let response = result.unwrap(); assert_eq!(response.content, content); response.response_evidence.unwrap() };
+        let wire = serde_json::to_value(proof).unwrap();assert_eq!(wire["boundary"], "sse_done");assert_eq!(wire["usage"]["totalTokens"], 25);assert!(!wire.to_string().contains("PRIVATE"));
+    }
+}
+
+#[test]
+fn r1_stop_finish_reason_without_done_is_not_completion_proof() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    accumulator.process_data_with_events(&json!({"choices":[{"delta":{"content":"partial"},"finish_reason":"stop"}]}).to_string(), "secret", Some("header")).unwrap();
+    assert!(accumulator.finish(Some("header".into())).unwrap_err().response_evidence.is_none());
+}
+
+#[test]
+fn r1_malformed_stream_frame_never_creates_completion_proof() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    assert!(accumulator.process_data_with_events("{malformed", "secret", Some("header")).unwrap_err().response_evidence.is_none());
+    assert!(accumulator.finish(Some("header".into())).unwrap_err().response_evidence.is_none());
+}
+
+#[tokio::test]
+async fn r1_pre_dispatch_cancel_keeps_completion_unknown() {
+    super::transport::cancel_request("r1-pre-cancel".into()).unwrap();
+    let error = super::transport::run_cancellable_chat_request(Some("r1-pre-cancel"), "reading_body", async { Ok::<(), ProviderCallError>(()) }).await.unwrap_err();
+    assert_eq!(error.phase.as_ref(), "before_dispatch");assert!(error.response_evidence.is_none());
+}

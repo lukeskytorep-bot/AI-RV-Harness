@@ -1,3 +1,4 @@
+import { classifyProviderAttempt, parseProviderResponseEvidence, type ProviderAttemptOutcome, type ProviderResponseEvidence } from "./responseEvidence";
 import { assertAbortOwnership } from "../application/abortOwnership";
 import { discoverOpenRouterModelEndpoints, providerChatAttempt } from "./native";
 import { normalizeProviderCallError, ProviderCallError } from "./providerError";
@@ -27,6 +28,7 @@ export interface ProviderExecutionReport {
   elapsedMs: number;
   recoveredFrom?: string;
   ambiguousBillingAttempts: number;
+  attemptOutcomes?: ProviderAttemptOutcome[];
 }
 
 export interface ProviderExecutionResult<T> {
@@ -74,6 +76,7 @@ export interface ExecuteProviderRequestInput<T> {
   configuredRetries?: number;
   signal?: AbortSignal;
   executeAttempt: (context: ProviderAttemptContext) => Promise<T>;
+  responseEvidence?: (value: T) => ProviderResponseEvidence | undefined;
   onAttemptFailure?: (error: ProviderCallError, context: ProviderAttemptContext) => void | Promise<void>;
   onAttemptStart?: (context: ProviderAttemptContext) => void | Promise<void>;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
@@ -88,10 +91,12 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
   let physicalAttempts = 0;
   let ambiguousBillingAttempts = 0;
   let recoveredFrom: string | undefined;
+  const attemptOutcomes: ProviderAttemptOutcome[] = [];
+  const attachOutcomes = (cause: unknown) => Object.assign(cause !== null && typeof cause === "object" ? cause : new Error(String(cause)), { providerAttemptOutcomes: structuredClone(attemptOutcomes) });
 
   while (true) {
-    if (input.signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
-    await assertAbortOwnership(input.signal);
+    if (input.signal?.aborted) throw attachOutcomes(new DOMException("Provider request cancelled", "AbortError"));
+    try { await assertAbortOwnership(input.signal); } catch (failure) { throw attachOutcomes(failure); }
     const context: ProviderAttemptContext = {
       operationId: input.operationId,
       logicalRequestId,
@@ -99,12 +104,20 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
       startedAtMs: Date.now(),
     };
     physicalAttempts += 1;
+    let dispatchStarted = false;
+    let receivedEvidence: ProviderResponseEvidence | undefined;
+    let responseReturned = false;
+    const identity = { attemptId: `${logicalRequestId}:${context.physicalAttempt}`, logicalRequestId, physicalAttempt: context.physicalAttempt };
     try {
       await input.onAttemptStart?.(context);
       input.signal?.throwIfAborted();
       await assertAbortOwnership(input.signal);
+      dispatchStarted = true;
       const value = await input.executeAttempt(context);
+      responseReturned = true;
+      receivedEvidence = parseProviderResponseEvidence(input.responseEvidence?.(value));
       if (input.rejectResponseAfterAbort && input.signal?.aborted) throw Object.assign(new DOMException("Provider response arrived after cancellation", "AbortError"), { providerResponse: value });
+      attemptOutcomes.push({ ...identity, outcome: classifyProviderAttempt({ responseEvidence: receivedEvidence }), validation: "accepted", ...(receivedEvidence ? { responseEvidence: receivedEvidence } : {}) });
       return {
         value,
         report: {
@@ -114,15 +127,20 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
           elapsedMs: Date.now() - operationStartedAt,
           ...(recoveredFrom ? { recoveredFrom } : {}),
           ambiguousBillingAttempts,
+          attemptOutcomes: structuredClone(attemptOutcomes),
         },
       };
     } catch (cause) {
-      if (input.signal?.aborted || (cause instanceof DOMException && cause.name === "AbortError")) throw cause;
-      const error = normalizeProviderCallError(cause);
+      const normalized = normalizeProviderCallError(cause);
+      const error = new ProviderCallError({ ...normalized.details, ...identity, ...(receivedEvidence ? { responseEvidence: receivedEvidence } : {}) }, { cause: normalized });
+      const evidence = parseProviderResponseEvidence(error.details.responseEvidence);
+      const outcome = dispatchStarted ? classifyProviderAttempt(error.details) : "not_dispatched";
+      attemptOutcomes.push({ ...identity, ...(error.details.transportRequestId ? { transportRequestId: error.details.transportRequestId } : {}), outcome, validation: responseReturned ? "accepted" : evidence ? "rejected" : "not_evaluated", ...(evidence ? { responseEvidence: evidence } : {}) });
+      if (input.signal?.aborted || (cause instanceof DOMException && cause.name === "AbortError")) throw attachOutcomes(cause);
       if (["response_body_read", "response_body_decode", "invalid_provider_json"].includes(error.details.code)) {
         ambiguousBillingAttempts += 1;
       }
-      await input.onAttemptFailure?.(error, context);
+      try { await input.onAttemptFailure?.(error, context); } catch (failure) { throw attachOutcomes(failure); }
       const allowance = providerRetryAllowance(error, input.configuredRetries ?? 2);
       const failedAttemptIndex = physicalAttempts - 1;
       if (failedAttemptIndex >= allowance) {
@@ -133,11 +151,12 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
           elapsedMs: Date.now() - operationStartedAt,
           ...(recoveredFrom ? { recoveredFrom } : {}),
           ambiguousBillingAttempts,
+          attemptOutcomes: structuredClone(attemptOutcomes),
         });
       }
       recoveredFrom ??= error.details.code;
       const delayMs = providerRetryDelayMs(failedAttemptIndex, error, input.random);
-      await (input.sleep ?? waitForRetry)(delayMs, input.signal);
+      try { await (input.sleep ?? waitForRetry)(delayMs, input.signal); } catch (failure) { throw attachOutcomes(failure); }
     }
   }
 }
@@ -219,6 +238,7 @@ export async function executeProviderChat(input: {
       rejectResponseAfterAbort: input.rejectResponseAfterAbort,
       onAttemptFailure: input.onAttemptFailure,
       onAttemptStart: input.onAttemptStart,
+      responseEvidence: response => response.responseEvidence,
       executeAttempt: () => attempt({
         config: input.config,
         modelId: input.modelId,

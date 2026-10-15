@@ -198,6 +198,7 @@ async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result
         failure.provider_error_type = provider_error_type;
         failure.provider_code = provider_code;
         failure.retry_after_ms = retry_after_ms;
+        failure.response_evidence = Some(super::response_evidence::finished(parsed.as_ref(), request_id.as_deref(), "body_read"));
         failure.provider_request_id = request_id.map(String::into_boxed_str);
         return Err(failure);
     }
@@ -208,6 +209,7 @@ async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result
             "parsing_body",
         );
         failure.provider_request_id = request_id.clone().map(String::into_boxed_str);
+        failure.response_evidence = Some(super::response_evidence::finished(None, request_id.as_deref(), "body_read"));
         failure
     })?;
     Ok((value, request_id))

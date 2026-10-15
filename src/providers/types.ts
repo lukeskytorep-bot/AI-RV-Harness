@@ -1,3 +1,4 @@
+import type { ProviderResponseEvidence, ProviderAttemptOutcome } from "./responseEvidence";
 import type { ProviderContinuationState } from "./continuationContract";
 
 export const PROVIDER_KINDS = [
@@ -195,6 +196,7 @@ export type ProviderStreamEvent =
   | { event: "finished"; data: { finishReason?: string } };
 
 export interface ProviderChatResponse {
+  responseEvidence?: ProviderResponseEvidence;
   content: string;
   reasoningContent?: string;
   reasoningDetails?: unknown[];
@@ -212,6 +214,7 @@ export interface ProviderChatResponse {
     elapsedMs: number;
     recoveredFrom?: string;
     ambiguousBillingAttempts: number;
+    attemptOutcomes?: ProviderAttemptOutcome[];
   };
 }
 

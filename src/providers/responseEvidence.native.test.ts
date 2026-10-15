@@ -1,0 +1,23 @@
+import {beforeEach,it,expect,vi} from "vitest";
+const bridge=vi.hoisted(()=>({invoke:vi.fn()}));
+vi.mock("@tauri-apps/api/core",()=>({invoke:bridge.invoke,Channel:class {onmessage?:unknown;}}));
+vi.mock("../storage",()=>({isTauriRuntime:()=>true}));
+vi.mock("./debug",()=>({recordProviderDebug:vi.fn(),detailedProviderDiagnosticsEnabled:()=>false}));
+import {executeProviderChat,ProviderExecutionError} from "./requestExecutor";
+import {classifyProviderAttempts} from "./responseEvidence";
+const evidence={version:1,transportOutcome:"response_finished",boundary:"sse_done",finishReason:"stop",providerRequestId:"header-id",generationId:"gen-id",usage:{reasoningTokens:100,totalTokens:101}};
+const request={config:{id:"pc",provider:"custom_openai" as const,label:"Fixture",credentialId:"opaque",baseUrl:"https://fixture.invalid/v1",enabled:true,createdAt:"t",updatedAt:"t"},modelId:"m",messages:[{role:"user" as const,content:"Fixture"}],settings:{requested:{},effective:{},omitted:[]},configuredRetries:0};
+beforeEach(()=>bridge.invoke.mockReset());
+for(const serialization of ["object","json"] as const)it(`${serialization}: native rejection survives IPC normalization into executor metadata without accepting reasoning`,async()=>{
+ const failure={code:"unknown",message:"provider returned reasoning without a final assistant response [finish-reason=stop]",phase:"validating_response",responseEvidence:{...evidence,reasoning:"PRIVATE"}};bridge.invoke.mockRejectedValueOnce(serialization==="json"?JSON.stringify(failure):failure);
+ let caught:unknown;try{await executeProviderChat(request);}catch(error){caught=error;}
+ expect(caught).toBeInstanceOf(ProviderExecutionError);const error=caught as ProviderExecutionError;
+ const transportRequestId=bridge.invoke.mock.calls[0][1].request.requestId;expect(transportRequestId).toEqual(expect.any(String));expect(error.causeError.details.transportRequestId).toBe(transportRequestId);expect(error.causeError.details.responseEvidence).toEqual(evidence);
+ expect(error.report.attemptOutcomes![0]).toMatchObject({transportRequestId,outcome:"response_finished",validation:"rejected",responseEvidence:evidence});expect(classifyProviderAttempts(error.report.attemptOutcomes!)).toBe("response_finished");expect(JSON.stringify(error.report)).not.toContain("PRIVATE");expect(bridge.invoke).toHaveBeenCalledTimes(1);
+});
+it("native successful reasoning+final content retains the same completion marker",async()=>{
+ bridge.invoke.mockResolvedValueOnce({content:"Actual final response",reasoning_content:"Private reasoning",finish_reason:"stop",usage:{total_tokens:101},response_evidence:evidence});const result=await executeProviderChat(request);expect(result.content).toBe("Actual final response");expect(result.responseEvidence).toEqual(evidence);expect(result.execution?.attemptOutcomes?.[0]).toMatchObject({outcome:"response_finished",validation:"accepted"});expect(result.execution?.attemptOutcomes?.[0].responseEvidence?.usage?.costUsd).toBeUndefined();
+});
+it("old native errors without transport proof remain unknown",async()=>{
+ bridge.invoke.mockRejectedValueOnce({code:"unknown",phase:"validating_response",message:"reasoning only [finish-reason=stop]",providerRequestId:"id",semanticOutputStarted:true});await expect(executeProviderChat(request)).rejects.toMatchObject({report:{attemptOutcomes:[expect.objectContaining({outcome:"dispatch_unknown",validation:"not_evaluated"})]}});
+});

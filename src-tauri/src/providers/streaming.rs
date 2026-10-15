@@ -25,6 +25,7 @@ pub(crate) enum ProviderStreamEvent {
 #[derive(Debug)]
 pub(super) struct StreamingChatResult {
     pub(super) payload: Value,
+    pub(super) response_evidence: Box<super::response_evidence::ProviderResponseEvidence>,
     pub(super) request_id: Option<String>,
     pub(super) semantic_output_started: bool,
     pub(super) continuation_diagnostics: ProviderContinuationStreamDiagnostics,
@@ -625,8 +626,11 @@ impl OpenRouterStreamAccumulator {
         if let Some(value) = self.openrouter_metadata {
             payload.insert("openrouter_metadata".into(), value);
         }
+        let payload = Value::Object(payload);
+        let response_evidence = super::response_evidence::finished(Some(&payload), request_id.as_deref(), "sse_done");
         Ok(StreamingChatResult {
-            payload: Value::Object(payload),
+            payload,
+            response_evidence,
             request_id,
             semantic_output_started,
             continuation_diagnostics: ProviderContinuationStreamDiagnostics {
@@ -763,6 +767,7 @@ pub(super) async fn send_openrouter_streaming_chat_request(
             failure.provider_error_type = provider_error_type;
             failure.provider_code = provider_code;
             failure.retry_after_ms = retry_after;
+            failure.response_evidence = Some(super::response_evidence::finished(parsed.as_ref(), provider_request_id.as_deref(), "body_read"));
             failure.provider_request_id = provider_request_id.map(String::into_boxed_str);
             return Err(failure);
         }
