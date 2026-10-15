@@ -1,3 +1,5 @@
+import type { InterfaceLanguage } from "../../types";
+import { learningWarningText } from "../../aiCenter/learningExecution";
 import { withWorkflow } from "../../application/workflowOwnership";
 import { useWorkflowOwnership } from "../../components/useWorkflowOwnership";
 import { TooltipButton } from "../../components/TooltipButton";
@@ -439,6 +441,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
         <TrainingSection title={text.execution}>{mode === "full" && roundCount > 1 && <label className="training-check"><input type="checkbox" checked={pauseAfterBlock} onChange={(event) => setPauseAfterBlock(event.target.checked)} /><span><strong>{text.pauseRounds}</strong><small>{text.pauseRoundsLead}</small></span></label>}<div className="training-preflight"><span><small>{text.sessions}</small><strong>{plannedSessionCount}</strong></span><span><small>{text.viewerCalls}</small><strong>{baselineViewerCalls}</strong></span><span><small>{text.judgeCalls}</small><strong>{plannedSessionCount * judgeCount}</strong></span><span><small>{text.curriculum}</small><strong>{mode === "full" ? `${FACTORY_CURRICULUM_ID}:${FACTORY_CURRICULUM_VERSION} · ${roundCount}×${FACTORY_ROUND_SIZE}` : text.partial}</strong></span><span><small>{text.repeatPolicy}</small><strong>{settings.targetRepeatPolicy === "avoid_profile" ? text.avoidProfile : text.allowRepeat}</strong></span></div><small className="training-preflight-note">{text.viewerCallNote}</small></TrainingSection>
         <div className="training-actions">{busy ? <><button className="secondary-button" onClick={() => { pauseRequested.current = true; }}><CircleStop size={15} />{text.pauseAfterSession}</button><button type="button" className="stop-button" disabled={stopping} title={pl ? "Zatrzymaj teraz i zachowaj checkpoint. Wznowienie wymaga ręcznej decyzji." : "Stop now and retain the checkpoint. Resume requires your action."} onClick={() => { setStopping(true); executionAbort.current?.abort(new DOMException("Stopped by user", "AbortError")); }}><CircleStop size={15}/>{stopping ? (pl ? "Zatrzymywanie…" : "Stopping…") : "Stop"}</button><span>{progressLine}</span></> : activeRecoverable && activeRun ? <><button type="button" className="secondary-button training-resume-button" disabled={trainingOperationPending || ownership.unavailable} onClick={()=>void resumeExisting(activeRun)}><Play size={15}/>{text.resume}</button><button type="button" className="secondary-button training-end-button" disabled={trainingOperationPending || ownership.unavailable} onClick={()=>void endExisting(activeRun)}><CircleStop size={15}/>{text.endTraining}</button></> : <span className="disabled-action-help" title={!workspaceId ? text.workspaceRequired : plannedSessionCount <= 0 ? text.targetsRequired : !fullSelectionValid && mode === "full" ? text.noRoundsAvailable : undefined}><button className="primary-button" disabled={!ready || trainingOperationPending || ownership.unavailable} onClick={() => void startNew()}><Play size={15} />{mode === "full" ? `${text.startFull} · ${plannedSessionCount}` : `${text.startPartial} · ${plannedSessionCount}`}</button></span>}</div>
         {(busy || activeRecoverable) && activeRun && <div className="active-training-run"><strong>{activeRun.name}</strong><span>{activeRun.completedTargetIds.length}/{activeRun.targetIds.length}</span><progress max={activeRun.targetIds.length} value={activeRun.completedTargetIds.length}/><small>{progressLine || activeRun.status}</small></div>}
+        {(busy || activeRecoverable) && (activeRun?.learningSettlements ?? []).filter(s => s.settlement === "failed_preserved").map(s => <p className="muted" key={s.auditId}>{learningWarningText(s, pl)}</p>)}
         {ownership.unavailable && <small role="status">{ownership.state==="other"?(pl?"Praca trwa w innym oknie":"Work is running in another window"):(pl?"Sprawdzanie stanu wykonania":"Checking execution state")}</small>}
         {!workspaceId && <div className="training-requirement-note"><ShieldCheck size={15} /><span>{text.workspaceRequired}</span></div>}
         {error && <div className="provider-error">{error}</div>}{exportMessage && <div className="storage-success"><Check size={14} />{exportMessage}</div>}
@@ -446,7 +449,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
       <HistoryPanelShell open={historyOpen} onToggle={() => setHistoryOpen(current => !current)}
         panelId="training-history-panel" label={historyOpen ? text.collapseHistory : text.expandHistory}>
           <div className="panel-header"><span><Database size={18} /></span><h2>{text.history}</h2></div>
-          <div className="training-run-list">{runs.filter(run=>!((busy || activeRecoverable) && activeRun?.id===run.id)).map((run) => <OwnedTrainingRunHistoryCard
+          <div className="training-run-list">{runs.filter(run=>!((busy || activeRecoverable) && activeRun?.id===run.id)).map((run) => <OwnedTrainingRunHistoryCard language={settings.interfaceLanguage}
             key={run.id}
             repository={repository}
             run={run}
@@ -487,7 +490,7 @@ export type TrainingRunHistoryCardText = {
 };
 
 export function TrainingRunHistoryCard({
-  run, expanded, selectedSessionId, operationUnavailable, archiveDisabled, text,
+  run, expanded, selectedSessionId, operationUnavailable, archiveDisabled, text, language = "en",
   onToggleSessions, onExport, onArchive, onResume, onEnd, onSelectSession,
 }: {
   run: TrainingRunRecord;
@@ -496,6 +499,7 @@ export function TrainingRunHistoryCard({
   operationUnavailable: boolean;
   archiveDisabled: boolean;
   text: TrainingRunHistoryCardText;
+  language?: InterfaceLanguage;
   onToggleSessions: () => void;
   onExport: () => void;
   onArchive: () => void;
@@ -510,11 +514,12 @@ export function TrainingRunHistoryCard({
       <span className="training-history-title" title={`#${run.runNumber} · ${run.name}`}>#{run.runNumber} · {run.name}</span>
       <div className="training-run-icon-actions">
         {Boolean(run.sessionIds?.length) && <TooltipButton className="icon-button" label={expanded ? text.hideSessions : text.showSessions} ariaExpanded={expanded} ariaControls={sessionsId} onClick={onToggleSessions}><List size={14} aria-hidden="true" /></TooltipButton>}
-        {Boolean(run.sessionIds?.length) && <TooltipButton className="icon-button" label={text.saveTraining} onClick={onExport}><Download size={14} aria-hidden="true" /></TooltipButton>}
+        {Boolean(run.sessionIds?.length || run.activeTargetCheckpoint) && <TooltipButton className="icon-button" label={text.saveTraining} onClick={onExport}><Download size={14} aria-hidden="true" /></TooltipButton>}
         <TooltipButton className="icon-button" label={text.archiveTraining} disabled={archiveDisabled} onClick={onArchive}><Archive size={14} aria-hidden="true" /></TooltipButton>
       </div>
     </div>
     <div className="training-run-details"><small>{isTrainingRunUserFinished(run) ? text.endedByUser : run.status} · {run.completedTargetIds.length}/{run.targetIds.length} · Lite {run.protocolVariant}</small></div>
+    {(run.learningSettlements ?? []).filter(s => s.settlement === "failed_preserved").map(s => <p className="muted" key={s.auditId}>{learningWarningText(s, language === "pl")}</p>)}
     {canRecover && <div className="training-run-recovery-actions">
       <button className="secondary-button training-resume-button" type="button" disabled={operationUnavailable} onClick={onResume}><Play size={13} />{text.resume}</button>
       <button className="secondary-button training-end-button" type="button" disabled={operationUnavailable} onClick={onEnd}><CircleStop size={13} />{text.endTraining}</button>

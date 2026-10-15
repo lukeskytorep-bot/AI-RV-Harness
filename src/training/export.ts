@@ -1,3 +1,4 @@
+import { LEARNING_SETTLEMENT_EVENT, learningWarningText, type LearningSettlement } from "../aiCenter/learningExecution";
 import { writeExportPackage } from "../exports/native";
 import type { AppRepository } from "../storage/repository";
 import type { TargetRecord } from "../targets/types";
@@ -29,6 +30,10 @@ export async function exportTrainingRun(
   const profileName = profiles.find((item) => item.id === run.profileId)?.name ?? run.profileId;
   const files: Array<{ relativePath: string; content: string }> = [];
   const artifactCopies: Array<{ sourcePath: string; relativePath: string }> = [];
+  const relatedSessionIds = [...new Set([...run.sessionIds, ...(run.activeTargetCheckpoint ? [run.activeTargetCheckpoint.sessionId] : [])])];
+  const settlements = (await Promise.all(relatedSessionIds.map(async id => (await repository.listSessionEvents(id)).filter(e => e.eventType === LEARNING_SETTLEMENT_EVENT).map(e => e.metadata?.settlement)))).flat();
+  if (settlements.length || run.activeTargetCheckpoint) files.push({ relativePath: "learning_settlements.json", content: JSON.stringify({ settlements, activeTargetCheckpoint: run.activeTargetCheckpoint ?? null }, null, 2) });
+  if (settlements.length) files.push({ relativePath: "learning_settlements.md", content: (settlements as LearningSettlement[]).map(s => `- ${s.sessionId} · ${s.kind}: ${s.settlement === "failed_preserved" ? learningWarningText(s, language === "pl") : s.settlement} · audit ${s.auditId} · packet ${s.packetHash} · version ${s.version?.id ?? "absent"} · hash ${s.version?.contentSha256 ?? "absent"}`).join("\n") });
   const rows: string[] = [];
   const resultRows: Array<{
     position: number;

@@ -18,6 +18,7 @@ describe("training export", () => {
     };
     const targets: TargetRecord[] = [{ id: "target", collection: "user", title: "Mój cel", revealText: "Opis celu", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }];
     const repository = {
+      listSessionEvents: vi.fn().mockResolvedValue([]),
       listRvSessions: vi.fn().mockResolvedValue([{ id: "session", workspaceId: "workspace", profileId: "profile", sessionCode: "RVH-1", state: "Completed", runType: "automatic", preRevealTranscript: "Dokładny prompt\n\nOdpowiedź", postRevealTranscript: `${JSON.stringify({ role: "assistant", content: "Moja samoocena" })}\n`, createdAt: "2026-08-21T10:01:00Z", updatedAt: "2026-08-21T10:09:00Z", completedAt: "2026-08-21T10:09:00Z" }]),
       listWorkspaces: vi.fn().mockResolvedValue([{ id: "workspace", name: "Treningi" }]),
       listProfiles: vi.fn().mockResolvedValue([{ id: "profile", name: "Nemo" }]),
@@ -61,6 +62,7 @@ describe("training export", () => {
     const targets: TargetRecord[] = [{ id: "target", collection: "user", title: "Target", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }];
     const score = (judgeIndex: number, total: number) => ({ id: `score-${judgeIndex}`, judgeRunId: `run-${judgeIndex}`, judgeIndex, modelRoute: "openrouter:same", gestalt: 0, verifiableFeatures: 0, activityFunctionEvent: 0, confabulationControl: 0, total, narrative: { strongestMatches: [], majorMissesContradictions: [], confabulationObservations: [], conciseRationale: "" }, frozenAt: "now", createdAt: "now" });
     const repository = {
+      listSessionEvents: vi.fn().mockResolvedValue([]),
       listRvSessions: vi.fn().mockResolvedValue([{ id: "session", workspaceId: "workspace", profileId: "profile", sessionCode: "RV-1", state: "Completed", runType: "automatic", preRevealTranscript: "Evidence", postRevealTranscript: "", createdAt: "now", updatedAt: "now" }]),
       listWorkspaces: vi.fn().mockResolvedValue([{ id: "workspace", name: "Workspace" }]),
       listProfiles: vi.fn().mockResolvedValue([{ id: "profile", name: "Profile" }]),
@@ -78,4 +80,16 @@ describe("training export", () => {
     expect(summary).toContain("Judge 1: openrouter:same · 1 sessions · mean 2");
     expect(summary).toContain("Judge 2: openrouter:same · 1 sessions · mean 8");
   });
+  it("T1 exports the interrupted active checkpoint settlement even before sessionIds contains it",async()=>{
+    const settlement={kind:"viewer_notes",sessionId:"pending",packetHash:"packet",auditId:"audit",settlement:"failed_preserved",version:null,attempts:2,status:"FAILED_PARSE",failureMessage:"Invalid JSON final response"};
+    const run={id:"run",runNumber:1,name:"Training",createdAt:"2026-10-15T00:00:00Z",updatedAt:"2026-10-15T00:00:00Z",status:"Interrupted",profileId:"p",workspaceId:"w",sessionIds:[],completedTargetIds:[],targetIds:["t"],categories:[],judgeModelRoutes:[],currentIndex:0,protocolVariant:"extended",activeTargetCheckpoint:{targetId:"t",sessionId:"pending",stage:"field_guide_update_completed"}} as unknown as TrainingRunRecord;
+    const repository={listRvSessions:vi.fn(async()=>[]),listWorkspaces:vi.fn(async()=>[]),listProfiles:vi.fn(async()=>[]),listSessionEvents:vi.fn(async()=>[{eventType:"LEARNING_SETTLEMENT",metadata:{settlement}}]),recordExport:vi.fn()} as unknown as AppRepository;
+    await exportTrainingRun(repository,run,[],"en");
+    expect(repository.listSessionEvents).toHaveBeenCalledWith("pending");
+    const files=writeExportPackage.mock.calls[0][0].files as Array<{relativePath:string;content:string}>;
+    const report=files.find(f=>f.relativePath==="learning_settlements.md")!.content;
+    expect(report).toContain("Invalid JSON final response");expect(report).toContain("previous version retained");expect(report).not.toContain("NO_CHANGE");
+    expect(files.find(f=>f.relativePath==="learning_settlements.json")!.content).toContain('"activeTargetCheckpoint"');
+  });
+
 });

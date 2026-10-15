@@ -106,6 +106,8 @@ export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOp
   minimumUsefulTokens?: number;
   signal?: AbortSignal;
   preserveCompleteAfterAbort?:boolean;
+  initialAttempt?: 0 | 1;
+  maximumAttempts?: 1 | 2;
   recoveryInstruction?: string;
   recoveryReasoningMaxTokens?: number;
   recoveryReasoningMaxTokensSupported?: boolean;
@@ -113,7 +115,8 @@ export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOp
   call: (settings: EffectiveGenerationSettings, attempt: 0 | 1, messages: ProviderMessage[]) => Promise<ProviderChatResponse>;
 }): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; attempt: 0 | 1 }> {
   let firstBudget = 0;
-  for (const attempt of [0, 1] as const) {
+  const attempts = ([0, 1] as const).filter(value => value >= (input.initialAttempt ?? 0)).slice(0, input.maximumAttempts ?? 2);
+  for (const attempt of attempts) {
     input.signal?.throwIfAborted();
     const attemptMessages = attempt === 1 && input.recoveryInstruction?.trim()
       ? input.messages.map((message, index) => index === input.messages.length - 1 && message.role === "user"
@@ -121,7 +124,7 @@ export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOp
         : message)
       : input.messages;
     const budget = analyticalOutputBudget({ ...input, messages: attemptMessages, attempt });
-    if (attempt === 1 && budget <= firstBudget) throw new Error(`Provider exhausted the available analytical output budget; this route cannot increase beyond ${firstBudget} tokens.`);
+    if (attempt === 1 && firstBudget > 0 && budget <= firstBudget) throw new Error(`Provider exhausted the available analytical output budget; this route cannot increase beyond ${firstBudget} tokens.`);
     if (attempt === 0) firstBudget = budget;
     const requestedSettings: GenerationSettings = { ...input.requestedSettings, maxOutputTokens: budget };
     const useExactReasoningCap = attempt === 1 && input.recoveryReasoningMaxTokens && input.recoveryReasoningMaxTokensSupported === true;
@@ -150,7 +153,7 @@ export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOp
       return { response, settings, attempt };
     } catch (cause) {
       if (input.signal?.aborted) throw cause;
-      if (attempt === 0 && isOutputLimitFailure(cause)) continue;
+      if (attempt === 0 && attempts.includes(1) && isOutputLimitFailure(cause)) continue;
       throw cause;
     }
   }

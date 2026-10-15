@@ -443,3 +443,9 @@ it("S1 analytical recovery never starts a second callback after Stop", async () 
   await expect(callWithAnalyticalOutputRecovery({ model, messages: [], operationKind: "judge", signal: controller.signal, call })).rejects.toMatchObject({ name: "AbortError" });
   expect(call).toHaveBeenCalledTimes(1);
 });
+
+it.each([0,1] as const)("T1 FIX: one permitted analytical iteration at slot %s preserves the original error object and evidence",async initialAttempt=>{
+ const error=new ProviderCallError({code:"unknown",message:"provider returned reasoning without a final assistant response [finish-reason=stop]",phase:"validating_response",responseEvidence:{version:1,transportOutcome:"response_finished",boundary:"sse_done"}});
+ const call=vi.fn(async()=>{throw error;});
+ await expect(callWithAnalyticalOutputRecovery({model,messages:[{role:"user",content:"Evaluate"}],operationKind:"judge",initialAttempt,maximumAttempts:1,call})).rejects.toBe(error);expect(call).toHaveBeenCalledTimes(1);
+});

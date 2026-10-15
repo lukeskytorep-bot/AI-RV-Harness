@@ -14,7 +14,7 @@ export interface TrainingRunTermination {
 
 export type TrainingTargetStage = "blind_initializing" | "blind_running" | "session_revealed" | "review_completed" | "field_guide_update_completed" | "viewer_notes_reflection_completed" | "judging_completed";
 
-export type TrainingFieldGuidePostUpdateStatus = "UPDATE" | "NO_CHANGE" | "FAILED_CAPACITY" | "STALE_BASE" | "LEGACY_UNRECORDED";
+export type TrainingFieldGuidePostUpdateStatus = "UPDATE" | "NO_CHANGE" | "FAILED_CAPACITY" | "FAILED_PARSE" | "FAILED_SCHEMA" | "FAILED_PROVIDER" | "FAILED_OUTPUT_PREFLIGHT" | "STALE_BASE" | "LEGACY_UNRECORDED";
 
 export interface TrainingFieldGuidePostUpdateCheckpoint {
   updateStatus: TrainingFieldGuidePostUpdateStatus;
@@ -24,6 +24,7 @@ export interface TrainingFieldGuidePostUpdateCheckpoint {
 }
 
 export interface TrainingTargetCheckpoint {
+  learningSettlements?: import("../aiCenter/learningExecution").LearningSettlement[];
   targetId: string;
   sessionId: string;
   stage: TrainingTargetStage;
@@ -89,6 +90,7 @@ export interface TrainingRunRecord {
   activeTargetCheckpoint?: TrainingTargetCheckpoint | null;
   /** Durable audit trail for per-session Field Guide Update decisions. */
   fieldGuideUpdates?: FieldGuideUpdateAuditRecord[];
+  learningSettlements?: import("../aiCenter/learningExecution").LearningSettlement[];
   directoryPath?: string;
   estimatedCostUsd?: number;
   actualCostUsd?: number;
@@ -111,6 +113,7 @@ export interface UpdateTrainingRunInput {
   executionSnapshot?: TrainingExecutionSnapshot;
   activeTargetCheckpoint?: TrainingTargetCheckpoint | null;
   fieldGuideUpdates?: FieldGuideUpdateAuditRecord[];
+  learningSettlements?: import("../aiCenter/learningExecution").LearningSettlement[];
   directoryPath?: string;
   actualCostUsd?: number;
   error?: string;

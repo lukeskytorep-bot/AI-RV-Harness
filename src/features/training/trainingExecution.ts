@@ -208,7 +208,7 @@ async function resolveTrainingFieldGuideAfterUpdate(input: {
   if (!snapshot || !frozen) throw new Error("Training Viewer Notes Reflection cannot resolve the frozen Field Guide snapshot.");
 
   const audit = input.explicitResult?.audit
-    ?? [...(input.trainingRun.fieldGuideUpdates ?? [])].reverse().find((item) => item.sourceSessionId === input.checkpoint.sessionId && fieldGuideUpdateCompletesStage(item.status));
+    ?? [...(input.trainingRun.fieldGuideUpdates ?? [])].reverse().find((item) => item.sourceSessionId === input.checkpoint.sessionId && (fieldGuideUpdateCompletesStage(item.status) || input.trainingRun.learningSettlements?.some(s => s.auditId === item.id)));
   const status = input.explicitResult?.status ?? audit?.status;
 
   if (status === "UPDATE") {
@@ -219,11 +219,11 @@ async function resolveTrainingFieldGuideAfterUpdate(input: {
     return { updateStatus: "UPDATE", versionId: exact.id, versionNumber: exact.versionNumber, contentSha256: exact.contentSha256 };
   }
 
-  if (status === "NO_CHANGE" || status === "FAILED_CAPACITY" || status === "STALE_BASE") {
+  if (status === "NO_CHANGE" || status === "FAILED_CAPACITY" || status === "STALE_BASE" || ((input.explicitResult?.settlement?.settlement === "failed_preserved" || input.trainingRun.learningSettlements?.some(s => s.auditId === audit?.id && s.settlement === "failed_preserved")) && status)) {
     if (audit && (audit.baseVersionId !== frozen.versionId || audit.baseContentSha256 !== frozen.contentSha256)) {
       throw new Error("Training Field Guide audit base does not match the frozen session Field Guide.");
     }
-    return { updateStatus: status, versionId: frozen.versionId, versionNumber: frozen.versionNumber, contentSha256: frozen.contentSha256 };
+    return { updateStatus: status as TrainingFieldGuidePostUpdateCheckpoint["updateStatus"], versionId: frozen.versionId, versionNumber: frozen.versionNumber, contentSha256: frozen.contentSha256 };
   }
 
   // Compatibility for a historical checkpoint created before this contract existed.
@@ -492,13 +492,14 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
           budgetPolicy: "training_reveal",
         });
         if (!fieldGuideResult) await assertCanContinue();
-        if (fieldGuideResult && !fieldGuideUpdateCompletesStage(fieldGuideResult.status)) {
+        if (fieldGuideResult && !fieldGuideResult.settlement && !fieldGuideUpdateCompletesStage(fieldGuideResult.status)) {
           throw new Error(`Field Guide Update did not complete (${fieldGuideResult.status}).${fieldGuideResult.audit.failureMessage ? ` ${fieldGuideResult.audit.failureMessage}` : ""}`);
         }
         const refreshed = await currentTrainingRecord(input.repository, working.id, working);
         const checkpointWithPacket: TrainingTargetCheckpoint = {
           ...checkpoint,
           stage: "field_guide_update_completed",
+          ...(fieldGuideResult?.settlement ? { learningSettlements: [fieldGuideResult.settlement] } : {}),
           ...(fieldGuideResult?.audit.packetSha256 ? { fieldGuideUpdatePacketSha256: fieldGuideResult.audit.packetSha256 } : {}),
         };
         const fieldGuideAfterUpdate = await resolveTrainingFieldGuideAfterUpdate({
@@ -542,7 +543,7 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
         if (!reflectionResult) await assertCanContinue();
         const sessionSnapshot = await input.repository.getSessionSnapshot(checkpoint.sessionId);
         if (!sessionSnapshot) throw new Error("Viewer Notes checkpoint requires the durable Session Snapshot.");
-        if (sessionSnapshot.viewerNotes?.enabled && (!reflectionResult || !viewerNoteReflectionCompletesStage(reflectionResult.status))) {
+        if (sessionSnapshot.viewerNotes?.enabled && (!reflectionResult || (!reflectionResult.settlement && !viewerNoteReflectionCompletesStage(reflectionResult.status)))) {
           throw new Error("Viewer Notes Reflection did not complete; the checkpoint remains resumable.");
         }
         const reflectionPacketSha256 = sessionSnapshot?.viewerNotes?.enabled
@@ -553,9 +554,10 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
         checkpoint = {
           ...checkpoint,
           stage: "viewer_notes_reflection_completed",
+          ...(reflectionResult?.settlement ? { learningSettlements: [...(checkpoint.learningSettlements ?? []), reflectionResult.settlement] } : {}),
           ...(reflectionPacketSha256 ? { viewerNotesReflectionPacketSha256: reflectionPacketSha256 } : {}),
         };
-        working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
+        working = { ...await currentTrainingRecord(input.repository, working.id, working), activeTargetCheckpoint: checkpoint, updatedAt: now() };
         await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
         input.onRunChange?.(working);
       }

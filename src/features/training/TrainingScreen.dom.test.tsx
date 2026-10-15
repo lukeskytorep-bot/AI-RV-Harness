@@ -295,4 +295,12 @@ describe("TrainingScreen mounted interactions", () => {
     expect(document.body.querySelector('[role="tooltip"]')).toBeNull();
   });
 
+  it("T1 completed Training retains a nonblocking learning warning with the real cause",async()=>{
+    currentRun = makeRun({status:"Completed",completedTargetIds:["t"],targetIds:["t"],currentIndex:1,activeTargetCheckpoint:null,
+      learningSettlements:[{kind:"viewer_notes",sessionId:"s",packetHash:"packet",auditId:"audit",settlement:"failed_preserved",version:null,attempts:2,status:"FAILED_CAPACITY",failureMessage:"Capacity exceeded (1200/1024)"}]});
+    await mount("en");
+    expect(host.textContent).toContain("Completed");expect(host.textContent).toContain("Update failed — previous version retained");expect(host.textContent).toContain("Capacity exceeded (1200/1024)");expect(host.textContent).not.toContain("NO_CHANGE");
+    expect(host.querySelector(".training-resume-button")).toBeNull();
+  });
+
 });

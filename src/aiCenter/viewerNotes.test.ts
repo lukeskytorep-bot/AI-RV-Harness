@@ -41,7 +41,7 @@ const packet: ViewerNoteReflectionPacket = {
     updateStatus: "UPDATE",
     versionId: "fg-after",
     versionNumber: 8,
-    contentSha256: "fg-after-sha",
+    contentSha256: await sha256Text("guide after this exact training"),
     content: "Post-training perceptual cue: fine vibration around metallic structures.",
   },
 };
@@ -179,7 +179,7 @@ describe("Viewer Notes", () => {
     };
     const effectivePrompt = "LOCKED CORE IDENTITY\nLOCKED BASE VOCABULARY\nFROZEN FIELD GUIDE BEFORE TRAINING";
     const effectivePromptSha = await sha256Text(effectivePrompt);
-    const frozenGuide = { aiIdentityId: "identity", language: "en" as const, versionId: "fg-before", versionNumber: 4, content: "guide before", contentSha256: "fg-before-sha", estimatedTokens: 3, estimatorVersion: "conservative-char-v1" as const, capacityTokens: 2048 as const, modelRoute: model.route, capturedAt: "now", sourceKind: "factory-baseline" as const };
+    const frozenGuide = { aiIdentityId: "identity", language: "en" as const, versionId: "fg-before", versionNumber: 4, content: "guide before", contentSha256: await sha256Text("guide before"), estimatedTokens: 3, estimatorVersion: "conservative-char-v1" as const, capacityTokens: 2048 as const, modelRoute: model.route, capturedAt: "now", sourceKind: "factory-baseline" as const };
     const snapshot = {
       schemaVersion: 3, sessionId: "session_1", sessionCode: "RV-1", profileId: "profile", workspaceId: "workspace", providerConfigId: providerConfig.id, credentialId: "credential", provider: "openrouter", modelId: model.modelId, modelRoute: model.route,
       capabilitySnapshot: {}, capabilityCapturedAt: "now", generationSettings: { requested: {}, effective: {}, omitted: [] }, sessionLanguage: "en",
@@ -188,7 +188,7 @@ describe("Viewer Notes", () => {
       viewerNotes: { enabled: true, aiIdentityId: "identity", noteType: "viewer_self_notes", content: "Current procedural notes", contentSha256: "notes-sha", estimatedTokens: 5, estimatorVersion: "conservative-char-v1", capacityTokens: 1024, modelRoute: model.route, capturedAt: "now" },
       revealSource: "automatic", applicationVersion: "0.7.13", createdAt: "now",
     } as SessionSnapshot;
-    const afterGuide = { id: "fg-after", aiIdentityId: "identity", language: "en", versionNumber: 5, content: "guide after this exact training", contentSha256: "fg-after-sha", estimatedTokens: 6, estimatorVersion: "conservative-char-v1", capacityTokensAtCreation: 2048, activationStatus: "active", sourceSessionId: "session_1", sourceSnapshot: { schemaVersion: 1, sourceKind: "training-reflection", profileId: "profile", capturedAt: "now", sourceSessionId: "session_1", fieldGuideUpdatePacketSha256: "field-packet" }, createdAt: "now" };
+    const afterGuide = { id: "fg-after", aiIdentityId: "identity", language: "en", versionNumber: 5, content: "guide after this exact training", contentSha256: await sha256Text("guide after this exact training"), estimatedTokens: 6, estimatorVersion: "conservative-char-v1", capacityTokensAtCreation: 2048, activationStatus: "active", sourceSessionId: "session_1", sourceSnapshot: { schemaVersion: 1, sourceKind: "training-reflection", profileId: "profile", capturedAt: "now", sourceSessionId: "session_1", fieldGuideUpdatePacketSha256: "field-packet" }, createdAt: "now" };
     const begin = vi.fn(async (input: Parameters<AppRepository["beginViewerNoteReflection"]>[0]) => ({ ...input, noteType: "viewer_self_notes", attemptCount: 0, status: "PENDING", createdAt: "now" }));
     const commit = vi.fn(async () => ({ status: "NO_CHANGE" as const }));
     const repository = workflowTestRepository({
@@ -209,17 +209,17 @@ describe("Viewer Notes", () => {
     const chat = vi.fn(async (request: Parameters<NonNullable<Parameters<typeof runViewerNoteReflection>[0]["chat"]>>[0]) => {
       budgets.push(request.settings.effective.maxOutputTokens!);
       if(scenario==="stop-length" || scenario==="stop-json"){stopController.abort(new DOMException("Stopped by user","AbortError"));return scenario==="stop-length"?{content:"partial",finishReason:"length",usage:{}}:{content:"malformed JSON",usage:{}};}
-      if (scenario === "training-capacity-json" && budgets.length === 2) return { content: "malformed JSON", usage: {} };
-      if (scenario === "training-capacity-json" && budgets.length === 3) return { content: "partial", finishReason: "length", usage: {} };
-      if(scenario==="training-length"&&budgets.length===1||["training-json","training-capacity"].includes(scenario)&&budgets.length===2)return {content:"partial",finishReason:"length",usage:{}};
-      if(scenario==="training-json"&&budgets.length===1)return {content:"malformed JSON",usage:{}};
-      if(["training-capacity", "training-capacity-json"].includes(scenario)&&budgets.length===1)return {content:JSON.stringify({decision:"UPDATE",notes:"x".repeat(6000),changeSummary:"too long"}),usage:{}};
-      return { content: '{"decision":"NO_CHANGE","notes":null,"changeSummary":"Distinct procedural notes remain sufficient"}', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, providerRequestId: "req" };
+      if (scenario === "training-capacity-json" && budgets.length === 2) return { responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const}, content: "malformed JSON", usage: {} };
+      if (scenario === "training-capacity-json" && budgets.length === 3) return { responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const}, content: "partial", finishReason: "length", usage: {} };
+      if(scenario==="training-length"&&budgets.length===1||["training-json","training-capacity"].includes(scenario)&&budgets.length===2)return {responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const},content:"partial",finishReason:"length",usage:{}};
+      if(scenario==="training-json"&&budgets.length===1)return {responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const},content:"malformed JSON",usage:{}};
+      if(["training-capacity", "training-capacity-json"].includes(scenario)&&budgets.length===1)return {responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const},content:JSON.stringify({decision:"UPDATE",notes:"x".repeat(6000),changeSummary:"too long"}),usage:{}};
+      return { responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const}, content: '{"decision":"NO_CHANGE","notes":null,"changeSummary":"Distinct procedural notes remain sufficient"}', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, providerRequestId: "req" };
     });
 
     const budgetPolicy = (scenario === "missing-policy" ? undefined : scenario === "wrong-policy" ? "default" : "training_reveal") as "training_reveal";
     const before = JSON.stringify(snapshot);
-    const operation = runViewerNoteReflection({ budgetPolicy, repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: "fg-after-sha" }, chat,signal:stopController.signal });
+    const operation = runViewerNoteReflection({ budgetPolicy, repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: await sha256Text("guide after this exact training") }, chat,signal:stopController.signal });
 
     if (scenario === "missing-policy" || scenario === "wrong-policy") {
       await expect(operation).rejects.toThrow(/explicit training_reveal/);
@@ -229,18 +229,19 @@ describe("Viewer Notes", () => {
       expect(JSON.stringify(snapshot)).toBe(before);
       return;
     }
-    const result = await operation;
-    if(scenario==="stop-length" || scenario==="stop-json"){expect(result).toBeNull();expect(chat).toHaveBeenCalledTimes(1);expect(commit).not.toHaveBeenCalled();expect(JSON.stringify(snapshot)).toBe(before);return;}
+    if(scenario==="stop-length" || scenario==="stop-json"){await expect(operation).rejects.toThrow("Stopped by user");expect(chat).toHaveBeenCalledTimes(1);expect(commit).not.toHaveBeenCalled();expect(JSON.stringify(snapshot)).toBe(before);return;}
 
-    expect(result).toEqual({ status: "NO_CHANGE" });
-    expect(budgets).toEqual(scenario==="training-capacity-json"?[1024+32768,1024+32768,1024+32768,1024+49152]:scenario==="training-complete"?[1024+32768]:scenario==="training-length"?[1024+32768,1024+49152]:[1024+32768,1024+32768,1024+49152]);
+    const result = await operation;
+    const failed = ["training-json", "training-capacity", "training-capacity-json"].includes(scenario);
+    expect(result?.settlement?.settlement).toBe(failed ? "failed_preserved" : "model_no_change");
+    expect(budgets).toEqual(scenario === "training-complete" ? [1024+32768] : [1024+32768,1024+49152]);
     expect(snapshot.viewerNotes?.capacityTokens).toBe(1024);
     const userPrompt = chat.mock.calls[0][0].messages.find((message: { role: string; content: string }) => message.role === "user")?.content ?? "";
     expect(userPrompt).toContain(effectivePrompt);
     expect(userPrompt).toContain("guide after this exact training");
     expect(userPrompt).toContain("Version ID: fg-after");
     expect(repository.listFieldGuideVersions).toHaveBeenCalledWith("identity", "en");
-    expect(commit).toHaveBeenCalledOnce();
+    if (failed) expect(commit).not.toHaveBeenCalled(); else expect(commit).toHaveBeenCalledOnce();
   });
 
   it.each([

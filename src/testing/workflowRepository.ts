@@ -7,8 +7,9 @@ import type { WorkflowScope } from "../application/workflowOwnership";
 export function workflowTestRepository<T extends object>(repository:T):T {
   const port=repository as unknown as AppRepository;
   if(typeof port.withWorkflowOwnership==="function")return repository;
-  if(typeof port.appendSessionEvent!=="function")Object.assign(repository,{appendSessionEvent:async()=>undefined});
-  if(typeof port.listSessionEvents!=="function")Object.assign(repository,{listSessionEvents:async()=>[]});
+  const events: import("../sessions/types").SessionEventRecord[] = [];
+  if(typeof port.appendSessionEvent!=="function")Object.assign(repository,{appendSessionEvent:async(sessionId:string,event:import("../sessions/types").SessionEventInput)=>{events.push({...event,sessionId,id:String(events.length),sequenceNumber:events.length+1,createdAt:"fixture"});}});
+  if(typeof port.listSessionEvents!=="function")Object.assign(repository,{listSessionEvents:async(sessionId:string)=>events.filter(e=>e.sessionId===sessionId)});
   Object.assign(repository,{
     ...(typeof port.getWorkflowOwnership==="function"?{}:{getWorkflowOwnership:async()=>"idle"}),
     ...(typeof port.getWorkflowResearchProjectId==="function"?{}:{getWorkflowResearchProjectId:async()=>undefined}),
