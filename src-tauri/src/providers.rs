@@ -285,6 +285,14 @@ pub struct ProviderCallError {
     code: Box<str>,
     message: Box<str>,
     phase: Box<str>,
+    // Keep Result's inline Err small; serde preserves the existing flat IPC JSON.
+    #[serde(flatten)]
+    metadata: Box<ProviderCallErrorMetadata>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderCallErrorMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     http_status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -307,13 +315,7 @@ impl ProviderCallError {
             code: code.into(),
             message: message.into().into_boxed_str(),
             phase: phase.into(),
-            http_status: None,
-            provider_error_type: None,
-            provider_code: None,
-            retry_after_ms: None,
-            provider_request_id: None,
-            semantic_output_started: None,
-            response_evidence: None,
+            metadata: Box::default(),
         }
     }
 
@@ -458,12 +460,12 @@ fn parse_finished_chat_response(
             "unknown"
         };
         let mut failure = ProviderCallError::new(code, message, "validating_response");
-        failure.provider_error_type = provider_error_type;
-        failure.provider_code = provider_code;
-        failure.provider_request_id = request_id.map(String::into_boxed_str);
-        failure.response_evidence = Some(response_evidence.clone());
+        failure.metadata.provider_error_type = provider_error_type;
+        failure.metadata.provider_code = provider_code;
+        failure.metadata.provider_request_id = request_id.map(String::into_boxed_str);
+        failure.metadata.response_evidence = Some(response_evidence.clone());
         if semantic_output_started {
-            failure.semantic_output_started = Some(true);
+            failure.metadata.semantic_output_started = Some(true);
         }
         failure
     })?;

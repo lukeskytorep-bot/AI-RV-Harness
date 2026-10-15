@@ -569,9 +569,9 @@ impl OpenRouterStreamAccumulator {
 
     fn error(&self, code: &str, message: impl Into<String>, phase: &str, request_id: Option<&str>) -> ProviderCallError {
         let mut error = ProviderCallError::new(code, message, phase);
-        error.provider_request_id = request_id.map(|value| value.to_string().into_boxed_str());
+        error.metadata.provider_request_id = request_id.map(|value| value.to_string().into_boxed_str());
         if self.semantic_output_started {
-            error.semantic_output_started = Some(true);
+            error.metadata.semantic_output_started = Some(true);
         }
         error
     }
@@ -583,9 +583,9 @@ impl OpenRouterStreamAccumulator {
                 "provider streaming response ended before [DONE]",
                 "reading_body",
             );
-            error.provider_request_id = request_id.clone().map(String::into_boxed_str);
+            error.metadata.provider_request_id = request_id.clone().map(String::into_boxed_str);
             if self.semantic_output_started {
-                error.semantic_output_started = Some(true);
+                error.metadata.semantic_output_started = Some(true);
             }
             return Err(error);
         }
@@ -676,11 +676,11 @@ fn stream_provider_error(payload: &Value, secret: &str, request_id: Option<&str>
         .unwrap_or("provider returned an SSE error event");
     let safe_message = raw_message.replace(secret, "[REDACTED]").chars().take(1200).collect::<String>();
     let mut failure = ProviderCallError::new("provider_error", safe_message, "reading_body");
-    failure.provider_error_type = provider_error_type;
-    failure.provider_code = provider_code;
-    failure.provider_request_id = request_id.map(|value| value.to_string().into_boxed_str());
+    failure.metadata.provider_error_type = provider_error_type;
+    failure.metadata.provider_code = provider_code;
+    failure.metadata.provider_request_id = request_id.map(|value| value.to_string().into_boxed_str());
     if semantic_output_started {
-        failure.semantic_output_started = Some(true);
+        failure.metadata.semantic_output_started = Some(true);
     }
     failure
 }
@@ -697,9 +697,9 @@ fn response_request_id(response: &reqwest::Response) -> Option<String> {
 
 fn timeout_error(message: &str, phase: &str, request_id: Option<&str>, semantic_output_started: bool) -> ProviderCallError {
     let mut error = ProviderCallError::new("timeout", message, phase);
-    error.provider_request_id = request_id.map(|value| value.to_string().into_boxed_str());
+    error.metadata.provider_request_id = request_id.map(|value| value.to_string().into_boxed_str());
     if semantic_output_started {
-        error.semantic_output_started = Some(true);
+        error.metadata.semantic_output_started = Some(true);
     }
     error
 }
@@ -763,12 +763,12 @@ pub(super) async fn send_openrouter_streaming_chat_request(
                 safe_provider_error(status, &body, secret, retry_after),
                 "reading_body",
             );
-            failure.http_status = Some(status.as_u16());
-            failure.provider_error_type = provider_error_type;
-            failure.provider_code = provider_code;
-            failure.retry_after_ms = retry_after;
-            failure.response_evidence = Some(super::response_evidence::finished(parsed.as_ref(), provider_request_id.as_deref(), "body_read"));
-            failure.provider_request_id = provider_request_id.map(String::into_boxed_str);
+            failure.metadata.http_status = Some(status.as_u16());
+            failure.metadata.provider_error_type = provider_error_type;
+            failure.metadata.provider_code = provider_code;
+            failure.metadata.retry_after_ms = retry_after;
+            failure.metadata.response_evidence = Some(super::response_evidence::finished(parsed.as_ref(), provider_request_id.as_deref(), "body_read"));
+            failure.metadata.provider_request_id = provider_request_id.map(String::into_boxed_str);
             return Err(failure);
         }
 
@@ -819,9 +819,9 @@ pub(super) async fn send_openrouter_streaming_chat_request(
                         last_transport_activity = Instant::now();
                     }
                     let frames = decoder.push(&bytes).map_err(|mut error| {
-                        error.provider_request_id = provider_request_id.clone().map(String::into_boxed_str);
+                        error.metadata.provider_request_id = provider_request_id.clone().map(String::into_boxed_str);
                         if accumulator.semantic_output_started {
-                            error.semantic_output_started = Some(true);
+                            error.metadata.semantic_output_started = Some(true);
                         }
                         error
                     })?;
@@ -836,17 +836,17 @@ pub(super) async fn send_openrouter_streaming_chat_request(
                 }
                 Some(Err(error)) => {
                     let mut failure = request_error(error, "reading_body");
-                    failure.provider_request_id = provider_request_id.clone().map(String::into_boxed_str);
+                    failure.metadata.provider_request_id = provider_request_id.clone().map(String::into_boxed_str);
                     if accumulator.semantic_output_started {
-                        failure.semantic_output_started = Some(true);
+                        failure.metadata.semantic_output_started = Some(true);
                     }
                     return Err(failure);
                 }
                 None => {
                     let frames = decoder.finish().map_err(|mut error| {
-                        error.provider_request_id = provider_request_id.clone().map(String::into_boxed_str);
+                        error.metadata.provider_request_id = provider_request_id.clone().map(String::into_boxed_str);
                         if accumulator.semantic_output_started {
-                            error.semantic_output_started = Some(true);
+                            error.metadata.semantic_output_started = Some(true);
                         }
                         error
                     })?;

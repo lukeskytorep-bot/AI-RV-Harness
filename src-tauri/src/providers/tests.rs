@@ -137,13 +137,13 @@ fn provider_errors_redact_secret() {
 
 #[test]
 fn provider_call_error_stays_compact_and_serializes_compatibly() {
-    assert!(std::mem::size_of::<ProviderCallError>() <= 128);
+    assert!(std::mem::size_of::<ProviderCallError>() < 128);
     let mut error = ProviderCallError::new("timeout", "request timed out", "awaiting_headers");
-    error.http_status = Some(504);
-    error.provider_error_type = Some("upstream_timeout".into());
-    error.provider_code = Some("gateway_timeout".into());
-    error.retry_after_ms = Some(1_000);
-    error.provider_request_id = Some("request-1".into());
+    error.metadata.http_status = Some(504);
+    error.metadata.provider_error_type = Some("upstream_timeout".into());
+    error.metadata.provider_code = Some("gateway_timeout".into());
+    error.metadata.retry_after_ms = Some(1_000);
+    error.metadata.provider_request_id = Some("request-1".into());
 
     assert_eq!(serde_json::to_value(error).unwrap(), json!({
         "code": "timeout",
@@ -1390,7 +1390,7 @@ fn stream_accumulator_treats_null_as_absent_and_invalid_non_null_as_semantic_fai
             "choices": [{"delta": {"reasoning_details": invalid}}]
         }).to_string(), "secret", None).unwrap_err();
         assert_eq!(error.code.as_ref(), "invalid_provider_json");
-        assert_eq!(error.semantic_output_started, Some(true));
+        assert_eq!(error.metadata.semantic_output_started, Some(true));
     }
 
     let mut after_valid = OpenRouterStreamAccumulator::default();
@@ -1401,7 +1401,7 @@ fn stream_accumulator_treats_null_as_absent_and_invalid_non_null_as_semantic_fai
         "choices": [{"delta": {"reasoning_details": {"unexpected": true}}}]
     }).to_string(), "secret", None).unwrap_err();
     assert_eq!(error.code.as_ref(), "invalid_provider_json");
-    assert_eq!(error.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
 }
 
 #[test]
@@ -1640,7 +1640,7 @@ fn partial_failed_stream_state_is_not_inherited_by_a_fresh_accumulator() {
     }).to_string(), "secret", None).unwrap();
     let failure = interrupted.finish(None).unwrap_err();
     assert_eq!(failure.code.as_ref(), "response_body_read");
-    assert_eq!(failure.semantic_output_started, Some(true));
+    assert_eq!(failure.metadata.semantic_output_started, Some(true));
 
     let mut fresh = OpenRouterStreamAccumulator::default();
     fresh.process_data_with_events(&json!({
@@ -1688,7 +1688,7 @@ fn stream_accumulator_bounds_total_data_and_preserves_semantic_retry_boundary() 
     }
     let error = saw_limit.expect("stream accumulation must be bounded");
     assert_eq!(error.code.as_ref(), "response_body_too_large");
-    assert_eq!(error.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
     const { assert!(MAX_ACCUMULATED_STREAM_DATA_BYTES >= 8 * 1024 * 1024) };
 }
 
@@ -1757,12 +1757,12 @@ fn midstream_error_records_whether_semantic_output_already_started() {
     let error_event = json!({"error": {"type": "server", "code": "upstream_disconnect", "message": "gone"}, "choices": [{"delta": {}, "finish_reason": "error"}]}).to_string();
     let mut before = OpenRouterStreamAccumulator::default();
     let error = before.process_data_with_events(&error_event, "secret", Some("r")).unwrap_err();
-    assert_eq!(error.semantic_output_started, None);
+    assert_eq!(error.metadata.semantic_output_started, None);
 
     let mut after = OpenRouterStreamAccumulator::default();
     after.process_data_with_events(&json!({"choices":[{"delta":{"content":"partial"}}]}).to_string(), "secret", None).unwrap();
     let error = after.process_data_with_events(&error_event, "secret", Some("r")).unwrap_err();
-    assert_eq!(error.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
 
     let same_event = json!({
         "error": {"type": "server", "code": "upstream_disconnect", "message": "gone"},
@@ -1770,20 +1770,20 @@ fn midstream_error_records_whether_semantic_output_already_started() {
     }).to_string();
     let mut same_frame = OpenRouterStreamAccumulator::default();
     let error = same_frame.process_data_with_events(&same_event, "secret", Some("r")).unwrap_err();
-    assert_eq!(error.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
 }
 
 #[test]
 fn malformed_stream_event_and_abrupt_eof_are_failures_and_keep_retry_boundary() {
     let mut before = OpenRouterStreamAccumulator::default();
     let error = before.process_data_with_events("{broken", "secret", None).unwrap_err();
-    assert_eq!(error.semantic_output_started, None);
+    assert_eq!(error.metadata.semantic_output_started, None);
 
     let mut after = OpenRouterStreamAccumulator::default();
     after.process_data_with_events(&json!({"choices":[{"delta":{"content":"partial"}}]}).to_string(), "secret", None).unwrap();
     let error = after.finish(None).unwrap_err();
     assert_eq!(error.code.as_ref(), "response_body_read");
-    assert_eq!(error.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
 }
 
 #[test]
@@ -2000,7 +2000,7 @@ async fn oversized_pending_event_after_semantic_output_closes_retry_boundary() {
         None,
     ).await.unwrap_err();
     assert_eq!(error.code.as_ref(), "response_body_too_large");
-    assert_eq!(error.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
     server.await.unwrap();
 }
 
@@ -2023,7 +2023,7 @@ async fn emergency_ceiling_remains_bounded_even_when_keepalives_continue() {
     ).await.unwrap_err();
     assert_eq!(error.code.as_ref(), "timeout");
     assert!(error.message.contains("emergency"));
-    assert_eq!(error.semantic_output_started, None);
+    assert_eq!(error.metadata.semantic_output_started, None);
     server.await.unwrap();
 }
 
@@ -2042,7 +2042,7 @@ async fn genuinely_idle_stream_times_out_without_creating_semantic_output() {
         None,
     ).await.unwrap_err();
     assert_eq!(error.code.as_ref(), "timeout");
-    assert_eq!(error.semantic_output_started, None);
+    assert_eq!(error.metadata.semantic_output_started, None);
     server.await.unwrap();
 }
 
@@ -2181,9 +2181,9 @@ async fn r1_full_body_reasoning_only_rejection_keeps_safe_finished_evidence() {
 async fn r1_complete_invalid_json_is_finished_but_broken_body_is_not() {
     let failure = r1_body_fixture("not valid json", 0).await.unwrap_err();
     assert_eq!(failure.code.as_ref(), "invalid_provider_json");
-    assert!(failure.response_evidence.is_some());
+    assert!(failure.metadata.response_evidence.is_some());
     let failure = r1_body_fixture("{", 100).await.unwrap_err();
-    assert!(failure.response_evidence.is_none());
+    assert!(failure.metadata.response_evidence.is_none());
 }
 
 #[test]
@@ -2191,7 +2191,7 @@ fn r1_full_rejected_structure_and_empty_content_keep_proof() {
     for payload in [json!({"choices":[]}), json!({"choices":[{"message":{"content":""},"finish_reason":"stop"}]})] {
         let proof = super::response_evidence::finished(Some(&payload), None, "body_read");
         let failure = parse_finished_chat_response(ProviderKind::Openrouter, &payload, None, false, proof).unwrap_err();
-        assert!(failure.response_evidence.is_some());
+        assert!(failure.metadata.response_evidence.is_some());
     }
 }
 
@@ -2203,7 +2203,7 @@ fn r1_done_reasoning_only_is_rejected_with_proof_and_final_content_stays_accepte
         accumulator.process_data_with_events("[DONE]", "secret", Some("header")).unwrap();
         let streamed = accumulator.finish(Some("header".into())).unwrap();
         let result = parse_finished_chat_response(ProviderKind::Openrouter, &streamed.payload, streamed.request_id, streamed.semantic_output_started, streamed.response_evidence);
-        let proof = if content.is_empty() { result.unwrap_err().response_evidence.unwrap() } else { let response = result.unwrap(); assert_eq!(response.content, content); response.response_evidence.unwrap() };
+        let proof = if content.is_empty() { result.unwrap_err().metadata.response_evidence.unwrap() } else { let response = result.unwrap(); assert_eq!(response.content, content); response.response_evidence.unwrap() };
         let wire = serde_json::to_value(proof).unwrap();assert_eq!(wire["boundary"], "sse_done");assert_eq!(wire["usage"]["totalTokens"], 25);assert!(!wire.to_string().contains("PRIVATE"));
     }
 }
@@ -2212,19 +2212,43 @@ fn r1_done_reasoning_only_is_rejected_with_proof_and_final_content_stays_accepte
 fn r1_stop_finish_reason_without_done_is_not_completion_proof() {
     let mut accumulator = OpenRouterStreamAccumulator::default();
     accumulator.process_data_with_events(&json!({"choices":[{"delta":{"content":"partial"},"finish_reason":"stop"}]}).to_string(), "secret", Some("header")).unwrap();
-    assert!(accumulator.finish(Some("header".into())).unwrap_err().response_evidence.is_none());
+    assert!(accumulator.finish(Some("header".into())).unwrap_err().metadata.response_evidence.is_none());
 }
 
 #[test]
 fn r1_malformed_stream_frame_never_creates_completion_proof() {
     let mut accumulator = OpenRouterStreamAccumulator::default();
-    assert!(accumulator.process_data_with_events("{malformed", "secret", Some("header")).unwrap_err().response_evidence.is_none());
-    assert!(accumulator.finish(Some("header".into())).unwrap_err().response_evidence.is_none());
+    assert!(accumulator.process_data_with_events("{malformed", "secret", Some("header")).unwrap_err().metadata.response_evidence.is_none());
+    assert!(accumulator.finish(Some("header".into())).unwrap_err().metadata.response_evidence.is_none());
 }
 
 #[tokio::test]
 async fn r1_pre_dispatch_cancel_keeps_completion_unknown() {
     super::transport::cancel_request("r1-pre-cancel".into()).unwrap();
     let error = super::transport::run_cancellable_chat_request(Some("r1-pre-cancel"), "reading_body", async { Ok::<(), ProviderCallError>(()) }).await.unwrap_err();
-    assert_eq!(error.phase.as_ref(), "before_dispatch");assert!(error.response_evidence.is_none());
+    assert_eq!(error.phase.as_ref(), "before_dispatch");assert!(error.metadata.response_evidence.is_none());
+}
+
+#[test]
+fn r1_boxed_metadata_preserves_flat_ipc_including_all_completion_evidence() {
+    let payload = json!({"id":"gen-flat","choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":7,"completion_tokens_details":{"reasoning_tokens":2},"total_tokens":12,"cost":0.03}});
+    let mut error = ProviderCallError::new("unknown", "rejected output", "validating_response");
+    error.metadata.http_status = Some(200);
+    error.metadata.provider_error_type = Some("invalid_output".into());
+    error.metadata.provider_code = Some("rejected".into());
+    error.metadata.retry_after_ms = Some(1_000);
+    error.metadata.provider_request_id = Some("request-flat".into());
+    error.metadata.semantic_output_started = Some(true);
+    error.metadata.response_evidence = Some(super::response_evidence::finished(Some(&payload), Some("request-flat"), "sse_done"));
+    let cloned = error.clone();
+    assert_eq!(serde_json::to_value(cloned).unwrap(), json!({
+        "code":"unknown", "message":"rejected output", "phase":"validating_response",
+        "httpStatus":200, "providerErrorType":"invalid_output", "providerCode":"rejected",
+        "retryAfterMs":1000, "providerRequestId":"request-flat", "semanticOutputStarted":true,
+        "responseEvidence":{
+            "version":1,"transportOutcome":"response_finished","boundary":"sse_done",
+            "finishReason":"stop","providerRequestId":"request-flat","generationId":"gen-flat",
+            "usage":{"inputTokens":5,"outputTokens":7,"reasoningTokens":2,"totalTokens":12,"costUsd":0.03}
+        }
+    }));
 }
