@@ -16,6 +16,6 @@ for(const language of ["en","pl"] as const)it(`T1 AiCenter ${language}: distingu
    await act(async()=>{root.render(<AiCenterScreen settings={{...createDefaultSettings(),interfaceLanguage:language}} profiles={[{id:"p",name:"P",createdAt:"t",updatedAt:"t"}]} workspaces={[]} activeProfileId="p" workspaceFilterId={null} repository={repository} initialView="viewer-learning" monitorPanel={null} onProfileChange={()=>undefined}/>);});
    expect(host.textContent).toContain("Field capacity (3000/2048)");
    const tab=[...host.querySelectorAll("button")].find(b=>b.textContent===(language==="pl"?"Notatki Viewera":"Viewer Notes"))!;
-   await act(async()=>tab.click());expect(host.textContent).toContain("Malformed JSON final response");expect(host.textContent).toContain(language==="pl"?"Aktualizacja nieudana — zachowano poprzednią wersję":"Update failed — previous version retained");expect(host.querySelector(".viewer-note-runs")?.textContent).not.toContain("NO_CHANGE");
+   await act(async()=>tab.click());expect(host.textContent).toContain("Malformed JSON final response");expect(host.textContent).toContain(language==="pl"?"Aktualizacja nieudana — nadal brak zapisanej wersji":"Update failed — no saved version exists");expect(host.querySelector(".viewer-note-runs")?.textContent).not.toContain("NO_CHANGE");expect(host.querySelector(".viewer-note-runs details")?.hasAttribute("open")).toBe(false);
  }finally{await act(async()=>root.unmount());host.remove();environment.IS_REACT_ACT_ENVIRONMENT=previous;}
 });

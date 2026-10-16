@@ -299,7 +299,7 @@ describe("TrainingScreen mounted interactions", () => {
     currentRun = makeRun({status:"Completed",completedTargetIds:["t"],targetIds:["t"],currentIndex:1,activeTargetCheckpoint:null,
       learningSettlements:[{kind:"viewer_notes",sessionId:"s",packetHash:"packet",auditId:"audit",settlement:"failed_preserved",version:null,attempts:2,status:"FAILED_CAPACITY",failureMessage:"Capacity exceeded (1200/1024)"}]});
     await mount("en");
-    expect(host.textContent).toContain("Completed");expect(host.textContent).toContain("Update failed — previous version retained");expect(host.textContent).toContain("Capacity exceeded (1200/1024)");expect(host.textContent).not.toContain("NO_CHANGE");
+    expect(host.textContent).toContain("Completed");expect(host.textContent).toContain("Update failed — no saved version exists");expect(host.textContent).toContain("Capacity exceeded (1200/1024)");expect(host.textContent).not.toContain("NO_CHANGE");
     expect(host.querySelector(".training-resume-button")).toBeNull();
   });
 

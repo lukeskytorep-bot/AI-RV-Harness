@@ -231,3 +231,9 @@
 .privacy-policy-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .privacy-policy-actions a.secondary-button { text-decoration: none; }
 .privacy-policy-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Optional learning failures belong to details, alongside the existing history. */
+.learning-warnings { margin: 8px 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.learning-warnings > summary { cursor: pointer; }
+.learning-warnings li { margin-block: 6px; }
+.learning-warnings li small { display: block; }

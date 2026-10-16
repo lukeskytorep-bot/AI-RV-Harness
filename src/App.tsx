@@ -409,6 +409,7 @@ export default function App() {
       <Sidebar page={page} copy={copy} compact={page !== "home"} onNavigate={navigate} />
       <main className="main-pane">
         <TopBar
+          contextLabel={page === "training" ? copy.training : undefined}
           copy={copy}
           profile={lastProfile}
           workspace={activeWorkspace}
@@ -683,10 +684,12 @@ function TopBar({
   workspace,
   theme,
   onThemeChange,
+  contextLabel,
 }: {
   copy: ReturnType<typeof getCopy>;
   profile: Profile | null;
   workspace: Workspace | null;
+  contextLabel?: string;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
 }) {
@@ -695,8 +698,8 @@ function TopBar({
   return (
     <header className="topbar">
       <div className="crumbs">
-        {profile ? <><span className="avatar tiny">{initials(aiIsBeDisplayName(profile))}</span><span>{aiIsBeDisplayName(profile)}</span></> : <span>AI IS-BE</span>}
-        {workspace && <><ChevronRight size={15} /><strong>{workspace.name}</strong></>}
+        {contextLabel ? <strong>{contextLabel}</strong> : <>{profile ? <><span className="avatar tiny">{initials(aiIsBeDisplayName(profile))}</span><span>{aiIsBeDisplayName(profile)}</span></> : <span>AI IS-BE</span>}
+        {workspace && <><ChevronRight size={15} /><strong>{workspace.name}</strong></>}</>}
       </div>
       <div className="top-actions">
         <span className="runtime-pill"><Database size={14} />{isTauriRuntime() ? "SQLite" : "Preview"}</span>

@@ -1,3 +1,4 @@
+import { failedLearningSummary, trainingLearningSettlements } from "./learningSummary";
 import { parseProviderFinalCandidate } from "../providers/finalCandidate";
 import { LEARNING_SETTLEMENT_EVENT, learningWarningText, type LearningSettlement } from "../aiCenter/learningExecution";
 import { writeExportPackage } from "../exports/native";
@@ -33,7 +34,8 @@ export async function exportTrainingRun(
   const artifactCopies: Array<{ sourcePath: string; relativePath: string }> = [];
   const relatedSessionIds = [...new Set([...run.sessionIds, ...(run.activeTargetCheckpoint ? [run.activeTargetCheckpoint.sessionId] : [])])];
   const learningEvents = (await Promise.all(relatedSessionIds.map(id => repository.listSessionEvents(id)))).flat();
-  const settlements = learningEvents.filter(e => e.eventType === LEARNING_SETTLEMENT_EVENT).map(e => e.metadata?.settlement);
+  const settlements = trainingLearningSettlements(run, learningEvents.filter(e => e.eventType === LEARNING_SETTLEMENT_EVENT && e.metadata?.settlement).map(e => e.metadata!.settlement as LearningSettlement));
+  const failedCount = settlements.filter(value => value.settlement === "failed_preserved").length;
   const candidates = learningEvents.flatMap(event => {
     const metadata = event.metadata ?? {};
     if (event.eventType !== "LEARNING_PHYSICAL_ATTEMPT" && event.eventType !== "LEARNING_CANDIDATE_VALIDATION") return [];
@@ -57,12 +59,14 @@ export async function exportTrainingRun(
     scores: Array<{ judgeIndex: number; modelRoute: string; total: number }>;
   }> = [];
 
-  for (let index = 0; index < run.sessionIds.length; index += 1) {
-    const sessionId = run.sessionIds[index];
-    const targetId = run.completedTargetIds[index];
+  for (let index = 0; index < relatedSessionIds.length; index += 1) {
+    const sessionId = relatedSessionIds[index];
+    const checkpoint = run.activeTargetCheckpoint?.sessionId === sessionId ? run.activeTargetCheckpoint : undefined;
+    const completed = run.sessionIds.includes(sessionId);
+    const targetId = checkpoint?.targetId ?? run.completedTargetIds[index];
     const session = sessionById.get(sessionId);
     const target = targetById.get(targetId);
-    if (!session || !target) continue;
+    if (!session) continue;
     const folder = `${String(index + 1).padStart(3, "0")}_${safeName(session.sessionCode)}`;
     const [reveal, scores, snapshot, clarifications] = await Promise.all([
       repository.getReveal(session.id),
@@ -70,9 +74,9 @@ export async function exportTrainingRun(
       repository.getSessionSnapshot(session.id),
       repository.listTargetClarifications(session.id),
     ]);
-    const category = target.sourceMetadata.category as TrainingCategory | undefined;
-    const title = localizedTargetTitle(target, language);
-    const revealText = reveal?.text?.trim() || (language === "pl" ? "Reveal zawiera wyłącznie załączone pliki." : "The Reveal contains attached files only.");
+    const category = target?.sourceMetadata.category as TrainingCategory | undefined;
+    const title = target ? localizedTargetTitle(target, language) : targetId;
+    const revealText = reveal?.text?.trim() || (reveal ? (language === "pl" ? "Reveal zawiera wyłącznie załączone pliki." : "The Reveal contains attached files only.") : (language === "pl" ? "Reveal nie został jeszcze zapisany." : "Reveal has not been recorded yet."));
     const revealFiles = (reveal?.artifactManifest ?? []).map((artifact, artifactIndex) => {
       const relativePath = `reveal_files/${String(artifactIndex + 1).padStart(2, "0")}_${safeName(artifact.originalFileName)}`;
       artifactCopies.push({ sourcePath: artifact.path, relativePath: `sessions/${folder}/${relativePath}` });
@@ -106,6 +110,7 @@ export async function exportTrainingRun(
         },
       }),
     });
+    if (!completed) continue;
     resultRows.push({
       position: index + 1,
       block: trainingGroupNumber(run, index),
@@ -139,8 +144,14 @@ export async function exportTrainingRun(
       { label: language === "pl" ? "Przebiegi" : "Rounds", value: `${run.roundCount ?? Math.ceil(run.targetIds.length / FACTORY_ROUND_SIZE)} × ${FACTORY_ROUND_SIZE}` },
       { label: language === "pl" ? "Polityka powtórek" : "Repeat policy", value: run.targetRepeatPolicy ?? "—" },
     ] : []),
+    ...(failedCount ? [{ label: language === "pl" ? "Pamięć" : "Memory", value: failedLearningSummary(failedCount, language === "pl") }] : []),
     { label: language === "pl" ? "Łączna średnia AI Judge" : "Overall AI Judge mean", value: overallMean ?? "—" },
   ];
+  const checkpoint = run.activeTargetCheckpoint;
+  const checkpointSession = checkpoint ? sessionById.get(checkpoint.sessionId) : undefined;
+  const checkpointFolder = checkpointSession ? `${String(relatedSessionIds.indexOf(checkpointSession.id) + 1).padStart(3, "0")}_${safeName(checkpointSession.sessionCode)}` : undefined;
+  const checkpointText = checkpoint ? `## ${language === "pl" ? "Bieżący checkpoint" : "Current checkpoint"}\n\n- ${language === "pl" ? "Sesja" : "Session"}: ${checkpoint.sessionId}\n- ${language === "pl" ? "Zapisany etap" : "Saved stage"}: ${checkpoint.stage}\n- Viewer: ${run.modelRoute}\n${checkpointFolder ? `- [${language === "pl" ? "Zapisany przebieg sesji" : "Saved session transcript"}](sessions/${checkpointFolder}/complete_session.md)\n` : ""}\n` : "";
+  const learningText = settlements.length ? `## ${language === "pl" ? "Aktualizacje pamięci" : "Memory updates"}\n\n${failedCount ? failedLearningSummary(failedCount, language === "pl") : (language === "pl" ? "Brak nieudanych aktualizacji." : "No failed updates.")}\n\n[${language === "pl" ? "Rozliczenia i przyczyny" : "Settlements and reasons"}](learning_settlements.md)\n\n` : "";
   const summary = renderMarkdownExportDocument({
     language,
     title: run.name,
@@ -157,7 +168,7 @@ export async function exportTrainingRun(
       exportedAt,
     },
     additionalMetadata,
-    body: `## AI Judge\n\n${judgeSummary}\n\n## ${language === "pl" ? "Sesje" : "Sessions"}\n\n| # | Session | Category | Target | Mean Judge score |\n|---:|---|---|---|---:|\n${rows.join("\n")}\n\n${language === "pl" ? "Każda sesja znajduje się w katalogu `sessions` jako jeden czytelny plik `complete_session.md`. Jeśli Reveal zawierał obraz, rzeczywisty plik obrazu znajduje się w podfolderze `reveal_files` danej sesji." : "Every session is stored under `sessions` as one readable `complete_session.md`. If the Reveal contained an image, the real image file is stored in that session's `reveal_files` folder."}`,
+    body: `${checkpointText}${learningText}## AI Judge\n\n${judgeSummary}\n\n## ${language === "pl" ? "Sesje" : "Sessions"}\n\n| # | Session | Category | Target | Mean Judge score |\n|---:|---|---|---|---:|\n${rows.join("\n")}\n\n${language === "pl" ? "Każda sesja znajduje się w katalogu `sessions` jako jeden czytelny plik `complete_session.md`. Jeśli Reveal zawierał obraz, rzeczywisty plik obrazu znajduje się w podfolderze `reveal_files` danej sesji." : "Every session is stored under `sessions` as one readable `complete_session.md`. If the Reveal contained an image, the real image file is stored in that session's `reveal_files` folder."}`,
   });
   files.unshift({ relativePath: "summary.md", content: summary });
   const exportId = `Training_${String(run.runNumber).padStart(3, "0")}_${run.createdAt.slice(0, 10)}`;

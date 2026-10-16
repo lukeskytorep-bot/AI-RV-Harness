@@ -183,5 +183,8 @@ export async function executeLearningProposal<T>(input: {
 
 export function learningWarningText(value: LearningSettlement, pl: boolean): string {
   const name = value.kind === "field_guide" ? "Field Guide" : "Viewer Notes";
-  return `${name}: ${pl ? "Aktualizacja nieudana — zachowano poprzednią wersję" : "Update failed — previous version retained"} (${value.attempts}/2). ${value.failureMessage ?? value.status}`;
+  const retained = value.version
+    ? (pl ? "Aktualizacja nieudana — zachowano poprzednią wersję" : "Update failed — previous version retained")
+    : (pl ? "Aktualizacja nieudana — nadal brak zapisanej wersji" : "Update failed — no saved version exists");
+  return `${name}: ${retained} (${value.attempts}/2). ${value.failureMessage ?? value.status}`;
 }

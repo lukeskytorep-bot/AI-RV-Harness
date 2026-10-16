@@ -78,13 +78,13 @@ beforeEach(async()=>{
 });
 afterEach(()=>{vi.useRealTimers();db.close();rmSync(directory,{recursive:true,force:true});bridge.invoke.mockReset();});
 const finished = (content: string) => ({content, usage:{}, responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const}});
-async function setup(corruptGuide = false) {
+async function setup(corruptGuide = false, modelId = "m") {
  const repository = await SqliteRepository.connect();
  const provider = await repository.createProviderConfig({id:"pc",provider:"custom_openai",label:"Fixture",credentialId:"key"});
  await repository.updateProviderConnectionStatus(provider.id,"ok");provider.lastStatus="ok";
  db.exec("UPDATE profiles SET credential_id='key'");
  const profile = (await repository.listProfiles())[0];
- const model: ProviderModel = {providerConfigId:provider.id,provider:"custom_openai",modelId:"m",displayName:"M",route:"custom_openai:m",capabilities:{inputModalities:["text"],outputModalities:["text"],supportsVision:false,supportsStreaming:true,reasoning:{supported:false,efforts:[],confidence:"unknown"},temperature:{supported:false,confidence:"unknown"},supportedParameters:[],contextTokens:262144,maxOutputTokens:65536,source:"provider",capturedAt:"t"},pricing:{},recommended:false,rawMetadata:{},refreshedAt:"t"};
+ const model: ProviderModel = {providerConfigId:provider.id,provider:"custom_openai",modelId,displayName:modelId,route:`custom_openai:${modelId}`,capabilities:{inputModalities:["text"],outputModalities:["text"],supportsVision:false,supportsStreaming:true,reasoning:{supported:false,efforts:[],confidence:"unknown"},temperature:{supported:false,confidence:"unknown"},supportedParameters:[],contextTokens:262144,maxOutputTokens:65536,source:"provider",capturedAt:"t"},pricing:{},recommended:false,rawMetadata:{},refreshedAt:"t"};
  const fieldGuide = await prepareFieldGuideForSession({repository,profile,providerConfig:provider,model,language:"en"});
  const prompt = await viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
  const notes = await prepareViewerNotesForSession({repository,profileId:profile.id,providerConfig:provider,model,enabled:true});
@@ -319,4 +319,50 @@ it("T3 real SQLite: failed_preserved learning cannot be reopened by the Viewer r
  const before = await h.repository.listSessionEvents("s"); const confirm = vi.fn(async () => true);
  await prepareViewerSessionResume({ repository: h.repository, sessionId: "s", language: "en", confirm });
  expect(confirm).not.toHaveBeenCalled(); expect(await h.repository.listSessionEvents("s")).toEqual(before);
+});
+
+for (const modelId of ["fixture-viewer-a", "fixture-viewer-b"]) it(`T5 integrated SQLite ${modelId}: mixed learning, three targets, Stop and process-style reconnect without repeating accepted work`, async () => {
+ const h = await setup(false, modelId);
+ const targets = await Promise.all([1, 2, 3].map(index => h.repository.createTarget({ id: `smoke-${index}`, collection: "user", title: `Smoke ${index}`, revealText: `Reveal ${index}`, tags: [], sourceMetadata: { category: "mixed_targets" } })));
+ const run = await h.repository.createTrainingRun({ name: "T5 integrated smoke", status: "Planned", mode: "partial", profileId: h.profile.id, workspaceId: "w", modelRoute: h.model.route, protocolVariant: "extended", targetIds: targets.map(target => target.id), categories: ["mixed_targets"], judgeModelRoutes: [], pauseAfterBlock: false, viewerNotesEnabled: true });
+ const blind = vi.fn(async (request: any) => {
+  const id = request.sessionIdentity.id;
+  await request.repository.createRvSession({ id, sessionCode: request.sessionIdentity.sessionCode, workspaceId: "w", profileId: h.profile.id, runType: "automatic", targetId: request.automaticTarget.id });
+  const snapshot = { ...h.snapshot(id, request.capturedAutomaticReveal.hash), rvSystemPrompt: { ...request.rvSystemPrompt, fullContent: request.rvSystemPrompt.content }, viewerNotes: request.viewerNotes };
+  await request.repository.saveSessionSnapshot(id, snapshot, await sha256Text(JSON.stringify(snapshot)));
+  await request.onSessionCreated(id, request.sessionIdentity.sessionCode);
+  await request.repository.sealPreReveal(id, "accepted blind", await sha256Text("accepted blind"));
+  await request.repository.acceptReveal(id, request.capturedAutomaticReveal);
+  await request.repository.recordTargetUsage({ targetId: request.automaticTarget.id, profileId: h.profile.id, sessionId: id });
+  await request.repository.updateRvSessionState(id, "Revealed");
+  return { sessionId: id, sessionCode: request.sessionIdentity.sessionCode, state: "Revealed", transcript: "accepted blind" };
+ });
+ const review = vi.fn(async (request: any) => {
+  await request.repository.appendPostRevealTurn(request.sessionId, "user", supportedAutomaticPostRevealReviewRequests("en")[0]);
+  return request.repository.appendPostRevealTurn(request.sessionId, "assistant", "review");
+ });
+ let guideCalls = 0, noteCalls = 0;
+ const guide = vi.fn(async () => finished(JSON.stringify(++guideCalls === 1 ? { decision: "UPDATE", fieldGuide: "Keep measured sensory proportions.", changeSummary: "Refine proportions" } : guideCalls <= 3 ? { decision: "UPDATE", fieldGuide: "x".repeat(9000), changeSummary: "too long" } : { decision: "NO_CHANGE", fieldGuide: null, changeSummary: "Keep guide" })));
+ const notes = vi.fn(async () => finished(++noteCalls === 1 ? JSON.stringify({ decision: "UPDATE", notes: "Separate impressions from labels.", changeSummary: "Useful distinction" }) : noteCalls <= 3 ? "invalid JSON" : JSON.stringify({ decision: "NO_CHANGE", notes: null, changeSummary: "Keep notes" })));
+ const judge = vi.fn(async () => ({ scores: [], aggregate: null }));
+ const dependencies = { runAutomaticRvLiteSession: blind, runAutomaticPostRevealReview: review, runFieldGuideUpdate: (request: Parameters<typeof runFieldGuideUpdate>[0]) => runFieldGuideUpdate({ ...request, chat: guide }), runViewerNoteReflection: (request: Parameters<typeof runViewerNoteReflection>[0]) => runViewerNoteReflection({ ...request, chat: notes }), runBlindJudging: judge } as any;
+ const stop = new AbortController();
+ const input = { profile: h.profile, providerConfig: h.provider, model: h.model, judges: [{ providerConfig: h.provider, model: h.model }], targets, language: "en" as const, settings: { maxRetries: 9, requestTimeoutMs: 30000, sessionCodePrefix: "T5" }, dependencies };
+ const first = await executeTrainingRun({ ...input, repository: h.repository, initial: run, signal: stop.signal, onRunChange: next => { if (next.completedTargetIds.length === 2) stop.abort(new DOMException("Stopped by user", "AbortError")); } });
+ expect(first.run.status).toBe("Interrupted"); expect(first.error).toBe("Stopped by user");
+ expect(blind).toHaveBeenCalledTimes(2); expect(review).toHaveBeenCalledTimes(2); expect(judge).toHaveBeenCalledTimes(2);
+ expect(guide).toHaveBeenCalledTimes(3); expect(notes).toHaveBeenCalledTimes(3);
+ const beforeRestart = { guides: await h.repository.getFieldGuideBundle(h.notes.aiIdentityId, "en"), notes: await h.repository.getViewerNoteBundle(h.notes.aiIdentityId) };
+ const restarted = await SqliteRepository.connect();
+ const saved = (await restarted.listTrainingRuns()).find(value => value.id === run.id)!;
+ expect(saved.completedTargetIds).toEqual(targets.slice(0, 2).map(target => target.id));
+ const outcome = await executeTrainingRun({ ...input, repository: restarted, initial: saved });
+ expect(outcome.error).toBeUndefined(); expect(outcome.run.status).toBe("Completed");
+ expect(blind).toHaveBeenCalledTimes(3); expect(review).toHaveBeenCalledTimes(3); expect(judge).toHaveBeenCalledTimes(3);
+ expect(guide).toHaveBeenCalledTimes(4); expect(notes).toHaveBeenCalledTimes(4);
+ const persisted = (await restarted.listTrainingRuns()).find(value => value.id === run.id)!;
+ expect(persisted.learningSettlements?.map(value => value.settlement)).toEqual(["updated", "updated", "failed_preserved", "failed_preserved", "model_no_change", "model_no_change"]);
+ expect(persisted.sessionIds.slice(0, 2)).toEqual(saved.sessionIds);
+ expect((await restarted.getFieldGuideBundle(h.notes.aiIdentityId, "en"))?.activeVersion?.id).toBe(beforeRestart.guides?.activeVersion?.id);
+ expect((await restarted.getViewerNoteBundle(h.notes.aiIdentityId))?.versions).toEqual(beforeRestart.notes?.versions);
 });
