@@ -46,6 +46,7 @@ async fn read_simulator_request(socket: &mut TcpStream) -> String {
 
 fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
     ProviderChatRequest {
+        workflow_ownership: None,
         provider,
         credential_id: "credential".to_string(),
         provider_config_id: "provider-config".to_string(),
@@ -2401,4 +2402,29 @@ fn t2_error_frame_with_typed_reasoning_closes_retry_boundary() {
     }).to_string(), "secret", Some("t2-request")).unwrap_err();
     assert_eq!(error.metadata.semantic_output_started, Some(true));
     assert_eq!(error.metadata.provider_request_id.as_deref(), Some("t2-request"));
+}
+
+#[tokio::test]
+async fn native_window_destruction_aborts_bound_transport_without_js_callback() {
+    use crate::{workflow_heartbeat as heartbeat, workflow_ownership::{execute, Request}};
+    let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+    sqlx::raw_sql("CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT); CREATE TABLE profiles(id TEXT PRIMARY KEY,archived_at TEXT); INSERT INTO profiles VALUES('p',NULL);").execute(&pool).await.unwrap();
+    let token: heartbeat::Token = serde_json::from_value(execute(&pool, Request::Acquire { profile_id: "p".into(), owner: "transport-owner".into() }).await.unwrap()).unwrap();
+    let window = "native-transport-window";
+    let id = "native-window-bound-request";
+    heartbeat::start(pool, token.clone(), window.into(), None).unwrap();
+    let binding = serde_json::from_value(json!({"profileId":"p","owner":token.owner,"version":token.version,"entities":[{"kind":"profile","id":"p"}]})).unwrap();
+    let guard = heartbeat::bind(&binding, window, id).await.unwrap();
+    let (ready, started) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        super::transport::run_cancellable_chat_request(Some(id), "reading_body", async {
+            ready.send(()).unwrap();
+            std::future::pending::<Result<(), ProviderCallError>>().await
+        }).await
+    });
+    started.await.unwrap();
+    heartbeat::window_destroyed(window);
+    let error = tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap().unwrap_err();
+    assert_eq!(error.code.as_ref(), "cancelled");
+    assert!(guard.failure().unwrap().contains("window closed"));
 }

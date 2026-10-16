@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { operationForWriteQuery, type DatabaseWriteOperation } from "./databaseWriteOperations";
 import type { PurgeEntityKind } from "./controlledPurge";
 
@@ -86,8 +86,10 @@ export async function executeControlledPurgeNative(kind: PurgeEntityKind, id: st
   await invoke("database_controlled_purge", { request: { kind, id, ...(expectedArchiveRevision===undefined?{}:{expectedArchiveRevision}) } });
 }
 
-export async function workflowOwnershipNative<T>(request: Record<string, unknown>): Promise<T> {
-  return invoke<T>("database_workflow_ownership", { request });
+export async function workflowOwnershipNative<T>(request: Record<string, unknown>, onFailure?: (failure: { kind: import("../application/abortOwnership").WorkflowAbortKind; message: string }) => void): Promise<T> {
+  const onLost = new Channel<{ kind: import("../application/abortOwnership").WorkflowAbortKind; message: string }>();
+  if (onLost && onFailure) onLost.onmessage = onFailure;
+  return invoke<T>("database_workflow_ownership", { request, onLost });
 }
 export async function executeWorkflowOwnedDatabaseTransaction(context: import("../application/workflowOwnership").WorkflowContext, statements: DatabaseTransactionStatement[], postRevealFence?: { sessionId: string; leaseOwner: string; leaseVersion: number }): Promise<number[]> {
   if (context.closed) throw new Error("Workflow ownership has settled; late writes are refused.");

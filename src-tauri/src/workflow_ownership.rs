@@ -5,7 +5,7 @@ use tauri::State;
 use tauri_plugin_sql::DbInstances;
 use crate::database::{DatabaseWriteStatement, execute_statement_internal, sqlite_pool};
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entity { kind: String, id: String, #[serde(default)] profile_id: Option<String>, #[serde(default)] allow_ended: bool }
 #[derive(Debug, Deserialize)]
@@ -140,7 +140,29 @@ pub(crate) async fn execute(pool: &SqlitePool, request: Request) -> Result<Value
     }
 }
 #[tauri::command]
-pub async fn database_workflow_ownership(db_instances: State<'_,DbInstances>, request: Request) -> Result<Value,String> { execute(&sqlite_pool(&db_instances).await?,request).await }
+pub async fn database_workflow_ownership(window: tauri::WebviewWindow, db_instances: State<'_,DbInstances>, request: Request, on_lost: tauri::ipc::Channel<crate::workflow_heartbeat::Failure>) -> Result<Value,String> {
+    let pool = sqlite_pool(&db_instances).await?;
+    if let Request::Release { profile_id, owner, version } = &request {
+        crate::workflow_heartbeat::stop(&crate::workflow_heartbeat::Token { profile_id: profile_id.clone(), owner: owner.clone(), version: *version }, window.label())?;
+    }
+    match &request {
+        Request::Check { profile_id, owner, version, .. } | Request::Write { profile_id, owner, version, .. }
+        | Request::EndResearch { profile_id, owner, version, .. } | Request::Renew { profile_id, owner, version } => {
+            crate::workflow_heartbeat::assert_active(&crate::workflow_heartbeat::Token { profile_id: profile_id.clone(), owner: owner.clone(), version: *version }, window.label())?;
+        }, _ => {},
+    }
+    let acquiring = matches!(&request, Request::Acquire { .. });
+    let mut result = execute(&pool, request).await?;
+    if acquiring {
+        let token: crate::workflow_heartbeat::Token = serde_json::from_value(result.clone()).map_err(|e| e.to_string())?;
+        if let Err(error) = crate::workflow_heartbeat::start(pool.clone(), token.clone(), window.label().to_owned(), Some(on_lost)) {
+            let _ = execute(&pool, Request::Release { profile_id: token.profile_id, owner: token.owner, version: token.version }).await;
+            return Err(error);
+        }
+        result["nativeHeartbeat"] = json!(true);
+    }
+    Ok(result)
+}
 
 #[cfg(test)]
 mod tests {

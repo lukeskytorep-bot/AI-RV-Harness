@@ -147,6 +147,8 @@ pub struct ProviderChatRequest {
     provider_config_id: String,
     base_url: Option<String>,
     request_id: Option<String>,
+    #[serde(default)]
+    workflow_ownership: Option<crate::workflow_heartbeat::Binding>,
     model_id: String,
     messages: Vec<ProviderMessage>,
     reasoning_effort: Option<String>,
@@ -495,11 +497,20 @@ fn parse_finished_chat_response(
 
 #[tauri::command]
 pub async fn provider_chat(
+    window: tauri::WebviewWindow,
     request: ProviderChatRequest,
     on_stream: Channel<ProviderStreamEvent>,
     emit_stream_events: bool,
 ) -> Result<ProviderChatResponse, ProviderCallError> {
     validate_chat_request(&request).map_err(ProviderCallError::configuration)?;
+    let ownership = if let Some(binding) = &request.workflow_ownership {
+        let id = request.request_id.as_deref().ok_or_else(|| ProviderCallError::configuration("Owned provider request requires its transport identity"))?;
+        Some(crate::workflow_heartbeat::bind(binding, window.label(), id).await.map_err(ProviderCallError::configuration)?)
+    } else { None };
+    let ownership_error = |mut failure: ProviderCallError| {
+        if let Some(message) = ownership.as_ref().and_then(|guard| guard.failure()) { failure.code = "cancelled".into(); failure.message = message.into(); }
+        failure
+    };
     let base = provider_base_url(request.provider, request.base_url.as_deref()).map_err(ProviderCallError::configuration)?;
     let binding = normalized_credential_endpoint(&base).map_err(ProviderCallError::configuration)?;
     validation::validate_continuation_bindings(&request, &binding).map_err(ProviderCallError::configuration)?;
@@ -538,7 +549,7 @@ pub async fn provider_chat(
             &timeout_policy,
             emit_stream_events.then_some(&on_stream),
         )
-        .await?;
+        .await.map_err(ownership_error)?;
         (
             streamed.payload,
             streamed.request_id,
@@ -552,7 +563,7 @@ pub async fn provider_chat(
             request.request_id.as_deref(),
             &secret,
         )
-        .await?;
+        .await.map_err(ownership_error)?;
         let evidence = response_evidence::finished(Some(&payload), request_id.as_deref(), "body_read");
         (payload, request_id, false, None, evidence)
     };

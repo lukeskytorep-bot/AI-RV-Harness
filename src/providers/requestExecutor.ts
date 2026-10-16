@@ -1,5 +1,5 @@
 import { classifyProviderAttempt, parseProviderResponseEvidence, type ProviderAttemptOutcome, type ProviderResponseEvidence } from "./responseEvidence";
-import { assertAbortOwnership } from "../application/abortOwnership";
+import { assertAbortOwnership, providerAbortFromSignal } from "../application/abortOwnership";
 import { discoverOpenRouterModelEndpoints, providerChatAttempt } from "./native";
 import { normalizeProviderCallError, ProviderCallError } from "./providerError";
 import {
@@ -95,7 +95,7 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
   const attachOutcomes = (cause: unknown) => Object.assign(cause !== null && typeof cause === "object" ? cause : new Error(String(cause)), { providerAttemptOutcomes: structuredClone(attemptOutcomes) });
 
   while (true) {
-    if (input.signal?.aborted) throw attachOutcomes(new DOMException("Provider request cancelled", "AbortError"));
+    if (input.signal?.aborted) throw attachOutcomes(providerAbortFromSignal(input.signal));
     try { await assertAbortOwnership(input.signal); } catch (failure) { throw attachOutcomes(failure); }
     const context: ProviderAttemptContext = {
       operationId: input.operationId,
@@ -116,7 +116,7 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
       const value = await input.executeAttempt(context);
       responseReturned = true;
       receivedEvidence = parseProviderResponseEvidence(input.responseEvidence?.(value));
-      if (input.rejectResponseAfterAbort && input.signal?.aborted) throw Object.assign(new DOMException("Provider response arrived after cancellation", "AbortError"), { providerResponse: value });
+      if (input.rejectResponseAfterAbort && input.signal?.aborted) throw Object.assign(providerAbortFromSignal(input.signal), { providerResponse: value });
       attemptOutcomes.push({ ...identity, outcome: classifyProviderAttempt({ responseEvidence: receivedEvidence }), validation: "accepted", ...(receivedEvidence ? { responseEvidence: receivedEvidence } : {}) });
       return {
         value,
@@ -306,7 +306,7 @@ export function createProviderChatExecutor(options: {
 }
 
 async function waitForRetry(milliseconds: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
+  if (signal?.aborted) throw providerAbortFromSignal(signal);
   await new Promise<void>((resolve, reject) => {
     const finish = () => signal?.removeEventListener("abort", abort);
     const timer = globalThis.setTimeout(() => {
@@ -316,7 +316,7 @@ async function waitForRetry(milliseconds: number, signal?: AbortSignal): Promise
     const abort = () => {
       globalThis.clearTimeout(timer);
       finish();
-      reject(new DOMException("Provider request cancelled", "AbortError"));
+      reject(signal?.aborted ? providerAbortFromSignal(signal) : new DOMException("Provider request cancelled", "AbortError"));
     };
     signal?.addEventListener("abort", abort, { once: true });
   });

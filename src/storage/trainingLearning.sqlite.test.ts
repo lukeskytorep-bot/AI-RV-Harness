@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { beforeEach, afterEach, it, expect, vi } from "vitest";
 vi.setConfig({hookTimeout:60_000,testTimeout:60_000});
 const bridge = vi.hoisted(() => ({invoke:vi.fn()}));
-vi.mock("@tauri-apps/api/core", () => ({invoke:bridge.invoke}));
+vi.mock("@tauri-apps/api/core", () => ({invoke:bridge.invoke,Channel:class {onmessage?:unknown;}}));
 vi.mock("@tauri-apps/plugin-sql", () => ({default:{load:async()=>({close:async()=>undefined})}}));
 import { SqliteRepository } from "./sqliteRepository";
 import { runFieldGuideUpdate } from "../aiCenter/fieldGuideUpdate";

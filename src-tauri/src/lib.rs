@@ -5,6 +5,7 @@ mod artifacts;
 mod storage;
 mod database;
 mod workflow_ownership;
+mod workflow_heartbeat;
 mod dialogs;
 mod documents;
 #[cfg(test)]
@@ -22,6 +23,9 @@ pub fn run() {
                 .add_migrations("sqlite:rv_harness.db", migrations)
                 .build(),
         )
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) { workflow_heartbeat::window_destroyed(window.label()); }
+        })
         .invoke_handler(tauri::generate_handler![
             providers::store_credential,
             providers::rebind_credential,

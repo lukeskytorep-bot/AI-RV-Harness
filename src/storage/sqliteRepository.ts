@@ -1,5 +1,5 @@
 import { validateResearchTermination, researchTerminationKey, researchScope, canEndResearchExecution } from "../research/executionLifecycle";
-import { registerAbortOwnership } from "../application/abortOwnership";
+import { registerAbortOwnership, WorkflowAbortError } from "../application/abortOwnership";
 import { ownSqliteWorkflow } from "./sqlite/workflowOwnership";
 import type { WorkflowContext, WorkflowScope } from "../application/workflowOwnership";
 import { workflowOwnershipNative, executeWorkflowOwnedDatabaseTransaction } from "./databaseNative";
@@ -172,8 +172,8 @@ export class SqliteRepository implements AppRepository {
       const nested={...context,entities:[...context.entities.filter(entity=>entity.kind!==scope.entity.kind).map(entity=>({...entity,allowEnded:scope.entity.kind==="research"?entity.allowEnded:false})),scope.entity]};
       await workflowOwnershipNative({action:"check",profileId:context.profileId,owner:context.owner,version:context.version,entities:nested.entities});
       const ended=new AbortController();nested.signal=AbortSignal.any([context.signal,...(scope.signal?[scope.signal]:[]),ended.signal]);
-      registerAbortOwnership(nested.signal,async()=>{if(nested.closed)throw new Error("Workflow ownership has settled");await workflowOwnershipNative({action:"check",profileId:nested.profileId,owner:nested.owner,version:nested.version,entities:nested.entities.map(entity=>({...entity,allowEnded:false}))});});
-      try{return await task(new SqliteRepository(this.db,nested),nested.signal);}finally{nested.closed=true;ended.abort(new DOMException("Workflow settled","AbortError"));}
+      registerAbortOwnership(nested.signal,async()=>{if(nested.closed)throw new Error("Workflow ownership has settled");await workflowOwnershipNative({action:"check",profileId:nested.profileId,owner:nested.owner,version:nested.version,entities:nested.entities.map(entity=>({...entity,allowEnded:false}))});},()=>({profileId:nested.profileId,owner:nested.owner,version:nested.version,entities:nested.entities.map(entity=>({...entity,allowEnded:false}))}));
+      try{return await task(new SqliteRepository(this.db,nested),nested.signal);}finally{nested.closed=true;ended.abort(new WorkflowAbortError("workflow_settled","Workflow settled"));}
     }
     return ownSqliteWorkflow(scope,context=>new SqliteRepository(this.db,context),task,owner=>{if(owner)this.workflowOwners.set(scope.profileId,owner);else this.workflowOwners.delete(scope.profileId);});
   }

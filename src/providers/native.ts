@@ -1,3 +1,4 @@
+import { nativeWorkflowBinding, providerAbortFromSignal } from "../application/abortOwnership";
 import { parseProviderFinalCandidate } from "./finalCandidate";
 import { parseProviderResponseEvidence } from "./responseEvidence";
 import { Channel, invoke } from "@tauri-apps/api/core";
@@ -124,7 +125,7 @@ export async function providerChatAttempt(input: {
   transportEnvelope?: EffectiveRequestEnvelope;
 }): Promise<ProviderChatResponse> {
   requireDesktop();
-  if (input.signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
+  if (input.signal?.aborted) throw providerAbortFromSignal(input.signal);
   const requestId = crypto.randomUUID();
   const cancel = () => {
     void invoke("cancel_provider_request", { requestId }).catch(() => undefined);
@@ -139,6 +140,7 @@ export async function providerChatAttempt(input: {
         ...nativeConfig(input.config),
         providerConfigId: input.config.id,
         requestId,
+        ...(nativeWorkflowBinding(input.signal) ? { workflowOwnership: nativeWorkflowBinding(input.signal) } : {}),
         modelId: input.modelId,
         messages: input.messages,
         reasoningEffort: input.settings.effective.reasoningEffort,
@@ -166,6 +168,7 @@ export async function providerChatAttempt(input: {
       error: normalized.message,
       ...(input.transportEnvelope ? { transport: structuredClone(input.transportEnvelope) } : {}),
     });
+    if (input.signal?.aborted) throw providerAbortFromSignal(input.signal, normalized);
     throw normalized;
   } finally {
     input.signal?.removeEventListener("abort", cancel);
