@@ -1,3 +1,6 @@
+import { prepareViewerSessionResume, inspectViewerSessionResume } from "../sessions/viewerResumeDecision";
+import { resolveViewerResumeStart } from "../sessions/viewerResumeLedger";
+import { withRvWorkflow } from "../application/workflowOwnership";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -287,4 +290,33 @@ it("T2 SQLite: corrupt candidate hash fails closed without creating memory or fa
 it("T2 SQLite: Stop prevents candidate persistence even after a completed native response",async()=>{
  const h=await setup();const controller=new AbortController();const finalCandidate=await t2Candidate("final candidate");const chat=vi.fn(async()=>{controller.abort(new Error("user Stop"));return {...finished("final candidate"),finalCandidate};});
  await expect(runViewerNoteReflection({...reflectionInput(h,chat),signal:controller.signal})).rejects.toThrow("user Stop");expect((await h.repository.listSessionEvents("s")).some(e=>JSON.stringify(e.metadata).includes("finalCandidate"))).toBe(false);
+});
+
+for (const uncertain of [false, true]) it(`T3 real SQLite: ${uncertain ? "uncertain" : "exhausted"} call requires a durable single-use authorization after repository restart`, async () => {
+ const repository = await SqliteRepository.connect();
+ const metadata = { stepId: "lite:prompt:2:viewer", requestSha256: "t3-hash", attemptId: "t3-old", recoveryLevel: 1 };
+ await repository.appendSessionEvent("s", { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", metadata });
+ if (!uncertain) await repository.appendSessionEvent("s", { eventType: "VIEWER_OUTPUT_INCOMPLETE", metadata: { ...metadata, reason: "output_limit", effectiveMaxOutputTokens: 32768 } });
+ const before = await repository.listSessionEvents("s");
+ await expect(resolveViewerResumeStart({ repository, sessionId: "s", stepKey: metadata.stepId, requestSha256: "t3-hash" })).rejects.toThrow(/AUTO-STOP/);
+ await prepareViewerSessionResume({ repository, sessionId: "s", language: "en", confirm: async () => true });
+ const restarted = await SqliteRepository.connect();
+ const start = await resolveViewerResumeStart({ repository: restarted, sessionId: "s", stepKey: metadata.stepId, requestSha256: "t3-hash" });
+ expect(start).toMatchObject({ startRecoveryLevel: 1, resumeAuthorizationId: expect.any(String) });
+ expect((await restarted.listSessionEvents("s")).slice(0, before.length)).toEqual(before);
+ await withRvWorkflow(restarted, "s", undefined, owned => owned.appendSessionEvent("s", { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", metadata: { ...metadata, attemptId: "t3-manual", resumeAuthorizationId: start.resumeAuthorizationId } }));
+ const afterRestart = await SqliteRepository.connect();
+ expect(inspectViewerSessionResume(await afterRestart.listSessionEvents("s"))).toMatchObject({ kind: "uncertain" });
+ await expect(resolveViewerResumeStart({ repository: afterRestart, sessionId: "s", stepKey: metadata.stepId, requestSha256: "t3-hash" })).rejects.toThrow(/duplicate paid request/);
+});
+
+it("T3 real SQLite: failed_preserved learning cannot be reopened by the Viewer retry decision flow", async () => {
+ const h = await setup();
+ const result = await runViewerNoteReflection({ repository: h.repository, sessionId: "s", viewerReview: "review", providerConfig: h.provider, model: h.model,
+  fieldGuideAfterTrainingUpdate: { updateStatus: "NO_CHANGE", versionId: h.fieldGuide.versionId, versionNumber: h.fieldGuide.versionNumber, contentSha256: h.fieldGuide.contentSha256 },
+  budgetPolicy: "training_reveal", chat: async () => finished("invalid JSON") });
+ expect(result?.settlement?.settlement).toBe("failed_preserved");
+ const before = await h.repository.listSessionEvents("s"); const confirm = vi.fn(async () => true);
+ await prepareViewerSessionResume({ repository: h.repository, sessionId: "s", language: "en", confirm });
+ expect(confirm).not.toHaveBeenCalled(); expect(await h.repository.listSessionEvents("s")).toEqual(before);
 });

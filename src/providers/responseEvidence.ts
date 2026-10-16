@@ -51,3 +51,56 @@ export function classifyProviderAttempts(attempts: readonly ProviderAttemptOutco
   if (!attempts.length || attempts.some(a => a.outcome === "dispatch_unknown")) return "dispatch_unknown";
   return attempts.some(a => a.outcome === "response_finished") ? "response_finished" : "not_dispatched";
 }
+
+/** Read executor reports through wrappers, including cancellation and repair errors. */
+export function providerAttemptOutcomes(cause: unknown): ProviderAttemptOutcome[] {
+  const seen = new Set<object>();
+  const visit = (value: unknown): ProviderAttemptOutcome[] => {
+    if (!value || typeof value !== "object" || seen.has(value)) return [];
+    seen.add(value);
+    const v = value as Record<string, unknown>;
+    const report = v.report && typeof v.report === "object" ? v.report as Record<string, unknown> : undefined;
+    const execution = v.execution && typeof v.execution === "object" ? v.execution as Record<string, unknown> : undefined;
+    const details = v.details && typeof v.details === "object" ? v.details as Record<string, unknown> : undefined;
+    const records = v.providerAttemptOutcomes ?? report?.attemptOutcomes ?? execution?.attemptOutcomes
+      ?? (details && typeof details.attemptId === "string" ? [{ ...details, outcome: classifyProviderAttempt(details), validation: details.responseEvidence ? "rejected" : "not_evaluated" }] : undefined);
+    if (Array.isArray(records) && records.length) return records.map(record => {
+      const a = record && typeof record === "object" ? record as Record<string, unknown> : {};
+      const evidence = parseProviderResponseEvidence(a.responseEvidence);
+      return {
+        attemptId: String(a.attemptId ?? ""), logicalRequestId: String(a.logicalRequestId ?? ""), physicalAttempt: Number(a.physicalAttempt),
+        ...(typeof a.transportRequestId === "string" ? { transportRequestId: a.transportRequestId } : {}),
+        // A persisted label alone is not proof that the whole response was read.
+        outcome: a.outcome === "not_dispatched" ? "not_dispatched" : evidence ? "response_finished" : "dispatch_unknown",
+        validation: a.validation === "accepted" || a.validation === "rejected" ? a.validation : "not_evaluated",
+        ...(evidence ? { responseEvidence: evidence } : {}),
+      };
+    });
+    for (const nested of [v.causeError, v.cause, v.providerResponse]) {
+      const outcomes = visit(nested);
+      if (outcomes.length) return outcomes;
+    }
+    return [];
+  };
+  return visit(cause);
+}
+
+/** A later completed response never closes an earlier ambiguous physical call. */
+export function classifyProviderFailure(cause: unknown): ProviderDispatchOutcome {
+  const attempts = providerAttemptOutcomes(cause);
+  if (attempts.length) return classifyProviderAttempts(attempts);
+  const seen = new Set<object>();
+  const visit = (value: unknown): ProviderDispatchOutcome => {
+    if (!value || typeof value !== "object" || seen.has(value)) return "dispatch_unknown";
+    seen.add(value);
+    const v = value as Record<string, unknown>;
+    const details = v.details && typeof v.details === "object" ? v.details as Record<string, unknown> : v;
+    if (typeof details.phase === "string" || details.responseEvidence) return classifyProviderAttempt(details);
+    for (const nested of [v.causeError, v.cause, v.providerResponse]) {
+      const outcome = visit(nested);
+      if (outcome !== "dispatch_unknown") return outcome;
+    }
+    return "dispatch_unknown";
+  };
+  return visit(cause);
+}

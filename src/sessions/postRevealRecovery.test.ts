@@ -1,3 +1,4 @@
+import { ProviderCallError } from "../providers/providerError";
 import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
@@ -180,4 +181,19 @@ describe("STEP 5B post-Reveal review recovery", () => {
     expect(recovery.resumable).toBe(true);
   });
 
+});
+
+it("T3 a later complete rejection in analytical recovery cannot hide an earlier unknown physical call", async () => {
+ const fixture = makeRepository(); let count = 0;
+ await expect(runAutomaticPostRevealReview({ repository: fixture.repository as never, sessionId: "s", viewer: { providerConfig: viewerConfig, model: { ...viewerModel, capabilities: { ...viewerModel.capabilities, maxOutputTokens: 65536, contextTokens: 262144 } } }, maxRetries: 1,
+  chat: async () => {
+   if (++count === 1) throw new ProviderCallError({ code: "response_body_read", phase: "reading_body", message: "connection lost", retryAfterMs: 0 });
+   if (count === 2) return { content: "partial", finishReason: "length", usage: {}, responseEvidence: { version: 1, transportOutcome: "response_finished", boundary: "body_read" } };
+   throw new ProviderCallError({ code: "empty_assistant_response", phase: "validating_response", message: "rejected", responseEvidence: { version: 1, transportOutcome: "response_finished", boundary: "body_read" } });
+  }
+ })).rejects.toThrow();
+ const recovery = await getPostRevealReviewRecoveryState(fixture.repository as never, "s");
+ expect(recovery.requiresDecision).toBe(true); expect(recovery.viewer?.status).toBe("uncertain");
+ expect(recovery.viewer?.dispatchOutcome).toBe("dispatch_unknown");
+ expect(recovery.viewer?.providerAttemptOutcomes?.[0].outcome).toBe("dispatch_unknown");
 });

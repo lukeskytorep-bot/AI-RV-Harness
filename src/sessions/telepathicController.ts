@@ -25,7 +25,7 @@ import { sha256Text, type SessionProgress } from "./controller";
 import { withEstimatedCost } from "./costGuard";
 import { emptySessionRequestMetrics, recordProviderRequest, snapshotSessionMetrics, type SessionRequestMetrics } from "./metrics";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
-import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, viewerDispatchOutcome, VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_POLICY_VERSION, VIEWER_OUTPUT_RECOVERY_TOKENS } from "./viewerOutputRecovery";
+import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, viewerDispatchOutcome, viewerFailureMetadata, VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_POLICY_VERSION, VIEWER_OUTPUT_RECOVERY_TOKENS } from "./viewerOutputRecovery";
 import { buildViewerStepId, resolveViewerResumeStart, viewerRequestFingerprintInput } from "./viewerResumeLedger";
 import { createSessionCode } from "./sessionCode";
 import {
@@ -152,7 +152,8 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
   let activeViewerAttemptId: string | undefined;
-  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.telepathic", operationKind: "rv_session_viewer", streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, ...(activeViewerAttemptId ? { attemptId: activeViewerAttemptId } : {}), dispatchOutcome: cause.details.phase === "before_dispatch" ? "not_dispatched" : "unknown" } }) });
+  let activeViewerManualRetry = false;
+  const chat = createProviderChatExecutor({ configuredRetries: () => activeViewerManualRetry ? 0 : maxRetries, operationId: "session.telepathic", operationKind: "rv_session_viewer", streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, ...(activeViewerAttemptId ? { attemptId: activeViewerAttemptId } : {}), ...viewerFailureMetadata(cause) } }) });
   const rawChat = (request: Parameters<typeof chat>[0]) => providerChatOnce(request, input.chat);
   const messages: ProviderMessage[] = [
     { role: "system", content: input.protocol.content },
@@ -278,7 +279,7 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
     messages.push({ role: "user", content: prompt });
     const requestSha256 = await sha256Text(viewerRequestFingerprintInput(messages));
     const durable = input.resumeSession ? await resolveViewerResumeStart({ repository: input.repository, sessionId, stepKey: stepId, requestSha256 }) : { startRecoveryLevel: 0 as const };
-    const durableMetadata = { ...metadata, stepId, requestSha256 };
+    const durableMetadata = { ...metadata, stepId, requestSha256, ...(durable.resumeAuthorizationId ? { resumeAuthorizationId: durable.resumeAuthorizationId } : {}) };
     await input.repository.appendSessionEvent(sessionId, { eventType: "CONTROLLER_STEP", role: "controller", content: prompt, metadata: { protocolFamily: "telepathic", ...metadata, stepId } });
     let response: ProviderChatResponse;
     let responseDurationMs = 0;
@@ -292,6 +293,7 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
           validateSessionContinuationBudget(messages);
           await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
           activeViewerAttemptId = dispatchAttempt.attemptId;
+        activeViewerManualRetry = Boolean(durable.resumeAuthorizationId);
           const requestStartedAt = Date.now();
           try {
             const phase = typeof metadata.step === "number" ? metadata.step : undefined;
@@ -299,6 +301,7 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
             next = { ...next, usage: withEstimatedCost(next.usage, input.model) };
             const elapsed = Date.now() - requestStartedAt; responseDurationMs += elapsed; metrics = recordProviderRequest(metrics, next.usage, elapsed);
             activeViewerAttemptId = undefined;
+          activeViewerManualRetry = false;
             return next;
           } catch (cause) {
            
@@ -306,14 +309,16 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
             if (!isStreamingRepetitionRunawayError(cause)) {
               const dispatchOutcome = viewerDispatchOutcome(cause);
               if (dispatchOutcome === "not_dispatched") await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_NOT_DISPATCHED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
-              await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...durableMetadata, attemptId: dispatchAttempt.attemptId, semanticAttempt, dispatchOutcome, requestDurationMs: Date.now() - requestStartedAt } });
+              await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...durableMetadata, attemptId: dispatchAttempt.attemptId, semanticAttempt, dispatchOutcome, ...viewerFailureMetadata(cause), requestDurationMs: Date.now() - requestStartedAt } });
             }
             activeViewerAttemptId = undefined;
+          activeViewerManualRetry = false;
             input.onStreamPreview?.(null);
             throw cause;
           }
         },
-        onIncompleteAttempt: (attempt) => input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: attempt.content, metadata: { ...durableMetadata, ...viewerOutputAttemptMetadata(attempt) } }),
+        onRecoveryBlocked: (reason) => input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_RECOVERY_BLOCKED", role: "controller", metadata: { ...durableMetadata, reason } }),
+      onIncompleteAttempt: (attempt) => input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: attempt.content, metadata: { ...durableMetadata, ...viewerOutputAttemptMetadata(attempt) } }),
       });
       response = recovered.response;
       responseAcceptedMetadata = { stepId, ...viewerOutputAcceptedMetadata(recovered) };
@@ -561,7 +566,8 @@ async function resumeTelepathicManualQuestionStageOwned(input: ResumeTelepathicM
 
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
   let activeResumeViewerAttemptId: string | undefined;
-  const chat = createProviderChatExecutor({ configuredRetries: maxRetries, operationId: "session.telepathic-resume", operationKind: "rv_session_viewer", streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(input.session.id, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, ...(activeResumeViewerAttemptId ? { attemptId: activeResumeViewerAttemptId } : {}), dispatchOutcome: cause.details.phase === "before_dispatch" ? "not_dispatched" : "unknown", resumed: true } }) });
+  let activeViewerManualRetry = false;
+  const chat = createProviderChatExecutor({ configuredRetries: () => activeViewerManualRetry ? 0 : maxRetries, operationId: "session.telepathic-resume", operationKind: "rv_session_viewer", streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(input.session.id, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, ...(activeResumeViewerAttemptId ? { attemptId: activeResumeViewerAttemptId } : {}), ...viewerFailureMetadata(cause), resumed: true } }) });
   const messages = await rebuildViewerMessages(input.repository, snapshot, events, input.providerConfig, input.model);
   const startedAtMs = Date.now();
   let metrics = rebuildViewerMetrics(events);
@@ -608,7 +614,7 @@ async function resumeTelepathicManualQuestionStageOwned(input: ResumeTelepathicM
     messages.push({ role: "user", content: prompt });
     const requestSha256 = await sha256Text(viewerRequestFingerprintInput(messages));
     const durable = await resolveViewerResumeStart({ repository: input.repository, sessionId: input.session.id, stepKey: stepId, requestSha256 });
-    const durableMetadata = { ...metadata, stepId, requestSha256 };
+    const durableMetadata = { ...metadata, stepId, requestSha256, ...(durable.resumeAuthorizationId ? { resumeAuthorizationId: durable.resumeAuthorizationId } : {}) };
     await input.repository.appendSessionEvent(input.session.id, { eventType: "CONTROLLER_STEP", role: "controller", content: prompt, metadata: { protocolFamily: "telepathic", resumed: true, ...metadata } });
     let response: ProviderChatResponse;
     let responseDurationMs = 0;
@@ -622,6 +628,7 @@ async function resumeTelepathicManualQuestionStageOwned(input: ResumeTelepathicM
           validateSessionContinuationBudget(messages);
           await input.repository.appendSessionEvent(input.session.id, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt, resumed: true } });
           activeResumeViewerAttemptId = dispatchAttempt.attemptId;
+          activeViewerManualRetry = Boolean(durable.resumeAuthorizationId);
           const requestStartedAt = Date.now();
           try {
             const phase = typeof metadata.step === "number" ? metadata.step : undefined;
@@ -629,6 +636,7 @@ async function resumeTelepathicManualQuestionStageOwned(input: ResumeTelepathicM
             next = { ...next, usage: withEstimatedCost(next.usage, input.model) };
             const elapsed = Date.now() - requestStartedAt; responseDurationMs += elapsed; metrics = recordProviderRequest(metrics, next.usage, elapsed);
             activeResumeViewerAttemptId = undefined;
+            activeViewerManualRetry = false;
             return next;
           } catch (cause) {
            
@@ -636,14 +644,16 @@ async function resumeTelepathicManualQuestionStageOwned(input: ResumeTelepathicM
             if (!isStreamingRepetitionRunawayError(cause)) {
               const dispatchOutcome = viewerDispatchOutcome(cause);
               if (dispatchOutcome === "not_dispatched") await input.repository.appendSessionEvent(input.session.id, { eventType: "VIEWER_OUTPUT_ATTEMPT_NOT_DISPATCHED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt, resumed: true } });
-              await input.repository.appendSessionEvent(input.session.id, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...durableMetadata, attemptId: dispatchAttempt.attemptId, resumed: true, semanticAttempt, dispatchOutcome, requestDurationMs: Date.now() - requestStartedAt } });
+              await input.repository.appendSessionEvent(input.session.id, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...durableMetadata, attemptId: dispatchAttempt.attemptId, resumed: true, semanticAttempt, dispatchOutcome, ...viewerFailureMetadata(cause), requestDurationMs: Date.now() - requestStartedAt } });
             }
             activeResumeViewerAttemptId = undefined;
+            activeViewerManualRetry = false;
             input.onStreamPreview?.(null);
             throw cause;
           }
         },
-        onIncompleteAttempt: (attempt) => input.repository.appendSessionEvent(input.session.id, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: attempt.content, metadata: { ...durableMetadata, resumed: true, ...viewerOutputAttemptMetadata(attempt) } }),
+        onRecoveryBlocked: (reason) => input.repository.appendSessionEvent(input.session.id, { eventType: "VIEWER_OUTPUT_RECOVERY_BLOCKED", role: "controller", metadata: { ...durableMetadata, reason } }),
+      onIncompleteAttempt: (attempt) => input.repository.appendSessionEvent(input.session.id, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: attempt.content, metadata: { ...durableMetadata, resumed: true, ...viewerOutputAttemptMetadata(attempt) } }),
       });
       response = recovered.response;
       responseAcceptedMetadata = { stepId, ...viewerOutputAcceptedMetadata(recovered) };

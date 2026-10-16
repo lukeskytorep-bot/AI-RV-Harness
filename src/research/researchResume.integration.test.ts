@@ -1,3 +1,4 @@
+import { ProviderCallError } from "../providers/providerError";
 import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
@@ -174,4 +175,24 @@ for (const frozenOutputPolicy of [false, true]) it(`BUDGET-0 preserves already l
     expect(resumed[0]).toBe(16384); expect(durable.assignment().sessionId).toBe(sessionId);
     expect(JSON.stringify(durable.project().config)).toBe(configWire);
   }
+});
+
+it("T3 Research: completed rejection uses the shared explicit decision and preserves the locked assignment, config and accepted output", async () => {
+ const durable = researchDurableRepository({ frozenOutputPolicy: true }); const frozen = JSON.stringify(durable.project().config); let calls = 0;
+ await executeResearchSessions({ repository: durable.repository, projectId: "research", rvLiteSessionRunner: async input => (await import("../sessions/rvLiteController")).runAutomaticRvLiteSession({ ...input, maxRetries: 0, chat: async () => {
+  if (++calls === 1) return { content: "accepted first step", finishReason: "stop", usage: {} };
+  throw new ProviderCallError({ code: "empty_assistant_response", phase: "validating_response", message: "rejected complete response", responseEvidence: { version: 1, transportOutcome: "response_finished", boundary: "sse_done" } });
+ } }) });
+ const id = durable.assignment().sessionId;
+ await expect(prepareInterruptedResearchRetry(durable.repository, "research")).rejects.toThrow(/explicit decision/);
+ expect(await prepareInterruptedResearchRetry(durable.repository, "research", async () => false)).toBe(0);
+ expect(durable.assignment().status).toBe("Interrupted");
+ expect(await prepareInterruptedResearchRetry(durable.repository, "research", async () => true)).toBe(1);
+ let live = 0;
+ await executeResearchSessions({ repository: durable.repository, projectId: "research", sessionReplayFactory: input => createSessionReplay({ ...input, liveChat: async request => {
+  live++; expect(request.messages.some(m => m.content === "accepted first step")).toBe(true); return { content: "recovered", finishReason: "stop", usage: {} };
+ } }) });
+ expect(live).toBe(3); expect(durable.assignment()).toMatchObject({ sessionId: id, status: "SessionComplete" });
+ expect(JSON.stringify(durable.project().config)).toBe(frozen);
+ expect(durable.events.filter(event => event.eventType === "VIEWER_RESPONSE" && event.content === "accepted first step")).toHaveLength(1);
 });

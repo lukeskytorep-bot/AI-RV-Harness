@@ -1,3 +1,4 @@
+import { inspectViewerSessionResume } from "./viewerResumeDecision";
 import { providerChatOnce } from "../providers/requestExecutor";
 import type { EffectiveGenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderUsage } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
@@ -29,8 +30,11 @@ export interface SessionReplay {
 }
 
 export function isRecoverableProviderInterruption(session: RvSession, events: SessionEventRecord[], snapshot?:SessionSnapshot|null): boolean {
+  const decision = inspectViewerSessionResume(events);
+  if (decision.kind === "unsafe") return false;
   if(snapshot?.sessionFocus && session.runType==="automatic" && !session.researchProjectId && ["Preflight","BlindRunning","AwaitingReveal"].includes(session.state))return true;
   if (session.state !== "Interrupted" || session.preRevealSealedAt) return false;
+  if (["uncertain", "finished_rejected", "exhausted", "authorized"].includes(decision.kind)) return true;
   const stop = [...events].reverse().find((event) => event.eventType === "SESSION_STOPPED");
   const reason = stop?.content?.toLowerCase() ?? "";
   if (/user stop/.test(reason) && events.some(event=>event.eventType==="FOCUS_PASS_STARTED")) return true;

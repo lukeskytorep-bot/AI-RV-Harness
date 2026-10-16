@@ -42,23 +42,23 @@ describe("durable session replay", () => {
     expect(isRecoverableProviderInterruption(session, [event(1, "SESSION_STOPPED", ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON)])).toBe(false);
   });
 
-  it("recognizes persisted Viewer output-limit interruption without relying on stop-message wording", () => {
+  it("hides unsafe legacy Resume when an incomplete response lacks an exact step identity", () => {
     expect(isRecoverableProviderInterruption(session, [
       event(1, "VIEWER_OUTPUT_INCOMPLETE", "partial", { reason: "output_limit", phase: 1 }),
       event(2, "SESSION_STOPPED", "AUTO-STOP: Viewer step incomplete or provider/API failure — recovery exhausted"),
-    ])).toBe(true);
+    ])).toBe(false);
   });
 
-  it("allows Resume after the first repetition attempt but not after repetition recovery is exhausted", () => {
+  it("offers the decision flow for exact repetition recovery and exhaustion", () => {
     expect(isRecoverableProviderInterruption(session, [
-      event(1, "VIEWER_OUTPUT_INCOMPLETE", "partial", { reason: "repetition_runaway", recoveryLevel: 0, phase: 1 }),
+      event(1, "VIEWER_OUTPUT_INCOMPLETE", "partial", { reason: "repetition_runaway", recoveryLevel: 0, phase: 1, stepId: "rcp:phase:1:viewer", requestSha256: "hash", effectiveMaxOutputTokens: 16384 }),
       event(2, "SESSION_STOPPED", "AUTO-STOP: Viewer repetition recovery interrupted"),
     ])).toBe(true);
     expect(isRecoverableProviderInterruption(session, [
-      event(1, "VIEWER_OUTPUT_INCOMPLETE", "partial one", { reason: "repetition_runaway", recoveryLevel: 0, phase: 1 }),
-      event(2, "VIEWER_OUTPUT_INCOMPLETE", "partial two", { reason: "repetition_runaway", recoveryLevel: 1, phase: 1 }),
+      event(1, "VIEWER_OUTPUT_INCOMPLETE", "partial one", { reason: "repetition_runaway", recoveryLevel: 0, phase: 1, stepId: "rcp:phase:1:viewer", requestSha256: "hash", effectiveMaxOutputTokens: 16384 }),
+      event(2, "VIEWER_OUTPUT_INCOMPLETE", "partial two", { reason: "repetition_runaway", recoveryLevel: 1, phase: 1, stepId: "rcp:phase:1:viewer", requestSha256: "hash", effectiveMaxOutputTokens: 16384 }),
       event(3, "SESSION_STOPPED", "AUTO-STOP: Viewer repetition recovery exhausted"),
-    ])).toBe(false);
+    ])).toBe(true);
   });
 
   it("replays saved responses and starts the provider only at the missing call", async () => {

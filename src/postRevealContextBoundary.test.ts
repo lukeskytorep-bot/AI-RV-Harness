@@ -133,8 +133,9 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     // MONITOR-STREAM-TELEPATHY-REPAIR-1 additionally wires attempt-local streaming abort/recovery.
     // AUDIT FIX 2 preserves definitive provider results across a concurrent Stop while gating any later recovery request.
     // STEP 2 links intervention records by logical identity without changing provider messages or recovery.
+    // T3 changes Viewer completion evidence, durable manual authorization and its one-physical-attempt allowance.
     // Freeze that accepted execution baseline while the Monitor prompt contract above remains separately byte-stable.
-    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("1d0fb72d6be5b597e2f17536c732857cd31448b9f97780ab56822b28c2f85be1");
+    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("a89d4a57b6115716b4ec52b2ab69c9f3e216b05c10c62a74f5ae0046b2759439");
   });
 
   it("keeps AI Judge prompt, rubric, scoring and packet byte-identical while allowing ORP1 resource wiring in the engine", () => {

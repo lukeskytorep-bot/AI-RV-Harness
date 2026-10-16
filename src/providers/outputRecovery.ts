@@ -1,3 +1,4 @@
+import { providerAttemptOutcomes, type ProviderAttemptOutcome } from "./responseEvidence";
 import { resolveGenerationSettings } from "./capabilities";
 import { getOperationResourceProfile, learningObjectOutputAllowance, type OperationKind, type LearningBudgetPolicy } from "./operationResourceProfiles";
 import type { EffectiveGenerationSettings, GenerationSettings, ProviderChatResponse, ProviderMessage, ProviderModel } from "./types";
@@ -115,16 +116,19 @@ export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOp
   call: (settings: EffectiveGenerationSettings, attempt: 0 | 1, messages: ProviderMessage[]) => Promise<ProviderChatResponse>;
 }): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; attempt: 0 | 1 }> {
   let firstBudget = 0;
+  const physicalOutcomes: ProviderAttemptOutcome[] = [];
+  const withOutcomes = (cause: unknown) => Object.assign(cause && typeof cause === "object" ? cause : new Error(String(cause)), { providerAttemptOutcomes: structuredClone(physicalOutcomes) });
   const attempts = ([0, 1] as const).filter(value => value >= (input.initialAttempt ?? 0)).slice(0, input.maximumAttempts ?? 2);
   for (const attempt of attempts) {
-    input.signal?.throwIfAborted();
+    if (input.signal?.aborted) throw withOutcomes(input.signal.reason ?? new DOMException("Cancelled", "AbortError"));
     const attemptMessages = attempt === 1 && input.recoveryInstruction?.trim()
       ? input.messages.map((message, index) => index === input.messages.length - 1 && message.role === "user"
         ? { ...message, content: `${message.content}\n\n[ANALYTICAL OUTPUT RECOVERY]\n${input.recoveryInstruction!.trim()}` }
         : message)
       : input.messages;
-    const budget = analyticalOutputBudget({ ...input, messages: attemptMessages, attempt });
-    if (attempt === 1 && firstBudget > 0 && budget <= firstBudget) throw new Error(`Provider exhausted the available analytical output budget; this route cannot increase beyond ${firstBudget} tokens.`);
+    let budget: number;
+    try { budget = analyticalOutputBudget({ ...input, messages: attemptMessages, attempt }); } catch (cause) { throw withOutcomes(cause); }
+    if (attempt === 1 && firstBudget > 0 && budget <= firstBudget) throw withOutcomes(new Error(`Provider exhausted the available analytical output budget; this route cannot increase beyond ${firstBudget} tokens.`));
     if (attempt === 0) firstBudget = budget;
     const requestedSettings: GenerationSettings = { ...input.requestedSettings, maxOutputTokens: budget };
     const useExactReasoningCap = attempt === 1 && input.recoveryReasoningMaxTokens && input.recoveryReasoningMaxTokensSupported === true;
@@ -141,20 +145,24 @@ export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOp
       : capabilities;
     const settings = resolveGenerationSettings(settingsCapabilities, requestedSettings);
     if (!settings.effective.maxOutputTokens || settings.omitted.includes("maxOutputTokens")) {
-      throw new Error("Model route rejected the required analytical output budget.");
+      throw withOutcomes(new Error("Model route rejected the required analytical output budget."));
     }
     if (requestedSettings.reasoningMaxTokens !== undefined && (settings.effective.reasoningMaxTokens !== requestedSettings.reasoningMaxTokens || settings.omitted.includes("reasoningMaxTokens"))) {
-      throw new Error("Model route rejected the exact reasoning token budget required for analytical recovery.");
+      throw withOutcomes(new Error("Model route rejected the exact reasoning token budget required for analytical recovery."));
     }
     try {
       const response = await input.call(settings, attempt, attemptMessages);
+      physicalOutcomes.push(...providerAttemptOutcomes(response));
       if (input.signal?.aborted && !input.preserveCompleteAfterAbort) throw Object.assign(new DOMException("Analytical response arrived after cancellation", "AbortError"), { providerResponse: response });
       assertCompleteAnalyticalResponse(response);
       return { response, settings, attempt };
     } catch (cause) {
-      if (input.signal?.aborted) throw cause;
+      const reported = providerAttemptOutcomes(cause);
+      for (const outcome of reported) if (!physicalOutcomes.some(a => a.attemptId === outcome.attemptId)) physicalOutcomes.push(outcome);
+      const failure = withOutcomes(cause);
+      if (input.signal?.aborted) throw failure;
       if (attempt === 0 && attempts.includes(1) && isOutputLimitFailure(cause)) continue;
-      throw cause;
+      throw failure;
     }
   }
   throw new Error("Analytical response recovery failed.");

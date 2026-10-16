@@ -1,3 +1,4 @@
+import { providerAttemptOutcomes, type ProviderAttemptOutcome, type ProviderDispatchOutcome } from "../providers/responseEvidence";
 import { withRvWorkflow } from "../application/workflowOwnership";
 import type { AppRepository } from "../storage/repository";
 import { parsePostRevealTranscript } from "./postRevealTranscript";
@@ -11,6 +12,8 @@ export interface PostRevealReviewCheckpoint {
   attempt: number;
   updatedAt: string;
   message?: string;
+  dispatchOutcome?: ProviderDispatchOutcome;
+  providerAttemptOutcomes?: ProviderAttemptOutcome[];
 }
 
 export interface PostRevealReviewRecoveryState {
@@ -48,6 +51,8 @@ export function latestPostRevealReviewCheckpoints(events: Awaited<ReturnType<App
       attempt: typeof event.metadata?.attempt === "number" ? event.metadata.attempt : 1,
       updatedAt: event.createdAt,
       ...(typeof event.metadata?.message === "string" ? { message: event.metadata.message } : {}),
+      ...(event.metadata?.dispatchOutcome === "response_finished" || event.metadata?.dispatchOutcome === "not_dispatched" || event.metadata?.dispatchOutcome === "dispatch_unknown" ? { dispatchOutcome: event.metadata.dispatchOutcome } : {}),
+      ...(providerAttemptOutcomes(event.metadata).length ? { providerAttemptOutcomes: providerAttemptOutcomes(event.metadata) } : {}),
     };
     result[stage] = checkpoint;
   }
@@ -61,6 +66,8 @@ export async function appendPostRevealReviewCheckpoint(input: {
   status: PostRevealReviewStatus;
   attempt: number;
   message?: string;
+  dispatchOutcome?: ProviderDispatchOutcome;
+  providerAttemptOutcomes?: ProviderAttemptOutcome[];
 }): Promise<void> {
   await input.repository.appendSessionEvent(input.sessionId, {
     eventType: EVENT_TYPE,
@@ -70,6 +77,8 @@ export async function appendPostRevealReviewCheckpoint(input: {
       status: input.status,
       attempt: input.attempt,
       ...(input.message ? { message: input.message } : {}),
+      ...(input.dispatchOutcome ? { dispatchOutcome: input.dispatchOutcome } : {}),
+      ...(input.providerAttemptOutcomes?.length ? { providerAttemptOutcomes: input.providerAttemptOutcomes } : {}),
     },
   });
 }

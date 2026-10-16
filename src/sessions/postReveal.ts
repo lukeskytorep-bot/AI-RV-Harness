@@ -1,3 +1,4 @@
+import { classifyProviderFailure, providerAttemptOutcomes } from "../providers/responseEvidence";
 import { withRvWorkflow } from "../application/workflowOwnership";
 import { inheritAbortOwnership } from "../application/abortOwnership";
 import { focusFeedbackIntroduction } from "./sessionFocus";
@@ -12,7 +13,6 @@ import type { InterfaceLanguage } from "../types";
 import { buildEffectiveMonitorPrompt } from "../resources/systemPrompts";
 import { politeRevealTransition } from "./courtesy";
 import { analyticalBudgetPolicyForSnapshot, analyticalOutputBudget, callWithAnalyticalOutputRecovery, isOutputLimitFailure, type AnalyticalBudgetPolicy } from "../providers/outputRecovery";
-import { providerErrorDetails } from "../providers/providerError";
 import { appendPostRevealReviewCheckpoint, getPostRevealReviewRecoveryState, hasPendingAutomaticViewerInstruction } from "./postRevealRecovery";
 import { captureSessionContinuationState, hydrateSessionMessageContinuation, validateFrozenSessionContinuationRoute, validateSessionContinuationBudget } from "./providerContinuation";
 
@@ -185,9 +185,11 @@ function combineAbortSignals(primary?: AbortSignal, lease?: AbortSignal): AbortS
 }
 
 function postRevealReviewFailureIsSafeToRetry(cause: unknown, providerAttemptStarted: boolean): boolean {
-  if (isOutputLimitFailure(cause)) return true;
-  const details = providerErrorDetails(cause);
-  if (details?.phase === "before_dispatch") return true;
+  const attempts = providerAttemptOutcomes(cause);
+  // A later output-limit failure must not conceal an earlier unknown dispatch.
+  if (attempts.some(a => a.outcome === "dispatch_unknown" && a.validation !== "accepted")) return false;
+  if (classifyProviderFailure(cause) !== "dispatch_unknown") return true;
+  if (isOutputLimitFailure(cause)) return true; // Durable legacy semantic failure, not a transport heuristic.
   return !providerAttemptStarted;
 }
 
@@ -315,6 +317,7 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
             sessionId: input.sessionId,
             stage: "viewer",
             status: safeRetry ? "failed" : "uncertain",
+            dispatchOutcome: classifyProviderFailure(cause), providerAttemptOutcomes: providerAttemptOutcomes(cause),
             attempt,
             message: cause instanceof Error ? cause.message : String(cause),
           });
@@ -399,6 +402,7 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
         sessionId: input.sessionId,
         stage: "monitor",
         status: safeRetry ? "failed" : "uncertain",
+        dispatchOutcome: classifyProviderFailure(cause), providerAttemptOutcomes: providerAttemptOutcomes(cause),
         attempt: monitorAttempt,
         message: cause instanceof Error ? cause.message : String(cause),
       });

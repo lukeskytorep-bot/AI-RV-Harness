@@ -1,3 +1,5 @@
+import { inspectViewerSessionResume } from "../../sessions/viewerResumeDecision";
+import type { ViewerResumeLedgerDecision } from "../../sessions/viewerResumeLedger";
 import type { InterfaceLanguage } from "../../types";
 import { learningWarningText } from "../../aiCenter/learningExecution";
 import { withWorkflow } from "../../application/workflowOwnership";
@@ -41,7 +43,7 @@ import {
 } from "../../training/curriculum";
 import { exportTrainingRun } from "../../training/export";
 import type { TrainingRunRecord } from "../../training/types";
-import { canResumeOrEndTrainingRun, isTrainingRunUserFinished } from "../../training/runLifecycle";
+import { canResumeTrainingRun, canResumeOrEndTrainingRun, isTrainingRunUserFinished } from "../../training/runLifecycle";
 import type { AppSettings, Profile, Workspace } from "../../types";
 import { SessionInspection } from "../../components/SessionInspection";
 import { executeTrainingRun } from "./trainingExecution";
@@ -118,6 +120,18 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   const [selectedSession, setSelectedSession] = useState<{ workspaceId: string; sessionId: string } | null>(null);
   const [historyOpen, setHistoryOpen] = useState(true);
   const [trainingOperationPending, setTrainingOperationPending] = useState(false);
+  const [resumeDecisions, setResumeDecisions] = useState<Record<string, ViewerResumeLedgerDecision>>({});
+  useEffect(() => {
+    let cancelled = false;
+    if (!repository || busy) return;
+    void Promise.all(runs.map(async run => {
+      const checkpoint = run.activeTargetCheckpoint;
+      if (!checkpoint || !["blind_initializing", "blind_running"].includes(checkpoint.stage)) return [run.id, { kind: "fresh" } as ViewerResumeLedgerDecision] as const;
+      try { return [run.id, inspectViewerSessionResume(await repository.listSessionEvents(checkpoint.sessionId))] as const; }
+      catch { return [run.id, { kind: "unsafe", reason: "Could not read the saved Viewer attempt history." } as ViewerResumeLedgerDecision] as const; }
+    })).then(entries => { if (!cancelled) setResumeDecisions(Object.fromEntries(entries)); });
+    return () => { cancelled = true; };
+  }, [repository, runs, busy]);
   const ownership=useWorkflowOwnership(repository,activeRun?.profileId ?? profile?.id);
   const activeRecoverable=Boolean(activeRun && canResumeOrEndTrainingRun(activeRun));
   useEffect(()=>{if(!busy && profile?.id && activeRun?.profileId!==profile.id)setActiveRun(runs.find(run=>run.profileId===profile.id && canResumeOrEndTrainingRun(run))??null);},[profile?.id,runs,busy,activeRun?.profileId]);
@@ -304,7 +318,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
   };
 
   const resumeExisting = async (run: TrainingRunRecord) => {
-    if (!repository || isTrainingRunUserFinished(run) || busy || ownership.unavailable && run.profileId===activeRun?.profileId) return;
+    if (!repository || !canResumeTrainingRun(run, resumeDecisions[run.id]) || busy || ownership.unavailable && run.profileId===activeRun?.profileId) return;
     const releaseTrainingOperation = acquireTrainingOperation(trainingOperationGuard, setTrainingOperationPending);
     if (!releaseTrainingOperation) return;
     try {
@@ -439,7 +453,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
         {mode === "partial" && <TrainingSection title={text.categories}><div className="training-category-grid">{TRAINING_CATEGORIES.map((category) => { const pool = availability.categories[category]; return <label key={category}><span>{TRAINING_CATEGORY_LABELS[category][settings.interfaceLanguage]}<small>{formatTrainingAvailability(pool, settings.targetRepeatPolicy, pl)}</small></span><input type="number" min={0} max={pool.available} value={counts[category] ?? 0} onChange={(event) => setCounts((current) => ({ ...current, [category]: Math.max(0, Math.floor(Number(event.target.value) || 0)) }))} /></label>; })}<label className="training-my-targets"><span>{text.user}<small>{formatTrainingAvailability(availability.myTargets, settings.targetRepeatPolicy, pl)}</small></span><input type="number" min={0} max={availability.myTargets.available} value={myTargetsCount} onChange={(event) => setMyTargetsCount(Math.max(0, Math.floor(Number(event.target.value) || 0)))} /></label></div></TrainingSection>}
         <TrainingSection title="AI Judge"><div className="training-grid two"><label>{text.judgeCount}<select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))}><option value={0}>0 · {text.none}</option><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>{Array.from({ length: judgeCount }, (_, index) => <label key={index}>Judge {index + 1}<ModelRouteSelect role="judge" profile={profile} providers={providers} models={models} value={judgeRoutes[index]} onChange={(next) => setJudgeRoutes((current) => current.map((value, itemIndex) => itemIndex === index ? next : value))} emptyLabel={text.selectModel} /></label>)}</div></TrainingSection>
         <TrainingSection title={text.execution}>{mode === "full" && roundCount > 1 && <label className="training-check"><input type="checkbox" checked={pauseAfterBlock} onChange={(event) => setPauseAfterBlock(event.target.checked)} /><span><strong>{text.pauseRounds}</strong><small>{text.pauseRoundsLead}</small></span></label>}<div className="training-preflight"><span><small>{text.sessions}</small><strong>{plannedSessionCount}</strong></span><span><small>{text.viewerCalls}</small><strong>{baselineViewerCalls}</strong></span><span><small>{text.judgeCalls}</small><strong>{plannedSessionCount * judgeCount}</strong></span><span><small>{text.curriculum}</small><strong>{mode === "full" ? `${FACTORY_CURRICULUM_ID}:${FACTORY_CURRICULUM_VERSION} · ${roundCount}×${FACTORY_ROUND_SIZE}` : text.partial}</strong></span><span><small>{text.repeatPolicy}</small><strong>{settings.targetRepeatPolicy === "avoid_profile" ? text.avoidProfile : text.allowRepeat}</strong></span></div><small className="training-preflight-note">{text.viewerCallNote}</small></TrainingSection>
-        <div className="training-actions">{busy ? <><button className="secondary-button" onClick={() => { pauseRequested.current = true; }}><CircleStop size={15} />{text.pauseAfterSession}</button><button type="button" className="stop-button" disabled={stopping} title={pl ? "Zatrzymaj teraz i zachowaj checkpoint. Wznowienie wymaga ręcznej decyzji." : "Stop now and retain the checkpoint. Resume requires your action."} onClick={() => { setStopping(true); executionAbort.current?.abort(new DOMException("Stopped by user", "AbortError")); }}><CircleStop size={15}/>{stopping ? (pl ? "Zatrzymywanie…" : "Stopping…") : "Stop"}</button><span>{progressLine}</span></> : activeRecoverable && activeRun ? <><button type="button" className="secondary-button training-resume-button" disabled={trainingOperationPending || ownership.unavailable} onClick={()=>void resumeExisting(activeRun)}><Play size={15}/>{text.resume}</button><button type="button" className="secondary-button training-end-button" disabled={trainingOperationPending || ownership.unavailable} onClick={()=>void endExisting(activeRun)}><CircleStop size={15}/>{text.endTraining}</button></> : <span className="disabled-action-help" title={!workspaceId ? text.workspaceRequired : plannedSessionCount <= 0 ? text.targetsRequired : !fullSelectionValid && mode === "full" ? text.noRoundsAvailable : undefined}><button className="primary-button" disabled={!ready || trainingOperationPending || ownership.unavailable} onClick={() => void startNew()}><Play size={15} />{mode === "full" ? `${text.startFull} · ${plannedSessionCount}` : `${text.startPartial} · ${plannedSessionCount}`}</button></span>}</div>
+        <div className="training-actions">{busy ? <><button className="secondary-button" onClick={() => { pauseRequested.current = true; }}><CircleStop size={15} />{text.pauseAfterSession}</button><button type="button" className="stop-button" disabled={stopping} title={pl ? "Zatrzymaj teraz i zachowaj checkpoint. Wznowienie wymaga ręcznej decyzji." : "Stop now and retain the checkpoint. Resume requires your action."} onClick={() => { setStopping(true); executionAbort.current?.abort(new DOMException("Stopped by user", "AbortError")); }}><CircleStop size={15}/>{stopping ? (pl ? "Zatrzymywanie…" : "Stopping…") : "Stop"}</button><span>{progressLine}</span></> : activeRecoverable && activeRun ? <><button type="button" className="secondary-button training-resume-button" disabled={trainingOperationPending || ownership.unavailable || !canResumeTrainingRun(activeRun, resumeDecisions[activeRun.id])} title={resumeDecisions[activeRun.id]?.kind === "unsafe" ? (resumeDecisions[activeRun.id] as Extract<ViewerResumeLedgerDecision, { kind: "unsafe" }>).reason : undefined} onClick={()=>void resumeExisting(activeRun)}><Play size={15}/>{text.resume}</button><button type="button" className="secondary-button training-end-button" disabled={trainingOperationPending || ownership.unavailable} onClick={()=>void endExisting(activeRun)}><CircleStop size={15}/>{text.endTraining}</button></> : <span className="disabled-action-help" title={!workspaceId ? text.workspaceRequired : plannedSessionCount <= 0 ? text.targetsRequired : !fullSelectionValid && mode === "full" ? text.noRoundsAvailable : undefined}><button className="primary-button" disabled={!ready || trainingOperationPending || ownership.unavailable} onClick={() => void startNew()}><Play size={15} />{mode === "full" ? `${text.startFull} · ${plannedSessionCount}` : `${text.startPartial} · ${plannedSessionCount}`}</button></span>}</div>
         {(busy || activeRecoverable) && activeRun && <div className="active-training-run"><strong>{activeRun.name}</strong><span>{activeRun.completedTargetIds.length}/{activeRun.targetIds.length}</span><progress max={activeRun.targetIds.length} value={activeRun.completedTargetIds.length}/><small>{progressLine || activeRun.status}</small></div>}
         {(busy || activeRecoverable) && (activeRun?.learningSettlements ?? []).filter(s => s.settlement === "failed_preserved").map(s => <p className="muted" key={s.auditId}>{learningWarningText(s, pl)}</p>)}
         {ownership.unavailable && <small role="status">{ownership.state==="other"?(pl?"Praca trwa w innym oknie":"Work is running in another window"):(pl?"Sprawdzanie stanu wykonania":"Checking execution state")}</small>}
@@ -465,6 +479,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
             onToggleSessions={() => setExpandedRunId((current) => current === run.id ? null : run.id)}
             onExport={() => void exportExisting(run)}
             onArchive={() => void archiveExisting(run)}
+            resumeDecision={resumeDecisions[run.id]}
             onResume={() => void resumeExisting(run)}
             onEnd={() => void endExisting(run)}
             onSelectSession={(sessionId) => setSelectedSession({ workspaceId: run.workspaceId, sessionId })}
@@ -491,7 +506,7 @@ export type TrainingRunHistoryCardText = {
 
 export function TrainingRunHistoryCard({
   run, expanded, selectedSessionId, operationUnavailable, archiveDisabled, text, language = "en",
-  onToggleSessions, onExport, onArchive, onResume, onEnd, onSelectSession,
+  onToggleSessions, onExport, onArchive, onResume, onEnd, onSelectSession, resumeDecision,
 }: {
   run: TrainingRunRecord;
   expanded: boolean;
@@ -503,6 +518,7 @@ export function TrainingRunHistoryCard({
   onToggleSessions: () => void;
   onExport: () => void;
   onArchive: () => void;
+  resumeDecision?: ViewerResumeLedgerDecision;
   onResume: () => void;
   onEnd: () => void;
   onSelectSession: (sessionId: string) => void;
@@ -521,7 +537,7 @@ export function TrainingRunHistoryCard({
     <div className="training-run-details"><small>{isTrainingRunUserFinished(run) ? text.endedByUser : run.status} · {run.completedTargetIds.length}/{run.targetIds.length} · Lite {run.protocolVariant}</small></div>
     {(run.learningSettlements ?? []).filter(s => s.settlement === "failed_preserved").map(s => <p className="muted" key={s.auditId}>{learningWarningText(s, language === "pl")}</p>)}
     {canRecover && <div className="training-run-recovery-actions">
-      <button className="secondary-button training-resume-button" type="button" disabled={operationUnavailable} onClick={onResume}><Play size={13} />{text.resume}</button>
+      <button className="secondary-button training-resume-button" type="button" disabled={operationUnavailable || !canResumeTrainingRun(run, resumeDecision)} title={resumeDecision?.kind === "unsafe" ? resumeDecision.reason : undefined} onClick={onResume}><Play size={13} />{text.resume}</button>
       <button className="secondary-button training-end-button" type="button" disabled={operationUnavailable} onClick={onEnd}><CircleStop size={13} />{text.endTraining}</button>
     </div>}
     <div id={sessionsId} className="training-session-links" hidden={!expanded}>{expanded && run.sessionIds.map((sessionId, index) => <button key={sessionId} className={selectedSessionId === sessionId ? "active" : ""} onClick={() => onSelectSession(sessionId)}><span className="training-session-id">{text.session} {index + 1} · {run.completedTargetIds[index] ?? sessionId}</span></button>)}</div>

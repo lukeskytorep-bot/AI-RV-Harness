@@ -22,7 +22,7 @@ import { APP_VERSION } from "../version";
 import { createSessionCode } from "./sessionCode";
 import { withEstimatedCost } from "./costGuard";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
-import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, viewerDispatchOutcome, VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_POLICY_VERSION, VIEWER_OUTPUT_RECOVERY_TOKENS } from "./viewerOutputRecovery";
+import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, viewerDispatchOutcome, viewerFailureMetadata, VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_POLICY_VERSION, VIEWER_OUTPUT_RECOVERY_TOKENS } from "./viewerOutputRecovery";
 import { buildViewerStepId, resolveViewerResumeStart, viewerRequestFingerprintInput } from "./viewerResumeLedger";
 import type { SpecialTaskInput } from "./specialTask";
 import { renderSpecialTask } from "./specialTask";
@@ -158,9 +158,10 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
   let currentState: RvSessionState = "Draft";
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
   let activeViewerAttemptId: string | undefined;
+  let activeViewerManualRetry = false;
   let focusedPhysicalFailures=0;
   const chat = createProviderChatExecutor({
-    configuredRetries: maxRetries,
+    configuredRetries: () => activeViewerManualRetry ? 0 : maxRetries,
     operationId: "session.rcp",
     operationKind: input.operationKind,
     streamWorkflowContext: input.streamWorkflowContext ?? "rv_session",
@@ -171,7 +172,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
       eventType: "PROVIDER_ATTEMPT_FAILED",
       role: "controller",
       content: cause.message,
-      metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, ...(activeViewerAttemptId ? { attemptId: activeViewerAttemptId } : {}), dispatchOutcome: cause.details.phase === "before_dispatch" ? "not_dispatched" : "unknown", billingStatus: ["response_body_read", "response_body_decode", "invalid_provider_json"].includes(cause.details.code) ? "unknown" : "not_reported" },
+      metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, ...(activeViewerAttemptId ? { attemptId: activeViewerAttemptId } : {}), ...viewerFailureMetadata(cause), billingStatus: ["response_body_read", "response_body_decode", "invalid_provider_json"].includes(cause.details.code) ? "unknown" : "not_reported" },
     });
     },
   });
@@ -192,7 +193,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
     const requestSha256 = await sha256Text(focusFingerprint(viewerRequestFingerprintInput(requestMessages),sessionFocus,currentPassIndex,effectiveSettings,input.providerConfig,input.model,input.sessionLanguage,input.protocol.contentSha256));
     const stepId = buildViewerStepId("rcp", metadata);
     const durable = input.resumeSession ? await resolveViewerResumeStart({ repository: input.repository, sessionId, stepKey: stepId, requestSha256 }) : { startRecoveryLevel: 0 as const };
-    const durableMetadata = { ...metadata, stepId, requestSha256 };
+    const durableMetadata = { ...metadata, stepId, requestSha256, ...(durable.resumeAuthorizationId ? { resumeAuthorizationId: durable.resumeAuthorizationId } : {}) };
     const result = await callViewerWithOutputRecovery({
       model: input.model, baseSettings: effectiveSettings, operationKind: input.operationKind ?? "rv_session_viewer", messages: requestMessages,
       preserveConfiguredBudget: input.operationKind === "research_viewer" && !input.viewerOutputPolicy,
@@ -206,6 +207,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
         validateSessionContinuationBudget(requestMessages);
         await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
         activeViewerAttemptId = dispatchAttempt.attemptId;
+        activeViewerManualRetry = Boolean(durable.resumeAuthorizationId);
         const started = Date.now();
         const failuresBefore=focusedPhysicalFailures;
         try {
@@ -214,6 +216,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
           response = { ...response, usage: withEstimatedCost(response.usage, input.model) };
           const elapsed = Date.now() - started; durationMs += elapsed; metrics = recordProviderRequest(metrics, response.usage, elapsed);
           activeViewerAttemptId = undefined;
+          activeViewerManualRetry = false;
           return response;
         } catch (cause) {
           input.onStreamPreview?.(null);
@@ -221,12 +224,14 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
           if (!isStreamingRepetitionRunawayError(cause)) {
             const dispatchOutcome = viewerDispatchOutcome(cause);
             if (dispatchOutcome === "not_dispatched") await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_NOT_DISPATCHED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
-            await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...durableMetadata, attemptId: dispatchAttempt.attemptId, semanticAttempt, dispatchOutcome, requestDurationMs: Date.now() - started } });
+            await input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ERROR", role: "controller", content: cause instanceof Error ? cause.message : String(cause), metadata: { ...durableMetadata, attemptId: dispatchAttempt.attemptId, semanticAttempt, dispatchOutcome, ...viewerFailureMetadata(cause), requestDurationMs: Date.now() - started } });
           }
           activeViewerAttemptId = undefined;
+          activeViewerManualRetry = false;
           throw cause;
         }
       },
+      onRecoveryBlocked: (reason) => input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_RECOVERY_BLOCKED", role: "controller", metadata: { ...durableMetadata, reason } }),
       onIncompleteAttempt: (attempt) => input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: attempt.content, metadata: { ...durableMetadata, ...viewerOutputAttemptMetadata(attempt) } }),
     });
     return { response: result.response, durationMs, acceptedMetadata: { ...focusMetadata(sessionFocus,currentPassIndex), stepId, ...viewerOutputAcceptedMetadata(result) } };

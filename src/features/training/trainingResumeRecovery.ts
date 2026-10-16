@@ -1,3 +1,4 @@
+import { prepareViewerSessionResume } from "../../sessions/viewerResumeDecision";
 import { learningAuditHasKnownResult, readLearningSettlement } from "../../aiCenter/learningExecution";
 import { withWorkflow } from "../../application/workflowOwnership";
 import type { AppRepository } from "../../storage/repository";
@@ -24,6 +25,13 @@ async function prepareTrainingRunResumeOwned(input: {
   if (!current) throw new Error("Training run is no longer available.");
   if (isTrainingRunUserFinished(current)) throw userFinishedTrainingError();
   const checkpoint = current.activeTargetCheckpoint;
+  if (checkpoint && ["blind_initializing", "blind_running"].includes(checkpoint.stage)) {
+    const session = await input.repository.getRvSession(checkpoint.sessionId);
+    if (!session || session.state === "Revealed" || session.state === "Completed") return current;
+    const prepared = await prepareViewerSessionResume({ repository: input.repository, sessionId: checkpoint.sessionId,
+      language: current.executionSnapshot?.language ?? input.fallbackLanguage, confirm: input.confirmUncertainViewerReview });
+    return prepared ? current : null;
+  }
   if (checkpoint && ["review_completed", "field_guide_update_completed"].includes(checkpoint.stage)) {
     const kind = checkpoint.stage === "review_completed" ? "field_guide" : "viewer_notes";
     const events = await input.repository.listSessionEvents(checkpoint.sessionId);

@@ -1,3 +1,4 @@
+import type { ViewerResumeLedgerDecision } from "../sessions/viewerResumeLedger";
 import type { TrainingRunRecord } from "./types";
 
 export const USER_FINISHED_TRAINING_REASON = "user_finished" as const;
@@ -18,4 +19,9 @@ export function canResumeOrEndTrainingRun(run: Pick<TrainingRunRecord, "terminat
 
 export function userFinishedTrainingError(): Error {
   return new Error("Training run was ended by the user and cannot be resumed or executed.");
+}
+
+/** Resume availability uses the same ledger decision as its resolver; End stays independent. */
+export function canResumeTrainingRun(run: Parameters<typeof canResumeOrEndTrainingRun>[0], decision?: ViewerResumeLedgerDecision): boolean {
+  return canResumeOrEndTrainingRun(run) && decision?.kind !== "unsafe";
 }

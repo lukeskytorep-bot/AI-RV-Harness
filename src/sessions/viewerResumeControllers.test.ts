@@ -1,3 +1,7 @@
+import { ProviderCallError } from "../providers/providerError";
+import { inspectViewerSessionResume } from "./viewerResumeDecision";
+import { createSessionReplay } from "./resumeReplay";
+import { prepareViewerSessionResume } from "./viewerResumeDecision";
 import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
@@ -19,6 +23,7 @@ const model = (maxOutputTokens: number): ProviderModel => ({
 function memoryRepository() {
   const events: SessionEventRecord[] = [];
   let sequence = 0;
+  let snapshot: unknown = null;
   const append = async (sessionId: string, event: SessionEventInput) => {
     const record: SessionEventRecord = { ...event, id: `e${++sequence}`, sessionId, sequenceNumber: sequence, createdAt: "now" };
     events.push(structuredClone(record));
@@ -31,7 +36,9 @@ function memoryRepository() {
     appendSessionEventWithProviderState: async (sessionId: string, event: SessionEventInput) => append(sessionId, event),
     listSessionEvents: async () => structuredClone(events),
     updatePreRevealTranscript: async () => undefined,
-    saveSessionSnapshot: async () => undefined,
+    saveSessionSnapshot: async (_id: string, value: unknown) => { snapshot = structuredClone(value); },
+    getSessionSnapshot: async () => structuredClone(snapshot),
+    getSessionEventProviderState: async () => null,
     sealPreReveal: async () => undefined,
     acceptReveal: async () => undefined,
     recordTargetUsage: async () => undefined,
@@ -58,6 +65,7 @@ async function expectResumeAtRecovery(runPrimary: (repository: AppRepository, vi
   const started = events.find((event) => event.eventType === "VIEWER_OUTPUT_ATTEMPT_STARTED");
   expect(incomplete?.metadata?.attemptId).toBe(started?.metadata?.attemptId);
 
+  await prepareViewerSessionResume({ repository, sessionId: first.sessionId, language: "en", confirm: async () => true });
   const budgets: number[] = [];
   let resumedCalls = 0;
   const resumed = await runPrimary(repository, model(32768), interruptedSession(first.sessionId, first.sessionCode), async ({ settings }: any) => {
@@ -86,4 +94,52 @@ describe("Viewer durable Resume across controllers", () => {
   it("Telepathic resumes the persisted first length at recovery level one", async () => {
     await expectResumeAtRecovery((repository, viewerModel, resumeSession, chat) => runAutomaticTelepathicSession({ repository, workspaceId: "w", profileId: "profile", providerConfig: config, model: viewerModel, protocol: getTelepathicProtocol("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, step8Questions: { mode: "predefined", questions: ["Describe the primary intention."] }, ...(resumeSession ? { resumeSession } : {}), ...(chat ? { chat } : {}) }));
   });
+});
+
+const rejected = () => new ProviderCallError({ code: "empty_assistant_response", message: "Rejected final response", phase: "validating_response",
+  responseEvidence: { version: 1, transportOutcome: "response_finished", boundary: "sse_done" } });
+const runners = {
+  RCP: (repository: AppRepository, resumeSession: RvSession | undefined, chat: (request: any) => Promise<any>) => runAutomaticRcpSession({ repository, workspaceId: "w", profileId: "profile", providerConfig: config, model: model(32768), protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: {}, resumeSession, chat }),
+  Lite: (repository: AppRepository, resumeSession: RvSession | undefined, chat: (request: any) => Promise<any>) => runAutomaticRvLiteSession({ repository, workspaceId: "w", profileId: "profile", providerConfig: config, model: model(32768), protocol: getRvLite("en", "core"), sessionLanguage: "en", requestedSettings: {}, resumeSession, chat }),
+  Custom: (repository: AppRepository, resumeSession: RvSession | undefined, chat: (request: any) => Promise<any>) => runAutomaticCustomSession({ repository, workspaceId: "w", profileId: "profile", providerConfig: config, model: model(32768), protocol: { protocolId: "c", versionId: "v1", displayName: "Custom", version: "1", language: "en", steps: ["Observe"], contentHash: "hash", createdAt: "now" }, sessionLanguage: "en", requestedSettings: {}, resumeSession, chat }),
+  Telepathic: (repository: AppRepository, resumeSession: RvSession | undefined, chat: (request: any) => Promise<any>) => runAutomaticTelepathicSession({ repository, workspaceId: "w", profileId: "profile", providerConfig: config, model: model(32768), protocol: getTelepathicProtocol("en"), sessionLanguage: "en", requestedSettings: {}, step8Questions: { mode: "predefined", questions: ["Describe the intention."] }, resumeSession, chat }),
+};
+for (const [name, run] of Object.entries(runners)) it(`T3 ${name}: completed rejection needs confirmation; one authorization cannot become an automatic third attempt`, async () => {
+  const { repository, events } = memoryRepository();
+  const first = await run(repository, undefined, async () => { throw rejected(); });
+  expect(first.state).toBe("Interrupted");
+  expect(inspectViewerSessionResume(events)).toMatchObject({ kind: "finished_rejected" });
+  const saved = structuredClone(events);
+  const session = interruptedSession(first.sessionId, first.sessionCode);
+  let calls = 0;
+  await run(repository, session, async () => { calls++; return { content: "unexpected", usage: {} }; }).catch(() => undefined);
+  expect(calls).toBe(0);
+  await prepareViewerSessionResume({ repository, sessionId: first.sessionId, language: "en", confirm: async () => true });
+  await run(repository, session, async () => { calls++; throw new ProviderCallError({ code: "response_body_read", phase: "reading_body", message: "retryable connection loss" }); }).catch(() => undefined);
+  expect(calls).toBe(1);
+  expect(events.slice(0, saved.length)).toEqual(saved);
+  expect(events.filter(e => e.eventType === "VIEWER_OUTPUT_ATTEMPT_STARTED" && e.metadata?.resumeAuthorizationId)).toHaveLength(1);
+  await run(repository, session, async () => { calls++; return { content: "unexpected", usage: {} }; }).catch(() => undefined);
+  expect(calls).toBe(1);
+});
+
+it("T3 Lite restart replays the accepted first output and sends only the confirmed missing step", async () => {
+  const { repository, events } = memoryRepository(); let firstCalls = 0;
+  const first = await runners.Lite(repository, undefined, async () => {
+    if (++firstCalls >= 2) throw rejected();
+    return { content: "SAVED_FIRST_OUTPUT", finishReason: "stop", usage: {} };
+  });
+  expect(first.state).toBe("Interrupted");
+  const session = interruptedSession(first.sessionId, first.sessionCode);
+  await prepareViewerSessionResume({ repository, sessionId: session.id, language: "en", confirm: async () => true });
+  const liveMessages: string[] = [];
+  const replay = await createSessionReplay({ repository, session, events: structuredClone(events), liveChat: async request => {
+    liveMessages.push(JSON.stringify(request.messages)); return { content: "next output", finishReason: "stop", usage: {} };
+  } });
+  const result = await runners.Lite(replay.repository, session, replay.chat);
+  expect(result.stopReason).toBeUndefined();
+  expect(result.state).toBe("AwaitingReveal");
+  expect(liveMessages).toHaveLength(3); // Core Lite has four Viewer calls; the first is replayed.
+  expect(liveMessages.every(messages => messages.includes("SAVED_FIRST_OUTPUT"))).toBe(true);
+  expect(events.filter(e => e.eventType === "VIEWER_RESPONSE" && e.content === "SAVED_FIRST_OUTPUT")).toHaveLength(1);
 });

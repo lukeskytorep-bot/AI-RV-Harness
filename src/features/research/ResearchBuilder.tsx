@@ -607,7 +607,11 @@ export function ResearchProjectView({ copy, repository, project, onRefresh, onBa
   const recover=()=>perform("recovery",async owned=>{
     if(!recoverableCount)return;
     const confirmed=await dialogs.confirm({title:copy.dialogWarningTitle,description:copy.researchRecoveryConfirm,confirmLabel:copy.dialogContinue,cancelLabel:copy.cancel,severity:"warning"});
-    if(confirmed){await prepareInterruptedResearchRetry(owned,project.id);setRecoverableCount(0);}
+    if(confirmed){
+      await prepareInterruptedResearchRetry(owned,project.id,decision=>dialogs.confirm({...decision,severity:"warning"}));
+      const assignments=await owned.listResearchAssignments(project.id);
+      setRecoverableCount(assignments.filter(item=>item.sessionId && !["SessionComplete","Judged","ResumeApproved"].includes(item.status)).length);
+    }
   });
   const resolveJudges=()=>perform("recovery",async owned=>{
     const confirmed=await dialogs.confirm({title:copy.dialogWarningTitle,description:pl?"Poprzednia próba Judge mogła zostać opłacona bez zapisanego wyniku. Oznaczyć te próby jako nieudane, aby umożliwić ręczne wznowienie?":"A previous Judge attempt may have been charged without a saved result. Mark these attempts failed to allow manual Resume?",confirmLabel:copy.dialogContinue,cancelLabel:copy.cancel,severity:"warning"});

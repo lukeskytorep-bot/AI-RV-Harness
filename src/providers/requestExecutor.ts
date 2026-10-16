@@ -281,7 +281,7 @@ export async function executeProviderChat(input: {
 }
 
 export function createProviderChatExecutor(options: {
-  configuredRetries?: number;
+  configuredRetries?: number | (() => number);
   operationId?: string;
   operationKind?: OperationKind;
   attempt?: ProviderChatAttempt;
@@ -292,7 +292,7 @@ export function createProviderChatExecutor(options: {
 }): ProviderChatAttempt {
   const executor: ProviderChatAttempt & { [PROVIDER_EXECUTOR_BRAND]?: boolean } = (request) => executeProviderChat({
     ...request,
-    configuredRetries: options.configuredRetries,
+    configuredRetries: typeof options.configuredRetries === "function" ? options.configuredRetries() : options.configuredRetries,
     operationId: options.operationId,
     operationKind: options.operationKind,
     attempt: options.attempt,

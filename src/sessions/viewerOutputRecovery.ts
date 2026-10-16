@@ -2,7 +2,7 @@ import { resolveGenerationSettings } from "../providers/capabilities";
 import { estimateContextBudget } from "../chat/contextBudget";
 import type { OperationKind } from "../providers/operationResourceProfiles";
 import type { EffectiveGenerationSettings, ProviderChatResponse, ProviderMessage, ProviderModel } from "../providers/types";
-import { providerErrorDetails } from "../providers/providerError";
+import { classifyProviderFailure, providerAttemptOutcomes } from "../providers/responseEvidence";
 import type { InterfaceLanguage } from "../types";
 import { sanitizeRepetitiveOutput } from "./repetitionGuard";
 import { isStreamingRepetitionRunawayError } from "./streamingRepetitionGuard";
@@ -163,14 +163,17 @@ export function viewerOutputAttemptMetadata(attempt: ViewerOutputAttemptRecord):
     ...(attempt.repetitionRule ? { repetitionRule: attempt.repetitionRule } : {}),
     attemptId: attempt.attemptId,
     usage: attempt.response.usage,
+    responseEvidence: attempt.response.responseEvidence,
+    providerAttemptOutcomes: providerAttemptOutcomes(attempt.response),
   };
 }
 
-export function viewerOutputAcceptedMetadata(result: { settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2; attemptId?: string; viewerOutputPolicyVersion?: number }): Record<string, unknown> {
+export function viewerOutputAcceptedMetadata(result: { settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2; attemptId?: string; viewerOutputPolicyVersion?: number; response?: ProviderChatResponse }): Record<string, unknown> {
   const effective = result.settings.effective.maxOutputTokens;
   return {
     viewerOutputPolicyVersion: result.viewerOutputPolicyVersion ?? VIEWER_OUTPUT_POLICY_VERSION,
     accepted: true,
+    ...(result.response ? { responseEvidence: result.response.responseEvidence, providerAttemptOutcomes: providerAttemptOutcomes(result.response) } : {}),
     ...(result.attemptId ? { attemptId: result.attemptId } : {}),
     semanticAttempt: result.semanticAttempt,
     recoveryLevel: result.semanticAttempt - 1,
@@ -189,25 +192,13 @@ export interface ViewerOutputDispatchAttempt {
 }
 
 
-function nestedProviderErrorDetails(cause: unknown): ReturnType<typeof providerErrorDetails> {
-  const direct = providerErrorDetails(cause);
-  if (direct) return direct;
-  if (!cause || typeof cause !== "object") return undefined;
-  const candidate = cause as { causeError?: unknown; cause?: unknown };
-  if (candidate.causeError !== undefined) {
-    const nested = nestedProviderErrorDetails(candidate.causeError);
-    if (nested) return nested;
-  }
-  if (candidate.cause !== undefined && candidate.cause !== cause) return nestedProviderErrorDetails(candidate.cause);
-  return undefined;
+export function viewerDispatchOutcome(cause: unknown): "not_dispatched" | "response_finished" | "unknown" {
+  const outcome = classifyProviderFailure(cause);
+  return outcome === "dispatch_unknown" ? "unknown" : outcome;
 }
 
-export function viewerDispatchOutcome(cause: unknown): "not_dispatched" | "unknown" {
-  // AbortError is not enough to prove that no request left the process. A user
-  // can abort while headers/body are already in flight, so only an explicit
-  // provider failure phase before_dispatch is safe to classify as unsent.
-  const details = nestedProviderErrorDetails(cause);
-  return details?.phase === "before_dispatch" ? "not_dispatched" : "unknown";
+export function viewerFailureMetadata(cause: unknown): Record<string, unknown> {
+  return { dispatchOutcome: viewerDispatchOutcome(cause), providerAttemptOutcomes: providerAttemptOutcomes(cause) };
 }
 
 export async function callViewerWithOutputRecovery(input: {
@@ -219,6 +210,7 @@ export async function callViewerWithOutputRecovery(input: {
   budgetProfile?: ViewerOutputBudgetProfile;
   lockedPolicy?: { initialTokens: number; recoveryTokens: number; preserveConfiguredBudget: boolean };
   call: (settings: EffectiveGenerationSettings, semanticAttempt: 1 | 2, attempt: ViewerOutputDispatchAttempt) => Promise<ProviderChatResponse>;
+  onRecoveryBlocked?: (reason: "context_limit" | "no_larger_recovery_budget") => void | Promise<void>;
   onIncompleteAttempt?: (attempt: ViewerOutputAttemptRecord) => void | Promise<void>;
   startRecoveryLevel?: 0 | 1;
   priorEffectiveMaxOutputTokens?: number;
@@ -258,6 +250,7 @@ export async function callViewerWithOutputRecovery(input: {
     const budget = settings.effective.maxOutputTokens!;
     const context = estimateContextBudget(input.messages, input.model.capabilities.contextTokens, budget);
     if (context.exceeded) {
+      await input.onRecoveryBlocked?.("context_limit");
       throw new ViewerOutputIncompleteError(
         "context_limit",
         attempts,
@@ -266,6 +259,7 @@ export async function callViewerWithOutputRecovery(input: {
     }
     if (recoveryLevel === 0) firstBudget = budget;
     if (recoveryLevel === 1 && budget <= firstBudget && previousIncompleteReason !== "repetition_runaway") {
+      await input.onRecoveryBlocked?.("no_larger_recovery_budget");
       throw new ViewerOutputIncompleteError(
         "no_larger_recovery_budget",
         attempts,

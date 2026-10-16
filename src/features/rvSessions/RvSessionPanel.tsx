@@ -1,3 +1,4 @@
+import { prepareViewerSessionResume } from "../../sessions/viewerResumeDecision";
 import { useViewerRoutes } from "../../components/useViewerRoutes";
 import { ViewerRouteNotice } from "../../components/ViewerRouteNotice";
 import { inheritAbortOwnership } from "../../application/abortOwnership";
@@ -753,6 +754,8 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
       if (snapshot.monitor && (!capturedMonitorProvider || !capturedMonitorModel)) throw new Error(copy.postRevealRouteUnavailable);
       const events = resume ? await repository.listSessionEvents(session.id) : [];
       if (resume && !isRecoverableProviderInterruption(session, events, snapshot)) throw new Error(settings.interfaceLanguage === "pl" ? "Ta sesja nie została przerwana przez odzyskiwalny błąd providera." : "This session was not interrupted by a recoverable provider error.");
+      if (resume && !await prepareViewerSessionResume({ repository, sessionId: session.id, language: settings.interfaceLanguage, signal: controller.signal,
+        confirm: decision => dialogs.confirm({ ...decision, severity: "warning" }) })) return;
       const monitorRuns = snapshot.monitor ? await repository.listMonitorRuns(workspace.id) : [];
       const monitorRun = monitorRuns.find((item) => item.sessionId === session.id);
       const replay = resume ? await createSessionReplay({ repository, session, events, ...(monitorRun ? { monitorRun } : {}) }) : null;

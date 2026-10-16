@@ -1,3 +1,4 @@
+import { prepareViewerSessionResume, type ViewerResumeDecisionCopy } from "../sessions/viewerResumeDecision";
 import { withResearchExecution } from "./executionLifecycle";
 import { assertAbortOwnership } from "../application/abortOwnership";
 import { getUncertainResearchJudges, recordResearchJudgeAttempt } from "./judgeRecovery";
@@ -331,22 +332,27 @@ async function executeResearchSessionsOwned(input: {
   await input.repository.setResearchProjectState(project.id, input.signal?.aborted?"Interrupted":"SessionsComplete");
 }
 
-async function prepareInterruptedResearchRetryOwned(repository: ResearchRepository, projectId: string): Promise<number> {
+async function prepareInterruptedResearchRetryOwned(repository: ResearchRepository, projectId: string, confirmViewerRetry?: (copy: ViewerResumeDecisionCopy) => Promise<boolean>): Promise<number> {
   const project = await requireProject(repository, projectId);
   if (!["Interrupted", "Running"].includes(project.state)) throw new Error("Explicit Research Resume approval is available only for an interrupted/running project with a preserved partial session.");
   const assignments = await repository.listResearchAssignments(projectId);
   const recoverable = assignments.filter((assignment) => assignment.sessionId && !["SessionComplete", "Judged", "ResumeApproved"].includes(assignment.status));
+  let approved = 0;
   for (const assignment of recoverable) {
     const sessionId = assignment.sessionId!;
     const session = await repository.getRvSession(sessionId);
     if (!session && assignment.status !== "Initializing") throw new Error(`Research Resume cannot approve missing session ${sessionId}.`);
     if (session && session.state !== "Revealed") {
+      const prepared = await prepareViewerSessionResume({ repository, sessionId, language: project.config.sessionLanguage,
+        confirm: confirmViewerRetry ?? (async () => { throw new Error("Research Resume requires an explicit decision for the recorded Viewer attempt."); }) });
+      if (!prepared) continue;
       await repository.updateRvSessionState(sessionId, "Interrupted", "RECOVERY: partial Research session preserved; Resume of the same locked assignment/session approved by user");
     }
     await repository.updateResearchAssignment(assignment.id, sessionId, "ResumeApproved");
+    approved += 1;
   }
-  if (recoverable.length) await repository.setResearchProjectState(projectId, "Interrupted");
-  return recoverable.length;
+  if (approved) await repository.setResearchProjectState(projectId, "Interrupted");
+  return approved;
 }
 
 /** Explicitly abandons a partial session and permits a new attempt for the same locked assignment. */
@@ -628,6 +634,6 @@ function capabilityMethodSignature(capabilities: ProviderModel["capabilities"]):
 
 export const executeResearchSessions=(input:Parameters<typeof executeResearchSessionsOwned>[0])=>withResearchExecution(input.repository,input.projectId,input.signal,(repository,signal)=>executeResearchSessionsOwned({...input,repository,signal}));
 export const judgeResearch=(input:Parameters<typeof judgeResearchOwned>[0])=>withResearchExecution(input.repository,input.projectId,input.signal,(repository,signal)=>judgeResearchOwned({...input,repository,signal}));
-export const prepareInterruptedResearchRetry=(repository:ResearchRepository,projectId:string)=>withResearchExecution(repository,projectId,undefined,owned=>prepareInterruptedResearchRetryOwned(owned,projectId));
+export const prepareInterruptedResearchRetry=(repository:ResearchRepository,projectId:string,confirmViewerRetry?: (copy: ViewerResumeDecisionCopy) => Promise<boolean>)=>withResearchExecution(repository,projectId,undefined,owned=>prepareInterruptedResearchRetryOwned(owned,projectId,confirmViewerRetry));
 export const prepareInterruptedResearchRestart=(repository:ResearchRepository,projectId:string,assignmentId:string)=>withResearchExecution(repository,projectId,undefined,owned=>prepareInterruptedResearchRestartOwned(owned,projectId,assignmentId));
 export const unblindAndComputeResearch=(repository:ResearchRepository,projectId:string,signal?:AbortSignal)=>withResearchExecution(repository,projectId,signal,(owned,signal)=>unblindAndComputeResearchOwned(owned,projectId,signal));
