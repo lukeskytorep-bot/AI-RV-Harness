@@ -29,3 +29,6 @@
 
 # Canonical Field Perception Lexicons: preserve uploaded UTF-8 bytes and CRLF exactly.
 src/resources/field-lexicon/*.txt -text
+
+# Pinned runtime: preserve exact reviewed bytes on every checkout, including Windows.
+src-tauri/vendor/tauri-runtime-wry/** -text
