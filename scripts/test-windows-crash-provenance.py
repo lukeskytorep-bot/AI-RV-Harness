@@ -3,6 +3,7 @@ import importlib.util
 import struct
 import tempfile
 import unittest
+from unittest import mock
 import uuid
 from pathlib import Path
 spec = importlib.util.spec_from_file_location("provenance", Path(__file__).with_name("collect-windows-crash-build.py"))
@@ -37,6 +38,17 @@ class ProvenanceTests(unittest.TestCase):
             exe, pdb_path = Path(directory)/"app.exe", Path(directory)/"app.pdb"
             exe.write_bytes(pe()); pdb_path.write_bytes(symbols)
             return module.verify_pair(exe, pdb_path)
+
+    def test_sha256_without_python_311_file_digest(self):
+        # CI may use Python 3.10: exercise the absence of the newer helper.
+        with mock.patch.object(module.hashlib, "file_digest", create=True):
+            del module.hashlib.file_digest
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "hash-fixture.bin"
+                for payload in [b"", b"abc", b"ab\x00cd" * 500000]:
+                    with self.subTest(size=len(payload)):
+                        path.write_bytes(payload)
+                        self.assertEqual(module.sha256(path), module.hashlib.sha256(payload).hexdigest())
 
     def test_standalone_build_recipe(self):
         recipe = module.build_recipe(module.DIAGNOSTIC_BUILD_COMMAND)

@@ -79,7 +79,11 @@ def read_identity(path, reader):
 
 
 def sha256(path):
-    with path.open("rb") as file: return hashlib.file_digest(file, "sha256").hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def verify_pair(exe, pdb):
