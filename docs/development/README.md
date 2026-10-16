@@ -109,3 +109,7 @@ English is required for the primary Developer Guide, CONTRIBUTING, living archit
 Update README, [documentation index](../README.md), affected architecture, wiki mirror and [desktop checklist](../architecture/FINAL_RUNTIME_SMOKE_v0.7.14_EN.md) when behavior changes. Wiki pages live under `docs/wiki/`; publishing them to the separate GitHub Wiki is a separate operation.
 
 A PR should explain the concrete behavior, validation and limits. Never include API keys, databases, private targets/transcripts, raw continuation payloads, build output or caches. Follow [CONTRIBUTING](../../CONTRIBUTING.md), [SECURITY](../../SECURITY.md) and the [Code of Conduct](../../CODE_OF_CONDUCT.md).
+
+## Windows runtime crash candidate
+
+The pinned local runtime ownership repair and manual diagnostic build are described in [Windows Runtime Ownership Repair](WINDOWS_RUNTIME_OWNERSHIP_REPAIR_EN.md). Source verification rejects a registry fallback. The diagnostic workflow preserves a GUID/age-verified EXE/PDB pair, encrypts private symbols, and requires a separate Windows IPC/Reveal/Stop/minimize soak; local Linux checks do not close that acceptance.

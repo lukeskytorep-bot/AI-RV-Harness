@@ -87,7 +87,9 @@ export async function executeControlledPurgeNative(kind: PurgeEntityKind, id: st
 }
 
 export async function workflowOwnershipNative<T>(request: Record<string, unknown>, onFailure?: (failure: { kind: import("../application/abortOwnership").WorkflowAbortKind; message: string }) => void): Promise<T> {
-  const onLost = new Channel<{ kind: import("../application/abortOwnership").WorkflowAbortKind; message: string }>();
+  // Only Acquire establishes a long-lived heartbeat notification stream.
+  // Reads/checks/writes/Release use plain IPC; native fences still run for every request.
+  const onLost = request.action === "acquire" ? new Channel<{ kind: import("../application/abortOwnership").WorkflowAbortKind; message: string }>() : null;
   if (onLost && onFailure) onLost.onmessage = onFailure;
   return invoke<T>("database_workflow_ownership", { request, onLost });
 }

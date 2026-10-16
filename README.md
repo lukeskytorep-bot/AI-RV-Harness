@@ -102,3 +102,7 @@ Current automated checks and historical release evidence are different records. 
 ## License and attribution
 
 Application source: [MIT](LICENSE). Eligible protocols/documentation/content: [CC BY 4.0](CONTENT_LICENSE_CC_BY_4.0.md), unless a resource states otherwise. See [CREDITS.md](CREDITS.md), [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md).
+
+### Windows runtime diagnostic candidate
+
+The development branch includes a pinned local Tauri runtime ownership repair for investigation of the reported Windows native crash. [Build and acceptance instructions](docs/development/WINDOWS_RUNTIME_OWNERSHIP_REPAIR_EN.md) describe the manual Windows workflow, matching private symbols and required runtime soak. This is a repair candidate; automated checks do not establish that the original Windows crash has been eliminated.

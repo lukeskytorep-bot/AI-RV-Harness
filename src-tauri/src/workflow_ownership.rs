@@ -140,7 +140,13 @@ pub(crate) async fn execute(pool: &SqlitePool, request: Request) -> Result<Value
     }
 }
 #[tauri::command]
-pub async fn database_workflow_ownership(window: tauri::WebviewWindow, db_instances: State<'_,DbInstances>, request: Request, on_lost: tauri::ipc::Channel<crate::workflow_heartbeat::Failure>) -> Result<Value,String> {
+pub async fn database_workflow_ownership(window: tauri::WebviewWindow, db_instances: State<'_,DbInstances>, request: Request, on_lost: Option<tauri::ipc::JavaScriptChannelId>) -> Result<Value,String> {
+    // Deserialize an optional channel ID without allocating a native Channel for reads/writes.
+    // Acquire still requires its loss notification stream, as before this optimization.
+    let on_lost = if matches!(&request, Request::Acquire { .. }) {
+        Some(on_lost.ok_or("Workflow Acquire requires a loss notification channel")?
+            .channel_on::<_, crate::workflow_heartbeat::Failure>(window.as_ref().clone()))
+    } else { None };
     let pool = sqlite_pool(&db_instances).await?;
     if let Request::Release { profile_id, owner, version } = &request {
         crate::workflow_heartbeat::stop(&crate::workflow_heartbeat::Token { profile_id: profile_id.clone(), owner: owner.clone(), version: *version }, window.label())?;
@@ -155,7 +161,7 @@ pub async fn database_workflow_ownership(window: tauri::WebviewWindow, db_instan
     let mut result = execute(&pool, request).await?;
     if acquiring {
         let token: crate::workflow_heartbeat::Token = serde_json::from_value(result.clone()).map_err(|e| e.to_string())?;
-        if let Err(error) = crate::workflow_heartbeat::start(pool.clone(), token.clone(), window.label().to_owned(), Some(on_lost)) {
+        if let Err(error) = crate::workflow_heartbeat::start(pool.clone(), token.clone(), window.label().to_owned(), on_lost) {
             let _ = execute(&pool, Request::Release { profile_id: token.profile_id, owner: token.owner, version: token.version }).await;
             return Err(error);
         }
