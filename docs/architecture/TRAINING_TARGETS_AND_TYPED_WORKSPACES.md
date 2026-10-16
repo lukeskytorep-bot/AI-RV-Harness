@@ -1,6 +1,6 @@
 # Training, target pack, and typed Workspaces
 
-> **Documentation scope:** accepted `ai-rv-2` development source through Training History UX and DOM dependency fixes; reviewed 11 October 2026. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Documentation scope:** `ai-rv-2` development source through Training Continuity T5; reviewed 16 October 2026 against commit `9c92bdbb94d1125406e0094779102458cdeee87c`. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
 > **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
 
 > **Status:** implemented in the accepted v0.7.14 development baseline
@@ -50,10 +50,10 @@ Field Guide and Viewer Notes are separate versioned knowledge packages. Ordinary
 
 The user-selected document capacity is unchanged. Generation budgets are:
 
-- first Training Reveal attempt: `capacity + 16384`;
-- one final Training Reveal recovery attempt: `capacity + 32768`.
+- first Training Reveal attempt: `capacity + 32768`;
+- one final Training Reveal recovery attempt: `capacity + 49152`.
 
-No third capacity attempt is allowed. A failed or oversized proposal does not replace the previously active version.
+The allowance is at most two dispatched requests per learning kind/session/packet across transport retry, output recovery and JSON/capacity repair, including restart. A rejected second proposal is durably settled as failed_preserved: keep the exact previous version or absence and continue to Judge/next target with a nonblocking warning. NO_CHANGE is a separate model decision. Stop, DB/ownership/hash/identity errors and unknown dispatch remain interruptions. Notes consumes the exact post-update/preserved Field Guide checkpoint; successful Field Guide is not rolled back if Notes fails.
 
 The Training screen contains the canonical Polish and English expandable explanation under **Jak działa AI Training? / How does AI Training work?**. It is application documentation, defaults to collapsed, and must remain synchronized with the runtime rules above.
 
@@ -108,3 +108,7 @@ The current SQLite registry is contiguous through migration 031. The accepted ch
 - `integrity_check=ok` and `foreign_key_check=0`.
 
 Public/legacy schemas outside the accepted v0.7.13 epoch remain governed by the database compatibility gate and are not silently promoted through an unverified migration chain.
+
+## Current Training UI and runtime
+
+Training uses a neutral module header and shows the saved run Profile/model separately from new-run settings. Warnings are expandable, distinguish both memory kinds and remain after completion. Export includes an interrupted first Session and checkpoint. Native classic workflow renewal is 10 seconds with a 45-second fenced lease; other lease contracts remain separate. See [current workflows](CURRENT_WORKFLOWS_v0.7.14_EN.md).

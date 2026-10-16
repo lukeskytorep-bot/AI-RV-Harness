@@ -1,9 +1,10 @@
 # AI RV Harness documentation
 
-## Current development documentation — reviewed 11 October 2026
+## Current development documentation — reviewed 16 October 2026
 
-The accepted AI RV branch through Training History UX uses schema 031. This is development-source documentation, not a declaration that v0.7.14 desktop release smoke or publication is complete. [Current workflows EN](architecture/CURRENT_WORKFLOWS_v0.7.14_EN.md) / [PL](architecture/CURRENT_WORKFLOWS_v0.7.14_PL.md) summarize recovery, generation budgets, Training history, Profile/help headers and Markdown boundaries. [Architecture index](architecture/README.md) links to living documents. Release/checkpoint/audit records below retain their historical scope and are not silently rewritten.
+The current `ai-rv-2` source through Training Continuity T5 uses package version 0.7.13 and SQLite schema 31. The v0.7.14 label describes development scope; final Windows/provider smoke and release publication are separate records.
 
+Start with the English [Developer Guide](development/README.md), [current workflows](architecture/CURRENT_WORKFLOWS_v0.7.14_EN.md) ([PL](architecture/CURRENT_WORKFLOWS_v0.7.14_PL.md)), [user/wiki mirror](wiki/Home.md), and [architecture index](architecture/README.md). Current references cover output-policy versions, two-dispatch learning settlement, finished versus uncertain responses, native ownership and interrupted checkpoint exports. Historical release/checkpoint/audit evidence below is not rewritten into present-day instructions.
 
 This directory contains project documentation that is useful for development, review, release reconstruction and historical audit but is not required in the repository root.
 
@@ -11,6 +12,8 @@ This directory contains project documentation that is useful for development, re
 
 | Directory | Purpose |
 | --- | --- |
+| [`development/`](development/) | English setup, commands, contributor contracts and review guidance. |
+| [`wiki/`](wiki/) | English current-development user guides mirrored for separate GitHub Wiki publication. |
 | [`architecture/`](architecture/) | Current system overview, engineering invariants, integrity safeguards, and feature architecture. |
 | [`checkpoints/`](checkpoints/) | Historical implementation checkpoints from v0.6.0 through v0.7.7. |
 | [`releases/`](releases/) | Version-specific plans, notes, reports, manifests, verification records and patch documentation. |
@@ -50,7 +53,7 @@ The documented public release baseline here is v0.7.13 for Windows and Linux. It
 - [Source package hygiene report](reports/SOURCE_PACKAGE_HYGIENE_1_v0.7.13_PL.md)
 - [Training/targets/typed Workspaces — Stage 6 closeout](reports/TRAINING_TARGETS_TYPED_WORKSPACES_STAGE_6_CLOSEOUT_v0.7.13_PL.md)
 
-The current SQLite boundary is schema **27**. The accepted current-epoch upgrade chain preserves the exact-green schema 23 → 24 Viewer Learning transition, schema 24 → 25 provider-continuation persistence, schema 25 → 26 typed Workspace transition, and schema 26 → 27 factory Training classification upgrade. Public/legacy schemas remain handled by the v0.7.13 database compatibility epoch gate and are not silently migrated into this chain.
+The current source registry is **001–031**: Viewer Learning (024), continuation (025), typed Workspaces (026), factory classification (027), telepathic exchange (028), cross-instance series lease (029), Conversation attachment metadata (030) and post-Reveal review lease (031). Native current-epoch fixtures protect the accepted upgrade chain without moving historical ownership. Legacy databases are classified before normal loading; current development does not authorize an unverified legacy migration.
 
 The v0.7.12 records below remain historical implementation and release documentation:
 
@@ -110,4 +113,12 @@ The authoritative project-level files remain in the repository root:
 
 ### Custom OpenAI wire parameter override
 
-Custom OpenAI-compatible connections keep `max_tokens` as the compatibility default. A connection may explicitly override only the maximum-output-token wire field to `max_completion_tokens`. The override is scoped to that Custom OpenAI provider configuration, stored in existing application settings, and never changes the built-in OpenRouter, OpenAI, Google, Anthropic, Z.AI, DeepSeek, Mistral, or Blackbox mappings. The override introduced no migration; the current SQLite schema later advanced through typed Workspaces (026) to the factory Training classification boundary (027).
+Custom OpenAI-compatible connections keep `max_tokens` as the compatibility default. A connection may explicitly override only the maximum-output-token wire field to `max_completion_tokens`. The override is scoped to that Custom OpenAI provider configuration, stored in existing application settings, and never changes the built-in OpenRouter, OpenAI, Google, Anthropic, Z.AI, DeepSeek, Mistral, or Blackbox mappings. The override introduced no migration; the current registry subsequently advanced through schema 031.
+
+## Developer documentation language
+
+Use English for primary developer setup, current architecture and developer-facing wiki pages. Retain dated Polish historical reports and optional PL counterparts without treating them as the current build recipe. See [Developer Guide](development/README.md).
+
+## Documentation review record
+
+[16 October 2026 synchronization report — English](reports/DOCUMENTATION_CURRENT_SYNC_2026-10-16_EN.md) records the source commit, corrected contracts, language policy and checks actually performed.

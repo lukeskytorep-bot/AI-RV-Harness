@@ -1,6 +1,6 @@
 # AI RV Harness architecture documentation
 
-These living documents describe the accepted AI RV development source through Training History UX, reviewed 11 October 2026, with SQLite schema 031. The documented public baseline remains v0.7.13; this update does not verify current GitHub publication or claim a completed v0.7.14 desktop smoke. Release-specific notes and verification records remain under [`docs/releases/`](../releases/); historical implementation and audit reports remain under [`docs/reports/`](../reports/).
+These living documents describe the accepted AI RV development source through Training Continuity T5, reviewed 16 October 2026, with SQLite schema 031. The documented public baseline remains v0.7.13; this update does not verify current GitHub publication or claim a completed v0.7.14 desktop smoke. Release-specific notes and verification records remain under [`docs/releases/`](../releases/); historical implementation and audit reports remain under [`docs/reports/`](../reports/).
 
 The completed v0.7.13 modularization work adds the following living architecture records. Stages 1–9 and the modularization campaign are closed after their accepted automated gates. The desktop checklist is retained as the release/runtime regression procedure and is accompanied by the final v0.7.13 release verification record:
 
@@ -15,6 +15,11 @@ The completed v0.7.13 modularization work adds the following living architecture
 - [v0.7.13 public release verification](../releases/v0.7.13/RELEASE_VERIFICATION_v0.7.13.md)
 - [v0.7.14 development final runtime/release smoke](FINAL_RUNTIME_SMOKE_v0.7.14_EN.md) ([PL](FINAL_RUNTIME_SMOKE_v0.7.14_PL.md))
 - [Stage 9 modularization closeout](../reports/MODULARIZATION_STAGE_9_CLOSEOUT_v0.7.13_PL.md)
+
+## Developer entry point
+
+- [English Developer Guide](../development/README.md) — setup, exact check commands, ownership, learning/recovery contracts and review policy.
+- [English user/wiki mirror](../wiki/Home.md) — concise product guidance for the same development line.
 
 ## Current workflow reference
 

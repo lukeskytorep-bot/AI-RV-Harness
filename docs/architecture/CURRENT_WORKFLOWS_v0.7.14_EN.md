@@ -1,134 +1,87 @@
 # Current workflows — v0.7.14 development line
 
-**Reviewed:** 11 October 2026. **Source:** accepted AI RV branch through Training History UX, DOM interaction tests and their dependency fix. **Schema:** 031. Package version remains 0.7.13 in this source; the v0.7.14 name identifies development scope. This document reports implemented behavior, not release publication or a completed desktop smoke.
+Reviewed **16 October 2026**, through Training Continuity T5, against `ai-rv-2` commit `9c92bdbb94d1125406e0094779102458cdeee87c`. Package version remains **0.7.13**; schema **31**. Implemented source behavior is distinct from a published release, interactive Windows acceptance and actual upstream model tests. Start with the English [Developer Guide](../development/README.md).
 
-## Request, output and context budgets
+## Output and context budgets
 
-Output allowance and input context are separate limits. A larger output allowance does not enlarge the model's context window. Provider-native reasoning may consume generation allowance; do not add OpenRouter-normalized and native token counters as if they represented independent work. Record the provider's finish reason and usage; provider metadata alone cannot establish which application step or retry it belonged to.
+Output allowance is not input-context capacity. Reasoning may consume output allowance. Do not add normalized and native usage counters twice or infer a local commit from a provider's finish reason.
 
-| Operation | Preferred first / recovery allowance | Owner |
+| Operation | Current preferred first / recovery allowance | Source owner |
 | --- | --- | --- |
-| Blind Viewer in ordinary automatic RV, Manual RV and classic Training | 16,384 → 32,768 | `src/sessions/viewerOutputRecovery.ts` |
-| Research Viewer with a frozen policy | policy captured at Experiment Lock; new standard policy uses 16,384 → 32,768 | Research runner and the shared Viewer recovery layer |
-| Legacy Research without the new policy snapshot | preserve its locked configured budget | compatibility path; no silent policy upgrade |
-| Classic Training post-Reveal Viewer review | 16,384 → 32,768 | `budgetPolicy: training_reveal` in `src/providers/outputRecovery.ts` |
-| Classic Training Field Guide and Viewer Notes proposals | document capacity C + 16,384 → C + 32,768 | `learningObjectOutputAllowance()` in `src/providers/operationResourceProfiles.ts` |
-| Judge (ordinary and Training), RV post-Reveal Viewer/Monitor | 16,384 → 32,768 | analytical recovery |
-| Live Monitor in existing RCP / classic Telepathic RV | 16,384 → 32,768 | existing Monitor engine, model ceiling retained |
-| Judge in already locked Research without a Judge policy snapshot | 8,192 → 16,384 | legacy contract for missing scores; accepted scores unchanged |
-| Learning-object proposals outside Training Reveal policy | C + 8,192 → C + 16,384 | capacity-bound resource profile |
+| Conversation | 16,384 default; no universal semantic two-call rule | `src/startupDefaults.ts`, `src/chat/outputPreference.ts` |
+| Manual RV Viewer | 32,768 → 49,152 | `src/chat/outputPolicy.ts` |
+| Automatic blind Viewer and classic Training blind Viewer | 16,384 → 32,768 | `src/sessions/viewerOutputRecovery.ts` |
+| New Research Viewer | normally 16,384 → 32,768, frozen at lock; supported larger configured values preserved | `src/research/engine.ts`, frozen condition policy |
+| Judge, post-Reveal Viewer/Monitor, classic Training Review | 32,768 → 49,152 | `src/providers/outputRecovery.ts` current analytical policy v2 |
+| Classic Training Field Guide / Viewer Notes | C + 32,768 → C + 49,152 | `learningObjectOutputAllowance()` in `src/providers/operationResourceProfiles.ts` |
+| Live Monitor | 16,384 → 32,768 | `src/monitor/engine.ts`, immutable analytical v1 constants |
+| Locked Research Judge with analytical policy v1 / v2 | 16,384 → 32,768 / 32,768 → 49,152 | frozen `judgeOutputPolicy` and `analyticalBudgetPolicyForSnapshot()` |
+| Legacy locked Research without a Judge policy snapshot | 8,192 → 16,384 for missing work | `legacy_analytical` compatibility policy |
+| New fixed-lead telepathic Reveal, shared comments, series reflection | 32,768 → 49,152 | `src/telepathicExchange/outputBudgets.ts`, policy v3 |
+| Other new fixed-lead stages | 16,384 → 32,768 | same stage table |
+| Telepathic sharing consent | 8,192 → 16,384 | same stage table |
 
-These are preferred generation allowances, subject to the selected model/endpoint and available context. Known smaller limits can reduce the effective allowance; recovery must actually increase it or stop explicitly. An explicitly selected larger Viewer budget is preserved where supported. OpenRouter analytical Training Reveal requests use endpoint-capacity discovery rather than trusting an aggregate model limit alone. A policy change never authorizes silently changing the requested model.
+C is document capacity and does not grow with output headroom. Learning requires explicit `training_reveal`; there is no current C+8K/C+16K fallback for an unspecified learning policy. These preferences are bounded by actual model/endpoint and context capacity; an unavailable larger recovery fails explicitly rather than changing models or accepting partial output. OpenRouter endpoint-capacity discovery is used where the operation contract permits it.
 
-The content capacity C does not increase with the generation allowance. A rejected, oversized or malformed Field Guide/Viewer Notes proposal is not an active learning version. Output recovery, JSON repair and document-capacity repair are distinct operations; the two-level Viewer rule must not be advertised as a universal cap of two HTTP calls for every workflow.
+Conversation's former unversioned saved 8,000/8,192 value upgrades once to 16,384 using `conversationOutputBudgetVersion`. A deliberate later reduction remains. The RV/global defaults are separate settings. Older Research/telepathic snapshots are never silently rewritten to today's table. Existing fixed-lead scopes retain policy v1/v2/v3 and attempt history.
 
-## Viewer completeness and durable recovery
+## Transport evidence, semantic validity and commit
 
-`viewerResponseCompletion()` rejects explicit output-limit, error/refusal and empty results as complete Viewer evidence. HTTP 200 alone is insufficient. Incomplete material is retained with attempt metadata and cannot advance a phase as accepted evidence.
+`response_finished` is transport completion evidence (`body_read` or `sse_done`), including a completed rejected answer. It is not semantic acceptance or durable commit. The classifier in `src/providers/responseEvidence.ts` considers every physical attempt: a later finished response cannot settle an earlier unknown dispatch. HTTP 200, dashboard token counts and `finish_reason=stop` alone are insufficient.
 
-The shared resume ledger (`src/sessions/viewerResumeLedger.ts`) binds attempts to a stable `stepId` and request fingerprint, including the particular Monitor exchange or Special Task. `VIEWER_OUTPUT_ATTEMPT_STARTED` is durable evidence of dispatch intent; result/error events carry the same attempt identity. Restart does not reset the semantic recovery level.
+Rust sends one physical attempt. `requestExecutor.ts` owns classified transport retry and attempt diagnostics; output/JSON/capacity repair belongs to its domain. `semanticOutputStarted`, cancellation, permanent errors and dispatch uncertainty constrain retries. See [retry architecture](PROVIDER_RETRY_ARCHITECTURE_FINAL_EN.md).
 
-- A confirmed first output-limit result can use the remaining larger-budget recovery.
-- An exhausted second semantic attempt cannot receive a third automatic semantic attempt merely because the application restarted.
-- Started dispatch without a reliably persisted terminal outcome is uncertain. Automatic paid continuation is blocked; use only the workflow's explicit recovery decision, where provided.
-- Fingerprint drift or unresolved legacy attempt identity blocks unsafe automatic reconstruction; do not guess from the last displayed phase.
-- Replay consumes accepted stored calls and suppresses duplicate writes. Live execution begins at the first missing call.
+Final-channel text and private reasoning remain separate. Initial reasoning envelopes may be removed; literal `<think>` text inside a JSON string remains data. A bounded final candidate, hash, native validation and attempt identifiers can cross IPC on success or error and be stored in existing learning events. `learning_candidates.json` supports offline review without another paid generation. Missing final text is not filled with private reasoning.
 
-Transport retry has its own allowance and physical-attempt report. It does not erase semantic exhaustion or uncertainty.
+## Classic Training continuity and learning
 
-## Training and Research Resume
+The durable sequence is blind Session → Reveal → Viewer Review → Field Guide Update → Viewer Notes Reflection → optional Judge. Each learning kind has its own **maximum of two dispatched requests per Session/packet**, shared across all physical retries, output recovery and domain repair. The durable reservation/ledger survives restart. A proven `not_dispatched` slot may be released; unknown dispatch is not proof of an unused slot.
 
-Classic Training saves its active-target checkpoint and keeps the same Session during supported blind Resume. It does not create a fresh paid Session to conceal a partial one, rerandomize the target plan, duplicate accepted evidence, or reset Viewer recovery. After Reveal, completed stages remain complete; Resume proceeds from the first missing stage. Uncertain post-Reveal Viewer review requires the explicit decision in `trainingResumeRecovery.ts` and is rechecked under the review lease.
+| Settlement | Memory | Training |
+| --- | --- | --- |
+| `updated` | One immutable accepted version | Continue |
+| `model_no_change` | Existing version/absence retained | Continue without warning |
+| `failed_preserved` | Previous exact version/absence retained; real FAILED_* audit and cause | Continue with a nonblocking warning |
+| `disabled` | No learning operation | Continue |
 
-Research freezes configuration and output policy at lock. Supported explicit same-session Resume preserves the linked Session, events, frozen learning inputs and attempt ledger. It does not silently rerun an incomplete paid assignment as a new successful replacement. Legacy frozen policy remains readable without retroactively adopting newer budgets. See `src/research/researchResume.integration.test.ts` for regression evidence.
+A failed update is not the model's NO_CHANGE. Known failed proposals/preflight/settled API errors can be recorded without blocking optional learning; Stop, ownership loss, DB error, corrupted/hash-mismatched snapshots, identity mismatch and unknown dispatch remain interruptions. Audit/settlement persistence must succeed before advancing the checkpoint. Existing failed known-result histories can be recovered without issuing another request.
 
-Neither Research nor AI–AI Telepathic Training writes Field Guide or Viewer Notes. Classic Training remains the learning-producing workflow.
+Viewer Notes receives the exact Field Guide version after this session's update or preservation, never an arbitrary newer active version. Successful Field Guide remains active when Notes fails. If Notes never had a first version, failure leaves no version and UI says so. Source owners are `learningExecution.ts`, `fieldGuideUpdate.ts`, `viewerNotes.ts` and `trainingExecution.ts`.
 
-## Training history and ending a run
+Only classic Training produces these updates. Ordinary RV, Conversations, Research and AI–AI Telepathic Training use allowed learning snapshots read-only.
 
-The history header puts Show/Hide Sessions, Save and Archive icons beside the run name, with hover/focus tooltips and accessible labels. Resume stays in a separate row below metadata; End training is beside it. Flex/grid wrapping handles narrow layouts; these rows do not use absolute positioning to overlap the name or each other. Names and session identifiers use the RV-style 11px/1.25 monospace font at weight 400.
+## Shared Resume, Stop and End
 
-History starts expanded on a fresh screen mount. Its local toggle hides/shows the panel without clearing the active run, selected Session or expanded run. It is not a database/Profile setting.
+Viewer attempts retain stable step/fingerprint/dispatch identity. UI and engines share `viewerResumeDecision.ts` / `viewerResumeLedger.ts` and the transport classifier. Accepted stored results replay locally before the first missing call. Completed rejected output is not shown as a request still generating. Exhausted essential Viewer recovery may require explicit one-attempt authorization that retains history; it does not reset learning or create an automatic retry loop. Unknown dispatch requires its explicit resolution path. Unsafe legacy/fingerprint state fails closed.
 
-End training records `termination: { reason: "user_finished", endedAt }` and status `Interrupted`. It means the user has ended further execution, not that all targets completed. Index, completed target IDs, Session IDs, checkpoint, snapshot and historical results remain intact. The marker survives restart and archive/restore; normal updates cannot remove it or return the run to Running. Resume and execute re-read and reject terminated runs. UI actions use a shared synchronous operation guard. Both Resume and End disappear after termination; history actions remain available. No Cancelled status or migration 032 is introduced.
+Classic Training Resume retains the Session, target order and frozen inputs. Review and each learning/Judge stage resume from the first missing stage. Research retains frozen config, linked Sessions, blinding and Judge policies. Stop cancels current work and prevents subsequent dispatch. End is terminal and distinct from Stop or completion.
 
-Eligibility is centralized in `src/training/runLifecycle.ts`; termination is coordinated by `src/features/training/trainingTermination.ts`. Mounted interactions are tested in `TrainingScreen.dom.test.tsx` with the file-local jsdom environment. Commit both package.json and package-lock.json whenever test dependencies change.
+Training stores `termination: { reason: "user_finished", endedAt }` with status `Interrupted`. It preserves progress, checkpoints, snapshots and results across restart/archive/restore. Engine/repository checks refuse stale execution, and Resume/End actions disappear after termination. RV and Research terminal markers have their own guarded APIs; Research's marker is outside its frozen configuration.
 
-## Markdown and live presentation
+## Native ownership
 
-Accepted blind provider calls render as isolated records through `BlindTranscriptRecord`, not one Markdown string joined across phase boundaries. An open code fence or malformed fragment from one response cannot consume the next response. SafeMarkdown keeps its safety rules, including protection against unsolicited remote Markdown image loads. A literal/raw fallback is an honest display choice; it does not rewrite saved evidence to manufacture bold text or remove headings.
+Classic SQLite owned workflows acquire an exact profile/owner/version token. Rust `workflow_heartbeat.rs` renews every **10 seconds**, TTL **45 seconds**, independently of WebView JS timers. SQL still rejects expired/stale ownership. Bound provider IDs are cancelled on ownership loss, heartbeat DB error or destroyed window; failed ownership fences later writes even before lease expiry. TS preserves the actual abort reason and received transport evidence.
 
-Live presentation is provisional until a response is accepted. Streamed characters are not proof of semantic completion. An output-limit or stream failure must retain its diagnosis and incomplete state rather than becoming a complete phase just because some text is visible.
+Release stops the exact heartbeat. `WindowEvent::Destroyed` cancels/releases it; `CloseRequested` alone does not. Failed start releases the acquired token and a late acquisition cannot start after destruction. Native handshake `nativeHeartbeat:true` disables the JS timer; old ports without the flag retain compatibility fallback. The current single-window process does not recreate a destroyed label; full restart resets the registry. Separate telepathic and post-Reveal leases retain their own contracts. Sleeping the entire computer is not equivalent to switching programs.
 
-## Profile and help controls
+## Training context, history and export
 
-AI Center, Conversation and RV Sessions use the shared ProfileSelector. Selecting another Profile synchronizes its compatible Conversation and RV Workspace context; selecting the already active Profile preserves a manually opened compatible Workspace. Selectors display the Profile belonging to visible workspace data. Specific Workspace changes remain in Profiles; no additional Workspace selector is added to Conversation/RV headers.
+Training's top breadcrumb is neutral, not the unrelated global Conversation Workspace. New-run settings are labeled separately. Active/history context shows the saved Profile/model; a new dropdown choice does not silently rebind Resume.
 
-ModuleHelpButton and ModuleHelpPanel provide the common green help style with the module icon and help label. Profile + How it works share the right header group where both exist; panels expand below the header. Targets' target-description/images control is outside this help unification.
+Show/Hide Sessions, Save and Archive remain beside the history title with accessible tooltips; recovery controls stay in their established row. The history toggle is local UI state. Completed runs show a failed-update count and expandable separate Field Guide/Notes causes. NO_CHANGE is not a warning. AI Center uses the same warning language and retained-version/absence distinction.
 
-## Costs, diagnostics and verification
+A stopped first Session can be exported even before `run.sessionIds` contains it. `src/training/export.ts` includes the active checkpoint, readable saved Session, settlement/version/hash/audit data and bounded candidates. Settlements merge run/checkpoint/events without duplicates. `summary.md` links to details. An unfinished Session does not inflate completed progress or completed-score means. Exports may contain private evidence; review them before sharing.
 
-There is no SessionCostGuard/CostAuthorization hard per-session spend blocker in the reviewed source. Pricing, preflight estimates, usage and possible duplicate billing remain useful diagnostics. An ambiguous paid call may have been billed; uncertainty protection remains despite removal of the spend blocker. A historical cost-limit statement in a release/checkpoint report is not a current runtime requirement.
+## Telepathic roles, history and presentation
 
-Automated tests and source gates cover contracts and regressions. They do not prove desktop visual quality, upstream provider availability or completed release smoke. Execute the paired [desktop checklist](FINAL_RUNTIME_SMOKE_v0.7.14_EN.md) on the exact release candidate and record platform/commit and actual results.
+New fixed-lead series freeze the lead, participants, personal learning, routes, geography and stage policies. Each round locks a fresh target; up to three lead-guided cycles can precede Reveal. Legacy protocol markers preserve earlier semantics. Operator visibility is broader than model visibility. Receivers do not see target/geography or other receivers' blind text before Reveal; consent controls later sharing. These are packet/visibility rules, not proof against every semantic leak.
 
-## Fixed-lead telepathy candidate
+History reads lightweight 50-summary pages, filtered before LIMIT, with updatedAt/id cursor order; opening/exporting one item loads its full state without a model call. Polling uses safe projections, call IDs and ownership-aware waiting; it must not turn an old uncertain dispatch into live generation. Readable instruction/answer projection is separate from evidence/continuation. This is implemented history work, not completion of every planned refresh/storage optimization.
 
-New telepathic series implement fixed_lead_v1 with geography, optional lead cycles, automatic AI finalization and role-safe transcript/history/export. This is a candidate pending native/visual acceptance; existing sections above describe the accepted input baseline. See [candidate workflow and ownership](TELEPATHY_FIXED_LEAD_v0.7.14_EN.md) and [implementation evidence](../reports/TELEPATHY_FIXED_LEAD_TRANSCRIPT_UX_IMPLEMENTATION_PL.md).
+`BlindTranscriptRecord` and telepathic transcript records isolate Markdown boundaries. One unfinished code fence cannot swallow the next accepted response. SafeMarkdown blocks unsolicited remote image loads. Provisional stream text is not accepted evidence.
 
-## BUDGET-0 compatibility
+## Verification and release status
 
-New Research drafts normalize Viewer control, requested/effective settings and output-policy snapshots together before preflight and Experiment Lock. The default is 16,384 with recovery at least 32,768; supported larger explicit budgets remain, while a shared smaller model ceiling limits the first allowance. New projects also freeze the Judge 16K/32K contract. Existing frozen Viewer policies (including 8K) and legacy projects are never rewritten by Resume; missing Judge scores in projects without the new Judge snapshot keep 8K/16K. Learning capacities and headroom are unchanged: Training Reveal uses C+16K/C+32K, other learning uses C+8K/C+16K. New Telepathy fixed-lead gateway budgets, including sharing consent 8K/16K, are unchanged. No live Monitor role is added to classic Training or Research.
+Use the full English [Developer Guide](../development/README.md) check list. The architecture allowlist is empty and schema remains 31. There is no hard SessionCostGuard/CostAuthorization spend blocker; estimates, known cost subtotals and ambiguous billing diagnostics remain independent of uncertainty protection.
 
-## PERF-HISTORY-1 — lightweight Telepathy history
-
-Conversation and Telepathic Training read 50-summary pages through listTelepathicSeriesSummaries. SQL filters mode/workspace/archive before pagination, with updatedAt DESC/id DESC order and a two-field cursor. It never returns plan_json/config_json or evidence. Participant names retain rowid order. Empty pages use one SELECT, nonempty pages two. Opening/exporting one entry and unchanged Resume load the full state. Current history uses archive=active before LIMIT. Initial selection loads at most one latest active series from that page; no archived-first fallback query is needed. The UI exposes loading/error/retry/Load more and resets the first page after an operation. Deduplication prevents duplicate cards; pages are not a frozen snapshot of the whole history. Browser still parses the shared localStorage JSON, without cloning full list states. Polling 500/750 ms and checkpoint writes remain unchanged until later stages. Desktop smoke remains a separate gate.
-
-## UX-TEL-1 and UX-TEL-2A — execution state and readable projection
-
-Edward confirmed green CI for UX-TEL-1 with its audit correction. Neutral waiting in the panels and transcript depends on the current call ID, local execution and verified lease. Dispatched/uncertain after restart still requires operator resolution; another owner or unknown ownership never offers retry. A 750 ms ownership check adds a small lease read; a fresh detail is loaded when another owner finishes. This is not PERF-REFRESH-2; desktop smoke remains separate.
-
-UX-TEL-2A is an audit candidate: packets carry optional display v1 with an exact instruction fragment. The engine stores it beside unchanged full materials in the existing runtime transcript JSON; schema remains 31. visibleTranscript applies first, then the readable projection. Normal cards and Markdown export share instructions and actual participant answers, with distinct lead/controller/reflection authorship. Learning, system prompts and repeated request history remain in evidence, outside ordinary reading. Legacy extraction accepts only known versioned requestMessages shapes; unknown material shows availability information without guessing or deleting participant words. Accepted final reflections without an output event are projected from the existing result map without rewriting stored history. Deduplication uses event identity, never text. Navigation, tooltips, colors and metric tiles remain UX-TEL-2B work.
-
-## UX-TEL-2B presentation navigation
-
-Edward confirmed green CI for UX-TEL-2A. The navigation scope mentioned above is now implemented as UX-TEL-2B, an audit candidate with desktop acceptance pending.
-
-Both Telepathy panels use the shared transcript renderer. Participant navigation scrolls only its own container, subtracts the measured sticky navigation height, and focuses the destination without moving the page. Back returns the transcript to scrollTop 0. Each mounted instance has unique IDs. Checkpoint updates preserve focus and position; changing series or round resets local scroll. Hover and keyboard focus use TooltipButton. Theme accents and rounded metric tiles are scoped to Telepathy. Request construction, stored evidence, budgets and database contracts are unchanged. Real browser/Tauri visual and scroll acceptance is still required.
-
-## UX-TEL-3 — human guidance and own targets
-
-Edward confirmed green CI for UX-TEL-2B. Conversation now presents one question/instruction field per currently active receiver. Trimmed nonempty fields produce individual questions; empty fields explicitly finish those receivers' guidance in this round. There is no human broadcast field or recipient checkbox. The adjacent seal action closes guidance explicitly. The draft component is keyed by current series, round and cycle: checkpoint updates keep drafts; context changes and restart clear unsaved drafts. Busy, uncertain calls and unavailable ownership disable the form. The engine validates the current ready checkpoint under its existing lease; a saved finish decision must be applied by Resume before the next guidance cycle is offered. Cycles remain bounded to three.
-
-Human target preparation shows category and asks for one target of the person's own, without requiring the planner's geography. Only newly recorded human target instructions change. Historical events, locked targets and hashes are preserved. AI sender prompts and geography assignments remain unchanged. UX-TEL-3 is an audit candidate; native CI and desktop visual acceptance remain separate.
-
-
-## UX-TEL-4 — separate archive history
-
-Edward confirmed green CI for UX-TEL-3. Both current histories now show active entries only. A committed archive removes that entry and clears the view only when it is the same series. Each successful archive resets history once; a list-read failure still removes the known archived entry and shows Retry. A failed archive write keeps the row and current view. Existing per-series leases protect another running window; checkpoint and archiveRevision contracts are unchanged. Settings → Data → Archive reads archived summaries separately for Training and Conversation, in pages of 50 with Load more and error/retry. The count suffix + means more pages exist, not an exact total. Restore loads one full series under its lease and refreshes archive lists; parent archive blocks restore. Main history sees a restored entry on its next refresh/mount. No permanent deletion is introduced. Native CI and visual smoke remain pending.
-
-## UX-TEL-5 — controlled Telepathy Permanent Delete
-
-Edward confirmed green CI for UX-TEL-4. Settings archive groups now offer the shared Deletion Preview, optional safety backup and DELETE phrase confirmation. Preview lists Telepathy children and runtime evidence counts without secrets. Its archive revision is passed through the typed native command and rechecked in the transaction, alongside archived state and current run lease. Database cascade removes only the selected series, participants, rounds, targets, blind, reflections, final reflections, calls and runtime JSON. Global Field Guide/Viewer Notes and external attachment files are retained; preview explicitly distinguishes database deletion from retained files. Profile/Workspace purge is blocked while a Telepathy series references it, including frozen participant snapshots. No new migration.
-
-Browser retains the selected series lease and uses a short shared collection Web Lock around the fresh read, validation and commit for every save and purge of that JSON key. Lock order is series lease → collection; provider calls run outside the collection lock. Writes of different series cannot overwrite each other or recreate deleted entries. All open tabs must run this corrected version. Without Web Locks, deletion is blocked; the older local fallback is not claimed as cross-tab protection. Restore or rearchive after preview invalidates its revision. Other entity purge semantics remain protected by normalized boundary hashes. Native Rust dispatcher tests are supplied, but local Cargo/Clippy and live Tauri acceptance remain pending; this is a candidate, not final plan acceptance.
-
-## B1 budgets — Conversation and Manual RV
-
-A fresh installation uses 16,384 tokens for Conversation. Per Edward’s decision, the update upgrades the old Conversation setting of 8192 (also literal 8000) to 16,384 once and saves it in Settings. A durable conversationOutputBudgetVersion=1 marker preserves later deliberate reductions. Other values stay intact. A stored legacy shared limit seeds only missing per-mode settings, with the same one-time Conversation upgrade. Factory defaultMaxOutputTokens and rvSessionMaxOutputTokens remain 8192.
-
-Manual RV, including an operator Reveal message, selects its own v2 profile: 32,768 initially and 49,152 for existing recovery. ChatPanel context preview, pending settings and send/retry agree on the first value. Model output limits cap the budget; insufficient context blocks dispatch. Length does not trigger another paid attempt when no larger effective budget is available. Reasoning and temperature remain intact, and historical attempt evidence is never rewritten. Automatic blind RV Sessions/Training/Research retain the default 16K/32K; their analysis, learning and Telepathy belong to B2/B3/B4. Stop is outside B1.
-
-## B2 — analysis and learning
-
-Post-Reveal Viewer/Monitor and ordinary/Training Judge prefer 32,768 → 49,152 tokens. Classical Training Field Guide and Viewer Notes use C + 32,768 → C + 49,152 without changing document capacity C. JSON repair and capacity retry carry the same policy. Live Monitor remains 16K/32K.
-
-New Research freezes Judge v2 and independent postRevealOutputPolicy v2 before Experiment Lock; blind Viewer retains v1 16K/32K. Session snapshots carry the separate analysis policy, and Resume verifies project agreement. Existing post-Reveal analysis reads the snapshot policy. Research batch execution stores Reveal without adding an automatic analysis call. Historical Judge without a marker retains 8K/16K, Judge v1 retains 16K/32K, and old Research analysis without a marker remains 16K/32K. Frozen configs, hashes and accepted scores are never rewritten.
-
-Model/endpoint ceilings and available context still constrain effective limits. Recovery does not dispatch another paid attempt with the same effective limit. Existing routing and reasoning recovery remain. Implicit learning C+8K/16K is reserved for B4; Telepathy budgets are reserved for B3.
-
-## B3 — versioned Telepathy budgets
-
-New fixed-lead series select outputBudgetPolicyVersion=3. Only receiver_reveal, sender_reveal, shared_answers_comment and series_reflection prefer 32,768 → 49,152. Target, READY, guidance and blind remain 16K/32K; sharing_consent stays 8K/16K. Learning capacity does not increase; Telepathy uses frozen read-only copies.
-
-Explicit v2 series retain v2 for new scopes; historical series without a marker use v2 for new scopes. Started scopes retain their v1/v2/v3 snapshots; older records without snapshots select legacy v1. Counters, hashes, partial evidence and uncertain records are never reset. v1/v2 fingerprints match B2. Length recovery requires a larger effective budget and retains the two-attempt limit. Migrations and the runtime JSON format remain unchanged.
+Source tests, real SQLite fixtures and native tests answer different questions from a real Windows window or a paid upstream provider. Record final acceptance with commit/platform/model and actual results using the [runtime checklist](FINAL_RUNTIME_SMOKE_v0.7.14_EN.md). Historical manifests and v0.7.13 release verification retain their dated scope.

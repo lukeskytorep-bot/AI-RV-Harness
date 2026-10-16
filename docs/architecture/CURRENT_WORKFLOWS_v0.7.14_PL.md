@@ -1,112 +1,74 @@
-# Aktualne przepływy — gałąź rozwojowa v0.7.14
+# Bieżące przepływy — linia rozwojowa v0.7.14
 
-**Przegląd:** 11 października 2026. **Baza:** zaakceptowana gałąź AI RV po Training History UX, testach DOM i poprawce ich zależności. **Schema:** 031. Wersja package.json nadal wynosi 0.7.13. Nazwa v0.7.14 oznacza zakres rozwoju, nie opublikowanie nowych instalatorów ani zaliczenie desktop smoke. Pełny opis z właścicielami kodu: [EN](CURRENT_WORKFLOWS_v0.7.14_EN.md).
+Przegląd: **16.10.2026**, kod `ai-rv-2` po Training Continuity T5, commit `9c92bdbb94d1125406e0094779102458cdeee87c`. Wersja aplikacji nadal **0.7.13**, schema **31**. To opis kodu, a nie deklaracja publikacji v0.7.14 lub zakończonego odbioru Windows. Główną dokumentacją developerską jest angielski [Developer Guide](../development/README.md); szczegółowym odpowiednikiem tego opisu jest [Current Workflows EN](CURRENT_WORKFLOWS_v0.7.14_EN.md).
 
-## Budżety
+## Budżety z aktualnego kodu
 
-Limit generacji jest oddzielny od kontekstu wejścia. Zwiększenie limitu odpowiedzi nie zwiększa okna kontekstu modelu. Reasoning może zużywać limit generacji; liczniki natywne i przeliczone OpenRoutera nie są osobnymi porcjami pracy, które należy bezwarunkowo dodawać.
-
-| Operacja | Preferowany limit pierwszej / recovery próby |
+| Operacja | Preferowana pierwsza próba / recovery |
 | --- | --- |
-| Blind Viewer zwykłego RV, Manual RV i klasycznego Training | 16 384 → 32 768 |
-| Nowy Research z zamrożoną standardową polityką | 16 384 → 32 768, według snapshotu Experiment Lock |
-| Starszy Research bez nowego snapshotu polityki | zachowany zamrożony limit; brak cichej aktualizacji |
-| Viewer Review po Reveal w klasycznym Training | 16 384 → 32 768 |
-| Field Guide / Viewer Notes w Training Reveal | pojemność dokumentu C + 16 384 → C + 32 768 |
-| Judge zwykły i Training, RV post-Reveal Viewer/Monitor | 16 384 → 32 768 |
-| Live Monitor w istniejącym RCP / klasycznym Telepathic RV | 16 384 → 32 768 |
-| Judge w zamrożonym Research bez snapshotu polityki Judge | 8192 → 16 384; zgodność dla brakujących ocen |
-| Propozycje learning poza polityką Training Reveal | C + 8192 → C + 16 384 |
+| Conversation | Domyślnie 16 384; bez uniwersalnej zasady dwóch wywołań |
+| Manual RV Viewer | 32 768 → 49 152 |
+| Automatyczny blind Viewer i classic Training | 16 384 → 32 768 |
+| Nowy Research Viewer | Zwykle 16 384 → 32 768, polityka zamrożona przy Lock; większe obsługiwane ustawienia zachowane |
+| Judge, post-Reveal Viewer/Monitor, Training Review | 32 768 → 49 152 |
+| Field Guide / Viewer Notes | Pojemność C + 32 768 → C + 49 152 |
+| Live Monitor | 16 384 → 32 768 |
+| Research Judge z zamrożoną polityką v1 / v2 | 16 384 → 32 768 / 32 768 → 49 152 |
+| Stary locked Research bez polityki Judge | 8192 → 16 384 dla brakujących ocen |
+| Nowa Telepatia: Reveal, wspólne komentarze i refleksja serii | 32 768 → 49 152 |
+| Pozostałe nowe etapy fixed-lead / zgoda na dzielenie | 16 384 → 32 768 / 8192 → 16 384 |
 
-To wartości preferowane, ograniczane przez rzeczywisty model/endpoint i dostępny kontekst. Recovery musi rzeczywiście zwiększać efektywny limit, inaczej kończy się jawnym błędem. Jawnie ustawiony większy budżet Viewera jest zachowywany tam, gdzie model go obsługuje. Pojemność C samego dokumentu pozostaje niezmieniona. Output recovery, naprawa JSON i ponowienie z powodu przekroczonej pojemności dokumentu są osobnymi operacjami; nie wolno obiecywać dwóch wywołań HTTP dla wszystkich możliwych napraw.
+Źródła: `startupDefaults.ts`, `chat/outputPolicy.ts`, `sessions/viewerOutputRecovery.ts`, `providers/outputRecovery.ts`, `operationResourceProfiles.ts`, `monitor/engine.ts` i `telepathicExchange/outputBudgets.ts`.
 
-## Próby, wznowienia i niepewny dispatch
+Limity modelu/endpointu i wolny kontekst mogą zmniejszyć efektywne allowance. Reasoning może zużywać output; limit outputu nie powiększa kontekstu. Pojemność dokumentu C nie rośnie. Learning wymaga jawnego `training_reveal`; nie ma aktualnej domyślnej ścieżki C+8K/C+16K. Stare zamrożone polityki Research i zakresów telepatycznych pozostają bez zmian. Stare nieoznaczone ustawienie Conversation 8000/8192 jest jednokrotnie podnoszone do 16 384; późniejsze świadome obniżenie pozostaje.
 
-`length`, jawny error/refusal i pusta odpowiedź nie stają się zaakceptowanym dowodem tylko dlatego, że HTTP zwróciło 200. Niekompletny wynik pozostaje zapisany diagnostycznie i nie przesuwa fazy dalej jako kompletna odpowiedź.
+## Wynik transportu i Wznów
 
-Trwały ledger wiąże `stepId`, fingerprint wejścia i attemptId, rozróżniając także Monitor exchange i Special Task. Zapis `VIEWER_OUTPUT_ATTEMPT_STARTED` pozwala rozpoznać przerwę po rozpoczęciu dispatch. Restart nie resetuje recovery: po pierwszym potwierdzonym length pozostaje większa próba; po wyczerpaniu drugiej nie ma trzeciej automatycznej próby. Niepewny wynik bez trwałego zakończenia oraz drift fingerprintu blokują niebezpieczne automatyczne wznowienie. Nie odgaduje się miejsca wznowienia z ostatniej widocznej linijki.
+`response_finished` oznacza odebranie całego transportu (`body_read` lub `sse_done`), także odrzuconej odpowiedzi. Nie dowodzi poprawności odpowiedzi ani lokalnego commit. Wcześniejszy unknown fizycznej próby nie znika tylko dlatego, że późniejsza odpowiedź przyszła. Sam HTTP 200, panel providera lub `finish_reason=stop` nie wystarcza.
 
-Replay odtwarza lokalnie zaakceptowane odpowiedzi, bez powtórnych zapisów i wywołań. Live zaczyna się przy pierwszym brakującym wywołaniu. Transport retry pozostaje oddzielne od limitu prób semantycznych.
+Rust wykonuje jedną próbę HTTP, a `requestExecutor.ts` zarządza transportowym retry. UI i silniki korzystają ze wspólnej decyzji `viewerResumeDecision.ts` / `viewerResumeLedger.ts`. Zapisany zaakceptowany wynik odtwarza się bez dispatch. Zakończone odrzucenie nie jest pokazywane jako nadal generowana odpowiedź. Świadome zezwolenie na dodatkową próbę istotnego kroku zachowuje historię i nie otwiera ponownie learning. Niepewny dispatch wymaga jawnego rozstrzygnięcia, a nie automatycznego płatnego resend.
 
-Training używa checkpointu i tej samej Session przy wspieranym blind Resume, bez ponownego losowania celu ani tworzenia zastępczej płatnej sesji. Po Reveal wraca do pierwszego brakującego etapu. Niepewny Viewer Review wymaga jawnej decyzji operatora i ponownej kontroli pod lease. Research stosuje jawne same-session Resume, snapshot konfiguracji/learning/polityki i istniejący ledger; nie ukrywa niepełnej płatnej próby nową sesją. Research i AI–AI Telepathic Training nie zapisują Field Guide ani Viewer Notes.
+Finalny kanał jest oddzielony od prywatnego reasoning. Dosłowny tag `<think>` wewnątrz JSON pozostaje danymi. Ograniczony kandydat finalnej odpowiedzi z hashem i walidacją może być zapisany w istniejących zdarzeniach learning i `learning_candidates.json` do analizy bez kolejnego wywołania.
 
-## Historia Training
+## Ciągłość classic Training
 
-Trzy ikony Pokaż/Ukryj sesje, Zapisz i Archiwizuj stoją przy nazwie treningu. Wznów i Zakończ trening zajmują osobny wiersz niżej. Tooltip działa myszą i klawiaturą, a nazwy i identyfikatory używają monospace 11px/1.25, weight 400. Układ zawija się w wąskim panelu, bez absolutnych przesunięć i nakładania wierszy.
+Kolejność trwałych etapów: blind Session → Reveal → Viewer Review → Field Guide Update → Viewer Notes Reflection → opcjonalny Judge.
 
-Historia jest domyślnie rozwinięta po wejściu. Lokalny przełącznik nie kasuje aktywnego treningu, wybranej sesji ani rozwiniętej karty i nie trafia do Settings/Profile/DB.
+Każdy rodzaj learning ma własny trwały limit **dwóch wysłanych żądań na sesję/pakiet**, wspólny dla retry transportowego, recovery oraz napraw JSON/pojemności. Restart nie resetuje limitu. Pewne not_dispatched może zwolnić rezerwację; unknown nie jest takim dowodem.
 
-Zakończ trening zapisuje `termination: { reason: "user_finished", endedAt }` i status Interrupted. To rezygnacja z dalszego wykonywania, nie ukończenie wszystkich celów. Indeks, checkpoint, snapshot, sesje i wyniki pozostają. Marker przetrwa restart oraz archive/restore; zwykły update nie może go usunąć ani ponownie ustawić Running. Silnik i Resume ponownie czytają rekord i odrzucają zakończony trening. Wznów/Zakończ znikają, ale historia nadal jest dostępna. Nie ma statusu Cancelled ani migracji 032.
+- `updated`: jedna zaakceptowana niezmienna wersja;
+- `model_no_change`: decyzja modelu, brak ostrzeżenia;
+- `failed_preserved`: rzeczywisty FAILED_* i przyczyna, zachowanie dokładnej poprzedniej wersji lub jej braku, dalszy Training;
+- `disabled`: aktualizacja wyłączona.
 
-## Markdown, Profil i pomoc
+Niepowodzenie aktualizacji nie jest NO_CHANGE. Stop, DB/ownership, uszkodzenie/hash snapshotu, niezgodność tożsamości i niepewny dispatch nadal przerywają wykonanie. Zapis audytu/rozliczenia musi się udać przed przesunięciem checkpointu. Viewer Notes otrzymują dokładny Field Guide po bieżącej aktualizacji albo zachowaniu; poprawny nowy Field Guide nie jest cofany po błędzie Notes.
 
-Zaakceptowane odpowiedzi blind są renderowane jako osobne rekordy przez BlindTranscriptRecord i bezpieczny renderer Markdown. Niedomknięty fence jednej odpowiedzi nie przejmuje następnej fazy. Jawny surowy fallback nie zmienia zapisanego dowodu. Streaming pokazuje stan roboczy; widoczny tekst nie oznacza zaakceptowanego zakończenia.
+Tylko classic Training tworzy te wersje. Conversation, RV, Research i AI–AI Telepathic Training używają dozwolonych snapshotów tylko do odczytu.
 
-AI Center, Conversation i RV Sessions korzystają ze wspólnego ProfileSelector. Zmiana Profilu synchronizuje zgodne konteksty Conversation/RV; ponowny wybór aktywnego Profilu zachowuje ręcznie otwarty Workspace. Konkretny Workspace wybiera się w Profiles, bez dodatkowych przycisków w nagłówkach Conversation/RV. Pomoc używa ModuleHelpButton/Panel, zielonego stylu i ikony modułu, z panelem poniżej nagłówka.
+## Ownership, Stop i zakończenie
 
-## Koszt i weryfikacja
+Rust odnawia klasyczne workflow co **10 s**, TTL pozostaje **45 s**. Token wiąże profil/owner/version i okno. Utrata lease lub błąd DB anuluje związany transport bez callbacku JS oraz blokuje późniejsze zapisy. `nativeHeartbeat:true` wyłącza timer JS; starszy port zachowuje fallback. Release zatrzymuje dokładny token. Destroyed przerywa i zwalnia, a samo CloseRequested tego nie robi. Registry zamkniętych etykiet resetuje się przy pełnym restarcie procesu. Telepatia i post-Reveal zachowują własne lease. Przełączenie do innego programu nie jest uśpieniem komputera.
 
-Usunięto twardą blokadę wydatku SessionCostGuard/CostAuthorization. Estymacje, usage i diagnostyka naliczeń pozostają odrębnymi danymi. Ochrona przed niepewnym dispatch nadal obowiązuje: poprzednia próba mogła zostać rozliczona.
+Stop zachowuje checkpoint i wymaga świadomego Wznów. Zakończ jest trwałą decyzją o niewykonywaniu dalszej pracy. Training zapisuje `termination.reason=user_finished` i Interrupted, nie fałszywe Completed. Stare wywołania silnika/repozytorium są blokowane; historia zostaje. Research ma marker poza zamrożoną konfiguracją. Rzeczywista przyczyna abort i odebrane dowody pozostają zachowane.
 
-Testy DOM korzystają z jsdom i lokalnej adnotacji środowiska testu. Zmiany zależności wymagają obu plików package.json/package-lock.json. Zielone testy nie zastępują rzeczywistego Windows/Linux desktop smoke na konkretnym kandydacie.
+## Training, AI Center i eksport
 
-## Kandydat: telepatia ze stałym prowadzącym
+Nagłówek Training jest neutralny, niezależny od globalnego Conversation Workspace. Ustawienia nowego treningu są opisane osobno; aktywny run i historia pokazują zapisany profil/model. Nowy dropdown nie przełącza po cichu istniejącego runu przy Resume.
 
-Nowe serie telepatyczne używają fixed_lead_v1: geografii tylko dla twórcy, opcjonalnych cykli prowadzenia, automatycznej finalizacji AI i wspólnej transkrypcji/historii/eksportu. Odbiór native i wizualny pozostaje otwarty; wcześniejsze sekcje opisują zaakceptowaną bazę wejściową. Zobacz [opis przebiegu](TELEPATHY_FIXED_LEAD_v0.7.14_EN.md) oraz [raport wdrożenia](../reports/TELEPATHY_FIXED_LEAD_TRANSCRIPT_UX_IMPLEMENTATION_PL.md).
+Historia zachowuje dotychczasowe akcje i dostępne klawiaturą tooltipy. Ukończony trening pokazuje liczbę nieudanych aktualizacji i rozwijane osobne przyczyny Field Guide/Notes. AI Center używa tego samego rozróżnienia. Gdy pierwsza wersja nie powstała, komunikat mówi o braku zapisanej wersji. NO_CHANGE nie jest ostrzeżeniem.
 
-## Zgodność BUDGET-0
+Eksport działa również po przerwaniu pierwszej sesji przed dodaniem jej do sessionIds. Zawiera bieżący checkpoint, czytelny zapisany przebieg, rozliczenia/wersje/hashe/audyty i ograniczone kandydaty finalne. Łączy run/checkpoint/zdarzenia bez duplikatów. summary.md odsyła do szczegółów. Nieukończona sesja nie zwiększa postępu ani średniej ukończonych sesji. Pliki mogą zawierać prywatne materiały — sprawdź je przed udostępnieniem.
 
-Nowy draft Research synchronizuje viewerControl, requested/effective settings i snapshot polityki przed preflight oraz Experiment Lock. Domyślnie jest to 16 384, z recovery co najmniej 32 768; większy jawny budżet pozostaje, a wspólny niższy limit modeli ogranicza pierwszą wartość. Nowe projekty zapisują także kontrakt Judge 16K/32K. Resume nie przepisuje istniejących polityk Viewera (również 8K) ani projektów legacy; brakujące oceny Judge w projekcie bez nowego snapshotu nadal używają 8K/16K. Pojemności learning i headroom bez zmian: Training Reveal C+16K/C+32K, pozostałe learning C+8K/C+16K. Gateway nowej Telepathy zachowuje swoją politykę, w tym sharing consent 8K/16K. Nie dodajemy live Monitora do klasycznego Training ani Research.
+## Telepatia i prezentacja
 
-## PERF-HISTORY-1 — lekka historia telepatii
+Nowe serie fixed_lead_v1 zamrażają prowadzącego, uczestników, learning, trasy, geografię i polityki. Każda runda ma nowy zamrożony cel; prowadzący może wykonać do trzech dodatkowych cykli. Starsze serie zachowują zapisane znaczniki i semantykę. Odbiorca przed Reveal nie otrzymuje celu/geografii ani cudzych blind odpowiedzi; późniejsze dzielenie podlega zgodzie. Operator ma szerszy widok niż model.
 
-Conversation i Telepathic Training listują strony po 50 summaries przez listTelepathicSeriesSummaries. SQL filtruje mode/workspace/archive przed paginacją; porządek updatedAt DESC, id DESC i dwupolowy cursor. Nie przesyła plan_json/config_json ani dowodów. Nazwy uczestników zachowują rowid order. Pusta strona używa jednego SELECT, niepusta dwóch. Pełny stan pobierany jest przy otwarciu/eksporcie jednego wpisu oraz przez niezmienione Resume. Bieżąca historia używa archive=active przed LIMIT. Początkowo otwierana jest najwyżej jedna najnowsza aktywna seria z tej strony; dodatkowy odczyt fallback po archiwum nie jest potrzebny. UI pokazuje loading/error/retry/Load more i resetuje pierwszą stronę po operacji. Deduplikacja zapobiega podwójnym kartom, ale strony nie są zamrożonym snapshotem całej historii. Browser nadal parsuje wspólny localStorage JSON, bez klonowania pełnych stanów listy. Polling 500/750 ms i checkpoint writes pozostają bez zmian do kolejnych etapów. Desktop smoke pozostaje osobnym gate.
+Historia używa 50-elementowych stron podsumowań z filtrem przed LIMIT i kursorem updatedAt/id. Otwarcie/eksport wczytuje szczegóły bez modelu. Projekcja czytelnego dialogu jest oddzielna od dowodów i continuation, a polling respektuje call ID i ownership. Nie oznacza to zakończenia wszystkich planowanych optymalizacji historii/refresh.
 
-## UX-TEL-1 i UX-TEL-2A — stan wykonania oraz czytelna projekcja
+BlindTranscriptRecord i rekordy telepatyczne izolują Markdown. Niedomknięty code fence nie pochłania kolejnej odpowiedzi. Provisional stream nie jest zaakceptowanym dowodem, a SafeMarkdown nie ładuje dowolnych zdalnych obrazów.
 
-UX-TEL-1 po poprawce audytu ma zielone CI potwierdzone przez Edwarda. Neutralne oczekiwanie w panelach i transkrypcie zależy od bieżącego call ID, lokalnego zadania i sprawdzonego lease. Restart z dispatched/uncertain nadal wymaga rozstrzygnięcia; inny właściciel i nieznany stan nie udostępniają retry. Polling właściciela 750 ms dodaje mały odczyt lease, a po zakończeniu pracy innego właściciela odczytuje świeży detail. Nie jest to PERF-REFRESH-2; desktop smoke pozostaje osobny.
+## Odbiór
 
-UX-TEL-2A jest kandydatem do audytu: packets mają opcjonalny display v1 z dokładnym fragmentem instrukcji. Engine zapisuje go obok niezmienionych pełnych materials w istniejącym runtime transcript JSON; schema nadal 31. Najpierw obowiązuje visibleTranscript, potem projekcja czytelna. Normalne karty i Markdown export wykorzystują tę samą instrukcję i rzeczywiste odpowiedzi uczestników, z odrębnym autorstwem prowadzącego/kontrolera/refleksji. Learning, system prompts i powtórzona historia requestu pozostają w dowodach, poza zwykłym czytaniem. Legacy rozpoznaje wyłącznie znane wersjonowane kształty requestMessages; nieznany materiał pokazuje brak dostępności, bez zgadywania lub usuwania słów z odpowiedzi. Przyjęte final reflections bez odpowiadającego output eventu są projektowane z istniejącej mapy wyników, bez przepisywania zapisu. Deduplikacja używa tożsamości eventu, nie tekstu. Nawigacja, tooltipy, kolory i kafelki metryk pozostają do UX-TEL-2B.
+Nie ma twardego SessionCostGuard/CostAuthorization. Metryki kosztów i niepewność płatnego dispatchu to oddzielne sprawy. Schema pozostaje 31, allowlista architektury jest pusta.
 
-## UX-TEL-2B — nawigacja widoku
-
-Edward potwierdził zielone CI UX-TEL-2A. Wskazany wyżej zakres nawigacji jest teraz wykonany jako UX-TEL-2B: kandydat do audytu z oczekującym odbiorem desktopowym.
-
-Oba panele telepatii używają wspólnego renderera transkryptu. Nawigacja przewija wyłącznie własny kontener, odejmuje zmierzoną wysokość przyklejonej listy i ustawia focus bez przesuwania strony. Powrót ustawia scrollTop transkryptu na 0. Każda instancja ma unikalne ID. Checkpoint zachowuje focus i pozycję; zmiana serii lub rundy zeruje lokalny scroll. TooltipButton obsługuje hover i focus klawiatury. Akcenty motywów i zaokrąglone metryki są ograniczone do telepatii. Requesty, dowody, budżety i kontrakty bazy pozostają bez zmian. Odbiór wizualny i rzeczywisty scroll w przeglądarce/Tauri nadal wymagają sprawdzenia.
-
-## UX-TEL-3 — prowadzenie przez człowieka i własny cel
-
-Edward potwierdził zielone CI UX-TEL-2B. Conversation ma po jednym polu pytania/instrukcji na aktywnego odbiorcę. Niepuste pole po trim daje indywidualne pytanie; puste jawnie kończy prowadzenie tej osoby w bieżącej rundzie. Nie ma wspólnego pola broadcast ani checkboxów odbiorców. Sąsiadujący przycisk zamyka blind jawną operacją. Komponent pól ma klucz bieżącej serii/rundy/cyklu: checkpoint zachowuje szkic, zmiana kontekstu lub restart usuwa niezapisany szkic. Busy, niepewne wywołania i niedostępny właściciel blokują formularz. Silnik pod istniejącym lease wymaga gotowego checkpointu; zapisane zakończenie musi zostać zastosowane przez Resume przed udostępnieniem kolejnego cyklu. Limit pozostaje trzy cykle.
-
-Przy tworzeniu celu człowiek widzi kategorię i prośbę o własny cel, bez wymogu geografii planera. Zmiana dotyczy wyłącznie nowych instrukcji w transkrypcie. Dawne wydarzenia, zamrożone cele i hashe pozostają zachowane. Prompty nadawcy AI i przypisania geograficzne bez zmian. UX-TEL-3 pozostaje kandydatem do audytu; native CI i wizualny odbiór desktopowy są osobnymi kontrolami.
-
-
-## UX-TEL-4 — archiwum poza bieżącą historią
-
-Edward potwierdził zielone CI UX-TEL-3. Obie bieżące historie pokazują wyłącznie aktywne wpisy. Udany archive usuwa wpis i czyści widok tylko tej samej serii. Lista resetuje się raz; nawet błąd jej odczytu usuwa znany zarchiwizowany wpis i pokazuje Retry. Błąd zapisu archive pozostawia kartę i aktualny widok. Istniejące lease chroni serię pracującą w drugim oknie; kontrakty checkpointu i archiveRevision są zachowane. Settings → Data → Archive pobiera lekkie archived summaries osobno dla Training i Conversation, po 50 z Pokaż więcej i error/retry. Sufiks + oznacza dalsze strony, nie dokładny total. Restore odczytuje jedną pełną serię pod lease i odświeża listy archiwum; zarchiwizowany rodzic blokuje restore. Wpis wraca do bieżącej historii przy jej następnym refresh/mount. Nie dodano permanent delete. Native CI i wizualny smoke pozostają oczekujące.
-
-## UX-TEL-5 — kontrolowane trwałe usuwanie telepatii
-
-Edward potwierdził zielone CI UX-TEL-4. Archiwum Settings udostępnia wspólny Deletion Preview, opcjonalną kopię bezpieczeństwa oraz potwierdzenie frazą DELETE. Preview pokazuje liczby zależnych danych i dowodów runtime bez sekretów. Wersja archiwum z podglądu trafia do typowanego polecenia native i jest sprawdzana w transakcji wraz z aktualną archiwizacją i lease. Cascade usuwa tylko wybraną serię, uczestników, rundy, cele, blind, refleksje, końcowe refleksje, calls i runtime JSON. Globalne Field Guide/Viewer Notes oraz zewnętrzne pliki załączników pozostają; preview wyraźnie oddziela usunięcie bazy od pozostawienia plików. Purge Profilu/Workspace jest zablokowany, dopóki telepatia na nie wskazuje, także przez zamrożone snapshoty uczestników. Bez nowej migracji.
-
-Browser utrzymuje lease usuwanej serii, a krótki wspólny Web Lock kolekcji chroni świeży odczyt, walidację i commit wszystkich zapisów save oraz purge tego klucza JSON. Kolejność to lease serii → kolekcja; blokada kolekcji nie obejmuje wywołań providera. Zapisy różnych serii nie nadpisują sobie odpowiedzi ani nie odtwarzają usuniętych wpisów. Wszystkie otwarte karty muszą używać tej poprawionej wersji. Bez Web Locks usunięcie jest zablokowane; lokalny fallback nie jest uznawany za ochronę między kartami. Restore lub rearchive po preview unieważnia jego wersję. Dotychczasowe reguły purge innych rodzajów pozostają chronione normalizowanymi hashami granic. Dodano testy Rust właściwego dispatchera; lokalny Cargo/Clippy i rzeczywisty odbiór Tauri pozostają oczekujące. Status CANDIDATE, bez końcowego przyjęcia całego planu.
-
-## Budżety B1 — Conversation i Manual RV
-
-Nowa instalacja ma Conversation 16 384 tokeny. Zgodnie z decyzją Edwarda aktualizacja jednorazowo podnosi stare ustawienie Conversation 8192 (także literalne 8000) do 16 384 i zapisuje wynik w Settings. Trwały znacznik conversationOutputBudgetVersion=1 pozwala zachować późniejsze ręczne obniżenie. Inne wartości pozostają. Starsze ustawienie wspólnego limitu zasila tylko brakujące ustawienia trybów, z tą samą jednorazową konwersją Conversation. Globalny defaultMaxOutputTokens oraz rvSessionMaxOutputTokens nadal mają fabrycznie 8192.
-
-Manual RV (również wiadomość operatora z Reveal) wybiera własny profil v2: 32 768 w pierwszej próbie i 49 152 przy istniejącym recovery. ChatPanel, jego podgląd kontekstu, zapis pending oraz send/retry stosują zgodną pierwszą wartość. Limity modelu ograniczają budżet; zbyt mały kontekst blokuje dispatch. Brak większego skutecznego limitu po length nie uruchamia drugiej płatnej próby. Reasoning i temperatura pozostają. Historyczne dowody prób nie są przepisywane. Blind automatycznych RV Sessions/Training/Research zachowuje domyślne 16K/32K; ich analizy, learning i telepatia należą do kolejnych paczek B2/B3/B4. Stop nie jest częścią B1.
-
-## B2 — analizy i learning
-
-Viewer i Monitor po Reveal oraz zwykły Judge i Judge w Training preferują 32 768 → 49 152 tokeny. Field Guide i Viewer Notes w klasycznym Training używają C + 32 768 → C + 49 152, bez zmiany pojemności C. JSON repair i capacity retry przekazują tę samą politykę. Live Monitor nadal używa 16K/32K.
-
-Nowy Research zamraża Judge v2 oraz niezależne postRevealOutputPolicy v2 przed Experiment Lock; blind Viewer nadal ma swoją politykę v1 16K/32K. Snapshot sesji przenosi osobną politykę analizy, a Resume sprawdza zgodność z projektem. Analizy wykonywane przez istniejącą ścieżkę po Reveal odczytują politykę snapshotu. Batch Research zapisuje Reveal i nie uruchamia nowego automatycznego wywołania analizy. Stare Judge bez znacznika zachowują 8K/16K, Judge v1 16K/32K; stare analizy Research bez znacznika pozostają 16K/32K. Zamrożone konfiguracje, hashe i przyjęte wyniki nie są przepisywane.
-
-Ceiling modelu/endpointu i dostępny kontekst nadal ograniczają rzeczywisty limit. Gdy recovery nie może otrzymać większego limitu, nie uruchamia identycznej płatnej próby. Istniejące routing i reasoning recovery pozostają. Niejawny learning C+8K/16K czeka na B4; budżety telepatii czekają na B3.
-
-## B3 — wersjonowane budżety telepatii
-
-Nowe serie fixed-lead wybierają outputBudgetPolicyVersion=3. Tylko receiver_reveal, sender_reveal, shared_answers_comment i series_reflection mają preferowane 32 768 → 49 152. Cel, READY, prowadzenie i blind nadal 16K/32K; sharing_consent nadal 8K/16K. Nie zwiększa się pojemności learning; telepatia korzysta z jego zamrożonych kopii.
-
-Jawne serie v2 zachowują v2 dla nowych scope; historyczne serie bez znacznika używają v2 dla nowych scope. Rozpoczęty scope zachowuje swój snapshot v1/v2/v3; stare rekordy bez snapshotu wybierają legacy v1. Nie resetuje się liczników, hashów, partial evidence ani uncertain. Fingerprinty v1/v2 są zgodne z bazą B2. Druga próba wymaga większego efektywnego limitu po length, w ramach dotychczasowego limitu dwóch prób. Brak zmiany migracji i formatu runtime JSON.
+Kontrole wykonuj według [Developer Guide EN](../development/README.md). Linux/testy, kontrolowany SQLite, okno Windows i płatny provider wymagają osobnych opisów wyniku. Końcowy runtime zapisuje się z commitem/platformą/modelem według [checklisty EN](FINAL_RUNTIME_SMOKE_v0.7.14_EN.md); historyczne manifesty nie są aktualnym odbiorem.

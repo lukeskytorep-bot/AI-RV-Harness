@@ -1,6 +1,6 @@
 # AI RV Harness code map
 
-> **Documentation scope:** accepted `ai-rv-2` development source through Training History UX and DOM dependency fixes; reviewed 11 October 2026. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Documentation scope:** `ai-rv-2` development source through Training Continuity T5; reviewed 16 October 2026 against commit `9c92bdbb94d1125406e0094779102458cdeee87c`. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
 > **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
 
 **Status:** current architecture map for the accepted AI RV development source
@@ -179,7 +179,7 @@ Stage 9 treats legacy Thread-group metadata, Workspace Sources, Custom Protocol 
 
 | Responsibility | Owner | Boundary |
 | --- | --- | --- |
-| Viewer semantic completeness and budget | `src/sessions/viewerOutputRecovery.ts` | 16K/32K preferences and accepted/incomplete classification |
+| Viewer semantic completeness and budget | `src/sessions/viewerOutputRecovery.ts` | operation-specific Viewer preferences (automatic 16K/32K, Manual RV 32K/48K) and accepted/incomplete classification |
 | Durable Viewer attempt replay | `src/sessions/viewerResumeLedger.ts` | exact step/fingerprint, exhaustion and dispatch uncertainty |
 | Training execution and recovery | `src/features/training/trainingExecution.ts`, `trainingResumeRecovery.ts` | same-session checkpoint and separate post-Reveal stage recovery |
 | User-ended Training | `src/training/runLifecycle.ts`, `src/features/training/trainingTermination.ts` | persistent termination and engine/repository/UI protection |
@@ -189,6 +189,17 @@ Stage 9 treats legacy Thread-group metadata, Workspace Sources, Custom Protocol 
 
 See [current workflow contract](CURRENT_WORKFLOWS_v0.7.14_EN.md) for budget and lifecycle details.
 
-## Fixed-lead telepathy candidate (11 October 2026)
+## Fixed-lead telepathy implementation (reviewed 16 October 2026)
 
-The candidate adds a shared fixed-lead runtime, durable `plan_json` extension and role-safe transcript/history/export for both telepathic surfaces. Owners, legacy boundaries and open native/visual acceptance checks are documented in [Fixed-lead telepathy](TELEPATHY_FIXED_LEAD_v0.7.14_EN.md). This section is candidate scope, not accepted release evidence. Schema remains 031 and the architecture allowlist remains empty.
+The development source contains a shared fixed-lead runtime, durable `plan_json` extension and role-safe transcript/history/export for both telepathic surfaces. Owners, legacy boundaries and open native/visual acceptance checks are documented in [Fixed-lead telepathy](TELEPATHY_FIXED_LEAD_v0.7.14_EN.md). Implemented development scope is not published-release or desktop acceptance evidence. Schema remains 031 and the architecture allowlist remains empty.
+
+## Training Continuity T1–T5 owners
+
+- `src/aiCenter/learningExecution.ts`: durable two-dispatch allowance, known-result recovery, settlements and actual failure text.
+- `src/providers/responseEvidence.ts`, `finalCandidate.ts`, native provider reasoning/final-candidate modules: transport evidence and bounded final-channel preservation.
+- `src/sessions/viewerResumeDecision.ts`: common decision used by UI/engine and explicit essential-step retry without deleting history.
+- `src-tauri/src/workflow_heartbeat.rs`, `workflow_ownership.rs`: native renewal, exact-token fencing and transport binding; TS `application/abortOwnership.ts` passes binding/reason through composed signals.
+- `src/training/learningSummary.ts`, `export.ts`, shared `LearningWarnings.tsx`: deduplicated run/checkpoint settlement presentation and interrupted-session export.
+- `src/App.tsx`, `features/training/TrainingScreen.tsx`: neutral Training header and saved Profile/model context.
+
+See the English [Developer Guide](../development/README.md) for check commands and relevant SQLite/DOM/native tests. No new migration or architecture exception was added by T1–T5.

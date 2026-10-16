@@ -1,6 +1,6 @@
 # AI RV Harness module boundaries
 
-> **Documentation scope:** accepted `ai-rv-2` development source through Training History UX and DOM dependency fixes; reviewed 11 October 2026. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Documentation scope:** `ai-rv-2` development source through Training Continuity T5; reviewed 16 October 2026 against commit `9c92bdbb94d1125406e0094779102458cdeee87c`. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
 > **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
 
 **Status:** enforceable boundaries for the accepted AI RV development source
@@ -220,3 +220,9 @@ Static evidence, CI and source inspection do not replace interactive runtime val
 ## Current branch additions
 
 Transport retry remains executor-owned; Viewer semantic recovery and the durable step/fingerprint ledger are Session-domain rules. Training coordinates the same-session checkpoint and termination but does not implement another transport loop. Research uses locked policy and explicit same-session recovery. BlindTranscriptRecord isolates display records and delegates safe Markdown; presentation never changes persisted evidence. Shared ProfileSelector and ModuleHelpButton/Panel own reusable presentation. A specific Workspace selection is managed in Profiles, not an extra header button. Training termination is permanent JSON state checked by engine and repository, not a CSS-only hiding rule. These extensions preserve the existing public feature entry points and schema 031.
+
+## Current native ownership and optional learning boundary
+
+`workflow_heartbeat.rs` owns classic native renewal and request cancellation; `workflow_ownership.rs` owns durable SQL acquisition/renewal/check/write/release. Providers bind exact workflow identity before dispatch. They do not become Training orchestration owners. Telepathic/review leases keep their own boundaries.
+
+`aiCenter/learningExecution.ts` owns the shared per-kind/session/packet allowance and settlement. Feature execution consumes it instead of introducing another retry loop. `training/learningSummary.ts` is presentation aggregation, not permission to advance execution. `LearningWarnings` displays existing failed_preserved records and does not write learning. Export may read an active interrupted checkpoint but cannot classify it as a completed Session. See [Developer Guide](../development/README.md).

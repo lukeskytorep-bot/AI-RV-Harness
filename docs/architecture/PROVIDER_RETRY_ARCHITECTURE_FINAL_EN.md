@@ -1,6 +1,6 @@
 # Provider retry architecture — current implementation
 
-**Reviewed:** 11 October 2026. **Scope:** accepted AI RV development line through Training History UX; schema 031. Historical September closure reports document the implementation at that date. This page now describes the checked-in code rather than a future implementation plan.
+**Reviewed:** 16 October 2026. **Scope:** accepted AI RV development line through Training Continuity T5; schema 031. Historical September closure reports document the implementation at that date. This page now describes the checked-in code rather than a future implementation plan.
 
 ## Ownership
 
@@ -37,7 +37,11 @@ Only complete accepted responses advance evidence/state. Transport retries do no
 
 ## Output budgets and costs
 
-Standard blind Viewer prefers 16,384 → 32,768. Training Reveal review uses the same analytical preference; Field Guide and Viewer Notes use capacity + 16,384 → capacity + 32,768. Default other analytical recovery remains 8,192 → 16,384; frozen Research compatibility can preserve older budgets. All are subject to route/context capacity. These are not universal two-HTTP-call limits, because transport and explicit domain repair have independent scopes.
+Automatic blind Viewer prefers 16,384 → 32,768; Manual RV uses 32,768 → 49,152. Current Judge/post-Reveal/Training Review analytical policy v2 prefers 32,768 → 49,152. Live Monitor retains the immutable 16,384 → 32,768 pair. Learning requires explicit training_reveal and uses capacity + 32,768 → capacity + 49,152. Frozen Research/telepathic policy versions retain their own older pairs; absent legacy Research Judge policy remains 8,192 → 16,384 for missing work.
+
+For classic Training learning, transport retry and output/JSON/capacity repair share one durable **two-dispatch limit per learning kind/session/packet**. They are not independently additive allowances. For other operations, apply the relevant transport and semantic contracts instead of assuming a universal two-HTTP-call rule.
+
+`response_finished` records complete transport, even when validation rejects the final channel. It is not proof of usable output or commit. Preserve unknown earlier physical attempts, exact request identity, received evidence and the real abort reason. Native ownership cancels bound requests without waiting for JS, and stale writes remain fenced. The shared Resume resolver can authorize a deliberate additional essential Viewer attempt without resetting learning history.
 
 The reviewed source does not contain the former SessionCostGuard / CostAuthorization spend blocker. Do not reintroduce it from a historical architecture plan. Usage, pricing estimates and ambiguity warnings remain diagnostic; removing a cost cap does not remove uncertainty protection.
 

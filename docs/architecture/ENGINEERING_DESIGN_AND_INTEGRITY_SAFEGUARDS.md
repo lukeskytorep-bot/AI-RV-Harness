@@ -1,6 +1,6 @@
 # Engineering Design and Integrity Safeguards
 
-> **Documentation scope:** accepted `ai-rv-2` development source through Training History UX and DOM dependency fixes; reviewed 11 October 2026. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Documentation scope:** `ai-rv-2` development source through Training Continuity T5; reviewed 16 October 2026 against commit `9c92bdbb94d1125406e0094779102458cdeee87c`. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
 > **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
 
 > **Project:** AI RV Harness  
@@ -371,8 +371,8 @@ Reasoning remains controlled through the selected model route's native supported
 
 Monitor output allowance is:
 
-- first attempt: up to 4,096 output tokens;
-- controlled retry: up to 8,192 output tokens;
+- first live Monitor allowance: 16,384 output tokens;
+- live Monitor recovery allowance: 32,768 output tokens;
 - always capped by the selected route's reported maximum.
 
 An incomplete Monitor response is eligible for controlled recovery rather than being treated as an intervention.
@@ -738,3 +738,17 @@ Training and Research resolve a compatible RV or `legacy_combined` Workspace int
 ### Invariant
 
 > Resume replays the exact persisted Training plan, and RV workflows never derive their technical owner from the active Conversation Workspace.
+
+## Decision 22 — Learning failure is distinct from interrupted execution
+
+Classic Training optional memory has a durable two-dispatch limit per kind/session/packet, shared across transport retry and all repairs. A known exhausted proposal settles failed_preserved and retains the exact prior version/absence; it is not model NO_CHANGE and does not stop later targets. Audit persistence must succeed. Stop, ownership/DB errors, identity/hash corruption and uncertain dispatch must never be converted to this settlement. Notes receives the exact Field Guide after update/preservation, and a later Notes failure cannot undo a successful Guide.
+
+## Decision 23 — Transport completion, acceptance and commit are separate
+
+Complete rejected final-channel output can have response_finished evidence. Preserve all physical outcomes; a later completed attempt does not resolve an earlier unknown one. The shared Resume resolver can permit explicit essential-step recovery while retaining history, never reopening settled learning. Preserve a bounded final candidate before normalization and keep private reasoning separate; tags embedded in JSON strings remain literal data.
+
+## Decision 24 — Renew ownership outside a single WebView timer
+
+Rust renews classic owned workflows every 10 seconds with TTL 45 seconds and exact profile/owner/version/window binding. Ownership loss, DB failure and Destroyed cancel bound transport and fence later writes. CloseRequested is not destruction. Release and failed start clean up exact ownership. This is not a mechanism to run while the whole process is asleep, nor a replacement for independent telepathic/review leases.
+
+See [current workflows](CURRENT_WORKFLOWS_v0.7.14_EN.md) and the English [Developer Guide](../development/README.md). Earlier version-specific examples/evidence in this decision record retain their historical applicability.
