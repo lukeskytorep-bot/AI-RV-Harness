@@ -2366,3 +2366,39 @@ fn t2_google_and_signed_anthropic_candidates_exclude_separate_thought_channels()
         assert!(!serde_json::to_string(&candidate).unwrap().contains("PRIVATE"));
     }
 }
+
+#[test]
+fn t2_stream_preserves_metadata_usage_and_finish_reasons_across_frames() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    accumulator.process_data_with_events(&json!({
+        "id": "t2-response", "model": "test-model", "provider": "test-provider",
+        "openrouter_metadata": {"route": "test-route"},
+        "choices": [{"delta": {"content": "final"}, "finish_reason": "stop", "native_finish_reason": "end_turn"}]
+    }).to_string(), "secret", Some("t2-request")).unwrap();
+    accumulator.process_data_with_events(&json!({
+        "choices": [], "usage": {"completion_tokens": 7}
+    }).to_string(), "secret", Some("t2-request")).unwrap();
+    accumulator.process_data_with_events("[DONE]", "secret", Some("t2-request")).unwrap();
+    let result = accumulator.finish(Some("t2-request".to_string())).unwrap();
+    assert_eq!(result.request_id.as_deref(), Some("t2-request"));
+    assert_eq!(result.payload["id"], "t2-response");
+    assert_eq!(result.payload["model"], "test-model");
+    assert_eq!(result.payload["provider"], "test-provider");
+    assert_eq!(result.payload["openrouter_metadata"]["route"], "test-route");
+    assert_eq!(result.payload["usage"]["completion_tokens"], 7);
+    assert_eq!(result.payload["choices"][0]["message"]["content"], "final");
+    assert_eq!(result.payload["choices"][0]["finish_reason"], "stop");
+    assert_eq!(result.payload["choices"][0]["native_finish_reason"], "end_turn");
+    assert!(result.semantic_output_started);
+}
+
+#[test]
+fn t2_error_frame_with_typed_reasoning_closes_retry_boundary() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    let error = accumulator.process_data_with_events(&json!({
+        "error": {"type": "server", "code": "upstream_disconnect", "message": "gone"},
+        "choices": [{"delta": {"content": [{"type": "reasoning", "text": "private"}]}}]
+    }).to_string(), "secret", Some("t2-request")).unwrap_err();
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.provider_request_id.as_deref(), Some("t2-request"));
+}

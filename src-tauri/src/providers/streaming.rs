@@ -474,6 +474,52 @@ impl OpenRouterStreamAccumulator {
                 .and_then(|choice| choice.get("delta"))
                 .is_some_and(|delta| {
                     let content = super::reasoning::extract_openai_text(delta.get("content"));
+                    let (native_reasoning, _) = super::reasoning::extract_openai_reasoning(delta, None);
+                    let reasoning = native_reasoning.unwrap_or_default();
+                    first_semantic_chunk(
+                        delta,
+                        &content,
+                        &reasoning,
+                        delta.get("reasoning_details").and_then(Value::as_array).map(Vec::as_slice),
+                    )
+                });
+            return Err(stream_provider_error(
+                &payload,
+                secret,
+                request_id,
+                self.semantic_output_started || event_has_semantic_output,
+            ));
+        }
+
+        if let Some(value) = payload.get("id").and_then(Value::as_str) {
+            self.response_id = Some(value.to_string());
+        }
+        if let Some(value) = payload.get("model").and_then(Value::as_str) {
+            self.actual_model = Some(value.to_string());
+        }
+        if let Some(value) = payload.get("provider").and_then(Value::as_str) {
+            self.actual_provider = Some(value.to_string());
+        }
+        if let Some(value) = payload.get("openrouter_metadata") {
+            self.openrouter_metadata = Some(value.clone());
+        }
+        if let Some(value) = payload.get("usage") {
+            if !value.is_null() {
+                self.usage = Some(value.clone());
+            }
+        }
+
+        let Some(choice) = payload.get("choices").and_then(Value::as_array).and_then(|choices| choices.first()) else {
+            return Ok(Vec::new());
+        };
+        if let Some(value) = choice.get("finish_reason").and_then(Value::as_str) {
+            self.finish_reason = Some(value.to_string());
+        }
+        if let Some(value) = choice.get("native_finish_reason").and_then(Value::as_str) {
+            self.native_finish_reason = Some(value.to_string());
+        }
+        let delta = choice.get("delta").unwrap_or(&Value::Null);
+        let content = super::reasoning::extract_openai_text(delta.get("content"));
         let (native_reasoning, _) = super::reasoning::extract_openai_reasoning(delta, None);
         let reasoning = native_reasoning.unwrap_or_default();
         let reasoning_details_value = delta.get("reasoning_details");
