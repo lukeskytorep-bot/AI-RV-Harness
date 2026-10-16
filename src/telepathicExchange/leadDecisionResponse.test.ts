@@ -1,9 +1,10 @@
+import { legacyLeadState as createTelepathicSeriesState } from "./__fixtures__/legacyLeadState";
 import {it,expect,vi} from "vitest";
 import type {ProviderConfig,ProviderModel} from "../providers/types";
 import type {ProviderChatAttempt} from "../providers/requestExecutor";
 import type {TelepathicParticipant,TelepathicSeriesConfig} from "./types";
 import type {ResolvedTelepathicAiRoute} from "./providerGateway";
-import {createTelepathicSeriesState,runNextTelepathicAiRound,advanceTelepathicConversationSeries} from "./engine";
+import {runNextTelepathicAiRound,advanceTelepathicConversationSeries} from "./engine";
 import {InMemoryTelepathicExchangeStore} from "./store";
 import {parseLeadDecisionResponse} from "./leadDecisionResponse";
 import {telepathicExportDocument} from "./export";

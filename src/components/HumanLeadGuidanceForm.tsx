@@ -19,7 +19,7 @@ export function HumanLeadGuidanceForm({cycle,participants,pl,disabled,onDecision
       {participants.map(p=><label key={p.id}><span>{pl?"Pytanie / instrukcja dla":"Question / instruction for"} {p.displayName}</span><textarea rows={3} maxLength={4000} value={fields[p.id]??""} onChange={e=>setFields(current=>({...current,[p.id]:e.target.value}))}/></label>)}
       <div className="telepathic-action-row telepathic-guidance-actions">
         <button type="submit" className="primary-button">{pl?"Wyślij pytania i kontynuuj":"Send questions and continue"}</button>
-        <button type="button" className="secondary-button" onClick={()=>{if(!disabled)onDecision({cycle,finishRound:true,finishParticipantIds:[]});}}>{pl?"Zakończ pytania i zamknij blind":"Finish guidance and seal blind"}</button>
+        <button type="button" className="secondary-button" onClick={()=>{if(!disabled)onDecision({cycle,finishRound:true,finishParticipantIds:[],individual:[]});}}>{pl?"Zakończ pytania i zamknij blind":"Finish guidance and seal blind"}</button>
       </div>
     </fieldset>
   </form>;

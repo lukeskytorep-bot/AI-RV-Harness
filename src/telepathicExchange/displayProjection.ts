@@ -1,3 +1,4 @@
+import { individualLeadCommand, leadDecisionContract, LEAD_INSTRUCTION_VERSION, LEGACY_LEAD_INSTRUCTION_VERSION } from "./leadGuidance";
 import * as packets from "./packets";
 import { buildReceiverSecondLookPrompt, receiverRevealInstruction, senderRevealInstruction, missingRevealInstruction, sharedAnswersInstruction, seriesReflectionInstruction } from "./prompts";
 import type { TelepathicSeriesState, TelepathicTranscriptEvent } from "./types";
@@ -6,7 +7,7 @@ import type { TelepathicSeriesState, TelepathicTranscriptEvent } from "./types";
  * is removed from evidence. Unrecognized material is unavailable, not guessed. */
 export function withReadableInstruction(state: TelepathicSeriesState, event: TelepathicTranscriptEvent): TelepathicTranscriptEvent {
   if (event.kind !== "materials" || event.display !== undefined) return event;
-  if (state.config.protocolVersion !== "fixed_lead_v1" || state.config.leadInstructionVersion !== "fixed_lead_guidance_v1") return event;
+  if (state.config.protocolVersion !== "fixed_lead_v1" || ![LEAD_INSTRUCTION_VERSION, LEGACY_LEAD_INSTRUCTION_VERSION].includes(state.config.leadInstructionVersion ?? "")) return event;
   const call = state.providerCalls.find(call => call.id === event.providerCallId);
   if (!call || call.seriesId !== event.seriesId || call.callStage !== event.stage
     || (call.roundId === "series-complete" ? event.roundId !== undefined : call.roundId !== event.roundId)
@@ -59,7 +60,12 @@ export function withReadableInstruction(state: TelepathicSeriesState, event: Tel
         : `Thank you, ${participant.displayName}. All rounds in this series are complete.`, seriesReflectionInstruction(language)); break;
     default:
       if (/^lead_guidance:cycle:[123]$/.test(call.callStage)) {
-        const cycle = call.callStage.at(-1);
+        const cycle = Number(call.callStage.at(-1)) as 1|2|3;
+        if (state.config.leadInstructionVersion === LEAD_INSTRUCTION_VERSION) {
+          const command = individualLeadCommand(language);
+          if (content.startsWith(`${command}\n${leadDecisionContract(cycle, LEAD_INSTRUCTION_VERSION)}\nEXAMPLE: `) && content.includes("\nCURRENT_ROUND_DATA:\n")) instruction = command;
+          break;
+        }
         const command = pl ? "Zdecyduj o następnym cyklu. Możesz zakończyć teraz. Zwróć wyłącznie JSON." : "Decide the next guidance cycle. You may finish now. Return only JSON.";
         if (content.startsWith(`${command}\nCONTRACT: {"cycle":${cycle},"finishRound":boolean,"finishParticipantIds":string[],"broadcast":{"recipientIds":string[],"instruction":string},"individual":[{"participantId":string,"instruction":string}]}\nCURRENT_ROUND_DATA:\n`)) instruction = command;
       } else if (/^receiver_guidance:cycle:[123]:recipient:/.test(call.callStage)) {

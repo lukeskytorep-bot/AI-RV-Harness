@@ -12,7 +12,7 @@ for(const pl of [true,false])for(const legacy of [true,false])it(`${pl?"PL":"EN"
  const before=JSON.stringify(event);const el=document.createElement("div");document.body.append(el);const root=createRoot(el);
  try {
   await act(async()=>root.render(<TelepathicTranscript seriesId="s" roundId="r" leadId="lead" participants={[{id:"lead",displayName:"Leo"},{id:"a",displayName:"Receiver"}]} events={[event]} pl={pl}/>));
-  expect(el.querySelector('[role="status"]')?.textContent).toContain(pl?"Nie udało się odczytać decyzji prowadzącego":"Could not read the lead's decision");
+  expect(el.querySelector('[role="status"]')?.textContent).toContain(pl?"Decyzja prowadzącego nie spełnia kontraktu":"The lead's decision violates the contract");
   if(!legacy)expect(el.querySelector('[role="status"]')?.textContent).toContain(pl?"Cykl nie odpowiada":"cycle does not match");
   expect(el.querySelector(".telepathic-message-author")?.textContent).toBe(pl?"Odrzucona decyzja — Leo":"Rejected decision — Leo");
   const details=el.querySelector("details")!;expect(details.open).toBe(false);expect(details.querySelector("pre")?.textContent).toBe(event.text);

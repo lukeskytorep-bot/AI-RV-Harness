@@ -61,7 +61,7 @@ Eksport działa również po przerwaniu pierwszej sesji przed dodaniem jej do se
 
 ## Telepatia i prezentacja
 
-Nowe serie fixed_lead_v1 zamrażają prowadzącego, uczestników, learning, trasy, geografię i polityki. Każda runda ma nowy zamrożony cel; prowadzący może wykonać do trzech dodatkowych cykli. Starsze serie zachowują zapisane znaczniki i semantykę. Odbiorca przed Reveal nie otrzymuje celu/geografii ani cudzych blind odpowiedzi; późniejsze dzielenie podlega zgodzie. Operator ma szerszy widok niż model.
+Nowe serie fixed_lead_v1 zamrażają prowadzącego, uczestników, learning, trasy, geografię i polityki. Każda runda ma nowy zamrożony cel; prowadzący może wykonać do trzech dodatkowych cykli. Starsze serie zachowują zapisane znaczniki i semantykę. Odbiorca przed Reveal nie otrzymuje celu/geografii ani cudzych blind odpowiedzi; późniejsze dzielenie podlega zgodzie. Operator ma szerszy widok niż model. Nowe decyzje używają `fixed_lead_guidance_v2`: osobna instrukcja w `individual` dla każdego aktywnego Viewera albo jawne zakończenie jego udziału. Zakończenie rundy wymaga pustej listy instrukcji. Takie samo pytanie do kilku osób musi mieć osobny wpis dla każdej z nich. Zapisane decyzje i requesty v1 zachowują swój kontrakt, w tym zaakceptowane broadcasty.
 
 Historia używa 50-elementowych stron podsumowań z filtrem przed LIMIT i kursorem updatedAt/id. Otwarcie/eksport wczytuje szczegóły bez modelu. Projekcja czytelnego dialogu jest oddzielna od dowodów i continuation, a polling respektuje call ID i ownership. Nie oznacza to zakończenia wszystkich planowanych optymalizacji historii/refresh.
 

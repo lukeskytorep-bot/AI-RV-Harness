@@ -16,6 +16,6 @@ Manual RV prefers 32,768 → 49,152; ordinary automatic blind Viewer prefers 16,
 
 ## Telepathic exchange
 
-New fixed-lead series freeze participants, a selected lead and per-round geography. Each round locks its own target before blind descriptions. Up to three lead-guided cycles may precede Reveal/reflections. Receivers do not receive the hidden target/geography or others' blind answers before Reveal. The operator has a broader observer view. Legacy series retain their protocol and saved policy.
+New fixed-lead series freeze participants, a selected lead and per-round geography. Each round locks its own target before blind descriptions. Up to three lead-guided cycles may precede Reveal/reflections. Receivers do not receive the hidden target/geography or others' blind answers before Reveal. The operator has a broader observer view. New decisions use `fixed_lead_guidance_v2`: one separately addressed `individual` instruction per active Viewer, or an explicit finish for that Viewer. The whole round can end with an empty instruction list. Identical questions must be repeated as separate addressed entries. Saved v1 decisions and requests keep their original contract, including accepted broadcasts. Legacy series retain their protocol and saved policy.
 
 Provider reasoning/continuation is kept outside visible blind evidence. Markdown records are isolated so malformed formatting in one response cannot consume the next. See [Providers](Providers-Models-and-AI-Monitor.md) and [Troubleshooting](Troubleshooting.md).

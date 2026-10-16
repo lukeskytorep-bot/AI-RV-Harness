@@ -12,7 +12,7 @@ import type { AiIdentity } from "../aiCenter/types";
 import type { TelepathicMode } from "../telepathicExchange/types";
 const execution = vi.hoisted(() => ({ advance: vi.fn(), next: vi.fn() }));
 vi.mock("../telepathicExchange/engine", async original => ({ ...await original<typeof import("../telepathicExchange/engine")>(), advanceTelepathicConversationSeries: execution.advance, runNextTelepathicAiRound: execution.next }));
-import { createTelepathicSeriesState } from "../telepathicExchange/engine";
+import { legacyLeadState as createTelepathicSeriesState } from "../telepathicExchange/__fixtures__/legacyLeadState";
 import { TelepathicTrainingPanel } from "../features/training/TelepathicTrainingPanel";
 import { TelepathicExchangePanel } from "../features/conversations/TelepathicExchangePanel";
 
@@ -85,6 +85,7 @@ for (const pl of [false, true]) for (const mode of ["ai_ai_training", "conversat
     const before = await f.repository.listTelepathicSeries(); expect(before).toHaveLength(0);
     await click(textButton(f.labels.start));
     const [saved] = await f.repository.listTelepathicSeries();
+    expect(saved.config.leadInstructionVersion).toBe("fixed_lead_guidance_v2");
     expect(saved.config.senderPolicy).toEqual({ kind: "fixed_ai", participantId: "ai:a" });
     expect(saved.plan.rounds.every(r => r.senderParticipantId === "ai:a")).toBe(true);
     expect(saved.config.participants.some(p => p.id === "ai:b")).toBe(false);
@@ -105,7 +106,8 @@ for (const pl of [false, true]) it(`Conversation/${pl ? "PL" : "EN"}: human lead
   await click(action(f.labels.participants)); expect(step(2).querySelectorAll("select")).toHaveLength(1);
   expect(textButton(f.labels.start).disabled).toBe(true); await click(action(f.labels.lead)); await click(textButton(f.labels.start));
   const [saved] = await f.repository.listTelepathicSeries();
-  expect(saved.config.senderPolicy).toEqual({ kind: "human_only", humanParticipantId: `${saved.config.seriesId}:human` });
+  expect(saved.config.leadInstructionVersion).toBe("fixed_lead_guidance_v2");
+    expect(saved.config.senderPolicy).toEqual({ kind: "human_only", humanParticipantId: `${saved.config.seriesId}:human` });
 });
 for (const mode of ["ai_ai_training", "conversation_exchange"] as const) {
   it(`${mode}: history and remount preserve frozen lead and durable attempt without replacing local draft`, async () => {
@@ -122,6 +124,7 @@ for (const mode of ["ai_ai_training", "conversation_exchange"] as const) {
     await click(textButton(newLabel)); expect(textButton(f.labels.start).disabled).toBe(false);
     expect(step(2).querySelectorAll<HTMLSelectElement>("select")[mode === "ai_ai_training" ? 0 : 1].value).toBe("b");
     await click(action(mode === "ai_ai_training" ? "Open training" : "Open exchange"));
+    expect((await f.repository.getTelepathicSeries("old"))?.config.leadInstructionVersion).toBe("fixed_lead_guidance_v1");
     expect((await f.repository.getTelepathicSeries("old"))?.config.senderPolicy).toEqual(config.senderPolicy);
     expect((await f.repository.getTelepathicSeries("old"))?.providerCalls).toEqual(state.providerCalls);
     await act(async () => { root.unmount(); root = createRoot(host); }); await f.render();

@@ -80,3 +80,7 @@ Step 6 may be marked `COMPLETED` only when:
 5. the result is recorded in a separate dated report identifying commit/source tree, platform, and application version.
 
 Lack of interactive desktop runtime or provider credentials is not `PASS`. This document is the v0.7.14 candidate checklist and does not replace the historical public v0.7.13 release-verification record.
+
+## Individual guidance v2 acceptance
+
+Run at least two rounds with Gemma and another model in both Training and Conversation, checking PL/EN instructions. New requests must show only the `individual` schema/example with actual active IDs. Check one/multiple Viewers, identical separate questions, different questions, per-Viewer finish and whole-round finish, human lead/Viewer, Stop and process restart. Resume a saved v1 series without regenerating accepted lead/Viewer scopes; compare saved requests/fingerprints and raw outputs. A rejected mixed v1 decision remains rejected. Record commit, platform, routes, call IDs and actual outcome. Controlled fixtures do not replace this provider/desktop acceptance.

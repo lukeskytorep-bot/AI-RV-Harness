@@ -37,7 +37,7 @@ Only **classic Training** updates learning. Ordinary RV, Conversations, Research
 
 ### Telepathic exchange and Training
 
-The two telepathic surfaces share a role-safe engine. New `fixed_lead_v1` series freeze a selected lead, participants, routes, personal learning and per-round geography. Each round locks its own target. The lead may request up to three additional cycles, followed by Reveal and reflections. AI–AI Training supports 2–6 distinct Profiles. Historical series retain their recorded protocol and budget policy.
+The two telepathic surfaces share a role-safe engine. New `fixed_lead_v1` series freeze a selected lead, participants, routes, personal learning and per-round geography. Each round locks its own target. The lead may request up to three additional cycles, followed by Reveal and reflections. AI–AI Training supports 2–6 distinct Profiles. New decisions use `fixed_lead_guidance_v2`: one separately addressed `individual` instruction per active Viewer, or an explicit finish for that Viewer. The whole round can end with an empty instruction list. Identical questions must be repeated as separate addressed entries. Saved v1 decisions and requests keep their original contract, including accepted broadcasts. Historical series retain their recorded protocol and budget policy.
 
 The operator can inspect the run; an AI receives only its permitted packet. Before Reveal, receivers do not receive the hidden target/geography or other receivers' blind answers. Opening history/export never calls a model. History uses paged summaries; this does not mean every planned history/refresh optimization is complete.
 

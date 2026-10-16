@@ -21,7 +21,7 @@ function route(participant: TelepathicParticipant, ceiling = 65536): ResolvedTel
 function config(mode: TelepathicMode): TelepathicSeriesConfig { return { schemaVersion: 1, protocolVersion: "fixed_lead_v1", leadInstructionVersion: "fixed_lead_guidance_v1", maxGuidanceCycles: 3, seriesId: "budgets", seriesWorkspaceId: "w-lead", mode, language: "en", participants: [ai("lead"), ai("a")], senderPolicy: { kind: "fixed_ai", participantId: "lead" }, roundCount: 1, topic: "any", discloseTopicToReceivers: false }; }
 function packet(callStage: string): TelepathicProviderPacket { const scope = { seriesId: "s", roundId: "r", participantId: "a", callStage }; return { scope, scopeKey: telepathicProviderScopeKey(scope), contextPolicy: "fresh_round_context", continuationPolicy: "none", messages: [{ role: "user", content: "Exact frozen instruction" }] }; }
 function answer(stage: string): string {
-  if (stage.startsWith("lead_guidance:cycle:")) return JSON.stringify({ cycle: Number(stage.split(":").at(-1)), finishRound: true, finishParticipantIds: [] });
+  if (stage.startsWith("lead_guidance:cycle:")) return JSON.stringify({ cycle: Number(stage.split(":").at(-1)), finishRound: true, finishParticipantIds: [], individual: [] });
   if (stage === "sender_target") return "SECRET_FROZEN_TARGET";
   if (stage === "sender_transmission_confirmation") return "READY";
   if (stage === "sharing_consent") return "YES";

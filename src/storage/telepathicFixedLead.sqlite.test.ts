@@ -1,3 +1,4 @@
+import { legacyLeadState } from "../telepathicExchange/__fixtures__/legacyLeadState";
 import { scopeOutputBudget } from "../telepathicExchange/outputBudgets";
 import { BrowserTelepathicExchangeRepository } from "./browser/telepathicExchangeRepository";
 import type { ResolvedTelepathicAiRoute } from "../telepathicExchange/providerGateway";
@@ -54,7 +55,7 @@ const config:TelepathicSeriesConfig={schemaVersion:1,protocolVersion:"fixed_lead
 describe("real SQLite fixed-lead checkpoint",()=>{
  it("round-trips geography, cycles, responses, transcript, usage, finalization and archive under lease",async()=>{
   const {db,repository}=database();try{
-   const state=createTelepathicSeriesState(config);await repository.saveTelepathicSeries(state);
+   const state=legacyLeadState(config);await repository.saveTelepathicSeries(state);
    state.rounds[0].guidance={decisions:[{cycle:1,finishRound:false,finishParticipantIds:[],broadcast:{recipientIds:["a"],instruction:"Describe movement"}}],finishedParticipantIds:[],closed:false};
    state.rounds[0].blindByParticipant.a={participantId:"a",status:"first_complete",providerAttemptCount:1,first:"slow",guidanceResponses:[{cycle:1,instruction:"Describe movement",response:"curved"}]};
    state.providerCalls=[{id:"call",seriesId:"sqlite",roundId:state.rounds[0].assignment.roundId,participantId:"a",callStage:"receiver_guidance:cycle:1:recipient:a",technicalAttempt:1,status:"succeeded",scopeKey:"scope",requestSha256:"hash",responseText:"curved",createdAt:"t",updatedAt:"t",usage:{totalTokens:100,costUsd:0.1},elapsedMs:50,physicalAttempts:1,costSource:"provider",finishReason:"stop",requestMessages:[{role:"user",content:"exact request"}]}];
@@ -156,7 +157,7 @@ describe("both durable backends use the engine's frozen step contract",()=>{
    const {db,repository}=backend==="sqlite"?database():browser();try{
     const resolveRoute=async()=>routeForA();const deps={store:repository,resolveRoute};await repository.saveTelepathicSeries(createTelepathicSeriesState(config));await setTelepathicArchived(repository,"sqlite",true);
     const before=await repository.getTelepathicSeries("sqlite");
-    const actions=[()=>saveHumanTelepathicTarget(deps,"sqlite",{content:"changed"}),()=>confirmHumanTelepathicTransmission(deps,"sqlite"),()=>saveHumanTelepathicFirstBlind(deps,"sqlite","changed"),()=>sealHumanTelepathicBlind(deps,"sqlite","changed"),()=>saveHumanTelepathicReflection(deps,"sqlite","changed"),()=>saveHumanTelepathicSharing(deps,"sqlite","yes",""),()=>saveHumanLeadGuidance(deps,"sqlite",{cycle:1,finishRound:true,finishParticipantIds:[]}),()=>saveHumanGuidanceResponse(deps,"sqlite","changed")];
+    const actions=[()=>saveHumanTelepathicTarget(deps,"sqlite",{content:"changed"}),()=>confirmHumanTelepathicTransmission(deps,"sqlite"),()=>saveHumanTelepathicFirstBlind(deps,"sqlite","changed"),()=>sealHumanTelepathicBlind(deps,"sqlite","changed"),()=>saveHumanTelepathicReflection(deps,"sqlite","changed"),()=>saveHumanTelepathicSharing(deps,"sqlite","yes",""),()=>saveHumanLeadGuidance(deps,"sqlite",{cycle:1,finishRound:true,finishParticipantIds:[],individual:[]}),()=>saveHumanGuidanceResponse(deps,"sqlite","changed")];
     for(const action of actions)await expect(action()).rejects.toThrow(/archived/);
     expect(await repository.getTelepathicSeries("sqlite")).toEqual(before);
     await setTelepathicArchived(repository,"sqlite",false);const next=await saveHumanTelepathicTarget(deps,"sqlite",{content:"legal after restore"});expect(next.rounds[0].target?.content).toBe("legal after restore");

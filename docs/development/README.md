@@ -78,6 +78,12 @@ Classic Training's Field Guide and Viewer Notes each permit at most **two durabl
 
 The shared Viewer Resume decision distinguishes replay, known finished rejection, unsafe state and uncertain dispatch. An explicit retry of an essential step retains attempt history and does not reopen exhausted learning. See [Current Workflows](../architecture/CURRENT_WORKFLOWS_v0.7.14_EN.md) for current budget tables and frozen-policy exceptions.
 
+## Telepathic lead decision contract
+
+New Training and Conversation series use `fixed_lead_guidance_v2`, while the round protocol remains `fixed_lead_v1`. Each active Viewer receives one `individual` instruction or an explicit participation finish. End-round decisions have an empty `individual` list. Do not introduce a broadcast fallback, split a shared instruction, merge two questions or silently drop unknown fields. Validation follows the frozen series version. Loading a v1 series must preserve its saved request bytes, accepted decisions, attempts and fingerprints; creation is the only point that selects v2.
+
+See [Fixed-lead telepathy](../architecture/TELEPATHY_FIXED_LEAD_v0.7.14_EN.md) for compatibility and scope. `individualLeadGuidance.test.ts` covers the new contract; the existing v1 packet/engine golden files remain unchanged. Stage 1 does not recover rejected mixed historical decisions or change the paid-attempt allowance.
+
 ## Database and native IPC changes
 
 Migrations `001–031` are registered in `src-tauri/src/migrations.rs`. Keep accepted migration bytes unchanged; introduce a new additive migration only with matching registry/compatibility tests. Legacy databases are classified before normal loading; an unverified legacy upgrade must not be made automatic.

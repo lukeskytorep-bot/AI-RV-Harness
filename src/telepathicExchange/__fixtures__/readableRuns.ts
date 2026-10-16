@@ -1,7 +1,8 @@
+import { legacyLeadState as createTelepathicSeriesState } from "./legacyLeadState";
 // Synthetic deterministic test inputs; not used by the application.
 import * as packets from "../packets";
 import { buildLeadDecisionPacket, guidancePacket } from "../leadGuidance";
-import { createTelepathicSeriesState, runNextTelepathicAiRound } from "../engine";
+import { runNextTelepathicAiRound } from "../engine";
 import { lockTelepathicTarget, markTelepathicTargetTransmissionReady } from "../target";
 import { withTelepathicTrainingLearning } from "../trainingLearning";
 import { sha256Text } from "../../application/sha256";

@@ -1,9 +1,10 @@
+import { legacyLeadState as createTelepathicSeriesState } from "./__fixtures__/legacyLeadState";
 import { describe,it,expect } from "vitest";
 import type { ProviderConfig,ProviderModel } from "../providers/types";
 import type { ProviderChatAttempt } from "../providers/requestExecutor";
 import type { TelepathicParticipant,TelepathicSeriesConfig } from "./types";
 import type { ResolvedTelepathicAiRoute } from "./providerGateway";
-import { createTelepathicSeriesState,runNextTelepathicAiRound,advanceTelepathicConversationSeries,saveHumanTelepathicTarget,confirmHumanTelepathicTransmission,saveHumanLeadGuidance,saveHumanTelepathicSharing,saveHumanTelepathicFirstBlind,saveHumanTelepathicReflection,telepathicConversationHumanStep,saveHumanGuidanceResponse,allowRetryForUncertainTelepathicCall,resumeBlockedTelepathicSeries } from "./engine";
+import { runNextTelepathicAiRound,advanceTelepathicConversationSeries,saveHumanTelepathicTarget,confirmHumanTelepathicTransmission,saveHumanLeadGuidance,saveHumanTelepathicSharing,saveHumanTelepathicFirstBlind,saveHumanTelepathicReflection,telepathicConversationHumanStep,saveHumanGuidanceResponse,allowRetryForUncertainTelepathicCall,resumeBlockedTelepathicSeries } from "./engine";
 import { InMemoryTelepathicExchangeStore } from "./store";
 import { buildTelepathicConversationView } from "./conversationView";
 import { telepathicRuntimeMetrics } from "./runtimeMetrics";

@@ -74,3 +74,7 @@ Krok 6 może otrzymać status `COMPLETED` dopiero, gdy:
 5. wynik zostanie zapisany jako osobny, datowany raport wskazujący commit/source-tree, platformę i wersję aplikacji.
 
 Brak interaktywnego desktop runtime lub credentialu nie jest `PASS`. Ten dokument jest checklistą kandydata v0.7.14 i nie zastępuje historycznego raportu publicznego v0.7.13.
+
+## Odbiór prowadzenia indywidualnego v2
+
+Wykonaj co najmniej dwie rundy z Gemmą i innym modelem w Training oraz Conversation, sprawdzając PL/EN. Nowe requesty mają wyłącznie schemat/przykład `individual` z prawdziwymi aktywnymi ID. Sprawdź jednego/kilku Viewerów, jednakowe osobno adresowane pytania, różne pytania, zakończenie osoby/rundy, człowieka w obu rolach, Stop i restart procesu. Wznów zapis v1 bez ponowienia zaakceptowanych wywołań; porównaj requesty/fingerprinty i surowe wyniki. Odrzucona mieszana decyzja v1 pozostaje odrzucona. Zapisz commit, platformę, trasy, call ID i rzeczywisty wynik. Kontrolowane odpowiedzi testowe nie zastępują tego odbioru providera/desktopu.

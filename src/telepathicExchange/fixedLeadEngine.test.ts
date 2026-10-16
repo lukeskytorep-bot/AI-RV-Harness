@@ -75,7 +75,7 @@ function answer(request:Parameters<ProviderChatAttempt>[0],cycles:number) {
   const content=request.messages.map(m=>m.content).join("\n");
   if(content.includes("CONTRACT:")) {
     const cycle=Number(content.match(/"cycle":(\d)/)?.[1]);
-    return JSON.stringify({cycle,finishRound:cycle>cycles,finishParticipantIds:[],...(cycle<=cycles?{broadcast:{recipientIds:["a","b"],instruction:"Describe only new movement"}}:{})});
+    return JSON.stringify({cycle,finishRound:cycle>cycles,finishParticipantIds:[],individual:cycle<=cycles?["a","b"].map(participantId=>({participantId,instruction:"Describe only new movement"})):[]});
   }
   if(content.includes("please prepare one specific target")) return "FROZEN_TARGET_FOR_TEST";
   if(content.includes("confirm the transmission")) return "READY";
@@ -101,7 +101,7 @@ describe("UX-TEL-3 human individual fields with the executable engine",()=>{
   const decision=buildHumanLeadDecision(1,ids,{...fields,stale:"Must never dispatch"});
   const snapshot=JSON.stringify(f.state.rounds[0].target);
   const saved=await saveHumanLeadGuidance(f.deps,f.id,decision);
-  expect(saved.rounds[0].guidance!.decisions[0]).toEqual(decision);expect(decision.broadcast).toBeUndefined();
+  expect(saved.rounds[0].guidance!.decisions[0]).toEqual(decision);expect(decision).not.toHaveProperty("broadcast");
   expect(telepathicConversationHumanStep(saved).kind).toBe("none");
   expect(f.requests).toHaveLength(ids.length);
   const state=await advanceTelepathicConversationSeries(f.deps,f.id);
@@ -124,11 +124,11 @@ describe("UX-TEL-3 human individual fields with the executable engine",()=>{
   const final=(await f.store.getTelepathicSeries(f.id))!;
   expect(final.rounds[0].guidance!.closed).toBe(true);expect(final.rounds[0].blindByParticipant.a.guidanceResponses).toHaveLength(3);
   const before=JSON.stringify(final);
-  await expect(saveHumanLeadGuidance(f.deps,f.id,{cycle:3,finishRound:true,finishParticipantIds:[]})).rejects.toThrow();
+  await expect(saveHumanLeadGuidance(f.deps,f.id,{cycle:3,finishRound:true,finishParticipantIds:[],individual:[]})).rejects.toThrow();
   expect(JSON.stringify(await f.store.getTelepathicSeries(f.id))).toBe(before);
  });
  it("explicit seal ignores drafts and generates no receiver guidance calls",async()=>{
-  const f=await ready();await saveHumanLeadGuidance(f.deps,f.id,{cycle:1,finishRound:true,finishParticipantIds:[]});const state=await advanceTelepathicConversationSeries(f.deps,f.id);
+  const f=await ready();await saveHumanLeadGuidance(f.deps,f.id,{cycle:1,finishRound:true,finishParticipantIds:[],individual:[]});const state=await advanceTelepathicConversationSeries(f.deps,f.id);
   expect(state.providerCalls.filter(c=>c.callStage.startsWith("receiver_guidance:"))).toHaveLength(0);expect(state.rounds[0].guidance!.closed).toBe(true);
  });
  for(const blocked of ["archive","uncertain","dispatched","cancelled"] as const)it(`${blocked} cannot mutate a human guidance decision`,async()=>{
@@ -193,7 +193,7 @@ describe("fixed lead executable engine",()=>{
     const store=new InMemoryTelepathicExchangeStore();const human={id:"human",kind:"human" as const,displayName:"Human"};
     const cfg={...config,mode:"conversation_exchange" as const,participants:[human,ai("lead")],seriesId:"human-fixed"};
     await store.saveTelepathicSeries(createTelepathicSeriesState(cfg));
-    const attempt:ProviderChatAttempt=async r=>{const content=r.messages.map(m=>m.content).join("\n");return {content:content.includes("CONTRACT:")?JSON.stringify({cycle:1,finishRound:true,finishParticipantIds:[]}):answer(r,0),finishReason:"stop",usage:{}};};
+    const attempt:ProviderChatAttempt=async r=>{const content=r.messages.map(m=>m.content).join("\n");return {content:content.includes("CONTRACT:")?JSON.stringify({cycle:1,finishRound:true,finishParticipantIds:[],individual:[]}):answer(r,0),finishReason:"stop",usage:{}};};
     const deps={store,resolveRoute,providerAttempt:attempt};
     let state=await advanceTelepathicConversationSeries(deps,"human-fixed");
     const view=buildTelepathicConversationView(state);expect(JSON.stringify(view)).not.toContain("FROZEN_TARGET_FOR_TEST");expect(view.config.topic).toBeUndefined();expect(view.plan.rounds[0].targetGeography).toBeUndefined();expect(view.rounds[0].assignment.targetGeography).toBeUndefined();
@@ -224,18 +224,18 @@ describe("selective guidance and human lead",()=>{
  it("finishes A early and continues only B",async()=>{
   const store=new InMemoryTelepathicExchangeStore();await store.saveTelepathicSeries(createTelepathicSeriesState(config));
   const attempt:ProviderChatAttempt=async request=>{const content=request.messages.map(m=>m.content).join("\n");let text=answer(request,0);
-   if(content.includes("CONTRACT:")){const cycle=Number(content.match(/"cycle":(\d)/)?.[1]);text=JSON.stringify(cycle===1?{cycle,finishRound:false,finishParticipantIds:[],broadcast:{recipientIds:["a","b"],instruction:"Describe movement"}}:cycle===2?{cycle,finishRound:false,finishParticipantIds:["a"],individual:[{participantId:"b",instruction:"Describe the next change"}]}:{cycle,finishRound:true,finishParticipantIds:["b"]});}
+   if(content.includes("CONTRACT:")){const cycle=Number(content.match(/"cycle":(\d)/)?.[1]);text=JSON.stringify(cycle===1?{cycle,finishRound:false,finishParticipantIds:[],individual:["a","b"].map(participantId=>({participantId,instruction:"Describe movement"}))}:cycle===2?{cycle,finishRound:false,finishParticipantIds:["a"],individual:[{participantId:"b",instruction:"Describe the next change"}]}:{cycle,finishRound:true,finishParticipantIds:["b"],individual:[]});}
    return {content:text,finishReason:"stop",usage:{}};
   };
   const state=await runNextTelepathicAiRound({store,resolveRoute,providerAttempt:attempt},"fixed");expect(state.rounds[0].blindByParticipant.a.guidanceResponses).toHaveLength(1);expect(state.rounds[0].blindByParticipant.b.guidanceResponses).toHaveLength(2);
-  expect(state.transcript!.find(e=>e.id.endsWith(":broadcast"))!.recipientIds).toEqual(["a","b"]);
+  expect(state.transcript!.filter(e=>e.kind==="instruction"&&e.cycle===1).map(e=>e.recipientIds)).toEqual([["a"],["b"]]);
  });
  it("supports a fixed human lead and human JSON-free actions without generating human reflections",async()=>{
   const store=new InMemoryTelepathicExchangeStore();const cfg:TelepathicSeriesConfig={...config,mode:"conversation_exchange",participants:[{id:"human",kind:"human",displayName:"Human"},ai("a")],senderPolicy:{kind:"human_only",humanParticipantId:"human"}};
   await store.saveTelepathicSeries(createTelepathicSeriesState(cfg));const deps={store,resolveRoute,providerAttempt:(async request=>({content:answer(request,0),finishReason:"stop",usage:{}})) as ProviderChatAttempt};
   let state=await advanceTelepathicConversationSeries(deps,"fixed");expect(telepathicConversationHumanStep(state).kind).toBe("prepare_target");
   await saveHumanTelepathicTarget(deps,"fixed",{content:"human frozen target"});await confirmHumanTelepathicTransmission(deps,"fixed");state=await advanceTelepathicConversationSeries(deps,"fixed");expect(telepathicConversationHumanStep(state).kind).toBe("lead_guidance");
-  await saveHumanLeadGuidance(deps,"fixed",{cycle:1,finishRound:false,finishParticipantIds:[],broadcast:{recipientIds:["a"],instruction:"Describe new movement"}});state=await advanceTelepathicConversationSeries(deps,"fixed");expect(telepathicConversationHumanStep(state)).toMatchObject({kind:"lead_guidance",cycle:2});
-  await saveHumanLeadGuidance(deps,"fixed",{cycle:2,finishRound:true,finishParticipantIds:[]});state=await advanceTelepathicConversationSeries(deps,"fixed");expect(telepathicConversationHumanStep(state).kind).toBe("reflection");await saveHumanTelepathicReflection(deps,"fixed","own reflection");state=await advanceTelepathicConversationSeries(deps,"fixed");expect(state.finalization).toBe("completed");expect(state.finalReflections.human).toBeUndefined();expect(state.rounds[0].blindByParticipant.a.guidanceResponses).toHaveLength(1);
+  await saveHumanLeadGuidance(deps,"fixed",{cycle:1,finishRound:false,finishParticipantIds:[],individual:[{participantId:"a",instruction:"Describe new movement"}]});state=await advanceTelepathicConversationSeries(deps,"fixed");expect(telepathicConversationHumanStep(state)).toMatchObject({kind:"lead_guidance",cycle:2});
+  await saveHumanLeadGuidance(deps,"fixed",{cycle:2,finishRound:true,finishParticipantIds:[],individual:[]});state=await advanceTelepathicConversationSeries(deps,"fixed");expect(telepathicConversationHumanStep(state).kind).toBe("reflection");await saveHumanTelepathicReflection(deps,"fixed","own reflection");state=await advanceTelepathicConversationSeries(deps,"fixed");expect(state.finalization).toBe("completed");expect(state.finalReflections.human).toBeUndefined();expect(state.rounds[0].blindByParticipant.a.guidanceResponses).toHaveLength(1);
  });
 });

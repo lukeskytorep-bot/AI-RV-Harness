@@ -2,8 +2,8 @@ import { parseLeadDecisionResponse } from "./leadDecisionResponse";
 import { TELEPATHIC_OUTPUT_POLICY_VERSION, scopeOutputBudget, nextDurableTechnicalAttempt, lengthRecoveryUnavailable } from "./outputBudgets";
 import { recordTranscript } from "./transcript";
 import { ensureFixedLeadGuidance, validateRoundLeadDecision } from "./fixedLeadRuntime";
-import type { LeadGuidanceDecision } from "./types";
-import { leadInstructions } from "./leadGuidance";
+import type { StoredLeadGuidanceDecision } from "./types";
+import { leadInstructions, LEAD_INSTRUCTION_VERSION, leadGuidanceVersion, guidanceInstructions } from "./leadGuidance";
 import { assignTargetGeographies } from "./geography";
 import { createBlindSubmission, recordFirstBlindResponse, recordSecondBlindResponse, sealBlindSubmission } from "./blind";
 import { parseTelepathicSharingConsent } from "./consent";
@@ -88,6 +88,9 @@ function topicLabel(config: TelepathicSeriesConfig): string {
 }
 
 export function createTelepathicSeriesState(config: TelepathicSeriesConfig, timestamp = new Date().toISOString()): TelepathicSeriesState {
+  // Only construction upgrades the contract. Loading/Resume never calls this.
+  if (config.protocolVersion === "fixed_lead_v1") config = { ...config, leadInstructionVersion: LEAD_INSTRUCTION_VERSION };
+
   if (config.outputBudgetPolicyVersion !== undefined && ![2, 3].includes(config.outputBudgetPolicyVersion)) throw new Error("Unsupported Telepathic output policy version.");
   const plan = planTelepathicSeries(config);
   if (config.protocolVersion === "fixed_lead_v1") {
@@ -197,7 +200,7 @@ async function invokeAi(
   const succeeded = [...existing].reverse().find((call) => call.status === "succeeded" && call.responseText !== undefined);
   const validateDecisionResponse = packet.scope.callStage.startsWith("lead_guidance:cycle:") ? (text: string) => {
     const round = state.rounds.find(r=>r.assignment.roundId===packet.scope.roundId)!;
-    parseLeadDecisionResponse(text, round, Number(packet.scope.callStage.split(":").at(-1)) as 1|2|3);
+    parseLeadDecisionResponse(text, round, Number(packet.scope.callStage.split(":").at(-1)) as 1|2|3, leadGuidanceVersion(state));
   } : undefined;
   if (succeeded) {
     // Older candidates recorded transport success before domain validation.
@@ -527,12 +530,12 @@ export function telepathicConversationHumanStep(state: TelepathicSeriesState): T
   if (state.config.protocolVersion === "fixed_lead_v1" && !round.revealedAt && round.target?.status === "transmission_ready") {
     if (isSender && round.assignment.receiverParticipantIds.every(id => round.blindByParticipant[id]?.first) && !round.guidance?.closed) {
       const pending = round.guidance?.decisions.at(-1);
-      const answered = !pending || (!pending.finishRound && pending.finishParticipantIds.every(id=>round.guidance?.finishedParticipantIds.includes(id)) && [...(pending.broadcast?.recipientIds ?? []), ...(pending.individual?.map(i => i.participantId) ?? [])].every(id => round.blindByParticipant[id]?.guidanceResponses?.some(r => r.cycle === pending.cycle)));
+      const answered = !pending || (!pending.finishRound && pending.finishParticipantIds.every(id=>round.guidance?.finishedParticipantIds.includes(id)) && guidanceInstructions(pending, leadGuidanceVersion(state)).map(i => i.participantId).every(id => round.blindByParticipant[id]?.guidanceResponses?.some(r => r.cycle === pending.cycle)));
       if (answered && (pending?.cycle ?? 0) < 3) return { kind: "lead_guidance", roundNumber: round.assignment.roundNumber, cycle: ((pending?.cycle ?? 0)+1) as 1|2|3, activeIds: round.assignment.receiverParticipantIds.filter(id => !round.guidance?.finishedParticipantIds.includes(id)) };
     }
     if (!isSender) {
-      const d = round.guidance?.decisions.find(d => !round.blindByParticipant[human.id]?.guidanceResponses?.some(r => r.cycle === d.cycle) && (d.broadcast?.recipientIds.includes(human.id) || d.individual?.some(i => i.participantId === human.id)));
-      const instruction = d?.individual?.find(i => i.participantId === human.id)?.instruction ?? d?.broadcast?.instruction;
+      const d = round.guidance?.decisions.find(d => !round.blindByParticipant[human.id]?.guidanceResponses?.some(r => r.cycle === d.cycle) && guidanceInstructions(d, leadGuidanceVersion(state)).some(i => i.participantId === human.id));
+      const instruction = d ? guidanceInstructions(d, leadGuidanceVersion(state)).find(i => i.participantId === human.id)?.instruction : undefined;
       if (d && instruction) return { kind: "receiver_guidance", roundNumber: round.assignment.roundNumber, cycle: d.cycle, instruction };
     }
   }
@@ -669,17 +672,17 @@ async function ensureGuidance(deps: TelepathicExchangeEngineDependencies, state:
   return ensureFixedLeadGuidance(state,round,{ invoke: (p,packet) => invokeAi(deps,state,p,packet), save: () => saveCheckpoint(deps,state), now: () => now(deps), checkStop: () => checkStop(deps) });
 }
 
-export async function saveHumanLeadGuidance(deps: TelepathicExchangeEngineDependencies, seriesId: string, decision: LeadGuidanceDecision): Promise<TelepathicSeriesState> {
+export async function saveHumanLeadGuidance(deps: TelepathicExchangeEngineDependencies, seriesId: string, decision: StoredLeadGuidanceDecision): Promise<TelepathicSeriesState> {
   return mutateTelepathicSeries(deps,seriesId,async(state,round,human) => {
     if (telepathicConversationHumanStep(state).kind !== "lead_guidance" || unresolvedTelepathicProviderCalls(state).length) throw new Error("Human lead guidance requires the current ready checkpoint.");
     if (state.config.protocolVersion !== "fixed_lead_v1" || round.assignment.senderParticipantId !== human.id || round.revealedAt) throw new Error("Human lead decision is unavailable.");
     round.guidance ??= { decisions: [], finishedParticipantIds: [], closed: false };
     if (round.guidance.closed || round.assignment.receiverParticipantIds.some(id => !round.blindByParticipant[id]?.first)) throw new Error("Guidance is closed or initial answers are missing.");
     const last = round.guidance.decisions.at(-1);
-    if (last && [...(last.broadcast?.recipientIds ?? []),...(last.individual?.map(i => i.participantId) ?? [])].some(id => !round.blindByParticipant[id]?.guidanceResponses?.some(r => r.cycle === last.cycle))) throw new Error("Previous guidance is not complete.");
+    if (last && guidanceInstructions(last, leadGuidanceVersion(state)).map(i => i.participantId).some(id => !round.blindByParticipant[id]?.guidanceResponses?.some(r => r.cycle === last.cycle))) throw new Error("Previous guidance is not complete.");
     const cycle = ((last?.cycle ?? 0)+1) as 1|2|3;
     if (cycle > 3) throw new Error("No fourth guidance cycle.");
-    round.guidance.decisions.push(validateRoundLeadDecision(round,decision,cycle));
+    round.guidance.decisions.push(validateRoundLeadDecision(state,round,decision,cycle));
     recordTranscript(state,{id:`${round.assignment.roundId}:human-lead:${cycle}`,roundId:round.assignment.roundId,stage:"lead_guidance",kind:"response",authorId:human.id,recipientIds:[],text:JSON.stringify(decision),cycle},now(deps));
     state.status="paused"; return state;
   });

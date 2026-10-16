@@ -253,15 +253,23 @@ export interface TelepathicTargetGeography {
   labelEn: string;
   poolVersion: string;
 }
-export interface LeadGuidanceDecision {
+export interface LegacyLeadGuidanceDecision {
   cycle: 1 | 2 | 3;
   finishRound: boolean;
   finishParticipantIds: string[];
   broadcast?: { recipientIds: string[]; instruction: string };
   individual?: Array<{ participantId: string; instruction: string }>;
 }
+/** New instructions have one addressed list; legacy broadcast stays read-only compatible. */
+export interface LeadGuidanceDecision {
+  cycle: 1 | 2 | 3;
+  finishRound: boolean;
+  finishParticipantIds: string[];
+  individual: Array<{ participantId: string; instruction: string }>;
+}
+export type StoredLeadGuidanceDecision = LeadGuidanceDecision | LegacyLeadGuidanceDecision;
 export interface TelepathicGuidanceState {
-  decisions: LeadGuidanceDecision[];
+  decisions: StoredLeadGuidanceDecision[];
   finishedParticipantIds: string[];
   closed: boolean;
 }
