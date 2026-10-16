@@ -21,3 +21,15 @@ it("native successful reasoning+final content retains the same completion marker
 it("old native errors without transport proof remain unknown",async()=>{
  bridge.invoke.mockRejectedValueOnce({code:"unknown",phase:"validating_response",message:"reasoning only [finish-reason=stop]",providerRequestId:"id",semanticOutputStarted:true});await expect(executeProviderChat(request)).rejects.toMatchObject({report:{attemptOutcomes:[expect.objectContaining({outcome:"dispatch_unknown",validation:"not_evaluated"})]}});
 });
+it("T2 adapter carries final candidate on native success independently of private reasoning",async()=>{
+ const content='{"notes":"Do not print <think> markers."}';const {sha256Text}=await import("../application/sha256");
+ const candidate={content,contentSha256:await sha256Text(content),byteLength:new TextEncoder().encode(content).length,omittedForSize:false,envelopeRemoved:false,nativeValidation:"accepted"};
+ bridge.invoke.mockResolvedValueOnce({content,final_candidate:candidate,reasoning_content:"PRIVATE",usage:{},response_evidence:evidence});
+ const response=await executeProviderChat(request);expect(response.finalCandidate).toEqual(candidate);expect(response.content).toBe(content);expect(response.transportRequestId).toEqual(expect.any(String));expect(JSON.stringify(response.finalCandidate)).not.toContain("PRIVATE");
+});
+for(const shape of ["object","json"] as const)it(`T2 ${shape}: adapter preserves rejected final candidate alongside R1 evidence`,async()=>{
+ const content='{"notes":"Literal <think>example</think>"}';const {sha256Text}=await import("../application/sha256");
+ const candidate={content,contentSha256:await sha256Text(content),byteLength:new TextEncoder().encode(content).length,omittedForSize:false,envelopeRemoved:false,nativeValidation:"rejected"};
+ const failure={code:"unknown",phase:"validating_response",message:"native continuation validation rejected",providerRequestId:"rejected-id",finalCandidate:candidate,responseEvidence:evidence};bridge.invoke.mockRejectedValueOnce(shape==="json"?JSON.stringify(failure):failure);
+ await expect(executeProviderChat(request)).rejects.toMatchObject({causeError:{details:{finalCandidate:candidate,responseEvidence:evidence,providerRequestId:"rejected-id",transportRequestId:expect.any(String),attemptId:expect.any(String)}}});
+});

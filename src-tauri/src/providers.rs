@@ -258,6 +258,8 @@ struct ProviderUsage {
 #[derive(Debug, Serialize)]
 pub struct ProviderChatResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
+    final_candidate: Option<Box<ProviderFinalCandidate>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     response_evidence: Option<Box<response_evidence::ProviderResponseEvidence>>,
     content: String,
     reasoning_content: Option<String>,
@@ -270,6 +272,17 @@ pub struct ProviderChatResponse {
     actual_provider: Option<String>,
     continuation_diagnostics: Option<ProviderContinuationStreamDiagnostics>,
     debug_payload: Option<ProviderDebugPayload>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderFinalCandidate {
+    content: Option<String>,
+    content_sha256: String,
+    byte_length: usize,
+    omitted_for_size: bool,
+    envelope_removed: bool,
+    native_validation: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -293,6 +306,8 @@ pub struct ProviderCallError {
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderCallErrorMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    final_candidate: Option<Box<ProviderFinalCandidate>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     http_status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -450,6 +465,7 @@ fn parse_finished_chat_response(
     semantic_output_started: bool,
     response_evidence: Box<response_evidence::ProviderResponseEvidence>,
 ) -> Result<ProviderChatResponse, ProviderCallError> {
+    let mut final_candidate = response_parsers::capture_final_candidate(provider, payload);
     let mut parsed = parse_chat_response(provider, payload.clone(), request_id.clone()).map_err(|message| {
         let (provider_error_type, provider_code) = provider_error_metadata(payload);
         let code = if provider_error_type.is_some() || provider_code.is_some() {
@@ -464,12 +480,16 @@ fn parse_finished_chat_response(
         failure.metadata.provider_code = provider_code;
         failure.metadata.provider_request_id = request_id.map(String::into_boxed_str);
         failure.metadata.response_evidence = Some(response_evidence.clone());
+        if let Some(candidate) = final_candidate.as_mut() { candidate.native_validation = "rejected"; }
+        failure.metadata.final_candidate = final_candidate.clone();
         if semantic_output_started {
             failure.metadata.semantic_output_started = Some(true);
         }
         failure
     })?;
     parsed.response_evidence = Some(response_evidence);
+    if let Some(candidate) = final_candidate.as_mut() { candidate.native_validation = "accepted"; }
+    parsed.final_candidate = final_candidate;
     Ok(parsed)
 }
 

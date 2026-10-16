@@ -196,6 +196,8 @@ export type ProviderStreamEvent =
   | { event: "finished"; data: { finishReason?: string } };
 
 export interface ProviderChatResponse {
+  finalCandidate?: import("./finalCandidate").ProviderFinalCandidate;
+  transportRequestId?: string;
   responseEvidence?: ProviderResponseEvidence;
   content: string;
   reasoningContent?: string;

@@ -1,3 +1,4 @@
+import { parseProviderFinalCandidate } from "../providers/finalCandidate";
 import { LEARNING_SETTLEMENT_EVENT, learningWarningText, type LearningSettlement } from "../aiCenter/learningExecution";
 import { writeExportPackage } from "../exports/native";
 import type { AppRepository } from "../storage/repository";
@@ -31,7 +32,18 @@ export async function exportTrainingRun(
   const files: Array<{ relativePath: string; content: string }> = [];
   const artifactCopies: Array<{ sourcePath: string; relativePath: string }> = [];
   const relatedSessionIds = [...new Set([...run.sessionIds, ...(run.activeTargetCheckpoint ? [run.activeTargetCheckpoint.sessionId] : [])])];
-  const settlements = (await Promise.all(relatedSessionIds.map(async id => (await repository.listSessionEvents(id)).filter(e => e.eventType === LEARNING_SETTLEMENT_EVENT).map(e => e.metadata?.settlement)))).flat();
+  const learningEvents = (await Promise.all(relatedSessionIds.map(id => repository.listSessionEvents(id)))).flat();
+  const settlements = learningEvents.filter(e => e.eventType === LEARNING_SETTLEMENT_EVENT).map(e => e.metadata?.settlement);
+  const candidates = learningEvents.flatMap(event => {
+    const metadata = event.metadata ?? {};
+    if (event.eventType !== "LEARNING_PHYSICAL_ATTEMPT" && event.eventType !== "LEARNING_CANDIDATE_VALIDATION") return [];
+    const response = metadata.response as Record<string, unknown> | undefined;
+    const finalCandidate = parseProviderFinalCandidate(metadata.finalCandidate ?? response?.finalCandidate);
+    if (!finalCandidate && event.eventType !== "LEARNING_CANDIDATE_VALIDATION") return [];
+    const fields = Object.fromEntries(["kind", "packetHash", "slot", "attemptId", "providerRequestId", "transportRequestId", "validation", "status", "responseHash"].filter(key => metadata[key] !== undefined).map(key => [key, metadata[key]]));
+    return [{ sessionId: event.sessionId, eventType: event.eventType, ...fields, ...(finalCandidate ? { finalCandidate } : {}) }];
+  });
+  if (candidates.length) files.push({ relativePath: "learning_candidates.json", content: JSON.stringify(candidates, null, 2) });
   if (settlements.length || run.activeTargetCheckpoint) files.push({ relativePath: "learning_settlements.json", content: JSON.stringify({ settlements, activeTargetCheckpoint: run.activeTargetCheckpoint ?? null }, null, 2) });
   if (settlements.length) files.push({ relativePath: "learning_settlements.md", content: (settlements as LearningSettlement[]).map(s => `- ${s.sessionId} · ${s.kind}: ${s.settlement === "failed_preserved" ? learningWarningText(s, language === "pl") : s.settlement} · audit ${s.auditId} · packet ${s.packetHash} · version ${s.version?.id ?? "absent"} · hash ${s.version?.contentSha256 ?? "absent"}`).join("\n") });
   const rows: string[] = [];

@@ -38,8 +38,6 @@ fn extract_final_text_parts(content: Option<&Value>) -> String {
                     } else {
                         part.get("text").and_then(Value::as_str)
                             .or_else(|| part.pointer("/text/value").and_then(Value::as_str))
-                            .or_else(|| part.get("thinking").and_then(Value::as_str))
-                            .or_else(|| part.get("reasoning").and_then(Value::as_str))
                     }
                 },
                 _ => None,
@@ -137,49 +135,42 @@ pub(super) struct TaggedReasoningSplit {
     pub(super) incomplete: bool,
 }
 
+pub(super) const REASONING_TAGS: [(&str, &str); 6] = [
+    ("<think>", "</think>"),
+    ("<thinking>", "</thinking>"),
+    ("<reason>", "</reason>"),
+    ("<reasoning>", "</reasoning>"),
+    ("<thought>", "</thought>"),
+    ("<|begin_of_thought|>", "<|end_of_thought|>"),
+];
+
+// Only a leading envelope is reasoning. Once final text begins, tags are data,
+// including JSON strings, quoted examples and prose. Byte offsets remain valid
+// for Unicode because ASCII case folding does not change UTF-8 lengths.
 pub(super) fn split_tagged_reasoning(value: &str) -> Option<TaggedReasoningSplit> {
-    const TAGS: [(&str, &str); 6] = [
-        ("<think>", "</think>"),
-        ("<thinking>", "</thinking>"),
-        ("<reason>", "</reason>"),
-        ("<reasoning>", "</reasoning>"),
-        ("<thought>", "</thought>"),
-        ("<|begin_of_thought|>", "<|end_of_thought|>"),
-    ];
     let lower = value.to_ascii_lowercase();
     let mut cursor = 0usize;
-    let mut content = String::new();
     let mut reasoning_parts = Vec::new();
     let mut found = false;
     let mut incomplete = false;
-
-    while cursor < value.len() {
-        let next = TAGS.iter().filter_map(|(open, close)| {
-            lower[cursor..].find(*open).map(|offset| (cursor + offset, *open, *close))
-        }).min_by_key(|entry| entry.0);
-        let Some((start, open, close)) = next else {
-            content.push_str(&value[cursor..]);
-            break;
-        };
+    loop {
+        let rest = &value[cursor..];
+        let start = cursor + rest.len() - rest.trim_start().len();
+        let Some((open, close)) = REASONING_TAGS.iter().find(|(open, _)| lower[start..].starts_with(*open)) else { break; };
         found = true;
-        content.push_str(&value[cursor..start]);
         let reasoning_start = start + open.len();
-        if let Some(close_offset) = lower[reasoning_start..].find(close) {
-            let reasoning_end = reasoning_start + close_offset;
-            reasoning_parts.push(value[reasoning_start..reasoning_end].to_string());
-            cursor = reasoning_end + close.len();
+        if let Some(offset) = lower[reasoning_start..].find(*close) {
+            let end = reasoning_start + offset;
+            reasoning_parts.push(value[reasoning_start..end].to_string());
+            cursor = end + close.len();
         } else {
             reasoning_parts.push(value[reasoning_start..].to_string());
             cursor = value.len();
             incomplete = true;
+            break;
         }
     }
-
-    found.then(|| TaggedReasoningSplit {
-        content,
-        reasoning: reasoning_parts.join("\n\n"),
-        incomplete,
-    })
+    found.then(|| TaggedReasoningSplit { content: value[cursor..].to_string(), reasoning: reasoning_parts.join("\n\n"), incomplete })
 }
 
 fn empty_response_error(finish_reason: Option<&str>, block_reason: Option<&str>) -> String {

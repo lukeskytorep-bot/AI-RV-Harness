@@ -1,3 +1,4 @@
+import { parseProviderFinalCandidate, type ProviderFinalCandidate } from "./finalCandidate";
 import { parseProviderResponseEvidence, type ProviderResponseEvidence } from "./responseEvidence";
 export type ProviderFailurePhase = "before_dispatch" | "awaiting_headers" | "reading_body" | "parsing_body" | "validating_response";
 
@@ -27,6 +28,7 @@ export interface ProviderCallErrorDetails {
   providerRequestId?: string;
   semanticOutputStarted?: boolean;
   responseEvidence?: ProviderResponseEvidence;
+  finalCandidate?: ProviderFinalCandidate;
   transportRequestId?: string;
   attemptId?: string;
   logicalRequestId?: string;
@@ -61,6 +63,7 @@ export function providerErrorDetails(cause: unknown): ProviderCallErrorDetails |
     ...(typeof nested.retryAfterMs === "number" ? { retryAfterMs: nested.retryAfterMs } : {}),
     ...(typeof nested.providerRequestId === "string" ? { providerRequestId: nested.providerRequestId } : {}),
     ...(typeof nested.semanticOutputStarted === "boolean" ? { semanticOutputStarted: nested.semanticOutputStarted } : {}),
+    ...(parseProviderFinalCandidate(nested.finalCandidate) ? { finalCandidate: parseProviderFinalCandidate(nested.finalCandidate) } : {}),
     ...(parseProviderResponseEvidence(nested.responseEvidence) ? { responseEvidence: parseProviderResponseEvidence(nested.responseEvidence) } : {}),
     ...Object.fromEntries(["transportRequestId", "attemptId", "logicalRequestId"].flatMap(key => typeof nested[key] === "string" && nested[key].length <= 512 ? [[key,nested[key]]] : [])),
     ...(Number.isSafeInteger(nested.physicalAttempt) && Number(nested.physicalAttempt) > 0 ? { physicalAttempt: Number(nested.physicalAttempt) } : {}),

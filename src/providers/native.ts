@@ -1,3 +1,4 @@
+import { parseProviderFinalCandidate } from "./finalCandidate";
 import { parseProviderResponseEvidence } from "./responseEvidence";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { isTauriRuntime } from "../storage";
@@ -18,6 +19,7 @@ import type {
 import type { ProviderTimeoutPolicy } from "./streamingPolicy";
 
 type NativeChatResponse = {
+  final_candidate?: unknown;
   response_evidence?: unknown;
   content: string;
   reasoning_content?: string | null;
@@ -198,6 +200,8 @@ export async function providerChatAttempt(input: {
     ...(input.transportEnvelope ? { transport: structuredClone(input.transportEnvelope) } : {}),
   });
   return {
+    ...(parseProviderFinalCandidate(response.final_candidate) ? { finalCandidate: parseProviderFinalCandidate(response.final_candidate) } : {}),
+    transportRequestId: requestId,
     ...(parseProviderResponseEvidence(response.response_evidence) ? { responseEvidence: parseProviderResponseEvidence(response.response_evidence) } : {}),
     content: response.content,
     reasoningContent: response.reasoning_content ?? undefined,

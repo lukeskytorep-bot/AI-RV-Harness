@@ -259,3 +259,32 @@ it.each(["sessionId","kind","packetHash","auditId"] as const)("T1 FIX: mismatche
  await h.repository.appendSessionEvent("s",{eventType:"LEARNING_SETTLEMENT",metadata:{settlement}});
  const confirm=vi.fn(async()=>false);expect(await prepareTrainingRunResume({repository:h.repository,runId:h.run.id,fallbackLanguage:"en",confirmUncertainViewerReview:confirm})).toBeNull();expect(confirm).toHaveBeenCalledOnce();
 });
+async function t2Candidate(content:string, nativeValidation:"accepted"|"rejected"="accepted") {
+ return {content,contentSha256:await sha256Text(content),byteLength:new TextEncoder().encode(content).length,omittedForSize:false,envelopeRemoved:false,nativeValidation};
+}
+it.each(["field_guide","viewer_notes"] as const)("T2 SQLite %s: native rejected final candidate remains available locally without another dispatch after settlement",async kind=>{
+ const h=await setup();const raw='{"notes":"Do not print <think> markers. Żółć 🌍"}';const finalCandidate=await t2Candidate(raw,"rejected");
+ const chat=vi.fn(async()=>{throw new ProviderCallError({code:"unknown",phase:"validating_response",message:"provider response reasoning_details must be an array or null",providerRequestId:"native-rejected",responseEvidence:{version:1,transportOutcome:"response_finished",boundary:"sse_done"},finalCandidate});});
+ const invoke=()=>kind==="viewer_notes"?runViewerNoteReflection(reflectionInput(h,chat)):runFieldGuideUpdate({repository:h.repository,trainingRun:h.run,sessionId:"s",postRevealReview:"review",providerConfig:h.provider,model:h.model,budgetPolicy:"training_reveal",chat});
+ const result=await invoke();expect(result?.settlement?.settlement).toBe("failed_preserved");expect(chat).toHaveBeenCalledTimes(2);
+ const rejected=(await h.repository.listSessionEvents("s")).filter(e=>e.metadata?.validation==="native_rejected");expect(rejected).toHaveLength(2);
+ for(const event of rejected){expect(event.metadata?.finalCandidate).toEqual(finalCandidate);expect(event.metadata?.attemptId).toEqual(expect.any(String));expect(event.metadata?.providerRequestId).toBe("native-rejected");expect(event.metadata?.transportRequestId).toBeUndefined();}
+ expect(new Set(rejected.map(e=>e.metadata?.attemptId)).size).toBe(2);
+ await invoke();expect(chat).toHaveBeenCalledTimes(2);expect((await h.repository.listSessionEvents("s")).filter(e=>e.metadata?.validation==="native_rejected")).toHaveLength(2);
+});
+it("T2 SQLite: invalid learning JSON retains native candidate and a separate validation result",async()=>{
+ const h=await setup();const raw="Malformed final JSON with literal <think>data</think>";const finalCandidate=await t2Candidate(raw);const chat=vi.fn(async()=>({...finished(raw),finalCandidate,providerRequestId:"candidate-id",transportRequestId:"transport-id",reasoningContent:"PRIVATE"}));
+ const result=await runViewerNoteReflection(reflectionInput(h,chat));expect(result?.status).toBe("FAILED_PARSE");const events=await h.repository.listSessionEvents("s");
+ const candidates=events.filter(e=>e.metadata?.state==="finished");expect(candidates).toHaveLength(2);
+ for(const event of candidates){expect((event.metadata?.response as {finalCandidate:unknown}).finalCandidate).toEqual(finalCandidate);expect(event.metadata?.transportRequestId).toBe("transport-id");expect(JSON.stringify(event.metadata)).not.toContain("PRIVATE");}
+ const validations=events.filter(e=>e.eventType==="LEARNING_CANDIDATE_VALIDATION");expect(validations).toHaveLength(2);expect(validations.every(e=>e.metadata?.validation==="learning_rejected")).toBe(true);
+ expect(validations.map(e=>e.metadata?.attemptId)).toEqual(candidates.map(e=>e.metadata?.attemptId));
+});
+it("T2 SQLite: corrupt candidate hash fails closed without creating memory or failed_preserved",async()=>{
+ const h=await setup();const finalCandidate={...await t2Candidate("raw"),contentSha256:"0".repeat(64)};const chat=vi.fn(async()=>({...finished('{"decision":"NO_CHANGE","notes":null,"changeSummary":"ok"}'),finalCandidate}));
+ await expect(runViewerNoteReflection(reflectionInput(h,chat))).rejects.toThrow("candidate content hash mismatch");expect(chat).toHaveBeenCalledTimes(1);expect((await h.repository.getViewerNoteBundle(h.notes.aiIdentityId))?.versions).toHaveLength(0);expect((await h.repository.listSessionEvents("s")).some(e=>e.eventType==="LEARNING_SETTLEMENT")).toBe(false);
+});
+it("T2 SQLite: Stop prevents candidate persistence even after a completed native response",async()=>{
+ const h=await setup();const controller=new AbortController();const finalCandidate=await t2Candidate("final candidate");const chat=vi.fn(async()=>{controller.abort(new Error("user Stop"));return {...finished("final candidate"),finalCandidate};});
+ await expect(runViewerNoteReflection({...reflectionInput(h,chat),signal:controller.signal})).rejects.toThrow("user Stop");expect((await h.repository.listSessionEvents("s")).some(e=>JSON.stringify(e.metadata).includes("finalCandidate"))).toBe(false);
+});

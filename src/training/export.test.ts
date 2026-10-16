@@ -93,3 +93,12 @@ describe("training export", () => {
   });
 
 });
+it("T2 exports bounded rejected candidates and validation for offline review without private reasoning",async()=>{
+ const {sha256Text}=await import("../application/sha256");const content='{"notes":"literal <think>data</think>"}';
+ const finalCandidate={content,contentSha256:await sha256Text(content),byteLength:new TextEncoder().encode(content).length,omittedForSize:false,envelopeRemoved:false,nativeValidation:"rejected"};
+ const run={id:"run",runNumber:1,name:"Training",createdAt:"2026-10-16T00:00:00Z",updatedAt:"2026-10-16T00:00:00Z",status:"Interrupted",profileId:"p",workspaceId:"w",sessionIds:[],completedTargetIds:[],targetIds:["t"],categories:[],judgeModelRoutes:[],currentIndex:0,protocolVariant:"extended",activeTargetCheckpoint:{targetId:"t",sessionId:"pending",stage:"field_guide_update_completed"}} as unknown as TrainingRunRecord;
+ const repository={listRvSessions:vi.fn(async()=>[]),listWorkspaces:vi.fn(async()=>[]),listProfiles:vi.fn(async()=>[]),listSessionEvents:vi.fn(async()=>[{sessionId:"pending",eventType:"LEARNING_PHYSICAL_ATTEMPT",metadata:{kind:"viewer_notes",packetHash:"packet",slot:0,attemptId:"attempt:1",providerRequestId:"provider-id",validation:"native_rejected",finalCandidate:{...finalCandidate,reasoning:"PRIVATE"},reasoning:"PRIVATE",secret:"SECRET"}}]),recordExport:vi.fn()} as unknown as AppRepository;
+ writeExportPackage.mockClear();await exportTrainingRun(repository,run,[],"en");
+ const files=writeExportPackage.mock.calls[0][0].files as Array<{relativePath:string;content:string}>;const report=files.find(f=>f.relativePath==="learning_candidates.json")!;
+ expect(report.content).not.toMatch(/PRIVATE|SECRET/);expect(JSON.parse(report.content)[0]).toMatchObject({sessionId:"pending",attemptId:"attempt:1",providerRequestId:"provider-id",validation:"native_rejected",finalCandidate});expect(repository.listSessionEvents).toHaveBeenCalledTimes(1);
+});

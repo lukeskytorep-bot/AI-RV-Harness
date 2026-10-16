@@ -16,11 +16,13 @@ import {BrowserTelepathicExchangeRepository} from "../../storage/browser/telepat
 import {createTelepathicSeriesState,telepathicConversationHumanStep} from "../../telepathicExchange/engine";
 import {TelepathicExchangePanel} from "./TelepathicExchangePanel";
 
+// Isolate asynchronous writes and lease keys from a previous unmounted fixture.
+let fixtureSequence = 0;
 async function fixture(pl:boolean,prepare=false){
  (globalThis as {IS_REACT_ACT_ENVIRONMENT?:boolean}).IS_REACT_ACT_ENVIRONMENT=true;
  localStorage.clear();mock.dispatch.mockReset();mock.dispatch.mockResolvedValue({content:"New rounded perception",finishReason:"stop",usage:{}});
  const ai=(id:string)=>({id,kind:"ai" as const,displayName:id,ai:{profileId:id,profileName:id,workspaceId:"w",aiIdentityId:id,providerConfigId:"c",credentialId:"k",credentialFingerprint:"f",modelId:"m",route:"m"}});
- const config:TelepathicSeriesConfig={schemaVersion:1,protocolVersion:"fixed_lead_v1",leadInstructionVersion:"v1",maxGuidanceCycles:3,seriesId:"human-form",seriesWorkspaceId:"w",mode:"conversation_exchange",language:pl?"pl":"en",participants:[{id:"human",kind:"human",displayName:"Edward"},ai("a"),ai("b"),ai("c")],roundCount:2,topic:"location",discloseTopicToReceivers:false,senderPolicy:{kind:"human_only",humanParticipantId:"human"}};
+ const config:TelepathicSeriesConfig={schemaVersion:1,protocolVersion:"fixed_lead_v1",leadInstructionVersion:"v1",maxGuidanceCycles:3,seriesId:`human-form-${++fixtureSequence}`,seriesWorkspaceId:"w",mode:"conversation_exchange",language:pl?"pl":"en",participants:[{id:"human",kind:"human",displayName:"Edward"},ai("a"),ai("b"),ai("c")],roundCount:2,topic:"location",discloseTopicToReceivers:false,senderPolicy:{kind:"human_only",humanParticipantId:"human"}};
  const store=new BrowserTelepathicExchangeRepository();let state=createTelepathicSeriesState(config);state.status="paused";
  if(!prepare){const round=state.rounds[0];round.status="blind";round.target={schemaVersion:1,roundId:round.assignment.roundId,senderParticipantId:"human",content:"FROZEN TARGET",assets:[],contentSha256:"hash",status:"transmission_ready",lockedAt:"t",transmissionReadyAt:"t"};for(const id of ["a","b","c"])round.blindByParticipant[id]={participantId:id,first:"Initial impression",status:"first_complete",providerAttemptCount:1};}
  await store.saveTelepathicSeries(state);

@@ -154,17 +154,11 @@ fn parse_sse_event(event: &[u8]) -> Result<Option<SseFrame>, ProviderCallError> 
     }
 }
 
-const LIVE_REASONING_TAGS: [(&str, &str); 6] = [
-    ("<think>", "</think>"),
-    ("<thinking>", "</thinking>"),
-    ("<reason>", "</reason>"),
-    ("<reasoning>", "</reasoning>"),
-    ("<thought>", "</thought>"),
-    ("<|begin_of_thought|>", "<|end_of_thought|>"),
-];
+use super::reasoning::REASONING_TAGS;
 
 #[derive(Default)]
 struct LiveVisibleContentFilter {
+    final_started: bool,
     pending: String,
     reasoning_close_tag: Option<&'static str>,
 }
@@ -192,9 +186,7 @@ impl LiveVisibleContentFilter {
                             let text = part
                                 .get("text")
                                 .and_then(Value::as_str)
-                                .or_else(|| part.pointer("/text/value").and_then(Value::as_str))
-                                .or_else(|| part.get("thinking").and_then(Value::as_str))
-                                .or_else(|| part.get("reasoning").and_then(Value::as_str));
+                                .or_else(|| part.pointer("/text/value").and_then(Value::as_str));
                             if let Some(text) = text {
                                 visible.push_str(&self.push_text(text));
                             }
@@ -209,6 +201,7 @@ impl LiveVisibleContentFilter {
     }
 
     fn push_text(&mut self, text: &str) -> String {
+        if self.final_started { return text.to_string(); }
         self.pending.push_str(text);
         let mut visible = String::new();
 
@@ -231,26 +224,20 @@ impl LiveVisibleContentFilter {
                 break;
             }
 
-            let lower = self.pending.to_ascii_lowercase();
-            let next_open = LIVE_REASONING_TAGS
-                .iter()
-                .filter_map(|(open, close)| lower.find(*open).map(|offset| (offset, *open, *close)))
-                .min_by_key(|entry| entry.0);
-
-            if let Some((offset, open, close)) = next_open {
-                visible.push_str(&self.pending[..offset]);
-                self.pending.drain(..offset + open.len());
-                self.reasoning_close_tag = Some(close);
+            let trimmed = self.pending.trim_start();
+            if trimmed.is_empty() { break; }
+            let whitespace = self.pending.len() - trimmed.len();
+            let lower = trimmed.to_ascii_lowercase();
+            if let Some((open, close)) = REASONING_TAGS.iter().find(|(open, _)| lower.starts_with(*open)) {
+                self.pending.drain(..whitespace + open.len());
+                self.reasoning_close_tag = Some(*close);
                 continue;
             }
-
-            let opens = LIVE_REASONING_TAGS.map(|(open, _)| open);
-            let keep = longest_ascii_suffix_prefix(&self.pending, &opens);
-            let emit_len = self.pending.len().saturating_sub(keep);
-            if emit_len > 0 {
-                visible.push_str(&self.pending[..emit_len]);
-                self.pending.drain(..emit_len);
-            }
+            // A tag can be split across SSE chunks. Hold only the undecided
+            // leading prefix; never rescan JSON or final prose for later tags.
+            if REASONING_TAGS.iter().any(|(open, _)| open.starts_with(lower.as_str())) { break; }
+            self.final_started = true;
+            visible.push_str(&std::mem::take(&mut self.pending));
             break;
         }
 
@@ -486,65 +473,9 @@ impl OpenRouterStreamAccumulator {
                 .and_then(|choices| choices.first())
                 .and_then(|choice| choice.get("delta"))
                 .is_some_and(|delta| {
-                    let content = stream_text(delta.get("content"));
-                    let reasoning = ["reasoning", "reasoning_content", "thinking"]
-                        .iter()
-                        .find_map(|field| {
-                            let value = stream_text(delta.get(*field));
-                            (!value.is_empty()).then_some(value)
-                        })
-                        .unwrap_or_default();
-                    first_semantic_chunk(
-                        delta,
-                        &content,
-                        &reasoning,
-                        delta.get("reasoning_details").and_then(Value::as_array).map(Vec::as_slice),
-                    )
-                });
-            return Err(stream_provider_error(
-                &payload,
-                secret,
-                request_id,
-                self.semantic_output_started || event_has_semantic_output,
-            ));
-        }
-
-        if let Some(value) = payload.get("id").and_then(Value::as_str) {
-            self.response_id = Some(value.to_string());
-        }
-        if let Some(value) = payload.get("model").and_then(Value::as_str) {
-            self.actual_model = Some(value.to_string());
-        }
-        if let Some(value) = payload.get("provider").and_then(Value::as_str) {
-            self.actual_provider = Some(value.to_string());
-        }
-        if let Some(value) = payload.get("openrouter_metadata") {
-            self.openrouter_metadata = Some(value.clone());
-        }
-        if let Some(value) = payload.get("usage") {
-            if !value.is_null() {
-                self.usage = Some(value.clone());
-            }
-        }
-
-        let Some(choice) = payload.get("choices").and_then(Value::as_array).and_then(|choices| choices.first()) else {
-            return Ok(Vec::new());
-        };
-        if let Some(value) = choice.get("finish_reason").and_then(Value::as_str) {
-            self.finish_reason = Some(value.to_string());
-        }
-        if let Some(value) = choice.get("native_finish_reason").and_then(Value::as_str) {
-            self.native_finish_reason = Some(value.to_string());
-        }
-        let delta = choice.get("delta").unwrap_or(&Value::Null);
-        let content = stream_text(delta.get("content"));
-        let reasoning = ["reasoning", "reasoning_content", "thinking"]
-            .iter()
-            .find_map(|field| {
-                let value = stream_text(delta.get(*field));
-                (!value.is_empty()).then_some(value)
-            })
-            .unwrap_or_default();
+                    let content = super::reasoning::extract_openai_text(delta.get("content"));
+        let (native_reasoning, _) = super::reasoning::extract_openai_reasoning(delta, None);
+        let reasoning = native_reasoning.unwrap_or_default();
         let reasoning_details_value = delta.get("reasoning_details");
         let reasoning_details = reasoning_details_value.and_then(Value::as_array);
         if first_semantic_chunk(delta, &content, &reasoning, reasoning_details.map(Vec::as_slice)) {
@@ -651,22 +582,6 @@ fn first_semantic_chunk(delta: &Value, content: &str, reasoning: &str, reasoning
         || delta.get("tool_calls").and_then(Value::as_array).is_some_and(|calls| !calls.is_empty())
 }
 
-fn stream_text(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .filter_map(|part| match part {
-                Value::String(text) => Some(text.as_str()),
-                Value::Object(_) => part.get("text").and_then(Value::as_str)
-                    .or_else(|| part.pointer("/text/value").and_then(Value::as_str)),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join(""),
-        _ => String::new(),
-    }
-}
 
 fn stream_provider_error(payload: &Value, secret: &str, request_id: Option<&str>, semantic_output_started: bool) -> ProviderCallError {
     let (provider_error_type, provider_code) = provider_error_metadata(payload);

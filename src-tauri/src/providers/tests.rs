@@ -1876,11 +1876,11 @@ fn s2_live_filter_hides_tagged_reasoning_without_changing_raw_accumulation() {
 
     for (open, close) in cases {
         let mut accumulator = OpenRouterStreamAccumulator::default();
-        let raw = format!("before {open}PRIVATE{close} VISIBLE");
+        let raw = format!("{open}PRIVATE{close} VISIBLE");
         let events = accumulator.process_data_with_events(&json!({
             "choices": [{"delta": {"content": raw.clone()}, "finish_reason": "stop"}]
         }).to_string(), "secret", Some("privacy-tags")).unwrap();
-        assert_eq!(streamed_visible_text(&events), "before  VISIBLE");
+        assert_eq!(streamed_visible_text(&events), " VISIBLE");
         accumulator.process_data_with_events("[DONE]", "secret", Some("privacy-tags")).unwrap();
         let result = accumulator.finish(Some("privacy-tags".to_string())).unwrap();
         assert_eq!(result.payload.pointer("/choices/0/message/content").and_then(Value::as_str), Some(raw.as_str()));
@@ -1914,7 +1914,7 @@ fn s2_live_filter_holds_split_reasoning_tags_until_visibility_is_known() {
 fn s2_live_filter_handles_multiple_reasoning_blocks_and_plain_text() {
     let mut accumulator = OpenRouterStreamAccumulator::default();
     let events = accumulator.process_data_with_events(&json!({
-        "choices": [{"delta": {"content": "A<think>x</think>B<reason>y</reason>C"}, "finish_reason": null}]
+        "choices": [{"delta": {"content": "<think>x</think><reason>y</reason>ABC"}, "finish_reason": null}]
     }).to_string(), "secret", Some("privacy-multiple")).unwrap();
     assert_eq!(streamed_visible_text(&events), "ABC");
     let plain = accumulator.process_data_with_events(&json!({
@@ -2251,4 +2251,118 @@ fn r1_boxed_metadata_preserves_flat_ipc_including_all_completion_evidence() {
             "usage":{"inputTokens":5,"outputTokens":7,"reasoningTokens":2,"totalTokens":12,"costUsd":0.03}
         }
     }));
+}
+
+#[test]
+fn t2_json_literals_and_unicode_survive_native_reasoning_normalization() {
+    for text in [
+        r#"{"decision":"UPDATE","notes":"Do not print <think> markers.","changeSummary":"Clean output"}"#,
+        r#"{"decision":"UPDATE","notes":"Literal <think>example</think> stays.","changeSummary":"Żółć 🌍 \"quote\" \\escape"}"#,
+        "Plain text with literal <reason>example</reason> remains.",
+    ] {
+        assert!(split_tagged_reasoning(text).is_none());
+        let payload = json!({"choices":[{"message":{"content":text,"reasoning":"PRIVATE"},"finish_reason":"stop"}]});
+        let proof = super::response_evidence::finished(Some(&payload), Some("t2-header"), "body_read");
+        let parsed = parse_finished_chat_response(ProviderKind::Openrouter, &payload, Some("t2-header".to_string()), false, proof).unwrap();
+        assert_eq!(parsed.content, text);
+        assert_eq!(parsed.reasoning_content.as_deref(), Some("PRIVATE"));
+        let candidate = parsed.final_candidate.unwrap();
+        assert_eq!(candidate.content.as_deref(), Some(text));
+        assert_eq!(candidate.native_validation, "accepted");
+        assert!(!candidate.envelope_removed);
+        use sha2::{Digest, Sha256};
+        assert_eq!(candidate.content_sha256, format!("{:x}", Sha256::digest(text.as_bytes())));
+        assert!(!serde_json::to_string(&candidate).unwrap().contains("PRIVATE"));
+    }
+}
+
+#[test]
+fn t2_candidate_survives_native_rejection_and_is_bounded_without_truncation() {
+    let text = r#"{"notes":"literal <think> and </think> are data"}"#;
+    let payload = json!({"choices":[{"message":{"content":text,"reasoning":"PRIVATE","reasoning_details":"invalid"},"finish_reason":"stop"}]});
+    let proof = super::response_evidence::finished(Some(&payload), Some("t2-rejected"), "body_read");
+    let failure = parse_finished_chat_response(ProviderKind::Openrouter, &payload, Some("t2-rejected".to_string()), false, proof).unwrap_err();
+    let wire = serde_json::to_value(&failure).unwrap();
+    assert_eq!(wire["finalCandidate"]["content"], text);
+    assert_eq!(wire["finalCandidate"]["nativeValidation"], "rejected");
+    assert_eq!(wire["providerRequestId"], "t2-rejected");
+    assert!(!wire.to_string().contains("PRIVATE"));
+    assert!(std::mem::size_of::<ProviderCallError>() < 128);
+    let huge = "x".repeat(2_000_001);
+    let payload = json!({"choices":[{"message":{"content":huge}}]});
+    let candidate = super::response_parsers::capture_final_candidate(ProviderKind::Openrouter, &payload).unwrap();
+    assert!(candidate.content.is_none());
+    assert!(candidate.omitted_for_size);
+    assert_eq!(candidate.byte_length, 2_000_001);
+}
+
+#[test]
+fn t2_prefix_envelopes_exclude_private_reasoning_from_candidates() {
+    for raw in [" \n<think>PRIVATE</think>{\"notes\":\"literal <think>\"}", "<THINK>PRIVATE</THINK><reason>PRIVATE2</reason>{\"notes\":\"literal <think>\"}"] {
+        let payload = json!({"choices":[{"message":{"content":raw}}]});
+        let candidate = super::response_parsers::capture_final_candidate(ProviderKind::Openrouter, &payload).unwrap();
+        assert_eq!(candidate.content.as_deref(), Some("{\"notes\":\"literal <think>\"}"));
+        assert!(candidate.envelope_removed);
+        assert!(!serde_json::to_string(&candidate).unwrap().contains("PRIVATE"));
+    }
+    let payload = json!({"choices":[{"message":{"content":"<think>PRIVATE unclosed"}}]});
+    let candidate = super::response_parsers::capture_final_candidate(ProviderKind::Openrouter, &payload).unwrap();
+    assert_eq!(candidate.content.as_deref(), Some(""));
+}
+
+#[test]
+fn t2_stream_and_final_parser_agree_at_every_unicode_chunk_boundary() {
+    for (raw, expected) in [
+        ("{\"notes\":\"Żółć 🌍 <think>literal</think>\"}", "{\"notes\":\"Żółć 🌍 <think>literal</think>\"}"),
+        ("<think>PRIVATE</think>{\"notes\":\"Żółć <think> literal\"}", "{\"notes\":\"Żółć <think> literal\"}"),
+        ("<think>PRIVATE</think><reason>PRIVATE2</reason>Plain <think>literal</think>", "Plain <think>literal</think>"),
+    ] {
+        for boundary in raw.char_indices().map(|(i, _)| i).chain(std::iter::once(raw.len())) {
+            let mut accumulator = OpenRouterStreamAccumulator::default();
+            let mut visible = String::new();
+            for (chunk, finish) in [(&raw[..boundary], Value::Null), (&raw[boundary..], json!("stop"))] {
+                let events = accumulator.process_data_with_events(&json!({"choices":[{"delta":{"content":chunk},"finish_reason":finish}]}).to_string(), "test-secret", Some("t2-stream")).unwrap();
+                visible.push_str(&streamed_visible_text(&events));
+            }
+            let events = accumulator.process_data_with_events("[DONE]", "test-secret", Some("t2-stream")).unwrap();
+            visible.push_str(&streamed_visible_text(&events));
+            let result = accumulator.finish(Some("t2-stream".to_string())).unwrap();
+            let parsed = parse_finished_chat_response(ProviderKind::Openrouter, &result.payload, result.request_id, result.semantic_output_started, result.response_evidence).unwrap();
+            assert_eq!(visible, expected, "boundary {boundary}");
+            assert_eq!(parsed.content, expected);
+            assert_eq!(parsed.final_candidate.unwrap().content.as_deref(), Some(expected));
+        }
+    }
+}
+
+#[test]
+fn t2_explicit_reasoning_fields_never_become_final_candidates() {
+    let text = "{\"notes\":\"literal <think>\"}";
+    let payload = json!({"choices":[{"message":{"content":[{"type":"reasoning","text":"PRIVATE_A"},{"thinking":"PRIVATE_B"},{"reasoning":"PRIVATE_C"},{"type":"output_text","text":text}],"reasoning":"PRIVATE_D"}}]});
+    let candidate = super::response_parsers::capture_final_candidate(ProviderKind::Openrouter, &payload).unwrap();
+    assert_eq!(candidate.content.as_deref(), Some(text));
+    assert!(!serde_json::to_string(&candidate).unwrap().contains("PRIVATE"));
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    accumulator.process_data_with_events(&json!({"choices":[{"delta":{"content":payload.pointer("/choices/0/message/content").unwrap().clone()},"finish_reason":"stop"}]}).to_string(), "secret", Some("t2-typed")).unwrap();
+    accumulator.process_data_with_events("[DONE]", "secret", Some("t2-typed")).unwrap();
+    let streamed = accumulator.finish(Some("t2-typed".to_string())).unwrap();
+    let parsed = parse_finished_chat_response(ProviderKind::Openrouter, &streamed.payload, streamed.request_id, streamed.semantic_output_started, streamed.response_evidence).unwrap();
+    assert_eq!(parsed.content, text);
+    assert!(!serde_json::to_string(&parsed.final_candidate).unwrap().contains("PRIVATE"));
+}
+
+#[test]
+fn t2_google_and_signed_anthropic_candidates_exclude_separate_thought_channels() {
+    let text = r#"{"notes":"literal <think>example</think>"}"#;
+    for (provider, payload) in [
+        (ProviderKind::Google, json!({"candidates":[{"content":{"parts":[{"thought":true,"text":"PRIVATE"},{"text":text}]},"finishReason":"STOP"}]})),
+        (ProviderKind::Anthropic, json!({"content":[{"type":"thinking","thinking":"PRIVATE","signature":"opaque"},{"type":"text","text":text}],"stop_reason":"end_turn"})),
+    ] {
+        let proof = super::response_evidence::finished(Some(&payload), Some("t2-provider"), "body_read");
+        let parsed = parse_finished_chat_response(provider, &payload, Some("t2-provider".to_string()), false, proof).unwrap();
+        assert_eq!(parsed.content, text);
+        let candidate = parsed.final_candidate.unwrap();
+        assert_eq!(candidate.content.as_deref(), Some(text));
+        assert!(!serde_json::to_string(&candidate).unwrap().contains("PRIVATE"));
+    }
 }

@@ -1,3 +1,4 @@
+import { parseProviderFinalCandidate } from "../providers/finalCandidate";
 import { assertAbortOwnership } from "../application/abortOwnership";
 import { sha256Text } from "../application/sha256";
 import { callWithAnalyticalOutputRecovery, isOutputLimitFailure } from "../providers/outputRecovery";
@@ -52,6 +53,13 @@ export async function saveLearningSettlement(repository: AppRepository, value: L
   return settled;
 }
 
+async function checkedFinalCandidate(value: unknown) {
+  const candidate = parseProviderFinalCandidate(value);
+  if (value !== undefined && !candidate) throw new Error("Invalid final candidate metadata.");
+  if (candidate?.content !== null && candidate?.content !== undefined && await sha256Text(candidate.content) !== candidate.contentSha256) throw new Error("Final candidate content hash mismatch.");
+  return candidate;
+}
+
 /** One persistent allowance covers generation, formatting, capacity and transport retries. */
 export async function executeLearningProposal<T>(input: {
   repository: AppRepository; sessionId: string; packetHash: string; kind: LearningSettlement["kind"];
@@ -73,6 +81,7 @@ export async function executeLearningProposal<T>(input: {
     const end = entries.find(e => e.metadata?.slot === slot && e.metadata?.state === "finished");
     const resolved = entries.find(e => e.metadata?.slot === slot && e.metadata?.state === "resolved");
     if (start && !end && !resolved) throw new LearningUncertainError();
+    let attemptId = start?.metadata?.attemptId;
     let response: ProviderChatResponse | undefined;
     let settings: Awaited<ReturnType<typeof callWithAnalyticalOutputRecovery>>["settings"] | undefined;
     let providerFailure: LearningProposalFailure | undefined;
@@ -84,6 +93,7 @@ export async function executeLearningProposal<T>(input: {
       if (end.metadata?.failureStatus === "FAILED_OUTPUT_PREFLIGHT") throw new LearningProposalFailure("FAILED_OUTPUT_PREFLIGHT", String(end.metadata.message), slot + 1);
       if (end.metadata?.response) {
         response = end.metadata.response as ProviderChatResponse;
+        await checkedFinalCandidate(response.finalCandidate);
         if (await sha256Text(response.content) !== end.metadata.responseHash) throw new Error("Stored learning response hash mismatch.");
         settings = end.metadata.settings as NonNullable<typeof settings>;
       } else providerFailure = new LearningProposalFailure("FAILED_PROVIDER", String(end.metadata?.message), slot + 1, undefined, end.metadata?.outputRecoveryRequired === true);
@@ -104,7 +114,8 @@ export async function executeLearningProposal<T>(input: {
               configuredRetries: 0, operationId: `${kind}.learning`, operationKind: input.analytical.operationKind,
               attempt: input.chat,
               onAttemptStart: async context => {
-                try { await assertAbortOwnership(signal); await repository.appendSessionEvent(sessionId, { eventType: LEARNING_ATTEMPT_EVENT, metadata: { kind, packetHash, slot, state: "reserved", attemptId: context.logicalRequestId } }); }
+                attemptId = `${context.logicalRequestId}:${context.physicalAttempt}`;
+                try { await assertAbortOwnership(signal); await repository.appendSessionEvent(sessionId, { eventType: LEARNING_ATTEMPT_EVENT, metadata: { kind, packetHash, slot, state: "reserved", attemptId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt } }); }
                 catch (cause) { persistenceFailure = cause; throw cause; }
               },
             });
@@ -123,7 +134,8 @@ export async function executeLearningProposal<T>(input: {
           const outcome = classifyProviderAttempt(cause.causeError.details);
           const outputRecoveryRequired = cause.causeError.details.httpStatus === undefined && requiresFinalOutputRecovery(cause);
           const responseEvidence = parseProviderResponseEvidence(cause.causeError.details.responseEvidence);
-          await repository.appendSessionEvent(sessionId, { eventType: LEARNING_ATTEMPT_EVENT, metadata: { kind, packetHash, slot, state: "finished", outcome, message: cause.message, outputRecoveryRequired, ...(responseEvidence ? { responseEvidence } : {}) } });
+          const finalCandidate = await checkedFinalCandidate(cause.causeError.details.finalCandidate);
+          await repository.appendSessionEvent(sessionId, { eventType: LEARNING_ATTEMPT_EVENT, metadata: { kind, packetHash, slot, state: "finished", outcome, attemptId, providerRequestId: cause.causeError.details.providerRequestId, transportRequestId: cause.causeError.details.transportRequestId, validation: "native_rejected", ...(finalCandidate ? { finalCandidate } : {}), message: cause.message, outputRecoveryRequired, ...(responseEvidence ? { responseEvidence } : {}) } });
           if (outcome === "dispatch_unknown") throw new LearningUncertainError();
           providerFailure = new LearningProposalFailure("FAILED_PROVIDER", cause.message, slot + 1, undefined, outputRecoveryRequired);
         } else {
@@ -134,28 +146,37 @@ export async function executeLearningProposal<T>(input: {
       }
       if (response) {
         await assertAbortOwnership(signal);
+        const finalCandidate = await checkedFinalCandidate(response.finalCandidate);
+        await assertAbortOwnership(signal);
         // Store only final output, never private reasoning. Bounded by the native response limit.
         if (new TextEncoder().encode(response.content).length > 2_000_000) {
           const outcome = classifyProviderAttempt({ responseEvidence: response.responseEvidence });
           const message = "Learning final response exceeds the bounded local replay capacity; previous memory retained.";
-          await repository.appendSessionEvent(sessionId, { eventType: LEARNING_ATTEMPT_EVENT, metadata: { kind, packetHash, slot, state: "finished", outcome, failureStatus: "FAILED_OUTPUT_PREFLIGHT", message, responseHash: await sha256Text(response.content) } });
+          await repository.appendSessionEvent(sessionId, { eventType: LEARNING_ATTEMPT_EVENT, metadata: { kind, packetHash, slot, state: "finished", outcome, attemptId, ...(finalCandidate ? { finalCandidate } : {}), failureStatus: "FAILED_OUTPUT_PREFLIGHT", message, responseHash: await sha256Text(response.content) } });
           if (outcome === "dispatch_unknown") throw new LearningUncertainError();
           throw new LearningProposalFailure("FAILED_OUTPUT_PREFLIGHT", message, slot + 1);
         }
         responseOutcome = classifyProviderAttempt({ responseEvidence: response.responseEvidence });
-        const safeResponse = { content: response.content, finishReason: response.finishReason, providerRequestId: response.providerRequestId };
-        await repository.appendSessionEvent(sessionId, { eventType: LEARNING_ATTEMPT_EVENT, metadata: { kind, packetHash, slot, state: "finished", outcome: responseOutcome, response: safeResponse, responseHash: await sha256Text(response.content), settings } });
+        const safeResponse = { ...(finalCandidate ? { finalCandidate } : {}), content: response.content, finishReason: response.finishReason, providerRequestId: response.providerRequestId };
+        await repository.appendSessionEvent(sessionId, { eventType: LEARNING_ATTEMPT_EVENT, metadata: { kind, packetHash, slot, state: "finished", outcome: responseOutcome, attemptId, providerRequestId: response.providerRequestId, transportRequestId: response.transportRequestId, response: safeResponse, responseHash: await sha256Text(response.content), settings } });
       }
     }
     if (providerFailure) { lastFailure = providerFailure; continue; }
     if (!response || !settings) throw new Error("Learning response/settings unavailable.");
-    try { return { parsed: input.parse(response), response, settings, attempts: slot + 1 }; }
+    let parsed: T;
+    try { parsed = input.parse(response); }
     catch (cause) {
       if (!(cause instanceof LearningProposalFailure)) throw cause;
       if (responseOutcome === "dispatch_unknown") throw new LearningUncertainError();
       lastFailure = new LearningProposalFailure(cause.status, cause.message, slot + 1, response, cause.status === "FAILED_PROVIDER" && requiresFinalOutputRecovery(cause));
+      await assertAbortOwnership(signal);
+      await repository.appendSessionEvent(sessionId, { eventType: "LEARNING_CANDIDATE_VALIDATION", metadata: { kind, packetHash, slot, attemptId, validation: "learning_rejected", status: cause.status, message: cause.message, responseHash: await sha256Text(response.content) } });
       messages = input.repairMessages(response, lastFailure);
+      continue;
     }
+    await assertAbortOwnership(signal);
+    await repository.appendSessionEvent(sessionId, { eventType: "LEARNING_CANDIDATE_VALIDATION", metadata: { kind, packetHash, slot, attemptId, validation: "learning_accepted", responseHash: await sha256Text(response.content) } });
+    return { parsed, response, settings, attempts: slot + 1 };
   }
   throw lastFailure ?? new Error("Learning allowance exhausted without a recorded result.");
 }
