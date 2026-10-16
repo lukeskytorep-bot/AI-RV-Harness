@@ -353,6 +353,8 @@ async function runFieldGuideUpdateOwned(input: {
   maxRetries?: number;
   signal?: AbortSignal;
   budgetPolicy: LearningBudgetPolicy;
+  failurePolicy?: import("./learningExecution").LearningFailurePolicy;
+  unavailableReviewReason?: string;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
 }): Promise<FieldGuideUpdateResult | null> {
   const [snapshot, reveal, evidence] = await Promise.all([
@@ -454,7 +456,12 @@ async function runFieldGuideUpdateOwned(input: {
     await persistAudit(input.repository, input.trainingRun.id, resolved);
     return settle(resolved);
   }
-  if (existing && !hasLedger) throw new Error("Historical Field Guide operation requires explicit resolution; no automatic resend.");
+  if (existing && !hasLedger) {
+    if (input.failurePolicy !== "preserve_and_continue") throw new Error("Historical Field Guide operation requires explicit resolution; no automatic resend.");
+    const preserved = { ...existing, status: "FAILED_PROVIDER" as const, failureMessage: "Historical learning result unavailable; previous memory preserved automatically without resending.", completedAt: new Date().toISOString() };
+    await persistAudit(input.repository, input.trainingRun.id, preserved);
+    return settle(preserved);
+  }
 
   assertLearningBudgetPolicy(input.budgetPolicy);
   const auditId = existing?.id ?? `field_guide_update_${crypto.randomUUID()}`;
@@ -477,6 +484,13 @@ async function runFieldGuideUpdateOwned(input: {
   };
   await persistAudit(input.repository, input.trainingRun.id, audit);
 
+  if (input.unavailableReviewReason) {
+    await assertAbortOwnership(input.signal);
+    audit = { ...audit, status: "FAILED_PROVIDER", failureMessage: input.unavailableReviewReason, completedAt: new Date().toISOString() };
+    await persistAudit(input.repository, input.trainingRun.id, audit);
+    return settle(audit);
+  }
+
   const imageArtifacts = (reveal.artifactManifest ?? []).filter((artifact) => artifact.mimeType.startsWith("image/"));
   let images: Awaited<ReturnType<typeof loadRevealImageForJudge>>[] = [];
   try {
@@ -493,7 +507,7 @@ async function runFieldGuideUpdateOwned(input: {
   let finalResponse: ProviderChatResponse;
   let parsed: ParsedUpdate;
   try {
-    const result = await executeLearningProposal({ repository: input.repository, sessionId: input.sessionId, packetHash: packetSha256, kind: "field_guide", config: input.providerConfig, modelId: input.model.modelId, timeoutMs: input.timeoutMs, chat: input.chat,
+    const result = await executeLearningProposal({ repository: input.repository, sessionId: input.sessionId, packetHash: packetSha256, kind: "field_guide", config: input.providerConfig, modelId: input.model.modelId, timeoutMs: input.timeoutMs, chat: input.chat, failurePolicy: input.failurePolicy,
       analytical: { signal: input.signal, model: input.model, operationKind: "field_guide_update", requestedSettings: snapshot.generationSettings.requested, learningObjectCapacityTokens: frozen.capacityTokens, budgetPolicy: input.budgetPolicy,
         recoveryInstruction: fieldGuideOutputRecoveryInstruction(snapshot.sessionLanguage), recoveryReasoningMaxTokens: 10_000, recoveryReasoningMaxTokensSupported: frozenSupportsExactReasoningMaxTokens(snapshot.capabilitySnapshot), allowOpenRouterEndpointRecoveryEscalation: true },
       messages: [{ role: "system", content: system }, { role: "user", content: buildFieldGuideUpdatePrompt(snapshot.sessionLanguage, packet), ...(images.length ? { images } : {}) }],

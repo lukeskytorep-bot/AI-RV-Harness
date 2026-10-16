@@ -56,15 +56,15 @@ for (const language of ["en", "pl"] as const) {
   expect(mocks.export).toHaveBeenCalledWith(repository, expect.objectContaining({ id: "run", sessionIds: [], activeTargetCheckpoint: expect.objectContaining({ sessionId: "s" }) }), [], expect.any(String), "C:/export");
   expect(repository.updateTrainingRun).toHaveBeenCalledWith("run", { directoryPath: "C:/export/run" });
  });
- it(`T5 ${language}: completed warnings are condensed, separate Field Guide/Notes, and do not flag NO_CHANGE`, async () => {
+ it(`T5 ${language}: learning failures stay out of Training while their audit remains stored`, async () => {
   const failure = { sessionId: "s", packetHash: "fg", auditId: "fg", kind: "field_guide" as const, settlement: "failed_preserved" as const, version: { id: "v1", contentSha256: "h" }, attempts: 2, status: "FAILED_CAPACITY", failureMessage: "Capacity 3000/2048" };
   run = { ...run, status: "Completed", currentIndex: 1, completedTargetIds: ["t"], sessionIds: ["s"], activeTargetCheckpoint: null, learningSettlements: [failure, { ...failure, kind: "viewer_notes", auditId: "vn", packetHash: "vn", version: null, failureMessage: "Malformed JSON" }, { ...failure, auditId: "no-change", packetHash: "later", sessionId: "later", settlement: "model_no_change", status: "NO_CHANGE" }] };
   await mount(language);
-  const details = host.querySelector("details.learning-warnings")!;
-  expect(details.hasAttribute("open")).toBe(false);
-  expect(details.querySelector("summary")?.textContent).toBe(language === "pl" ? "Nieudane aktualizacje pamięci: 2" : "Failed memory updates: 2");
-  expect(details.querySelectorAll("li")).toHaveLength(2); expect(details.textContent).toContain("Field Guide"); expect(details.textContent).toContain("Viewer Notes");
-  expect(details.textContent).toContain("Capacity 3000/2048"); expect(details.textContent).toContain("Malformed JSON"); expect(details.textContent).not.toContain("NO_CHANGE");
+  expect(host.querySelector("details.learning-warnings")).toBeNull();
+  expect(host.textContent).not.toContain("Capacity 3000/2048");
+  expect(host.textContent).not.toContain("Malformed JSON");
+  expect(host.textContent).not.toContain(language === "pl" ? "Nieudane aktualizacje pamięci" : "Failed memory updates");
+  expect(run.learningSettlements).toHaveLength(3);
   expect(host.querySelector(".training-run-recovery-actions")).toBeNull(); expect(host.querySelector("[role=alert]")).toBeNull();
  });
 }

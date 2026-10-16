@@ -1,10 +1,11 @@
 import { classifyProviderFailure, providerAttemptOutcomes } from "../providers/responseEvidence";
 import { withRvWorkflow } from "../application/workflowOwnership";
-import { inheritAbortOwnership } from "../application/abortOwnership";
+import { inheritAbortOwnership, assertAbortOwnership } from "../application/abortOwnership";
 import { focusFeedbackIntroduction } from "./sessionFocus";
 import { loadRevealImageForJudge } from "../artifacts/native";
 import { resolveGenerationSettings } from "../providers/capabilities";
-import { executeProviderChat } from "../providers/requestExecutor";
+import { executeProviderChat, ProviderExecutionError } from "../providers/requestExecutor";
+import { ProviderCallError } from "../providers/providerError";
 import type { StreamWorkflowContext } from "../providers/streamPresentation";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
@@ -19,6 +20,9 @@ import { captureSessionContinuationState, hydrateSessionMessageContinuation, val
 type PostRevealContinuationRepository = Pick<AppRepository, "appendPostRevealTurnWithProviderState" | "listSessionEvents" | "getSessionEventProviderState">;
 type PostRevealRepository = Pick<AppRepository, "appendPostRevealTurn" | "getReveal" | "getSessionSnapshot" | "getViewerEvidence" | "listTargetClarifications">
   & Partial<PostRevealContinuationRepository>;
+
+/** A provider failure in optional Training Review, not a storage/ownership failure. */
+export class OptionalTrainingReviewUnavailable extends Error {}
 
 
 function frozenSupportsExactReasoningMaxTokens(capabilitySnapshot?: Record<string, unknown>): boolean {
@@ -206,6 +210,7 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
   afterViewerReview?: (review: { content: string; transcript: string; response: ProviderChatResponse }) => Promise<void>;
   budgetPolicy?: AnalyticalBudgetPolicy;
+  failurePolicy?: "preserve_and_continue";
 }): Promise<string> {
   if (activeAutomaticPostRevealReviews.has(input.sessionId)) {
     throw new Error("Automatic post-Reveal review is already running for this session.");
@@ -238,6 +243,7 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
     });
 
     if (recovery.requiresDecision) {
+      if (input.failurePolicy === "preserve_and_continue") throw new OptionalTrainingReviewUnavailable("Previous Review result unavailable; optional learning skipped without resending the uncertain request.");
       throw new Error(`Post-Reveal ${recovery.nextStage ?? "review"} call has an uncertain dispatch state. Resolve it before retrying.`);
     }
 
@@ -269,7 +275,8 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
           ...(input.budgetPolicy ? { budgetPolicy: input.budgetPolicy } : {}),
           onProviderAttemptStart: async () => {
             if (providerAttemptStarted) return;
-            await input.repository.assertPostRevealReviewLease?.(input.sessionId);
+            if (input.failurePolicy === "preserve_and_continue") await assertAbortOwnership(input.signal);
+            else await input.repository.assertPostRevealReviewLease?.(input.sessionId);
             providerAttemptStarted = true;
             await appendPostRevealReviewCheckpoint({
               repository: checkpointRepository,
@@ -321,6 +328,11 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
             attempt,
             message: cause instanceof Error ? cause.message : String(cause),
           });
+          if (input.failurePolicy === "preserve_and_continue" && !input.signal?.aborted
+            && (cause instanceof ProviderExecutionError || cause instanceof ProviderCallError || isOutputLimitFailure(cause)
+              || /available context or output capacity|rejected.*budget|cannot increase beyond|provider returned an empty assistant response/.test(cause instanceof Error ? cause.message : ""))) {
+            throw new OptionalTrainingReviewUnavailable(cause instanceof Error ? cause.message : String(cause), { cause });
+          }
           throw cause;
         }
       }
@@ -414,6 +426,9 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
 }
 
 async function runAutomaticPostRevealReviewOwned(input: Parameters<typeof runAutomaticPostRevealReviewUnlocked>[0]): Promise<string> {
+  // The exported entry point already owns the durable RV workflow. Automatic
+  // Training uses that native lifetime, not a second WebView-timer lease.
+  if (input.failurePolicy === "preserve_and_continue") return runAutomaticPostRevealReviewUnlocked(input);
   if (!input.repository.withPostRevealReviewLease) return runAutomaticPostRevealReviewUnlocked(input);
   return input.repository.withPostRevealReviewLease<string>(input.sessionId, async (): Promise<string> => {
     await input.repository.assertPostRevealReviewLease?.(input.sessionId);

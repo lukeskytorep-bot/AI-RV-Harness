@@ -34,34 +34,18 @@ function repository(transcript = "") {
 }
 
 describe("Training uncertain Viewer Review Resume", () => {
-  it("does not mutate the checkpoint when the operator cancels", async () => {
-    const repo = repository();
-    const confirm = vi.fn(async () => false);
-    const result = await prepareTrainingRunResume({ repository: repo as never, runId: "run-1", fallbackLanguage: "en", confirmUncertainViewerReview: confirm });
-    expect(result).toBeNull();
-    expect(confirm).toHaveBeenCalledTimes(1);
-    expect(repo.appendSessionEvent).not.toHaveBeenCalled();
-    expect(repo.withPostRevealReviewLease).not.toHaveBeenCalled();
-  });
-
-  it("persists the decision under the existing post-Reveal lease before retry is allowed", async () => {
-    const repo = repository();
-    const result = await prepareTrainingRunResume({ repository: repo as never, runId: "run-1", fallbackLanguage: "en", confirmUncertainViewerReview: async () => true });
-    expect(result?.id).toBe("run-1");
-    expect(repo.withPostRevealReviewLease).toHaveBeenCalledWith("s", expect.any(Function));
-    expect(repo.appendSessionEvent).toHaveBeenCalledWith("s", expect.objectContaining({ metadata: expect.objectContaining({ stage: "viewer", status: "failed", attempt: 1 }) }));
-  });
-
-
-  it("does not apply an old confirmation to a newer uncertain Viewer Review attempt", async () => {
-    const repo = repository();
-    const confirm = vi.fn(async () => {
-      repo._events.push({ id: "e2", sessionId: "s", sequenceNumber: 2, eventType: "POST_REVEAL_REVIEW_CHECKPOINT", role: "controller", content: null, metadata: { stage: "viewer", status: "uncertain", attempt: 2 }, createdAt: "later" });
-      return true;
+  for (const stage of ["session_revealed", "review_completed", "field_guide_update_completed"] as const) {
+    it(`returns ${stage} directly without a learning/review confirmation or manual resolution`, async () => {
+      const repo = repository();
+      repo.listTrainingRuns.mockResolvedValue([run({ activeTargetCheckpoint: { targetId: "t", sessionId: "s", stage } })]);
+      const confirm = vi.fn(async () => { throw new Error("Automatic Training must not ask this question"); });
+      const result = await prepareTrainingRunResume({ repository: repo as never, runId: "run-1", fallbackLanguage: "en", confirmUncertainViewerReview: confirm });
+      expect(result?.activeTargetCheckpoint?.stage).toBe(stage);
+      expect(confirm).not.toHaveBeenCalled();
+      expect(repo.appendSessionEvent).not.toHaveBeenCalled();
+      expect(repo.withPostRevealReviewLease).not.toHaveBeenCalled();
     });
-    await expect(prepareTrainingRunResume({ repository: repo as never, runId: "run-1", fallbackLanguage: "en", confirmUncertainViewerReview: confirm })).rejects.toThrow("newer attempt was not resolved");
-    expect(repo.appendSessionEvent).not.toHaveBeenCalled();
-  });
+  }
 
   it("recovers a Viewer Review that completed while the confirmation dialog was open", async () => {
     const repo = repository();

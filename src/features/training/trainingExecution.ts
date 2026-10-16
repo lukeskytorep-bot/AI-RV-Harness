@@ -9,7 +9,7 @@ import { profileGenerationDefaults } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
 import { getRvLite } from "../../resources/protocolRegistry";
 import type { SessionProgress } from "../../sessions/controller";
-import { findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview } from "../../sessions/postReveal";
+import { findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview, OptionalTrainingReviewUnavailable } from "../../sessions/postReveal";
 import { runAutomaticRvLiteSession } from "../../sessions/rvLiteController";
 import { createSessionReplay } from "../../sessions/resumeReplay";
 import { createSessionCode } from "../../sessions/sessionCode";
@@ -448,7 +448,8 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
         const storedReview = await loadStoredViewerReview();
         viewerReview = storedReview?.content ?? null;
         viewerReviewRequest = storedReview?.request ?? null;
-        if (!viewerReview) {
+        if (!viewerReview && !checkpoint.postRevealReviewFailure) {
+          try {
           const transcript = await dependencies.runAutomaticPostRevealReview({
             repository: input.repository,
             sessionId: checkpoint.sessionId,
@@ -458,13 +459,24 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
             signal: input.signal,
             streamWorkflowContext: "training",
             budgetPolicy: "training_reveal",
+            failurePolicy: "preserve_and_continue",
           });
           const completedReview = findCompletedAutomaticViewerReviewRecord(transcript, execution.language);
           viewerReview = completedReview?.content ?? null;
           viewerReviewRequest = completedReview?.request ?? null;
+          } catch (cause) {
+            if (!(cause instanceof OptionalTrainingReviewUnavailable)) throw cause;
+            await assertCanContinue();
+            // A late durable response wins over a provider error. Otherwise no
+            // memory is learned from a missing Review and Training continues.
+            const stored = await loadStoredViewerReview();
+            viewerReview = stored?.content ?? null;
+            viewerReviewRequest = stored?.request ?? null;
+            if (!viewerReview) checkpoint = { ...checkpoint, postRevealReviewFailure: cause.message };
+          }
         }
-        if (!viewerReview || !viewerReviewRequest) throw new Error("Completed automatic Viewer Review could not be recovered after post-Reveal execution.");
-        checkpoint = { ...checkpoint, stage: "review_completed", postRevealReviewPacketSha256: await reviewPacketSha256(viewerReviewRequest) };
+        if ((!viewerReview || !viewerReviewRequest) && !checkpoint.postRevealReviewFailure) throw new Error("Completed automatic Viewer Review could not be recovered after post-Reveal execution.");
+        checkpoint = { ...checkpoint, stage: "review_completed", ...(viewerReviewRequest ? { postRevealReviewPacketSha256: await reviewPacketSha256(viewerReviewRequest) } : {}) };
         working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
         await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
         input.onRunChange?.(working);
@@ -477,19 +489,21 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
           viewerReview = storedReview?.content ?? null;
           viewerReviewRequest = storedReview?.request ?? null;
         }
-        if (!viewerReview) throw new Error("Completed automatic Viewer Review is required before Field Guide Update.");
+        if (!viewerReview && !checkpoint.postRevealReviewFailure) throw new Error("Completed automatic Viewer Review is required before Field Guide Update.");
         await assertCanContinue();
         const fieldGuideResult = await dependencies.runFieldGuideUpdate({
           repository: input.repository,
           trainingRun: working,
           sessionId: checkpoint.sessionId,
-          postRevealReview: viewerReview,
+          postRevealReview: viewerReview ?? "",
           providerConfig: input.providerConfig,
           model: input.model,
           timeoutMs: execution.transport.requestTimeoutMs,
           maxRetries: execution.transport.maxRetries,
           signal: input.signal,
           budgetPolicy: "training_reveal",
+          failurePolicy: "preserve_and_continue",
+          unavailableReviewReason: checkpoint.postRevealReviewFailure,
         });
         if (!fieldGuideResult) await assertCanContinue();
         if (fieldGuideResult && !fieldGuideResult.settlement && !fieldGuideUpdateCompletesStage(fieldGuideResult.status)) {
@@ -526,12 +540,12 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
         const fieldGuideAfterTrainingUpdate = checkpoint.fieldGuideAfterUpdate;
         if (!fieldGuideAfterTrainingUpdate) throw new Error("Training checkpoint is missing the exact Field Guide version required by Viewer Notes Reflection.");
         if (!viewerReview) viewerReview = (await loadStoredViewerReview())?.content ?? null;
-        if (!viewerReview) throw new Error("Completed automatic Viewer Review is required before Viewer Notes Reflection.");
+        if (!viewerReview && !checkpoint.postRevealReviewFailure) throw new Error("Completed automatic Viewer Review is required before Viewer Notes Reflection.");
         await assertCanContinue();
         const reflectionResult = await dependencies.runViewerNoteReflection({
           repository: input.repository,
           sessionId: checkpoint.sessionId,
-          viewerReview,
+          viewerReview: viewerReview ?? "",
           providerConfig: input.providerConfig,
           model: input.model,
           fieldGuideAfterTrainingUpdate,
@@ -539,6 +553,8 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
           maxRetries: execution.transport.maxRetries,
           signal: input.signal,
           budgetPolicy: "training_reveal",
+          failurePolicy: "preserve_and_continue",
+          unavailableReviewReason: checkpoint.postRevealReviewFailure,
         });
         if (!reflectionResult) await assertCanContinue();
         const sessionSnapshot = await input.repository.getSessionSnapshot(checkpoint.sessionId);

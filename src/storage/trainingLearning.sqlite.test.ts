@@ -18,7 +18,7 @@ import { prepareViewerNotesForSession } from "../aiCenter/viewerNotes";
 import { sha256Text } from "../application/sha256";
 import { executeTrainingRun } from "../features/training/trainingExecution";
 import { serializePostRevealTurn } from "../sessions/postRevealTranscript";
-import { supportedAutomaticPostRevealReviewRequests } from "../sessions/postReveal";
+import { runAutomaticPostRevealReview, supportedAutomaticPostRevealReviewRequests } from "../sessions/postReveal";
 import type { ProviderModel } from "../providers/types";
 import type { SessionSnapshot } from "../sessions/types";
 const native=readFileSync(new URL("../../src-tauri/src/workflow_ownership.rs",import.meta.url),"utf8").split("#[cfg(test)]")[0];
@@ -118,6 +118,30 @@ it.each(["oversize-json", "native-reasoning"] as const)("T1 real SQLite: full Tr
  expect(outcome.error).toBeUndefined();expect(outcome.run.status).toBe("Completed");expect(blind).toHaveBeenCalledTimes(2);expect(judge).toHaveBeenCalledTimes(2);expect(fgChat).toHaveBeenCalledTimes(4);expect(vnChat).toHaveBeenCalledTimes(4);
  const persisted=(await h.repository.listTrainingRuns()).find(r=>r.id===run.id)!;expect(persisted.learningSettlements?.filter(s=>s.settlement==="failed_preserved")).toHaveLength(4);expect((await h.repository.getViewerNoteBundle(h.notes.aiIdentityId))?.versions).toHaveLength(0);expect((await h.repository.getFieldGuideBundle(h.notes.aiIdentityId,"en"))?.activeVersion?.id).toBe(h.fieldGuide.versionId);
 });
+it.each(["unknown-learning", "review-provider-failure", "review-empty", "review-uncertain-history", "successful-learning"] as const)("Automatic restore: full Training (%s) preserves failed memories, invokes Judge, completes target and starts the next", async scenario=>{
+ const h=await setup();
+ const targets = await Promise.all([1,2].map(i=>h.repository.createTarget({id:`target-${i}`,collection:"user",title:`T${i}`,revealText:`Reveal ${i}`,tags:[],sourceMetadata:{category:"mixed_targets"}})));
+ await h.repository.updateTrainingRun(h.run.id,{activeTargetCheckpoint:null});
+ // Freeze real target IDs in the new run; creation is the only target-plan mutation.
+ const run=await h.repository.createTrainingRun({name:"Full T1",status:"Planned",mode:"partial",profileId:h.profile.id,workspaceId:"w",modelRoute:h.model.route,protocolVariant:"extended",targetIds:targets.map(t=>t.id),categories:["mixed_targets"],judgeModelRoutes:[],pauseAfterBlock:false,viewerNotesEnabled:true});
+ const blind=vi.fn(async(request:any)=>{const id=request.sessionIdentity.id;await request.repository.createRvSession({id,sessionCode:request.sessionIdentity.sessionCode,workspaceId:"w",profileId:h.profile.id,runType:"automatic",targetId:request.automaticTarget.id});const snapshot={...h.snapshot(id,request.capturedAutomaticReveal.hash),rvSystemPrompt:{...request.rvSystemPrompt,fullContent:request.rvSystemPrompt.content},viewerNotes:request.viewerNotes};await request.repository.saveSessionSnapshot(id,snapshot,await sha256Text(JSON.stringify(snapshot)));await request.onSessionCreated(id,request.sessionIdentity.sessionCode);await request.repository.sealPreReveal(id,"blind",await sha256Text("blind"));await request.repository.acceptReveal(id,request.capturedAutomaticReveal);await request.repository.recordTargetUsage({targetId:request.automaticTarget.id,profileId:h.profile.id,sessionId:id});await request.repository.updateRvSessionState(id,"Revealed");return{sessionId:id,sessionCode:request.sessionIdentity.sessionCode,state:"Revealed",transcript:"blind"};});
+ const reviewChat=vi.fn(async()=>{
+  if(scenario==="review-provider-failure")throw new ProviderCallError({code:"response_body_read",phase:"reading_body",message:"fixture connection lost",semanticOutputStarted:true});
+  return finished(scenario==="review-empty"?"":"Completed actual Review.");
+ });
+ const review=vi.fn(async(request:any)=>{
+  if(scenario==="review-uncertain-history")await request.repository.appendSessionEvent(request.sessionId,{eventType:"POST_REVEAL_REVIEW_CHECKPOINT",role:"controller",metadata:{stage:"viewer",status:"uncertain",attempt:1}});
+  return runAutomaticPostRevealReview({...request,maxRetries:0,chat:reviewChat});
+ });
+ const fgChat=vi.fn(async()=>{if(scenario==="unknown-learning")throw new Error("fixture unconfirmed provider dispatch");return finished(JSON.stringify(scenario==="successful-learning"?{decision:"NO_CHANGE",changeSummary:"Keep current memory"}:{decision:"UPDATE",fieldGuide:"x".repeat(9000),changeSummary:"too long"}));});
+ const vnChat=vi.fn(async()=>{if(scenario==="unknown-learning")throw new Error("fixture unconfirmed provider dispatch");return finished(scenario==="successful-learning"?JSON.stringify({decision:"NO_CHANGE",notes:null,changeSummary:"Keep current notes"}):"bad JSON");});const judge=vi.fn(async()=>({scores:[],aggregate:null}));
+ const outcome=await executeTrainingRun({repository:h.repository,initial:run,profile:h.profile,providerConfig:h.provider,model:h.model,judges:[{providerConfig:h.provider,model:h.model}],targets,language:"en",settings:{maxRetries:9,requestTimeoutMs:30000,sessionCodePrefix:"T"},dependencies:{runAutomaticRvLiteSession:blind,runAutomaticPostRevealReview:review,runFieldGuideUpdate:(request:Parameters<typeof runFieldGuideUpdate>[0])=>runFieldGuideUpdate({...request,chat:fgChat}),runViewerNoteReflection:(request:Parameters<typeof runViewerNoteReflection>[0])=>runViewerNoteReflection({...request,chat:vnChat}),runBlindJudging:judge} as any});
+ expect(outcome.error).toBeUndefined();expect(outcome.run.status).toBe("Completed");expect(blind).toHaveBeenCalledTimes(2);expect(judge).toHaveBeenCalledTimes(2);expect(fgChat.mock.calls.length, JSON.stringify(outcome.run.learningSettlements)).toBe((scenario==="unknown-learning" || scenario==="successful-learning")?2:0);expect(vnChat).toHaveBeenCalledTimes((scenario==="unknown-learning" || scenario==="successful-learning")?2:0);
+ expect(reviewChat.mock.calls.length, JSON.stringify(outcome.run.learningSettlements)).toBe(scenario==="review-uncertain-history"?0:2);
+ expect(outcome.run.learningSettlements?.every(s=>s.attempts===((scenario==="unknown-learning" || scenario==="successful-learning")?1:0))).toBe(true);
+ for(const id of outcome.run.sessionIds)expect((await h.repository.listSessionEvents(id)).some(e=>e.metadata?.state==="resolved")).toBe(false);
+ const persisted=(await h.repository.listTrainingRuns()).find(r=>r.id===run.id)!;expect(persisted.learningSettlements?.filter(s=>s.settlement==="failed_preserved")).toHaveLength(scenario==="successful-learning"?0:4);expect((await h.repository.getViewerNoteBundle(h.notes.aiIdentityId))?.versions).toHaveLength(0);expect((await h.repository.getFieldGuideBundle(h.notes.aiIdentityId,"en"))?.activeVersion?.id).toBe(h.fieldGuide.versionId);
+});
 function reflectionInput(h:Awaited<ReturnType<typeof setup>>,chat:NonNullable<Parameters<typeof runViewerNoteReflection>[0]["chat"]>) {
  return {repository:h.repository,sessionId:"s",viewerReview:"review",providerConfig:h.provider,model:h.model,fieldGuideAfterTrainingUpdate:{updateStatus:"NO_CHANGE" as const,versionId:h.fieldGuide.versionId,versionNumber:h.fieldGuide.versionNumber,contentSha256:h.fieldGuide.contentSha256},budgetPolicy:"training_reveal" as const,maxRetries:9,chat};
 }
@@ -165,17 +189,19 @@ it("T1 real SQLite: historical FAILED_CAPACITY is settled without another reflec
  db.exec("DELETE FROM session_events WHERE event_type IN ('LEARNING_PHYSICAL_ATTEMPT','LEARNING_SETTLEMENT')");
  const recovered=await runViewerNoteReflection(reflectionInput(h,chat));expect(recovered?.status).toBe("FAILED_CAPACITY");expect(recovered?.settlement?.settlement).toBe("failed_preserved");expect(chat).toHaveBeenCalledTimes(2);
 });
-it("T1 real SQLite: existing Resume dialog resolves uncertainty without resetting the two-request cap",async()=>{
+it("Automatic Training resumes a saved unknown learning dispatch without asking or sending it again",async()=>{
  const h=await setup();const {prepareTrainingRunResume}=await import("../features/training/trainingResumeRecovery");
  await h.repository.updateTrainingRun(h.run.id,{activeTargetCheckpoint:{targetId:"t1",sessionId:"s",stage:"field_guide_update_completed",fieldGuideAfterUpdate:{updateStatus:"NO_CHANGE",versionId:h.fieldGuide.versionId,versionNumber:h.fieldGuide.versionNumber,contentSha256:h.fieldGuide.contentSha256}}});
- const chat=vi.fn(async()=>{throw new Error("connection closed after dispatch");});const invoke=()=>runViewerNoteReflection(reflectionInput(h,chat));
- await expect(invoke()).rejects.toThrow("unconfirmed");await expect(invoke()).rejects.toThrow("unconfirmed");expect(chat).toHaveBeenCalledTimes(1);
- expect(await prepareTrainingRunResume({repository:h.repository,runId:h.run.id,fallbackLanguage:"en",confirmUncertainViewerReview:async()=>false})).toBeNull();
- for(let i=0;i<2;i++){
-   await prepareTrainingRunResume({repository:h.repository,runId:h.run.id,fallbackLanguage:"en",confirmUncertainViewerReview:async()=>true});
-   if(i===0)await expect(invoke()).rejects.toThrow("unconfirmed");
- }
- const result=await invoke();expect(result?.settlement?.settlement).toBe("failed_preserved");expect(result?.settlement?.attempts).toBe(2);expect(chat).toHaveBeenCalledTimes(2);
+ const chat=vi.fn(async()=>{throw new Error("connection closed after dispatch");});
+ await expect(runViewerNoteReflection(reflectionInput(h,chat))).rejects.toThrow("unconfirmed");
+ const confirm=vi.fn(async()=>{throw new Error("Unexpected dialog");});
+ expect((await prepareTrainingRunResume({repository:h.repository,runId:h.run.id,fallbackLanguage:"en",confirmUncertainViewerReview:confirm}))?.id).toBe(h.run.id);
+ expect(confirm).not.toHaveBeenCalled();
+ const invoke=()=>runViewerNoteReflection({...reflectionInput(h,chat),failurePolicy:"preserve_and_continue" as const});
+ expect((await invoke())?.settlement).toMatchObject({settlement:"failed_preserved",attempts:1});
+ expect((await invoke())?.settlement?.settlement).toBe("failed_preserved");expect(chat).toHaveBeenCalledTimes(1);
+ expect((await h.repository.listViewerNoteReflectionRuns(h.notes.aiIdentityId))[0].status).toBe("FAILED_PROVIDER");
+ expect((await h.repository.listSessionEvents("s")).some(e=>e.metadata?.state==="resolved")).toBe(false);
 });
 it("T1 real SQLite: reservation DB failure stops before dispatch and never becomes failed_preserved",async()=>{
  const h=await setup();db.exec("CREATE TRIGGER fixture_learning_write_error BEFORE INSERT ON session_events WHEN NEW.event_type='LEARNING_PHYSICAL_ATTEMPT' BEGIN SELECT RAISE(ABORT,'fixture DB reservation failure'); END;");
@@ -254,13 +280,17 @@ for(const kind of ["field_guide","viewer_notes"] as const)for(const boundary of 
  const confirm=vi.fn(async()=>false);const resumed=await prepareTrainingRunResume({repository:h.repository,runId:h.run.id,fallbackLanguage:"en",confirmUncertainViewerReview:confirm});expect(resumed?.id).toBe(h.run.id);expect(confirm).not.toHaveBeenCalled();
  expect((await invoke())?.settlement?.status).toBe("FAILED_OUTPUT_PREFLIGHT");expect(chat).not.toHaveBeenCalled();
 });
-it.each(["sessionId","kind","packetHash","auditId"] as const)("T1 FIX: mismatched settlement %s does not suppress genuine uncertainty",async mismatch=>{
+it.each(["sessionId","kind","packetHash","auditId"] as const)("Automatic Training never trusts a mismatched %s settlement or asks for learning confirmation",async mismatch=>{
  const h=await setup();await h.repository.updateTrainingRun(h.run.id,{activeTargetCheckpoint:{targetId:"t1",sessionId:"s",stage:"field_guide_update_completed"}});
  await expect(runViewerNoteReflection(reflectionInput(h,vi.fn(async()=>{throw new Error("unknown dispatch");})))).rejects.toThrow("unconfirmed");
  const audit=(await h.repository.listViewerNoteReflectionRuns(h.notes.aiIdentityId))[0];
  const settlement:Record<string,unknown>={sessionId:"s",kind:"viewer_notes",packetHash:audit.reflectionPacketSha256,auditId:audit.id,settlement:"failed_preserved",version:null,attempts:1,status:"FAILED_PROVIDER"};settlement[mismatch]="mismatch";
  await h.repository.appendSessionEvent("s",{eventType:"LEARNING_SETTLEMENT",metadata:{settlement}});
- const confirm=vi.fn(async()=>false);expect(await prepareTrainingRunResume({repository:h.repository,runId:h.run.id,fallbackLanguage:"en",confirmUncertainViewerReview:confirm})).toBeNull();expect(confirm).toHaveBeenCalledOnce();
+ const confirm=vi.fn(async()=>false);expect((await prepareTrainingRunResume({repository:h.repository,runId:h.run.id,fallbackLanguage:"en",confirmUncertainViewerReview:confirm}))?.id).toBe(h.run.id);expect(confirm).not.toHaveBeenCalled();
+ const chat=vi.fn();const invoke=()=>runViewerNoteReflection({...reflectionInput(h,chat),failurePolicy:"preserve_and_continue" as const});
+ if(mismatch==="auditId")await expect(invoke()).rejects.toThrow("settlement audit mismatch");
+ else expect((await invoke())?.settlement?.settlement).toBe("failed_preserved");
+ expect(chat).not.toHaveBeenCalled();
 });
 async function t2Candidate(content:string, nativeValidation:"accepted"|"rejected"="accepted") {
  return {content,contentSha256:await sha256Text(content),byteLength:new TextEncoder().encode(content).length,omittedForSize:false,envelopeRemoved:false,nativeValidation};
@@ -365,4 +395,15 @@ for (const modelId of ["fixture-viewer-a", "fixture-viewer-b"]) it(`T5 integrate
  expect(persisted.sessionIds.slice(0, 2)).toEqual(saved.sessionIds);
  expect((await restarted.getFieldGuideBundle(h.notes.aiIdentityId, "en"))?.activeVersion?.id).toBe(beforeRestart.guides?.activeVersion?.id);
  expect((await restarted.getViewerNoteBundle(h.notes.aiIdentityId))?.versions).toEqual(beforeRestart.notes?.versions);
+});
+
+it.each(["field_guide","viewer_notes"] as const)("Automatic restore: historical PENDING %s without an attempt ledger preserves memory without dispatch",async kind=>{
+ const h=await setup();const oldChat=vi.fn(async()=>{throw new Error("unconfirmed historical request");});
+ const invoke=(chat:any,failurePolicy?:"preserve_and_continue")=>kind==="field_guide"
+  ?runFieldGuideUpdate({repository:h.repository,trainingRun:h.run,sessionId:"s",postRevealReview:"review",providerConfig:h.provider,model:h.model,budgetPolicy:"training_reveal",chat,failurePolicy})
+  :runViewerNoteReflection({...reflectionInput(h,chat),failurePolicy});
+ await expect(invoke(oldChat)).rejects.toThrow("unconfirmed");
+ db.exec("DELETE FROM session_events WHERE event_type='LEARNING_PHYSICAL_ATTEMPT'");
+ const chat=vi.fn();expect((await invoke(chat,"preserve_and_continue"))?.settlement?.settlement).toBe("failed_preserved");expect(chat).not.toHaveBeenCalled();
+ expect((await invoke(chat,"preserve_and_continue"))?.settlement?.settlement).toBe("failed_preserved");expect(chat).not.toHaveBeenCalled();
 });

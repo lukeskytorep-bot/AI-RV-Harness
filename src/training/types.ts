@@ -37,6 +37,8 @@ export interface TrainingTargetCheckpoint {
   };
   /** Stable input packet hash for the completed shared post-Reveal Review. */
   postRevealReviewPacketSha256?: string;
+  /** Optional Review failed: skip learning, retain memory, continue Training. */
+  postRevealReviewFailure?: string;
   /** Stable Field Guide Update packet hash when the stage is applicable. */
   fieldGuideUpdatePacketSha256?: string;
   /** Exact Field Guide version in effect after this target's Training update. */

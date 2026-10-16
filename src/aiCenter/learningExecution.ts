@@ -33,6 +33,7 @@ function requiresFinalOutputRecovery(cause: unknown): boolean {
 export class LearningUncertainError extends Error {
   constructor() { super("Learning dispatch is unconfirmed. Resolve the existing attempt before continuing; automatic resend is blocked."); }
 }
+export type LearningFailurePolicy = "require_resolution" | "preserve_and_continue";
 export const LEARNING_ATTEMPT_EVENT = "LEARNING_PHYSICAL_ATTEMPT";
 export const LEARNING_SETTLEMENT_EVENT = "LEARNING_SETTLEMENT";
 
@@ -64,6 +65,7 @@ async function checkedFinalCandidate(value: unknown) {
 export async function executeLearningProposal<T>(input: {
   repository: AppRepository; sessionId: string; packetHash: string; kind: LearningSettlement["kind"];
   config: ProviderConfig; modelId: string; timeoutMs?: number; chat?: ProviderChatAttempt;
+  failurePolicy?: LearningFailurePolicy;
   analytical: Omit<Extract<Parameters<typeof callWithAnalyticalOutputRecovery>[0], { learningObjectCapacityTokens: number }>, "call" | "messages">;
   messages: ProviderMessage[];
   parse: (response: ProviderChatResponse) => T;
@@ -71,6 +73,12 @@ export async function executeLearningProposal<T>(input: {
 }): Promise<{ parsed: T; response: ProviderChatResponse; settings: Awaited<ReturnType<typeof callWithAnalyticalOutputRecovery>>["settings"]; attempts: number }> {
   const { repository, sessionId, packetHash, kind } = input;
   const signal = input.analytical.signal;
+  // Optional Training learning must never require a person to resolve a dispatch.
+  // Preserve memory and consume no further paid slot when its result is unknown.
+  const unconfirmed = (attempts: number): never => {
+    if (input.failurePolicy === "preserve_and_continue") throw new LearningProposalFailure("FAILED_PROVIDER", "Learning result unavailable; previous memory preserved automatically without resending the uncertain request.", attempts);
+    throw new LearningUncertainError();
+  };
   const events = await repository.listSessionEvents(sessionId);
   const entries = events.filter(e => e.eventType === LEARNING_ATTEMPT_EVENT && e.metadata?.kind === kind && e.metadata?.packetHash === packetHash);
   let messages = input.messages;
@@ -80,7 +88,7 @@ export async function executeLearningProposal<T>(input: {
     const start = entries.find(e => e.metadata?.slot === slot && e.metadata?.state === "reserved");
     const end = entries.find(e => e.metadata?.slot === slot && e.metadata?.state === "finished");
     const resolved = entries.find(e => e.metadata?.slot === slot && e.metadata?.state === "resolved");
-    if (start && !end && !resolved) throw new LearningUncertainError();
+    if (start && !end && !resolved) unconfirmed(slot + 1);
     let attemptId = start?.metadata?.attemptId;
     let response: ProviderChatResponse | undefined;
     let settings: Awaited<ReturnType<typeof callWithAnalyticalOutputRecovery>>["settings"] | undefined;
@@ -89,7 +97,7 @@ export async function executeLearningProposal<T>(input: {
     if (resolved) {
       providerFailure = new LearningProposalFailure("FAILED_PROVIDER", "Unconfirmed attempt explicitly resolved as failed by the user.", slot + 1);
     } else if (end) {
-      if (end.metadata?.outcome === "dispatch_unknown" && !end.metadata?.response) throw new LearningUncertainError();
+      if (end.metadata?.outcome === "dispatch_unknown" && !end.metadata?.response) unconfirmed(slot + 1);
       if (end.metadata?.failureStatus === "FAILED_OUTPUT_PREFLIGHT") throw new LearningProposalFailure("FAILED_OUTPUT_PREFLIGHT", String(end.metadata.message), slot + 1);
       if (end.metadata?.response) {
         response = end.metadata.response as ProviderChatResponse;
@@ -136,7 +144,7 @@ export async function executeLearningProposal<T>(input: {
           const responseEvidence = parseProviderResponseEvidence(cause.causeError.details.responseEvidence);
           const finalCandidate = await checkedFinalCandidate(cause.causeError.details.finalCandidate);
           await repository.appendSessionEvent(sessionId, { eventType: LEARNING_ATTEMPT_EVENT, metadata: { kind, packetHash, slot, state: "finished", outcome, attemptId, providerRequestId: cause.causeError.details.providerRequestId, transportRequestId: cause.causeError.details.transportRequestId, validation: "native_rejected", ...(finalCandidate ? { finalCandidate } : {}), message: cause.message, outputRecoveryRequired, ...(responseEvidence ? { responseEvidence } : {}) } });
-          if (outcome === "dispatch_unknown") throw new LearningUncertainError();
+          if (outcome === "dispatch_unknown") unconfirmed(slot + 1);
           providerFailure = new LearningProposalFailure("FAILED_PROVIDER", cause.message, slot + 1, undefined, outputRecoveryRequired);
         } else {
           // Only local capacity/settings preflight can fail before the executor is entered.
@@ -153,7 +161,7 @@ export async function executeLearningProposal<T>(input: {
           const outcome = classifyProviderAttempt({ responseEvidence: response.responseEvidence });
           const message = "Learning final response exceeds the bounded local replay capacity; previous memory retained.";
           await repository.appendSessionEvent(sessionId, { eventType: LEARNING_ATTEMPT_EVENT, metadata: { kind, packetHash, slot, state: "finished", outcome, attemptId, ...(finalCandidate ? { finalCandidate } : {}), failureStatus: "FAILED_OUTPUT_PREFLIGHT", message, responseHash: await sha256Text(response.content) } });
-          if (outcome === "dispatch_unknown") throw new LearningUncertainError();
+          if (outcome === "dispatch_unknown") unconfirmed(slot + 1);
           throw new LearningProposalFailure("FAILED_OUTPUT_PREFLIGHT", message, slot + 1);
         }
         responseOutcome = classifyProviderAttempt({ responseEvidence: response.responseEvidence });
@@ -167,7 +175,7 @@ export async function executeLearningProposal<T>(input: {
     try { parsed = input.parse(response); }
     catch (cause) {
       if (!(cause instanceof LearningProposalFailure)) throw cause;
-      if (responseOutcome === "dispatch_unknown") throw new LearningUncertainError();
+      if (responseOutcome === "dispatch_unknown") unconfirmed(slot + 1);
       lastFailure = new LearningProposalFailure(cause.status, cause.message, slot + 1, response, cause.status === "FAILED_PROVIDER" && requiresFinalOutputRecovery(cause));
       await assertAbortOwnership(signal);
       await repository.appendSessionEvent(sessionId, { eventType: "LEARNING_CANDIDATE_VALIDATION", metadata: { kind, packetHash, slot, attemptId, validation: "learning_rejected", status: cause.status, message: cause.message, responseHash: await sha256Text(response.content) } });
