@@ -6,6 +6,7 @@ import hashlib
 import json
 import mmap
 import platform
+import shlex
 import struct
 import subprocess
 import uuid
@@ -90,17 +91,37 @@ def verify_pair(exe, pdb):
 def command(*args): return subprocess.check_output(args, text=True).strip()
 
 
+# The diagnostic workflow is intentionally a single, explicit standalone recipe.
+# A Cargo optimization profile alone does not switch Tauri out of dev mode.
+DIAGNOSTIC_BUILD_COMMAND = (
+    "cargo build --manifest-path src-tauri/Cargo.toml --profile diagnostic "
+    "--locked --bin ai-rv-harness --features tauri/custom-protocol"
+)
+
+
+def build_recipe(value):
+    argv = shlex.split(value)
+    if argv != shlex.split(DIAGNOSTIC_BUILD_COMMAND):
+        raise ValueError("Expected locked diagnostic app build with tauri/custom-protocol")
+    return {"command": value, "argv": argv, "cargoProfile": "diagnostic",
+            "cargoFeatures": ["tauri/custom-protocol"],
+            "frontendMode": "embedded", "manifestPath": "src-tauri/Cargo.toml",
+            "binary": "ai-rv-harness"}
+
+
 def main():
     parser = argparse.ArgumentParser()
     for name in ["exe", "pdb", "output"]: parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--build-command", required=True)
     args = parser.parse_args()
+    recipe = build_recipe(args.build_command)
     result = verify_pair(args.exe, args.pdb)
-    result.update({"createdAt": datetime.now(timezone.utc).isoformat(), "sourceCommit": command("git", "rev-parse", "HEAD"),
+    result.update({"build": recipe, "createdAt": datetime.now(timezone.utc).isoformat(), "sourceCommit": command("git", "rev-parse", "HEAD"),
                    "sourceGitTree": command("git", "rev-parse", "HEAD^{tree}"), "platform": platform.platform(),
                    "rustc": command("rustc", "-Vv"), "cargo": command("cargo", "-V"),
                    "cargoLockSha256": sha256(Path("src-tauri/Cargo.lock")), "packageLockSha256": sha256(Path("package-lock.json")),
                    "runtimePatchManifestSha256": sha256(Path("src-tauri/vendor/tauri-runtime-wry/PATCH.json")),
-                   "runtimeResolution": command("cargo", "tree", "--manifest-path", "src-tauri/Cargo.toml", "--locked", "--offline", "-i", "tauri-runtime-wry")})
+                   "runtimeResolution": command("cargo", "tree", "--manifest-path", "src-tauri/Cargo.toml", "--locked", "--offline", "--features", ",".join(recipe["cargoFeatures"]), "-i", "tauri-runtime-wry")})
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print("PASS: exact EXE/PDB GUID and age; hashes and provenance saved")

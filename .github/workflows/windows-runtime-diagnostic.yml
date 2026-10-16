@@ -52,7 +52,7 @@ jobs:
       - run: npm run verify:runtime-ownership -- --cargo
       - name: Build optimized candidate and real native handle stress with full symbols
         run: |
-          cargo build --manifest-path src-tauri/Cargo.toml --profile diagnostic --locked --bin ai-rv-harness
+          cargo build --manifest-path src-tauri/Cargo.toml --profile diagnostic --locked --bin ai-rv-harness --features tauri/custom-protocol
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --manifest-path src-tauri/Cargo.toml --profile diagnostic --locked --example runtime_owner_stress
       - name: Stress actual WryHandle clone/drop and owner shutdown
@@ -67,7 +67,7 @@ jobs:
           }
       - name: Verify matching EXE/PDB and record exact build provenance
         run: |
-          python -B scripts/collect-windows-crash-build.py --exe src-tauri/target/diagnostic/ai-rv-harness.exe --pdb src-tauri/target/diagnostic/ai_rv_harness.pdb --output diagnostic-evidence/provenance.json
+          python -B scripts/collect-windows-crash-build.py --exe src-tauri/target/diagnostic/ai-rv-harness.exe --pdb src-tauri/target/diagnostic/ai_rv_harness.pdb --output diagnostic-evidence/provenance.json --build-command "cargo build --manifest-path src-tauri/Cargo.toml --profile diagnostic --locked --bin ai-rv-harness --features tauri/custom-protocol"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item src-tauri/target/diagnostic/ai-rv-harness.exe diagnostic-evidence/
           Copy-Item src-tauri/Cargo.lock diagnostic-evidence/

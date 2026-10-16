@@ -77,7 +77,16 @@ They do not constitute a real Windows binary acceptance.
 The new workflow **Windows Runtime Diagnostic Candidate** is manual only. It
 builds the selected branch and never publishes/releases or installs anything.
 It uses the custom Cargo `diagnostic` profile (release optimization, full debug
-information, no stripping). Normal release profile/bundling is unchanged.
+information, no stripping), explicitly enabling `tauri/custom-protocol` to embed
+`dist`. The Cargo profile alone does not enable this feature; without it Tauri
+uses `devUrl` and requires Vite on port 1420. Normal release profile/bundling is
+unchanged. After `npm ci` and `npm run build`, the exact application build is:
+
+```bash
+cargo build --manifest-path src-tauri/Cargo.toml --profile diagnostic --locked --bin ai-rv-harness --features tauri/custom-protocol
+```
+
+The native stress example has no WebView and cannot verify embedded assets.
 
 1. Add `DIAGNOSTIC_SYMBOLS_PASSWORD` as a repository Actions secret, retained
    privately by the owner. Do not put the password in a commit, issue or chat.
@@ -91,6 +100,11 @@ information, no stripping). Normal release profile/bundling is unchanged.
 4. `collect-windows-crash-build.py` compares EXE CodeView RSDS GUID/age with the
    PDB Info stream, rejects mismatches, and records EXE/PDB SHA256, source commit
    and tree, Cargo/package-lock hashes, patch-manifest hash and toolchain.
+   Provenance also records the exact application build command and argv,
+   `cargoProfile: diagnostic`, and `cargoFeatures: ["tauri/custom-protocol"]`.
+   The collector requires `--build-command` with the exact command above and
+   rejects a dev-mode recipe. Regression tests tie this recipe to both workflow
+   invocations. This records the workflow declaration, not proof of a UI run.
 5. The artifact contains the candidate EXE, provenance, exact Cargo.lock,
    runtime patch manifest, stress log and AES-encrypted `symbols.7z`. Plaintext
    PDBs are never selected for upload. The archive is password-tested before
@@ -99,6 +113,22 @@ information, no stripping). Normal release profile/bundling is unchanged.
 No Windows executable or successful Windows run is implied by delivering this
 source overlay. The diagnostic workflow must run on Windows; downloading an
 artifact is not equivalent to completing the following runtime acceptance.
+
+## Standalone Windows launch acceptance (before the soak)
+
+Download the exact Actions EXE and its provenance; retain the matching encrypted
+PDB. Use a Windows environment without Node/Vite running. Confirm that no server
+is listening on port 1420 (`Get-NetTCPConnection -LocalPort 1420 -State Listen
+-ErrorAction SilentlyContinue` must return no listener). Do not start `npm run dev`
+or a frontend server. Launch the downloaded EXE directly and record its SHA256.
+Verify the complete UI loads and a real native IPC operation succeeds, for
+example listing locally stored Profiles and reopening one. Check the listener
+again while the app runs and retain the result, Windows/WebView2 versions and
+observations. A blank window or a dependency on localhost fails acceptance.
+
+Only after this passes, run the following scenarios on that same EXE. Any rebuild
+requires fresh provenance, its matching PDB, and a new standalone launch check.
+Native handle stress alone cannot satisfy this gate.
 
 ## Windows IPC / Reveal / Stop / window lifecycle soak
 

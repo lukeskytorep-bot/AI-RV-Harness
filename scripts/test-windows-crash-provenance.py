@@ -38,6 +38,33 @@ class ProvenanceTests(unittest.TestCase):
             exe.write_bytes(pe()); pdb_path.write_bytes(symbols)
             return module.verify_pair(exe, pdb_path)
 
+    def test_standalone_build_recipe(self):
+        recipe = module.build_recipe(module.DIAGNOSTIC_BUILD_COMMAND)
+        self.assertEqual(recipe["cargoProfile"], "diagnostic")
+        self.assertEqual(recipe["cargoFeatures"], ["tauri/custom-protocol"])
+        self.assertEqual(recipe["frontendMode"], "embedded")
+        self.assertIn("--locked", recipe["argv"])
+
+    def test_rejects_dev_or_different_build_recipe(self):
+        good = module.DIAGNOSTIC_BUILD_COMMAND
+        for bad in [good.replace(" --features tauri/custom-protocol", ""),
+                    good.replace("tauri/custom-protocol", "tauri/devtools"),
+                    good.replace("diagnostic", "release"),
+                    good.replace("--locked ", ""),
+                    good.replace("--bin ai-rv-harness", "--example runtime_owner_stress")]:
+            with self.subTest(command=bad), self.assertRaises(ValueError):
+                module.build_recipe(bad)
+
+    def test_workflow_build_and_provenance_use_same_standalone_recipe(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/windows-runtime-diagnostic.yml").read_text()
+        lines = [line.strip() for line in workflow.splitlines()]
+        app_builds = [line for line in lines if line.startswith("cargo build ") and "--bin" in line]
+        self.assertEqual(app_builds, [module.DIAGNOSTIC_BUILD_COMMAND])
+        collectors = [line for line in lines if line.startswith("python -B scripts/collect-windows-crash-build.py ")]
+        self.assertEqual(len(collectors), 1)
+        self.assertIn('--build-command "' + module.DIAGNOSTIC_BUILD_COMMAND + '"', collectors[0])
+
     def test_exact_pair_and_private_path_basename(self):
         result = self.pair(pdb()); self.assertEqual(result["exe"]["guid"], str(GUID))
         self.assertEqual(result["exe"]["pdbName"], "ai_rv_harness.pdb")
