@@ -313,6 +313,8 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 .openrouter-sampling-controls .sampling-capability.supported { color: var(--green); }
 .openrouter-sampling-controls .sampling-capability.unsupported { color: var(--red); }
 .openrouter-sampling-controls .sampling-capability.unknown { color: var(--muted); }
+.openrouter-sampling-controls .sampling-auto-state { color: var(--muted); font-size: 10px; font-weight: 700; }
+.openrouter-sampling-controls .sampling-auto-button { justify-self: start; min-height: 30px; padding: 5px 8px; font-size: 10px; }
 .openrouter-sampling-controls .sampling-seed-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .openrouter-sampling-controls .sampling-seed-row button { min-height: 38px; }
 @media (max-width: 780px) {

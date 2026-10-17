@@ -1,5 +1,6 @@
 import type { getCopy } from "../../i18n";
 import type { ProviderModel } from "../../providers/types";
+import { openRouterSamplingModelCapabilityState, type OpenRouterSamplingModelCapabilityState } from "./openRouterSamplingModelCapability";
 
 export interface OpenRouterSamplingUiState {
   enabled: boolean;
@@ -17,21 +18,7 @@ export interface OpenRouterSamplingControlsProps extends OpenRouterSamplingUiSta
   onSeed: (value: string) => void;
 }
 
-type CapabilityState = "supported" | "unsupported" | "unknown";
-
-function rawSupportedParameters(model: ProviderModel | null): string[] | null {
-  if (!model) return null;
-  const raw = model.rawMetadata.supported_parameters;
-  return Array.isArray(raw) && raw.every((item) => typeof item === "string") ? raw as string[] : null;
-}
-
-function capabilityState(model: ProviderModel | null, parameter: string): CapabilityState {
-  if (!model) return "unknown";
-  if (model.capabilities.supportedParameters.includes(parameter)) return "supported";
-  return rawSupportedParameters(model) ? "unsupported" : "unknown";
-}
-
-function capabilityLabel(copy: ReturnType<typeof getCopy>, state: CapabilityState): string {
+function capabilityLabel(copy: ReturnType<typeof getCopy>, state: OpenRouterSamplingModelCapabilityState): string {
   if (state === "supported") return copy.samplingSupported;
   if (state === "unsupported") return copy.samplingUnsupported;
   return copy.samplingUnknown;
@@ -57,9 +44,9 @@ export function OpenRouterSamplingControls({
   onTopK,
   onSeed,
 }: OpenRouterSamplingControlsProps) {
-  const topPState = capabilityState(model, "top_p");
-  const topKState = capabilityState(model, "top_k");
-  const seedState = capabilityState(model, "seed");
+  const topPState = openRouterSamplingModelCapabilityState(model, "top_p");
+  const topKState = openRouterSamplingModelCapabilityState(model, "top_k");
+  const seedState = openRouterSamplingModelCapabilityState(model, "seed");
   const topPDisabled = !enabled || topPState !== "supported";
   const topKDisabled = !enabled || topKState !== "supported";
   const seedDisabled = !enabled || seedState !== "supported";
@@ -79,12 +66,16 @@ export function OpenRouterSamplingControls({
           <span>Top P <small className={`sampling-capability ${topPState}`}>{capabilityLabel(copy, topPState)}</small></span>
           <input aria-label="Top P" type="range" min="0" max="1" step="0.01" value={topPRange} disabled={topPDisabled} onChange={(event) => onTopP(event.target.value)} />
           <input aria-label="Top P value" type="number" min="0" max="1" step="any" inputMode="decimal" value={topP} disabled={topPDisabled} placeholder={copy.autoProviderDefault} onChange={(event) => onTopP(event.target.value)} />
+          {enabled && topPState !== "supported" && topP !== "" && <button type="button" className="secondary-button sampling-auto-button" aria-label={`${copy.setSamplingAuto}: Top P`} onClick={() => onTopP("")}>{copy.setSamplingAuto}</button>}
+          {topP === "" && <small className="sampling-auto-state">{copy.samplingAutoInactive}</small>}
           <small>{copy.topPLead}</small>
         </label>
         <label>
           <span>Top K <small className={`sampling-capability ${topKState}`}>{capabilityLabel(copy, topKState)}</small></span>
           <input aria-label="Top K" type="range" min="0" max="200" step="1" value={topKRange} disabled={topKDisabled} onChange={(event) => onTopK(event.target.value)} />
           <input aria-label="Top K value" type="number" min="0" step="1" inputMode="numeric" value={topK} disabled={topKDisabled} placeholder={copy.autoProviderDefault} onChange={(event) => onTopK(event.target.value)} />
+          {enabled && topKState !== "supported" && topK !== "" && <button type="button" className="secondary-button sampling-auto-button" aria-label={`${copy.setSamplingAuto}: Top K`} onClick={() => onTopK("")}>{copy.setSamplingAuto}</button>}
+          {topK === "" && <small className="sampling-auto-state">{copy.samplingAutoInactive}</small>}
           <small>{copy.topKLead}</small>
         </label>
         <label>
@@ -93,6 +84,8 @@ export function OpenRouterSamplingControls({
             <input aria-label="Seed value" type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" inputMode="numeric" value={seed} disabled={seedDisabled} placeholder={copy.autoProviderDefault} onChange={(event) => onSeed(event.target.value)} />
             <button type="button" className="secondary-button" disabled={seedDisabled} onClick={() => onSeed(String(safeRandomSeed()))}>{copy.randomizeSeed}</button>
           </div>
+          {enabled && seedState !== "supported" && seed !== "" && <button type="button" className="secondary-button sampling-auto-button" aria-label={`${copy.setSamplingAuto}: Seed`} onClick={() => onSeed("")}>{copy.setSamplingAuto}</button>}
+          {seed === "" && <small className="sampling-auto-state">{copy.samplingAutoInactive}</small>}
           <small>{copy.seedLead}</small>
         </label>
       </div>

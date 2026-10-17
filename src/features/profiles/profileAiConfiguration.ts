@@ -4,6 +4,7 @@ import { defaultTemperatureForModel, reasoningEffortForModel } from "../../profi
 import type { ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
 import { validateOpenRouterAdditionalSamplingSettings, type OpenRouterAdditionalSamplingSettings } from "../../providers/openRouterSamplingSettings";
 import type { ProfileAiConfigurationInput } from "../../types";
+import { openRouterSamplingModelCapabilityState, type OpenRouterSamplingModelParameter } from "./openRouterSamplingModelCapability";
 
 export function parseOpenRouterAdditionalSamplingInputs(
   copy: ReturnType<typeof getCopy>,
@@ -33,6 +34,27 @@ export function parseOpenRouterAdditionalSamplingInputs(
     ...(topK !== undefined ? { topK } : {}),
     ...(seed !== undefined ? { seed } : {}),
   });
+}
+
+
+function assertManualOpenRouterSamplingSupportedByModel(
+  copy: ReturnType<typeof getCopy>,
+  model: ProviderModel,
+  settings: OpenRouterAdditionalSamplingSettings,
+): void {
+  if (!settings.enabled) return;
+  const manual: Array<[OpenRouterSamplingModelParameter, string, number | undefined]> = [
+    ["top_p", "Top P", settings.topP],
+    ["top_k", "Top K", settings.topK],
+    ["seed", "Seed", settings.seed],
+  ];
+  for (const [parameter, label, value] of manual) {
+    if (value === undefined) continue;
+    const state = openRouterSamplingModelCapabilityState(model, parameter);
+    if (state === "supported") continue;
+    const stateLabel = state === "unsupported" ? copy.samplingUnsupported : copy.samplingUnknown;
+    throw new Error(`${label}: ${stateLabel}. ${copy.samplingResolveManualCapability}`);
+  }
 }
 
 export function buildProfileAiConfiguration(
@@ -83,7 +105,11 @@ export function buildProfileAiConfiguration(
     ...(normalizedReasoning ? { defaultViewerReasoningEffort: normalizedReasoning } : {}),
     ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
     ...(provider.provider === "openrouter" && openRouterSampling !== undefined
-      ? { defaultViewerOpenRouterSampling: validateOpenRouterAdditionalSamplingSettings(openRouterSampling) }
+      ? (() => {
+          const validatedSampling = validateOpenRouterAdditionalSamplingSettings(openRouterSampling);
+          assertManualOpenRouterSamplingSupportedByModel(copy, viewerModel, validatedSampling);
+          return { defaultViewerOpenRouterSampling: validatedSampling };
+        })()
       : {}),
     ...(systemPrompt.trim() ? { defaultViewerSystemPrompt: systemPrompt.trim() } : {}),
     ...(monitor ? { defaultMonitorProviderConfigId: monitor.providerConfigId, defaultMonitorModelId: monitor.modelId } : {}),

@@ -102,4 +102,36 @@ describe("profile AI configuration", () => {
     expect(() => parseOpenRouterAdditionalSamplingInputs(getCopy("en"), true, "", "", String(Number.MAX_SAFE_INTEGER + 1))).toThrow(getCopy("en").seedOutOfRange);
   });
 
+  it("blocks enabled manual sampling when the selected model does not confirm that parameter", () => {
+    const unsupported: ProviderModel = { ...model, rawMetadata: { supported_parameters: ["temperature"] } };
+    const unknown: ProviderModel = { ...model, rawMetadata: {} };
+    const supported: ProviderModel = {
+      ...model,
+      capabilities: { ...model.capabilities, supportedParameters: ["temperature", "top_p", "top_k", "seed"] },
+      rawMetadata: { supported_parameters: ["temperature", "top_p", "top_k", "seed"] },
+    };
+
+    expect(() => buildProfileAiConfiguration(
+      getCopy("en"), provider, unsupported, "", "0.8", "", "", "", [provider], [unsupported],
+      { enabled: true, topK: 0 },
+    )).toThrow(`Top K: ${getCopy("en").samplingUnsupported}`);
+    expect(() => buildProfileAiConfiguration(
+      getCopy("en"), provider, unknown, "", "0.8", "", "", "", [provider], [unknown],
+      { enabled: true, seed: 42 },
+    )).toThrow(`Seed: ${getCopy("en").samplingUnknown}`);
+    expect(buildProfileAiConfiguration(
+      getCopy("en"), provider, supported, "", "0.8", "", "", "", [provider], [supported],
+      { enabled: true, topP: 0.04, topK: 0, seed: 42 },
+    ).defaultViewerOpenRouterSampling).toEqual({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
+  });
+
+  it("allows remembered incompatible values to remain stored when the sampling section is disabled", () => {
+    const unsupported: ProviderModel = { ...model, rawMetadata: { supported_parameters: ["temperature"] } };
+    const result = buildProfileAiConfiguration(
+      getCopy("en"), provider, unsupported, "", "0.8", "", "", "", [provider], [unsupported],
+      { enabled: false, topP: 0.04, topK: 0, seed: 42 },
+    );
+    expect(result.defaultViewerOpenRouterSampling).toEqual({ enabled: false, topP: 0.04, topK: 0, seed: 42 });
+  });
+
 });

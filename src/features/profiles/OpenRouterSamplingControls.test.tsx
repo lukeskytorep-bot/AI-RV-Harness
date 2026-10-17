@@ -22,9 +22,9 @@ const model = (supported: string[] | undefined): ProviderModel => ({
   refreshedAt: "now",
 });
 
-function render(supported: string[] | undefined, enabled = true) {
+function render(supported: string[] | undefined, enabled = true, values = { topP: "0.04", topK: "0", seed: "42" }) {
   return renderToStaticMarkup(<OpenRouterSamplingControls
-    copy={getCopy("en")} model={model(supported)} enabled={enabled} topP="0.04" topK="0" seed="42"
+    copy={getCopy("en")} model={model(supported)} enabled={enabled} topP={values.topP} topK={values.topK} seed={values.seed}
     onEnabled={vi.fn()} onTopP={vi.fn()} onTopK={vi.fn()} onSeed={vi.fn()}
   />);
 }
@@ -39,14 +39,22 @@ describe("OpenRouter sampling controls", () => {
     expect(html).toContain("Supported");
   });
 
-  it("disables unsupported manual controls instead of deleting stored values", () => {
+  it("disables unsupported manual controls without deleting stored values and exposes an explicit Auto action", () => {
     const html = render(["temperature"]);
     expect(html).toContain("Unsupported");
     expect(html).toContain('value="42"');
     expect(html).toContain("disabled");
+    expect(html).toContain(`${getCopy("en").setSamplingAuto}: Top P`);
+    expect(html).toContain(`${getCopy("en").setSamplingAuto}: Top K`);
+    expect(html).toContain(`${getCopy("en").setSamplingAuto}: Seed`);
   });
 
   it("labels missing provider metadata as unknown", () => {
     expect(render(undefined)).toContain("Unknown");
+  });
+
+  it("marks Auto as inactive so the range thumb is not mistaken for an active setting", () => {
+    const html = render(["temperature", "top_p", "top_k", "seed"], true, { topP: "", topK: "", seed: "" });
+    expect(html.match(new RegExp(getCopy("en").samplingAutoInactive, "g"))).toHaveLength(3);
   });
 });

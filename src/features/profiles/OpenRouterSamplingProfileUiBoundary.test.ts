@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import appSource from "../../App.tsx?raw";
 import dialogsSource from "./ProfileDialogs.tsx?raw";
 import controlsSource from "./ProfileViewerControls.tsx?raw";
+import samplingControlsSource from "./OpenRouterSamplingControls.tsx?raw";
 import controllerSource from "./useProfileSetupController.ts?raw";
 
 describe("OR-SAMPLING-3 profile UI boundaries", () => {
@@ -15,7 +16,9 @@ describe("OR-SAMPLING-3 profile UI boundaries", () => {
 
   it("keeps temperature outside the additional sampling contract", () => {
     expect(controlsSource).toContain("copy.viewerTemperature");
-    expect(controlsSource).toContain("copy.additionalSamplingParameters");
+    expect(controlsSource).toContain("<OpenRouterSamplingControls");
+    expect(samplingControlsSource).toContain("copy.additionalSamplingParameters");
+    expect(samplingControlsSource).not.toContain("copy.viewerTemperature");
     expect(controllerSource).toContain("viewerTemperature");
     expect(controllerSource).toContain("viewerSamplingEnabled");
   });
