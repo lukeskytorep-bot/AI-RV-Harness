@@ -39,6 +39,13 @@ export function profileGenerationDefaults(
               : defaultTemperatureForModel(model),
         }
       : {}),
+    ...(model.provider === "openrouter" && profile?.defaultViewerOpenRouterSampling?.enabled === true
+      ? {
+          ...(profile.defaultViewerOpenRouterSampling.topP !== undefined ? { topP: profile.defaultViewerOpenRouterSampling.topP } : {}),
+          ...(profile.defaultViewerOpenRouterSampling.topK !== undefined ? { topK: profile.defaultViewerOpenRouterSampling.topK } : {}),
+          ...(profile.defaultViewerOpenRouterSampling.seed !== undefined ? { seed: profile.defaultViewerOpenRouterSampling.seed } : {}),
+        }
+      : {}),
   };
   return resolveGenerationSettings(model.capabilities, requested).effective;
 }

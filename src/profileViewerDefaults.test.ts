@@ -61,4 +61,29 @@ describe("Profile Viewer defaults", () => {
     expect(customSnapshot?.content).toContain("smells!");
   });
 
+
+  it("applies enabled OpenRouter sampling defaults independently of temperature and omits them when disabled or on another provider", () => {
+    const samplingProfile: Profile = {
+      ...profile,
+      defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 0, seed: 42 },
+    };
+    expect(profileGenerationDefaults(samplingProfile, model())).toEqual({
+      reasoningEffort: "high",
+      temperature: 1.1,
+      topP: 0.04,
+      topK: 0,
+      seed: 42,
+    });
+
+    const disabled: Profile = {
+      ...samplingProfile,
+      defaultViewerOpenRouterSampling: { enabled: false, topP: 0.04, topK: 0, seed: 42 },
+    };
+    expect(profileGenerationDefaults(disabled, model())).toEqual({ reasoningEffort: "high", temperature: 1.1 });
+
+    const nonOpenRouter = { ...model(), provider: "custom_openai" as const, route: "custom_openai:viewer" };
+    expect(profileGenerationDefaults(samplingProfile, nonOpenRouter)).toEqual({ reasoningEffort: "high", temperature: 1.1 });
+  });
+
+
 });

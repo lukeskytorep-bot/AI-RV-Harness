@@ -159,6 +159,7 @@ export interface OpenRouterProviderRouting {
   only?: string[];
   ignore?: string[];
   allowFallbacks?: boolean;
+  requireParameters?: boolean;
 }
 
 export interface ProviderChatRequest {

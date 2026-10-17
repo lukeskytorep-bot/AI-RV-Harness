@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearOpenRouterEndpointCapabilityCache } from "./openRouterEndpointCapability";
 import { estimateProviderInputTokens } from "./inputTokenEstimate";
 import { resolveEffectiveRequestEnvelope } from "./effectiveRequestEnvelope";
-import type { ProviderConfig, ProviderMessage } from "./types";
+import type { EffectiveGenerationSettings, ProviderConfig, ProviderMessage } from "./types";
 
 const openrouter: ProviderConfig = {
   id: "pc-i1",
@@ -337,5 +337,70 @@ describe("I1 effective request envelope", () => {
     expect(result.envelope.eligibleProviderRoutes).toEqual(["provider-a/region-1", "provider-b"]);
     expect(result.envelope.routeCertainty).toBe("verified_fit");
   });
+
+
+  it("forces OpenRouter endpoint preflight for small manual sampling requests while Auto keeps the legacy short path", async () => {
+    const manualSettings: EffectiveGenerationSettings = {
+      requested: { topK: 64, maxOutputTokens: 4096 },
+      effective: { topK: 64, maxOutputTokens: 4096 },
+      omitted: [],
+    };
+    const discover = vi.fn(async () => ({ data: { endpoints: [
+      { tag: "provider-a/fp8", context_length: 131_072, max_completion_tokens: 16_384, supported_parameters: ["top_k"] },
+    ] } }));
+
+    const manual = await resolveEffectiveRequestEnvelope({
+      config: openrouter,
+      modelId: "sampling/model",
+      messages: [{ role: "user", content: "small request" }],
+      settings: manualSettings,
+      operationKind: "conversation",
+      streamWorkflowContext: "conversation",
+      endpointDiscovery: discover,
+    });
+
+    expect(discover).toHaveBeenCalledTimes(1);
+    expect(manual.envelope.routeCertainty).toBe("verified_fit");
+    expect(manual.providerRouting).toEqual({
+      only: ["provider-a/fp8"],
+      allowFallbacks: true,
+      requireParameters: true,
+    });
+
+    const autoDiscover = vi.fn();
+    const auto = await resolveEffectiveRequestEnvelope({
+      config: openrouter,
+      modelId: "sampling/model",
+      messages: [{ role: "user", content: "small request" }],
+      settings: settings(4096),
+      operationKind: "conversation",
+      streamWorkflowContext: "conversation",
+      endpointDiscovery: autoDiscover,
+    });
+    expect(autoDiscover).not.toHaveBeenCalled();
+    expect(auto.envelope.routeCertainty).toBe("not_required");
+    expect(auto.providerRouting).toBeUndefined();
+  });
+
+  it("keeps manual sampling fail-closed when metadata is unavailable even if an existing provider selector would otherwise be UNKNOWN", async () => {
+    const manualSettings: EffectiveGenerationSettings = {
+      requested: { seed: 42, maxOutputTokens: 4096 },
+      effective: { seed: 42, maxOutputTokens: 4096 },
+      omitted: [],
+    };
+    const result = await resolveEffectiveRequestEnvelope({
+      config: openrouter,
+      modelId: "sampling/model",
+      messages: [{ role: "user", content: "small request" }],
+      settings: manualSettings,
+      operationKind: "conversation",
+      providerRouting: { only: ["provider-z"] },
+      endpointDiscovery: async () => { throw new Error("offline"); },
+    });
+    expect(result.endpointRoutingMode).toBe("local_stop");
+    expect(result.envelope.routeCertainty).toBe("blocked");
+    expect(result.localStopMessage).toContain("cannot be verified");
+  });
+
 
 });

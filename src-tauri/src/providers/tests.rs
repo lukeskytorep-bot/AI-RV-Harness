@@ -64,6 +64,9 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
         reasoning_transport_kind: None,
         reasoning_transport_value: None,
         temperature: None,
+        top_p: None,
+        top_k: None,
+        seed: None,
         max_output_tokens: None,
         custom_output_token_field: None,
         timeout_ms: None,
@@ -1129,6 +1132,7 @@ fn emits_openrouter_capacity_routing_without_changing_other_provider_bodies() {
         only: vec!["siliconflow".to_string()],
         ignore: vec!["deepinfra".to_string()],
         allow_fallbacks: Some(true),
+        require_parameters: None,
     });
     let (_, body) = build_openai_compatible_request(&openrouter, "https://openrouter.ai/api/v1");
     assert_eq!(body.pointer("/provider/order/0"), Some(&json!("siliconflow")));
@@ -1140,6 +1144,51 @@ fn emits_openrouter_capacity_routing_without_changing_other_provider_bodies() {
     openai.provider_routing = openrouter.provider_routing.clone();
     let (_, body) = build_openai_compatible_request(&openai, "https://api.openai.com/v1");
     assert!(body.get("provider").is_none());
+}
+
+#[test]
+fn emits_openrouter_manual_sampling_and_require_parameters_without_leaking_to_other_providers() {
+    let mut openrouter = chat_request(ProviderKind::Openrouter, "sampling/model");
+    openrouter.top_p = Some(0.04);
+    openrouter.top_k = Some(0);
+    openrouter.seed = Some(42);
+    openrouter.provider_routing = Some(OpenRouterProviderRouting {
+        order: vec![],
+        only: vec!["provider-a/fp8".to_string()],
+        ignore: vec![],
+        allow_fallbacks: Some(true),
+        require_parameters: Some(true),
+    });
+    validate_chat_request(&openrouter).unwrap();
+    let (_, body) = build_openai_compatible_request(&openrouter, "https://openrouter.ai/api/v1");
+    assert_eq!(body.get("top_p"), Some(&json!(0.04)));
+    assert_eq!(body.get("top_k"), Some(&json!(0)));
+    assert_eq!(body.get("seed"), Some(&json!(42)));
+    assert_eq!(body.pointer("/provider/require_parameters"), Some(&json!(true)));
+    assert_eq!(body.pointer("/provider/only/0"), Some(&json!("provider-a/fp8")));
+
+    let mut openai = chat_request(ProviderKind::Openai, "gpt-test");
+    openai.top_p = Some(0.5);
+    assert!(validate_chat_request(&openai).unwrap_err().contains("only for OpenRouter"));
+    let (_, body) = build_openai_compatible_request(&openai, "https://api.openai.com/v1");
+    assert!(body.get("top_p").is_none());
+    assert!(body.get("top_k").is_none());
+    assert!(body.get("seed").is_none());
+}
+
+#[test]
+fn validates_openrouter_sampling_transport_ranges() {
+    let mut request = chat_request(ProviderKind::Openrouter, "sampling/model");
+    request.top_p = Some(1.01);
+    assert!(validate_chat_request(&request).unwrap_err().contains("top_p"));
+
+    let mut request = chat_request(ProviderKind::Openrouter, "sampling/model");
+    request.top_k = Some(9_007_199_254_740_992);
+    assert!(validate_chat_request(&request).unwrap_err().contains("top_k"));
+
+    let mut request = chat_request(ProviderKind::Openrouter, "sampling/model");
+    request.seed = Some(9_007_199_254_740_992);
+    assert!(validate_chat_request(&request).unwrap_err().contains("seed"));
 }
 
 #[test]

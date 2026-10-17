@@ -352,6 +352,42 @@ describe("E1 OpenRouter endpoint-capability integration", () => {
     expect(attempt.mock.calls[0][0].providerRouting).toEqual({ only: ["siliconflow"], allowFallbacks: true });
   });
 
+  it("dispatches a small manual-sampling request only after verified parameter-capability routing", async () => {
+    const attempt = vi.fn().mockResolvedValue(response);
+    await executeProviderChat({
+      config,
+      modelId: "sampling/model",
+      messages: [{ role: "user", content: "small manual sampling" }],
+      settings: { requested: { topK: 0, seed: 42, maxOutputTokens: 4096 }, effective: { topK: 0, seed: 42, maxOutputTokens: 4096 }, omitted: [] },
+      endpointDiscovery: async () => ({ data: { endpoints: [
+        { tag: "provider-a/fp8", context_length: 131_072, max_completion_tokens: 16_384, supported_parameters: ["top_k", "seed"] },
+      ] } }),
+      attempt,
+    });
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(attempt.mock.calls[0][0].settings.effective).toMatchObject({ topK: 0, seed: 42 });
+    expect(attempt.mock.calls[0][0].providerRouting).toEqual({
+      only: ["provider-a/fp8"],
+      allowFallbacks: true,
+      requireParameters: true,
+    });
+  });
+
+  it("keeps manual sampling zero-dispatch when endpoint parameter support is not confirmed", async () => {
+    const attempt = vi.fn().mockResolvedValue(response);
+    await expect(executeProviderChat({
+      config,
+      modelId: "sampling/model",
+      messages: [{ role: "user", content: "small manual sampling" }],
+      settings: { requested: { seed: 42, maxOutputTokens: 4096 }, effective: { seed: 42, maxOutputTokens: 4096 }, omitted: [] },
+      endpointDiscovery: async () => ({ data: { endpoints: [
+        { tag: "provider-a/fp8", context_length: 131_072, max_completion_tokens: 16_384 },
+      ] } }),
+      attempt,
+    })).rejects.toMatchObject({ name: "ProviderCallError", details: { code: "configuration", phase: "before_dispatch" } });
+    expect(attempt).not.toHaveBeenCalled();
+  });
+
   it("stops locally when every discovered route is proven too small", async () => {
     const attempt = vi.fn().mockResolvedValue(response);
     await expect(executeProviderChat({

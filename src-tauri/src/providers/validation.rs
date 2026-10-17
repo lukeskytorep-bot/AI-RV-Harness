@@ -67,6 +67,33 @@ pub(super) fn validate_chat_request(request: &ProviderChatRequest) -> Result<(),
             return Err("temperature must be finite".to_string());
         }
     }
+    const JS_MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+    let has_additional_sampling = request.top_p.is_some() || request.top_k.is_some() || request.seed.is_some();
+    if has_additional_sampling {
+        if !matches!(request.provider, super::ProviderKind::Openrouter) {
+            return Err("additional sampling parameters are supported only for OpenRouter requests".to_string());
+        }
+        if request.provider_routing.as_ref().and_then(|routing| routing.require_parameters) != Some(true) {
+            return Err("OpenRouter additional sampling requires provider.require_parameters=true".to_string());
+        }
+    } else if request.provider_routing.as_ref().and_then(|routing| routing.require_parameters) == Some(true) {
+        return Err("provider.require_parameters=true is reserved for manual OpenRouter sampling".to_string());
+    }
+    if let Some(value) = request.top_p {
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err("top_p must be a finite number between 0 and 1".to_string());
+        }
+    }
+    if let Some(value) = request.top_k {
+        if value > JS_MAX_SAFE_INTEGER {
+            return Err("top_k exceeds the safe TypeScript/JSON transport range".to_string());
+        }
+    }
+    if let Some(value) = request.seed {
+        if value > JS_MAX_SAFE_INTEGER {
+            return Err("seed exceeds the safe TypeScript/JSON transport range".to_string());
+        }
+    }
     if let Some(value) = request.reasoning_effort.as_deref() {
         if !matches!(value, "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") {
             return Err("invalid reasoning effort".to_string());

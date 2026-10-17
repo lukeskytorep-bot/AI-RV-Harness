@@ -161,6 +161,18 @@ function reconcileFinalOpenRouterRouting(
   const eligibleProviderRoutes = routeTags(decision.endpoints, providerRouting, "PROVEN_FIT");
   const unknownProviderRoutes = routeTags(decision.endpoints, providerRouting, "UNKNOWN");
 
+  if (decision.mode === "local_stop") {
+    return {
+      ...(providerRouting ? { providerRouting } : {}),
+      endpointRoutingMode: "local_stop",
+      eligibleProviderRoutes,
+      unknownProviderRoutes,
+      routeCertainty: "blocked",
+      localStopMessage: decision.humanMessage
+        ?? "OpenRouter routing was blocked before dispatch because no safe route could be verified.",
+    };
+  }
+
   if (!decision.capacitySensitive) {
     return {
       ...(providerRouting ? { providerRouting } : {}),

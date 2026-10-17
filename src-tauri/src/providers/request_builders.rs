@@ -18,6 +18,17 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
     if let Some(value) = request.temperature {
         body.insert("temperature".into(), json!(value));
     }
+    if matches!(request.provider, ProviderKind::Openrouter) {
+        if let Some(value) = request.top_p {
+            body.insert("top_p".into(), json!(value));
+        }
+        if let Some(value) = request.top_k {
+            body.insert("top_k".into(), json!(value));
+        }
+        if let Some(value) = request.seed {
+            body.insert("seed".into(), json!(value));
+        }
+    }
     if let Some(value) = request.max_output_tokens {
         body.insert(openai_compatible_output_token_field(request).into(), json!(value));
     }
@@ -49,6 +60,9 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
             }
             if let Some(value) = routing.allow_fallbacks {
                 provider.insert("allow_fallbacks".into(), json!(value));
+            }
+            if let Some(value) = routing.require_parameters {
+                provider.insert("require_parameters".into(), json!(value));
             }
             if !provider.is_empty() {
                 body.insert("provider".into(), Value::Object(provider));

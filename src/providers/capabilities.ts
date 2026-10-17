@@ -282,6 +282,27 @@ export function resolveGenerationSettings(capabilities: ModelCapabilities, reque
     else omitted.push("temperature");
   }
 
+  if (requested.topP !== undefined) {
+    if (!Number.isFinite(requested.topP) || requested.topP < 0 || requested.topP > 1) {
+      throw new RangeError("topP must be a finite number between 0 and 1.");
+    }
+    effective.topP = requested.topP;
+  }
+
+  if (requested.topK !== undefined) {
+    if (!Number.isSafeInteger(requested.topK) || requested.topK < 0) {
+      throw new RangeError("topK must be a non-negative safe integer.");
+    }
+    effective.topK = requested.topK;
+  }
+
+  if (requested.seed !== undefined) {
+    if (!Number.isSafeInteger(requested.seed) || requested.seed < 0) {
+      throw new RangeError("seed must be a non-negative safe integer.");
+    }
+    effective.seed = requested.seed;
+  }
+
   if (requested.maxOutputTokens !== undefined) {
     if (requested.maxOutputTokens > 0 && (!capabilities.maxOutputTokens || requested.maxOutputTokens <= capabilities.maxOutputTokens)) {
       effective.maxOutputTokens = Math.floor(requested.maxOutputTokens);

@@ -130,4 +130,21 @@ describe("dynamic provider capabilities", () => {
     expect(isRecommendedModel("openai/gpt-oss-120b")).toBe(false);
     expect(isRecommendedModel("google/gemini-3.1-pro")).toBe(true);
   });
+
+  it("preserves valid manual sampling values without silently degrading zero and rejects invalid numeric contracts", () => {
+    const [model] = normalizeModelDiscovery(config, {
+      data: [{ id: "sampling/model", supported_parameters: ["temperature"], top_provider: { max_completion_tokens: 8192 } }],
+    });
+    const resolved = resolveGenerationSettings(model.capabilities, { topP: 0.04, topK: 0, seed: 42 });
+    expect(resolved.effective).toMatchObject({ topP: 0.04, topK: 0, seed: 42 });
+    expect(resolved.omitted).not.toContain("topP");
+    expect(resolved.omitted).not.toContain("topK");
+    expect(resolved.omitted).not.toContain("seed");
+
+    expect(() => resolveGenerationSettings(model.capabilities, { topP: 1.01 })).toThrow(/topP/);
+    expect(() => resolveGenerationSettings(model.capabilities, { topK: -1 })).toThrow(/topK/);
+    expect(() => resolveGenerationSettings(model.capabilities, { seed: Number.MAX_SAFE_INTEGER + 1 })).toThrow(/seed/);
+  });
+
+
 });

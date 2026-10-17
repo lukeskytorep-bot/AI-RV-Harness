@@ -99,6 +99,7 @@ struct OpenRouterProviderRouting {
     #[serde(default)]
     ignore: Vec<String>,
     allow_fallbacks: Option<bool>,
+    require_parameters: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -156,6 +157,9 @@ pub struct ProviderChatRequest {
     reasoning_transport_kind: Option<String>,
     reasoning_transport_value: Option<String>,
     temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<u64>,
+    seed: Option<u64>,
     max_output_tokens: Option<u32>,
     custom_output_token_field: Option<CustomOpenAiOutputTokenField>,
     timeout_ms: Option<u64>,
