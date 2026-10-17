@@ -19,14 +19,14 @@ const migrationsDir = path.join(root, "src-tauri/migrations");
 const migrationNames = fs.readdirSync(migrationsDir)
   .filter((name) => /^\d{3}_.+\.sql$/.test(name))
   .sort();
-if (migrationNames.length !== 31) failures.push(`expected 31 migrations, found ${migrationNames.length}`);
+if (migrationNames.length !== 32) failures.push(`expected 32 migrations, found ${migrationNames.length}`);
 if (migrationNames[0] !== "001_initial.sql") failures.push(`unexpected first migration: ${migrationNames[0] ?? "<none>"}`);
-if (migrationNames.at(-1) !== "031_post_reveal_review_lease.sql") failures.push(`unexpected last migration: ${migrationNames.at(-1) ?? "<none>"}`);
+if (migrationNames.at(-1) !== "032_openrouter_sampling_profile_settings.sql") failures.push(`unexpected last migration: ${migrationNames.at(-1) ?? "<none>"}`);
 for (let index = 0; index < migrationNames.length; index += 1) {
   const expected = String(index + 1).padStart(3, "0");
   if (!migrationNames[index].startsWith(`${expected}_`)) failures.push(`migration registry is not contiguous at ${expected}: ${migrationNames[index]}`);
 }
-requireContains("src-tauri/src/migrations.rs", "assert_eq!(CURRENT_MIGRATION_VERSION, 31);", "CURRENT_MIGRATION_VERSION = 31 test");
+requireContains("src-tauri/src/migrations.rs", "assert_eq!(CURRENT_MIGRATION_VERSION, 32);", "CURRENT_MIGRATION_VERSION = 32 test");
 
 // Step 3/4 telepathic exchange and training invariants.
 requireContains("src/telepathicExchange/packets.ts", "buildMissingResponseRevealPrompt", "NO_SUBMISSION Reveal prompt");
@@ -63,4 +63,4 @@ if (failures.length) {
   console.error("v0.7.14 release gate failed:\n" + failures.map((item) => `- ${item}`).join("\n"));
   process.exit(1);
 }
-console.log("v0.7.14 release-gate structure verification passed: schema 31, Steps 1-5 safety markers and Step 6 runtime evidence are present.");
+console.log("v0.7.14 release-gate structure verification passed: schema 32, Steps 1-5 safety markers and Step 6 runtime evidence are present.");
