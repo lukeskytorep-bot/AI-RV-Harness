@@ -2,6 +2,7 @@ import type { getCopy } from "../../i18n";
 import { isRouteAllowedForCredential, splitModelRouteKey } from "../../modelRoutes";
 import { defaultTemperatureForModel, reasoningEffortForModel } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
+import { validateOpenRouterAdditionalSamplingSettings, type OpenRouterAdditionalSamplingSettings } from "../../providers/openRouterSamplingSettings";
 import type { ProfileAiConfigurationInput } from "../../types";
 
 export function buildProfileAiConfiguration(
@@ -15,6 +16,7 @@ export function buildProfileAiConfiguration(
   judgeModelKey: string,
   providers: ProviderConfig[] = provider ? [provider] : [],
   models: ProviderModel[] = viewerModel ? [viewerModel] : [],
+  openRouterSampling?: OpenRouterAdditionalSamplingSettings,
 ): ProfileAiConfigurationInput {
   if (!provider || !viewerModel || viewerModel.providerConfigId !== provider.id) {
     throw new Error(copy.selectViewerBeforeSaving);
@@ -50,6 +52,9 @@ export function buildProfileAiConfiguration(
     defaultViewerModelId: viewerModel.modelId,
     ...(normalizedReasoning ? { defaultViewerReasoningEffort: normalizedReasoning } : {}),
     ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
+    ...(provider.provider === "openrouter" && openRouterSampling !== undefined
+      ? { defaultViewerOpenRouterSampling: validateOpenRouterAdditionalSamplingSettings(openRouterSampling) }
+      : {}),
     ...(systemPrompt.trim() ? { defaultViewerSystemPrompt: systemPrompt.trim() } : {}),
     ...(monitor ? { defaultMonitorProviderConfigId: monitor.providerConfigId, defaultMonitorModelId: monitor.modelId } : {}),
     ...(judge ? { defaultJudgeProviderConfigId: judge.providerConfigId, defaultJudgeModelId: judge.modelId } : {}),

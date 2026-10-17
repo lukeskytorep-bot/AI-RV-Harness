@@ -26,9 +26,9 @@ const migrationFiles = readdirSync(migrationDir)
   .filter((name) => /^\d{3}_.+\.sql$/.test(name))
   .sort();
 const migrationNumbers = migrationFiles.map((name) => Number(name.slice(0, 3)));
-const expectedNumbers = Array.from({ length: 31 }, (_, index) => index + 1);
+const expectedNumbers = Array.from({ length: 32 }, (_, index) => index + 1);
 if (JSON.stringify(migrationNumbers) !== JSON.stringify(expectedNumbers)) {
-  failures.push(`SQLite migrations must be contiguous 001-031; found: ${migrationFiles.join(", ")}`);
+  failures.push(`SQLite migrations must be contiguous 001-032; found: ${migrationFiles.join(", ")}`);
 }
 
 const tauriLib = read("src-tauri/src/lib.rs");
@@ -120,6 +120,7 @@ const migration028 = read("src-tauri/migrations/028_telepathic_exchange_series.s
 const migration029 = read("src-tauri/migrations/029_telepathic_series_run_lease.sql");
 const migration030 = read("src-tauri/migrations/030_chat_message_attachment_metadata.sql");
 const migration031 = read("src-tauri/migrations/031_post_reveal_review_lease.sql");
+const migration032 = read("src-tauri/migrations/032_openrouter_sampling_profile_settings.sql");
 for (const marker of ["chat_message_provider_state", "session_event_provider_state", "ON DELETE CASCADE", "payload_sha256", "payload_size_bytes"]) {
   if (!migration025.includes(marker)) failures.push(`provider-continuation persistence migration missing marker: ${marker}`);
 }
@@ -141,6 +142,9 @@ for (const marker of ["ALTER TABLE chat_messages ADD COLUMN metadata_json", "jso
 for (const marker of ["post_reveal_review_lease_owner", "post_reveal_review_lease_expires_at", "post_reveal_review_lease_version"]) {
   if (!migration031.includes(marker)) failures.push(`post-Reveal review lease migration missing marker: ${marker}`);
 }
+for (const marker of ["default_viewer_sampling_enabled", "default_viewer_top_p", "default_viewer_top_k", "default_viewer_seed"]) {
+  if (!migration032.includes(marker)) failures.push(`OpenRouter sampling profile migration missing marker: ${marker}`);
+}
 
 const nativeCompatibility = join(root, "src-tauri", "src", "ux_data_compatibility.rs");
 if (!existsSync(nativeCompatibility)) failures.push("native UX-DATA compatibility test module is missing");
@@ -152,6 +156,7 @@ if (!nativeCompatibilitySource.includes("exact_green_v25_to_v26_types_existing_w
 if (!nativeCompatibilitySource.includes("exact_green_v26_to_v27_repairs_factory_classification_without_unlocking_history")) failures.push("native compatibility gate must test exact green v26 -> v27 factory-target metadata upgrade");
 if (!nativeCompatibilitySource.includes("exact_green_v27_to_v28_adds_telepathic_exchange_storage_without_moving_existing_data")) failures.push("native compatibility gate must test exact green v27 -> v28 telepathic exchange upgrade");
 if (!nativeCompatibilitySource.includes("exact_green_v28_to_v29_adds_cross_instance_telepathic_run_lease_without_moving_series_data")) failures.push("native compatibility gate must test exact green v28 -> v29 telepathic run-lease upgrade");
+if (!nativeCompatibilitySource.includes("exact_green_v31_to_v32_adds_openrouter_sampling_profile_defaults_without_mutating_existing_profile_values")) failures.push("native compatibility gate must test exact green v31 -> v32 OpenRouter sampling profile upgrade");
 if (nativeCompatibilitySource.includes("legacy_fixture_manual_chain_through_024")) failures.push("native compatibility gate must not reintroduce a public-v0.7.12 -> v0.7.13 migration chain");
 
 if (failures.length) {
@@ -159,4 +164,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`UX-DATA compatibility verification passed: ${migrationFiles.length} migrations, flat Conversations, shared dialogs/model routes, unified lifecycle, Viewer Notes provenance, Field Guide schema 024, provider continuation schema 025, typed Workspace schema 026, factory-target upgrade schema 027, telepathic exchange schema 028, cross-instance lease schema 029, Conversation attachment metadata schema 030, post-Reveal review lease schema 031, and native green-v23/v24/v25/v26/v27/v28 upgrade gates are present.`);
+console.log(`UX-DATA compatibility verification passed: ${migrationFiles.length} migrations, flat Conversations, shared dialogs/model routes, unified lifecycle, Viewer Notes provenance, Field Guide schema 024, provider continuation schema 025, typed Workspace schema 026, factory-target upgrade schema 027, telepathic exchange schema 028, cross-instance lease schema 029, Conversation attachment metadata schema 030, post-Reveal review lease schema 031, OpenRouter sampling profile schema 032, and native green-v23/v24/v25/v26/v27/v28/v31 upgrade gates are present.`);

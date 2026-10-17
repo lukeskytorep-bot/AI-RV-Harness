@@ -1,5 +1,6 @@
 import type { FieldGuideSessionSnapshot } from "./aiCenter/fieldGuideTypes";
 import type { ReasoningEffort } from "./providers/types";
+import type { OpenRouterAdditionalSamplingSettings } from "./providers/openRouterSamplingSettings";
 
 export type InterfaceLanguage = "pl" | "en";
 export type SessionLanguageSetting = "same" | InterfaceLanguage;
@@ -84,6 +85,7 @@ export interface Profile {
   defaultViewerModelId?: string;
   defaultViewerReasoningEffort?: ReasoningEffort;
   defaultViewerTemperature?: number;
+  defaultViewerOpenRouterSampling?: OpenRouterAdditionalSamplingSettings;
   defaultViewerSystemPrompt?: string;
   defaultMonitorSystemPrompt?: string;
   defaultMonitorProviderConfigId?: string;
@@ -101,6 +103,7 @@ export interface ProfileAiConfigurationInput {
   defaultViewerModelId?: string;
   defaultViewerReasoningEffort?: ReasoningEffort;
   defaultViewerTemperature?: number;
+  defaultViewerOpenRouterSampling?: OpenRouterAdditionalSamplingSettings;
   defaultViewerSystemPrompt?: string;
   defaultMonitorSystemPrompt?: string;
   defaultMonitorProviderConfigId?: string;

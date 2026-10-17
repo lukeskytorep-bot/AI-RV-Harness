@@ -122,6 +122,9 @@ export interface ProviderModel {
 export interface GenerationSettings {
   reasoningEffort?: ReasoningEffort;
   temperature?: number;
+  topP?: number;
+  topK?: number;
+  seed?: number;
   maxOutputTokens?: number;
   reasoningMaxTokens?: number;
 }
@@ -129,7 +132,7 @@ export interface GenerationSettings {
 export interface EffectiveGenerationSettings {
   requested: GenerationSettings;
   effective: GenerationSettings;
-  omitted: Array<"reasoningEffort" | "temperature" | "maxOutputTokens" | "reasoningMaxTokens">;
+  omitted: Array<"reasoningEffort" | "temperature" | "topP" | "topK" | "seed" | "maxOutputTokens" | "reasoningMaxTokens">;
   reasoningResolution?: {
     selected: ReasoningEffort;
     label: string;

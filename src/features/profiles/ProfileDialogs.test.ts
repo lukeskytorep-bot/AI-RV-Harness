@@ -63,6 +63,27 @@ describe("profile AI configuration", () => {
     )).toThrow(getCopy("en").selectModel);
   });
 
+
+  it("keeps temperature independent while accepting OpenRouter sampling as a separate contract", () => {
+    const result = buildProfileAiConfiguration(
+      getCopy("en"), provider, model, "low", "0.8", "", "", "", [provider], [model],
+      { enabled: false, topP: 0.4, topK: 0, seed: 42 },
+    );
+    expect(result.defaultViewerTemperature).toBe(0.8);
+    expect(result.defaultViewerOpenRouterSampling).toEqual({ enabled: false, topP: 0.4, topK: 0, seed: 42 });
+  });
+
+  it("does not attach OpenRouter sampling to a non-OpenRouter profile", () => {
+    const mistralProvider: ProviderConfig = { ...provider, id: "provider-m", provider: "mistral", label: "Mistral" };
+    const mistralModel: ProviderModel = { ...model, providerConfigId: mistralProvider.id, provider: "mistral" };
+    const result = buildProfileAiConfiguration(
+      getCopy("en"), mistralProvider, mistralModel, "low", "0.8", "", "", "", [mistralProvider], [mistralModel],
+      { enabled: true, topP: 0.4, seed: 42 },
+    );
+    expect(result.defaultViewerTemperature).toBe(0.8);
+    expect(result.defaultViewerOpenRouterSampling).toBeUndefined();
+  });
+
   it("does not persist the legacy Viewer System Prompt when the shared setup passes an empty prompt", () => {
     const result = buildProfileAiConfiguration(getCopy("en"), provider, model, "", "", "", "", "");
     expect(result.defaultViewerSystemPrompt).toBeUndefined();

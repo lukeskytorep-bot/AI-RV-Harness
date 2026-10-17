@@ -1,4 +1,5 @@
 import type { ReasoningEffort } from "../../providers/types";
+import { validateOpenRouterSamplingForProvider } from "../../providers/openRouterSamplingSettings";
 import type {
   CreateProfileInput,
   Profile,
@@ -18,6 +19,10 @@ type ProfileRow = {
   default_viewer_model_id: string | null;
   default_viewer_reasoning_effort: ReasoningEffort | null;
   default_viewer_temperature: number | null;
+  default_viewer_sampling_enabled: number;
+  default_viewer_top_p: number | null;
+  default_viewer_top_k: number | null;
+  default_viewer_seed: number | null;
   default_viewer_system_prompt: string | null;
   default_monitor_system_prompt: string | null;
   default_monitor_provider_config_id: string | null;
@@ -47,6 +52,19 @@ function mapProfile(row: ProfileRow): Profile {
     defaultViewerModelId: row.default_viewer_model_id ?? undefined,
     defaultViewerReasoningEffort: row.default_viewer_reasoning_effort ?? undefined,
     defaultViewerTemperature: row.default_viewer_temperature ?? undefined,
+    ...((row.default_viewer_sampling_enabled === 1
+      || row.default_viewer_top_p !== null
+      || row.default_viewer_top_k !== null
+      || row.default_viewer_seed !== null)
+      ? {
+          defaultViewerOpenRouterSampling: {
+            enabled: row.default_viewer_sampling_enabled === 1,
+            ...(row.default_viewer_top_p !== null ? { topP: row.default_viewer_top_p } : {}),
+            ...(row.default_viewer_top_k !== null ? { topK: row.default_viewer_top_k } : {}),
+            ...(row.default_viewer_seed !== null ? { seed: row.default_viewer_seed } : {}),
+          },
+        }
+      : {}),
     defaultViewerSystemPrompt: row.default_viewer_system_prompt ?? undefined,
     defaultMonitorSystemPrompt: row.default_monitor_system_prompt ?? undefined,
     defaultMonitorProviderConfigId: row.default_monitor_provider_config_id ?? undefined,
@@ -69,6 +87,7 @@ export class SqliteProfilesRepository implements ProfilesRepository {
               p.default_viewer_model_id,
               p.default_viewer_reasoning_effort,
               p.default_viewer_temperature,
+              p.default_viewer_sampling_enabled, p.default_viewer_top_p, p.default_viewer_top_k, p.default_viewer_seed,
               p.default_viewer_system_prompt,
               p.default_monitor_system_prompt,
               p.default_monitor_provider_config_id,
@@ -89,6 +108,7 @@ export class SqliteProfilesRepository implements ProfilesRepository {
       `SELECT p.id, p.display_name, p.human_display_name, p.note, p.credential_id,
               c.provider AS credential_provider, p.default_viewer_model_id,
               p.default_viewer_reasoning_effort, p.default_viewer_temperature,
+              p.default_viewer_sampling_enabled, p.default_viewer_top_p, p.default_viewer_top_k, p.default_viewer_seed,
               p.default_viewer_system_prompt, p.default_monitor_system_prompt,
               p.default_monitor_provider_config_id, p.default_monitor_model_id,
               p.default_judge_provider_config_id, p.default_judge_model_id,
@@ -112,6 +132,7 @@ export class SqliteProfilesRepository implements ProfilesRepository {
       defaultViewerModelId: ai?.defaultViewerModelId,
       defaultViewerReasoningEffort: ai?.defaultViewerReasoningEffort,
       defaultViewerTemperature: ai?.defaultViewerTemperature,
+      defaultViewerOpenRouterSampling: validateOpenRouterSamplingForProvider(ai?.credentialProvider, ai?.defaultViewerOpenRouterSampling),
       defaultViewerSystemPrompt: ai?.defaultViewerSystemPrompt?.trim() || undefined,
       defaultMonitorSystemPrompt: ai?.defaultMonitorSystemPrompt?.trim() || undefined,
       defaultMonitorProviderConfigId: ai?.defaultMonitorProviderConfigId,
@@ -125,11 +146,12 @@ export class SqliteProfilesRepository implements ProfilesRepository {
       `INSERT INTO profiles (
          id, display_name, human_display_name, note, credential_id,
          default_viewer_model_id, default_viewer_reasoning_effort,
-         default_viewer_temperature, default_viewer_system_prompt, default_monitor_system_prompt,
+         default_viewer_temperature, default_viewer_sampling_enabled, default_viewer_top_p, default_viewer_top_k, default_viewer_seed,
+         default_viewer_system_prompt, default_monitor_system_prompt,
          default_monitor_provider_config_id, default_monitor_model_id,
          default_judge_provider_config_id, default_judge_model_id,
          created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
       [
         profile.id,
         profile.name,
@@ -139,6 +161,10 @@ export class SqliteProfilesRepository implements ProfilesRepository {
         profile.defaultViewerModelId ?? null,
         profile.defaultViewerReasoningEffort ?? null,
         profile.defaultViewerTemperature ?? null,
+        profile.defaultViewerOpenRouterSampling?.enabled ? 1 : 0,
+        profile.defaultViewerOpenRouterSampling?.topP ?? null,
+        profile.defaultViewerOpenRouterSampling?.topK ?? null,
+        profile.defaultViewerOpenRouterSampling?.seed ?? null,
         profile.defaultViewerSystemPrompt ?? null,
         profile.defaultMonitorSystemPrompt ?? null,
         profile.defaultMonitorProviderConfigId ?? null,
@@ -160,25 +186,38 @@ export class SqliteProfilesRepository implements ProfilesRepository {
   }
 
   async setProfileAiConfiguration(profileId: string, input: ProfileAiConfigurationInput): Promise<void> {
+    const sampling = validateOpenRouterSamplingForProvider(
+      input.credentialProvider,
+      input.defaultViewerOpenRouterSampling,
+    );
     await this.dependencies.executeWrite(
       `UPDATE profiles
           SET credential_id = $1,
               default_viewer_model_id = $2,
               default_viewer_reasoning_effort = $3,
               default_viewer_temperature = $4,
-              default_viewer_system_prompt = $5,
-              default_monitor_system_prompt = $6,
-              default_monitor_provider_config_id = $7,
-              default_monitor_model_id = $8,
-              default_judge_provider_config_id = $9,
-              default_judge_model_id = $10,
-              updated_at = $11
-        WHERE id = $12 AND archived_at IS NULL`,
+              default_viewer_sampling_enabled = CASE WHEN $5 = 1 THEN $6 ELSE default_viewer_sampling_enabled END,
+              default_viewer_top_p = CASE WHEN $5 = 1 THEN $7 ELSE default_viewer_top_p END,
+              default_viewer_top_k = CASE WHEN $5 = 1 THEN $8 ELSE default_viewer_top_k END,
+              default_viewer_seed = CASE WHEN $5 = 1 THEN $9 ELSE default_viewer_seed END,
+              default_viewer_system_prompt = $10,
+              default_monitor_system_prompt = $11,
+              default_monitor_provider_config_id = $12,
+              default_monitor_model_id = $13,
+              default_judge_provider_config_id = $14,
+              default_judge_model_id = $15,
+              updated_at = $16
+        WHERE id = $17 AND archived_at IS NULL`,
       [
         input.credentialId ?? null,
         input.defaultViewerModelId ?? null,
         input.defaultViewerReasoningEffort ?? null,
         input.defaultViewerTemperature ?? null,
+        sampling === undefined ? 0 : 1,
+        sampling?.enabled ? 1 : 0,
+        sampling?.topP ?? null,
+        sampling?.topK ?? null,
+        sampling?.seed ?? null,
         input.defaultViewerSystemPrompt?.trim() || null,
         input.defaultMonitorSystemPrompt?.trim() || null,
         input.defaultMonitorProviderConfigId ?? null,

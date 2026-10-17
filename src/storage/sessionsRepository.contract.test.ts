@@ -42,7 +42,7 @@ function minimalSnapshot(): SessionSnapshot {
     modelRoute: "provider-a::model-a",
     capabilitySnapshot: {},
     capabilityCapturedAt: timestamp,
-    generationSettings: { requested: { reasoningEffort: "none", temperature: 0.2, maxOutputTokens: 1024 }, effective: { reasoningEffort: "none", temperature: 0.2, maxOutputTokens: 1024 }, omitted: [] },
+    generationSettings: { requested: { reasoningEffort: "none", temperature: 0.2, topK: 64, seed: 42, maxOutputTokens: 1024 }, effective: { reasoningEffort: "none", temperature: 0.2, topK: 64, seed: 42, maxOutputTokens: 1024 }, omitted: [] },
     sessionLanguage: "en",
     protocol: { id: "rcp", version: "1", language: "en", contentSha256: "protocol-hash", fullContent: "protocol" },
     controllerPrompt: { id: "controller", version: "1", language: "en" },
@@ -95,6 +95,10 @@ describe("browser Sessions repository contract", () => {
     const repository = new BrowserSessionsRepository({ storage, now: () => timestamp, isResearchScoresFrozen: () => true });
     await repository.createRvSession(sessionInput);
     await repository.saveSessionSnapshot("session-a", minimalSnapshot(), "snapshot-hash");
+    const restored = await repository.getSessionSnapshot("session-a");
+    expect(restored?.generationSettings.requested).toMatchObject({ topK: 64, seed: 42 });
+    storage.setItem("rvh.dev.profiles", JSON.stringify([{ id: "profile-a", name: "Profile", defaultViewerOpenRouterSampling: { enabled: true, topK: 20 }, createdAt: timestamp, updatedAt: timestamp }]));
+    expect((await repository.getSessionSnapshot("session-a"))?.generationSettings.requested.topK).toBe(64);
     await expect(repository.saveSessionSnapshot("session-a", minimalSnapshot(), "snapshot-hash-2")).rejects.toThrow("immutable");
     await repository.appendSessionEvent("session-a", { eventType: "ONE", role: "controller" });
     await repository.appendSessionEvent("session-a", { eventType: "TWO", role: "assistant", content: "data" });

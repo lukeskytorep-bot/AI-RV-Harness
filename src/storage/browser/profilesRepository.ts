@@ -1,3 +1,4 @@
+import { validateOpenRouterSamplingForProvider } from "../../providers/openRouterSamplingSettings";
 import type {
   CreateProfileInput,
   Profile,
@@ -61,6 +62,10 @@ export class BrowserProfilesRepository implements ProfilesRepository {
       defaultViewerModelId: input.aiConfiguration?.defaultViewerModelId,
       defaultViewerReasoningEffort: input.aiConfiguration?.defaultViewerReasoningEffort,
       defaultViewerTemperature: input.aiConfiguration?.defaultViewerTemperature,
+      defaultViewerOpenRouterSampling: validateOpenRouterSamplingForProvider(
+        input.aiConfiguration?.credentialProvider,
+        input.aiConfiguration?.defaultViewerOpenRouterSampling,
+      ),
       defaultViewerSystemPrompt: input.aiConfiguration?.defaultViewerSystemPrompt?.trim() || undefined,
       defaultMonitorSystemPrompt: input.aiConfiguration?.defaultMonitorSystemPrompt?.trim() || undefined,
       defaultMonitorProviderConfigId: input.aiConfiguration?.defaultMonitorProviderConfigId,
@@ -97,6 +102,9 @@ export class BrowserProfilesRepository implements ProfilesRepository {
           defaultViewerModelId: input.defaultViewerModelId,
           defaultViewerReasoningEffort: input.defaultViewerReasoningEffort,
           defaultViewerTemperature: input.defaultViewerTemperature,
+          ...(input.defaultViewerOpenRouterSampling !== undefined
+            ? { defaultViewerOpenRouterSampling: validateOpenRouterSamplingForProvider(input.credentialProvider, input.defaultViewerOpenRouterSampling)! }
+            : {}),
           defaultViewerSystemPrompt: input.defaultViewerSystemPrompt?.trim() || undefined,
           defaultMonitorSystemPrompt: input.defaultMonitorSystemPrompt?.trim() || undefined,
           defaultMonitorProviderConfigId: input.defaultMonitorProviderConfigId,
