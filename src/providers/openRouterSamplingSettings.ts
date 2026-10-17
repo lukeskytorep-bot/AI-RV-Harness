@@ -12,24 +12,44 @@ export interface OpenRouterAdditionalSamplingSettings {
 }
 
 export function validateOpenRouterAdditionalSamplingSettings(
-  settings: OpenRouterAdditionalSamplingSettings,
+  settings: unknown,
 ): OpenRouterAdditionalSamplingSettings {
-  if (settings.topP !== undefined) {
-    if (!Number.isFinite(settings.topP) || settings.topP < OPENROUTER_TOP_P_MIN || settings.topP > OPENROUTER_TOP_P_MAX) {
+  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
+    throw new TypeError("OpenRouter additional sampling settings must be an object.");
+  }
+
+  const candidate = settings as Record<string, unknown>;
+  if (typeof candidate.enabled !== "boolean") {
+    throw new TypeError("OpenRouter additional sampling enabled must be a boolean.");
+  }
+
+  const topP = candidate.topP;
+  if (topP !== undefined) {
+    if (typeof topP !== "number" || !Number.isFinite(topP) || topP < OPENROUTER_TOP_P_MIN || topP > OPENROUTER_TOP_P_MAX) {
       throw new RangeError(`top_p must be a finite number between ${OPENROUTER_TOP_P_MIN} and ${OPENROUTER_TOP_P_MAX}.`);
     }
   }
-  if (settings.topK !== undefined) {
-    if (!Number.isSafeInteger(settings.topK) || settings.topK < OPENROUTER_TOP_K_MIN) {
+
+  const topK = candidate.topK;
+  if (topK !== undefined) {
+    if (typeof topK !== "number" || !Number.isSafeInteger(topK) || topK < OPENROUTER_TOP_K_MIN) {
       throw new RangeError("top_k must be a non-negative safe integer.");
     }
   }
-  if (settings.seed !== undefined) {
-    if (!Number.isSafeInteger(settings.seed) || settings.seed < OPENROUTER_SEED_MIN || settings.seed > OPENROUTER_SEED_MAX) {
+
+  const seed = candidate.seed;
+  if (seed !== undefined) {
+    if (typeof seed !== "number" || !Number.isSafeInteger(seed) || seed < OPENROUTER_SEED_MIN || seed > OPENROUTER_SEED_MAX) {
       throw new RangeError(`seed must be a safe integer between ${OPENROUTER_SEED_MIN} and ${OPENROUTER_SEED_MAX}.`);
     }
   }
-  return { ...settings };
+
+  return {
+    enabled: candidate.enabled,
+    ...(topP !== undefined ? { topP } : {}),
+    ...(topK !== undefined ? { topK } : {}),
+    ...(seed !== undefined ? { seed } : {}),
+  };
 }
 
 

@@ -15,6 +15,22 @@ describe("OpenRouter additional sampling profile contract", () => {
       .toBe(OPENROUTER_SEED_MAX);
   });
 
+  it("requires a real boolean enabled flag for untrusted runtime data", () => {
+    expect(validateOpenRouterAdditionalSamplingSettings({ enabled: true, topK: 64 })).toEqual({ enabled: true, topK: 64 });
+    expect(validateOpenRouterAdditionalSamplingSettings({ enabled: false, topK: 64 })).toEqual({ enabled: false, topK: 64 });
+
+    for (const settings of [
+      { enabled: "false", topK: 64 },
+      { enabled: 1, topK: 64 },
+      { enabled: null, topK: 64 },
+      { topK: 64 },
+      null,
+      [],
+    ]) {
+      expect(() => validateOpenRouterAdditionalSamplingSettings(settings)).toThrow();
+    }
+  });
+
   it("rejects invalid numeric values", () => {
     for (const topP of [-0.01, 1.01, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => validateOpenRouterAdditionalSamplingSettings({ enabled: true, topP })).toThrow();

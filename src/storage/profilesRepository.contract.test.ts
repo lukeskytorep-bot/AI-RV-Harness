@@ -262,6 +262,41 @@ function runProfilesRepositoryContract(name: string, createHarness: () => Contra
       expect(afterProviderChange?.defaultViewerOpenRouterSampling).toEqual({ enabled: false, topP: 0.04, topK: 0, seed: 42 });
     });
 
+    it("rejects malformed sampling enabled values before write and preserves the previous profile", async () => {
+      const { repository } = createHarness();
+      const profile = await repository.createProfile({
+        name: "Sampling Viewer",
+        aiConfiguration: {
+          credentialId: "credential-or",
+          credentialProvider: "openrouter",
+          defaultViewerModelId: "model-a",
+          defaultViewerTemperature: 0.6,
+          defaultViewerOpenRouterSampling: { enabled: true, topK: 64 },
+        },
+      });
+
+      const malformedEnabledValues: unknown[] = ["false", 1, null, undefined];
+      for (const enabled of malformedEnabledValues) {
+        const malformedSampling = enabled === undefined
+          ? { topK: 20 }
+          : { enabled, topK: 20 };
+
+        await expect(repository.setProfileAiConfiguration(profile.id, {
+          credentialId: "credential-or",
+          credentialProvider: "openrouter",
+          defaultViewerModelId: "model-b",
+          defaultViewerTemperature: 0.2,
+          defaultViewerOpenRouterSampling: malformedSampling as never,
+        })).rejects.toThrow("enabled must be a boolean");
+
+        expect((await repository.listProfiles())[0]).toMatchObject({
+          defaultViewerModelId: "model-a",
+          defaultViewerTemperature: 0.6,
+          defaultViewerOpenRouterSampling: { enabled: true, topK: 64 },
+        });
+      }
+    });
+
     it("rejects storing OpenRouter sampling under a non-OpenRouter provider", async () => {
       const { repository } = createHarness();
       const profile = await repository.createProfile({ name: "Viewer" });
