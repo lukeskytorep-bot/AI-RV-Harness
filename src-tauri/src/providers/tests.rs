@@ -1178,16 +1178,27 @@ fn emits_openrouter_manual_sampling_and_require_parameters_without_leaking_to_ot
 
 #[test]
 fn validates_openrouter_sampling_transport_ranges() {
+    let manual_sampling_routing = || OpenRouterProviderRouting {
+        order: vec![],
+        only: vec!["provider-a/fp8".to_string()],
+        ignore: vec![],
+        allow_fallbacks: Some(true),
+        require_parameters: Some(true),
+    };
+
     let mut request = chat_request(ProviderKind::Openrouter, "sampling/model");
     request.top_p = Some(1.01);
+    request.provider_routing = Some(manual_sampling_routing());
     assert!(validate_chat_request(&request).unwrap_err().contains("top_p"));
 
     let mut request = chat_request(ProviderKind::Openrouter, "sampling/model");
     request.top_k = Some(9_007_199_254_740_992);
+    request.provider_routing = Some(manual_sampling_routing());
     assert!(validate_chat_request(&request).unwrap_err().contains("top_k"));
 
     let mut request = chat_request(ProviderKind::Openrouter, "sampling/model");
     request.seed = Some(9_007_199_254_740_992);
+    request.provider_routing = Some(manual_sampling_routing());
     assert!(validate_chat_request(&request).unwrap_err().contains("seed"));
 }
 
