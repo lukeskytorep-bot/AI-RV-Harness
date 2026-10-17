@@ -41,10 +41,10 @@ The durable sequence is blind Session → Reveal → Viewer Review → Field Gui
 | --- | --- | --- |
 | `updated` | One immutable accepted version | Continue |
 | `model_no_change` | Existing version/absence retained | Continue without warning |
-| `failed_preserved` | Previous exact version/absence retained; real FAILED_* audit and cause | Continue with a nonblocking warning |
+| `failed_preserved` | Previous exact version/absence retained; real FAILED_* audit and cause | Continue; detailed audit in AI Center, no Training warning list |
 | `disabled` | No learning operation | Continue |
 
-A failed update is not the model's NO_CHANGE. Known failed proposals/preflight/settled API errors can be recorded without blocking optional learning; Stop, ownership loss, DB error, corrupted/hash-mismatched snapshots, identity mismatch and unknown dispatch remain interruptions. Audit/settlement persistence must succeed before advancing the checkpoint. Existing failed known-result histories can be recovered without issuing another request.
+Classic Training explicitly selects `preserve_and_continue` for optional post-Reveal learning. After bounded recovery, an invalid JSON/schema/capacity proposal preserves the exact previous learning version or absence, records `failed_preserved`, and continues to eligible remaining stages and the next target. It is not model `NO_CHANGE`. An unknown optional-learning result is preserved and audited without another paid dispatch or a user confirmation; it is not relabelled as a successfully completed transport. An unavailable optional Viewer Review skips dependent learning while retaining the Session and continuing. Stop, actual loss of ownership, database/audit persistence failure, identity/hash corruption and mandatory evidence failures still interrupt. Blind Viewer, Judge, Research and non-Training callers retain their own contracts. Audit/settlement persistence must succeed before advancing the checkpoint. Existing failed known-result histories can be recovered without issuing another request.
 
 Viewer Notes receives the exact Field Guide version after this session's update or preservation, never an arbitrary newer active version. Successful Field Guide remains active when Notes fails. If Notes never had a first version, failure leaves no version and UI says so. Source owners are `learningExecution.ts`, `fieldGuideUpdate.ts`, `viewerNotes.ts` and `trainingExecution.ts`.
 
@@ -52,7 +52,7 @@ Only classic Training produces these updates. Ordinary RV, Conversations, Resear
 
 ## Shared Resume, Stop and End
 
-Viewer attempts retain stable step/fingerprint/dispatch identity. UI and engines share `viewerResumeDecision.ts` / `viewerResumeLedger.ts` and the transport classifier. Accepted stored results replay locally before the first missing call. Completed rejected output is not shown as a request still generating. Exhausted essential Viewer recovery may require explicit one-attempt authorization that retains history; it does not reset learning or create an automatic retry loop. Unknown dispatch requires its explicit resolution path. Unsafe legacy/fingerprint state fails closed.
+Viewer attempts retain stable step/fingerprint/dispatch identity. UI and engines share `viewerResumeDecision.ts` / `viewerResumeLedger.ts` and the transport classifier. Accepted stored results replay locally before the first missing call. Completed rejected output is not shown as a request still generating. Exhausted essential Viewer recovery may require explicit one-attempt authorization that retains history; it does not reset learning or create an automatic retry loop. Unknown essential-step dispatch retains its explicit resolution path. The optional Classic Training learning exception above preserves memory without resending or requiring operator resolution. Unsafe legacy/fingerprint state fails closed.
 
 Classic Training Resume retains the Session, target order and frozen inputs. Review and each learning/Judge stage resume from the first missing stage. Research retains frozen config, linked Sessions, blinding and Judge policies. Stop cancels current work and prevents subsequent dispatch. End is terminal and distinct from Stop or completion.
 

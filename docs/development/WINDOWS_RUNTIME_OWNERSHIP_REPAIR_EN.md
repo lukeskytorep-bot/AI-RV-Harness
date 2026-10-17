@@ -177,3 +177,9 @@ validation or increase model token/attempt budgets as a workaround.
 
 The separate confirmed post-Reveal nested-repository/review-lease inconsistency
 is not changed here and is not claimed to be the cause of the native UD2 trap.
+
+## User follow-up and future dependency upgrades — 17 October 2026
+
+Edward reported that repaired Training completed in approximately 20 minutes and felt faster or comparable to earlier working builds. Training Stop did not close the app. Earlier coincidence between Stop/window interaction and a native crash is not proof of a Stop exit-handler defect. The exact new EXE hash and a complete soak record were not supplied with this feedback; it is a successful user scenario, not universal race-freedom certification.
+
+Preserve the owner-thread target repair and reduced IPC. Increased IPC plausibly increased exposure and overhead, but CPU saturation and an isolated speedup percentage were not measured. Do not remove the local patch merely because a newer dependency exists. Verify an officially released fix covers the same ownership/teardown paths, review the resolved dependency source, update patch gates/lockfile, retain equivalent tests and repeat standalone Windows Training/Reveal/Stop/minimize acceptance before replacing it. Record a successful replacement and its version in [Engineering Decisions 25–26](../architecture/ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md#decision-25--windows-runtime-ownership-and-bounded-ipc-observation).

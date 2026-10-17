@@ -36,7 +36,7 @@ The implementation follows six general principles:
 3. **Make evidence boundaries stateful.** Blind, sealed, revealed, judged, and unblinded are different persistent states, not visual labels.
 4. **Make completed evidence immutable.** Hashes and database constraints protect records after their evidence boundary closes.
 5. **Normalize providers at one boundary.** Vendor-specific response formats are interpreted centrally before application controllers use them.
-6. **Fail closed when integrity is uncertain.** An incomplete response, changed research condition, missing capability, or invalid state stops progression rather than being treated as success.
+6. **Fail closed when mandatory integrity is uncertain.** Incomplete essential evidence, changed research conditions, missing required capabilities or invalid mandatory state stop progression rather than being treated as success. Optional Training learning has an explicit preserve-and-continue policy (Decisions 22 and 26); rejecting a proposal is not a reason to stop the curriculum.
 
 ## Decision 1 — Blindness is enforced by data flow and persistent state
 
@@ -741,7 +741,7 @@ Training and Research resolve a compatible RV or `legacy_combined` Workspace int
 
 ## Decision 22 — Learning failure is distinct from interrupted execution
 
-Classic Training optional memory has a durable two-dispatch limit per kind/session/packet, shared across transport retry and all repairs. A known exhausted proposal settles failed_preserved and retains the exact prior version/absence; it is not model NO_CHANGE and does not stop later targets. Audit persistence must succeed. Stop, ownership/DB errors, identity/hash corruption and uncertain dispatch must never be converted to this settlement. Notes receives the exact Field Guide after update/preservation, and a later Notes failure cannot undo a successful Guide.
+Classic Training optional memory has a durable two-dispatch limit per kind/session/packet, shared across transport retry and all repairs. A known exhausted proposal settles failed_preserved and retains the exact prior version/absence; it is not model NO_CHANGE and does not stop later targets. Audit persistence must succeed. Stop, ownership/DB errors and identity/hash corruption remain interruptions. Under Classic Training's explicit preserve_and_continue policy, an unknown optional-learning result preserves memory with an audit and no new dispatch or operator dialog; it is never represented as a successful transport. Other callers retain their own uncertainty contracts. Notes receives the exact Field Guide after update/preservation, and a later Notes failure cannot undo a successful Guide.
 
 ## Decision 23 — Transport completion, acceptance and commit are separate
 
@@ -752,3 +752,25 @@ Complete rejected final-channel output can have response_finished evidence. Pres
 Rust renews classic owned workflows every 10 seconds with TTL 45 seconds and exact profile/owner/version/window binding. Ownership loss, DB failure and Destroyed cancel bound transport and fence later writes. CloseRequested is not destruction. Release and failed start clean up exact ownership. This is not a mechanism to run while the whole process is asleep, nor a replacement for independent telepathic/review leases.
 
 See [current workflows](CURRENT_WORKFLOWS_v0.7.14_EN.md) and the English [Developer Guide](../development/README.md). Earlier version-specific examples/evidence in this decision record retain their historical applicability.
+
+## Decision 25 — Windows runtime ownership and bounded IPC observation
+
+**Recorded 17 October 2026; local runtime repair implemented, successful user scenario reported.** Training sometimes exited during Reveal or window interaction. The old EXE reported APPCRASH `0xC000001D` at RVA `0x99929`; inspection found an explicit UD2 reference-count trap strongly matching Tauri Context cloning. The affected set was tauri 2.11.5 / tauri-runtime-wry 2.11.4 / tao 0.35.3 / wry 0.55.1. Without a matched dump/PDB, the full corruption sequence remains unproven. Stop was initially suspected by timing; Edward later confirmed Stop works without closing the repaired application.
+
+The local runtime patch keeps the strong event-loop target on its owner thread; Context/dispatchers carry private atomic weak tokens, check ThreadId before upgrade and do not move final destruction to a worker. Monitor/display access uses the appropriate owner-thread path. Preserve native write/dispatch fencing, heartbeat and source/provenance verification. Do not remove UD2 guards or substitute a mechanical Rc-to-Arc change.
+
+Share ownership UI watchers, avoid overlapping requests, poll at 2 seconds visible / 10 seconds hidden, and create loss channels only for Acquire. Extra IPC can add overhead and increase exposure to the affected ownership bug; there is no established universal IPC crash threshold. Reduced polling alone is not a memory-safety fix. The user reported Training completing in approximately 20 minutes with improved responsiveness; no controlled benchmark isolated the effect of each repair.
+
+**Upstream replacement rule:** when a newer Tauri release is considered, verify the released fix and actual resolved runtime/Tao/Wry code against clone/drop, owner-thread access and teardown requirements. A newer version number or an open PR is insufficient. Replace the local patch in a separate reviewed change only when equivalent protection is established; update Cargo.lock, patch-specific gates and documentation together, retain regression coverage and IPC improvements, and test the actual standalone Windows EXE through sustained IPC, Reveal, Stop/Resume and minimize/restore. Record the superseding version and evidence here. Keep matching EXE/PDB provenance; old RVAs do not describe a new binary.
+
+See [Windows runtime ownership repair](../development/WINDOWS_RUNTIME_OWNERSHIP_REPAIR_EN.md) for implementation, dated upstream references and acceptance procedure.
+
+## Decision 26 — Restore unattended Training without accepting invalid learning
+
+Later hardening introduced optional-learning resolution gates and duplicate warnings which could block unattended Training. The correction selectively restored earlier working progression; it did not roll back the whole application, accepted larger output budgets, evidence boundaries or native storage protection.
+
+Classic Training explicitly selects `preserve_and_continue` for optional post-Reveal learning. After bounded recovery, an invalid JSON/schema/capacity proposal preserves the exact previous learning version or absence, records `failed_preserved`, and continues to eligible remaining stages and the next target. It is not model `NO_CHANGE`. An unknown optional-learning result is preserved and audited without another paid dispatch or a user confirmation; it is not relabelled as a successfully completed transport. An unavailable optional Viewer Review skips dependent learning while retaining the Session and continuing. Stop, actual loss of ownership, database/audit persistence failure, identity/hash corruption and mandatory evidence failures still interrupt. Blind Viewer, Judge, Research and non-Training callers retain their own contracts.
+
+Detailed proposal, capacity and preservation diagnostics remain in existing AI Center / Field Guide / Viewer Notes histories. Do not reintroduce repetitive learning-warning lists or failure counters beneath Training results. A model may fail to count tokens or shorten a proposal correctly; `finish_reason=stop` proves neither schema nor capacity validity. Keep validation, bounded attempts and preservation instead of turning that optional failure into a manual gate. Do not automatically spill rejected Guide content into Notes or increase document capacities. Prompt improvements for shorter output are a separate future task.
+
+Before future hardening, regress invalid JSON, capacity overflow, unavailable Review and uncertain optional dispatch: preserve old data, retain audit, avoid blind paid retries, require no user dialog, and reach the next target. Test Stop and mandatory persistence/ownership failure separately. See [automatic Training learning](../development/TRAINING_AUTOMATIC_LEARNING.md).

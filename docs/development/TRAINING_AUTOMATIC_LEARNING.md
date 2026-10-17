@@ -38,3 +38,9 @@ Exports retain their existing evidence and learning records.
 This behavior change does not fix or certify the separate native Windows
 UD2/runtime crash under investigation. Desktop stability requires its own
 matching-build validation.
+
+## Why this contract must survive later hardening — 17 October 2026
+
+This is a selective restoration of earlier working unattended Training, not a blanket rollback. Mandatory evidence and persistence remain protected; optional JSON/capacity rejection preserves memory and advances the run. A model may ignore shortening instructions or estimate tokens incorrectly. Do not turn that model limitation into an operator-resolution gate, increase document capacity automatically, or use Viewer Notes as an automatic overflow destination. Prompt refinements are a separate task.
+
+Edward reported a completed approximately 20-minute Training after the repairs and a working Stop which did not exit the application. Native runtime stability and learning continuity are separate fixes. Future changes must exercise malformed/oversized proposals through allowed recovery, unavailable Review, unknown optional-learning results, valid independent updates, Stop and real persistence/ownership errors. Preserve bounded dispatch, saved evidence and no-dialog progression. See [Engineering Decision 26](../architecture/ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md#decision-26--restore-unattended-training-without-accepting-invalid-learning).

@@ -12,16 +12,20 @@ Full Training freezes 1–10 rounds of eight sessions, one target per category, 
 
 After Reveal: **Viewer Review → Field Guide Update → Viewer Notes Reflection → optional Judge**. Field Guide and Notes each have a separate durable maximum of **two dispatched requests per session/packet**, including transport retry, output recovery and JSON/capacity repair. Restart does not reset it.
 
-A valid UPDATE creates an immutable version. NO_CHANGE is the model's decision and is not a warning. A known rejected second proposal is recorded as failed_preserved: keep the exact prior memory or its absence and continue to Judge/next target with the real failure in expandable details. A successful Guide is not rolled back when Notes fails. Notes uses the exact Guide checkpoint after this update/preservation.
+A valid UPDATE creates an immutable version. NO_CHANGE is the model's decision and is not a warning. A known rejected second proposal is recorded as failed_preserved: keep the exact prior memory or its absence and continue to Judge/next target with the real failure retained in existing AI Center histories. A successful Guide is not rolled back when Notes fails. Notes uses the exact Guide checkpoint after this update/preservation.
 
-Stop, ownership/DB/hash/identity errors and unknown dispatch still interrupt. They are not treated as harmless failed learning. Unconfirmed requests require explicit resolution before another paid request.
+Stop and ownership/DB/hash/identity errors still interrupt. Under Classic Training preserve_and_continue, unknown optional-learning results preserve memory and continue without a new paid dispatch or operator resolution. Essential-step unknown dispatch retains its own recovery contract; it must not be blindly retried.
 
 ## Budgets and context
 
 Current Review/Judge allowance: 32,768 → 49,152. Learning: capacity C + 32,768 → C + 49,152, without increasing C. Automatic blind Viewer: 16,384 → 32,768. Actual model/context limits apply; see [provider guide](Providers-Models-and-AI-Monitor.md).
 
-Training's top breadcrumb is neutral. New-run settings are separate from a saved run's Profile/model. Resume uses the saved identity or refuses an unavailable route. Completed runs retain memory warnings. Save also exports the first interrupted Session/checkpoint before any target completes.
+Training's top breadcrumb is neutral. New-run settings are separate from a saved run's Profile/model. Resume uses the saved identity or refuses an unavailable route. Detailed failed/preserved learning diagnostics remain in AI Center histories; Training does not duplicate warning lists or failure counters. Save also exports the first interrupted Session/checkpoint before any target completes.
 
 ## AI–AI Telepathic Training
 
-This is a separate workflow for 2–6 Profiles. New fixed-lead series freeze the selected lead, participants, routes, learning and per-round geography. Each round locks a new target, permits up to three additional lead-guided cycles, then Reveal/reflections. It reads frozen Field Guide/Notes and never updates them. New decisions use `fixed_lead_guidance_v2`: one separately addressed `individual` instruction per active Viewer, or an explicit finish for that Viewer. The whole round can end with an empty instruction list. Identical questions must be repeated as separate addressed entries. Saved v1 decisions and requests keep their original contract, including accepted broadcasts. Legacy series retain their saved protocol/policy.
+This is a separate workflow for 2–6 Profiles. New fixed-lead series freeze the selected lead, participants, routes, learning and per-round geography. Each round locks a new target, permits up to three additional lead-guided cycles, then Reveal/reflections. It reads frozen Field Guide/Notes and never updates them. Legacy series retain their saved protocol/policy.
+
+## Continuity after optional learning failure
+
+Malformed or oversized optional learning output must not discard the Session or block the curriculum after allowed recovery. Preserve the previous valid learning state, retain the audit and continue. Classic Training preserve_and_continue also preserves unknown optional-learning outcomes without resending or asking for resolution. An unavailable optional Viewer Review skips dependent learning. Mandatory persistence, identity/evidence integrity, ownership and Stop remain protected. See [Engineering Decisions](Engineering-Design-and-Integrity-Safeguards.md) for the rationale and [Troubleshooting](Troubleshooting.md) for symptoms. These changes retain the larger output/document allowances above; future prompt refinements are a separate task.

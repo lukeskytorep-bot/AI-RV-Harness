@@ -113,3 +113,7 @@ A PR should explain the concrete behavior, validation and limits. Never include 
 ## Windows runtime crash candidate
 
 The pinned local runtime ownership repair and manual diagnostic build are described in [Windows Runtime Ownership Repair](WINDOWS_RUNTIME_OWNERSHIP_REPAIR_EN.md). Source verification rejects a registry fallback. The diagnostic workflow preserves a GUID/age-verified EXE/PDB pair, encrypts private symbols, and requires a separate Windows IPC/Reveal/Stop/minimize soak; local Linux checks do not close that acceptance.
+
+## Maintenance decisions to preserve
+
+Before changing runtime dependencies, recurring IPC or post-Reveal recovery, read [Engineering Decisions 25 and 26](../architecture/ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md#decision-25--windows-runtime-ownership-and-bounded-ipc-observation). They record the Windows crash investigation/repair, criteria for replacing the local Tauri patch with a verified upstream fix, and the selective restoration of unattended Training. Optional learning rejection must not become a mandatory operator gate. The 17 October user test completed Training in approximately 20 minutes and verified Stop without app closure; it is not a substitute for every Windows acceptance scenario.
