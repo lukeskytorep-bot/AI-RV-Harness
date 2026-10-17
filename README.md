@@ -1,108 +1,124 @@
-# AI RV Harness
+# AI RV Harness documentation
 
-AI RV Harness is a local-first desktop workspace for AI conversations, blind Remote Viewing sessions, structured Training, telepathic exchange and controlled Research. It records procedures, evidence and evaluations; it does not establish that Remote Viewing works or that a model's impressions are accurate.
+## Current development documentation — reviewed 16 October 2026
 
-The application uses **Tauri 2, React, TypeScript, Rust and SQLite**. It has Polish and English interfaces and Windows/Linux packaging workflows.
+The current `ai-rv-2` source through Training Continuity T5 uses package version 0.7.13 and SQLite schema 31. The v0.7.14 label describes development scope; final Windows/provider smoke and release publication are separate records.
 
-## Which version does this describe?
+Start with the English [Developer Guide](development/README.md), [current workflows](architecture/CURRENT_WORKFLOWS_v0.7.14_EN.md) ([PL](architecture/CURRENT_WORKFLOWS_v0.7.14_PL.md)), [user/wiki mirror](wiki/Home.md), and [architecture index](architecture/README.md). Current references cover output-policy versions, two-dispatch learning settlement, finished versus uncertain responses, native ownership and interrupted checkpoint exports. Historical release/checkpoint/audit evidence below is not rewritten into present-day instructions.
 
-This README describes the **`ai-rv-2` development source reviewed on 16 October 2026, through Training Continuity T5**. The package version is still **0.7.13**, the database schema is **31**, and **v0.7.14** names the development/release scope. A green implementation patch does not publish a release or prove desktop/provider acceptance.
+This directory contains project documentation that is useful for development, review, release reconstruction and historical audit but is not required in the repository root.
 
-The recorded public v0.7.13 baseline and its original verification remain under [release documentation](docs/releases/v0.7.13/). Use [GitHub Releases](https://github.com/lukeskytorep-bot/AI-RV-Harness/releases) for available downloads and their own compatibility notes. Do not assume that a development Actions artifact is a public release.
+## Directory structure
 
-## What you can do
-
-| Area | Purpose |
+| Directory | Purpose |
 | --- | --- |
-| Profiles | Configure AI identity, provider connection and default Viewer/model settings. |
-| Conversations | Ordinary chat, selected sources/attachments and optional read-only Viewer Learning. |
-| RV Sessions | Manual RV and automatic RCP, RV Lite or compatible custom protocols. |
-| Training | Classic RV Training with learning, or a separate AI–AI telepathic workflow. |
-| AI Center | AI identities, Monitor history, Field Guide and Viewer Notes. |
-| Targets | 94 read-only factory Training targets in eight categories, My Targets and a separate telepathic target set. |
-| Research | Freeze studies, run blinded assignments, freeze Judge scores before unblinding and export reproducibility records. |
-| Settings | Connections, model capabilities, generation settings, appearance, diagnostics and backup/restore. |
+| [`development/`](development/) | English setup, commands, contributor contracts and review guidance. |
+| [`wiki/`](wiki/) | English current-development user guides mirrored for separate GitHub Wiki publication. |
+| [`architecture/`](architecture/) | Current system overview, engineering invariants, integrity safeguards, and feature architecture. |
+| [`checkpoints/`](checkpoints/) | Historical implementation checkpoints from v0.6.0 through v0.7.7. |
+| [`releases/`](releases/) | Version-specific plans, notes, reports, manifests, verification records and patch documentation. |
+| [`specifications/`](specifications/) | As-built functional and technical specifications. |
+| [`requirements/`](requirements/) | Historical requirements, accepted correction sets and test-derived change lists. |
+| [`prompts/`](prompts/) | Design records for bundled prompt packages. Runtime prompt resources remain in source/resource directories. |
+| [`reports/`](reports/) | Implementation and audit reports, including the completed v0.7.13 UX-DATA campaign. |
+| [`credits/`](credits/) | Credit history, attribution policy and technical-reference records supporting the root `CREDITS.md` and `CITATION.cff`. |
 
-Conversations and RV Sessions use separate typed Workspaces. New Profiles receive one of each. Historical `legacy_combined` Workspaces remain readable. Training and Research resolve a compatible technical RV Workspace without exposing another Workspace selector.
+## Documented public release and living architecture
 
-### Classic Training and memory
+The documented public release baseline here is v0.7.13 for Windows and Linux. Its exact release notes, verification record, checksums and source identity are stored under [`releases/v0.7.13/`](releases/v0.7.13/). Living architecture now describes the accepted development source; release reports retain their original v0.7.13 scope:
 
-Full Training freezes one to ten rounds of eight category-balanced sessions before starting. Partial Training uses explicit category counts and may include My Targets. Resume retains the saved target order, Session identity and completed stages.
+- [Public release notes](releases/v0.7.13/RELEASE_NOTES_v0.7.13.md)
+- [Release verification](releases/v0.7.13/RELEASE_VERIFICATION_v0.7.13.md)
+- [Release checksums](releases/v0.7.13/SHA256SUMS.txt)
+- [Release source identity](releases/v0.7.13/SOURCE_IDENTITY.txt)
 
-After Reveal, the sequence is **Viewer Review → Field Guide Update → Viewer Notes Reflection → optional Judge**. Field Guide and Viewer Notes have separate histories and separate durable limits: **at most two dispatched requests for each update in one session/packet**, including transport retry and repair. An invalid second proposal is recorded as `failed_preserved`; Training continues with the previous exact version, or with no version if the first notes were never created. A failure is not the model's `NO_CHANGE` decision.
+- [Architecture documentation index](architecture/README.md)
+- [System overview](architecture/SYSTEM_OVERVIEW.md)
+- [Engineering design and integrity safeguards](architecture/ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md)
+- [AI Center and Viewer Notes architecture](architecture/AI_CENTER_AND_VIEWER_NOTES.md)
+- [Training, target pack, and typed Workspaces](architecture/TRAINING_TARGETS_AND_TYPED_WORKSPACES.md)
+- [UX-DATA-6 Soft Archive / Restore implementation report](reports/UX_DATA_SOFT_ARCHIVE_LIFECYCLE_v0.7.13_PL.md)
+- [UX-DATA-7 Viewer Notes source preservation implementation report](reports/UX_DATA_VIEWER_NOTES_SOURCE_PRESERVATION_v0.7.13_PL.md)
+- [UX-DATA-8 Permanent Delete / controlled purge implementation report](reports/UX_DATA_CONTROLLED_PURGE_v0.7.13_PL.md)
+- [UX-DATA-9 final cleanup and compatibility gate report](reports/UX_DATA_FINAL_CLEANUP_COMPATIBILITY_GATE_v0.7.13_PL.md)
+- [UX-DATA compatibility gate architecture](architecture/UX_DATA_COMPATIBILITY_GATE.md)
+- [Etap 6 Rust provider modularization report](reports/MODULARIZATION_RUST_PROVIDERS_SPLIT_v0.7.13_PL.md)
+- [Stage 9 modularization closeout](reports/MODULARIZATION_STAGE_9_CLOSEOUT_v0.7.13_PL.md)
+- [Historical v0.7.13 desktop runtime and release smoke](architecture/FINAL_RUNTIME_SMOKE_v0.7.13_PL.md)
+- [v0.7.14 development final runtime/release smoke — EN](architecture/FINAL_RUNTIME_SMOKE_v0.7.14_EN.md) ([PL](architecture/FINAL_RUNTIME_SMOKE_v0.7.14_PL.md))
+- [v0.7.14 Step 6 final release gate](reports/STEP6_V0714_FINAL_RELEASE_GATE_PL.md)
+- [Viewer Learning 1 Field Guide foundation report](reports/VIEWER_LEARNING_1_FIELD_GUIDE_FOUNDATION_R1_v0.7.13_PL.md)
+- [Viewer Learning 2 Training Field Guide update report](reports/VIEWER_LEARNING_2_TRAINING_FIELD_GUIDE_UPDATE_v0.7.13_PL.md)
+- [Viewer Learning 3 Research Field Guide controls report](reports/VIEWER_LEARNING_3_RESEARCH_FIELD_GUIDE_CONTROLS_v0.7.13_PL.md)
+- [Source package hygiene report](reports/SOURCE_PACKAGE_HYGIENE_1_v0.7.13_PL.md)
+- [Training/targets/typed Workspaces — Stage 6 closeout](reports/TRAINING_TARGETS_TYPED_WORKSPACES_STAGE_6_CLOSEOUT_v0.7.13_PL.md)
 
-Classic Training handles optional post-Reveal failures automatically. An unconfirmed Field Guide or Viewer Notes request preserves previous memory without resending that request or asking for confirmation. A provider failure or an unconfirmed request in optional Viewer Review skips learning for that session; no review text is invented. Detailed learning results remain in AI Center, not on the Training screen or its history cards. Stop, lost ownership, database failures and snapshot/hash corruption still interrupt execution and retain completed work. Blind-session recovery retains its own rules. Export also includes an interrupted first Session and its active checkpoint.
+The current source registry is **001–031**: Viewer Learning (024), continuation (025), typed Workspaces (026), factory classification (027), telepathic exchange (028), cross-instance series lease (029), Conversation attachment metadata (030) and post-Reveal review lease (031). Native current-epoch fixtures protect the accepted upgrade chain without moving historical ownership. Legacy databases are classified before normal loading; current development does not authorize an unverified legacy migration.
 
-Only **classic Training** updates learning. Ordinary RV, Conversations, Research and AI–AI Telepathic Training consume allowed snapshots read-only. Learning belongs to an exact Profile/credential/provider/model/Viewer identity; it is never silently transferred to another route.
+The v0.7.12 records below remain historical implementation and release documentation:
 
-### Telepathic exchange and Training
+- [AI Center implementation plan](releases/v0.7.12/AI_CENTER_IMPLEMENTATION_PLAN_PL.md)
+- [AI Center wiki documentation](releases/v0.7.12/AI_CENTER_VIEWER_NOTES_WIKI_EN.md)
+- [Implementation report](releases/v0.7.12/IMPLEMENTATION_REPORT_v0.7.12_PL.md)
+- [Application instructions](releases/v0.7.12/APPLY_UPDATE_v0.7.12_PL.md)
+- [Changed-file manifest](releases/v0.7.12/CHANGED_FILES_v0.7.12.txt)
+- [Changed-file SHA-256 checksums](releases/v0.7.12/SHA256SUMS_v0.7.12.txt)
 
-The two telepathic surfaces share a role-safe engine. New `fixed_lead_v1` series freeze a selected lead, participants, routes, personal learning and per-round geography. Each round locks its own target. The lead may request up to three additional cycles, followed by Reveal and reflections. AI–AI Training supports 2–6 distinct Profiles. New decisions use `fixed_lead_guidance_v2`: one separately addressed `individual` instruction per active Viewer, or an explicit finish for that Viewer. The whole round can end with an empty instruction list. Identical questions must be repeated as separate addressed entries. Saved v1 decisions and requests keep their original contract, including accepted broadcasts. Historical series retain their recorded protocol and budget policy.
+The previous public v0.7.11 baseline remains archived here:
 
-The operator can inspect the run; an AI receives only its permitted packet. Before Reveal, receivers do not receive the hidden target/geography or other receivers' blind answers. Opening history/export never calls a model. History uses paged summaries; this does not mean every planned history/refresh optimization is complete.
+- [Reasoning compatibility plan](releases/v0.7.11/AI_RV_Harness_v0.7.11_REASONING_COMPATIBILITY_PLAN_PL.md)
+- [Implementation report](releases/v0.7.11/AI_RV_Harness_v0.7.11_IMPLEMENTATION_REPORT_PL.md)
+- [Public release notes](releases/v0.7.11/AI_RV_Harness_v0.7.11_PUBLIC_RELEASE_NOTES.md)
+- [Changed-file manifest](releases/v0.7.11/AI_RV_Harness_v0.7.11_CHANGED_FILES.txt)
+- [Changed-file SHA-256 checksums](releases/v0.7.11/AI_RV_Harness_v0.7.11_CHANGED_FILES_SHA256.txt)
+- [Application instructions](releases/v0.7.11/AI_RV_Harness_v0.7.11_APPLY_README_PL.md)
 
-### Stop, Resume and native ownership
+## Root-directory policy
 
-Stop cancels active work and prevents later dispatch. Resume is explicit, replays accepted stored work and starts at the first missing stage. End is a permanent user decision to stop further execution while retaining history; it does not falsely complete a run.
+The repository root is reserved for files that developers, hosting platforms and package tooling expect to find immediately:
 
-A finished but rejected response is distinguished from an unconfirmed request. `response_finished` proves that transport completed, not that the answer is usable. Earlier unknown physical attempts remain unknown even if a later attempt finished. Explicit retry authorization for an essential Viewer step never resets the learning allowance.
+- `README.md`;
+- `LICENSE` and the supplementary content licence;
+- `SECURITY.md`;
+- `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md`;
+- `CREDITS.md`;
+- `CITATION.cff`;
+- package, TypeScript, Vite, Tauri and environment configuration files.
 
-Classic owned desktop workflows use a Rust heartbeat every 10 seconds with a 45-second lease. Owner/version checks still reject stale writes. This removes reliance on one WebView timer; it does not keep a suspended or terminated process running. Telepathic and post-Reveal leases retain their own contracts.
+Checkpoint records, release plans, reports, manifests, verification logs and historical requirements belong under `docs/`. Generated build output and dependency directories do not belong in source archives.
 
-## Output allowances
+## Rules for future documentation
 
-These are the current source preferences, **not guaranteed provider capacity**. Input context, endpoint/model limits and native reasoning consumption remain separate constraints.
+1. Put new release-specific documentation in `docs/releases/vX.Y.Z/`.
+2. Keep filenames versioned when the document describes one immutable release.
+3. Update this index when adding a new documentation category or current-release document.
+4. Use relative Markdown links and verify them before packaging.
+5. Do not rewrite historical manifests merely because files were reorganized later; those manifests describe the package that existed at their recorded time.
+6. Keep runtime resources in their existing `src/resources/` or `src-tauri/resources/` locations rather than moving them into documentation.
+7. Keep `.git`, `node_modules`, `dist`, Rust `target` and compiler cache files out of complete-source archives.
 
-| Operation | First / recovery preference |
-| --- | --- |
-| Conversation | 16,384 default; former unversioned 8,000/8,192 setting upgrades once, later deliberate reductions remain |
-| Manual RV Viewer | 32,768 → 49,152 |
-| Automatic blind RV / classic Training Viewer | 16,384 → 32,768 |
-| New Research Viewer | Frozen Viewer policy, normally 16,384 → 32,768 |
-| Judge and post-Reveal analytical work, including classic Training Review | 32,768 → 49,152 |
-| Field Guide / Viewer Notes | Document capacity C + 32,768 → C + 49,152; C does not increase |
-| Live Monitor | 16,384 → 32,768 |
-| New fixed-lead Telepathy Reveal, shared comments and series reflection | 32,768 → 49,152 |
-| Other new fixed-lead stages / sharing consent | 16,384 → 32,768 / 8,192 → 16,384 |
+## Legal and security documents
 
-Locked Research and existing telepathic scopes keep their saved policy versions, including older allowances. See the [current workflow reference](docs/architecture/CURRENT_WORKFLOWS_v0.7.14_EN.md) for exact owners and compatibility rules.
+The authoritative project-level files remain in the repository root:
 
-## Providers, data and safety
+- [MIT source-code licence](../LICENSE)
+- [CC BY 4.0 content licence](../CONTENT_LICENSE_CC_BY_4.0.md)
+- [Security policy](../SECURITY.md)
+- [Contributing guide](../CONTRIBUTING.md)
+- [Code of Conduct](../CODE_OF_CONDUCT.md)
+- [Credits](../CREDITS.md)
+- [Citation metadata](../CITATION.cff)
+- [Credits and attribution records](credits/)
 
-Native adapters cover OpenRouter, OpenAI, Google, Anthropic, Z.AI, DeepSeek, Mistral, Blackbox and Custom OpenAI-compatible endpoints. Model discovery and supported reasoning controls are route-specific. An arbitrary model/deployment is not automatically compatible merely because it exposes an HTTP endpoint.
 
-API secrets use native credential storage. Requests send the permitted prompt/attachments to the selected provider. Provider-native continuation is fingerprinted and kept outside visible evidence. A bounded final-channel candidate can be retained for rejected learning output; private reasoning is not substituted for a final answer. Literal `<think>` text inside JSON is data, not automatically a reasoning envelope.
+### Custom OpenAI wire parameter override
 
-The app seals blind evidence before Reveal, uses allowlisted Judge packets and a fixed **3 + 3 + 2 + 2** rubric, and freezes Research scores before unblinding. Archive/Restore and explicit Permanent Delete remain separate operations. Back up local data before testing upgrades. Usage/cost estimates are diagnostic; this branch has no hard SessionCostGuard spend authorization layer.
+Custom OpenAI-compatible connections keep `max_tokens` as the compatibility default. A connection may explicitly override only the maximum-output-token wire field to `max_completion_tokens`. The override is scoped to that Custom OpenAI provider configuration, stored in existing application settings, and never changes the built-in OpenRouter, OpenAI, Google, Anthropic, Z.AI, DeepSeek, Mistral, or Blackbox mappings. The override introduced no migration; the current registry subsequently advanced through schema 032.
 
-## For developers
+## Developer documentation language
 
-Start with the **English [Developer Guide](docs/development/README.md)** and [CONTRIBUTING.md](CONTRIBUTING.md). Use Node **24** and the Rust stable/tooling required by the checked-in workflows.
+Use English for primary developer setup, current architecture and developer-facing wiki pages. Retain dated Polish historical reports and optional PL counterparts without treating them as the current build recipe. See [Developer Guide](development/README.md).
 
-```bash
-npm ci
-npm run tauri dev
-```
+## Documentation review record
 
-Linux requires the native Tauri/WebKit packages listed in the Developer Guide; Windows requires its native build/WebView prerequisites. A browser-only preview (`npm run dev`) does not provide native credentials, SQLite, backup/restore or equivalent desktop acceptance.
-
-The Developer Guide lists the complete frontend, source, architecture, compatibility, Rust, Clippy and cross-language bridge checks. Keep `Cargo.lock` committed and use `--locked`. Do not package `node_modules`, `dist`, Rust `target`, databases or private logs.
-
-## Documentation
-
-- [Documentation index](docs/README.md)
-- [English user/wiki guide](docs/wiki/Home.md)
-- [Current workflows and budgets — English](docs/architecture/CURRENT_WORKFLOWS_v0.7.14_EN.md) ([Polski](docs/architecture/CURRENT_WORKFLOWS_v0.7.14_PL.md))
-- [Architecture and code ownership](docs/architecture/README.md)
-- [Final desktop/runtime checklist](docs/architecture/FINAL_RUNTIME_SMOKE_v0.7.14_EN.md)
-- [Historical release records](docs/releases/)
-
-Current automated checks and historical release evidence are different records. The T1–T5 implementation scope is delivered; final Windows/provider smoke is recorded separately and is not implied by this documentation update.
-
-## License and attribution
-
-Application source: [MIT](LICENSE). Eligible protocols/documentation/content: [CC BY 4.0](CONTENT_LICENSE_CC_BY_4.0.md), unless a resource states otherwise. See [CREDITS.md](CREDITS.md), [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md).
-
-### Windows runtime diagnostic candidate
-
-The development branch includes a pinned local Tauri runtime ownership repair for investigation of the reported Windows native crash. [Build and acceptance instructions](docs/development/WINDOWS_RUNTIME_OWNERSHIP_REPAIR_EN.md) describe the manual Windows workflow, matching private symbols and required runtime soak. This is a repair candidate; automated checks do not establish that the original Windows crash has been eliminated.
+[16 October 2026 synchronization report — English](reports/DOCUMENTATION_CURRENT_SYNC_2026-10-16_EN.md) records the source commit, corrected contracts, language policy and checks actually performed.

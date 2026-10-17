@@ -28,3 +28,16 @@ Continuation is stored outside visible transcripts, bounded/validated and tied t
 Private reasoning is not a final answer. Literal think tags inside JSON remain data. A bounded final-channel learning candidate can be retained/exported for offline review without exposing private reasoning.
 
 AI Monitor operates only on supported monitored flows. It cannot rewrite sealed Viewer evidence, and classic Training/Research do not gain an extra live Monitor role from the budget table.
+
+
+## OpenRouter additional sampling parameters
+
+OpenRouter Viewer profiles can optionally enable additional sampling controls for `top_p`, `top_k`, and `seed`. They are disabled by default. Auto is represented by omission of the field, not by a numeric substitute; therefore manual zero remains distinct from Auto where the API contract permits zero.
+
+The existing Viewer temperature control remains separate and is never enabled/disabled by the additional-sampling section. Sampling controls are not automatically inherited by separately configured AI Monitor or AI Judge roles and are not sent to non-OpenRouter providers.
+
+The UI preserves manual values when the selected model changes. If the selected model reports a parameter as unsupported or unknown while the section is enabled, profile save is blocked for that active manual value until the user explicitly returns that parameter to Auto, selects a compatible model, or disables the section. Disabled values may remain stored but are inactive.
+
+At execution time, manual sampling requires confirmed capability at the concrete OpenRouter endpoint level and the normal context/prompt/output/reasoning constraints must still fit. Small requests also run the capability preflight when any additional sampler is manual. Unknown sampling capability fails closed before dispatch. `provider.require_parameters=true` is added only for active manual additional sampling.
+
+A fixed seed can improve within-route repeatability but does not promise identical outputs across different providers, endpoint variants, model revisions, routing decisions or backend implementations. Manual sampling may narrow eligible endpoints and therefore can change availability, latency or price.
