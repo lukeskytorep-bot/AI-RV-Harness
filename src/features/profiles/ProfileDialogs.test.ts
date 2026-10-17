@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { getCopy } from "../../i18n";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
 import { buildProfileAiConfiguration } from "./ProfileDialogs";
+import { parseOpenRouterAdditionalSamplingInputs } from "./profileAiConfiguration";
 
 const now = "2026-09-02T10:00:00.000Z";
 const provider: ProviderConfig = {
@@ -88,6 +89,17 @@ describe("profile AI configuration", () => {
     const result = buildProfileAiConfiguration(getCopy("en"), provider, model, "", "", "", "", "");
     expect(result.defaultViewerSystemPrompt).toBeUndefined();
     expect(result.defaultViewerModelId).toBe("model-1");
+  });
+
+  it("parses Auto independently from manual zero values", () => {
+    expect(parseOpenRouterAdditionalSamplingInputs(getCopy("en"), true, "", "0", "42")).toEqual({ enabled: true, topK: 0, seed: 42 });
+    expect(parseOpenRouterAdditionalSamplingInputs(getCopy("en"), true, "0.04", "", "")).toEqual({ enabled: true, topP: 0.04 });
+  });
+
+  it("rejects invalid sampling text before profile persistence", () => {
+    expect(() => parseOpenRouterAdditionalSamplingInputs(getCopy("en"), true, "20", "", "")).toThrow(getCopy("en").topPOutOfRange);
+    expect(() => parseOpenRouterAdditionalSamplingInputs(getCopy("en"), true, "", "1.5", "")).toThrow(getCopy("en").topKOutOfRange);
+    expect(() => parseOpenRouterAdditionalSamplingInputs(getCopy("en"), true, "", "", String(Number.MAX_SAFE_INTEGER + 1))).toThrow(getCopy("en").seedOutOfRange);
   });
 
 });

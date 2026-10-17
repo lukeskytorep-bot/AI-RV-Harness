@@ -296,3 +296,25 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 }
 
 @media (max-width: 760px) { .custom-protocol-modal.preview-open .custom-protocol-body { grid-template-columns: minmax(0, 1fr); } .custom-dry-run { border-left: 0; border-top: 1px solid var(--border); } .custom-protocol-actions { align-items: stretch; flex-direction: column; } .custom-protocol-actions > div { flex-wrap: wrap; } }
+
+.openrouter-sampling-controls { grid-column: 1 / -1; min-width: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); overflow: hidden; }
+.openrouter-sampling-controls > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; cursor: pointer; color: var(--muted-strong); font-size: 11px; font-weight: 800; }
+.openrouter-sampling-controls > summary span { color: var(--muted); font-weight: 700; }
+.openrouter-sampling-body { display: grid; gap: 12px; padding: 0 12px 12px; }
+.openrouter-sampling-controls .sampling-enable-row { display: flex; align-items: flex-start; gap: 9px; }
+.openrouter-sampling-controls .sampling-enable-row > input { width: auto; height: auto; margin-top: 2px; }
+.openrouter-sampling-controls .sampling-enable-row > span { display: grid; gap: 3px; }
+.openrouter-sampling-controls .sampling-enable-row small, .openrouter-sampling-controls .sampling-runtime-note { color: var(--muted); font-size: 11px; font-weight: 500; line-height: 1.45; }
+.openrouter-sampling-controls .sampling-parameter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.openrouter-sampling-controls .sampling-parameter-grid > label { min-width: 0; display: grid; gap: 6px; color: var(--muted-strong); font-size: 11px; font-weight: 700; }
+.openrouter-sampling-controls .sampling-parameter-grid > label > span { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.openrouter-sampling-controls .sampling-parameter-grid input { width: 100%; min-width: 0; }
+.openrouter-sampling-controls .sampling-capability { font-size: 9px; text-transform: uppercase; letter-spacing: .03em; }
+.openrouter-sampling-controls .sampling-capability.supported { color: var(--green); }
+.openrouter-sampling-controls .sampling-capability.unsupported { color: var(--red); }
+.openrouter-sampling-controls .sampling-capability.unknown { color: var(--muted); }
+.openrouter-sampling-controls .sampling-seed-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.openrouter-sampling-controls .sampling-seed-row button { min-height: 38px; }
+@media (max-width: 780px) {
+  .openrouter-sampling-controls .sampling-parameter-grid { grid-template-columns: minmax(0, 1fr); }
+}

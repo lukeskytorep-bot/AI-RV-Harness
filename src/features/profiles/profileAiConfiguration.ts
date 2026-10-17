@@ -5,6 +5,36 @@ import type { ProviderConfig, ProviderModel, ReasoningEffort } from "../../provi
 import { validateOpenRouterAdditionalSamplingSettings, type OpenRouterAdditionalSamplingSettings } from "../../providers/openRouterSamplingSettings";
 import type { ProfileAiConfigurationInput } from "../../types";
 
+export function parseOpenRouterAdditionalSamplingInputs(
+  copy: ReturnType<typeof getCopy>,
+  enabled: boolean,
+  topPInput: string,
+  topKInput: string,
+  seedInput: string,
+): OpenRouterAdditionalSamplingSettings {
+  const parseOptional = (input: string): number | undefined => input.trim() === "" ? undefined : Number(input);
+  const topP = parseOptional(topPInput);
+  const topK = parseOptional(topKInput);
+  const seed = parseOptional(seedInput);
+
+  if (topP !== undefined && (!Number.isFinite(topP) || topP < 0 || topP > 1)) {
+    throw new Error(copy.topPOutOfRange);
+  }
+  if (topK !== undefined && (!Number.isSafeInteger(topK) || topK < 0)) {
+    throw new Error(copy.topKOutOfRange);
+  }
+  if (seed !== undefined && (!Number.isSafeInteger(seed) || seed < 0 || seed > Number.MAX_SAFE_INTEGER)) {
+    throw new Error(copy.seedOutOfRange);
+  }
+
+  return validateOpenRouterAdditionalSamplingSettings({
+    enabled,
+    ...(topP !== undefined ? { topP } : {}),
+    ...(topK !== undefined ? { topK } : {}),
+    ...(seed !== undefined ? { seed } : {}),
+  });
+}
+
 export function buildProfileAiConfiguration(
   copy: ReturnType<typeof getCopy>,
   provider: ProviderConfig | null,

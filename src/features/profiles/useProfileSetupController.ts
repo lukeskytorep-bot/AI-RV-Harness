@@ -10,7 +10,7 @@ import { factoryViewerEditablePrompt, localizedMonitorEditablePrompt } from "../
 import { isTauriRuntime } from "../../storage";
 import type { AppRepository } from "../../storage/repository";
 import type { InterfaceLanguage, Profile, ProfileAiConfigurationInput } from "../../types";
-import { buildProfileAiConfiguration } from "./profileAiConfiguration";
+import { buildProfileAiConfiguration, parseOpenRouterAdditionalSamplingInputs } from "./profileAiConfiguration";
 
 export const NEW_PROFILE_PROVIDER_CHOICE = "__new__";
 
@@ -31,6 +31,10 @@ export interface ProfileSetupController {
   viewerModelId: string;
   viewerReasoning: "" | ReasoningEffort;
   viewerTemperature: string;
+  viewerSamplingEnabled: boolean;
+  viewerTopP: string;
+  viewerTopK: string;
+  viewerSeed: string;
   viewerSystemPrompt: string;
   modelSearch: string;
   judgeModelKey: string;
@@ -49,6 +53,10 @@ export interface ProfileSetupController {
   setBaseUrl: (value: string) => void;
   setViewerReasoning: (value: "" | ReasoningEffort) => void;
   setViewerTemperature: (value: string) => void;
+  setViewerSamplingEnabled: (value: boolean) => void;
+  setViewerTopP: (value: string) => void;
+  setViewerTopK: (value: string) => void;
+  setViewerSeed: (value: string) => void;
   setModelSearch: (value: string) => void;
   setJudgeModelKey: (value: string) => void;
   setMonitorModelKey: (value: string) => void;
@@ -74,6 +82,10 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
   const [viewerModelId, setViewerModelId] = useState("");
   const [viewerReasoning, setViewerReasoning] = useState<"" | ReasoningEffort>("");
   const [viewerTemperature, setViewerTemperature] = useState("");
+  const [viewerSamplingEnabled, setViewerSamplingEnabled] = useState(existingProfile?.defaultViewerOpenRouterSampling?.enabled ?? false);
+  const [viewerTopP, setViewerTopP] = useState(existingProfile?.defaultViewerOpenRouterSampling?.topP === undefined ? "" : String(existingProfile.defaultViewerOpenRouterSampling.topP));
+  const [viewerTopK, setViewerTopK] = useState(existingProfile?.defaultViewerOpenRouterSampling?.topK === undefined ? "" : String(existingProfile.defaultViewerOpenRouterSampling.topK));
+  const [viewerSeed, setViewerSeed] = useState(existingProfile?.defaultViewerOpenRouterSampling?.seed === undefined ? "" : String(existingProfile.defaultViewerOpenRouterSampling.seed));
   const [modelSearch, setModelSearch] = useState("");
   const [judgeModelKey, setJudgeModelKey] = useState("");
   const [monitorModelKey, setMonitorModelKey] = useState("");
@@ -202,6 +214,10 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     setViewerTemperature(temperature === undefined ? "" : String(temperature));
     setJudgeModelKey("");
     setMonitorModelKey("");
+    setViewerSamplingEnabled(false);
+    setViewerTopP("");
+    setViewerTopK("");
+    setViewerSeed("");
   };
 
   const buildAiConfiguration = (skipOptional = false): ProfileAiConfigurationInput => {
@@ -225,6 +241,9 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
         judgeKey,
         providers,
         models,
+        selectedProvider?.provider === "openrouter"
+          ? parseOpenRouterAdditionalSamplingInputs(copy, viewerSamplingEnabled, viewerTopP, viewerTopK, viewerSeed)
+          : undefined,
       ),
       defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(existingProfile?.defaultMonitorSystemPrompt, setupLanguage),
     };
@@ -241,6 +260,10 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     viewerModelId,
     viewerReasoning,
     viewerTemperature,
+    viewerSamplingEnabled,
+    viewerTopP,
+    viewerTopK,
+    viewerSeed,
     viewerSystemPrompt,
     modelSearch,
     judgeModelKey,
@@ -259,6 +282,10 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     setBaseUrl,
     setViewerReasoning,
     setViewerTemperature,
+    setViewerSamplingEnabled,
+    setViewerTopP,
+    setViewerTopK,
+    setViewerSeed,
     setModelSearch,
     setJudgeModelKey,
     setMonitorModelKey,
