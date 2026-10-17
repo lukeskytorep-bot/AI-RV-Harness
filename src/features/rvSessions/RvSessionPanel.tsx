@@ -35,7 +35,7 @@ import { getFullRcp, getRvLite, getTelepathicProtocol, type ProtocolResource } f
 import { isTauriRuntime } from "../../storage";
 import type { AppRepository } from "../../storage/repository";
 import type { AppSettings, InterfaceLanguage, Profile, SessionLanguageSetting, Workspace } from "../../types";
-import type { ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
+import type { GenerationSettings, ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
 import { parseModelCapabilitiesSnapshot } from "../../providers/capabilitySnapshot";
 import { runAutomaticRcpSession, submitExternalReveal, type SessionProgress } from "../../sessions/controller";
 import { buildAutomaticTargetReveal, chooseRandomTarget, createUserTarget, resolveAutomaticTargetRevealForResume, targetIsEligibleForProtocol } from "../../targets/service";
@@ -81,6 +81,26 @@ import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide }
 import { requireWorkspaceViewerRoute, viewerIdentityLabel } from "../../aiCenter/viewerIdentitySelection";
 import { reasoningCapabilityLead, reasoningOptionLabel } from "../../providers/reasoningPresentation";
 import { BatchEvaluation, JudgeEvaluation } from "../judge";
+
+export function buildRvSessionRequestedSettings(input: {
+  profile: Profile | null;
+  model: ProviderModel;
+  reasoning: "" | ReasoningEffort;
+  temperature: string;
+  rvSessionMaxOutputTokens: number;
+}): GenerationSettings {
+  const defaults = profileGenerationDefaults(input.profile, input.model);
+  return {
+    ...(input.reasoning ? { reasoningEffort: input.reasoning } : {}),
+    ...(input.temperature.trim() ? { temperature: Number(input.temperature) } : {}),
+    ...(defaults.topP !== undefined ? { topP: defaults.topP } : {}),
+    ...(defaults.topK !== undefined ? { topK: defaults.topK } : {}),
+    ...(defaults.seed !== undefined ? { seed: defaults.seed } : {}),
+    maxOutputTokens: input.model.capabilities.maxOutputTokens
+      ? Math.min(input.rvSessionMaxOutputTokens, input.model.capabilities.maxOutputTokens)
+      : input.rvSessionMaxOutputTokens,
+  };
+}
 
 export function RvSessionPanel({ copy, settings, profile, workspace, repository, onBusyChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; profile: Profile | null; workspace: Workspace; repository: AppRepository | null; onBusyChange?: (busy: boolean) => void }) {
   const dialogs = useAppDialogs();
@@ -463,11 +483,13 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     setBatchProgress(null);
     setManualQuestionHandle(null);
     setManualQuestionText("");
-    const requestedSettings = {
-      ...(reasoning ? { reasoningEffort: reasoning } : {}),
-      ...(temperature.trim() ? { temperature: Number(temperature) } : {}),
-      maxOutputTokens: selectedModel?.capabilities.maxOutputTokens ? Math.min(settings.rvSessionMaxOutputTokens, selectedModel.capabilities.maxOutputTokens) : settings.rvSessionMaxOutputTokens,
-    };
+    const requestedSettings = buildRvSessionRequestedSettings({
+      profile,
+      model: selectedModel,
+      reasoning,
+      temperature,
+      rvSessionMaxOutputTokens: settings.rvSessionMaxOutputTokens,
+    });
     const runOne = async (target: TargetRecord | null) => {
       const viewerNotes = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: viewerNotesEnabled, aiIdentityId: selectedIdentity.identity.id });
       if (protocol === "lite") {
