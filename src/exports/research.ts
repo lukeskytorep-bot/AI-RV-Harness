@@ -5,6 +5,7 @@ import type { AppRepository } from "../storage/repository";
 import type { RevealArtifactRecord } from "../sessions/types";
 import { stableStringify } from "../research/planner";
 import type { ResearchConfig, ResearchResults } from "../research/types";
+import { researchRequestedSamplingValue } from "../research/samplingPolicy";
 import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
 import { writeExportPackage, type ExportArtifactCopy, type ExportTextFile } from "./native";
 import { renderCompleteSessionMarkdown } from "./sessionDocument";
@@ -153,9 +154,9 @@ export async function exportResearchPackage(repository: AppRepository, projectId
 function resultsCsv(results: ResearchResults): string {
   const header = ["condition_key", "condition_label", "requested_top_p", "effective_top_p", "requested_top_k", "effective_top_k", "requested_seed", "effective_seed", "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort", "provider_config_id", "model_id", "n", "mean_total", "median_total", "stddev_total", "min_total", "max_total", "gestalt_mean", "features_mean", "activity_mean", "confabulation_mean"];
   const rows = results.conditions.map((condition) => [condition.conditionKey, condition.label,
-    valueOrAuto(condition.samplingValues?.topP), valueOrAuto(condition.effectiveSettings?.topP),
-    valueOrAuto(condition.samplingValues?.topK), valueOrAuto(condition.effectiveSettings?.topK),
-    valueOrAuto(condition.samplingValues?.seed), valueOrAuto(condition.effectiveSettings?.seed),
+    valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topP")), valueOrAuto(condition.effectiveSettings?.topP),
+    valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topK")), valueOrAuto(condition.effectiveSettings?.topK),
+    valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "seed")), valueOrAuto(condition.effectiveSettings?.seed),
     valueOrAuto(condition.requestedSettings?.temperature), valueOrAuto(condition.effectiveSettings?.temperature),
     condition.requestedSettings?.reasoningEffort ?? "Auto", condition.effectiveSettings?.reasoningEffort ?? "Auto",
     condition.providerConfigId ?? "", condition.modelId ?? "", condition.n, condition.meanTotal, condition.medianTotal, condition.stdDevTotal, condition.minTotal, condition.maxTotal,
@@ -169,9 +170,9 @@ function sessionResultsCsv(results: ResearchResults): string {
     "provider_config_id", "model_id", "actual_provider", "actual_model", "generation_ids", "provider_request_ids", "viewer_call_count", "input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "cost_usd", "request_duration_ms", "first_viewer_response_at", "last_viewer_response_at",
     "field_guide_version_id", "field_guide_version_number", "field_guide_content_sha256", "mean_total", "judge_count", "judge_total_range", "judge_total_stddev", "gestalt", "verifiable_features", "activity_function_event", "confabulation_control"];
   const rows = results.sessions.map((session) => [session.anonymousSessionId, session.sessionId, session.targetId, session.pairKey, session.conditionKey, session.conditionLabel,
-    valueOrAuto(session.samplingValues?.topP), valueOrAuto(session.effectiveSettings?.topP),
-    valueOrAuto(session.samplingValues?.topK), valueOrAuto(session.effectiveSettings?.topK),
-    valueOrAuto(session.samplingValues?.seed), valueOrAuto(session.effectiveSettings?.seed),
+    valueOrAuto(researchRequestedSamplingValue(session.requestedSettings, session.samplingValues, "topP")), valueOrAuto(session.effectiveSettings?.topP),
+    valueOrAuto(researchRequestedSamplingValue(session.requestedSettings, session.samplingValues, "topK")), valueOrAuto(session.effectiveSettings?.topK),
+    valueOrAuto(researchRequestedSamplingValue(session.requestedSettings, session.samplingValues, "seed")), valueOrAuto(session.effectiveSettings?.seed),
     valueOrAuto(session.requestedSettings?.temperature), valueOrAuto(session.effectiveSettings?.temperature),
     session.requestedSettings?.reasoningEffort ?? "Auto", session.effectiveSettings?.reasoningEffort ?? "Auto",
     session.providerConfigId ?? "", session.modelId ?? "", session.execution?.actualProviders?.join("|") || "unknown", session.execution?.actualModels?.join("|") || "unknown", session.execution?.generationIds?.join("|") ?? "", session.execution?.providerRequestIds?.join("|") ?? "", session.execution?.viewerCallCount ?? 0,
@@ -220,7 +221,7 @@ function valueOrAuto(value: unknown): string | number { return typeof value === 
 
 function summaryMarkdown(name: string, results: ResearchResults): string {
   const lines = [`# ${name}`, "", `Template: ${results.templateType}`, `Sessions: ${results.sessions.length}`, "", "## Conditions", "", "| Condition | top_p | top_k | seed | Temp | Reasoning | n | Mean | Median | SD | Min | Max |", "|---|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|"];
-  for (const condition of results.conditions) lines.push(`| ${escapePipe(condition.label)} | ${valueOrAuto(condition.samplingValues?.topP)} | ${valueOrAuto(condition.samplingValues?.topK)} | ${valueOrAuto(condition.samplingValues?.seed)} | ${valueOrAuto(condition.requestedSettings?.temperature)} | ${condition.requestedSettings?.reasoningEffort ?? "Auto"} | ${condition.n} | ${condition.meanTotal.toFixed(2)} | ${condition.medianTotal.toFixed(2)} | ${condition.stdDevTotal.toFixed(2)} | ${condition.minTotal.toFixed(1)} | ${condition.maxTotal.toFixed(1)} |`);
+  for (const condition of results.conditions) lines.push(`| ${escapePipe(condition.label)} | ${valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topP"))} | ${valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topK"))} | ${valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "seed"))} | ${valueOrAuto(condition.requestedSettings?.temperature)} | ${condition.requestedSettings?.reasoningEffort ?? "Auto"} | ${condition.n} | ${condition.meanTotal.toFixed(2)} | ${condition.medianTotal.toFixed(2)} | ${condition.stdDevTotal.toFixed(2)} | ${condition.minTotal.toFixed(1)} | ${condition.maxTotal.toFixed(1)} |`);
   return lines.join("\n") + "\n";
 }
 
@@ -261,7 +262,7 @@ function researchReadme(name: string, sessionCount: number, language: "pl" | "en
 }
 
 function summaryHtml(name: string, language: "pl" | "en", results: ResearchResults | null, sessionCount: number, saveOnly: boolean): string {
-  const rows = results?.conditions.map((condition) => `<tr><td>${escapeHtml(condition.label)}</td><td>${valueOrAuto(condition.samplingValues?.topP)}</td><td>${valueOrAuto(condition.samplingValues?.topK)}</td><td>${valueOrAuto(condition.samplingValues?.seed)}</td><td>${condition.n}</td><td>${condition.meanTotal.toFixed(2)}</td><td>${condition.medianTotal.toFixed(2)}</td><td>${condition.stdDevTotal.toFixed(2)}</td></tr>`).join("") ?? "";
+  const rows = results?.conditions.map((condition) => `<tr><td>${escapeHtml(condition.label)}</td><td>${valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topP"))}</td><td>${valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topK"))}</td><td>${valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "seed"))}</td><td>${condition.n}</td><td>${condition.meanTotal.toFixed(2)}</td><td>${condition.medianTotal.toFixed(2)}</td><td>${condition.stdDevTotal.toFixed(2)}</td></tr>`).join("") ?? "";
   return `<!doctype html><html lang="${language}"><head><meta charset="utf-8"><title>${escapeHtml(name)}</title><style>body{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;padding:0 24px;color:#172033}table{width:100%;border-collapse:collapse}th,td{padding:9px;border:1px solid #cbd5e1;text-align:left}th{background:#eef2ff}</style></head><body><h1>${escapeHtml(name)}</h1><p>${language === "pl" ? "Sesje" : "Sessions"}: ${sessionCount} · ${saveOnly ? (language === "pl" ? "ocena zewnętrzna" : "external evaluation") : "AI Judge"}</p>${results ? `<table><thead><tr><th>${language === "pl" ? "Warunek" : "Condition"}</th><th>top_p</th><th>top_k</th><th>seed</th><th>n</th><th>${language === "pl" ? "Średnia" : "Mean"}</th><th>Median</th><th>SD</th></tr></thead><tbody>${rows}</tbody></table>` : ""}</body></html>`;
 }
 

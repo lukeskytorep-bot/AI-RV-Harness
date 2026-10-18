@@ -1,6 +1,7 @@
 import { validateOpenRouterAdditionalSamplingSettings } from "../providers/openRouterSamplingSettings";
 import type { GenerationSettings, ProviderModel } from "../providers/types";
 import type { Profile } from "../types";
+import type { ResearchSamplingConditionValues } from "./types";
 
 export type ResearchSamplingParameter = "topP" | "topK" | "seed";
 export type ResearchSamplingCapabilityState = "supported" | "unsupported" | "unknown";
@@ -80,6 +81,14 @@ export function assertResearchSamplingSupported(
       }
     }
   }
+}
+
+export function researchRequestedSamplingValue(
+  requested: GenerationSettings | undefined,
+  samplingValues: ResearchSamplingConditionValues | undefined,
+  parameter: ResearchSamplingParameter,
+): number | undefined {
+  return requested?.[parameter] ?? samplingValues?.[parameter];
 }
 
 export function researchSamplingSignature(settings: GenerationSettings): string {

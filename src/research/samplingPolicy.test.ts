@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderModel } from "../providers/types";
 import type { Profile } from "../types";
-import { assertResearchSamplingSupported, researchSamplingFromProfile } from "./samplingPolicy";
+import { assertResearchSamplingSupported, researchRequestedSamplingValue, researchSamplingFromProfile } from "./samplingPolicy";
 
 const now = "2026-10-18T00:00:00.000Z";
 function model(supported: string[] | undefined, route = "openrouter:model-a"): ProviderModel {
@@ -35,4 +35,11 @@ describe("Research sampling policy", () => {
     expect(() => assertResearchSamplingSupported(requested, [model(["top_p", "top_k", "seed"]), model(["top_p", "top_k"], "openrouter:model-b")])).toThrow(/seed is unsupported.*model-b/);
     expect(() => assertResearchSamplingSupported({ seed: 123 }, [model(undefined)])).toThrow(/seed is unknown/);
   });
+});
+
+it("prefers frozen requested sampler values and falls back to structural legacy values without losing zero", () => {
+  expect(researchRequestedSamplingValue({ topP: 0.04, topK: 0, seed: 42 }, { topP: 0.9, topK: 100, seed: 7 }, "topP")).toBe(0.04);
+  expect(researchRequestedSamplingValue({ topK: 0 }, { topK: 100 }, "topK")).toBe(0);
+  expect(researchRequestedSamplingValue(undefined, { topK: 100 }, "topK")).toBe(100);
+  expect(researchRequestedSamplingValue({}, undefined, "seed")).toBeUndefined();
 });

@@ -41,4 +41,25 @@ describe("Research results pagination", () => {
       expect(host.textContent).toContain("Page 2/3");
     } finally { await act(async () => root.unmount()); host.remove(); }
   });
+
+  it("shows frozen requested samplers for classic Research even when samplingValues is absent", async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const row = session(0);
+    row.requestedSettings = { topK: 100 };
+    row.effectiveSettings = { topK: 100 };
+    const results: ResearchResults = {
+      schemaVersion: 1, projectId: "classic", templateType: "model", computedAt: "now",
+      sessions: [row],
+      conditions: [{ conditionKey: "c0", label: "Condition 0", requestedSettings: { topK: 100 }, effectiveSettings: { topK: 100 }, n: 1, meanTotal: 6, medianTotal: 6, stdDevTotal: 0, minTotal: 6, maxTotal: 6, meanComponents: { gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 1, confabulationControl: 1 } }],
+      pairwise: [],
+    };
+    const repository = workflowTestRepository({ listJudgeScores: vi.fn(async () => []) } as unknown as AppRepository);
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<ResearchResultsView copy={getCopy("en")} results={results} repository={repository} />); await Promise.resolve(); });
+      expect(host.textContent).toContain("100");
+      expect(host.textContent).not.toContain("Auto (provider default) → 100");
+    } finally { await act(async () => root.unmount()); host.remove(); }
+  });
+
 });

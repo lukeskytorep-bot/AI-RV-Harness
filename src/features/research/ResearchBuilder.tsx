@@ -23,7 +23,7 @@ import { exportResearchPackage } from "../../exports/research";
 import { sampleResearchTargetIds, type ResearchTargetSelectionMode, type ResearchTargetSource } from "../../research/targetSelection";
 import { profileGenerationDefaults } from "../../profileViewerDefaults";
 import { sharedResearchCapabilities, type SharedResearchCapabilities } from "../../research/studyControls";
-import { assertResearchSamplingSupported, researchSamplingFromProfile } from "../../research/samplingPolicy";
+import { assertResearchSamplingSupported, researchRequestedSamplingValue, researchSamplingFromProfile } from "../../research/samplingPolicy";
 import { buildResearchSamplingConditions, researchSamplingConfigurationCount, researchSamplingSessionCount } from "../../research/samplingDesign";
 import { buildResearchSamplingDesignFromForm, ResearchSamplingDesignControls, researchSamplingFormFromRequested, type ResearchSamplingFormState } from "./ResearchSamplingDesignControls";
 import { reasoningOptions } from "../../providers/modelReasoningRegistry";
@@ -707,7 +707,7 @@ export function ResearchResultsView({ copy, results, repository }: { copy: Copy;
       <th>{copy.condition}</th><th>top_p</th><th>top_k</th><th>seed</th><th>{copy.viewerTemperature}</th><th>{copy.viewerReasoningLevel}</th><th>{pl ? "Model / trasa" : "Model / route"}</th><th>{copy.sampleN}</th><th>{copy.mean}</th><th>{copy.median}</th><th>{copy.stdDev}</th><th>{copy.minMax}</th>
     </tr></thead><tbody>{results.conditions.map((condition) => <tr key={condition.conditionKey}>
       <td><strong>{condition.label}</strong></td>
-      <td>{researchRequestedEffective(condition.samplingValues?.topP, condition.effectiveSettings?.topP, copy)}</td><td>{researchRequestedEffective(condition.samplingValues?.topK, condition.effectiveSettings?.topK, copy)}</td><td>{researchRequestedEffective(condition.samplingValues?.seed, condition.effectiveSettings?.seed, copy)}</td>
+      <td>{researchRequestedEffective(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topP"), condition.effectiveSettings?.topP, copy)}</td><td>{researchRequestedEffective(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topK"), condition.effectiveSettings?.topK, copy)}</td><td>{researchRequestedEffective(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "seed"), condition.effectiveSettings?.seed, copy)}</td>
       <td>{researchRequestedEffective(condition.requestedSettings?.temperature, condition.effectiveSettings?.temperature, copy)}</td><td>{researchRequestedEffectiveText(condition.requestedSettings?.reasoningEffort, condition.effectiveSettings?.reasoningEffort, copy)}</td><td><small>{condition.modelId ?? "—"}<br />{condition.providerConfigId ?? "—"}</small></td>
       <td>{condition.n}</td><td>{condition.meanTotal.toFixed(2)}</td><td>{condition.medianTotal.toFixed(2)}</td><td>{condition.stdDevTotal.toFixed(2)}</td><td>{condition.minTotal.toFixed(1)} / {condition.maxTotal.toFixed(1)}</td>
     </tr>)}</tbody></table></div>

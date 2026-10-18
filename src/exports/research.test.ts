@@ -114,3 +114,51 @@ for(const sealed of [false,true])it(`ended Research export keeps incomplete work
  writeExportPackage.mockResolvedValue("/exports/stopped");await exportResearchPackage(repository,"r");const files=writeExportPackage.mock.calls.at(-1)![0].files as Array<{relativePath:string;content:string}>;
  expect(files.find(file=>file.relativePath==="private_master/master/execution_termination.json")?.content).toContain("user_finished");expect(files.find(file=>file.relativePath.endsWith("session_events.json"))?.content).toContain("uncertain");expect(files.find(file=>file.relativePath==="summary.md")?.content).toContain("Saved sessions: 1/2");expect(files.find(file=>file.relativePath==="README.md")?.content).toContain("does not mark the study complete");expect(files.filter(file=>file.relativePath.startsWith("external_evaluation/")&&file.relativePath.endsWith("BlindSession_ABCDEF123456.json"))).toHaveLength(sealed?1:0);expect(files.filter(file=>file.relativePath.startsWith("external_evaluation/")).some(file=>file.content.includes("Secret condition"))).toBe(false);expect(JSON.stringify(project)).toBe(before);
 });
+
+it("exports requested OpenRouter samplers from frozen requestedSettings for classic Research without samplingValues", async () => {
+  const condition = { key: "classic", label: "Classic model condition", profileId: "profile", providerConfigId: "provider", modelId: "viewer-a", requestedSettings: { topP: 0.04, topK: 0, seed: 42 } };
+  const config: ResearchConfig = { schemaVersion: 1, name: "Classic", workspaceId: "workspace", templateType: "model", sessionLanguage: "en", protocol: { id: "full-rcp", version: "1.5a" }, targetIds: ["target"], repetitions: 1, requireUnusedTargets: false, conditions: [condition], judges: [{ providerConfigId: "judge-provider", modelId: "judge" }], randomization: { matchedTargets: true, randomizedExecution: true, randomizedJudgeOrder: true } };
+  const project: ResearchProjectRecord = { id: "research-classic", workspaceId: "workspace", name: "Classic", templateType: "model", state: "Complete", config, configHash: "hash", lockedAt: "lock", scoresFrozenAt: "scores", unblindedAt: "unblind", createdAt: "now", updatedAt: "now" };
+  const results: ResearchResults = {
+    schemaVersion: 1, projectId: project.id, templateType: "model", computedAt: "now",
+    conditions: [
+      { conditionKey: "classic", label: condition.label, requestedSettings: condition.requestedSettings, effectiveSettings: condition.requestedSettings, providerConfigId: "provider", modelId: "viewer-a", n: 1, meanTotal: 6, medianTotal: 6, stdDevTotal: 0, minTotal: 6, maxTotal: 6, meanComponents: { gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 1, confabulationControl: 1 } },
+      { conditionKey: "classic100", label: "Classic topK 100", requestedSettings: { topK: 100 }, effectiveSettings: { topK: 100 }, providerConfigId: "provider", modelId: "viewer-a", n: 1, meanTotal: 5, medianTotal: 5, stdDevTotal: 0, minTotal: 5, maxTotal: 5, meanComponents: { gestalt: 2, verifiableFeatures: 1, activityFunctionEvent: 1, confabulationControl: 1 } },
+      { conditionKey: "auto", label: "Classic Auto", requestedSettings: {}, effectiveSettings: {}, providerConfigId: "provider", modelId: "viewer-a", n: 1, meanTotal: 4, medianTotal: 4, stdDevTotal: 0, minTotal: 4, maxTotal: 4, meanComponents: { gestalt: 1, verifiableFeatures: 1, activityFunctionEvent: 1, confabulationControl: 1 } },
+    ],
+    pairwise: [],
+    sessions: [
+      { anonymousSessionId: "BlindSession_CLASSIC", sessionId: "session", targetId: "target", pairKey: "pair", conditionKey: "classic", conditionLabel: condition.label, requestedSettings: condition.requestedSettings, effectiveSettings: condition.requestedSettings, providerConfigId: "provider", modelId: "viewer-a", total: 6, judgeCount: 1, judgeTotalRange: 0, judgeTotalStdDev: 0, gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 1, confabulationControl: 1 },
+      { anonymousSessionId: "BlindSession_100", sessionId: "session-100", targetId: "target", pairKey: "pair-100", conditionKey: "classic100", conditionLabel: "Classic topK 100", requestedSettings: { topK: 100 }, effectiveSettings: { topK: 100 }, providerConfigId: "provider", modelId: "viewer-a", total: 5, judgeCount: 1, judgeTotalRange: 0, judgeTotalStdDev: 0, gestalt: 2, verifiableFeatures: 1, activityFunctionEvent: 1, confabulationControl: 1 },
+      { anonymousSessionId: "BlindSession_AUTO", sessionId: "session-auto", targetId: "target", pairKey: "pair-auto", conditionKey: "auto", conditionLabel: "Classic Auto", requestedSettings: {}, effectiveSettings: {}, providerConfigId: "provider", modelId: "viewer-a", total: 4, judgeCount: 1, judgeTotalRange: 0, judgeTotalStdDev: 0, gestalt: 1, verifiableFeatures: 1, activityFunctionEvent: 1, confabulationControl: 1 },
+    ],
+  };
+  const repo = workflowTestRepository({
+    getResearchProject: async () => project, getResearchResults: async () => results, getResearchExecutionTermination: async () => undefined,
+    listResearchAssignments: async () => [{ id: "a", researchProjectId: project.id, anonymousSessionId: "BlindSession_CLASSIC", sessionId: "session", targetId: "target", executionOrder: 1, judgeOrder: 1, status: "Judged" }],
+    listBlindingMappings: async () => [{ id: "map", researchProjectId: project.id, anonymousSessionId: "BlindSession_CLASSIC", conditionId: "condition", pairKey: "pair", mappingHash: "h", createdAt: "now" }],
+    listResearchConditions: async () => [{ id: "condition", researchProjectId: project.id, conditionKey: "classic", config: condition }],
+    listRvSessions: async () => [{ id: "session", workspaceId: "workspace", profileId: "profile", sessionCode: "S", state: "Completed", runType: "automatic", preRevealTranscript: "blind", postRevealTranscript: "", targetId: "target", researchProjectId: project.id, createdAt: "now", updatedAt: "now" }],
+    getReveal: async () => ({ source: "automatic_target", text: "Reveal", hash: "h", artifactManifest: [] }), getViewerEvidence: async () => "blind evidence", getSessionSnapshot: async () => null,
+    listJudgeScores: async () => [], listTargetClarifications: async () => [], recordExport: vi.fn(),
+  } as unknown as AppRepository);
+  writeExportPackage.mockResolvedValue("/exports/classic");
+  await exportResearchPackage(repo, project.id);
+  const files = writeExportPackage.mock.calls.at(-1)![0].files as Array<{ relativePath: string; content: string }>;
+  const resultCsv = files.find((file) => file.relativePath === "results/results.csv")?.content ?? "";
+  const sessionCsv = files.find((file) => file.relativePath === "results/session_results.csv")?.content ?? "";
+  const summaryMd = files.find((file) => file.relativePath === "summary.md")?.content ?? "";
+  const summaryHtml = files.find((file) => file.relativePath === "summary.html")?.content ?? "";
+  expect(resultCsv).toContain("0.04,0.04,0,0,42,42");
+  expect(sessionCsv).toContain("0.04,0.04,0,0,42,42");
+  expect(resultCsv).toContain("Auto,Auto,100,100,Auto,Auto");
+  expect(sessionCsv).toContain("Auto,Auto,100,100,Auto,Auto");
+  expect(resultCsv).toContain("Auto,Auto,Auto,Auto,Auto,Auto");
+  expect(sessionCsv).toContain("Auto,Auto,Auto,Auto,Auto,Auto");
+  expect(summaryMd).toContain("| Classic model condition | 0.04 | 0 | 42 |");
+  expect(summaryMd).toContain("| Classic topK 100 | Auto | 100 | Auto |");
+  expect(summaryMd).toContain("| Classic Auto | Auto | Auto | Auto |");
+  expect(summaryHtml).toContain("<td>0.04</td><td>0</td><td>42</td>");
+  expect(summaryHtml).toContain("<td>Auto</td><td>100</td><td>Auto</td>");
+  expect(resultCsv).not.toContain("Auto,0.04,Auto,0,Auto,42");
+});

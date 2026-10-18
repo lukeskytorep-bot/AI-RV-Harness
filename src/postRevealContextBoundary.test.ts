@@ -31,7 +31,8 @@ function normalizeS2TelepathicStreamingWiring(value: string): string {
     .replace('        const phase = typeof metadata.step === "number" ? metadata.step : undefined;\n        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: snapshot.generationSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent: createSessionStreamPreviewHandler({ role: "viewer", phase, source: typeof metadata.source === "string" ? metadata.source : "resume", emit: input.onStreamPreview }) });',
       '        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: snapshot.generationSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal });')
     .replace('          streamWorkflowContext: input.streamWorkflowContext ?? "rv_session",\n          onStreamEvent: createSessionStreamPreviewHandler({ role: "monitor", phase: step, exchangeNumber, source: "live_monitor", emit: input.onStreamPreview }),\n', "")
-    .replace(/^\s*input\.onStreamPreview\?\.\(null\);\n/gm, "");
+    .replace(/^\s*input\.onStreamPreview\?\.\(null\);\n/gm, "")
+    .replace(/, actualProvider: response\.actualProvider \?\? "unknown"/g, "");
 }
 
 describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
@@ -134,7 +135,8 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     // AUDIT FIX 2 preserves definitive provider results across a concurrent Stop while gating any later recovery request.
     // STEP 2 links intervention records by logical identity without changing provider messages or recovery.
     // T3 changes Viewer completion evidence, durable manual authorization and its one-physical-attempt allowance.
-    // Freeze that accepted execution baseline while the Monitor prompt contract above remains separately byte-stable.
+    // R4 adds additive Viewer actualProvider telemetry; normalization above excludes only that metadata field.
+    // Freeze the accepted execution baseline while the Monitor prompt contract above remains separately byte-stable.
     expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("a89d4a57b6115716b4ec52b2ab69c9f3e216b05c10c62a74f5ae0046b2759439");
   });
 
