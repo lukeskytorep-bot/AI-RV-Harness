@@ -47,19 +47,23 @@ export function researchSamplingSessionCount(design: ResearchSamplingDesign, tar
   return sessions;
 }
 
-export function buildResearchSamplingConditions(base: ResearchConditionDefinition, design: ResearchSamplingDesign): ResearchConditionDefinition[] {
+export function researchSamplingConditionValues(design: ResearchSamplingDesign): ResearchSamplingConditionValues[] {
   validateResearchSamplingDesign(design);
-  const combinations = cartesian(
+  return cartesian(
     axisValues(design.topP),
     axisValues(design.topK),
     axisValues(design.seed),
-  );
-  return combinations.map(([topP, topK, seed], index) => {
-    const values: ResearchSamplingConditionValues = {
-      ...(topP !== undefined ? { topP } : {}),
-      ...(topK !== undefined ? { topK } : {}),
-      ...(seed !== undefined ? { seed } : {}),
-    };
+  ).map(([topP, topK, seed]) => ({
+    ...(topP !== undefined ? { topP } : {}),
+    ...(topK !== undefined ? { topK } : {}),
+    ...(seed !== undefined ? { seed } : {}),
+  }));
+}
+
+export function buildResearchSamplingConditions(base: ResearchConditionDefinition, design: ResearchSamplingDesign): ResearchConditionDefinition[] {
+  const combinations = researchSamplingConditionValues(design);
+  return combinations.map((values, index) => {
+    const { topP, topK, seed } = values;
     const requestedSettings = { ...base.requestedSettings };
     delete requestedSettings.topP;
     delete requestedSettings.topK;

@@ -22,7 +22,7 @@ const model: ProviderModel = {
 const repository = {} as AppRepository;
 const noop = vi.fn(async () => undefined);
 
-function renderBuilder(template: "model" | "viewer_notes" | "system_prompt") {
+function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "sampling") {
   return renderToStaticMarkup(<ResearchConfigBuilder
     copy={getCopy("en")}
     settings={createDefaultSettings()}
@@ -139,6 +139,19 @@ describe("Research Builder Training/Research UX step", () => {
     expect(before).toHaveLength(after.length);
     expect(researchBaseModelInventorySignature(before)).not.toBe(researchBaseModelInventorySignature(after));
     expect(reconcileResearchBaseModelKey(profileB, after, "pc-a::model-a")).toBe("pc-a::model-b");
+  });
+
+
+  it("exposes the Sampling configurations form only through the Research builder contract", () => {
+    const html = renderBuilder("sampling");
+    expect(html).toContain("Sampling configurations");
+    expect(html).toContain("top_p");
+    expect(html).toContain("top_k");
+    expect(html).toContain("seed");
+    expect(html).toContain("At least one parameter must be compared");
+    expect(researchBuilderSource).toContain('"viewer_notes", "sampling"');
+    expect(researchBuilderSource).toContain('buildResearchSamplingConditions(base("sampling_base", "Sampling"), samplingDesign!)');
+    expect(researchBuilderSource).toContain('source: "research", profileId: baseProfile.id, mode: "condition_variable"');
   });
 
   it("captures the currently active Viewer Notes version for the exact base Viewer identity", async () => {

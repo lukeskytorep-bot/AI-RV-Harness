@@ -400,3 +400,19 @@
 .settings-tabs button { min-height: 34px; padding: 0 11px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; cursor: pointer; font-size: 11px; font-weight: 700; }
 .settings-tabs button:hover { color: var(--text); background: var(--surface-hover); }
 .settings-tabs button.active { color: var(--violet); background: var(--violet-soft); }
+
+/* Research Sampling configurations */
+.research-sampling-design { gap: 12px; }
+.research-sampling-axis-list { display: grid; gap: 8px; }
+.research-sampling-axis { display: grid; gap: 7px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-subtle, transparent); }
+.research-sampling-axis-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.research-sampling-axis-head > strong { font: 700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.research-sampling-axis-head select { width: min(180px, 48%); }
+.research-sampling-fixed { display: grid; grid-template-columns: 90px minmax(0, 1fr); align-items: center; gap: 8px; }
+.research-sampling-fixed > span { color: var(--muted); font-size: 11px; font-weight: 700; }
+.research-sampling-values { display: grid; gap: 6px; }
+.research-sampling-values > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; }
+.research-sampling-preview { display: grid; gap: 8px; padding-top: 4px; }
+.research-sampling-preview > strong { color: var(--muted-strong); font-size: 11px; }
+.research-sampling-preview-pills { flex-wrap: wrap; }
+.research-sampling-preview-pills span { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
