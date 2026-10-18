@@ -302,6 +302,7 @@ export class ViewerNoteCapacityError extends Error {
 export function buildCapacityRetryPrompt(language: InterfaceLanguage, packet: ViewerNoteReflectionPacket, rejectedNotes: string): string {
   const currentSize = estimateViewerNoteTokens(packet.currentNotes);
   const rejectedSize = estimateViewerNoteTokens(rejectedNotes);
+  const targetTokens = Math.floor(packet.capacityTokens * 0.9);
   const originalContext = buildReflectionPrompt(language, packet);
   if (language === "pl") return `Twoja pierwsza propozycja UPDATE nie została zapisana, ponieważ pełna nowa wersja przekroczyła ustawioną pojemność Viewer Notes.
 
@@ -312,6 +313,8 @@ Odrzucona propozycja: ${rejectedSize} szacowanych tokenów.
 Podejmij drugą i ostatnią próbę. Ponownie przeanalizuj pełne doświadczenie z sesji podane niżej: zapieczętowaną część blind, Reveal oraz swoją własną ocenę po Revealu. Nie działaj jedynie jak redaktor lub skryba mechanicznie skracający dwa dokumenty. Sam zdecyduj, które wnioski są wystarczająco ważne, aby zajmować ograniczoną pamięć.
 
 Możesz skrócić lub scalić wcześniejsze wskazówki, zastąpić mniej trafne wnioski nowymi, usunąć mniej przydatne informacje, skrócić własną propozycję albo wybrać NO_CHANGE. Jeżeli wybierzesz UPDATE, zwróć cały dokument zastępujący aktywną wersję i zmieść go w limicie.
+
+Pamiętaj, że Twoje oszacowanie liczby tokenów może różnić się od oszacowania używanego przez Harness. Ponieważ jest to druga i ostatnia próba, nie celuj w samą granicę pojemności. Dla całego tekstu nowych Viewer Notes przyjmij cel wynoszący najwyżej ${targetTokens} szacowanych tokenów, czyli 10% poniżej maksymalnej pojemności ${packet.capacityTokens}. Ten margines ma zmniejszyć ryzyko ponownego przekroczenia limitu. Dotyczy całej nowej wersji notatek, a nie tylko dopisywanego fragmentu.
 
 ${originalContext}
 
@@ -331,6 +334,8 @@ Rejected proposal: ${rejectedSize} estimated tokens.
 Make a second and final attempt. Reconsider the complete session experience supplied below: the sealed blind evidence, Reveal, and your own post-Reveal assessment. Do not act merely as an editor or scribe mechanically shortening two documents. Decide which insights are important enough to occupy the limited memory.
 
 You may shorten or merge earlier guidance, replace less useful conclusions, remove lower-value information, shorten your proposed additions, or choose NO_CHANGE. If you choose UPDATE, return the complete replacement document and keep it within capacity.
+
+Remember that your token-count estimate may differ from the estimate used by Harness. Since this is the second and final attempt, do not aim at the capacity boundary. Aim for no more than ${targetTokens} estimated tokens for the complete new Viewer Notes text, which is 10% below the maximum capacity of ${packet.capacityTokens}. This margin is intended to reduce the risk of exceeding the limit again. It applies to the entire replacement notes document, not just the additions.
 
 ${originalContext}
 

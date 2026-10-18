@@ -1,6 +1,9 @@
 import type { AppSettings } from "./types";
 
 export const DEFAULT_CONVERSATION_MAX_OUTPUT_TOKENS = 16_384;
+export const MIN_CONVERSATION_MAX_OUTPUT_TOKENS = 16_384;
+export const DEFAULT_RV_SESSION_MAX_OUTPUT_TOKENS = 16_384;
+export const MIN_RV_SESSION_MAX_OUTPUT_TOKENS = 16_384;
 export const CONVERSATION_OUTPUT_BUDGET_VERSION = 1;
 
 export const DEFAULT_INTERFACE_LANGUAGE = "en" as const;
@@ -16,7 +19,7 @@ export function createDefaultSettings(): AppSettings {
     defaultMaxOutputTokens: 8192,
     conversationMaxOutputTokens: DEFAULT_CONVERSATION_MAX_OUTPUT_TOKENS,
     conversationOutputBudgetVersion: CONVERSATION_OUTPUT_BUDGET_VERSION,
-    rvSessionMaxOutputTokens: 8192,
+    rvSessionMaxOutputTokens: DEFAULT_RV_SESSION_MAX_OUTPUT_TOKENS,
     maxSessionCostUsd: 0,
     defaultRevealSource: "external",
     targetRepeatPolicy: "avoid_profile",
@@ -28,18 +31,31 @@ export function createDefaultSettings(): AppSettings {
   };
 }
 
-// Edward explicitly opted to upgrade the former 8K Conversation setting once.
-// The persisted marker distinguishes that old value from a later deliberate
-// reduction to 8K. The RV/global defaults and other custom values stay intact.
+// Conversation and automatic RV Sessions now have a persistent 16K floor in Settings.
+// The legacy global default remains 8K and all unrelated output budgets stay untouched.
+function normalizeOutputSetting(value: number | undefined, fallback: number, minimum: number): number {
+  const resolved = Number.isFinite(value) ? value as number : fallback;
+  return Math.max(minimum, resolved);
+}
+
+export function storedOutputSettingsNeedUpgrade(storedSettings: Partial<AppSettings>): boolean {
+  return storedSettings.conversationMaxOutputTokens === undefined
+    || storedSettings.rvSessionMaxOutputTokens === undefined
+    || !Number.isFinite(storedSettings.conversationMaxOutputTokens)
+    || !Number.isFinite(storedSettings.rvSessionMaxOutputTokens)
+    || storedSettings.conversationMaxOutputTokens < MIN_CONVERSATION_MAX_OUTPUT_TOKENS
+    || storedSettings.rvSessionMaxOutputTokens < MIN_RV_SESSION_MAX_OUTPUT_TOKENS
+    || (storedSettings.conversationOutputBudgetVersion ?? 0) < CONVERSATION_OUTPUT_BUDGET_VERSION;
+}
+
 export function applyStoredOutputSettings(nextSettings: AppSettings, storedSettings: Partial<AppSettings>): AppSettings {
   const legacyOutput = storedSettings.defaultMaxOutputTokens;
   const conversation = storedSettings.conversationMaxOutputTokens ?? legacyOutput ?? nextSettings.conversationMaxOutputTokens;
-  const upgraded = (storedSettings.conversationOutputBudgetVersion ?? 0) >= CONVERSATION_OUTPUT_BUDGET_VERSION;
+  const rvSession = storedSettings.rvSessionMaxOutputTokens ?? legacyOutput ?? nextSettings.rvSessionMaxOutputTokens;
   return {
     ...nextSettings,
-    conversationMaxOutputTokens: !upgraded && (conversation === 8192 || conversation === 8000)
-      ? DEFAULT_CONVERSATION_MAX_OUTPUT_TOKENS : conversation,
+    conversationMaxOutputTokens: normalizeOutputSetting(conversation, DEFAULT_CONVERSATION_MAX_OUTPUT_TOKENS, MIN_CONVERSATION_MAX_OUTPUT_TOKENS),
     conversationOutputBudgetVersion: Math.max(storedSettings.conversationOutputBudgetVersion ?? 0, CONVERSATION_OUTPUT_BUDGET_VERSION),
-    rvSessionMaxOutputTokens: storedSettings.rvSessionMaxOutputTokens ?? legacyOutput ?? nextSettings.rvSessionMaxOutputTokens,
+    rvSessionMaxOutputTokens: normalizeOutputSetting(rvSession, DEFAULT_RV_SESSION_MAX_OUTPUT_TOKENS, MIN_RV_SESSION_MAX_OUTPUT_TOKENS),
   };
 }

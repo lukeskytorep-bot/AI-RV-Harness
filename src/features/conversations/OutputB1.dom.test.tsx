@@ -61,7 +61,7 @@ for(const scenario of ["fresh-conversation","saved-conversation","old-conversati
     expect(button(getCopy("en").send)?.disabled).toBe(false);
     await act(async()=>{button(getCopy("en").send)!.click();});
    }
-   const budgets=(scenario==="fresh-conversation"||scenario==="old-conversation-upgrade")?[16384]:scenario==="saved-conversation"||scenario==="manual-low-ceiling"?[8192]:[32768,49152];
+   const budgets=(scenario==="fresh-conversation"||scenario==="old-conversation-upgrade"||scenario==="saved-conversation")?[16384]:scenario==="manual-low-ceiling"?[8192]:[32768,49152];
    expect(seen).toEqual(budgets.map(n=>({requested:n,effective:n})));
    const messages=await new BrowserRepository().listChatMessages(thread.id);
    expect(messages.filter(m=>m.role==="user")).toHaveLength(1);

@@ -9,6 +9,7 @@ vi.mock("../providers/native", () => ({
   providerChatAttempt: vi.fn(),
 }));
 import type { ProviderConfig, ProviderModel } from "../providers/types";
+import type { ProviderChatAttempt } from "../providers/requestExecutor";
 import type { AppRepository } from "../storage/repository";
 import type { TrainingRunRecord } from "../training/types";
 import { fieldPerceptionLexicon } from "./fieldLexicon";
@@ -143,6 +144,13 @@ describe("Field Guide Update", () => {
     expect(retry).toContain(p.postRevealReview);
     expect(retry).toContain(p.lexicon.content.slice(0, 120));
     expect(retry).toContain("second and final attempt");
+    expect(retry).toContain("Aim for no more than 1843 estimated tokens for the complete new Field Guide text");
+    expect(retry).toContain("10% below the maximum capacity of 2048");
+    expect(retry).toContain("entire replacement Field Guide document, not just the additions");
+    const plRetry = buildFieldGuideCapacityRetryPrompt("pl", p, rejected);
+    expect(plRetry).toContain("najwyżej 1843 szacowanych tokenów");
+    expect(plRetry).toContain("10% poniżej maksymalnej pojemności 2048");
+    expect(plRetry).toContain("całej nowej wersji Przewodnika Pola");
     expect(retry).toContain("Current version size:");
     expect(retry).toContain("Rejected proposal size:");
     expect(() => validateFieldGuideUpdateContent(rejected, 2048)).toThrow(FieldGuideCapacityError);
@@ -236,10 +244,13 @@ describe("Field Guide Update", () => {
   it("records FAILED_CAPACITY after the second oversize proposal and leaves the old guide active", async () => {
     const h = integrationHarness();
     const huge = "x".repeat(9000);
-    const chat = vi.fn(async () => response(JSON.stringify({ decision: "UPDATE", fieldGuide: huge, changeSummary: "still too long" })));
+    const chat = vi.fn<ProviderChatAttempt>(async (_request) => response(JSON.stringify({ decision: "UPDATE", fieldGuide: huge, changeSummary: "still too long" })));
     const result = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: "session-1", postRevealReview: "Review", providerConfig: provider, model, chat });
     expect(result?.status).toBe("FAILED_CAPACITY");
     expect(chat).toHaveBeenCalledTimes(2);
+    const retryPrompt = chat.mock.calls[1]?.[0].messages.find((message: { role: string; content: string }) => message.role === "user")?.content ?? "";
+    expect(retryPrompt).toContain("Aim for no more than 1843 estimated tokens for the complete new Field Guide text");
+    expect(retryPrompt).toContain("[BEGIN DATA: REJECTED FIELD GUIDE UPDATE]");
     expect(h.created).toHaveLength(0);
     expect(h.activeVersion.id).toBe("fg-v1");
   });

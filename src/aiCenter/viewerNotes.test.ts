@@ -101,6 +101,13 @@ describe("Viewer Notes", () => {
     expect(prompt).toContain(packet.currentNotes);
     expect(prompt).toContain(rejected);
     expect(prompt).toContain(`Maximum capacity: ${packet.capacityTokens} estimated tokens`);
+    expect(prompt).toContain("Aim for no more than 921 estimated tokens for the complete new Viewer Notes text");
+    expect(prompt).toContain("10% below the maximum capacity of 1024");
+    expect(prompt).toContain("entire replacement notes document, not just the additions");
+    const plPrompt = buildCapacityRetryPrompt("pl", packet, rejected);
+    expect(plPrompt).toContain("najwyżej 921 szacowanych tokenów");
+    expect(plPrompt).toContain("10% poniżej maksymalnej pojemności 1024");
+    expect(plPrompt).toContain("całej nowej wersji notatek");
     expect(prompt).toContain("second and final attempt");
     expect(prompt).toContain("merely as an editor or scribe");
     expect(prompt).toContain(packet.effectiveViewerPrompt.content);
@@ -241,6 +248,12 @@ describe("Viewer Notes", () => {
     expect(userPrompt).toContain("guide after this exact training");
     expect(userPrompt).toContain("Version ID: fg-after");
     expect(repository.listFieldGuideVersions).toHaveBeenCalledWith("identity", "en");
+    if (scenario === "training-capacity" || scenario === "training-capacity-json") {
+      const retryPrompt = chat.mock.calls[1]?.[0].messages.find((message: { role: string; content: string }) => message.role === "user")?.content ?? "";
+      expect(retryPrompt).toContain("Aim for no more than 921 estimated tokens for the complete new Viewer Notes text");
+      expect(retryPrompt).toContain("sealed evidence");
+      expect(retryPrompt).toContain("[BEGIN DATA: REJECTED VIEWER NOTES UPDATE]");
+    }
     if (failed) expect(commit).not.toHaveBeenCalled(); else expect(commit).toHaveBeenCalledOnce();
   });
 

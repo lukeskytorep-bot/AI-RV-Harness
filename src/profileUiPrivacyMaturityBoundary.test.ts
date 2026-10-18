@@ -25,7 +25,9 @@ describe("PROFILE-UI-PRIVACY-MATURITY-1 boundary", () => {
     const defaults = read("./startupDefaults.ts");
     expect(defaults).toContain("const legacyOutput = storedSettings.defaultMaxOutputTokens");
     expect(defaults).toContain("storedSettings.conversationMaxOutputTokens ?? legacyOutput ?? nextSettings.conversationMaxOutputTokens");
-    expect(app).toContain("(storedSettings.conversationOutputBudgetVersion ?? 0) < CONVERSATION_OUTPUT_BUDGET_VERSION");
+    expect(app).toContain("storedOutputSettingsNeedUpgrade(storedSettings)");
+    expect(defaults).toContain("conversationMaxOutputTokens < MIN_CONVERSATION_MAX_OUTPUT_TOKENS");
+    expect(defaults).toContain("rvSessionMaxOutputTokens < MIN_RV_SESSION_MAX_OUTPUT_TOKENS");
     expect(defaults).toContain("storedSettings.rvSessionMaxOutputTokens ?? legacyOutput ?? nextSettings.rvSessionMaxOutputTokens");
   });
 

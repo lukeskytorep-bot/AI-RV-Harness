@@ -285,6 +285,7 @@ export function validateFieldGuideUpdateContent(content: string, capacity: Field
 export function buildFieldGuideCapacityRetryPrompt(language: InterfaceLanguage, packet: FieldGuideUpdatePacket, rejectedFieldGuide: string): string {
   const currentSize = estimateFieldGuideTokens(packet.fieldGuide.content);
   const rejectedSize = estimateFieldGuideTokens(rejectedFieldGuide);
+  const targetTokens = Math.floor(packet.capacityTokens * 0.9);
   const original = buildFieldGuideUpdatePrompt(language, packet);
   if (language === "pl") return `Pierwsza propozycja UPDATE nie została zapisana, ponieważ przekroczyła maksymalną pojemność Przewodnika Pola.
 
@@ -293,6 +294,8 @@ Rozmiar aktualnej wersji: ${currentSize} szacowanych tokenów.
 Rozmiar odrzuconej propozycji: ${rejectedSize} szacowanych tokenów.
 
 To jest druga i ostatnia próba. Ponownie otrzymujesz cały pierwotny kontekst. Możesz skrócić, scalić lub usunąć mniej przydatne opisy albo wybrać \`NO_CHANGE\`. Jeżeli wybierzesz UPDATE, pełna nowa wersja musi zmieścić się w limicie.
+
+Pamiętaj, że Twoje oszacowanie liczby tokenów może różnić się od oszacowania używanego przez Harness. Ponieważ jest to druga i ostatnia próba, nie celuj w samą granicę pojemności. Dla całego tekstu nowego Przewodnika Pola przyjmij cel wynoszący najwyżej ${targetTokens} szacowanych tokenów, czyli 10% poniżej maksymalnej pojemności ${packet.capacityTokens}. Ten margines ma zmniejszyć ryzyko ponownego przekroczenia limitu. Dotyczy całej nowej wersji Przewodnika Pola, a nie tylko dopisywanego fragmentu.
 
 ${original}
 
@@ -309,6 +312,8 @@ Current version size: ${currentSize} estimated tokens.
 Rejected proposal size: ${rejectedSize} estimated tokens.
 
 This is the second and final attempt. You receive the complete original context again. You may shorten, merge, or remove less useful descriptions, or choose \`NO_CHANGE\`. If you choose UPDATE, the complete new version must fit within the limit.
+
+Remember that your token-count estimate may differ from the estimate used by Harness. Since this is the second and final attempt, do not aim at the capacity boundary. Aim for no more than ${targetTokens} estimated tokens for the complete new Field Guide text, which is 10% below the maximum capacity of ${packet.capacityTokens}. This margin is intended to reduce the risk of exceeding the limit again. It applies to the entire replacement Field Guide document, not just the additions.
 
 ${original}
 

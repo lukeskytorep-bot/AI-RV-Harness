@@ -68,7 +68,7 @@ import { ConversationsScreen } from "./features/conversations";
 import { RvSessionsScreen, type RvSessionsView } from "./features/rvSessions";
 import { FormDialog } from "./components/FormDialog";
 import { ensureBundledTrainingTargets } from "./targets/bundled";
-import { CONVERSATION_OUTPUT_BUDGET_VERSION, applyStoredOutputSettings, createDefaultSettings } from "./startupDefaults";
+import { applyStoredOutputSettings, createDefaultSettings, storedOutputSettingsNeedUpgrade } from "./startupDefaults";
 import { SettingsSaveQueue } from "./storage/settingsSaveQueue";
 import { profileNeedingInitialSetup } from "./profileModelDefaults";
 import { ModelRouteSelect } from "./components/ModelRouteSelect";
@@ -149,8 +149,7 @@ export default function App() {
           repo.listWorkspaces(),
         ]);
         let nextSettings = { ...createDefaultSettings(), ...storedSettings };
-        const outputSettingsNeedUpgrade = storedSettings.conversationMaxOutputTokens === undefined || storedSettings.rvSessionMaxOutputTokens === undefined
-          || (storedSettings.conversationOutputBudgetVersion ?? 0) < CONVERSATION_OUTPUT_BUDGET_VERSION;
+        const outputSettingsNeedUpgrade = storedOutputSettingsNeedUpgrade(storedSettings);
         if (outputSettingsNeedUpgrade) {
           nextSettings = applyStoredOutputSettings(nextSettings, storedSettings);
           stage = "output-token-settings.upgrade";

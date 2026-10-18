@@ -47,6 +47,7 @@ import type { TrainingRunRecord } from "../../training/types";
 import type { ResearchProjectRecord } from "../../research/types";
 import type { TargetRecord } from "../../targets/types";
 import { APP_VERSION } from "../../version";
+import { MIN_CONVERSATION_MAX_OUTPUT_TOKENS, MIN_RV_SESSION_MAX_OUTPUT_TOKENS } from "../../startupDefaults";
 import { CreditsCard } from "./CreditsCard";
 
 export interface SettingsScreenProps {
@@ -425,7 +426,27 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
 }
 
 function SessionSettingsCard({ copy, settings, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; onChange: (settings: Partial<AppSettings>) => void }) {
-  return <section className="panel session-settings-card"><PanelHeader title={copy.sessions} icon={<CircleStop size={18} />} /><div className="session-settings-body"><label><span>{copy.sessionLanguage}</span><select value={settings.sessionLanguage} onChange={(event) => onChange({ sessionLanguage: event.target.value as SessionLanguageSetting })}><option value="same">{copy.sameAsInterface}</option><option value="pl">Polski</option><option value="en">English</option></select></label><label><span>{copy.requestTimeout}</span><div><input type="number" min={1} max={600} value={Math.round(settings.requestTimeoutMs / 1000)} onChange={(event) => onChange({ requestTimeoutMs: Math.max(1, Math.min(600, Number(event.target.value) || 120)) * 1000 })} /><small>s</small></div></label><label><span>{copy.retryPolicy}</span><select value={settings.maxRetries} onChange={(event) => onChange({ maxRetries: Number(event.target.value) })}>{[0, 1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label><label><span>{copy.conversationOutputTokens}</span><input type="number" min={1} max={262144} value={settings.conversationMaxOutputTokens} onChange={(event) => onChange({ conversationMaxOutputTokens: Math.max(1, Number(event.target.value) || 8192) })} /></label><label><span>{copy.rvSessionOutputTokens}</span><input type="number" min={1} max={262144} value={settings.rvSessionMaxOutputTokens} onChange={(event) => onChange({ rvSessionMaxOutputTokens: Math.max(1, Number(event.target.value) || 8192) })} /></label><label><span>{copy.defaultReveal}</span><select value={settings.defaultRevealSource} onChange={(event) => onChange({ defaultRevealSource: event.target.value as AppSettings["defaultRevealSource"] })}><option value="external">{copy.externalBlind}</option><option value="automatic">{copy.automaticTarget}</option></select></label><div className="mandatory-autosave"><ShieldCheck size={16} /><div><strong>{copy.mandatoryAutosave}</strong><p>{copy.sessionRules}</p></div></div></div></section>;
+  return <section className="panel session-settings-card"><PanelHeader title={copy.sessions} icon={<CircleStop size={18} />} /><div className="session-settings-body"><label><span>{copy.sessionLanguage}</span><select value={settings.sessionLanguage} onChange={(event) => onChange({ sessionLanguage: event.target.value as SessionLanguageSetting })}><option value="same">{copy.sameAsInterface}</option><option value="pl">Polski</option><option value="en">English</option></select></label><label><span>{copy.requestTimeout}</span><div><input type="number" min={1} max={600} value={Math.round(settings.requestTimeoutMs / 1000)} onChange={(event) => onChange({ requestTimeoutMs: Math.max(1, Math.min(600, Number(event.target.value) || 120)) * 1000 })} /><small>s</small></div></label><label><span>{copy.retryPolicy}</span><select value={settings.maxRetries} onChange={(event) => onChange({ maxRetries: Number(event.target.value) })}>{[0, 1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label><label><span>{copy.conversationOutputTokens}</span><OutputTokenSettingInput value={settings.conversationMaxOutputTokens} minimum={MIN_CONVERSATION_MAX_OUTPUT_TOKENS} onCommit={(value) => onChange({ conversationMaxOutputTokens: value })} /></label><label><span>{copy.rvSessionOutputTokens}</span><OutputTokenSettingInput value={settings.rvSessionMaxOutputTokens} minimum={MIN_RV_SESSION_MAX_OUTPUT_TOKENS} onCommit={(value) => onChange({ rvSessionMaxOutputTokens: value })} /></label><label><span>{copy.defaultReveal}</span><select value={settings.defaultRevealSource} onChange={(event) => onChange({ defaultRevealSource: event.target.value as AppSettings["defaultRevealSource"] })}><option value="external">{copy.externalBlind}</option><option value="automatic">{copy.automaticTarget}</option></select></label><div className="mandatory-autosave"><ShieldCheck size={16} /><div><strong>{copy.mandatoryAutosave}</strong><p>{copy.sessionRules}</p></div></div></div></section>;
+}
+
+function OutputTokenSettingInput({ value, minimum, onCommit }: { value: number; minimum: number; onCommit: (value: number) => void }) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const commit = () => {
+    const parsed = Number(draft);
+    const normalized = Number.isFinite(parsed) ? Math.max(minimum, parsed) : minimum;
+    setDraft(String(normalized));
+    if (normalized !== value) onCommit(normalized);
+  };
+  return <input
+    type="number"
+    min={minimum}
+    max={262144}
+    value={draft}
+    onChange={(event) => setDraft(event.target.value)}
+    onBlur={commit}
+    onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+  />;
 }
 
 function PromptResourceDialog({ copy, resource, onClose }: { copy: ReturnType<typeof getCopy>; resource: FactoryPromptResource; onClose: () => void }) {
