@@ -62,7 +62,7 @@ describe("Profile Viewer defaults", () => {
   });
 
 
-  it("applies enabled OpenRouter sampling defaults independently of temperature and omits them when disabled or on another provider", () => {
+  it("applies enabled OpenRouter/Custom sampling defaults independently of temperature and omits them when disabled or on unrelated providers", () => {
     const samplingProfile: Profile = {
       ...profile,
       defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 0, seed: 42 },
@@ -81,8 +81,11 @@ describe("Profile Viewer defaults", () => {
     };
     expect(profileGenerationDefaults(disabled, model())).toEqual({ reasoningEffort: "high", temperature: 1.1 });
 
-    const nonOpenRouter = { ...model(), provider: "custom_openai" as const, route: "custom_openai:viewer" };
-    expect(profileGenerationDefaults(samplingProfile, nonOpenRouter)).toEqual({ reasoningEffort: "high", temperature: 1.1 });
+    const custom = { ...model(), provider: "custom_openai" as const, route: "custom_openai:viewer" };
+    expect(profileGenerationDefaults(samplingProfile, custom)).toEqual({ reasoningEffort: "high", temperature: 1.1, topP: 0.04, topK: 0, seed: 42 });
+
+    const unrelated = { ...model(), provider: "mistral" as const, route: "mistral:viewer" };
+    expect(profileGenerationDefaults(samplingProfile, unrelated)).toEqual({ reasoningEffort: "high", temperature: 1.1 });
   });
 
 

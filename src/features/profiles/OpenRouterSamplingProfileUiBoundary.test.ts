@@ -10,7 +10,7 @@ describe("OR-SAMPLING-3 profile UI boundaries", () => {
   it("uses the shared sampling controls in First Run, Create Profile and Edit Profile", () => {
     expect(appSource).toContain("sampling={{ enabled: setup.viewerSamplingEnabled");
     expect(dialogsSource.match(/sampling=\{\{/g)?.length).toBe(2);
-    expect(controlsSource).toContain('providerKind === "openrouter"');
+    expect(controlsSource).toContain('providerKind === "openrouter" || providerKind === "custom_openai"');
     expect(controlsSource).toContain("<OpenRouterSamplingControls");
   });
 
@@ -23,9 +23,9 @@ describe("OR-SAMPLING-3 profile UI boundaries", () => {
     expect(controllerSource).toContain("viewerSamplingEnabled");
   });
 
-  it("persists sampling through the shared profile configuration builder only for OpenRouter", () => {
-    expect(controllerSource).toContain('selectedProvider?.provider === "openrouter"');
+  it("persists sampling through the shared profile configuration builder for OpenRouter and Custom only", () => {
+    expect(controllerSource).toContain('selectedProvider?.provider === "openrouter" || selectedProvider?.provider === "custom_openai"');
     expect(controllerSource).toContain("parseOpenRouterAdditionalSamplingInputs");
-    expect(dialogsSource).toContain('provider?.provider === "openrouter" ? parseOpenRouterAdditionalSamplingInputs');
+    expect(dialogsSource).toContain('provider?.provider === "openrouter" || provider?.provider === "custom_openai"');
   });
 });

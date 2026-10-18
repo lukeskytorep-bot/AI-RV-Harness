@@ -297,15 +297,44 @@ function runProfilesRepositoryContract(name: string, createHarness: () => Contra
       }
     });
 
-    it("rejects storing OpenRouter sampling under a non-OpenRouter provider", async () => {
+    it("round-trips the shared sampling columns for Custom OpenAI-compatible and rejects unrelated providers", async () => {
       const { repository } = createHarness();
-      const profile = await repository.createProfile({ name: "Viewer" });
-      await expect(repository.setProfileAiConfiguration(profile.id, {
+      const custom = await repository.createProfile({
+        name: "Custom Sampling Viewer",
+        aiConfiguration: {
+          credentialId: "credential-custom",
+          credentialProvider: "custom_openai",
+          defaultViewerModelId: "model-custom",
+          defaultViewerTemperature: 0.8,
+          defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 0, seed: 42 },
+        },
+      });
+      expect((await repository.listProfiles()).find((item) => item.id === custom.id)?.defaultViewerOpenRouterSampling)
+        .toEqual({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
+
+      await repository.setProfileAiConfiguration(custom.id, {
+        credentialId: "credential-custom",
+        credentialProvider: "custom_openai",
+        defaultViewerModelId: "model-custom",
+        defaultViewerTemperature: 1.1,
+      });
+      expect((await repository.listProfiles()).find((item) => item.id === custom.id)).toMatchObject({
+        defaultViewerTemperature: 1.1,
+        defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 0, seed: 42 },
+      });
+
+      await repository.setProfileCredential(custom.id, "credential-other", "mistral");
+      await repository.setProfileCredential(custom.id, "credential-custom", "custom_openai");
+      expect((await repository.listProfiles()).find((item) => item.id === custom.id)?.defaultViewerOpenRouterSampling)
+        .toEqual({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
+
+      const unrelated = await repository.createProfile({ name: "Viewer" });
+      await expect(repository.setProfileAiConfiguration(unrelated.id, {
         credentialId: "credential-m",
         credentialProvider: "mistral",
         defaultViewerModelId: "model-m",
         defaultViewerOpenRouterSampling: { enabled: true, topP: 0.7 },
-      })).rejects.toThrow("only valid for OpenRouter");
+      })).rejects.toThrow("OpenRouter or Custom OpenAI-compatible");
     });
 
     it("separates and sorts active and archived Profile records", async () => {

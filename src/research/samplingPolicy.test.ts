@@ -29,7 +29,14 @@ describe("Research sampling policy", () => {
   it("does not reactivate retained OpenRouter values on another provider", () => {
     expect(researchSamplingFromProfile(profile({ enabled: true, topP: 0.9, topK: 40, seed: 123 }), "mistral").requested).toEqual({});
   });
-  it("requires every compared Viewer route to confirm every manual parameter", () => {
+
+  it("reuses the stored sampling intent for Custom without inventing endpoint capability verification", () => {
+    const stored = profile({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
+    expect(researchSamplingFromProfile(stored, "custom_openai").requested).toEqual({ topP: 0.04, topK: 0, seed: 42 });
+    const custom = { ...model(undefined, "custom_openai:model-a"), provider: "custom_openai" as const, route: "custom_openai:model-a" };
+    expect(() => assertResearchSamplingSupported({ topP: 0.04, topK: 0, seed: 42 }, [custom])).not.toThrow();
+  });
+  it("requires every compared OpenRouter Viewer route to confirm every manual parameter", () => {
     const requested = { topP: 0.9, topK: 40, seed: 123 };
     expect(() => assertResearchSamplingSupported(requested, [model(["top_p", "top_k", "seed"]), model(["top_p", "top_k", "seed"], "openrouter:model-b")])).not.toThrow();
     expect(() => assertResearchSamplingSupported(requested, [model(["top_p", "top_k", "seed"]), model(["top_p", "top_k"], "openrouter:model-b")])).toThrow(/seed is unsupported.*model-b/);

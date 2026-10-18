@@ -241,7 +241,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
         judgeKey,
         providers,
         models,
-        selectedProvider?.provider === "openrouter"
+        (selectedProvider?.provider === "openrouter" || selectedProvider?.provider === "custom_openai")
           ? parseOpenRouterAdditionalSamplingInputs(copy, viewerSamplingEnabled, viewerTopP, viewerTopK, viewerSeed)
           : undefined,
       ),

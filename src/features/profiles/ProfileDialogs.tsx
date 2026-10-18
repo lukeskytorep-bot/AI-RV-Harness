@@ -167,7 +167,7 @@ export function EditProfileDialog({ copy, profile, providers, models, onCancel, 
     if (aiTouched && (!provider || !validViewerModelId)) { setError(copy.selectViewerBeforeSaving); return; }
     setSaving(true); setError(null);
     try {
-      const aiConfiguration = aiTouched ? { ...buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey, providers, models, provider?.provider === "openrouter" ? parseOpenRouterAdditionalSamplingInputs(copy, samplingEnabled, topP, topK, seed) : undefined), defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, interfaceLanguage) } : undefined;
+      const aiConfiguration = aiTouched ? { ...buildProfileAiConfiguration(copy, provider, viewerModel, reasoning, temperature, systemPrompt, monitorModelKey, judgeModelKey, providers, models, (provider?.provider === "openrouter" || provider?.provider === "custom_openai") ? parseOpenRouterAdditionalSamplingInputs(copy, samplingEnabled, topP, topK, seed) : undefined), defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(profile.defaultMonitorSystemPrompt, interfaceLanguage) } : undefined;
       await onSave(name, humanName || undefined, note, aiConfiguration);
     }
     catch (cause) { setError(profileSaveErrorMessage(cause, copy === getCopy("pl") ? "pl" : "en")); }

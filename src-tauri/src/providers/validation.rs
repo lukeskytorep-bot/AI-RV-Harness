@@ -70,11 +70,15 @@ pub(super) fn validate_chat_request(request: &ProviderChatRequest) -> Result<(),
     const JS_MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
     let has_additional_sampling = request.top_p.is_some() || request.top_k.is_some() || request.seed.is_some();
     if has_additional_sampling {
-        if !matches!(request.provider, super::ProviderKind::Openrouter) {
-            return Err("additional sampling parameters are supported only for OpenRouter requests".to_string());
+        if !matches!(request.provider, super::ProviderKind::Openrouter | super::ProviderKind::CustomOpenai) {
+            return Err("additional sampling parameters are supported only for OpenRouter or Custom OpenAI-compatible requests".to_string());
         }
-        if request.provider_routing.as_ref().and_then(|routing| routing.require_parameters) != Some(true) {
-            return Err("OpenRouter additional sampling requires provider.require_parameters=true".to_string());
+        if matches!(request.provider, super::ProviderKind::Openrouter) {
+            if request.provider_routing.as_ref().and_then(|routing| routing.require_parameters) != Some(true) {
+                return Err("OpenRouter additional sampling requires provider.require_parameters=true".to_string());
+            }
+        } else if request.provider_routing.as_ref().and_then(|routing| routing.require_parameters).is_some() {
+            return Err("provider.require_parameters is OpenRouter-only and must not be sent for Custom OpenAI-compatible requests".to_string());
         }
     } else if request.provider_routing.as_ref().and_then(|routing| routing.require_parameters) == Some(true) {
         return Err("provider.require_parameters=true is reserved for manual OpenRouter sampling".to_string());

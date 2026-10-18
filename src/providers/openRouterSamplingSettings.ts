@@ -15,12 +15,12 @@ export function validateOpenRouterAdditionalSamplingSettings(
   settings: unknown,
 ): OpenRouterAdditionalSamplingSettings {
   if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
-    throw new TypeError("OpenRouter additional sampling settings must be an object.");
+    throw new TypeError("Additional sampling settings must be an object.");
   }
 
   const candidate = settings as Record<string, unknown>;
   if (typeof candidate.enabled !== "boolean") {
-    throw new TypeError("OpenRouter additional sampling enabled must be a boolean.");
+    throw new TypeError("Additional sampling enabled must be a boolean.");
   }
 
   const topP = candidate.topP;
@@ -58,8 +58,8 @@ export function validateOpenRouterSamplingForProvider(
   settings: OpenRouterAdditionalSamplingSettings | undefined,
 ): OpenRouterAdditionalSamplingSettings | undefined {
   if (settings === undefined) return undefined;
-  if (provider !== "openrouter") {
-    throw new Error("Additional sampling parameters are only valid for OpenRouter profiles.");
+  if (provider !== "openrouter" && provider !== "custom_openai") {
+    throw new Error("Additional sampling parameters are valid only for OpenRouter or Custom OpenAI-compatible profiles.");
   }
   return validateOpenRouterAdditionalSamplingSettings(settings);
 }

@@ -29,6 +29,7 @@ export function researchSamplingCapabilityState(
   model: ProviderModel,
   parameter: ResearchSamplingParameter,
 ): ResearchSamplingCapabilityState {
+  if (model.provider === "custom_openai") return "supported";
   if (model.provider !== "openrouter") return "unsupported";
   const wireName = WIRE_NAME[parameter];
   if (model.capabilities.supportedParameters.includes(wireName)) return "supported";
@@ -36,7 +37,7 @@ export function researchSamplingCapabilityState(
 }
 
 /**
- * Reads the user's stored OpenRouter sampling intent without passing through
+ * Reads the user's stored OpenRouter/Custom sampling intent without passing through
  * capability resolution. Disabled/all-Auto profiles intentionally return an
  * empty GenerationSettings object. Zero remains a manual value.
  */
@@ -46,7 +47,7 @@ export function researchSamplingFromProfile(profile: Profile | null, provider: P
 } {
   const snapshot: ResearchSamplingProfileSnapshot = { source: "profile", profileId: profile?.id ?? "" };
   const stored = profile?.defaultViewerOpenRouterSampling;
-  if (!stored || provider !== "openrouter") return { requested: {}, snapshot };
+  if (!stored || (provider !== "openrouter" && provider !== "custom_openai")) return { requested: {}, snapshot };
   const validated = validateOpenRouterAdditionalSamplingSettings(stored);
   if (!validated.enabled) return { requested: {}, snapshot };
   const requested: GenerationSettings = {

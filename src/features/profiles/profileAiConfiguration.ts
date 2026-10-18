@@ -104,10 +104,12 @@ export function buildProfileAiConfiguration(
     defaultViewerModelId: viewerModel.modelId,
     ...(normalizedReasoning ? { defaultViewerReasoningEffort: normalizedReasoning } : {}),
     ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
-    ...(provider.provider === "openrouter" && openRouterSampling !== undefined
+    ...((provider.provider === "openrouter" || provider.provider === "custom_openai") && openRouterSampling !== undefined
       ? (() => {
           const validatedSampling = validateOpenRouterAdditionalSamplingSettings(openRouterSampling);
-          assertManualOpenRouterSamplingSupportedByModel(copy, viewerModel, validatedSampling);
+          if (provider.provider === "openrouter") {
+            assertManualOpenRouterSamplingSupportedByModel(copy, viewerModel, validatedSampling);
+          }
           return { defaultViewerOpenRouterSampling: validatedSampling };
         })()
       : {}),

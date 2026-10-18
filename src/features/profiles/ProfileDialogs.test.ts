@@ -74,7 +74,25 @@ describe("profile AI configuration", () => {
     expect(result.defaultViewerOpenRouterSampling).toEqual({ enabled: false, topP: 0.4, topK: 0, seed: 42 });
   });
 
-  it("does not attach OpenRouter sampling to a non-OpenRouter profile", () => {
+  it("accepts manual sampling for Custom OpenAI-compatible without requiring OpenRouter capability metadata", () => {
+    const customProvider: ProviderConfig = { ...provider, id: "provider-custom", provider: "custom_openai", label: "Custom", baseUrl: "https://example.test/v1" };
+    const customModel: ProviderModel = {
+      ...model,
+      providerConfigId: customProvider.id,
+      provider: "custom_openai",
+      route: "custom_openai:model-1",
+      capabilities: { ...model.capabilities, supportedParameters: ["temperature"] },
+      rawMetadata: {},
+    };
+    const result = buildProfileAiConfiguration(
+      getCopy("en"), customProvider, customModel, "low", "0.8", "", "", "", [customProvider], [customModel],
+      { enabled: true, topP: 0.04, topK: 0, seed: 42 },
+    );
+    expect(result.defaultViewerTemperature).toBe(0.8);
+    expect(result.defaultViewerOpenRouterSampling).toEqual({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
+  });
+
+  it("does not attach shared sampling to an unrelated provider profile", () => {
     const mistralProvider: ProviderConfig = { ...provider, id: "provider-m", provider: "mistral", label: "Mistral" };
     const mistralModel: ProviderModel = { ...model, providerConfigId: mistralProvider.id, provider: "mistral" };
     const result = buildProfileAiConfiguration(

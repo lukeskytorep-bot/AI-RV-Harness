@@ -18,7 +18,7 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
     if let Some(value) = request.temperature {
         body.insert("temperature".into(), json!(value));
     }
-    if matches!(request.provider, ProviderKind::Openrouter) {
+    if matches!(request.provider, ProviderKind::Openrouter | ProviderKind::CustomOpenai) {
         if let Some(value) = request.top_p {
             body.insert("top_p".into(), json!(value));
         }

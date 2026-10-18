@@ -170,3 +170,92 @@ describe("OpenRouter sampling model changes", () => {
     }
   });
 });
+
+
+describe("Custom OpenAI-compatible sampling profile UI", () => {
+  it("shows the shared controls, keeps zero manual, and saves all three parameters without capability metadata", async () => {
+    const customProvider: ProviderConfig = {
+      ...provider,
+      id: "custom-1",
+      provider: "custom_openai",
+      label: "Custom",
+      credentialId: "credential-custom",
+      baseUrl: "https://example.test/v1",
+    };
+    const customModel: ProviderModel = {
+      ...samplingModel("custom-model", "unknown"),
+      providerConfigId: customProvider.id,
+      provider: "custom_openai",
+      route: "custom_openai:custom-model",
+      capabilities: { ...samplingModel("custom-model", "unknown").capabilities, supportedParameters: ["temperature"] },
+      rawMetadata: {},
+    };
+    const customProfile: Profile = {
+      ...profile,
+      credentialId: customProvider.credentialId,
+      credentialProvider: "custom_openai",
+      defaultViewerModelId: customModel.modelId,
+      defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 0, seed: 42 },
+    };
+    const onSave = vi.fn(async (_name: string, _humanName: string | undefined, _note?: string, _ai?: ProfileAiConfigurationInput) => undefined);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<EditProfileDialog copy={getCopy("en")} profile={customProfile} providers={[customProvider]} models={[customModel]} onCancel={vi.fn()} onSave={onSave} />));
+      expect(host.querySelector<HTMLInputElement>('input[aria-label="Top P value"]')?.disabled).toBe(false);
+      expect(host.querySelector<HTMLInputElement>('input[aria-label="Top P value"]')?.value).toBe("0.04");
+      expect(host.querySelector<HTMLInputElement>('input[aria-label="Top K value"]')?.value).toBe("0");
+      expect(host.querySelector<HTMLInputElement>('input[aria-label="Seed value"]')?.value).toBe("42");
+      expect(host.textContent).toContain(getCopy("en").samplingCustomRuntimeLead);
+      const checkbox = host.querySelector<HTMLInputElement>('.sampling-enable-row input[type="checkbox"]')!;
+      await act(async () => { checkbox.click(); });
+      expect(checkbox.checked).toBe(false);
+      await act(async () => { checkbox.click(); });
+      expect(checkbox.checked).toBe(true);
+      await submit(host);
+      expect(onSave).toHaveBeenCalledTimes(1);
+      expect(onSave.mock.calls[0][3]?.defaultViewerOpenRouterSampling).toEqual({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+  it("preserves untouched Custom AI configuration by leaving the edit payload undefined", async () => {
+    const customProvider: ProviderConfig = {
+      ...provider,
+      id: "custom-untouched",
+      provider: "custom_openai",
+      label: "Custom",
+      credentialId: "credential-custom-untouched",
+      baseUrl: "https://example.test/v1",
+    };
+    const customModel: ProviderModel = {
+      ...samplingModel("custom-model-untouched", "unknown"),
+      providerConfigId: customProvider.id,
+      provider: "custom_openai",
+      route: "custom_openai:custom-model-untouched",
+      capabilities: { ...samplingModel("custom-model-untouched", "unknown").capabilities, supportedParameters: ["temperature"] },
+      rawMetadata: {},
+    };
+    const customProfile: Profile = {
+      ...profile,
+      credentialId: customProvider.credentialId,
+      credentialProvider: "custom_openai",
+      defaultViewerModelId: customModel.modelId,
+      defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 0, seed: 42 },
+    };
+    const onSave = vi.fn(async (_name: string, _humanName: string | undefined, _note?: string, _ai?: ProfileAiConfigurationInput) => undefined);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<EditProfileDialog copy={getCopy("en")} profile={customProfile} providers={[customProvider]} models={[customModel]} onCancel={vi.fn()} onSave={onSave} />));
+      await submit(host);
+      expect(onSave).toHaveBeenCalledTimes(1);
+      expect(onSave.mock.calls[0][3]).toBeUndefined();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+});

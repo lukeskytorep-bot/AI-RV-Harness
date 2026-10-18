@@ -1070,6 +1070,42 @@ async fn openrouter_wire_requests_omit_application_attribution_headers() {
 }
 
 #[tokio::test]
+async fn custom_openai_sampling_reaches_the_local_http_simulator_without_openrouter_routing() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_simulator_request(&mut socket).await;
+        assert!(request.lines().next().unwrap_or_default().contains("/chat/completions"));
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json.get("model"), Some(&json!("custom-model")));
+        assert_eq!(json.get("top_p"), Some(&json!(0.04)));
+        assert_eq!(json.get("top_k"), Some(&json!(0)));
+        assert_eq!(json.get("seed"), Some(&json!(42)));
+        assert!(json.get("provider").is_none());
+        let response_body = r#"{"model":"custom-model","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#;
+        let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response_body.len(), response_body);
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+
+    let base = format!("http://{address}");
+    let mut request = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    request.top_p = Some(0.04);
+    request.top_k = Some(0);
+    request.seed = Some(42);
+    validate_chat_request(&request).unwrap();
+    let (url, body) = build_chat_request(&request, &base).unwrap();
+    assert!(body.get("provider").is_none());
+    let response = authenticated(client().unwrap().post(url).json(&body), ProviderKind::CustomOpenai, "simulator-secret")
+        .send().await.unwrap();
+    let (payload, request_id) = json_response(response, "simulator-secret").await.unwrap();
+    let parsed = parse_chat_response(ProviderKind::CustomOpenai, payload, request_id).unwrap();
+    assert_eq!(parsed.content, "ok");
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn openai_compatible_contract_passes_against_a_local_simulator() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -1146,7 +1182,7 @@ fn emits_openrouter_capacity_routing_without_changing_other_provider_bodies() {
 }
 
 #[test]
-fn emits_openrouter_manual_sampling_and_require_parameters_without_leaking_to_other_providers() {
+fn emits_openrouter_and_custom_manual_sampling_without_leaking_to_other_providers() {
     let mut openrouter = chat_request(ProviderKind::Openrouter, "sampling/model");
     openrouter.top_p = Some(0.04);
     openrouter.top_k = Some(0);
@@ -1166,9 +1202,49 @@ fn emits_openrouter_manual_sampling_and_require_parameters_without_leaking_to_ot
     assert_eq!(body.pointer("/provider/require_parameters"), Some(&json!(true)));
     assert_eq!(body.pointer("/provider/only/0"), Some(&json!("provider-a/fp8")));
 
+    let mut custom = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    custom.top_p = Some(0.04);
+    custom.top_k = Some(0);
+    custom.seed = Some(42);
+    validate_chat_request(&custom).unwrap();
+    let (_, custom_body) = build_openai_compatible_request(&custom, "https://example.test/v1");
+    assert_eq!(custom_body.get("top_p"), Some(&json!(0.04)));
+    assert_eq!(custom_body.get("top_k"), Some(&json!(0)));
+    assert_eq!(custom_body.get("seed"), Some(&json!(42)));
+    assert!(custom_body.get("provider").is_none());
+
+    let custom_auto = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    let (_, custom_auto_body) = build_openai_compatible_request(&custom_auto, "https://example.test/v1");
+    assert!(custom_auto_body.get("top_p").is_none());
+    assert!(custom_auto_body.get("top_k").is_none());
+    assert!(custom_auto_body.get("seed").is_none());
+
+    let mut custom_top_k = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    custom_top_k.top_k = Some(100);
+    validate_chat_request(&custom_top_k).unwrap();
+    let (_, custom_top_k_body) = build_openai_compatible_request(&custom_top_k, "https://example.test/v1");
+    assert_eq!(custom_top_k_body.get("top_k"), Some(&json!(100)));
+    assert!(custom_top_k_body.get("top_p").is_none());
+    assert!(custom_top_k_body.get("seed").is_none());
+
+    let mut custom_seed = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    custom_seed.seed = Some(42);
+    validate_chat_request(&custom_seed).unwrap();
+    let (_, custom_seed_body) = build_openai_compatible_request(&custom_seed, "https://example.test/v1");
+    assert_eq!(custom_seed_body.get("seed"), Some(&json!(42)));
+    assert!(custom_seed_body.get("top_p").is_none());
+    assert!(custom_seed_body.get("top_k").is_none());
+
+    let mut custom_with_or_routing = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    custom_with_or_routing.seed = Some(42);
+    custom_with_or_routing.provider_routing = Some(OpenRouterProviderRouting {
+        order: vec![], only: vec![], ignore: vec![], allow_fallbacks: None, require_parameters: Some(true),
+    });
+    assert!(validate_chat_request(&custom_with_or_routing).unwrap_err().contains("OpenRouter-only"));
+
     let mut openai = chat_request(ProviderKind::Openai, "gpt-test");
     openai.top_p = Some(0.5);
-    assert!(validate_chat_request(&openai).unwrap_err().contains("only for OpenRouter"));
+    assert!(validate_chat_request(&openai).unwrap_err().contains("OpenRouter or Custom OpenAI-compatible"));
     let (_, body) = build_openai_compatible_request(&openai, "https://api.openai.com/v1");
     assert!(body.get("top_p").is_none());
     assert!(body.get("top_k").is_none());

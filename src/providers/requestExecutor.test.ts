@@ -57,6 +57,32 @@ describe("provider request executor", () => {
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
+  it("passes Custom manual sampling unchanged without OpenRouter endpoint discovery or routing metadata", async () => {
+    const attempt = vi.fn(async (request) => {
+      expect(request.settings.requested).toMatchObject({ topP: 0.04, topK: 0, seed: 42 });
+      expect(request.settings.effective).toMatchObject({ topP: 0.04, topK: 0, seed: 42 });
+      expect(request.providerRouting).toBeUndefined();
+      return { content: "ok", usage: {}, finishReason: "stop" };
+    });
+    const endpointDiscovery = vi.fn();
+    const response = await executeProviderChat({
+      config: { id: "pc-custom", provider: "custom_openai", label: "Custom", credentialId: "c", baseUrl: "https://example.test/v1", enabled: true, createdAt: "now", updatedAt: "now" },
+      modelId: "custom-model",
+      messages: [{ role: "user", content: "test" }],
+      settings: {
+        requested: { topP: 0.04, topK: 0, seed: 42 },
+        effective: { topP: 0.04, topK: 0, seed: 42 },
+        omitted: [],
+      },
+      configuredRetries: 0,
+      endpointDiscovery,
+      attempt,
+    });
+    expect(response.content).toBe("ok");
+    expect(endpointDiscovery).not.toHaveBeenCalled();
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retry a physical streaming failure after semantic output started", async () => {
     const attempt = vi.fn().mockRejectedValue(failure("timeout", { semanticOutputStarted: true }));
     await expect(executeProviderRequest({

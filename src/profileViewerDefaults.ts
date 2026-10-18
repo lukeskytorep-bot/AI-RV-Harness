@@ -39,7 +39,7 @@ export function profileGenerationDefaults(
               : defaultTemperatureForModel(model),
         }
       : {}),
-    ...(model.provider === "openrouter" && profile?.defaultViewerOpenRouterSampling?.enabled === true
+    ...((model.provider === "openrouter" || model.provider === "custom_openai") && profile?.defaultViewerOpenRouterSampling?.enabled === true
       ? {
           ...(profile.defaultViewerOpenRouterSampling.topP !== undefined ? { topP: profile.defaultViewerOpenRouterSampling.topP } : {}),
           ...(profile.defaultViewerOpenRouterSampling.topK !== undefined ? { topK: profile.defaultViewerOpenRouterSampling.topK } : {}),

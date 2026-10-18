@@ -93,7 +93,32 @@ describe("RV Sessions sampling handoff", () => {
     });
   });
 
-  it("keeps disabled and Auto sampling omitted and never applies stored OpenRouter sampling to another provider", () => {
+
+  it("hands Custom OpenAI-compatible sampling into the same frozen RV session settings", () => {
+    const customModel: ProviderModel = {
+      ...openRouterModel,
+      providerConfigId: "provider-custom",
+      provider: "custom_openai",
+      route: "custom_openai:model-custom",
+      capabilities: { ...openRouterModel.capabilities, supportedParameters: ["reasoning", "temperature"] },
+      rawMetadata: {},
+    };
+    const customProfile: Profile = {
+      ...profile,
+      defaultViewerModelId: customModel.modelId,
+      defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 100, seed: 42 },
+    };
+    const requested = buildRvSessionRequestedSettings({
+      profile: customProfile,
+      model: customModel,
+      reasoning: "low",
+      temperature: "0.7",
+      rvSessionMaxOutputTokens: 32_768,
+    });
+    expect(requested).toMatchObject({ topP: 0.04, topK: 100, seed: 42, reasoningEffort: "low", temperature: 0.7, maxOutputTokens: 32_768 });
+  });
+
+  it("keeps disabled and Auto sampling omitted and never applies stored sampling to an unrelated provider", () => {
     const disabledProfile: Profile = {
       ...profile,
       defaultViewerOpenRouterSampling: { enabled: false, topP: 0.04, topK: 64, seed: 42 },
