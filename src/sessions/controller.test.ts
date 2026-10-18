@@ -58,6 +58,29 @@ function fakeRepository(log: string[], snapshots: SessionSnapshot[] = []) {
 }
 
 describe("automatic RCP controller", () => {
+  it("issues exactly one provider call for Phase 2 and stores its accepted answer once", async () => {
+    const log: string[] = [];
+    let calls = 0;
+    const result = await runAutomaticRcpSession({
+      repository: fakeRepository(log),
+      workspaceId: "w",
+      profileId: "p",
+      providerConfig: config,
+      model,
+      protocol: getFullRcp("en"),
+      sessionLanguage: "en",
+      requestedSettings: { maxOutputTokens: 16384 },
+      chat: async () => {
+        calls += 1;
+        return { content: calls === 2 ? "PHASE2_UNIQUE_ANSWER" : `unique phase ${calls} answer`, finishReason: "stop", usage: {} };
+      },
+    });
+
+    expect(calls).toBe(6);
+    expect((result.transcript.match(/PHASE2_UNIQUE_ANSWER/g) ?? []).length).toBe(1);
+    expect(log.filter((entry) => entry === "event:VIEWER_RESPONSE")).toHaveLength(6);
+  });
+
   it("persists each completed phase before issuing the next provider call", async () => {
     const log: string[] = [];
     const snapshots: SessionSnapshot[] = [];

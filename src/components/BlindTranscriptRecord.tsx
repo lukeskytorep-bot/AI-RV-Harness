@@ -104,15 +104,27 @@ export function buildBlindTranscriptBlocks(events: SessionEventRecord[], languag
     });
 }
 
-export function BlindTranscriptRecord({ events, fallbackTranscript, interfaceLanguage, sessionLanguage, className = "" }: {
+export function BlindTranscriptRecord({ events, fallbackTranscript, interfaceLanguage, sessionLanguage, className = "", liveSnapshot = false }: {
   events: SessionEventRecord[];
   fallbackTranscript: string;
   interfaceLanguage: InterfaceLanguage;
   sessionLanguage?: InterfaceLanguage;
   className?: string;
+  liveSnapshot?: boolean;
 }) {
   const blocks = buildBlindTranscriptBlocks(events, interfaceLanguage);
-  const showLegacyFallback = Boolean(fallbackTranscript.trim()) && !hasCompleteEventCoverage(events, fallbackTranscript, sessionLanguage);
+  const hasStoredTranscript = Boolean(fallbackTranscript.trim());
+  const completeEventCoverage = hasCompleteEventCoverage(events, fallbackTranscript, sessionLanguage);
+  const showLegacyFallback = hasStoredTranscript && !completeEventCoverage;
+
+  // During a live run, progress.transcript and the asynchronously reloaded event
+  // ledger can briefly describe different revisions of the same session. Mixing
+  // those revisions duplicates phase headings/instructions. Prefer the newer
+  // accepted transcript until the event ledger catches up. History/inspection
+  // keeps the legacy mixed view so incomplete historical evidence is never lost.
+  if (liveSnapshot && showLegacyFallback) {
+    return <pre className={`blind-transcript-legacy ${className}`.trim()}>{fallbackTranscript}</pre>;
+  }
 
   if (!blocks.length) {
     return <pre className={`blind-transcript-legacy ${className}`.trim()}>{fallbackTranscript || (interfaceLanguage === "pl" ? "Brak transkryptu." : "No transcript.")}</pre>;

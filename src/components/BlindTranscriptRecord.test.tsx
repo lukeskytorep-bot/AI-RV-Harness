@@ -189,4 +189,53 @@ describe("BlindTranscriptRecord", () => {
     expect(html).toContain("## Phase 1");
   });
 
+  it("does not mix a stale live event revision with a newer accepted transcript", () => {
+    const transcript = [
+      "## Phase 1",
+      "",
+      "### Exact controller instruction",
+      "",
+      "P1 instruction",
+      "",
+      "### Viewer response",
+      "",
+      "P1 answer",
+      "",
+      "## Phase 2",
+      "",
+      "### Exact controller instruction",
+      "",
+      "P2 instruction",
+      "",
+      "### Viewer response",
+      "",
+      "PHASE2_UNIQUE_ANSWER",
+    ].join("\n");
+    const staleEvents = [
+      event(1, "CONTROLLER_STEP", "P1 instruction", { phase: 1 }),
+      event(2, "VIEWER_RESPONSE", "P1 answer", { phase: 1, accepted: true, finishReason: "stop" }),
+      event(3, "CONTROLLER_STEP", "P2 instruction", { phase: 2 }),
+    ];
+
+    const mixed = renderToStaticMarkup(<BlindTranscriptRecord events={staleEvents} fallbackTranscript={transcript} interfaceLanguage="en" sessionLanguage="en" />);
+    expect((mixed.match(/Phase 2/g) ?? []).length).toBe(2);
+
+    const live = renderToStaticMarkup(<BlindTranscriptRecord events={staleEvents} fallbackTranscript={transcript} interfaceLanguage="en" sessionLanguage="en" liveSnapshot />);
+    expect((live.match(/Phase 2/g) ?? []).length).toBe(1);
+    expect((live.match(/PHASE2_UNIQUE_ANSWER/g) ?? []).length).toBe(1);
+    expect((live.match(/P2 instruction/g) ?? []).length).toBe(1);
+  });
+
+  it("returns to event blocks after the live event ledger catches up", () => {
+    const transcript = "## Phase 2\n\n### Exact controller instruction\n\nP2 instruction\n\n### Viewer response\n\nPHASE2_UNIQUE_ANSWER";
+    const events = [
+      event(1, "CONTROLLER_STEP", "P2 instruction", { phase: 2 }),
+      event(2, "VIEWER_RESPONSE", "PHASE2_UNIQUE_ANSWER", { phase: 2, accepted: true, finishReason: "stop" }),
+    ];
+    const html = renderToStaticMarkup(<BlindTranscriptRecord events={events} fallbackTranscript={transcript} interfaceLanguage="en" sessionLanguage="en" liveSnapshot />);
+    expect(html).toContain("blind-transcript-record");
+    expect(html).not.toContain("Stored transcript (legacy compatibility)");
+    expect((html.match(/PHASE2_UNIQUE_ANSWER/g) ?? []).length).toBe(1);
+  });
+
 });
