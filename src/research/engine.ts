@@ -515,6 +515,45 @@ async function judgeResearchOwned(input: {
   await input.repository.setResearchProjectState(project.id, "ScoresFrozen");
 }
 
+function collectResearchViewerExecutionMetadata(events: Awaited<ReturnType<ResearchRepository["listSessionEvents"]>>, condition: ResearchConfig["conditions"][number]): import("./types").ResearchSessionExecutionMetadata {
+  const actualProviders = new Set<string>();
+  const actualModels = new Set<string>();
+  const generationIds = new Set<string>();
+  const providerRequestIds = new Set<string>();
+  let inputTokens = 0, outputTokens = 0, reasoningTokens = 0, totalTokens = 0, costUsd = 0, requestDurationMs = 0, viewerCallCount = 0;
+  let firstViewerResponseAt: string | undefined, lastViewerResponseAt: string | undefined;
+  let hasInput = false, hasOutput = false, hasReasoning = false, hasTotal = false, hasCost = false, hasDuration = false;
+  for (const event of events) {
+    if (event.eventType !== "VIEWER_RESPONSE" && event.eventType !== "VIEWER_SPECIAL_TASK_RESPONSE") continue;
+    viewerCallCount += 1;
+    if (!firstViewerResponseAt || event.createdAt < firstViewerResponseAt) firstViewerResponseAt = event.createdAt;
+    if (!lastViewerResponseAt || event.createdAt > lastViewerResponseAt) lastViewerResponseAt = event.createdAt;
+    const metadata = event.metadata ?? {};
+    if (typeof metadata.actualProvider === "string" && metadata.actualProvider.trim() && metadata.actualProvider !== "unavailable" && metadata.actualProvider !== "unknown") actualProviders.add(metadata.actualProvider);
+    if (typeof metadata.actualModel === "string" && metadata.actualModel.trim() && metadata.actualModel !== "unavailable") actualModels.add(metadata.actualModel);
+    if (typeof metadata.providerRequestId === "string" && metadata.providerRequestId.trim() && metadata.providerRequestId !== "unavailable") providerRequestIds.add(metadata.providerRequestId);
+    const evidence = metadata.responseEvidence && typeof metadata.responseEvidence === "object" ? metadata.responseEvidence as Record<string, unknown> : undefined;
+    if (typeof evidence?.generationId === "string" && evidence.generationId.trim()) generationIds.add(evidence.generationId);
+    const usage = metadata.usage && typeof metadata.usage === "object" ? metadata.usage as Record<string, unknown> : evidence?.usage && typeof evidence.usage === "object" ? evidence.usage as Record<string, unknown> : undefined;
+    const add = (key: string, on: (value:number)=>void) => { const value = usage?.[key]; if (typeof value === "number" && Number.isFinite(value) && value >= 0) on(value); };
+    add("inputTokens", value => { inputTokens += value; hasInput = true; });
+    add("outputTokens", value => { outputTokens += value; hasOutput = true; });
+    add("reasoningTokens", value => { reasoningTokens += value; hasReasoning = true; });
+    add("totalTokens", value => { totalTokens += value; hasTotal = true; });
+    add("costUsd", value => { costUsd += value; hasCost = true; });
+    if (typeof metadata.requestDurationMs === "number" && Number.isFinite(metadata.requestDurationMs) && metadata.requestDurationMs >= 0) { requestDurationMs += metadata.requestDurationMs; hasDuration = true; }
+  }
+  return {
+    configuredProviderConfigId: condition.providerConfigId, configuredModelId: condition.modelId, viewerCallCount,
+    ...(actualProviders.size ? { actualProviders: [...actualProviders].sort() } : {}),
+    ...(actualModels.size ? { actualModels: [...actualModels].sort() } : {}),
+    ...(generationIds.size ? { generationIds: [...generationIds].sort() } : {}),
+    ...(providerRequestIds.size ? { providerRequestIds: [...providerRequestIds].sort() } : {}),
+    ...(hasInput ? { inputTokens } : {}), ...(hasOutput ? { outputTokens } : {}), ...(hasReasoning ? { reasoningTokens } : {}), ...(hasTotal ? { totalTokens } : {}), ...(hasCost ? { costUsd } : {}), ...(hasDuration ? { requestDurationMs } : {}),
+    ...(firstViewerResponseAt ? { firstViewerResponseAt } : {}), ...(lastViewerResponseAt ? { lastViewerResponseAt } : {}),
+  };
+}
+
 async function unblindAndComputeResearchOwned(repository: ResearchRepository, projectId: string, signal?:AbortSignal): Promise<ResearchResults> {
   signal?.throwIfAborted();
   let project = await requireProject(repository, projectId);
@@ -551,8 +590,9 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
     const mapping = mappingByAnonymous.get(assignment.anonymousSessionId);
     const condition = mapping ? conditionById.get(mapping.conditionId) : undefined;
     if (!mapping || !condition) throw new Error("Blinding Key is incomplete.");
-    const scores = await repository.listJudgeScores(assignment.sessionId);
+    const [scores, sessionEvents] = await Promise.all([repository.listJudgeScores(assignment.sessionId), repository.listSessionEvents(assignment.sessionId)]);
     const aggregate = aggregateJudgeScores(scores);
+    const execution = collectResearchViewerExecutionMetadata(sessionEvents, condition.config);
     sessions.push({
       anonymousSessionId: assignment.anonymousSessionId,
       sessionId: assignment.sessionId,
@@ -568,6 +608,12 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
       judgeCount: aggregate.judgeCount,
       judgeTotalRange: aggregate.totalRange,
       judgeTotalStdDev: aggregate.totalStdDev,
+      ...(condition.config.samplingValues ? { samplingValues: structuredClone(condition.config.samplingValues) } : {}),
+      requestedSettings: structuredClone(condition.config.requestedSettings),
+      ...(condition.config.effectiveSettings ? { effectiveSettings: structuredClone(condition.config.effectiveSettings.effective) } : {}),
+      providerConfigId: condition.config.providerConfigId,
+      modelId: condition.config.modelId,
+      execution,
       ...(condition.config.fieldGuide ? {
         fieldGuideVersionId: condition.config.fieldGuide.versionId,
         fieldGuideVersionNumber: condition.config.fieldGuide.versionNumber,

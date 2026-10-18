@@ -70,3 +70,13 @@ Paid runtime tests are evidence for the exact candidate and should not be inferr
 ## Research inheritance
 
 Existing Research templates inherit enabled manual `top_p`, `top_k`, and `seed` from the selected base Viewer Profile as one common controlled setting. The Research builder reads the stored user intent directly rather than relying only on capability-resolved defaults, so an unsupported or unknown manual value cannot disappear silently. Profile/model comparisons keep that one base-Profile sampling configuration constant and require every compared Viewer route to confirm support before Experiment Lock. Auto/disabled values remain omitted, explicit zero remains manual, and later Profile edits do not change locked or resumed Research. The Dry Run and locked project summary expose the frozen values. Judge/Monitor routes do not inherit them.
+
+## Research sampling-grid contract
+
+Research supports a dedicated `Sampling configurations` template on top of the same OpenRouter sampling, endpoint qualification and Session snapshot contracts described above. Each of `top_p`, `top_k` and `seed` is fixed or varied. Varied axes contain at least two unique valid numeric values; fixed Auto omits the field. The grid is the full deterministic Cartesian product and is materialized as ordinary `ResearchConditionDefinition` records before Experiment Lock. No separate sampling execution engine exists.
+
+The frozen design metadata and generated conditions are cross-validated in both Planner and Preflight. Sampling Research requires explicit Research-owned Viewer sampling control, and all non-sampling inputs (including any condition instruction) must remain identical across conditions. The configured grid is capped centrally before Lock rather than truncated.
+
+Results and private exports preserve structural sampler values and requested/effective generation settings. Session-result provenance aggregates provider-reported Viewer call metadata already captured by the Session event ledger, including actual provider/model when supplied, generation/request identifiers, usage, cost and request duration. Missing metadata remains unknown and is never inferred from the configured route.
+
+Blinding remains strict: sampling values, condition mappings, Profile/model identity and route/provider provenance are not added to live Judge input or the `external_evaluation` package. In save-only exports these details remain under `private_master`; after normal Unblind they are available in the results/configuration export for analysis.

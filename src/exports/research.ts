@@ -4,7 +4,7 @@ import { getJudgePrompt } from "../judge/prompt";
 import type { AppRepository } from "../storage/repository";
 import type { RevealArtifactRecord } from "../sessions/types";
 import { stableStringify } from "../research/planner";
-import type { ResearchResults } from "../research/types";
+import type { ResearchConfig, ResearchResults } from "../research/types";
 import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
 import { writeExportPackage, type ExportArtifactCopy, type ExportTextFile } from "./native";
 import { renderCompleteSessionMarkdown } from "./sessionDocument";
@@ -45,6 +45,9 @@ export async function exportResearchPackage(repository: AppRepository, projectId
     files.push({ relativePath: "results/session_results.csv", content: sessionResultsCsv(results) });
   }
   files.push({ relativePath: `${privatePrefix}configuration/research_config.json`, content: pretty({ projectId: project.id, name: project.name, templateType: project.templateType, configHash: project.configHash, lockedAt: project.lockedAt, scoresFrozenAt: project.scoresFrozenAt, unblindedAt: project.unblindedAt, config: project.config }) });
+  const conditionParameters = researchConditionParameters(project.config);
+  files.push({ relativePath: `${privatePrefix}configuration/condition_parameters.json`, content: pretty(conditionParameters) });
+  files.push({ relativePath: `${privatePrefix}configuration/condition_parameters.csv`, content: conditionParametersCsv(project.config) });
   if (recoverySessions.length) {
     files.push({ relativePath: `${privatePrefix}master/recovery_sessions.json`, content: pretty(recoverySessions) });
     for (const session of recoverySessions) files.push({ relativePath: `${privatePrefix}master/recovery_sessions/${session.id}/pre_reveal.md`, content: session.preRevealTranscript });
@@ -148,20 +151,76 @@ export async function exportResearchPackage(repository: AppRepository, projectId
 }
 
 function resultsCsv(results: ResearchResults): string {
-  const header = ["condition_key", "condition_label", "n", "mean_total", "median_total", "stddev_total", "min_total", "max_total", "gestalt_mean", "features_mean", "activity_mean", "confabulation_mean"];
-  const rows = results.conditions.map((condition) => [condition.conditionKey, condition.label, condition.n, condition.meanTotal, condition.medianTotal, condition.stdDevTotal, condition.minTotal, condition.maxTotal, condition.meanComponents.gestalt, condition.meanComponents.verifiableFeatures, condition.meanComponents.activityFunctionEvent, condition.meanComponents.confabulationControl]);
+  const header = ["condition_key", "condition_label", "requested_top_p", "effective_top_p", "requested_top_k", "effective_top_k", "requested_seed", "effective_seed", "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort", "provider_config_id", "model_id", "n", "mean_total", "median_total", "stddev_total", "min_total", "max_total", "gestalt_mean", "features_mean", "activity_mean", "confabulation_mean"];
+  const rows = results.conditions.map((condition) => [condition.conditionKey, condition.label,
+    valueOrAuto(condition.samplingValues?.topP), valueOrAuto(condition.effectiveSettings?.topP),
+    valueOrAuto(condition.samplingValues?.topK), valueOrAuto(condition.effectiveSettings?.topK),
+    valueOrAuto(condition.samplingValues?.seed), valueOrAuto(condition.effectiveSettings?.seed),
+    valueOrAuto(condition.requestedSettings?.temperature), valueOrAuto(condition.effectiveSettings?.temperature),
+    condition.requestedSettings?.reasoningEffort ?? "Auto", condition.effectiveSettings?.reasoningEffort ?? "Auto",
+    condition.providerConfigId ?? "", condition.modelId ?? "", condition.n, condition.meanTotal, condition.medianTotal, condition.stdDevTotal, condition.minTotal, condition.maxTotal,
+    condition.meanComponents.gestalt, condition.meanComponents.verifiableFeatures, condition.meanComponents.activityFunctionEvent, condition.meanComponents.confabulationControl]);
   return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
 
 function sessionResultsCsv(results: ResearchResults): string {
-  const header = ["anonymous_session_id", "session_id", "target_id", "pair_key", "condition_key", "condition_label", "field_guide_version_id", "field_guide_version_number", "field_guide_content_sha256", "mean_total", "judge_count", "judge_total_range", "judge_total_stddev", "gestalt", "verifiable_features", "activity_function_event", "confabulation_control"];
-  const rows = results.sessions.map((session) => [session.anonymousSessionId, session.sessionId, session.targetId, session.pairKey, session.conditionKey, session.conditionLabel, session.fieldGuideVersionId ?? "", session.fieldGuideVersionNumber ?? "", session.fieldGuideContentSha256 ?? "", session.total, session.judgeCount, session.judgeTotalRange, session.judgeTotalStdDev, session.gestalt, session.verifiableFeatures, session.activityFunctionEvent, session.confabulationControl]);
+  const header = ["anonymous_session_id", "session_id", "target_id", "pair_key", "condition_key", "condition_label",
+    "requested_top_p", "effective_top_p", "requested_top_k", "effective_top_k", "requested_seed", "effective_seed", "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort",
+    "provider_config_id", "model_id", "actual_provider", "actual_model", "generation_ids", "provider_request_ids", "viewer_call_count", "input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "cost_usd", "request_duration_ms", "first_viewer_response_at", "last_viewer_response_at",
+    "field_guide_version_id", "field_guide_version_number", "field_guide_content_sha256", "mean_total", "judge_count", "judge_total_range", "judge_total_stddev", "gestalt", "verifiable_features", "activity_function_event", "confabulation_control"];
+  const rows = results.sessions.map((session) => [session.anonymousSessionId, session.sessionId, session.targetId, session.pairKey, session.conditionKey, session.conditionLabel,
+    valueOrAuto(session.samplingValues?.topP), valueOrAuto(session.effectiveSettings?.topP),
+    valueOrAuto(session.samplingValues?.topK), valueOrAuto(session.effectiveSettings?.topK),
+    valueOrAuto(session.samplingValues?.seed), valueOrAuto(session.effectiveSettings?.seed),
+    valueOrAuto(session.requestedSettings?.temperature), valueOrAuto(session.effectiveSettings?.temperature),
+    session.requestedSettings?.reasoningEffort ?? "Auto", session.effectiveSettings?.reasoningEffort ?? "Auto",
+    session.providerConfigId ?? "", session.modelId ?? "", session.execution?.actualProviders?.join("|") || "unknown", session.execution?.actualModels?.join("|") || "unknown", session.execution?.generationIds?.join("|") ?? "", session.execution?.providerRequestIds?.join("|") ?? "", session.execution?.viewerCallCount ?? 0,
+    session.execution?.inputTokens ?? "", session.execution?.outputTokens ?? "", session.execution?.reasoningTokens ?? "", session.execution?.totalTokens ?? "", session.execution?.costUsd ?? "", session.execution?.requestDurationMs ?? "", session.execution?.firstViewerResponseAt ?? "", session.execution?.lastViewerResponseAt ?? "",
+    session.fieldGuideVersionId ?? "", session.fieldGuideVersionNumber ?? "", session.fieldGuideContentSha256 ?? "", session.total, session.judgeCount, session.judgeTotalRange, session.judgeTotalStdDev, session.gestalt, session.verifiableFeatures, session.activityFunctionEvent, session.confabulationControl]);
   return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
 
+function researchConditionParameters(config: ResearchConfig): Array<Record<string, unknown>> {
+  return config.conditions.map((condition) => ({
+    conditionKey: condition.key,
+    label: condition.label,
+    profileId: condition.profileId,
+    providerConfigId: condition.providerConfigId,
+    modelId: condition.modelId,
+    sampling: {
+      topP: condition.requestedSettings.topP ?? null,
+      topPSource: condition.requestedSettings.topP === undefined ? "auto" : "manual",
+      topK: condition.requestedSettings.topK ?? null,
+      topKSource: condition.requestedSettings.topK === undefined ? "auto" : "manual",
+      seed: condition.requestedSettings.seed ?? null,
+      seedSource: condition.requestedSettings.seed === undefined ? "auto" : "manual",
+    },
+    temperature: condition.requestedSettings.temperature ?? null,
+    reasoningEffort: condition.requestedSettings.reasoningEffort ?? null,
+    requestedSettings: condition.requestedSettings,
+    effectiveSettings: condition.effectiveSettings?.effective ?? null,
+    capabilitySnapshot: condition.capabilitySnapshot ?? null,
+  }));
+}
+
+function conditionParametersCsv(config: ResearchConfig): string {
+  const header = ["condition_key", "condition_label", "profile_id", "provider_config_id", "model_id",
+    "requested_top_p", "top_p_source", "effective_top_p", "requested_top_k", "top_k_source", "effective_top_k", "requested_seed", "seed_source", "effective_seed",
+    "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort"];
+  const rows = config.conditions.map((condition) => [condition.key, condition.label, condition.profileId, condition.providerConfigId, condition.modelId,
+    valueOrAuto(condition.requestedSettings.topP), condition.requestedSettings.topP === undefined ? "auto" : "manual", valueOrAuto(condition.effectiveSettings?.effective.topP),
+    valueOrAuto(condition.requestedSettings.topK), condition.requestedSettings.topK === undefined ? "auto" : "manual", valueOrAuto(condition.effectiveSettings?.effective.topK),
+    valueOrAuto(condition.requestedSettings.seed), condition.requestedSettings.seed === undefined ? "auto" : "manual", valueOrAuto(condition.effectiveSettings?.effective.seed),
+    valueOrAuto(condition.requestedSettings.temperature), valueOrAuto(condition.effectiveSettings?.effective.temperature),
+    condition.requestedSettings.reasoningEffort ?? "Auto", condition.effectiveSettings?.effective.reasoningEffort ?? "Auto"]);
+  return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
+}
+
+function valueOrAuto(value: unknown): string | number { return typeof value === "number" ? value : "Auto"; }
+
 function summaryMarkdown(name: string, results: ResearchResults): string {
-  const lines = [`# ${name}`, "", `Template: ${results.templateType}`, `Sessions: ${results.sessions.length}`, "", "## Conditions", "", "| Condition | n | Mean | Median | SD | Min | Max |", "|---|---:|---:|---:|---:|---:|---:|"];
-  for (const condition of results.conditions) lines.push(`| ${escapePipe(condition.label)} | ${condition.n} | ${condition.meanTotal.toFixed(2)} | ${condition.medianTotal.toFixed(2)} | ${condition.stdDevTotal.toFixed(2)} | ${condition.minTotal.toFixed(1)} | ${condition.maxTotal.toFixed(1)} |`);
+  const lines = [`# ${name}`, "", `Template: ${results.templateType}`, `Sessions: ${results.sessions.length}`, "", "## Conditions", "", "| Condition | top_p | top_k | seed | Temp | Reasoning | n | Mean | Median | SD | Min | Max |", "|---|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|"];
+  for (const condition of results.conditions) lines.push(`| ${escapePipe(condition.label)} | ${valueOrAuto(condition.samplingValues?.topP)} | ${valueOrAuto(condition.samplingValues?.topK)} | ${valueOrAuto(condition.samplingValues?.seed)} | ${valueOrAuto(condition.requestedSettings?.temperature)} | ${condition.requestedSettings?.reasoningEffort ?? "Auto"} | ${condition.n} | ${condition.meanTotal.toFixed(2)} | ${condition.medianTotal.toFixed(2)} | ${condition.stdDevTotal.toFixed(2)} | ${condition.minTotal.toFixed(1)} | ${condition.maxTotal.toFixed(1)} |`);
   return lines.join("\n") + "\n";
 }
 
@@ -197,13 +256,13 @@ function blindingKeyMarkdown(name: string, rows: Array<Record<string, unknown>>,
 }
 
 function researchReadme(name: string, sessionCount: number, language: "pl" | "en", saveOnly: boolean, hasResults: boolean): string {
-  if (language === "pl") return [`# Jak czytać pakiet Research — ${name}`, "", `Pakiet zawiera ${sessionCount} sesji. Ten plik opisuje po kolei, gdzie znajduje się każda informacja.`, "", "## Najprostsza ścieżka dla człowieka", "", saveOnly ? "1. Pełne, czytelne sesje otwieraj w `private_master/sessions/<ID>/complete_session.md`." : "1. Pełne, czytelne sesje otwieraj w `sessions/<ID>/complete_session.md`.", "2. Każdy taki plik zawiera dokładne prompty i odpowiedzi z części blind oraz Target Reveal. Jeżeli istnieje dozwolony rekord post-Reveal, jest dołączony jako oddzielna część. Ocena AI Judge jest dołączona, jeśli jej użyto.", "3. Jeżeli Reveal zawierał obraz, rzeczywisty plik obrazu znajduje się obok pakietu i jest podlinkowany w Markdownzie.", hasResults ? "4. Podsumowanie wyników znajdziesz w `summary.md`, a dane tabelaryczne w folderze `results`." : "4. W tym pakiecie nie ma jeszcze wyników AI Judge; ocena została pozostawiona zewnętrznemu oceniającemu.", "", "## Pliki techniczne", "", "Pliki JSON pozostają dla AI, audytu i odtwarzalności badania. Człowiek nie musi ich czytać, aby przejrzeć sesje.", "", saveOnly ? "## Zewnętrzna ocena" : "## Pakiety Judge", "", saveOnly ? "Udostępnij oceniającemu wyłącznie folder `external_evaluation`. Każda sesja ma tam czytelny plik `.md`, techniczny `.json`, instrukcję oceny oraz rzeczywiste obrazy Revealu. Nie udostępniaj `private_master` przed zamrożeniem ocen." : "Folder `judge_packets` zawiera anonimowe pakiety techniczne użyte przez Judge'ów.", "", "## Klucz odślepienia", "", saveOnly ? "Po zamrożeniu ocen otwórz `private_master/blinding/blinding_key.md`. Pokazuje on prostą tabelę: anonimowa sesja → warunek → target. Obok pozostaje wersja JSON dla automatyzacji." : "Czytelna tabela znajduje się w `blinding/blinding_key.md`; wersja JSON służy automatyzacji.", "", "## Pozostałe katalogi", "", "- `configuration` — zamrożona konfiguracja badania.", "- `master` — techniczny rekord audytowy i ewentualne odzyskane sesje.", "- `manifest.json` — sumy kontrolne eksportu.", "- `summary.csv` i `summary.html` — dodatkowe formaty podsumowania.", ""].join("\n");
-  return [`# How to read the Research package — ${name}`, "", `This package contains ${sessionCount} sessions. This file explains exactly where each kind of information is stored.`, "", "## Simplest path for a human reader", "", saveOnly ? "1. Open complete readable sessions in `private_master/sessions/<ID>/complete_session.md`." : "1. Open complete readable sessions in `sessions/<ID>/complete_session.md`.", "2. Each file contains the exact blind prompts and responses and Target Reveal. If a permitted post-Reveal record exists, it is included as a separate section. AI Judge evaluation is included when used.", "3. If a Reveal included an image, the real image file is included and linked from Markdown.", hasResults ? "4. Read `summary.md` for results and the `results` folder for tables." : "4. No internal AI Judge result is present; evaluation was left to an external evaluator.", "", "## Technical files", "", "JSON files remain for AI tools, audit, and reproducibility. A human does not need to read JSON to inspect the sessions.", "", saveOnly ? "## External evaluation" : "## Judge packets", "", saveOnly ? "Share only `external_evaluation` with the evaluator. Each session has a readable `.md`, a technical `.json`, instructions, and real Reveal images. Keep `private_master` private until scores are frozen." : "`judge_packets` contains the anonymous technical packets used by the Judges.", "", "## Blinding Key", "", saveOnly ? "After scores are frozen, open `private_master/blinding/blinding_key.md`. Its simple table maps anonymous session → condition → target. JSON remains beside it for automation." : "The readable table is `blinding/blinding_key.md`; JSON remains for automation.", "", "## Other folders", "", "- `configuration` — frozen research configuration.", "- `master` — technical audit record and any recovery sessions.", "- `manifest.json` — export checksums.", "- `summary.csv` and `summary.html` — additional summary formats.", ""].join("\n");
+  if (language === "pl") return [`# Jak czytać pakiet Research — ${name}`, "", `Pakiet zawiera ${sessionCount} sesji. Ten plik opisuje po kolei, gdzie znajduje się każda informacja.`, "", "## Najprostsza ścieżka dla człowieka", "", saveOnly ? "1. Pełne, czytelne sesje otwieraj w `private_master/sessions/<ID>/complete_session.md`." : "1. Pełne, czytelne sesje otwieraj w `sessions/<ID>/complete_session.md`.", "2. Każdy taki plik zawiera dokładne prompty i odpowiedzi z części blind oraz Target Reveal. Jeżeli istnieje dozwolony rekord post-Reveal, jest dołączony jako oddzielna część. Ocena AI Judge jest dołączona, jeśli jej użyto.", "3. Jeżeli Reveal zawierał obraz, rzeczywisty plik obrazu znajduje się obok pakietu i jest podlinkowany w Markdownzie.", hasResults ? "4. Podsumowanie wyników znajdziesz w `summary.md`, a dane tabelaryczne w folderze `results`." : "4. W tym pakiecie nie ma jeszcze wyników AI Judge; ocena została pozostawiona zewnętrznemu oceniającemu.", "", "## Pliki techniczne", "", "Pliki JSON pozostają dla AI, audytu i odtwarzalności badania. Człowiek nie musi ich czytać, aby przejrzeć sesje.", "", saveOnly ? "## Zewnętrzna ocena" : "## Pakiety Judge", "", saveOnly ? "Udostępnij oceniającemu wyłącznie folder `external_evaluation`. Każda sesja ma tam czytelny plik `.md`, techniczny `.json`, instrukcję oceny oraz rzeczywiste obrazy Revealu. Nie udostępniaj `private_master` przed zamrożeniem ocen." : "Folder `judge_packets` zawiera anonimowe pakiety techniczne użyte przez Judge'ów.", "", "## Klucz odślepienia", "", saveOnly ? "Po zamrożeniu ocen otwórz `private_master/blinding/blinding_key.md`. Pokazuje on prostą tabelę: anonimowa sesja → warunek → target. Obok pozostaje wersja JSON dla automatyzacji." : "Czytelna tabela znajduje się w `blinding/blinding_key.md`; wersja JSON służy automatyzacji.", "", "## Pozostałe katalogi", "", "- `configuration` — zamrożona konfiguracja badania, w tym `condition_parameters.json/.csv` z prywatnymi wartościami samplerów i pochodzeniem Auto/manual.", "- `master` — techniczny rekord audytowy i ewentualne odzyskane sesje.", "- `manifest.json` — sumy kontrolne eksportu.", "- `summary.csv` i `summary.html` — dodatkowe formaty podsumowania.", ""].join("\n");
+  return [`# How to read the Research package — ${name}`, "", `This package contains ${sessionCount} sessions. This file explains exactly where each kind of information is stored.`, "", "## Simplest path for a human reader", "", saveOnly ? "1. Open complete readable sessions in `private_master/sessions/<ID>/complete_session.md`." : "1. Open complete readable sessions in `sessions/<ID>/complete_session.md`.", "2. Each file contains the exact blind prompts and responses and Target Reveal. If a permitted post-Reveal record exists, it is included as a separate section. AI Judge evaluation is included when used.", "3. If a Reveal included an image, the real image file is included and linked from Markdown.", hasResults ? "4. Read `summary.md` for results and the `results` folder for tables." : "4. No internal AI Judge result is present; evaluation was left to an external evaluator.", "", "## Technical files", "", "JSON files remain for AI tools, audit, and reproducibility. A human does not need to read JSON to inspect the sessions.", "", saveOnly ? "## External evaluation" : "## Judge packets", "", saveOnly ? "Share only `external_evaluation` with the evaluator. Each session has a readable `.md`, a technical `.json`, instructions, and real Reveal images. Keep `private_master` private until scores are frozen." : "`judge_packets` contains the anonymous technical packets used by the Judges.", "", "## Blinding Key", "", saveOnly ? "After scores are frozen, open `private_master/blinding/blinding_key.md`. Its simple table maps anonymous session → condition → target. JSON remains beside it for automation." : "The readable table is `blinding/blinding_key.md`; JSON remains for automation.", "", "## Other folders", "", "- `configuration` — frozen research configuration, including `condition_parameters.json/.csv` with private structural sampler values and Auto/manual provenance.", "- `master` — technical audit record and any recovery sessions.", "- `manifest.json` — export checksums.", "- `summary.csv` and `summary.html` — additional summary formats.", ""].join("\n");
 }
 
 function summaryHtml(name: string, language: "pl" | "en", results: ResearchResults | null, sessionCount: number, saveOnly: boolean): string {
-  const rows = results?.conditions.map((condition) => `<tr><td>${escapeHtml(condition.label)}</td><td>${condition.n}</td><td>${condition.meanTotal.toFixed(2)}</td><td>${condition.medianTotal.toFixed(2)}</td><td>${condition.stdDevTotal.toFixed(2)}</td></tr>`).join("") ?? "";
-  return `<!doctype html><html lang="${language}"><head><meta charset="utf-8"><title>${escapeHtml(name)}</title><style>body{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;padding:0 24px;color:#172033}table{width:100%;border-collapse:collapse}th,td{padding:9px;border:1px solid #cbd5e1;text-align:left}th{background:#eef2ff}</style></head><body><h1>${escapeHtml(name)}</h1><p>${language === "pl" ? "Sesje" : "Sessions"}: ${sessionCount} · ${saveOnly ? (language === "pl" ? "ocena zewnętrzna" : "external evaluation") : "AI Judge"}</p>${results ? `<table><thead><tr><th>${language === "pl" ? "Warunek" : "Condition"}</th><th>n</th><th>${language === "pl" ? "Średnia" : "Mean"}</th><th>Median</th><th>SD</th></tr></thead><tbody>${rows}</tbody></table>` : ""}</body></html>`;
+  const rows = results?.conditions.map((condition) => `<tr><td>${escapeHtml(condition.label)}</td><td>${valueOrAuto(condition.samplingValues?.topP)}</td><td>${valueOrAuto(condition.samplingValues?.topK)}</td><td>${valueOrAuto(condition.samplingValues?.seed)}</td><td>${condition.n}</td><td>${condition.meanTotal.toFixed(2)}</td><td>${condition.medianTotal.toFixed(2)}</td><td>${condition.stdDevTotal.toFixed(2)}</td></tr>`).join("") ?? "";
+  return `<!doctype html><html lang="${language}"><head><meta charset="utf-8"><title>${escapeHtml(name)}</title><style>body{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;padding:0 24px;color:#172033}table{width:100%;border-collapse:collapse}th,td{padding:9px;border:1px solid #cbd5e1;text-align:left}th{background:#eef2ff}</style></head><body><h1>${escapeHtml(name)}</h1><p>${language === "pl" ? "Sesje" : "Sessions"}: ${sessionCount} · ${saveOnly ? (language === "pl" ? "ocena zewnętrzna" : "external evaluation") : "AI Judge"}</p>${results ? `<table><thead><tr><th>${language === "pl" ? "Warunek" : "Condition"}</th><th>top_p</th><th>top_k</th><th>seed</th><th>n</th><th>${language === "pl" ? "Średnia" : "Mean"}</th><th>Median</th><th>SD</th></tr></thead><tbody>${rows}</tbody></table>` : ""}</body></html>`;
 }
 
 function escapeHtml(value: string): string {

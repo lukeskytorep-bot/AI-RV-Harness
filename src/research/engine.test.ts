@@ -257,11 +257,13 @@ describe("Research evidence boundaries", () => {
         expect(state).toBe("Unblinded");
         return [{ id: "map", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "cond", pairKey: "pair", mappingHash: "h", createdAt: "now" }];
       }),
-      listResearchConditions: vi.fn().mockResolvedValue([{ id: "cond", researchProjectId: "r", conditionKey: "a", config: config.conditions[0] }]),
+      listResearchConditions: vi.fn().mockResolvedValue([{ id: "cond", researchProjectId: "r", conditionKey: "a", config: { ...config.conditions[0], requestedSettings: { topP: 0.04, topK: 0, seed: 42, temperature: 0.7 }, effectiveSettings: { requested: { topP: 0.04, topK: 0, seed: 42, temperature: 0.7 }, effective: { topP: 0.04, topK: 0, seed: 42, temperature: 0.7 }, omitted: [] }, samplingValues: { topP: 0.04, topK: 0, seed: 42 } } }]),
+      listSessionEvents: vi.fn().mockResolvedValue([{ id: "e1", sessionId: "s", sequenceNumber: 1, createdAt: "now", eventType: "VIEWER_RESPONSE", role: "assistant", metadata: { actualProvider: "DeepInfra", actualModel: "m-runtime", providerRequestId: "req-1", requestDurationMs: 125, usage: { inputTokens: 100, outputTokens: 20, reasoningTokens: 5, totalTokens: 120, costUsd: 0.002 }, responseEvidence: { generationId: "gen-1" } } }]),
       saveResearchResults: vi.fn(async (_id: string, results) => { saved = results; }),
     } as unknown as AppRepository);
     const results = await unblindAndComputeResearch(repo, "r");
-    expect(results.conditions[0].meanTotal).toBe(6);
+    expect(results.conditions[0]).toMatchObject({ meanTotal: 6, samplingValues: { topP: 0.04, topK: 0, seed: 42 }, requestedSettings: { temperature: 0.7 }, providerConfigId: "pc", modelId: "m" });
+    expect(results.sessions[0]).toMatchObject({ samplingValues: { topP: 0.04, topK: 0, seed: 42 }, execution: { actualProviders: ["DeepInfra"], actualModels: ["m-runtime"], generationIds: ["gen-1"], providerRequestIds: ["req-1"], viewerCallCount: 1, totalTokens: 120, costUsd: 0.002, requestDurationMs: 125 } });
     expect(state).toBe("Complete");
   });
 

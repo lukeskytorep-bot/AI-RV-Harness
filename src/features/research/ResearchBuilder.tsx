@@ -683,16 +683,58 @@ export function ResearchProjectView({ copy, repository, project, onRefresh, onBa
   </div>;
 }
 
-function ResearchResultsView({ copy, results, repository }: { copy: Copy; results: ResearchResults; repository: AppRepository }) {
+export function ResearchResultsView({ copy, results, repository }: { copy: Copy; results: ResearchResults; repository: AppRepository }) {
   const [scoresBySession, setScoresBySession] = useState<Record<string, JudgeScoreRecord[]>>({});
+  const [pairPage, setPairPage] = useState(0);
+  const [sessionPage, setSessionPage] = useState(0);
+  const pl = copy.home !== "Home";
+  const pageSize = 100;
+  const pairPageCount = Math.max(1, Math.ceil(results.pairwise.length / pageSize));
+  const sessionPageCount = Math.max(1, Math.ceil(results.sessions.length / pageSize));
+  const pairwisePage = results.pairwise.slice(pairPage * pageSize, (pairPage + 1) * pageSize);
+  const sessionRows = results.sessions.slice(sessionPage * pageSize, (sessionPage + 1) * pageSize);
+  useEffect(() => { setPairPage(0); setSessionPage(0); }, [results.projectId, results.computedAt]);
   useEffect(() => {
     let cancelled = false;
-    void Promise.all(results.sessions.map(async (session) => [session.sessionId, await repository.listJudgeScores(session.sessionId)] as const)).then((pairs) => {
-      if (!cancelled) setScoresBySession(Object.fromEntries(pairs));
+    void Promise.all(sessionRows.map(async (session) => [session.sessionId, await repository.listJudgeScores(session.sessionId)] as const)).then((pairs) => {
+      if (!cancelled) setScoresBySession((current) => ({ ...current, ...Object.fromEntries(pairs) }));
     });
     return () => { cancelled = true; };
-  }, [repository, results]);
-  return <section className="panel research-results"><div className="research-section-head"><strong>{copy.researchResults}</strong><small>{results.sessions.length} sessions</small></div><div className="research-results-table-wrap"><table><thead><tr><th>{copy.condition}</th><th>{copy.sampleN}</th><th>{copy.mean}</th><th>{copy.median}</th><th>{copy.stdDev}</th><th>{copy.minMax}</th></tr></thead><tbody>{results.conditions.map((condition) => <tr key={condition.conditionKey}><td><strong>{condition.label}</strong></td><td>{condition.n}</td><td>{condition.meanTotal.toFixed(2)}</td><td>{condition.medianTotal.toFixed(2)}</td><td>{condition.stdDevTotal.toFixed(2)}</td><td>{condition.minTotal.toFixed(1)} / {condition.maxTotal.toFixed(1)}</td></tr>)}</tbody></table></div><div className="research-component-results"><strong>{copy.componentMeans}</strong>{results.conditions.map((condition) => <div key={condition.conditionKey}><span>{condition.label}</span><small>G {condition.meanComponents.gestalt.toFixed(2)}/3 · F {condition.meanComponents.verifiableFeatures.toFixed(2)}/3 · A {condition.meanComponents.activityFunctionEvent.toFixed(2)}/2 · C {condition.meanComponents.confabulationControl.toFixed(2)}/2</small></div>)}</div>{results.pairwise.length > 0 && <div className="pairwise-results"><strong>{copy.pairwise}</strong>{results.pairwise.map((pair) => <div key={`${pair.conditionA}-${pair.conditionB}`}><span>{pair.conditionA} ↔ {pair.conditionB}</span><small>n={pair.pairedN} · {copy.winsTiesLosses}: {pair.winsA}/{pair.ties}/{pair.winsB} · Δ={pair.meanPairedDifference.toFixed(2)}</small></div>)}</div>}<div className="research-target-results"><strong>{copy.targetComparisons}</strong><div className="research-results-table-wrap"><table><thead><tr><th>{copy.blindSession}</th><th>{copy.targetId}</th><th>{copy.condition}</th><th>{copy.mean}</th><th>{copy.scoreSpread}</th><th>{copy.judgeResults}</th></tr></thead><tbody>{results.sessions.map((session) => <tr key={session.sessionId}><td><code>{session.anonymousSessionId}</code></td><td><code>{session.targetId}</code></td><td>{session.conditionLabel}{session.fieldGuideVersionNumber !== undefined && <small className="research-result-provenance"> · FG v{session.fieldGuideVersionNumber} · {session.fieldGuideContentSha256?.slice(0, 10)}…</small>}</td><td><strong>{session.total.toFixed(2)}</strong></td><td>σ {session.judgeTotalStdDev.toFixed(2)} · Δ {session.judgeTotalRange.toFixed(2)}</td><td>{(scoresBySession[session.sessionId] ?? []).map((score) => `J${score.judgeIndex} ${score.total.toFixed(1)}`).join(" · ") || "…"}</td></tr>)}</tbody></table></div></div></section>;
+  }, [repository, results.projectId, results.computedAt, sessionPage]);
+  return <section className="panel research-results">
+    <div className="research-section-head"><strong>{copy.researchResults}</strong><small>{results.sessions.length} sessions</small></div>
+    <div className="research-results-table-wrap"><table><thead><tr>
+      <th>{copy.condition}</th><th>top_p</th><th>top_k</th><th>seed</th><th>{copy.viewerTemperature}</th><th>{copy.viewerReasoningLevel}</th><th>{pl ? "Model / trasa" : "Model / route"}</th><th>{copy.sampleN}</th><th>{copy.mean}</th><th>{copy.median}</th><th>{copy.stdDev}</th><th>{copy.minMax}</th>
+    </tr></thead><tbody>{results.conditions.map((condition) => <tr key={condition.conditionKey}>
+      <td><strong>{condition.label}</strong></td>
+      <td>{researchRequestedEffective(condition.samplingValues?.topP, condition.effectiveSettings?.topP, copy)}</td><td>{researchRequestedEffective(condition.samplingValues?.topK, condition.effectiveSettings?.topK, copy)}</td><td>{researchRequestedEffective(condition.samplingValues?.seed, condition.effectiveSettings?.seed, copy)}</td>
+      <td>{researchRequestedEffective(condition.requestedSettings?.temperature, condition.effectiveSettings?.temperature, copy)}</td><td>{researchRequestedEffectiveText(condition.requestedSettings?.reasoningEffort, condition.effectiveSettings?.reasoningEffort, copy)}</td><td><small>{condition.modelId ?? "—"}<br />{condition.providerConfigId ?? "—"}</small></td>
+      <td>{condition.n}</td><td>{condition.meanTotal.toFixed(2)}</td><td>{condition.medianTotal.toFixed(2)}</td><td>{condition.stdDevTotal.toFixed(2)}</td><td>{condition.minTotal.toFixed(1)} / {condition.maxTotal.toFixed(1)}</td>
+    </tr>)}</tbody></table></div>
+    <div className="research-component-results"><strong>{copy.componentMeans}</strong>{results.conditions.map((condition) => <div key={condition.conditionKey}><span>{condition.label}</span><small>G {condition.meanComponents.gestalt.toFixed(2)}/3 · F {condition.meanComponents.verifiableFeatures.toFixed(2)}/3 · A {condition.meanComponents.activityFunctionEvent.toFixed(2)}/2 · C {condition.meanComponents.confabulationControl.toFixed(2)}/2</small></div>)}</div>
+    {pairwisePage.length > 0 && <div className="pairwise-results"><strong>{copy.pairwise}</strong>{pairwisePage.map((pair) => <div key={`${pair.conditionA}-${pair.conditionB}`}><span>{pair.conditionA} ↔ {pair.conditionB}</span><small>n={pair.pairedN} · {copy.winsTiesLosses}: {pair.winsA}/{pair.ties}/{pair.winsB} · Δ={pair.meanPairedDifference.toFixed(2)}</small></div>)}{pairPageCount > 1 && <ResearchResultsPager pl={pl} page={pairPage} pageCount={pairPageCount} onPage={setPairPage} />}</div>}
+    <div className="research-target-results"><strong>{copy.targetComparisons}</strong><div className="research-results-table-wrap"><table><thead><tr><th>{copy.blindSession}</th><th>{copy.targetId}</th><th>{copy.condition}</th><th>{pl ? "Wykonanie" : "Execution"}</th><th>{copy.mean}</th><th>{copy.scoreSpread}</th><th>{copy.judgeResults}</th></tr></thead><tbody>{sessionRows.map((session) => <tr key={session.sessionId}>
+      <td><code>{session.anonymousSessionId}</code></td><td><code>{session.targetId}</code></td><td>{session.conditionLabel}{session.fieldGuideVersionNumber !== undefined && <small className="research-result-provenance"> · FG v{session.fieldGuideVersionNumber} · {session.fieldGuideContentSha256?.slice(0, 10)}…</small>}</td>
+      <td><small>{session.execution?.actualProviders?.length ? session.execution.actualProviders.join(", ") : (pl ? "provider: nieznany" : "provider: unknown")}<br />{session.execution?.actualModels?.join(", ") || session.modelId || (pl ? "model: nieznany" : "model: unknown")}{session.execution?.costUsd !== undefined ? <><br />${session.execution.costUsd.toFixed(4)}</> : null}</small></td>
+      <td><strong>{session.total.toFixed(2)}</strong></td><td>σ {session.judgeTotalStdDev.toFixed(2)} · Δ {session.judgeTotalRange.toFixed(2)}</td><td>{(scoresBySession[session.sessionId] ?? []).map((score) => `J${score.judgeIndex} ${score.total.toFixed(1)}`).join(" · ") || "…"}</td>
+    </tr>)}</tbody></table></div>{sessionPageCount > 1 && <ResearchResultsPager pl={pl} page={sessionPage} pageCount={sessionPageCount} onPage={setSessionPage} />}</div>
+  </section>;
+}
+
+function ResearchResultsPager({ pl, page, pageCount, onPage }: { pl: boolean; page: number; pageCount: number; onPage: (page: number) => void }) {
+  return <div className="research-stage-actions"><button className="secondary-button" disabled={page <= 0} onClick={() => onPage(page - 1)}>{pl ? "Poprzednia" : "Previous"}</button><small>{pl ? "Strona" : "Page"} {page + 1}/{pageCount}</small><button className="secondary-button" disabled={page + 1 >= pageCount} onClick={() => onPage(page + 1)}>{pl ? "Następna" : "Next"}</button></div>;
+}
+
+function researchResultValue(value: number | undefined, copy: Copy): string | number { return value === undefined ? copy.autoProviderDefault : value; }
+function researchRequestedEffective(requested: number | undefined, effective: number | undefined, copy: Copy): string {
+  const requestedText = String(researchResultValue(requested, copy));
+  const effectiveText = String(researchResultValue(effective, copy));
+  return requestedText === effectiveText ? requestedText : `${requestedText} → ${effectiveText}`;
+}
+function researchRequestedEffectiveText(requested: string | undefined, effective: string | undefined, copy: Copy): string {
+  const requestedText = requested ?? copy.autoProviderDefault;
+  const effectiveText = effective ?? copy.autoProviderDefault;
+  return requestedText === effectiveText ? requestedText : `${requestedText} → ${effectiveText}`;
 }
 
 function samplingControlDisplay(copy: Copy, config: ResearchConfig, parameter: "topP" | "topK" | "seed"): string | number {

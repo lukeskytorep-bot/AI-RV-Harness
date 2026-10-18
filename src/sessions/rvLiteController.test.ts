@@ -37,9 +37,12 @@ describe("automatic RV Lite controller", () => {
     const log: string[] = [];
     const snapshots: SessionSnapshot[] = [];
     const requests: string[] = [];
+    const events: SessionEventInput[] = [];
+    const repo = repository(log, snapshots);
+    repo.appendSessionEvent = vi.fn(async (_sessionId: string, event: SessionEventInput) => { events.push(structuredClone(event)); log.push(event.eventType); return { ...event, id: `event-${events.length}`, sessionId: "session", sequenceNumber: events.length, createdAt: "now" } as never; });
     let calls = 0;
     const result = await runAutomaticRvLiteSession({
-      repository: repository(log, snapshots), workspaceId: "w", profileId: "profile", profileName: "Leo", providerConfig: config, model,
+      repository: repo, workspaceId: "w", profileId: "profile", profileName: "Leo", providerConfig: config, model,
       protocol: getRvLite("pl"), sessionLanguage: "pl", requestedSettings: { maxOutputTokens: 1024 }, automaticTarget: target,
       rvSystemPrompt: {
         id: "viewer_prompt_identity_en", version: "1.5.0:field-guide:fg-v1", content: "FIXED PROFILE VIEWER PROMPT", contentSha256: "a".repeat(64),
@@ -52,7 +55,7 @@ describe("automatic RV Lite controller", () => {
         expect(payload).not.toContain("SECRET REVEAL");
         expect(messages[0]).toEqual({ role: "system", content: "FIXED PROFILE VIEWER PROMPT" });
         requests.push(messages.at(-1)?.content ?? "");
-        return { content: `Blind evidence ${calls}`, usage: {} };
+        return { content: `Blind evidence ${calls}`, actualProvider: "DeepInfra", actualModel: "m-runtime", usage: {} };
       },
     });
     expect(calls).toBe(4);
@@ -66,6 +69,7 @@ describe("automatic RV Lite controller", () => {
     expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity", "locked-viewer-base-vocabulary"]);
     expect(snapshots[0].rvSystemPrompt?.fieldGuide).toMatchObject({ versionId: "fg-v1", content: "FIELD GUIDE", capacityTokens: 2048 });
     expect(snapshots[0].automaticRevealHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(events.filter((event) => event.eventType === "VIEWER_RESPONSE").every((event) => event.metadata?.actualProvider === "DeepInfra" && event.metadata?.actualModel === "m-runtime")).toBe(true);
   });
 
   it("retries the same RV Lite step once at 16K -> 32K after length and accepts only the recovery", async () => {

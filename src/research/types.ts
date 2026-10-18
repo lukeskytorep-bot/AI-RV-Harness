@@ -247,6 +247,24 @@ export interface ResearchPreflightResult {
   estimatedJudgeCalls: number;
 }
 
+export interface ResearchSessionExecutionMetadata {
+  configuredProviderConfigId: string;
+  configuredModelId: string;
+  actualProviders?: string[];
+  actualModels?: string[];
+  generationIds?: string[];
+  providerRequestIds?: string[];
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+  requestDurationMs?: number;
+  firstViewerResponseAt?: string;
+  lastViewerResponseAt?: string;
+  viewerCallCount: number;
+}
+
 export interface UnblindedSessionResult extends JudgeComponentScores {
   anonymousSessionId: string;
   sessionId: string;
@@ -258,6 +276,12 @@ export interface UnblindedSessionResult extends JudgeComponentScores {
   judgeCount: number;
   judgeTotalRange: number;
   judgeTotalStdDev: number;
+  samplingValues?: ResearchSamplingConditionValues;
+  requestedSettings?: GenerationSettings;
+  effectiveSettings?: GenerationSettings;
+  providerConfigId?: string;
+  modelId?: string;
+  execution?: ResearchSessionExecutionMetadata;
   /** Exact frozen Field Guide provenance used by this session, when enabled. */
   fieldGuideVersionId?: string;
   fieldGuideVersionNumber?: number;
@@ -267,6 +291,11 @@ export interface UnblindedSessionResult extends JudgeComponentScores {
 export interface ConditionStatistics {
   conditionKey: string;
   label: string;
+  samplingValues?: ResearchSamplingConditionValues;
+  requestedSettings?: GenerationSettings;
+  effectiveSettings?: GenerationSettings;
+  providerConfigId?: string;
+  modelId?: string;
   n: number;
   meanTotal: number;
   medianTotal: number;
