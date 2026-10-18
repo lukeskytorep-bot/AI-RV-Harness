@@ -15,10 +15,31 @@ export const RESEARCH_TEMPLATE_TYPES = [
   "practice",
   "system_prompt",
   "viewer_notes",
+  "sampling",
   "custom",
 ] as const;
 
 export type ResearchTemplateType = (typeof RESEARCH_TEMPLATE_TYPES)[number];
+
+export type ResearchSamplingParameter = "topP" | "topK" | "seed";
+
+export type ResearchSamplingAxis =
+  | { mode: "fixed"; value?: number }
+  | { mode: "varied"; values: number[] };
+
+export interface ResearchSamplingDesign {
+  version: 1;
+  topP: ResearchSamplingAxis;
+  topK: ResearchSamplingAxis;
+  seed: ResearchSamplingAxis;
+}
+
+export interface ResearchSamplingConditionValues {
+  topP?: number;
+  topK?: number;
+  seed?: number;
+}
+
 export type ResearchState = "Draft" | "Preflight" | "Locked" | "Running" | "SessionsComplete" | "Judging" | "ScoresFrozen" | "Unblinded" | "Complete" | "Interrupted" | "Failed";
 
 export type ResearchSystemPromptSnapshot = ViewerSystemPromptSnapshot;
@@ -84,6 +105,8 @@ export interface ResearchConditionDefinition {
   conditionInstruction?: ResearchSystemPromptSnapshot;
   practiceOrder?: "FIRST" | "SECOND";
   customValue?: string;
+  /** Structural sampler values for Sampling configurations; never parse these values from labels. */
+  samplingValues?: ResearchSamplingConditionValues;
   /** Immutable Viewer Notes snapshot captured for and frozen by Experiment Lock. */
   viewerNotes?: ViewerNotesSessionSnapshot;
   /** Immutable trained Field Guide snapshot. Research never mutates it. */
@@ -113,7 +136,7 @@ export interface ResearchViewerControl {
     value?: number;
   };
   /** Frozen common OpenRouter sampling inherited from the base Profile. Missing means legacy Research. */
-  sampling?: { source: "profile"; profileId: string; topP?: number; topK?: number; seed?: number };
+  sampling?: { source: "profile" | "research"; profileId: string; mode?: "fixed" | "condition_variable"; topP?: number; topK?: number; seed?: number };
   maxOutputTokens: number;
 }
 
@@ -144,6 +167,8 @@ export interface ResearchConfig {
   fieldGuideControl?: ResearchFieldGuideControl;
   viewerNotesControl?: ResearchViewerNotesControl;
   promptResearchSource?: ResearchPromptResearchSource;
+  /** Versioned design metadata for the Sampling configurations template. */
+  samplingDesign?: ResearchSamplingDesign;
   conditions: ResearchConditionDefinition[];
   evaluationMode?: "save_only" | "ai_judges";
   judges: ResearchJudgeDefinition[];

@@ -704,8 +704,8 @@ export function researchPreflightSignature(config: ResearchConfig): string {
 }
 
 function templateName(copy: Copy, type: ResearchTemplateType): string {
-  return ({ reasoning: copy.reasoningCalibration, temperature: copy.temperatureTest, profile: copy.profileComparison, model: copy.modelComparison, practice: copy.practiceEffect, system_prompt: copy.promptComparison, viewer_notes: copy.viewerNotesImpact, custom: copy.customVariable } as const)[type];
+  return ({ reasoning: copy.reasoningCalibration, temperature: copy.temperatureTest, profile: copy.profileComparison, model: copy.modelComparison, practice: copy.practiceEffect, system_prompt: copy.promptComparison, viewer_notes: copy.viewerNotesImpact, sampling: copy.home === "Home" ? "Sampling configurations" : "Konfiguracje samplingu", custom: copy.customVariable } as const)[type];
 }
 function templateMeta(copy: Copy, type: ResearchTemplateType): string {
-  return ({ reasoning: "NONE · LOW · MEDIUM · HIGH", temperature: copy.temperature, profile: "Profile A · B", model: "Model A · B", practice: "FIRST ↔ SECOND", system_prompt: "Prompt A · B · C · D", viewer_notes: "NO NOTES ↔ FROZEN NOTES", custom: copy.researchConditions } as const)[type];
+  return ({ reasoning: "NONE · LOW · MEDIUM · HIGH", temperature: copy.temperature, profile: "Profile A · B", model: "Model A · B", practice: "FIRST ↔ SECOND", system_prompt: "Prompt A · B · C · D", viewer_notes: "NO NOTES ↔ FROZEN NOTES", sampling: "top_p · top_k · seed", custom: copy.researchConditions } as const)[type];
 }

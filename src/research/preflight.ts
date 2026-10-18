@@ -10,6 +10,7 @@ import { activeViewerNotesControlSignature, sameFrozenViewerNotesVersion, viewer
 import { fieldGuideSnapshotSignature } from "./fieldGuidePolicy";
 import { researchProtocolLabel, researchProtocolViewerCalls, resolveResearchProtocol, type ResearchProtocolResource } from "./protocolPolicy";
 import { researchSamplingCapabilityState, researchSamplingSignature } from "./samplingPolicy";
+import { assertSamplingResearchContract, researchSamplingConfigurationCount, researchSamplingSessionCount } from "./samplingDesign";
 
 export interface ResearchPreflightInventory {
   profiles: Profile[];
@@ -113,7 +114,7 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
       else checks.push(warn(`${prefix}:context`, `${condition.label}: provider did not advertise a context limit`));
     }
   }
-  if ((config.templateType === "reasoning" || config.templateType === "temperature") && [...effectiveSignatures.values()].some((keys) => keys.length > 1)) {
+  if ((config.templateType === "reasoning" || config.templateType === "temperature" || config.templateType === "sampling") && [...effectiveSignatures.values()].some((keys) => keys.length > 1)) {
     checks.push(fail("condition_distinguishability", "Two or more tested conditions resolve to the same effective generation settings"));
   } else {
     checks.push(pass("condition_distinguishability", "Tested conditions remain distinguishable at the known capability layer"));
@@ -125,9 +126,9 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   if (config.templateType !== "reasoning" && reasoningValues.size !== 1) confoundedControls.push("reasoning");
   if (config.templateType !== "temperature" && temperatureValues.size !== 1) confoundedControls.push("temperature");
   if (outputValues.size !== 1) confoundedControls.push("maximum output tokens");
-  if (topPValues.size !== 1) confoundedControls.push("top_p");
-  if (topKValues.size !== 1) confoundedControls.push("top_k");
-  if (seedValues.size !== 1) confoundedControls.push("seed");
+  if (config.templateType !== "sampling" && topPValues.size !== 1) confoundedControls.push("top_p");
+  if (config.templateType !== "sampling" && topKValues.size !== 1) confoundedControls.push("top_k");
+  if (config.templateType !== "sampling" && seedValues.size !== 1) confoundedControls.push("seed");
   if (config.templateType !== "viewer_notes" && viewerNotesControls.size !== 1) confoundedControls.push("Viewer Notes");
   const fieldGuideIsTestedVariable = config.templateType === "system_prompt" && config.promptResearchSource === "field_guide_history";
   if (!fieldGuideIsTestedVariable && !identityVariesByDesign && fieldGuideControls.size !== 1) confoundedControls.push("Field Guide");
@@ -155,7 +156,9 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     if (config.viewerControl.temperature.mode === "fixed" && (temperatureValues.size !== 1 || !temperatureValues.has(config.viewerControl.temperature.value ?? Number.NaN))) lockIssues.push("fixed temperature");
     if (config.viewerControl.temperature.mode === "provider_default" && !temperatureValues.has("__provider_default__")) lockIssues.push("provider-default temperature");
     if (outputValues.size !== 1 || !outputValues.has(config.viewerControl.maxOutputTokens)) lockIssues.push("maximum output tokens");
-    if (config.viewerControl.sampling) {
+    if (config.templateType === "sampling") {
+      try { assertSamplingResearchContract(config); } catch { lockIssues.push("Sampling configurations control/design"); }
+    } else if (config.viewerControl.sampling) {
       const samplingControl = {
         ...(config.viewerControl.sampling.topP !== undefined ? { topP: config.viewerControl.sampling.topP } : {}),
         ...(config.viewerControl.sampling.topK !== undefined ? { topK: config.viewerControl.sampling.topK } : {}),
@@ -168,7 +171,9 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
       ? fail("viewer_control_lock", `Study-wide Viewer control does not match its conditions: ${lockIssues.join(", ")}`)
       : pass("viewer_control_lock", "Study-wide Viewer model, prompt and generation controls are captured in Experiment Lock"));
   } else {
-    checks.push(warn("viewer_control_lock", "Legacy Research configuration has no explicit study-wide Viewer-control record"));
+    checks.push(config.templateType === "sampling"
+      ? fail("viewer_control_lock", "Sampling configurations requires an explicit frozen study-wide Viewer-control record")
+      : warn("viewer_control_lock", "Legacy Research configuration has no explicit study-wide Viewer-control record"));
   }
   if (config.templateType === "system_prompt") {
     const isFieldGuideHistory = config.promptResearchSource === "field_guide_history";
@@ -323,6 +328,19 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   }
 
   checks.push(pass("viewer_notes_feedback", "Research uses Viewer Notes read-only; Research sessions never update Viewer Notes"));
+
+  if (config.templateType === "sampling") {
+    try {
+      assertSamplingResearchContract(config);
+      const configurations = researchSamplingConfigurationCount(config.samplingDesign!);
+      const sessions = researchSamplingSessionCount(config.samplingDesign!, config.targetIds.length, config.repetitions);
+      checks.push(pass("sampling_design", `Sampling design is valid: ${configurations} configuration(s), ${sessions} session(s)`));
+    } catch (cause) {
+      checks.push(fail("sampling_design", cause instanceof Error ? cause.message : String(cause)));
+    }
+  } else if (config.samplingDesign) {
+    checks.push(fail("sampling_design", "samplingDesign metadata is only valid for the Sampling configurations template"));
+  }
 
   if (config.judges.length === 0) {
     checks.push(config.evaluationMode === "save_only"
