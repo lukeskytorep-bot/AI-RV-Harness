@@ -152,9 +152,13 @@ describe("RV Sessions live transcript revision coherence", () => {
     const model = { providerConfigId: "pc", provider: "custom_openai", modelId: "m", route: "route", displayName: "M", capabilities: { inputModalities: ["text"], outputModalities: ["text"], reasoning: { supported: false, efforts: [] }, temperature: { supported: false }, supportedParameters: [] }, pricing: {} };
     mocks.identities.mockResolvedValue([{ identity: { id: "i", displayName: "Viewer" }, providerConfig: provider, model }]);
     mocks.blind.mockImplementation(async request => {
-      request.onProgress({ sessionId: "s", sessionCode: "S", state: "BlindRunning", transcript: acceptedTranscript("en"), phase: 2 });
-      await new Promise<void>((_resolve, reject) => request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true }));
-      throw new Error("unreachable");
+      const transcript = acceptedTranscript("en");
+      request.onProgress({ sessionId: "s", sessionCode: "S", state: "BlindRunning", transcript, phase: 2 });
+      await new Promise<void>(resolve => request.signal.addEventListener("abort", () => {
+        request.onProgress({ sessionId: "s", sessionCode: "S", state: "Interrupted", transcript, stopReason: "USER STOP" });
+        resolve();
+      }, { once: true }));
+      return { sessionId: "s", sessionCode: "S", state: "Interrupted", transcript, stopReason: "USER STOP" };
     });
     const repository = workflowTestRepository({
       listProviderConfigs: async () => [provider],
