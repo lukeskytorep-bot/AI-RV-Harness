@@ -38,7 +38,7 @@ For qualifying manual requests the OpenRouter provider object adds `require_para
 
 ## Training Continuity T5
 
-Mandatory Viewer/Reveal/Review stages retain their normal interruption/checkpoint semantics when no safe route exists. Optional classic-Training Field Guide or Viewer Notes updates may use the existing `failed_preserved` path for a known, resolved preflight/execution failure, preserving prior memory and continuing the Training workflow. STOP, owner/lease, database, hash/identity, or unknown-dispatch states are never converted to `failed_preserved`.
+Classic Training explicitly selects `preserve_and_continue` for optional Viewer Review and learning. Unavailable optional Review is recorded in the checkpoint, dependent learning is skipped while previous memory is preserved, and Training continues to eligible later stages and targets. Invalid proposals use only the existing bounded recovery. Unknown optional-learning results are handled by preserving previous memory without another paid dispatch or operator resolution; this does not assert transport success. STOP, actual ownership loss, database/hash/identity errors, and mandatory evidence failures retain their interruption semantics. Other workflows retain their own uncertainty contracts.
 
 The existing durable maximum of two physically dispatched requests per memory category remains unchanged. A local preflight rejection with zero dispatch does not count as a sent provider request.
 

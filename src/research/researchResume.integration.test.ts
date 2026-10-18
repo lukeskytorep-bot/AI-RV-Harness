@@ -1,4 +1,9 @@
 import { ProviderCallError } from "../providers/providerError";
+import {
+  clearOpenRouterEndpointCapabilityCache,
+  openRouterEndpointCacheKey,
+  seedOpenRouterEndpointCapabilityCacheForTest,
+} from "../providers/openRouterEndpointCapability";
 import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
@@ -139,19 +144,37 @@ describe("Research same-assignment Resume", () => {
   });
 
   it("keeps locked sampling on execution when the live Profile was edited after Experiment Lock", async () => {
-    const durable = researchDurableRepository({ frozenOutputPolicy: true, lockedTopK: 64, liveProfileTopK: 20 });
-    const observed: number[] = [];
-    await executeResearchSessions({
-      repository: durable.repository,
-      projectId: "research",
-      rvLiteSessionRunner: async (input) => (await import("../sessions/rvLiteController")).runAutomaticRvLiteSession({
-        ...input,
-        chat: async ({ settings }) => { observed.push(settings.requested.topK ?? -1); return { content: "complete", finishReason: "stop", usage: {} }; },
-      }),
-    });
-    expect(observed.length).toBeGreaterThan(0);
-    expect(new Set(observed)).toEqual(new Set([64]));
-    expect(durable.snapshot().generationSettings.requested.topK).toBe(64);
+    clearOpenRouterEndpointCapabilityCache();
+    seedOpenRouterEndpointCapabilityCacheForTest(
+      openRouterEndpointCacheKey("pc", "m", "c", ""),
+      {
+        capturedAtMs: Date.now(),
+        endpoints: [{
+          routeTag: "test-route",
+          contextLength: 131072,
+          maxCompletionTokens: 65536,
+          supportedParameters: ["top_k"],
+          available: true,
+        }],
+      },
+    );
+    try {
+      const durable = researchDurableRepository({ frozenOutputPolicy: true, lockedTopK: 64, liveProfileTopK: 20 });
+      const observed: number[] = [];
+      await executeResearchSessions({
+        repository: durable.repository,
+        projectId: "research",
+        rvLiteSessionRunner: async (input) => (await import("../sessions/rvLiteController")).runAutomaticRvLiteSession({
+          ...input,
+          chat: async ({ settings }) => { observed.push(settings.requested.topK ?? -1); return { content: "complete", finishReason: "stop", usage: {} }; },
+        }),
+      });
+      expect(observed.length).toBeGreaterThan(0);
+      expect(new Set(observed)).toEqual(new Set([64]));
+      expect(durable.snapshot().generationSettings.requested.topK).toBe(64);
+    } finally {
+      clearOpenRouterEndpointCapabilityCache();
+    }
   });
 
   it("preserves a legacy locked Research single output budget instead of silently upgrading it", async () => {
