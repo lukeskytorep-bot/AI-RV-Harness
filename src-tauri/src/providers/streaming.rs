@@ -406,11 +406,21 @@ fn merge_openrouter_reasoning_delta(last: &mut Value, next: &Value) -> bool {
     true
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum StreamingFlavor {
+    #[default]
+    OpenRouter,
+    CustomOpenAi,
+}
+
 #[derive(Default)]
 pub(super) struct OpenRouterStreamAccumulator {
+    flavor: StreamingFlavor,
     content: String,
     reasoning: String,
     reasoning_details: OpenRouterReasoningDetailsAccumulator,
+    custom_reasoning_details: Vec<Value>,
+    custom_reasoning_details_seen: bool,
     finish_reason: Option<String>,
     native_finish_reason: Option<String>,
     actual_model: Option<String>,
@@ -426,6 +436,8 @@ pub(super) struct OpenRouterStreamAccumulator {
 }
 
 impl OpenRouterStreamAccumulator {
+    fn custom_openai() -> Self { Self { flavor: StreamingFlavor::CustomOpenAi, ..Self::default() } }
+
     fn process_frame_with_events(&mut self, frame: SseFrame, secret: &str, request_id: Option<&str>) -> Result<Vec<ProviderStreamEvent>, ProviderCallError> {
         match frame {
             SseFrame::Comment => Ok(Vec::new()),
@@ -538,9 +550,18 @@ impl OpenRouterStreamAccumulator {
         if !reasoning.is_empty() {
             self.reasoning.push_str(&reasoning);
         }
-        self.reasoning_details.ingest(reasoning_details_value).map_err(|message| {
-            self.error("invalid_provider_json", message, "parsing_body", request_id)
-        })?;
+        if self.flavor == StreamingFlavor::OpenRouter {
+            self.reasoning_details.ingest(reasoning_details_value).map_err(|message| {
+                self.error("invalid_provider_json", message, "parsing_body", request_id)
+            })?;
+        } else if let Some(value) = reasoning_details_value {
+            self.custom_reasoning_details_seen = true;
+            match value {
+                Value::Null => {}
+                Value::Array(items) => self.custom_reasoning_details.extend(items.iter().cloned()),
+                _ => return Err(self.error("invalid_provider_json", "provider streaming reasoning_details must be an array or null when present", "parsing_body", request_id)),
+            }
+        }
         Ok(events)
     }
 
@@ -573,8 +594,10 @@ impl OpenRouterStreamAccumulator {
         if !self.reasoning.is_empty() {
             message.insert("reasoning".into(), Value::String(self.reasoning));
         }
-        if self.reasoning_details.field_seen {
+        if self.flavor == StreamingFlavor::OpenRouter && self.reasoning_details.field_seen {
             message.insert("reasoning_details".into(), Value::Array(self.reasoning_details.details.clone()));
+        } else if self.flavor == StreamingFlavor::CustomOpenAi && self.custom_reasoning_details_seen {
+            message.insert("reasoning_details".into(), Value::Array(self.custom_reasoning_details.clone()));
         }
         let mut choice = Map::new();
         choice.insert("index".into(), json!(0));
@@ -673,12 +696,13 @@ fn earlier_deadline(a: Instant, b: Instant) -> Instant {
     a.min(b)
 }
 
-pub(super) async fn send_openrouter_streaming_chat_request(
+async fn send_streaming_chat_request(
     builder: RequestBuilder,
     request_id: Option<&str>,
     secret: &str,
     policy: &ProviderTimeoutPolicy,
     on_stream: Option<&Channel<ProviderStreamEvent>>,
+    flavor: StreamingFlavor,
 ) -> Result<StreamingChatResult, ProviderCallError> {
     let first_event_timeout = Duration::from_millis(policy.first_event_timeout_ms);
     let idle_timeout = Duration::from_millis(policy.idle_timeout_ms);
@@ -735,7 +759,7 @@ pub(super) async fn send_openrouter_streaming_chat_request(
 
         let mut stream = response.bytes_stream();
         let mut decoder = SseDecoder::default();
-        let mut accumulator = OpenRouterStreamAccumulator::default();
+        let mut accumulator = if flavor == StreamingFlavor::CustomOpenAi { OpenRouterStreamAccumulator::custom_openai() } else { OpenRouterStreamAccumulator::default() };
         let mut saw_transport_activity = false;
         let mut last_transport_activity = started;
 
@@ -824,4 +848,25 @@ pub(super) async fn send_openrouter_streaming_chat_request(
             }
         }
     }).await
+}
+
+
+pub(super) async fn send_openrouter_streaming_chat_request(
+    builder: RequestBuilder,
+    request_id: Option<&str>,
+    secret: &str,
+    policy: &ProviderTimeoutPolicy,
+    on_stream: Option<&Channel<ProviderStreamEvent>>,
+) -> Result<StreamingChatResult, ProviderCallError> {
+    send_streaming_chat_request(builder, request_id, secret, policy, on_stream, StreamingFlavor::OpenRouter).await
+}
+
+pub(super) async fn send_custom_openai_streaming_chat_request(
+    builder: RequestBuilder,
+    request_id: Option<&str>,
+    secret: &str,
+    policy: &ProviderTimeoutPolicy,
+    on_stream: Option<&Channel<ProviderStreamEvent>>,
+) -> Result<StreamingChatResult, ProviderCallError> {
+    send_streaming_chat_request(builder, request_id, secret, policy, on_stream, StreamingFlavor::CustomOpenAi).await
 }

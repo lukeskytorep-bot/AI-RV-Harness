@@ -376,6 +376,7 @@ export class SqliteRepository implements AppRepository {
 
   updateProviderCredentialMetadata: AppRepository["updateProviderCredentialMetadata"] = (id, credentialHint, fingerprint) => this.settingsModelsRepository.updateProviderCredentialMetadata(id, credentialHint, fingerprint);
   updateProviderCustomOutputTokenField: AppRepository["updateProviderCustomOutputTokenField"] = (id, field) => this.settingsModelsRepository.updateProviderCustomOutputTokenField(id, field);
+  updateProviderCustomStreamingEnabled: AppRepository["updateProviderCustomStreamingEnabled"] = (id, enabled) => this.settingsModelsRepository.updateProviderCustomStreamingEnabled(id, enabled);
 
   deleteProviderConfig: AppRepository["deleteProviderConfig"] = (id) => this.settingsModelsRepository.deleteProviderConfig(id);
   updateProviderConnectionStatus: AppRepository["updateProviderConnectionStatus"] = (id, status, error) => this.settingsModelsRepository.updateProviderConnectionStatus(id, status, error);

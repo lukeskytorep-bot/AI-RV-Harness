@@ -42,6 +42,7 @@ export interface ProviderConfig {
   credentialFingerprint?: string;
   baseUrl?: string;
   customOutputTokenField?: CustomOpenAiOutputTokenField;
+  customStreamingEnabled?: boolean;
   enabled: boolean;
   lastTestedAt?: string;
   lastStatus?: "ok" | "error";

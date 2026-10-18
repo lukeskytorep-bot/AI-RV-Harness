@@ -224,7 +224,7 @@ function reconcileFinalOpenRouterRouting(
 }
 
 export function streamingTransportMode(config: ProviderConfig): StreamingTransportMode {
-  return config.provider === "openrouter" ? "streaming" : "non_streaming";
+  return config.provider === "openrouter" || (config.provider === "custom_openai" && config.customStreamingEnabled === true) ? "streaming" : "non_streaming";
 }
 
 /**

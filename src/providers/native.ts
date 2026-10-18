@@ -153,6 +153,7 @@ export async function providerChatAttempt(input: {
         ...((input.config.provider === "openrouter" || input.config.provider === "custom_openai") && input.settings.effective.seed !== undefined ? { seed: input.settings.effective.seed } : {}),
         maxOutputTokens: input.settings.effective.maxOutputTokens,
         ...(input.config.provider === "custom_openai" && input.config.customOutputTokenField ? { customOutputTokenField: input.config.customOutputTokenField } : {}),
+        ...(input.config.provider === "custom_openai" ? { customStreamingEnabled: input.config.customStreamingEnabled ?? false } : {}),
         timeoutMs: input.timeoutMs,
         timeoutPolicy: input.timeoutPolicy,
         detailedDiagnostics: detailedProviderDiagnosticsEnabled(),

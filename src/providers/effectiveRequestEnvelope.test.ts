@@ -53,6 +53,14 @@ describe("I1 effective request envelope", () => {
     expect(result.providerRouting).toBeUndefined();
   });
 
+  it("keeps Custom OpenAI non-streaming by default and enables streaming only when explicitly configured", async () => {
+    const customBase: ProviderConfig = { ...openrouter, id: "pc-custom", provider: "custom_openai", baseUrl: "https://example.test/v1" };
+    const nonStreaming = await resolveEffectiveRequestEnvelope({ config: customBase, modelId: "m", messages: [{ role: "user", content: "x" }], settings: settings(), operationKind: "conversation" });
+    expect(nonStreaming.envelope.streamingMode).toBe("non_streaming");
+    const streaming = await resolveEffectiveRequestEnvelope({ config: { ...customBase, customStreamingEnabled: true }, modelId: "m", messages: [{ role: "user", content: "x" }], settings: settings(), operationKind: "conversation" });
+    expect(streaming.envelope.streamingMode).toBe("streaming");
+  });
+
   it("uses the complete continuation-bearing logical payload for sizing before endpoint routing", async () => {
     const messages: ProviderMessage[] = [
       { role: "user", content: "question" },

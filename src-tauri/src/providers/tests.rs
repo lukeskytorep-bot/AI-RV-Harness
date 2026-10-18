@@ -16,10 +16,10 @@ fn openrouter_requests_omit_application_identity_and_keep_authentication() {
 use super::reasoning::split_tagged_reasoning;
 use super::endpoint_capabilities::openrouter_model_endpoints_url;
 use super::errors::safe_provider_error;
-use super::request_builders::{build_anthropic_request, build_google_request, build_openai_compatible_request, enable_openrouter_streaming};
+use super::request_builders::{build_anthropic_request, build_google_request, build_openai_compatible_request, enable_chat_streaming};
 use super::response_parsers::{parse_anthropic_response, parse_google_response, parse_openai_compatible_response};
 use super::streaming::{
-    send_openrouter_streaming_chat_request, OpenRouterStreamAccumulator, ProviderStreamEvent, SseDecoder, SseFrame,
+    send_custom_openai_streaming_chat_request, send_openrouter_streaming_chat_request, OpenRouterStreamAccumulator, ProviderStreamEvent, SseDecoder, SseFrame,
     MAX_ACCUMULATED_STREAM_DATA_BYTES, MAX_PENDING_SSE_EVENT_BYTES,
 };
 use super::transport::retry_after_value_ms_at;
@@ -73,6 +73,7 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
         seed: None,
         max_output_tokens: None,
         custom_output_token_field: None,
+        custom_streaming_enabled: false,
         timeout_ms: None,
         timeout_policy: None,
         provider_routing: None,
@@ -85,7 +86,7 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
 fn enables_openrouter_sse_and_usage_frames_without_changing_other_request_fields() {
     let request = chat_request(ProviderKind::Openrouter, "qwen/qwen3-32b");
     let (_, mut body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
-    enable_openrouter_streaming(&mut body).unwrap();
+    enable_chat_streaming(&mut body).unwrap();
     assert_eq!(body.get("stream"), Some(&json!(true)));
     assert!(body.get("stream_options").is_none());
     assert_eq!(body.get("model"), Some(&json!("qwen/qwen3-32b")));
@@ -2081,6 +2082,58 @@ fn s2_live_filter_never_flushes_incomplete_reasoning_to_ui() {
     let done = accumulator.process_data_with_events("[DONE]", "secret", Some("privacy-incomplete")).unwrap();
     assert!(streamed_visible_text(&done).is_empty());
     assert!(matches!(done.last(), Some(ProviderStreamEvent::Finished { .. })));
+}
+
+
+#[tokio::test]
+async fn custom_openai_streaming_sends_stream_true_and_accepts_reasoning_usage_and_done() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_simulator_request(&mut socket).await;
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json.get("stream"), Some(&json!(true)));
+        assert_eq!(json.get("model"), Some(&json!("custom-model")));
+        assert!(json.get("provider").is_none());
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: custom-stream-1\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.write_all(b": keepalive\n\n").await.unwrap();
+        socket.write_all(b"data: {\"id\":\"gen-custom\",\"model\":\"custom-model-runtime\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"private\"},\"finish_reason\":null}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"visible final\"},\"finish_reason\":\"stop\"}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n").await.unwrap();
+        socket.write_all(b"data: [DONE]\n\n").await.unwrap();
+    });
+    let base = format!("http://{address}");
+    let request = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    let (url, mut body) = build_chat_request(&request, &base).unwrap();
+    enable_chat_streaming(&mut body).unwrap();
+    let result = send_custom_openai_streaming_chat_request(
+        authenticated(client().unwrap().post(url).json(&body), ProviderKind::CustomOpenai, "simulator-secret"),
+        None,
+        "simulator-secret",
+        &short_stream_policy(500, 500, 2_000),
+        None,
+    ).await.unwrap();
+    let parsed = parse_chat_response(ProviderKind::CustomOpenai, result.payload, result.request_id).unwrap();
+    assert_eq!(parsed.content, "visible final");
+    assert_eq!(parsed.reasoning_content.as_deref(), Some("private"));
+    assert_eq!(parsed.finish_reason.as_deref(), Some("stop"));
+    assert_eq!(parsed.actual_model.as_deref(), Some("custom-model-runtime"));
+    assert_eq!(parsed.usage.total_tokens, Some(5));
+    assert_eq!(parsed.provider_request_id.as_deref(), Some("custom-stream-1"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn custom_openai_streaming_rejects_eof_without_done_after_partial_output() {
+    let (url, server) = start_sse_server(vec![(10, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")]).await;
+    let error = send_custom_openai_streaming_chat_request(
+        reqwest::Client::new().post(url), None, "secret", &short_stream_policy(500, 500, 2_000), None,
+    ).await.unwrap_err();
+    assert_eq!(error.code.as_ref(), "response_body_read");
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
+    server.await.unwrap();
 }
 
 #[tokio::test]

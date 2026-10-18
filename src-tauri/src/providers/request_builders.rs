@@ -211,8 +211,10 @@ pub(super) fn build_anthropic_request(request: &ProviderChatRequest, base: &str)
 }
 
 
-pub(super) fn enable_openrouter_streaming(body: &mut Value) -> Result<(), String> {
-    let object = body.as_object_mut().ok_or_else(|| "OpenRouter chat request body must be an object".to_string())?;
+pub(super) fn enable_chat_streaming(body: &mut Value) -> Result<(), String> {
+    let object = body.as_object_mut().ok_or_else(|| "chat request body must be an object".to_string())?;
     object.insert("stream".into(), Value::Bool(true));
     Ok(())
 }
+
+

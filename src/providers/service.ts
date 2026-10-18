@@ -99,6 +99,16 @@ export async function updateCustomOpenAiOutputTokenField(
   notifyProviderRoutesChanged();
 }
 
+export async function updateCustomOpenAiStreamingEnabled(
+  repository: AppRepository,
+  config: ProviderConfig,
+  enabled: boolean,
+): Promise<void> {
+  if (config.provider !== "custom_openai") throw new Error("Streaming transport setting is available only for Custom OpenAI-compatible providers.");
+  await repository.updateProviderCustomStreamingEnabled(config.id, enabled);
+  notifyProviderRoutesChanged();
+}
+
 export async function removeProvider(repository: AppRepository, config: ProviderConfig): Promise<void> {
   await deleteCredentialSecret(config.credentialId);
   await repository.deleteProviderConfig(config.id);
