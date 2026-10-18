@@ -1,4 +1,4 @@
-import { individualLeadCommand, leadDecisionContract, LEAD_INSTRUCTION_VERSION, LEGACY_LEAD_INSTRUCTION_VERSION } from "./leadGuidance";
+import { guidanceInstructions, individualLeadCommand, leadDecisionContract, leadGuidanceVersion, LEAD_INSTRUCTION_VERSION, LEGACY_LEAD_INSTRUCTION_VERSION } from "./leadGuidance";
 import * as packets from "./packets";
 import { buildReceiverSecondLookPrompt, receiverRevealInstruction, senderRevealInstruction, missingRevealInstruction, sharedAnswersInstruction, seriesReflectionInstruction } from "./prompts";
 import type { TelepathicSeriesState, TelepathicTranscriptEvent } from "./types";
@@ -77,6 +77,38 @@ export function withReadableInstruction(state: TelepathicSeriesState, event: Tel
   return instruction === undefined ? event : { ...event, display: { version: 1, instruction } };
 }
 
+
+/** Read-only projection for an accepted fixed-lead decision. The durable raw
+ * provider output remains in transcript/providerCalls. We hide it only when
+ * the stored decision and every readable instruction produced from it are
+ * present, so an incomplete historical record never loses its only evidence. */
+export function projectAcceptedLeadDecision(state: TelepathicSeriesState, event: TelepathicTranscriptEvent): TelepathicTranscriptEvent | null {
+  const match = /^lead_guidance:cycle:([123])$/.exec(event.stage);
+  if (!match || event.kind !== "response" || !event.roundId || !event.providerCallId) return event;
+  const cycle = Number(match[1]) as 1 | 2 | 3;
+  const round = state.rounds.find(item => item.assignment.roundId === event.roundId);
+  const decision = round?.guidance?.decisions.find(item => item.cycle === cycle);
+  const call = state.providerCalls.find(item => item.id === event.providerCallId);
+  if (!round || !decision || !call || call.status !== "succeeded" || call.callStage !== event.stage
+    || call.roundId !== event.roundId || call.participantId !== event.authorId || call.responseText !== event.text) return event;
+  let instructions: Array<{ participantId: string; instruction: string }>;
+  try { instructions = guidanceInstructions(decision, leadGuidanceVersion(state)); } catch { return event; }
+  const transcript = state.transcript ?? [];
+  const hasReadableCounterparts = instructions.every(({ participantId, instruction }) => transcript.some(candidate =>
+    candidate.roundId === event.roundId && candidate.stage === "receiver_guidance" && candidate.kind === "instruction"
+    && candidate.authorId === event.authorId && candidate.cycle === cycle && candidate.recipientIds.includes(participantId)
+    && candidate.text === instruction));
+  if (!hasReadableCounterparts) return event;
+  if (!decision.finishRound && decision.finishParticipantIds.length === 0) return null;
+  const pl = state.config.language === "pl";
+  const recipientIds = decision.finishRound ? round.assignment.receiverParticipantIds : decision.finishParticipantIds;
+  const names = recipientIds.map(id => state.config.participants.find(participant => participant.id === id)?.displayName ?? id);
+  const text = decision.finishRound
+    ? (pl ? "Prowadzący zakończył tę rundę." : "The lead ended this round.")
+    : (pl ? `Prowadzący zakończył udział: ${names.join(", ")}.` : `The lead ended participation for: ${names.join(", ")}.`);
+  return { ...event, kind: "notice", recipientIds, text };
+}
+
 export function readableTelepathicText(event: TelepathicTranscriptEvent, pl: boolean): string {
   if (event.kind !== "materials") return event.text;
   return event.display?.version === 1 && typeof event.display.instruction === "string" ? event.display.instruction
@@ -91,6 +123,7 @@ export function uniqueTelepathicEvents(events: TelepathicTranscriptEvent[]): Tel
 export function telepathicMessageTitle(event: TelepathicTranscriptEvent, participants: Array<{id:string;displayName:string}>, leadId: string, pl: boolean): string {
   const name = participants.find(p => p.id === event.authorId)?.displayName ?? event.authorId;
   if (event.kind === "notice" && event.stage.startsWith("lead_guidance:cycle:") && (event.decisionRejectionReason || event.text.startsWith("[REJECTED DECISION"))) return `${pl ? "Odrzucona decyzja" : "Rejected decision"} — ${name}`;
+  if (event.kind === "notice" && event.stage.startsWith("lead_guidance:cycle:")) return `${pl ? "Decyzja prowadzącego" : "Lead decision"} — ${name}`;
   if (event.authorId === "controller") return pl ? "Kontroler programu" : "Program controller";
   if (event.stage === "series_reflection") return `${pl ? "Refleksja końcowa" : "Final reflection"} — ${name}`;
   if ((event.kind === "reflection" || event.stage === "reflection")) return `${pl ? "Refleksja po Revealu" : "Post-Reveal reflection"} — ${name}`;

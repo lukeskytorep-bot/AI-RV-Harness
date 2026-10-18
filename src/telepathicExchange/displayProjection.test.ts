@@ -61,3 +61,62 @@ it("projects accepted final-map answers missing an output event without duplicat
  const raw=JSON.stringify(result);expect(visibleTranscript(result).map(e=>e.text)).toEqual(["MAP_ONLY_LEAD","MAP_ONLY_RECEIVER"]);expect(telepathicExportDocument(result)).toContain("MAP_ONLY_RECEIVER");expect(JSON.stringify(result)).toBe(raw);
  result.transcript=[{id:"accepted",seriesId:"display",sequence:1,stage:"series_reflection",kind:"reflection",authorId:"lead",recipientIds:[],text:"EXACT_ACCEPTED_OUTPUT",createdAt:"t"}];expect(visibleTranscript(result).map(e=>e.text)).toEqual(["EXACT_ACCEPTED_OUTPUT","MAP_ONLY_RECEIVER"]);
 });
+
+
+for (const language of ["pl", "en"] as const) {
+ it(`${language}: accepted lead decision raw JSON is projected to instructions/finish notice while evidence remains durable`, async()=>{
+  const { result } = await actualDisplayRun(language);
+  const rawLead = result.transcript!.filter(event => /^lead_guidance:cycle:[123]$/.test(event.stage) && event.kind === "response");
+  expect(rawLead.length).toBeGreaterThanOrEqual(2);
+  expect(rawLead[0].text).toContain('"cycle":1');
+  expect(result.providerCalls.find(call => call.id === rawLead[0].providerCallId)?.responseText).toBe(rawLead[0].text);
+  const visible = visibleTranscript(result);
+  expect(visible.some(event => event.id === rawLead[0].id)).toBe(false);
+  expect(visible.filter(event => event.kind === "instruction" && event.text === "Describe motion")).toHaveLength(1);
+  const finish = visible.find(event => event.id === rawLead[1].id);
+  expect(finish).toMatchObject({ kind: "notice", stage: "lead_guidance:cycle:2" });
+  expect(finish?.text).toBe(language === "pl" ? "Prowadzący zakończył tę rundę." : "The lead ended this round.");
+  expect(result.transcript?.find(event => event.id === rawLead[0].id)?.text).toBe(rawLead[0].text);
+  expect(telepathicExportDocument(result)).not.toContain(rawLead[0].text);
+ });
+
+ it(`${language}: incomplete historical lead projection keeps the raw accepted response instead of hiding sole evidence`, async()=>{
+  const { result } = await actualDisplayRun(language);
+  const rawLead = result.transcript!.find(event => event.stage === "lead_guidance:cycle:1" && event.kind === "response")!;
+  result.transcript = result.transcript!.filter(event => !(event.stage === "receiver_guidance" && event.kind === "instruction" && event.cycle === 1));
+  expect(visibleTranscript(result).find(event => event.id === rawLead.id)?.text).toBe(rawLead.text);
+ });
+
+ it(`${language}: fenced accepted lead JSON is still hidden only by the durable accepted-decision relation`, async()=>{
+  const { result } = await actualDisplayRun(language);
+  const rawLead = result.transcript!.find(event => event.stage === "lead_guidance:cycle:1" && event.kind === "response")!;
+  const call = result.providerCalls.find(item => item.id === rawLead.providerCallId)!;
+  const fenced = `\`\`\`json\n${rawLead.text}\n\`\`\``;
+  rawLead.text = fenced; call.responseText = fenced;
+  expect(visibleTranscript(result).some(event => event.id === rawLead.id)).toBe(false);
+  expect(result.providerCalls.find(item => item.id === rawLead.providerCallId)?.responseText).toBe(fenced);
+ });
+}
+
+it("v2 multiple recipients project one accepted lead decision to addressed instructions without raw JSON", async()=>{
+ const { result } = await actualDisplayRun("en");
+ const round = result.rounds[0];
+ result.config.leadInstructionVersion = "fixed_lead_guidance_v2";
+ result.config.participants.push({ ...structuredClone(result.config.participants.find(p=>p.id==="a")!), id:"b", displayName:"b", ai:{...structuredClone(result.config.participants.find(p=>p.id==="a")!.ai!),profileId:"b",aiIdentityId:"b"} });
+ round.assignment.receiverParticipantIds.push("b");
+ round.guidance!.decisions[0] = {cycle:1,finishRound:false,finishParticipantIds:[],individual:[{participantId:"a",instruction:"Describe motion"},{participantId:"b",instruction:"Describe temperature"}]};
+ const raw = result.transcript!.find(event=>event.stage==="lead_guidance:cycle:1" && event.kind==="response")!;
+ const call = result.providerCalls.find(item=>item.id===raw.providerCallId)!;
+ raw.text = JSON.stringify(round.guidance!.decisions[0]); call.responseText = raw.text;
+ result.transcript = result.transcript!.filter(event=>!(event.stage==="receiver_guidance" && event.cycle===1 && event.kind==="instruction"));
+ const next = Math.max(...result.transcript.map(event=>event.sequence)) + 1;
+ result.transcript.push(
+  {id:"r:g:1:a",seriesId:result.config.seriesId,roundId:round.assignment.roundId,sequence:next,stage:"receiver_guidance",kind:"instruction",authorId:raw.authorId,recipientIds:["a"],text:"Describe motion",cycle:1,createdAt:"t"},
+  {id:"r:g:1:b",seriesId:result.config.seriesId,roundId:round.assignment.roundId,sequence:next+1,stage:"receiver_guidance",kind:"instruction",authorId:raw.authorId,recipientIds:["b"],text:"Describe temperature",cycle:1,createdAt:"t"},
+ );
+ const visible = visibleTranscript(result);
+ expect(visible.some(event=>event.id===raw.id)).toBe(false);
+ expect(visible.filter(event=>event.kind==="instruction" && event.cycle===1).map(event=>event.text)).toEqual(["Describe motion","Describe temperature"]);
+ expect(result.providerCalls.find(item=>item.id===raw.providerCallId)?.responseText).toBe(raw.text);
+ expect(JSON.parse(call.responseText ?? "{}").individual).toEqual(round.guidance!.decisions[0].individual);
+});

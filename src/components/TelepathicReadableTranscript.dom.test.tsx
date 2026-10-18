@@ -46,8 +46,17 @@ for (const mode of ["conversation_exchange", "ai_ai_training"] as const) for (co
       expect(container.textContent).toContain(language === "pl" ? "Kontroler programu" : "Program controller");
       expect(container.textContent).toContain(language === "pl" ? "Prowadzący — lead" : "Lead — lead");
       expect(container.textContent).toContain(language === "pl" ? "Refleksja po Revealu — a" : "Post-Reveal reflection — a");
-      const doc = telepathicExportDocument(state); expect(doc).toContain("Describe motion"); expect(doc).toContain("ACTUAL MODEL ANSWER with notes and system words"); expect(doc).not.toMatch(/FG PRIVATE|VN PRIVATE|READ-ONLY|OWN_BLIND_DATA/);
-      const rawEvidence = JSON.stringify((await store.getTelepathicSeries("display"))!.providerCalls); expect(rawEvidence).toContain("FG PRIVATE LEARNING"); expect(rawEvidence).toContain("VN PRIVATE LEARNING");
+      expect(container.textContent).not.toMatch(/"finishRound"|"finishParticipantIds"|"broadcast"|"individual"/);
+      expect(container.textContent).toContain(language === "pl" ? "Prowadzący zakończył tę rundę." : "The lead ended this round.");
+      const leadSection = [...container.querySelectorAll(".telepathic-participant-section")].find(section => section.querySelector("h3")?.textContent?.includes(language === "pl" ? "Prowadzący" : "Lead"));
+      expect(leadSection?.textContent?.match(/Describe motion/g) ?? []).toHaveLength(1);
+      const doc = telepathicExportDocument(state); expect(doc).toContain("Describe motion"); expect(doc).toContain("ACTUAL MODEL ANSWER with notes and system words"); expect(doc).not.toMatch(/FG PRIVATE|VN PRIVATE|READ-ONLY|OWN_BLIND_DATA|"finishRound"|"broadcast"/);
+      const persisted = (await store.getTelepathicSeries("display"))!;
+      const rawEvidence = JSON.stringify(persisted.providerCalls); expect(rawEvidence).toContain("FG PRIVATE LEARNING"); expect(rawEvidence).toContain("VN PRIVATE LEARNING");
+      const rawLead = persisted.transcript!.find(event => event.kind === "response" && /^lead_guidance:cycle:[123]$/.test(event.stage))!;
+      expect(rawLead).toBeDefined();
+      expect(persisted.providerCalls.find(call => call.id === rawLead.providerCallId)?.responseText).toBe(rawLead.text);
+      expect(rawLead.text).toContain('"finishRound"');
       if (mode === "conversation_exchange") {
         const hidden: TelepathicTranscriptEvent = { id:"new-hidden",seriesId:"display",roundId:state.rounds[0].assignment.roundId,sequence:999,stage:"sender_target",kind:"materials",authorId:"controller",recipientIds:["lead"],text:"HIDDEN RAW",display:{version:1,instruction:"HIDDEN DISPLAY"},createdAt:"t" };
         state.transcript!.push(hidden); delete state.rounds[0].revealedAt; await store.saveTelepathicSeries(state);

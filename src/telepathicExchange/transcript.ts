@@ -1,4 +1,4 @@
-import { withReadableInstruction } from "./displayProjection";
+import { projectAcceptedLeadDecision, withReadableInstruction } from "./displayProjection";
 import type { TelepathicSeriesState, TelepathicTranscriptEvent } from "./types";
 
 export function recordTranscript(state: TelepathicSeriesState, event: Omit<TelepathicTranscriptEvent, "seriesId" | "sequence" | "createdAt">, timestamp: string): void {
@@ -23,7 +23,11 @@ export function visibleTranscript(state: TelepathicSeriesState): TelepathicTrans
     if (state.transcript === undefined && !round?.revealedAt && ["reflection","shared_answers_comment"].includes(e.stage)) return false;
     return Boolean(round && (round.revealedAt || round.assignment.senderParticipantId === human.id ||
       ((e.authorId === human.id || e.recipientIds.includes(human.id)) && e.stage !== "lead_guidance")));
-  }).map(e => withReadableInstruction(state, structuredClone(e)));
+  }).flatMap(e => {
+    const readable = withReadableInstruction(state, structuredClone(e));
+    const projected = projectAcceptedLeadDecision(state, readable);
+    return projected ? [projected] : [];
+  });
 }
 
 export function legacyEvents(state: { config: Pick<TelepathicSeriesState["config"],"seriesId"|"participants">;rounds:TelepathicSeriesState["rounds"];createdAt:string; finalReflections?:Record<string,string> }): TelepathicTranscriptEvent[] {
