@@ -1,13 +1,17 @@
 use super::*;
-use super::adapters::{normalized_credential_endpoint, provider_family, validate_base_url, ProviderFamily, OPENROUTER_APP_REFERER, OPENROUTER_APP_TITLE};
+use super::adapters::{normalized_credential_endpoint, provider_family, validate_base_url, ProviderFamily};
 
 #[test]
-fn openrouter_app_attribution_uses_public_project_page() {
-    assert_eq!(
-        OPENROUTER_APP_REFERER,
-        "https://lukeskytorep-bot.github.io/AI-RV-Harness/"
-    );
-    assert_eq!(OPENROUTER_APP_TITLE, "AI RV Harness");
+fn openrouter_requests_omit_application_identity_and_keep_authentication() {
+    let request = authenticated(
+        client().unwrap().post("https://openrouter.ai/api/v1/chat/completions"),
+        ProviderKind::Openrouter,
+        "simulator-secret",
+    ).build().unwrap();
+    assert_eq!(request.headers().get("authorization").unwrap().to_str().unwrap(), "Bearer simulator-secret");
+    for header in ["http-referer", "referer", "x-title", "x-openrouter-title", "user-agent"] {
+        assert!(request.headers().get(header).is_none(), "unexpected identifying header: {header}");
+    }
 }
 use super::reasoning::split_tagged_reasoning;
 use super::endpoint_capabilities::openrouter_model_endpoints_url;
@@ -1037,7 +1041,7 @@ fn blackbox_uses_the_documented_openai_compatible_routes() {
 }
 
 #[tokio::test]
-async fn openrouter_requests_include_application_attribution_headers() {
+async fn openrouter_wire_requests_omit_application_attribution_headers() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -1045,14 +1049,9 @@ async fn openrouter_requests_include_application_attribution_headers() {
         let request = read_simulator_request(&mut socket).await;
         let headers = request.to_ascii_lowercase();
         assert!(headers.contains("authorization: bearer simulator-secret"));
-        assert!(headers.contains(&format!(
-            "http-referer: {}",
-            OPENROUTER_APP_REFERER.to_ascii_lowercase()
-        )));
-        assert!(headers.contains(&format!(
-            "x-openrouter-title: {}",
-            OPENROUTER_APP_TITLE.to_ascii_lowercase()
-        )));
+        for header in ["http-referer:", "referer:", "x-title:", "x-openrouter-title:", "user-agent:"] {
+            assert!(!headers.lines().any(|line| line.starts_with(header)), "unexpected identifying header: {header}");
+        }
         let body = r#"{"data":[]}"#;
         let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
         socket.write_all(response.as_bytes()).await.unwrap();

@@ -6,10 +6,10 @@ import nativeProviderTransport from "../src-tauri/src/providers/transport.rs?raw
 import { APP_VERSION } from "./version";
 
 describe("application version", () => {
-  it("stays aligned across the frontend, Tauri bundle and native provider user agent", () => {
+  it("stays aligned across frontend and native manifests without sending a version user agent", () => {
     expect(APP_VERSION).toBe(packageJson.version);
     expect(tauriConfig.version).toBe(APP_VERSION);
     expect(cargoManifest).toMatch(new RegExp(`^version = "${APP_VERSION.replaceAll(".", "\\.")}"$`, "m"));
-    expect(nativeProviderTransport).toContain('env!("CARGO_PKG_VERSION")');
+    expect(nativeProviderTransport).not.toContain(".user_agent(");
   });
 });

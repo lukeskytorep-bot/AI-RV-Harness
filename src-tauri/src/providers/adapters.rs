@@ -51,15 +51,8 @@ pub(super) fn normalized_credential_endpoint(base: &str) -> Result<String, Strin
     Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
-pub(super) const OPENROUTER_APP_REFERER: &str = "https://lukeskytorep-bot.github.io/AI-RV-Harness/";
-pub(super) const OPENROUTER_APP_TITLE: &str = "AI RV Harness";
-
 pub(super) fn authenticated(builder: RequestBuilder, provider: ProviderKind, secret: &str) -> RequestBuilder {
     match provider {
-        ProviderKind::Openrouter => builder
-            .bearer_auth(secret)
-            .header("HTTP-Referer", OPENROUTER_APP_REFERER)
-            .header("X-OpenRouter-Title", OPENROUTER_APP_TITLE),
         ProviderKind::Google => builder.header("x-goog-api-key", secret),
         ProviderKind::Anthropic => builder
             .header("x-api-key", secret)

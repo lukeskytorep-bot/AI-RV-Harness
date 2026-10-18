@@ -50,7 +50,7 @@ Etap 6 keeps the existing Tauri command names and TypeScript retry ownership whi
 | Native module | Owns | Must not own |
 | --- | --- | --- |
 | `src-tauri/src/providers.rs` | public Tauri command facade, request/response DTOs, debug-payload redaction coordination | provider-specific wire-format implementations, retry loops |
-| `src-tauri/src/providers/adapters.rs` | provider family classification, fixed/custom base URL validation, authentication headers, OpenRouter attribution headers | request payload construction, response parsing |
+| `src-tauri/src/providers/adapters.rs` | provider family classification, fixed/custom base URL validation, authentication headers (no application attribution) | request payload construction, response parsing |
 | `src-tauri/src/providers/request_builders.rs` | OpenAI-compatible, Google and Anthropic request payloads/endpoints | HTTP dispatch, response interpretation |
 | `src-tauri/src/providers/response_parsers.rs` | normalized `ProviderChatResponse` construction and provider response payload interpretation | HTTP transport, retry policy |
 | `src-tauri/src/providers/reasoning.rs` | native/tagged reasoning extraction and final-content normalization | provider authentication, HTTP dispatch |
@@ -60,7 +60,7 @@ Etap 6 keeps the existing Tauri command names and TypeScript retry ownership whi
 
 Google and Anthropic remain explicit special wire-format families. OpenRouter, OpenAI, ZAI, DeepSeek, Mistral, Blackbox and Custom OpenAI share the OpenAI-compatible family instead of duplicating near-identical adapter modules. This is intentional: the architectural boundary follows protocol differences rather than brand count.
 
-`src/providerRustModuleBoundary.test.ts` protects the split structurally. Existing native provider contract tests remain in `src-tauri/src/providers/tests.rs` and continue to verify request payloads, parsing, reasoning separation, error redaction, OpenRouter attribution and local simulator behavior.
+`src/providerRustModuleBoundary.test.ts` protects the split structurally. Existing native provider contract tests remain in `src-tauri/src/providers/tests.rs` and continue to verify request payloads, parsing, reasoning separation, error redaction, absence of application attribution and local simulator behavior.
 
 ## Public entry points
 

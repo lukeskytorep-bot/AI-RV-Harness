@@ -78,7 +78,7 @@ describe("Etap 6 Rust provider module boundary", () => {
     expect(streaming).toContain("struct OpenRouterStreamAccumulator");
     expect(transport).toContain("async fn send_chat_request");
     expect(transport).toContain("static HTTP_CLIENT");
-    expect(transport).toContain('env!("CARGO_PKG_VERSION")');
+    expect(transport).not.toContain(".user_agent(");
     expect(adapters).not.toContain("HTTP_CLIENT");
     expect(validation).toContain("fn validate_chat_request");
     expect(validation).toContain("fn validate_request_id");

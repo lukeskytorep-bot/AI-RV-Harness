@@ -41,3 +41,9 @@ The UI preserves manual values when the selected model changes. If the selected 
 At execution time, manual sampling requires confirmed capability at the concrete OpenRouter endpoint level and the normal context/prompt/output/reasoning constraints must still fit. Small requests also run the capability preflight when any additional sampler is manual. Unknown sampling capability fails closed before dispatch. `provider.require_parameters=true` is added only for active manual additional sampling.
 
 A fixed seed can improve within-route repeatability but does not promise identical outputs across different providers, endpoint variants, model revisions, routing decisions or backend implementations. Manual sampling may narrow eligible endpoints and therefore can change availability, latency or price.
+
+## Application identification in provider requests
+
+Provider requests do not add `HTTP-Referer`, `X-OpenRouter-Title` or `X-Title` application-attribution headers. The shared native HTTP client does not set an application-specific `User-Agent`. This applies to new requests after installing a build containing this change; it does not alter historical OpenRouter activity.
+
+The API key still authenticates your account. The label displayed for unattributed requests is controlled by OpenRouter; the application does not send a literal `Anonymous` title. Model routing, sampling settings and session behavior are unchanged.

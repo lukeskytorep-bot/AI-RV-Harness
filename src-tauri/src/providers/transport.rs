@@ -20,7 +20,7 @@ static CHAT_CANCELLATIONS: LazyLock<Mutex<ChatCancellationRegistry>> =
 static HTTP_CLIENT: LazyLock<Result<Client, String>> = LazyLock::new(|| {
     Client::builder()
         .connect_timeout(Duration::from_secs(30))
-        .user_agent(format!("AI-RV-Harness/{}", env!("CARGO_PKG_VERSION")))
+        // Do not identify the application or its version to provider endpoints.
         .build()
         .map_err(|error| error.to_string())
 });
