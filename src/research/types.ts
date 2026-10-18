@@ -112,6 +112,8 @@ export interface ResearchViewerControl {
     mode: "provider_default" | "fixed" | "condition_variable";
     value?: number;
   };
+  /** Frozen common OpenRouter sampling inherited from the base Profile. Missing means legacy Research. */
+  sampling?: { source: "profile"; profileId: string; topP?: number; topK?: number; seed?: number };
   maxOutputTokens: number;
 }
 

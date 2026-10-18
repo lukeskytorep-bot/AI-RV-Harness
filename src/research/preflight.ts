@@ -9,6 +9,7 @@ import { modelRouteKey } from "../modelRoutes";
 import { activeViewerNotesControlSignature, sameFrozenViewerNotesVersion, viewerNotesSnapshotSignature } from "./viewerNotesPolicy";
 import { fieldGuideSnapshotSignature } from "./fieldGuidePolicy";
 import { researchProtocolLabel, researchProtocolViewerCalls, resolveResearchProtocol, type ResearchProtocolResource } from "./protocolPolicy";
+import { researchSamplingCapabilityState, researchSamplingSignature } from "./samplingPolicy";
 
 export interface ResearchPreflightInventory {
   profiles: Profile[];
@@ -65,6 +66,9 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   const reasoningValues = new Set(config.conditions.map((condition) => condition.requestedSettings.reasoningEffort ?? "__provider_default__"));
   const temperatureValues = new Set(config.conditions.map((condition) => condition.requestedSettings.temperature ?? "__provider_default__"));
   const outputValues = new Set(config.conditions.map((condition) => condition.requestedSettings.maxOutputTokens ?? "__provider_default__"));
+  const topPValues = new Set(config.conditions.map((condition) => condition.requestedSettings.topP ?? "__provider_default__"));
+  const topKValues = new Set(config.conditions.map((condition) => condition.requestedSettings.topK ?? "__provider_default__"));
+  const seedValues = new Set(config.conditions.map((condition) => condition.requestedSettings.seed ?? "__provider_default__"));
   const viewerNotesControls = new Set(config.conditions.map((condition) => activeViewerNotesControlSignature(condition.viewerNotes)));
   const fieldGuideControls = new Set(config.conditions.map((condition) => fieldGuideSnapshotSignature(condition.fieldGuide)));
   const comparedViewerIdentities = new Set(config.conditions.map((condition) => `${condition.profileId}\u0000${condition.providerConfigId}\u0000${condition.modelId}`));
@@ -85,7 +89,15 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     }
     checks.push(pass(`${prefix}:model`, `${condition.label}: model route is cached`));
     const effective = resolveGenerationSettings(model.capabilities, condition.requestedSettings);
-    checks.push(effective.omitted.length ? fail(`${prefix}:settings`, `${condition.label}: unsupported setting(s): ${effective.omitted.join(", ")}`) : pass(`${prefix}:settings`, `${condition.label}: requested settings are supported`));
+    const samplingIssues = (["topP", "topK", "seed"] as const).flatMap((parameter) => {
+      if (condition.requestedSettings[parameter] === undefined) return [];
+      const state = researchSamplingCapabilityState(model, parameter);
+      const wireName = parameter === "topP" ? "top_p" : parameter === "topK" ? "top_k" : "seed";
+      return state === "supported" ? [] : [`${wireName} ${state} on ${model.route}`];
+    });
+    checks.push(effective.omitted.length || samplingIssues.length
+      ? fail(`${prefix}:settings`, `${condition.label}: unsupported/unconfirmed setting(s): ${[...effective.omitted, ...samplingIssues].join(", ")}`)
+      : pass(`${prefix}:settings`, `${condition.label}: requested settings, including manual sampling, are supported by the selected Viewer route`));
     checks.push(condition.capabilitySnapshot && condition.effectiveSettings ? pass(`${prefix}:snapshot`, `${condition.label}: capability + requested/effective settings snapshot is present`) : fail(`${prefix}:snapshot`, `${condition.label}: Research capability snapshot is missing`));
     const signature = JSON.stringify(effective.effective);
     effectiveSignatures.set(signature, [...(effectiveSignatures.get(signature) ?? []), condition.key]);
@@ -113,6 +125,9 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   if (config.templateType !== "reasoning" && reasoningValues.size !== 1) confoundedControls.push("reasoning");
   if (config.templateType !== "temperature" && temperatureValues.size !== 1) confoundedControls.push("temperature");
   if (outputValues.size !== 1) confoundedControls.push("maximum output tokens");
+  if (topPValues.size !== 1) confoundedControls.push("top_p");
+  if (topKValues.size !== 1) confoundedControls.push("top_k");
+  if (seedValues.size !== 1) confoundedControls.push("seed");
   if (config.templateType !== "viewer_notes" && viewerNotesControls.size !== 1) confoundedControls.push("Viewer Notes");
   const fieldGuideIsTestedVariable = config.templateType === "system_prompt" && config.promptResearchSource === "field_guide_history";
   if (!fieldGuideIsTestedVariable && !identityVariesByDesign && fieldGuideControls.size !== 1) confoundedControls.push("Field Guide");
@@ -140,6 +155,15 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     if (config.viewerControl.temperature.mode === "fixed" && (temperatureValues.size !== 1 || !temperatureValues.has(config.viewerControl.temperature.value ?? Number.NaN))) lockIssues.push("fixed temperature");
     if (config.viewerControl.temperature.mode === "provider_default" && !temperatureValues.has("__provider_default__")) lockIssues.push("provider-default temperature");
     if (outputValues.size !== 1 || !outputValues.has(config.viewerControl.maxOutputTokens)) lockIssues.push("maximum output tokens");
+    if (config.viewerControl.sampling) {
+      const samplingControl = {
+        ...(config.viewerControl.sampling.topP !== undefined ? { topP: config.viewerControl.sampling.topP } : {}),
+        ...(config.viewerControl.sampling.topK !== undefined ? { topK: config.viewerControl.sampling.topK } : {}),
+        ...(config.viewerControl.sampling.seed !== undefined ? { seed: config.viewerControl.sampling.seed } : {}),
+      };
+      if (new Set(config.conditions.map((condition) => researchSamplingSignature(condition.requestedSettings))).size !== 1
+        || researchSamplingSignature(samplingControl) !== researchSamplingSignature(config.conditions[0]?.requestedSettings ?? {})) lockIssues.push("OpenRouter sampling");
+    }
     checks.push(lockIssues.length
       ? fail("viewer_control_lock", `Study-wide Viewer control does not match its conditions: ${lockIssues.join(", ")}`)
       : pass("viewer_control_lock", "Study-wide Viewer model, prompt and generation controls are captured in Experiment Lock"));

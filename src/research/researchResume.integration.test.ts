@@ -13,18 +13,19 @@ import { executeResearchSessions, prepareInterruptedResearchRetry } from "./engi
 const provider: ProviderConfig = { id: "pc", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
 const model: ProviderModel = {
   providerConfigId: "pc", provider: "openrouter", modelId: "m", displayName: "M", route: "openrouter:m", pricing: {}, recommended: false, rawMetadata: {}, refreshedAt: "now",
-  capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, contextTokens: 131072, maxOutputTokens: 65536, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: [], source: "provider", capturedAt: "now" },
+  capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, contextTokens: 131072, maxOutputTokens: 65536, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: ["top_k"], source: "provider", capturedAt: "now" },
 };
 
-function researchDurableRepository(options?: { frozenOutputPolicy?: boolean; initialTokens?: number }) {
+function researchDurableRepository(options?: { frozenOutputPolicy?: boolean; initialTokens?: number; lockedTopK?: number; liveProfileTopK?: number }) {
   const initialTokens = options?.initialTokens ?? 16384;
   const recoveryTokens = initialTokens === 8192 ? 16384 : 32768;
   const protocol = createResearchProtocolSelection("rv-lite", "en");
+  const lockedSettings = { ...(options?.lockedTopK !== undefined ? { topK: options.lockedTopK } : {}), maxOutputTokens: initialTokens };
   const condition = {
     key: "a", label: "A", profileId: "profile", providerConfigId: provider.id, modelId: model.modelId,
-    requestedSettings: { maxOutputTokens: initialTokens },
+    requestedSettings: lockedSettings,
     ...(options?.frozenOutputPolicy ? { viewerOutputPolicy: { version: 1 as const, initialTokens, recoveryTokens, preserveConfiguredBudget: false } } : {}),
-    effectiveSettings: { requested: { maxOutputTokens: initialTokens }, effective: { maxOutputTokens: initialTokens }, omitted: [] },
+    effectiveSettings: { requested: lockedSettings, effective: lockedSettings, omitted: [] },
     capabilitySnapshot: structuredClone(model.capabilities),
   };
   let project: ResearchProjectRecord = {
@@ -68,7 +69,7 @@ function researchDurableRepository(options?: { frozenOutputPolicy?: boolean; ini
     listTargets: vi.fn(async () => [{ id: "target", collection: "user", title: "Target", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }]),
     listProviderConfigs: vi.fn(async () => [provider]),
     listProviderModels: vi.fn(async () => [model]),
-    listProfiles: vi.fn(async () => [{ id: "profile", name: "Viewer", credentialId: "c", createdAt: "now", updatedAt: "now" }]),
+    listProfiles: vi.fn(async () => [{ id: "profile", name: "Viewer", credentialId: "c", ...(options?.liveProfileTopK !== undefined ? { defaultViewerOpenRouterSampling: { enabled: true, topK: options.liveProfileTopK } } : {}), createdAt: "now", updatedAt: "now" }]),
     createRvSession: vi.fn(async (input: Record<string, unknown>) => {
       if (session) throw new Error("UNIQUE constraint failed: rv_sessions.id");
       session = { ...input, state: "Created", preRevealTranscript: "", postRevealTranscript: "", createdAt: "now", updatedAt: "now" } as unknown as RvSession;
@@ -136,6 +137,23 @@ describe("Research same-assignment Resume", () => {
     expect(livePrompts[0]).toContain("Step 2");
     expect(durable.events.filter((event) => event.eventType === "VIEWER_RESPONSE" && event.metadata?.stepId === "lite:prompt:1:viewer")).toHaveLength(1);
   });
+
+  it("keeps locked sampling on execution when the live Profile was edited after Experiment Lock", async () => {
+    const durable = researchDurableRepository({ frozenOutputPolicy: true, lockedTopK: 64, liveProfileTopK: 20 });
+    const observed: number[] = [];
+    await executeResearchSessions({
+      repository: durable.repository,
+      projectId: "research",
+      rvLiteSessionRunner: async (input) => (await import("../sessions/rvLiteController")).runAutomaticRvLiteSession({
+        ...input,
+        chat: async ({ settings }) => { observed.push(settings.requested.topK ?? -1); return { content: "complete", finishReason: "stop", usage: {} }; },
+      }),
+    });
+    expect(observed.length).toBeGreaterThan(0);
+    expect(new Set(observed)).toEqual(new Set([64]));
+    expect(durable.snapshot().generationSettings.requested.topK).toBe(64);
+  });
+
   it("preserves a legacy locked Research single output budget instead of silently upgrading it", async () => {
     const durable = researchDurableRepository();
     let calls = 0;

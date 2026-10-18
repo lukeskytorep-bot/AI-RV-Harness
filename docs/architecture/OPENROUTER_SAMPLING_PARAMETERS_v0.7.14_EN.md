@@ -66,3 +66,7 @@ A release candidate should verify with an operator-approved OpenRouter credentia
 12. diagnostics/export distinguish Auto/omitted from manual requested/wire values without secrets.
 
 Paid runtime tests are evidence for the exact candidate and should not be inferred from unit tests alone.
+
+## Research inheritance
+
+Existing Research templates inherit enabled manual `top_p`, `top_k`, and `seed` from the selected base Viewer Profile as one common controlled setting. The Research builder reads the stored user intent directly rather than relying only on capability-resolved defaults, so an unsupported or unknown manual value cannot disappear silently. Profile/model comparisons keep that one base-Profile sampling configuration constant and require every compared Viewer route to confirm support before Experiment Lock. Auto/disabled values remain omitted, explicit zero remains manual, and later Profile edits do not change locked or resumed Research. The Dry Run and locked project summary expose the frozen values. Judge/Monitor routes do not inherit them.
