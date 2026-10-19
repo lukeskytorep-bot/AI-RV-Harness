@@ -19,7 +19,7 @@ use super::errors::safe_provider_error;
 use super::request_builders::{build_anthropic_request, build_google_request, build_openai_compatible_request, enable_chat_streaming, enable_mistral_chat_streaming};
 use super::response_parsers::{parse_anthropic_response, parse_google_response, parse_openai_compatible_response};
 use super::streaming::{
-    send_custom_openai_streaming_chat_request, send_mistral_streaming_chat_request, send_openrouter_streaming_chat_request, OpenRouterStreamAccumulator, ProviderStreamEvent, SseDecoder, SseFrame,
+    send_blackbox_streaming_chat_request, send_custom_openai_streaming_chat_request, send_mistral_streaming_chat_request, send_openrouter_streaming_chat_request, OpenRouterStreamAccumulator, ProviderStreamEvent, SseDecoder, SseFrame,
     MAX_ACCUMULATED_STREAM_DATA_BYTES, MAX_PENDING_SSE_EVENT_BYTES,
 };
 use super::transport::retry_after_value_ms_at;
@@ -2371,6 +2371,162 @@ async fn direct1d_mistral_stream_accepts_done_without_usage() {
 async fn direct1d_mistral_stream_rejects_eof_without_done_after_reasoning() {
     let (url, server) = start_sse_server(vec![(10, "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\",\"text\":\"partial\"}]}]},\"finish_reason\":null}]}\n\n")]).await;
     let error = send_mistral_streaming_chat_request(
+        reqwest::Client::new().post(url), None, "secret", &short_stream_policy(500, 500, 2_000), None,
+    ).await.unwrap_err();
+    assert_eq!(error.code.as_ref(), "response_body_read");
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct2e_blackbox_stream_sends_stream_true_and_reconstructs_reasoning_usage_and_provider() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_simulator_request(&mut socket).await;
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json.get("stream"), Some(&json!(true)));
+        assert_eq!(json.get("top_p"), Some(&json!(0.7)));
+        assert_eq!(json.get("top_k"), Some(&json!(100)));
+        assert_eq!(json.get("seed"), Some(&json!(42)));
+        assert!(json.get("stream_options").is_none());
+        assert!(json.get("provider").is_none());
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: blackbox-stream-1\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.write_all(b": keepalive\n\n").await.unwrap();
+        socket.write_all(b"data: {\"id\":\"bb-gen\",\"model\":\"vendor/model-v1\",\"provider\":\"ExampleProvider\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning\":\"private \"},\"finish_reason\":null}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{\"reasoning\":\"thought\",\"content\":\"visible \"},\"finish_reason\":null}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\",\"native_finish_reason\":\"completed\"}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":6,\"total_tokens\":15,\"completion_tokens_details\":{\"reasoning_tokens\":2}}}\n\n").await.unwrap();
+        socket.write_all(b"data: [DONE]\n\n").await.unwrap();
+    });
+
+    let base = format!("http://{address}");
+    let mut request = chat_request(ProviderKind::Blackbox, "vendor/model-v1");
+    request.top_p = Some(0.7);
+    request.top_k = Some(100);
+    request.seed = Some(42);
+    let (url, mut body) = build_chat_request(&request, &base).unwrap();
+    enable_chat_streaming(&mut body).unwrap();
+    let result = send_blackbox_streaming_chat_request(
+        authenticated(client().unwrap().post(url).json(&body), ProviderKind::Blackbox, "simulator-secret"),
+        None,
+        "simulator-secret",
+        &short_stream_policy(500, 500, 2_000),
+        None,
+    ).await.unwrap();
+    let parsed = parse_chat_response(ProviderKind::Blackbox, result.payload, result.request_id).unwrap();
+    assert_eq!(parsed.content, "visible answer");
+    assert_eq!(parsed.reasoning_content.as_deref(), Some("private thought"));
+    assert_eq!(parsed.usage.total_tokens, Some(15));
+    assert_eq!(parsed.usage.reasoning_tokens, Some(2));
+    assert_eq!(parsed.actual_provider.as_deref(), Some("ExampleProvider"));
+    assert_eq!(parsed.provider_request_id.as_deref(), Some("blackbox-stream-1"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct2e_blackbox_stream_accepts_done_without_usage() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_simulator_request(&mut socket).await;
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json.get("stream"), Some(&json!(true)));
+        assert!(json.get("stream_options").is_none());
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: blackbox-stream-no-usage\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"final without usage\"},\"finish_reason\":\"stop\"}]}\n\n").await.unwrap();
+        socket.write_all(b"data: [DONE]\n\n").await.unwrap();
+    });
+    let base = format!("http://{address}");
+    let request = chat_request(ProviderKind::Blackbox, "vendor/model-v1");
+    let (url, mut body) = build_chat_request(&request, &base).unwrap();
+    enable_chat_streaming(&mut body).unwrap();
+    let result = send_blackbox_streaming_chat_request(
+        authenticated(client().unwrap().post(url).json(&body), ProviderKind::Blackbox, "simulator-secret"),
+        None,
+        "simulator-secret",
+        &short_stream_policy(500, 500, 2_000),
+        None,
+    ).await.unwrap();
+    let parsed = parse_chat_response(ProviderKind::Blackbox, result.payload, result.request_id).unwrap();
+    assert_eq!(parsed.content, "final without usage");
+    assert_eq!(parsed.usage.total_tokens, None);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct2e_blackbox_stream_surfaces_choice_error_before_output() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _request = read_simulator_request(&mut socket).await;
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: blackbox-choice-error-before\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"error\",\"error\":{\"type\":\"upstream\",\"code\":502,\"message\":\"upstream failed simulator-secret\"}}]}\n\n").await.unwrap();
+        socket.write_all(b"data: [DONE]\n\n").await.unwrap();
+    });
+
+    let base = format!("http://{address}");
+    let request = chat_request(ProviderKind::Blackbox, "vendor/model-v1");
+    let (url, mut body) = build_chat_request(&request, &base).unwrap();
+    enable_chat_streaming(&mut body).unwrap();
+    let error = send_blackbox_streaming_chat_request(
+        authenticated(client().unwrap().post(url).json(&body), ProviderKind::Blackbox, "simulator-secret"),
+        None,
+        "simulator-secret",
+        &short_stream_policy(500, 500, 2_000),
+        None,
+    ).await.unwrap_err();
+    assert_eq!(error.code.as_ref(), "provider_error");
+    assert_eq!(error.metadata.provider_code.as_deref(), Some("502"));
+    assert_eq!(error.metadata.provider_request_id.as_deref(), Some("blackbox-choice-error-before"));
+    assert_eq!(error.metadata.semantic_output_started, None);
+    assert!(error.message.contains("[REDACTED]"));
+    assert!(!error.message.contains("simulator-secret"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct2e_blackbox_stream_surfaces_choice_error_after_output() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _request = read_simulator_request(&mut socket).await;
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: blackbox-choice-error-after\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{\"reasoning\":\"private\",\"content\":\"partial\"},\"finish_reason\":null}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"error\",\"error\":{\"code\":502,\"message\":\"upstream failed simulator-secret\"}}]}\n\n").await.unwrap();
+        socket.write_all(b"data: [DONE]\n\n").await.unwrap();
+    });
+
+    let base = format!("http://{address}");
+    let request = chat_request(ProviderKind::Blackbox, "vendor/model-v1");
+    let (url, mut body) = build_chat_request(&request, &base).unwrap();
+    enable_chat_streaming(&mut body).unwrap();
+    let error = send_blackbox_streaming_chat_request(
+        authenticated(client().unwrap().post(url).json(&body), ProviderKind::Blackbox, "simulator-secret"),
+        None,
+        "simulator-secret",
+        &short_stream_policy(500, 500, 2_000),
+        None,
+    ).await.unwrap_err();
+    assert_eq!(error.code.as_ref(), "provider_error");
+    assert_eq!(error.metadata.provider_code.as_deref(), Some("502"));
+    assert_eq!(error.metadata.provider_request_id.as_deref(), Some("blackbox-choice-error-after"));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
+    assert!(error.message.contains("[REDACTED]"));
+    assert!(!error.message.contains("simulator-secret"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct2e_blackbox_stream_rejects_eof_without_done_after_output() {
+    let (url, server) = start_sse_server(vec![(10, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")]).await;
+    let error = send_blackbox_streaming_chat_request(
         reqwest::Client::new().post(url), None, "secret", &short_stream_policy(500, 500, 2_000), None,
     ).await.unwrap_err();
     assert_eq!(error.code.as_ref(), "response_body_read");

@@ -412,6 +412,7 @@ enum StreamingFlavor {
     OpenRouter,
     CustomOpenAi,
     Mistral,
+    Blackbox,
 }
 
 #[derive(Default)]
@@ -441,6 +442,7 @@ pub(super) struct OpenRouterStreamAccumulator {
 impl OpenRouterStreamAccumulator {
     fn custom_openai() -> Self { Self { flavor: StreamingFlavor::CustomOpenAi, ..Self::default() } }
     fn mistral() -> Self { Self { flavor: StreamingFlavor::Mistral, ..Self::default() } }
+    fn blackbox() -> Self { Self { flavor: StreamingFlavor::Blackbox, ..Self::default() } }
 
     fn process_frame_with_events(&mut self, frame: SseFrame, secret: &str, request_id: Option<&str>) -> Result<Vec<ProviderStreamEvent>, ProviderCallError> {
         match frame {
@@ -528,6 +530,30 @@ impl OpenRouterStreamAccumulator {
         let Some(choice) = payload.get("choices").and_then(Value::as_array).and_then(|choices| choices.first()) else {
             return Ok(Vec::new());
         };
+        if matches!(self.flavor, StreamingFlavor::Blackbox) {
+            if let Some(choice_error) = choice.get("error").filter(|value| !value.is_null()) {
+                let delta = choice.get("delta").unwrap_or(&Value::Null);
+                let content = super::reasoning::extract_openai_text(delta.get("content"));
+                let (native_reasoning, _) = super::reasoning::extract_openai_reasoning(delta, None);
+                let reasoning = native_reasoning.unwrap_or_default();
+                let event_has_semantic_output = first_semantic_chunk(
+                    delta,
+                    &content,
+                    &reasoning,
+                    delta.get("reasoning_details").and_then(Value::as_array).map(Vec::as_slice),
+                );
+                let mut normalized_error_payload = payload.clone();
+                if let Some(object) = normalized_error_payload.as_object_mut() {
+                    object.insert("error".to_string(), choice_error.clone());
+                }
+                return Err(stream_provider_error(
+                    &normalized_error_payload,
+                    secret,
+                    request_id,
+                    self.semantic_output_started || event_has_semantic_output,
+                ));
+            }
+        }
         if let Some(value) = choice.get("finish_reason").and_then(Value::as_str) {
             self.finish_reason = Some(value.to_string());
         }
@@ -698,7 +724,7 @@ impl OpenRouterStreamAccumulator {
         }
         if self.flavor == StreamingFlavor::OpenRouter && self.reasoning_details.field_seen {
             message.insert("reasoning_details".into(), Value::Array(self.reasoning_details.details.clone()));
-        } else if self.flavor == StreamingFlavor::CustomOpenAi && self.custom_reasoning_details_seen {
+        } else if matches!(self.flavor, StreamingFlavor::CustomOpenAi | StreamingFlavor::Blackbox) && self.custom_reasoning_details_seen {
             message.insert("reasoning_details".into(), Value::Array(self.custom_reasoning_details.clone()));
         }
         let mut choice = Map::new();
@@ -864,6 +890,7 @@ async fn send_streaming_chat_request(
         let mut accumulator = match flavor {
             StreamingFlavor::CustomOpenAi => OpenRouterStreamAccumulator::custom_openai(),
             StreamingFlavor::Mistral => OpenRouterStreamAccumulator::mistral(),
+            StreamingFlavor::Blackbox => OpenRouterStreamAccumulator::blackbox(),
             StreamingFlavor::OpenRouter => OpenRouterStreamAccumulator::default(),
         };
         let mut saw_transport_activity = false;
@@ -986,4 +1013,14 @@ pub(super) async fn send_mistral_streaming_chat_request(
     on_stream: Option<&Channel<ProviderStreamEvent>>,
 ) -> Result<StreamingChatResult, ProviderCallError> {
     send_streaming_chat_request(builder, request_id, secret, policy, on_stream, StreamingFlavor::Mistral).await
+}
+
+pub(super) async fn send_blackbox_streaming_chat_request(
+    builder: RequestBuilder,
+    request_id: Option<&str>,
+    secret: &str,
+    policy: &ProviderTimeoutPolicy,
+    on_stream: Option<&Channel<ProviderStreamEvent>>,
+) -> Result<StreamingChatResult, ProviderCallError> {
+    send_streaming_chat_request(builder, request_id, secret, policy, on_stream, StreamingFlavor::Blackbox).await
 }
