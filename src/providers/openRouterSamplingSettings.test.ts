@@ -46,7 +46,8 @@ describe("OpenRouter additional sampling profile contract", () => {
   it("allows the shared sampling contract for OpenRouter and Custom without changing other providers", () => {
     expect(validateOpenRouterSamplingForProvider("openrouter", { enabled: true, seed: 42 })).toEqual({ enabled: true, seed: 42 });
     expect(validateOpenRouterSamplingForProvider("custom_openai", { enabled: true, topP: 0.04, topK: 0, seed: 42 })).toEqual({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
-    expect(() => validateOpenRouterSamplingForProvider("mistral", { enabled: true, seed: 42 })).toThrow("OpenRouter or Custom OpenAI-compatible");
+    expect(validateOpenRouterSamplingForProvider("mistral", { enabled: true, topP: 0.04, topK: 0, seed: 42 }))
+      .toEqual({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
     expect(validateOpenRouterSamplingForProvider("mistral", undefined)).toBeUndefined();
   });
 

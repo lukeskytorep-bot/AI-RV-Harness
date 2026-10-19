@@ -26,8 +26,15 @@ describe("Research sampling policy", () => {
     expect(researchSamplingFromProfile(profile({ enabled: false, topP: 0.9, topK: 40, seed: 123 }), "openrouter").requested).toEqual({});
     expect(researchSamplingFromProfile(profile({ enabled: true }), "openrouter").requested).toEqual({});
   });
-  it("does not reactivate retained OpenRouter values on another provider", () => {
-    expect(researchSamplingFromProfile(profile({ enabled: true, topP: 0.9, topK: 40, seed: 123 }), "mistral").requested).toEqual({});
+  it("does not reactivate retained sampling values on an unsupported provider", () => {
+    expect(researchSamplingFromProfile(profile({ enabled: true, topP: 0.9, topK: 40, seed: 123 }), "openai").requested).toEqual({});
+  });
+
+  it("reuses stored sampling intent for Mistral direct under the documented Chat request contract", () => {
+    const stored = profile({ enabled: true, topP: 0.7, topK: 100, seed: 42 });
+    expect(researchSamplingFromProfile(stored, "mistral").requested).toEqual({ topP: 0.7, topK: 100, seed: 42 });
+    const mistral = { ...model(undefined, "mistral:mistral-medium-3-5"), provider: "mistral" as const, route: "mistral:mistral-medium-3-5" };
+    expect(() => assertResearchSamplingSupported({ topP: 0.7, topK: 100, seed: 42 }, [mistral])).not.toThrow();
   });
 
   it("reuses the stored sampling intent for Custom without inventing endpoint capability verification", () => {

@@ -253,7 +253,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
         judgeKey,
         providers,
         models,
-        (selectedProvider?.provider === "openrouter" || selectedProvider?.provider === "custom_openai")
+        (selectedProvider?.provider === "openrouter" || selectedProvider?.provider === "custom_openai" || selectedProvider?.provider === "mistral")
           ? parseOpenRouterAdditionalSamplingInputs(copy, viewerSamplingEnabled, viewerTopP, viewerTopK, viewerSeed)
           : undefined,
         selectedProvider?.provider === "custom_openai" ? viewerTemperatureMode : undefined,

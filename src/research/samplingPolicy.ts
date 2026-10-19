@@ -29,7 +29,7 @@ export function researchSamplingCapabilityState(
   model: ProviderModel,
   parameter: ResearchSamplingParameter,
 ): ResearchSamplingCapabilityState {
-  if (model.provider === "custom_openai") return "supported";
+  if (model.provider === "custom_openai" || model.provider === "mistral") return "supported";
   if (model.provider !== "openrouter") return "unsupported";
   const wireName = WIRE_NAME[parameter];
   if (model.capabilities.supportedParameters.includes(wireName)) return "supported";
@@ -47,7 +47,7 @@ export function researchSamplingFromProfile(profile: Profile | null, provider: P
 } {
   const snapshot: ResearchSamplingProfileSnapshot = { source: "profile", profileId: profile?.id ?? "" };
   const stored = profile?.defaultViewerOpenRouterSampling;
-  if (!stored || (provider !== "openrouter" && provider !== "custom_openai")) return { requested: {}, snapshot };
+  if (!stored || (provider !== "openrouter" && provider !== "custom_openai" && provider !== "mistral")) return { requested: {}, snapshot };
   const validated = validateOpenRouterAdditionalSamplingSettings(stored);
   if (!validated.enabled) return { requested: {}, snapshot };
   const requested: GenerationSettings = {

@@ -92,15 +92,15 @@ describe("profile AI configuration", () => {
     expect(result.defaultViewerOpenRouterSampling).toEqual({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
   });
 
-  it("does not attach shared sampling to an unrelated provider profile", () => {
+  it("accepts documented Mistral direct sampling without claiming per-model live verification", () => {
     const mistralProvider: ProviderConfig = { ...provider, id: "provider-m", provider: "mistral", label: "Mistral" };
-    const mistralModel: ProviderModel = { ...model, providerConfigId: mistralProvider.id, provider: "mistral" };
+    const mistralModel: ProviderModel = { ...model, providerConfigId: mistralProvider.id, provider: "mistral", route: "mistral:model-1", rawMetadata: {} };
     const result = buildProfileAiConfiguration(
       getCopy("en"), mistralProvider, mistralModel, "low", "0.8", "", "", "", [mistralProvider], [mistralModel],
-      { enabled: true, topP: 0.4, seed: 42 },
+      { enabled: true, topP: 0.4, topK: 100, seed: 42 },
     );
     expect(result.defaultViewerTemperature).toBe(0.8);
-    expect(result.defaultViewerOpenRouterSampling).toBeUndefined();
+    expect(result.defaultViewerOpenRouterSampling).toEqual({ enabled: true, topP: 0.4, topK: 100, seed: 42 });
   });
 
   it("does not persist the legacy Viewer System Prompt when the shared setup passes an empty prompt", () => {

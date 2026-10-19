@@ -42,19 +42,8 @@ requireCheck(
   'DIRECT-1A ordered nested-thinking Rust regression test is missing',
 );
 
-// DIRECT-1A must not silently broaden direct sampling or streaming.
-requireCheck(
-  builders.includes('matches!(request.provider, ProviderKind::Openrouter | ProviderKind::CustomOpenai)'),
-  'DIRECT-1A unexpectedly changed the additional-sampling request gate',
-);
-requireCheck(
-  validation.includes('supported only for OpenRouter or Custom OpenAI-compatible requests'),
-  'DIRECT-1A unexpectedly changed the direct sampling validation gate',
-);
-requireCheck(
-  !builders.includes('ProviderKind::Mistral => "random_seed"'),
-  'DIRECT-1A must not add Mistral random_seed transport yet',
-);
+// This verifier is phase-local: later DIRECT-1 substeps may intentionally broaden
+// Mistral transport. DIRECT-1A only freezes parser/fixture invariants.
 
 console.log('DIRECT-1A Mistral parser static verification PASS');
 console.log('No paid/live provider API calls were performed by this verifier.');

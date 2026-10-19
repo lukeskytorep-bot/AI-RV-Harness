@@ -338,13 +338,15 @@ function runProfilesRepositoryContract(name: string, createHarness: () => Contra
       expect((await repository.listProfiles()).find((item) => item.id === custom.id)?.defaultViewerOpenRouterSampling)
         .toEqual({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
 
-      const unrelated = await repository.createProfile({ name: "Viewer" });
-      await expect(repository.setProfileAiConfiguration(unrelated.id, {
+      const mistral = await repository.createProfile({ name: "Mistral Viewer" });
+      await repository.setProfileAiConfiguration(mistral.id, {
         credentialId: "credential-m",
         credentialProvider: "mistral",
         defaultViewerModelId: "model-m",
-        defaultViewerOpenRouterSampling: { enabled: true, topP: 0.7 },
-      })).rejects.toThrow("OpenRouter or Custom OpenAI-compatible");
+        defaultViewerOpenRouterSampling: { enabled: true, topP: 0.7, topK: 100, seed: 7 },
+      });
+      expect((await repository.listProfiles()).find((item) => item.id === mistral.id)?.defaultViewerOpenRouterSampling)
+        .toEqual({ enabled: true, topP: 0.7, topK: 100, seed: 7 });
     });
 
     it("separates and sorts active and archived Profile records", async () => {

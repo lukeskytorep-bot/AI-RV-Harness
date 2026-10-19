@@ -51,9 +51,8 @@ requireCheck(!exists('docs/audits/direct-providers/AI_RV_HARNESS_DIRECT_0_REPORT
 requireCheck(!exists('scripts/verify-direct-providers-direct0.mjs'), 'DIRECT-0 evidence verifier should not remain in application source');
 requireCheck(!exists('src/providers/direct-compat-fixtures/direct-provider-contract-baseline.json'), 'DIRECT-0 baseline fixture should not remain in application source');
 
-// DIRECT-1B is replay only. Samplers and direct SSE remain for later substeps.
-requireCheck(!rustBuilder.includes('ProviderKind::Mistral => "random_seed"'), 'DIRECT-1B must not add Mistral random_seed transport yet');
-requireCheck(!rustBuilder.includes('ProviderKind::Mistral | ProviderKind::Openrouter | ProviderKind::CustomOpenai'), 'DIRECT-1B must not broaden sampling gates');
+// This verifier is phase-local: later DIRECT-1 substeps may intentionally add
+// Mistral sampling/SSE while DIRECT-1B continues to guard replay invariants.
 
 console.log('DIRECT-1B Mistral native replay static verification PASS');
 console.log('DIRECT-0 evidence/source packaging correction PASS');

@@ -18,7 +18,7 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
     if let Some(value) = request.temperature {
         body.insert("temperature".into(), json!(value));
     }
-    if matches!(request.provider, ProviderKind::Openrouter | ProviderKind::CustomOpenai) {
+    if matches!(request.provider, ProviderKind::Openrouter | ProviderKind::CustomOpenai | ProviderKind::Mistral) {
         if let Some(value) = request.top_p {
             body.insert("top_p".into(), json!(value));
         }
@@ -26,7 +26,8 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
             body.insert("top_k".into(), json!(value));
         }
         if let Some(value) = request.seed {
-            body.insert("seed".into(), json!(value));
+            let wire_name = if matches!(request.provider, ProviderKind::Mistral) { "random_seed" } else { "seed" };
+            body.insert(wire_name.into(), json!(value));
         }
     }
     if let Some(value) = request.max_output_tokens {

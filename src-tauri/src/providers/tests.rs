@@ -1277,7 +1277,7 @@ fn emits_openrouter_and_custom_manual_sampling_without_leaking_to_other_provider
 
     let mut openai = chat_request(ProviderKind::Openai, "gpt-test");
     openai.top_p = Some(0.5);
-    assert!(validate_chat_request(&openai).unwrap_err().contains("OpenRouter or Custom OpenAI-compatible"));
+    assert!(validate_chat_request(&openai).unwrap_err().contains("OpenRouter, Custom OpenAI-compatible, or Mistral direct"));
     let (_, body) = build_openai_compatible_request(&openai, "https://api.openai.com/v1");
     assert!(body.get("top_p").is_none());
     assert!(body.get("top_k").is_none());
@@ -1288,7 +1288,6 @@ fn emits_openrouter_and_custom_manual_sampling_without_leaking_to_other_provider
 fn direct0_characterizes_direct_provider_sampling_gate_without_enabling_it() {
     for provider in [
         ProviderKind::Openai,
-        ProviderKind::Mistral,
         ProviderKind::Zai,
         ProviderKind::Deepseek,
         ProviderKind::Blackbox,
@@ -1299,7 +1298,7 @@ fn direct0_characterizes_direct_provider_sampling_gate_without_enabling_it() {
         request.seed = Some(42);
 
         let error = validate_chat_request(&request).unwrap_err();
-        assert!(error.contains("OpenRouter or Custom OpenAI-compatible"));
+        assert!(error.contains("OpenRouter, Custom OpenAI-compatible, or Mistral direct"));
 
         // Characterization only: even if a caller bypassed validation, the current
         // generic builder does not leak the extra sampling fields to direct routes.
@@ -1309,6 +1308,33 @@ fn direct0_characterizes_direct_provider_sampling_gate_without_enabling_it() {
         assert!(body.get("top_k").is_none(), "{provider:?} unexpectedly emitted top_k");
         assert!(body.get("seed").is_none(), "{provider:?} unexpectedly emitted seed");
     }
+}
+
+#[test]
+fn direct1c_emits_mistral_sampling_with_random_seed_wire_name() {
+    let mut request = chat_request(ProviderKind::Mistral, "mistral-medium-3-5");
+    request.top_p = Some(0.7);
+    request.top_k = Some(100);
+    request.seed = Some(42);
+
+    validate_chat_request(&request).unwrap();
+    let (_, body) = build_openai_compatible_request(&request, "https://api.mistral.ai/v1");
+    assert_eq!(body.get("top_p"), Some(&json!(0.7)));
+    assert_eq!(body.get("top_k"), Some(&json!(100)));
+    assert_eq!(body.get("random_seed"), Some(&json!(42)));
+    assert!(body.get("seed").is_none(), "Mistral must not receive the Harness/OpenRouter seed wire name");
+    assert!(body.get("provider").is_none(), "OpenRouter routing must never leak into Mistral direct");
+}
+
+#[test]
+fn direct1c_mistral_auto_omits_all_optional_sampling_fields() {
+    let request = chat_request(ProviderKind::Mistral, "mistral-medium-3-5");
+    validate_chat_request(&request).unwrap();
+    let (_, body) = build_openai_compatible_request(&request, "https://api.mistral.ai/v1");
+    assert!(body.get("top_p").is_none());
+    assert!(body.get("top_k").is_none());
+    assert!(body.get("random_seed").is_none());
+    assert!(body.get("seed").is_none());
 }
 
 #[test]

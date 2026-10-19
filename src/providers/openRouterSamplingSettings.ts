@@ -53,13 +53,17 @@ export function validateOpenRouterAdditionalSamplingSettings(
 }
 
 
+export function supportsAdditionalSamplingProvider(provider: string | undefined): boolean {
+  return provider === "openrouter" || provider === "custom_openai" || provider === "mistral";
+}
+
 export function validateOpenRouterSamplingForProvider(
   provider: string | undefined,
   settings: OpenRouterAdditionalSamplingSettings | undefined,
 ): OpenRouterAdditionalSamplingSettings | undefined {
   if (settings === undefined) return undefined;
-  if (provider !== "openrouter" && provider !== "custom_openai") {
-    throw new Error("Additional sampling parameters are valid only for OpenRouter or Custom OpenAI-compatible profiles.");
+  if (!supportsAdditionalSamplingProvider(provider)) {
+    throw new Error("Additional sampling parameters are valid only for OpenRouter, Custom OpenAI-compatible, or Mistral direct profiles.");
   }
   return validateOpenRouterAdditionalSamplingSettings(settings);
 }

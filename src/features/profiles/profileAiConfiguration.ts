@@ -114,7 +114,7 @@ export function buildProfileAiConfiguration(
     ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
     ...(provider.provider === "custom_openai" && customTemperatureMode && customTemperatureMode !== "legacy" ? { defaultViewerCustomTemperatureMode: customTemperatureMode } : {}),
     ...(provider.provider === "custom_openai" && customReasoningMode ? { defaultViewerCustomReasoningMode: customReasoningMode } : {}),
-    ...((provider.provider === "openrouter" || provider.provider === "custom_openai") && openRouterSampling !== undefined
+    ...((provider.provider === "openrouter" || provider.provider === "custom_openai" || provider.provider === "mistral") && openRouterSampling !== undefined
       ? (() => {
           const validatedSampling = validateOpenRouterAdditionalSamplingSettings(openRouterSampling);
           if (provider.provider === "openrouter") {
