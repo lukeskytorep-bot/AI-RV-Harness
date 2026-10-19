@@ -122,3 +122,7 @@ Use English for primary developer setup, current architecture and developer-faci
 ## Documentation review record
 
 [16 October 2026 synchronization report — English](reports/DOCUMENTATION_CURRENT_SYNC_2026-10-16_EN.md) records the source commit, corrected contracts, language policy and checks actually performed.
+
+## Direct provider update — 19 October 2026
+
+Mistral and Blackbox now include direct additional Viewer sampling and Chat Completions SSE. Mistral also preserves compatible thinking/text continuation. Blackbox supports explicit account endpoints and manual model IDs for non-legacy routes without guessed discovery. See [Mistral and Blackbox configuration and engineering contract](development/DIRECT_MISTRAL_BLACKBOX.md) for exact scope, code map and acceptance limits. Ollama Native is planned, not implemented. This update does not change the package/release version or claim live/Windows acceptance.
