@@ -32,7 +32,8 @@ function normalizeS2TelepathicStreamingWiring(value: string): string {
       '        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: snapshot.generationSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal });')
     .replace('          streamWorkflowContext: input.streamWorkflowContext ?? "rv_session",\n          onStreamEvent: createSessionStreamPreviewHandler({ role: "monitor", phase: step, exchangeNumber, source: "live_monitor", emit: input.onStreamPreview }),\n', "")
     .replace(/^\s*input\.onStreamPreview\?\.\(null\);\n/gm, "")
-    .replace(/, actualProvider: response\.actualProvider \?\? "unknown"/g, "");
+    .replace(/, actualProvider: response\.actualProvider \?\? "unknown"/g, "")
+    .replace('resolveGenerationSettings(input.model.capabilities, input.requestedSettings, { provider: input.model.provider })', 'resolveGenerationSettings(input.model.capabilities, input.requestedSettings)');
 }
 
 describe("POST-REVEAL-CONTEXT-1 boundaries", () => {

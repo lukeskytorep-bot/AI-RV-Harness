@@ -428,7 +428,7 @@ impl DatabaseWriteOperation {
             Self::MonitorInsertMonitorInterventions01 => 8,
             Self::ProfilesInsertProfiles01 => 21,
             Self::ProfilesUpdateProfiles01 => 5,
-            Self::ProfilesUpdateProfiles02 => 17,
+            Self::ProfilesUpdateProfiles02 => 18,
             Self::ProfilesUpdateProfiles03 => 3,
             Self::ProfilesUpdateProfiles04 => 3,
             Self::ResearchInsertResearchProjects01 => 6,
