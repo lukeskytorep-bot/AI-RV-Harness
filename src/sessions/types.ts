@@ -100,6 +100,15 @@ export type SessionContinuationRouteSnapshot =
       stateFormat: "anthropic-thinking-blocks";
       stateFormatVersion: 1;
       prefixPolicy: "append-only";
+    }
+  | {
+      transport: "mistral-native";
+      normalizedEndpoint: string;
+      providerConfigId: string;
+      credentialId: string;
+      requestedModelId: string;
+      stateFormat: "mistral-assistant-content";
+      stateFormatVersion: 1;
     };
 
 export interface SessionSnapshot {

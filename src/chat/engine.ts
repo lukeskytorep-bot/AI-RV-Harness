@@ -8,6 +8,7 @@ import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutpu
 import { providerBindingEndpoint } from "../providers/native";
 import { captureGoogleContinuationState } from "../providers/googleContinuation";
 import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
+import { captureMistralContinuationState } from "../providers/mistralContinuation";
 import {
   applyConversationContinuationMemory,
   clearConversationContinuationMemory,
@@ -283,7 +284,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   }
   let normalizedEndpoint: string | undefined;
   const hasContinuationMemory = input.mode === "conversation" && hasConversationContinuationMemory(input.threadId);
-  if (input.mode === "conversation" && ["openrouter", "google"].includes(input.providerConfig.provider) && (!input.chat || hasContinuationMemory)) {
+  if (input.mode === "conversation" && ["openrouter", "google", "mistral"].includes(input.providerConfig.provider) && (!input.chat || hasContinuationMemory)) {
     normalizedEndpoint = await (input.resolveBindingEndpoint ?? providerBindingEndpoint)(input.providerConfig);
   }
   if (hasContinuationMemory) {
@@ -433,11 +434,12 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   let continuationCapture:
     | ReturnType<typeof captureOpenRouterContinuationState>
     | ReturnType<typeof captureGoogleContinuationState>
+    | ReturnType<typeof captureMistralContinuationState>
     | undefined;
   const continuationDetailsPresent = input.providerConfig.provider === "openrouter"
     ? response.reasoningDetails !== undefined
     : Boolean(response.reasoningDetails?.length);
-  if (input.mode === "conversation" && continuationDetailsPresent && ["openrouter", "google"].includes(input.providerConfig.provider)) {
+  if (input.mode === "conversation" && continuationDetailsPresent && ["openrouter", "google", "mistral"].includes(input.providerConfig.provider)) {
     normalizedEndpoint ??= await (input.resolveBindingEndpoint ?? providerBindingEndpoint)(input.providerConfig);
     continuationCapture = input.providerConfig.provider === "openrouter"
       ? captureOpenRouterContinuationState({
@@ -447,13 +449,21 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
           reasoningDetails: response.reasoningDetails,
           continuationDiagnostics: response.continuationDiagnostics,
         })
-      : captureGoogleContinuationState({
-          config: input.providerConfig,
-          requestedModelId: input.model.modelId,
-          normalizedEndpoint,
-          parts: response.reasoningDetails,
-          visibleContent: response.content,
-        });
+      : input.providerConfig.provider === "google"
+        ? captureGoogleContinuationState({
+            config: input.providerConfig,
+            requestedModelId: input.model.modelId,
+            normalizedEndpoint,
+            parts: response.reasoningDetails,
+            visibleContent: response.content,
+          })
+        : captureMistralContinuationState({
+            config: input.providerConfig,
+            requestedModelId: input.model.modelId,
+            normalizedEndpoint,
+            content: response.reasoningDetails,
+            visibleContent: response.content,
+          });
   }
   input.signal?.throwIfAborted();
   const assistant = continuationCapture?.state

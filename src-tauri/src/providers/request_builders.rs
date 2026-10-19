@@ -90,7 +90,19 @@ fn openai_compatible_output_token_field(request: &ProviderChatRequest) -> &'stat
 }
 
 fn openai_message(provider: ProviderKind, message: &ProviderMessage) -> Value {
-    let content = if message.images.is_empty() {
+    let content = if matches!(provider, ProviderKind::Mistral) {
+        if let Some(ProviderContinuationState::Mistral(state)) = message.continuation_state.as_ref() {
+            Value::Array(state.content.clone())
+        } else if message.images.is_empty() {
+            Value::String(message.content.clone())
+        } else {
+            let mut parts = vec![json!({ "type": "text", "text": message.content })];
+            for image in &message.images {
+                parts.push(json!({ "type": "image_url", "image_url": { "url": format!("data:{};base64,{}", image.mime_type, image.data_base64) } }));
+            }
+            Value::Array(parts)
+        }
+    } else if message.images.is_empty() {
         Value::String(message.content.clone())
     } else {
         let mut parts = vec![json!({ "type": "text", "text": message.content })];

@@ -383,7 +383,7 @@ fn provider_message_deserializes_camel_case_continuation_state() {
         ProviderContinuationState::OpenRouter(state) => {
             assert_eq!(state.replay_fingerprint.actual_model_id.as_deref(), Some("provider-specific-model"));
         }
-        ProviderContinuationState::Google(_) | ProviderContinuationState::Anthropic(_) => {
+        ProviderContinuationState::Google(_) | ProviderContinuationState::Anthropic(_) | ProviderContinuationState::Mistral(_) => {
             panic!("expected OpenRouter continuation state")
         }
     }
@@ -2701,4 +2701,109 @@ async fn native_window_destruction_aborts_bound_transport_without_js_callback() 
     let error = tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap().unwrap_err();
     assert_eq!(error.code.as_ref(), "cancelled");
     assert!(guard.failure().unwrap().contains("window closed"));
+}
+
+
+#[test]
+fn direct1b_mistral_parser_preserves_complete_assistant_content_for_replay() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../src/providers/continuation-fixtures/mistral-assistant-content.json"
+    ))
+    .expect("DIRECT-1B Mistral continuation fixture must be valid JSON");
+    let payload = fixture.get("providerResponse").cloned().expect("providerResponse");
+    let expected_content = fixture.pointer("/continuationState/content").and_then(Value::as_array).cloned().unwrap();
+    let parsed = super::response_parsers::parse_chat_response(ProviderKind::Mistral, payload, None).unwrap();
+    assert_eq!(parsed.content, "final");
+    assert_eq!(parsed.reasoning_content.as_deref(), Some("reasoning"));
+    assert_eq!(parsed.reasoning_source.as_deref(), Some("mistral_thinking"));
+    assert_eq!(parsed.reasoning_details, Some(expected_content));
+}
+
+#[test]
+fn direct1b_replays_complete_mistral_assistant_content_on_bound_message() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../src/providers/continuation-fixtures/mistral-assistant-content.json"
+    ))
+    .expect("DIRECT-1B Mistral continuation fixture must be valid JSON");
+    let content = fixture.pointer("/continuationState/content").and_then(Value::as_array).cloned().unwrap();
+    let mut request = chat_request(ProviderKind::Mistral, "mistral-large-latest");
+    request.messages = vec![
+        ProviderMessage {
+            role: "user".to_string(),
+            content: "first".to_string(),
+            images: vec![],
+            continuation_state: None,
+        },
+        ProviderMessage {
+            role: "assistant".to_string(),
+            content: "final".to_string(),
+            images: vec![],
+            continuation_state: Some(ProviderContinuationState::Mistral(MistralContinuationState {
+                schema_version: 1,
+                transport: "mistral-native".to_string(),
+                format: "mistral-assistant-content".to_string(),
+                replay_fingerprint: ProviderReplayFingerprint {
+                    transport: "mistral-native".to_string(),
+                    normalized_endpoint: "https://api.mistral.ai/v1".to_string(),
+                    provider_config_id: "provider-config".to_string(),
+                    credential_id: "credential".to_string(),
+                    requested_model_id: "mistral-large-latest".to_string(),
+                    actual_model_id: None,
+                    state_format: "mistral-assistant-content".to_string(),
+                    state_format_version: 1,
+                },
+                content: content.clone(),
+            })),
+        },
+        ProviderMessage {
+            role: "user".to_string(),
+            content: "continue".to_string(),
+            images: vec![],
+            continuation_state: None,
+        },
+    ];
+    validate_chat_request(&request).unwrap();
+    validate_continuation_bindings(&request, "https://api.mistral.ai/v1").unwrap();
+    let (_, body) = build_openai_compatible_request(&request, "https://api.mistral.ai/v1");
+    assert_eq!(body.pointer("/messages/1/content"), Some(&Value::Array(content)));
+    assert_eq!(body.pointer("/messages/1/role"), Some(&json!("assistant")));
+}
+
+#[test]
+fn direct1b_rejects_mistral_replay_when_visible_text_or_fingerprint_changes() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../src/providers/continuation-fixtures/mistral-assistant-content.json"
+    ))
+    .expect("DIRECT-1B Mistral continuation fixture must be valid JSON");
+    let content = fixture.pointer("/continuationState/content").and_then(Value::as_array).cloned().unwrap();
+    let state = MistralContinuationState {
+        schema_version: 1,
+        transport: "mistral-native".to_string(),
+        format: "mistral-assistant-content".to_string(),
+        replay_fingerprint: ProviderReplayFingerprint {
+            transport: "mistral-native".to_string(),
+            normalized_endpoint: "https://api.mistral.ai/v1".to_string(),
+            provider_config_id: "provider-config".to_string(),
+            credential_id: "credential".to_string(),
+            requested_model_id: "mistral-large-latest".to_string(),
+            actual_model_id: None,
+            state_format: "mistral-assistant-content".to_string(),
+            state_format_version: 1,
+        },
+        content,
+    };
+    let mut request = chat_request(ProviderKind::Mistral, "mistral-large-latest");
+    request.messages = vec![ProviderMessage {
+        role: "assistant".to_string(),
+        content: "changed".to_string(),
+        images: vec![],
+        continuation_state: Some(ProviderContinuationState::Mistral(state.clone())),
+    }];
+    assert!(validate_continuation_bindings(&request, "https://api.mistral.ai/v1").unwrap_err().contains("do not match"));
+
+    request.messages[0].content = "final".to_string();
+    if let Some(ProviderContinuationState::Mistral(state)) = request.messages[0].continuation_state.as_mut() {
+        state.replay_fingerprint.credential_id = "other".to_string();
+    }
+    assert!(validate_continuation_bindings(&request, "https://api.mistral.ai/v1").unwrap_err().contains("fingerprint"));
 }

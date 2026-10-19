@@ -191,6 +191,7 @@ enum ProviderContinuationState {
     OpenRouter(OpenRouterContinuationState),
     Google(GoogleContinuationState),
     Anthropic(AnthropicContinuationState),
+    Mistral(MistralContinuationState),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -221,6 +222,16 @@ struct AnthropicContinuationState {
     format: String,
     replay_fingerprint: ProviderReplayFingerprint,
     blocks: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MistralContinuationState {
+    schema_version: u8,
+    transport: String,
+    format: String,
+    replay_fingerprint: ProviderReplayFingerprint,
+    content: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

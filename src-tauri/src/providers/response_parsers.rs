@@ -13,12 +13,17 @@ pub(super) fn parse_chat_response(
         ProviderFamily::Google => parse_google_response(payload, request_id),
         ProviderFamily::Anthropic => parse_anthropic_response(payload, request_id),
         ProviderFamily::OpenaiCompatible => {
+            let mistral_content = matches!(provider, ProviderKind::Mistral)
+                .then(|| payload.pointer("/choices/0/message/content").and_then(Value::as_array).cloned())
+                .flatten();
             let mut parsed = parse_openai_compatible_response(payload, request_id)?;
             if matches!(provider, ProviderKind::Mistral)
-                && parsed.reasoning_details.is_none()
                 && parsed.reasoning_source.as_deref() == Some("openai_reasoning_details")
             {
                 parsed.reasoning_source = Some("mistral_thinking".to_string());
+                if let Some(content) = mistral_content {
+                    parsed.reasoning_details = Some(content);
+                }
             }
             Ok(parsed)
         },

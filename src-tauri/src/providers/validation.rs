@@ -39,6 +39,7 @@ pub(super) fn validate_chat_request(request: &ProviderChatRequest) -> Result<(),
                 (super::ProviderKind::Openrouter, ProviderContinuationState::OpenRouter(_))
                     | (super::ProviderKind::Google, ProviderContinuationState::Google(_))
                     | (super::ProviderKind::Anthropic, ProviderContinuationState::Anthropic(_))
+                    | (super::ProviderKind::Mistral, ProviderContinuationState::Mistral(_))
             );
             if !supported {
                 return Err("continuation state belongs to a different or unsupported provider transport".to_string());
@@ -249,6 +250,32 @@ fn validate_anthropic_thinking_block(value: &Value) -> bool {
     }
 }
 
+fn validate_mistral_content_chunk(value: &Value) -> bool {
+    let Some(object) = value.as_object() else { return false; };
+    match object.get("type").and_then(Value::as_str) {
+        Some("text") => object.len() == 2 && object.get("text").and_then(Value::as_str).is_some(),
+        Some("thinking") => {
+            if object.len() != 2 { return false; }
+            let Some(items) = object.get("thinking").and_then(Value::as_array) else { return false; };
+            !items.is_empty() && items.iter().all(|item| {
+                let Some(inner) = item.as_object() else { return false; };
+                inner.len() == 2
+                    && inner.get("type").and_then(Value::as_str) == Some("text")
+                    && inner.get("text").and_then(Value::as_str).is_some()
+            })
+        }
+        _ => false,
+    }
+}
+
+fn mistral_visible_content(content: &[Value]) -> Option<String> {
+    if !content.iter().all(validate_mistral_content_chunk) { return None; }
+    Some(content.iter()
+        .filter(|chunk| chunk.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|chunk| chunk.get("text").and_then(Value::as_str))
+        .collect::<String>())
+}
+
 fn canonical_base64(value: &str) -> bool {
     if value.is_empty() || !value.len().is_multiple_of(4) {
         return false;
@@ -396,6 +423,50 @@ pub(super) fn validate_continuation_bindings(request: &ProviderChatRequest, norm
                     }
                 }
                 serde_json::to_vec(state).map_err(|_| "invalid Anthropic continuation state".to_string())?.len()
+            }
+            ProviderContinuationState::Mistral(state) => {
+                if !matches!(request.provider, super::ProviderKind::Mistral) {
+                    return Err("Mistral continuation state cannot be replayed through this provider".to_string());
+                }
+                if state.schema_version != 1
+                    || state.transport != "mistral-native"
+                    || state.format != "mistral-assistant-content"
+                    || state.replay_fingerprint.transport != "mistral-native"
+                    || state.replay_fingerprint.state_format != "mistral-assistant-content"
+                    || state.replay_fingerprint.state_format_version != 1
+                {
+                    return Err("unsupported Mistral continuation state".to_string());
+                }
+                if state.replay_fingerprint.normalized_endpoint != normalized_endpoint
+                    || state.replay_fingerprint.provider_config_id != request.provider_config_id
+                    || state.replay_fingerprint.credential_id != request.credential_id
+                    || state.replay_fingerprint.requested_model_id != request.model_id
+                {
+                    return Err("Mistral continuation fingerprint is incompatible with this request".to_string());
+                }
+                if state.content.is_empty() || state.content.len() > MAX_BLOCKS {
+                    return Err("Mistral continuation state has an invalid chunk count".to_string());
+                }
+                if !message.images.is_empty() {
+                    return Err("Mistral continuation state cannot be replayed on an assistant message with images".to_string());
+                }
+                let visible = mistral_visible_content(&state.content)
+                    .ok_or_else(|| "invalid Mistral assistant content chunk".to_string())?;
+                if visible != message.content {
+                    return Err("Mistral continuation chunks do not match the bound assistant message content".to_string());
+                }
+                if !state.content.iter().any(|chunk| chunk.get("type").and_then(Value::as_str) == Some("thinking"))
+                    || !state.content.iter().any(|chunk| chunk.get("type").and_then(Value::as_str) == Some("text"))
+                {
+                    return Err("Mistral continuation state must preserve both thinking and visible text chunks".to_string());
+                }
+                for chunk in &state.content {
+                    let bytes = serde_json::to_vec(chunk).map_err(|_| "invalid Mistral assistant content chunk".to_string())?.len();
+                    if bytes > MAX_BLOCK_BYTES {
+                        return Err("Mistral continuation state contains an oversized chunk".to_string());
+                    }
+                }
+                serde_json::to_vec(state).map_err(|_| "invalid Mistral continuation state".to_string())?.len()
             }
         };
 
