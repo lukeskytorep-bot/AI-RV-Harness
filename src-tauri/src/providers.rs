@@ -20,9 +20,9 @@ mod validation;
 use adapters::{authenticated, endpoint, normalized_credential_endpoint, provider_base_url};
 use endpoint_capabilities::discover_openrouter_model_endpoints;
 use errors::provider_error_metadata;
-use request_builders::{build_chat_request, enable_chat_streaming};
+use request_builders::{build_chat_request, enable_chat_streaming, enable_mistral_chat_streaming};
 use response_parsers::parse_chat_response;
-use streaming::{send_custom_openai_streaming_chat_request, send_openrouter_streaming_chat_request, ProviderContinuationStreamDiagnostics, ProviderStreamEvent};
+use streaming::{send_custom_openai_streaming_chat_request, send_mistral_streaming_chat_request, send_openrouter_streaming_chat_request, ProviderContinuationStreamDiagnostics, ProviderStreamEvent};
 use transport::{cancel_request, client, json_response, send_chat_request};
 use validation::validate_chat_request;
 
@@ -540,8 +540,11 @@ pub async fn provider_chat(
     let (url, mut body) = build_chat_request(&request, &base).map_err(ProviderCallError::configuration)?;
     let use_openrouter_streaming = matches!(request.provider, ProviderKind::Openrouter);
     let use_custom_streaming = matches!(request.provider, ProviderKind::CustomOpenai) && request.custom_streaming_enabled;
-    let use_streaming = use_openrouter_streaming || use_custom_streaming;
-    if use_streaming {
+    let use_mistral_streaming = matches!(request.provider, ProviderKind::Mistral);
+    let use_streaming = use_openrouter_streaming || use_custom_streaming || use_mistral_streaming;
+    if use_mistral_streaming {
+        enable_mistral_chat_streaming(&mut body).map_err(ProviderCallError::configuration)?;
+    } else if use_streaming {
         enable_chat_streaming(&mut body).map_err(ProviderCallError::configuration)?;
     }
     let debug_endpoint = url.clone();
@@ -563,6 +566,14 @@ pub async fn provider_chat(
     let (payload, request_id, semantic_output_started, continuation_diagnostics, response_evidence) = if use_streaming {
         let streamed = if use_openrouter_streaming {
             send_openrouter_streaming_chat_request(
+                builder,
+                request.request_id.as_deref(),
+                &secret,
+                &timeout_policy,
+                emit_stream_events.then_some(&on_stream),
+            ).await
+        } else if use_mistral_streaming {
+            send_mistral_streaming_chat_request(
                 builder,
                 request.request_id.as_deref(),
                 &secret,

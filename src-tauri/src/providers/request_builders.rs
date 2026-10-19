@@ -238,4 +238,10 @@ pub(super) fn enable_chat_streaming(body: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+pub(super) fn enable_mistral_chat_streaming(body: &mut Value) -> Result<(), String> {
+    let object = body.as_object_mut().ok_or_else(|| "chat request body must be an object".to_string())?;
+    object.insert("stream".into(), Value::Bool(true));
+    Ok(())
+}
+
 

@@ -411,6 +411,7 @@ enum StreamingFlavor {
     #[default]
     OpenRouter,
     CustomOpenAi,
+    Mistral,
 }
 
 #[derive(Default)]
@@ -421,6 +422,8 @@ pub(super) struct OpenRouterStreamAccumulator {
     reasoning_details: OpenRouterReasoningDetailsAccumulator,
     custom_reasoning_details: Vec<Value>,
     custom_reasoning_details_seen: bool,
+    mistral_content: Vec<Value>,
+    mistral_saw_thinking: bool,
     finish_reason: Option<String>,
     native_finish_reason: Option<String>,
     actual_model: Option<String>,
@@ -437,6 +440,7 @@ pub(super) struct OpenRouterStreamAccumulator {
 
 impl OpenRouterStreamAccumulator {
     fn custom_openai() -> Self { Self { flavor: StreamingFlavor::CustomOpenAi, ..Self::default() } }
+    fn mistral() -> Self { Self { flavor: StreamingFlavor::Mistral, ..Self::default() } }
 
     fn process_frame_with_events(&mut self, frame: SseFrame, secret: &str, request_id: Option<&str>) -> Result<Vec<ProviderStreamEvent>, ProviderCallError> {
         match frame {
@@ -562,7 +566,101 @@ impl OpenRouterStreamAccumulator {
                 _ => return Err(self.error("invalid_provider_json", "provider streaming reasoning_details must be an array or null when present", "parsing_body", request_id)),
             }
         }
+        if self.flavor == StreamingFlavor::Mistral {
+            self.ingest_mistral_content(delta.get("content"), request_id)?;
+        }
         Ok(events)
+    }
+
+    fn ingest_mistral_content(&mut self, value: Option<&Value>, request_id: Option<&str>) -> Result<(), ProviderCallError> {
+        let Some(value) = value else { return Ok(()); };
+        match value {
+            Value::Null => Ok(()),
+            Value::String(text) => {
+                if !text.is_empty() { self.push_mistral_text(text); }
+                Ok(())
+            }
+            Value::Array(parts) => {
+                for part in parts {
+                    let Some(object) = part.as_object() else {
+                        return Err(self.error("invalid_provider_json", "Mistral streaming content chunks must be objects", "parsing_body", request_id));
+                    };
+                    match object.get("type").and_then(Value::as_str) {
+                        Some("thinking") => {
+                            let Some(thinking) = object.get("thinking").and_then(Value::as_array) else {
+                                return Err(self.error("invalid_provider_json", "Mistral thinking chunk must contain a thinking array", "parsing_body", request_id));
+                            };
+                            self.mistral_saw_thinking = true;
+                            self.push_mistral_thinking(thinking, request_id)?;
+                        }
+                        Some("text") => {
+                            let Some(text) = object.get("text").and_then(Value::as_str) else {
+                                return Err(self.error("invalid_provider_json", "Mistral text chunk must contain text", "parsing_body", request_id));
+                            };
+                            if !text.is_empty() { self.push_mistral_text(text); }
+                        }
+                        Some(other) => {
+                            return Err(self.error("invalid_provider_json", format!("unsupported Mistral streaming content chunk type: {other}"), "parsing_body", request_id));
+                        }
+                        None => {
+                            return Err(self.error("invalid_provider_json", "Mistral streaming content chunk is missing type", "parsing_body", request_id));
+                        }
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(self.error("invalid_provider_json", "Mistral streaming delta.content must be a string, array, or null", "parsing_body", request_id)),
+        }
+    }
+
+    fn push_mistral_text(&mut self, text: &str) {
+        if let Some(last) = self.mistral_content.last_mut().and_then(Value::as_object_mut) {
+            if last.get("type").and_then(Value::as_str) == Some("text") {
+                if let Some(Value::String(existing)) = last.get_mut("text") {
+                    existing.push_str(text);
+                    return;
+                }
+            }
+        }
+        self.mistral_content.push(json!({"type":"text","text":text}));
+    }
+
+    fn push_mistral_thinking(&mut self, thinking: &[Value], request_id: Option<&str>) -> Result<(), ProviderCallError> {
+        let mut texts = Vec::new();
+        for item in thinking {
+            let Some(object) = item.as_object() else {
+                return Err(self.error("invalid_provider_json", "Mistral thinking entries must be objects", "parsing_body", request_id));
+            };
+            if object.get("type").and_then(Value::as_str) != Some("text") {
+                return Err(self.error("invalid_provider_json", "Mistral thinking entries must be text chunks", "parsing_body", request_id));
+            }
+            let Some(text) = object.get("text").and_then(Value::as_str) else {
+                return Err(self.error("invalid_provider_json", "Mistral thinking text chunk is missing text", "parsing_body", request_id));
+            };
+            if !text.is_empty() { texts.push(text); }
+        }
+        if texts.is_empty() { return Ok(()); }
+        if let Some(last) = self.mistral_content.last_mut().and_then(Value::as_object_mut) {
+            if last.get("type").and_then(Value::as_str) == Some("thinking") {
+                if let Some(Value::Array(existing)) = last.get_mut("thinking") {
+                    for text in texts {
+                        if let Some(Value::Object(previous)) = existing.last_mut() {
+                            if previous.get("type").and_then(Value::as_str) == Some("text") {
+                                if let Some(Value::String(current)) = previous.get_mut("text") {
+                                    current.push_str(text);
+                                    continue;
+                                }
+                            }
+                        }
+                        existing.push(json!({"type":"text","text":text}));
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        let items = texts.into_iter().map(|text| json!({"type":"text","text":text})).collect::<Vec<_>>();
+        self.mistral_content.push(json!({"type":"thinking","thinking":items}));
+        Ok(())
     }
 
     fn error(&self, code: &str, message: impl Into<String>, phase: &str, request_id: Option<&str>) -> ProviderCallError {
@@ -590,8 +688,12 @@ impl OpenRouterStreamAccumulator {
         let semantic_output_started = self.semantic_output_started;
         let mut message = Map::new();
         message.insert("role".into(), Value::String("assistant".to_string()));
-        message.insert("content".into(), Value::String(self.content));
-        if !self.reasoning.is_empty() {
+        if self.flavor == StreamingFlavor::Mistral && self.mistral_saw_thinking {
+            message.insert("content".into(), Value::Array(self.mistral_content.clone()));
+        } else {
+            message.insert("content".into(), Value::String(self.content));
+        }
+        if self.flavor != StreamingFlavor::Mistral && !self.reasoning.is_empty() {
             message.insert("reasoning".into(), Value::String(self.reasoning));
         }
         if self.flavor == StreamingFlavor::OpenRouter && self.reasoning_details.field_seen {
@@ -759,7 +861,11 @@ async fn send_streaming_chat_request(
 
         let mut stream = response.bytes_stream();
         let mut decoder = SseDecoder::default();
-        let mut accumulator = if flavor == StreamingFlavor::CustomOpenAi { OpenRouterStreamAccumulator::custom_openai() } else { OpenRouterStreamAccumulator::default() };
+        let mut accumulator = match flavor {
+            StreamingFlavor::CustomOpenAi => OpenRouterStreamAccumulator::custom_openai(),
+            StreamingFlavor::Mistral => OpenRouterStreamAccumulator::mistral(),
+            StreamingFlavor::OpenRouter => OpenRouterStreamAccumulator::default(),
+        };
         let mut saw_transport_activity = false;
         let mut last_transport_activity = started;
 
@@ -869,4 +975,15 @@ pub(super) async fn send_custom_openai_streaming_chat_request(
     on_stream: Option<&Channel<ProviderStreamEvent>>,
 ) -> Result<StreamingChatResult, ProviderCallError> {
     send_streaming_chat_request(builder, request_id, secret, policy, on_stream, StreamingFlavor::CustomOpenAi).await
+}
+
+
+pub(super) async fn send_mistral_streaming_chat_request(
+    builder: RequestBuilder,
+    request_id: Option<&str>,
+    secret: &str,
+    policy: &ProviderTimeoutPolicy,
+    on_stream: Option<&Channel<ProviderStreamEvent>>,
+) -> Result<StreamingChatResult, ProviderCallError> {
+    send_streaming_chat_request(builder, request_id, secret, policy, on_stream, StreamingFlavor::Mistral).await
 }
