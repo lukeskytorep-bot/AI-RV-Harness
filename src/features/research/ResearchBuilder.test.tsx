@@ -5,7 +5,7 @@ import type { AppRepository } from "../../storage/repository";
 import { getCopy } from "../../i18n";
 import { createDefaultSettings } from "../../startupDefaults";
 import type { Profile, Workspace } from "../../types";
-import { captureCurrentViewerNotes, reconcileResearchBaseModelKey, ResearchConfigBuilder, researchBaseModelInventorySignature, researchPreflightSignature } from "./ResearchBuilder";
+import { captureCurrentViewerNotes, reconcileResearchBaseModelKey, ResearchConfigBuilder, researchBaseModelInventorySignature, researchCustomReasoningModeForProfile, researchPreflightSignature } from "./ResearchBuilder";
 import type { ResearchConfig } from "../../research/types";
 import researchBuilderSource from "./ResearchBuilder.tsx?raw";
 
@@ -40,6 +40,14 @@ function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "s
 }
 
 describe("Research Builder Training/Research UX step", () => {
+  it("freezes the selected Custom reasoning switch for ordinary Research but not reasoning-effort experiments", () => {
+    const customProvider = { ...provider, provider: "custom_openai" as const };
+    const customModel = { ...model, provider: "custom_openai" as const, providerConfigId: customProvider.id, route: "custom_openai:model-a" };
+    const customProfile = { ...profile, defaultViewerCustomReasoningMode: "off" as const };
+    expect(researchCustomReasoningModeForProfile(customProfile, customModel, "model")).toBe("off");
+    expect(researchCustomReasoningModeForProfile(customProfile, customModel, "reasoning")).toBeUndefined();
+    expect(researchCustomReasoningModeForProfile(customProfile, model, "model")).toBeUndefined();
+  });
   it("offers exactly Full RCP and RV Lite as Research-wide protocol choices", () => {
     const html = renderBuilder("model");
     expect(html).toContain("Full RCP · 1.5a");

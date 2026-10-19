@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ReasoningEffort } from "../providers/types";
+import type { CustomReasoningMode, ReasoningEffort } from "../providers/types";
 import type { Profile } from "../types";
 import { BrowserProfilesRepository } from "./browser/profilesRepository";
 import type { ProfilesRepository } from "./contracts/profilesRepository";
@@ -29,6 +29,7 @@ type ProfileRow = {
   default_viewer_reasoning_effort: ReasoningEffort | null;
   default_viewer_temperature: number | null;
   default_viewer_custom_temperature_mode: "provider_default" | "manual" | null;
+  default_viewer_custom_reasoning_mode: CustomReasoningMode | null;
   default_viewer_sampling_enabled: number;
   default_viewer_top_p: number | null;
   default_viewer_top_k: number | null;
@@ -79,6 +80,7 @@ function toRow(profile: Profile): ProfileRow {
     default_viewer_reasoning_effort: profile.defaultViewerReasoningEffort ?? null,
     default_viewer_temperature: profile.defaultViewerTemperature ?? null,
     default_viewer_custom_temperature_mode: profile.defaultViewerCustomTemperatureMode ?? null,
+    default_viewer_custom_reasoning_mode: profile.defaultViewerCustomReasoningMode ?? null,
     default_viewer_sampling_enabled: profile.defaultViewerOpenRouterSampling?.enabled ? 1 : 0,
     default_viewer_top_p: profile.defaultViewerOpenRouterSampling?.topP ?? null,
     default_viewer_top_k: profile.defaultViewerOpenRouterSampling?.topK ?? null,
@@ -123,18 +125,19 @@ function sqliteHarness(): ContractHarness {
           default_viewer_reasoning_effort: values[6] as ProfileRow["default_viewer_reasoning_effort"],
           default_viewer_temperature: values[7] as number | null,
           default_viewer_custom_temperature_mode: values[8] as ProfileRow["default_viewer_custom_temperature_mode"],
-          default_viewer_sampling_enabled: values[9] as number,
-          default_viewer_top_p: values[10] as number | null,
-          default_viewer_top_k: values[11] as number | null,
-          default_viewer_seed: values[12] as number | null,
-          default_viewer_system_prompt: values[13] as string | null,
-          default_monitor_system_prompt: values[14] as string | null,
-          default_monitor_provider_config_id: values[15] as string | null,
-          default_monitor_model_id: values[16] as string | null,
-          default_judge_provider_config_id: values[17] as string | null,
-          default_judge_model_id: values[18] as string | null,
-          created_at: String(values[19]),
-          updated_at: String(values[20]),
+          default_viewer_custom_reasoning_mode: values[9] as ProfileRow["default_viewer_custom_reasoning_mode"],
+          default_viewer_sampling_enabled: values[10] as number,
+          default_viewer_top_p: values[11] as number | null,
+          default_viewer_top_k: values[12] as number | null,
+          default_viewer_seed: values[13] as number | null,
+          default_viewer_system_prompt: values[14] as string | null,
+          default_monitor_system_prompt: values[15] as string | null,
+          default_monitor_provider_config_id: values[16] as string | null,
+          default_monitor_model_id: values[17] as string | null,
+          default_judge_provider_config_id: values[18] as string | null,
+          default_judge_model_id: values[19] as string | null,
+          created_at: String(values[20]),
+          updated_at: String(values[21]),
           archived_at: null,
         });
         return;
@@ -144,27 +147,28 @@ function sqliteHarness(): ContractHarness {
         if (row) Object.assign(row, { display_name: values[0], human_display_name: values[1], note: values[2], updated_at: values[3] });
         return;
       }
-      if (query.includes("default_viewer_sampling_enabled = CASE WHEN $6 = 1")) {
-        const row = rows.find((item) => item.id === values[17] && item.archived_at === null);
+      if (query.includes("default_viewer_sampling_enabled = CASE WHEN $7 = 1")) {
+        const row = rows.find((item) => item.id === values[18] && item.archived_at === null);
         if (row) Object.assign(row, {
           credential_id: values[0],
           default_viewer_model_id: values[1],
           default_viewer_reasoning_effort: values[2],
           default_viewer_temperature: values[3],
           default_viewer_custom_temperature_mode: values[4] as ProfileRow["default_viewer_custom_temperature_mode"],
-          ...(values[5] === 1 ? {
-            default_viewer_sampling_enabled: values[6],
-            default_viewer_top_p: values[7],
-            default_viewer_top_k: values[8],
-            default_viewer_seed: values[9],
+          default_viewer_custom_reasoning_mode: values[5] as ProfileRow["default_viewer_custom_reasoning_mode"],
+          ...(values[6] === 1 ? {
+            default_viewer_sampling_enabled: values[7],
+            default_viewer_top_p: values[8],
+            default_viewer_top_k: values[9],
+            default_viewer_seed: values[10],
           } : {}),
-          default_viewer_system_prompt: values[10],
-          default_monitor_system_prompt: values[11],
-          default_monitor_provider_config_id: values[12],
-          default_monitor_model_id: values[13],
-          default_judge_provider_config_id: values[14],
-          default_judge_model_id: values[15],
-          updated_at: values[16],
+          default_viewer_system_prompt: values[11],
+          default_monitor_system_prompt: values[12],
+          default_monitor_provider_config_id: values[13],
+          default_monitor_model_id: values[14],
+          default_judge_provider_config_id: values[15],
+          default_judge_model_id: values[16],
+          updated_at: values[17],
         });
         return;
       }
@@ -181,6 +185,7 @@ function sqliteHarness(): ContractHarness {
           default_viewer_reasoning_effort: null,
           default_viewer_temperature: null,
           default_viewer_custom_temperature_mode: null,
+          default_viewer_custom_reasoning_mode: null,
           updated_at: values[1],
         });
       }

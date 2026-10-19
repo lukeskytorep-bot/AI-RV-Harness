@@ -104,6 +104,8 @@ export class BrowserRepository implements AppRepository {
             defaultViewerModelId: undefined,
             defaultViewerReasoningEffort: undefined,
             defaultViewerTemperature: undefined,
+            defaultViewerCustomTemperatureMode: undefined,
+            defaultViewerCustomReasoningMode: undefined,
           } : {}),
           ...(usesRemovedMonitor ? { defaultMonitorProviderConfigId: undefined, defaultMonitorModelId: undefined } : {}),
           ...(usesRemovedJudge ? { defaultJudgeProviderConfigId: undefined, defaultJudgeModelId: undefined } : {}),

@@ -163,4 +163,27 @@ describe("dynamic provider capabilities", () => {
     expect(() => resolveGenerationSettings(capabilities, { customTemperatureMode: "manual", temperature: 0.7 }, { provider: "openrouter" })).toThrow(/Custom temperature override/);
   });
 
+  it("treats Custom reasoning on/off as an intentional override without blocking omitted effort fields", () => {
+    const [customModel] = normalizeModelDiscovery({ ...config, id: "custom_reasoning", provider: "custom_openai" }, {
+      data: [{ id: "custom/reasoning-toggle", supported_parameters: [], top_provider: { max_completion_tokens: 8192 } }],
+    });
+    const capabilities = {
+      ...customModel.capabilities,
+      reasoning: { ...customModel.capabilities.reasoning, supported: false, efforts: [], supportsMaxTokens: false },
+    };
+
+    const off = resolveGenerationSettings(capabilities, { customReasoningMode: "off", reasoningEffort: "high", reasoningMaxTokens: 1024 }, { provider: "custom_openai" });
+    expect(off.omitted).not.toContain("reasoningEffort");
+    expect(off.omitted).not.toContain("reasoningMaxTokens");
+    expect(off.effective).toMatchObject({ customReasoningMode: "off" });
+    expect(off.effective.reasoningEffort).toBeUndefined();
+    expect(off.effective.reasoningMaxTokens).toBeUndefined();
+
+    const repeated = resolveGenerationSettings(capabilities, { ...off.effective, reasoningEffort: "high", reasoningMaxTokens: 1024 }, { provider: "custom_openai" });
+    expect(repeated.omitted).toEqual([]);
+    expect(repeated.effective.customReasoningMode).toBe("off");
+
+    expect(() => resolveGenerationSettings(capabilities, { customReasoningMode: "off" }, { provider: "openrouter" })).toThrow(/Custom reasoning override/);
+  });
+
 });

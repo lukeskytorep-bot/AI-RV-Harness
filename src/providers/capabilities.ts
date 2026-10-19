@@ -252,7 +252,14 @@ export function resolveGenerationSettings(
   const omitted: EffectiveGenerationSettings["omitted"] = [];
   let reasoningResolution: EffectiveGenerationSettings["reasoningResolution"];
 
-  if (requested.reasoningMaxTokens !== undefined) {
+  const customReasoningMode = context?.provider === "custom_openai" ? requested.customReasoningMode : undefined;
+  if (requested.customReasoningMode !== undefined && context?.provider !== "custom_openai") {
+    throw new Error("Custom reasoning override is only valid for Custom OpenAI-compatible routes.");
+  }
+
+  const suppressReasoningControls = customReasoningMode === "on" || customReasoningMode === "off";
+
+  if (!suppressReasoningControls && requested.reasoningMaxTokens !== undefined) {
     if (capabilities.reasoning.supportsMaxTokens === true && requested.reasoningMaxTokens > 0) {
       effective.reasoningMaxTokens = Math.floor(requested.reasoningMaxTokens);
     } else {
@@ -260,7 +267,7 @@ export function resolveGenerationSettings(
     }
   }
 
-  if (requested.reasoningEffort !== undefined) {
+  if (!suppressReasoningControls && requested.reasoningEffort !== undefined) {
     if (effective.reasoningMaxTokens !== undefined) {
       omitted.push("reasoningEffort");
     } else if (capabilities.reasoning.supported && capabilities.reasoning.efforts.includes(requested.reasoningEffort)) {
@@ -276,6 +283,8 @@ export function resolveGenerationSettings(
       omitted.push("reasoningEffort");
     }
   }
+
+  if (customReasoningMode !== undefined) effective.customReasoningMode = customReasoningMode;
 
   const customTemperatureMode = context?.provider === "custom_openai" ? requested.customTemperatureMode : undefined;
   if (requested.customTemperatureMode !== undefined && context?.provider !== "custom_openai") {

@@ -129,6 +129,21 @@ describe("SQLite Settings and models repository contract", () => {
     expect(transactions[0]).toHaveLength(Object.keys(createDefaultSettings()).length);
   });
 
+  it("clears Custom profile modes when deleting a SQLite provider credential binding", async () => {
+    const transactions: DatabaseTransactionStatement[][] = [];
+    const repository = new SqliteSettingsModelsRepository({
+      select: async <T>() => [{ credential_id: "credential-remove" }] as T,
+      executeWrite: async () => ({ rowsAffected: 1 }),
+      executeTransaction: async (statements) => { transactions.push(statements); return []; },
+      now: () => timestamp,
+    });
+    await repository.deleteProviderConfig("provider-remove");
+    const profileUpdate = transactions[0]?.find((statement) => statement.query.includes("UPDATE profiles"));
+    expect(profileUpdate?.query).toContain("default_viewer_custom_temperature_mode");
+    expect(profileUpdate?.query).toContain("default_viewer_custom_reasoning_mode");
+    expect(profileUpdate?.values).toEqual(["credential-remove", "provider-remove", timestamp]);
+  });
+
   it("reads the Custom OpenAI streaming switch from existing app_settings without a schema change", async () => {
     const repository = new SqliteSettingsModelsRepository({
       select: async <T>() => [{

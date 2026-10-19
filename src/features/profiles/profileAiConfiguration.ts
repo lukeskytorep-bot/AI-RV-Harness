@@ -1,7 +1,7 @@
 import type { getCopy } from "../../i18n";
 import { isRouteAllowedForCredential, splitModelRouteKey } from "../../modelRoutes";
 import { defaultTemperatureForModel, reasoningEffortForModel } from "../../profileViewerDefaults";
-import type { ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
+import type { CustomReasoningMode, ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
 import { validateOpenRouterAdditionalSamplingSettings, type OpenRouterAdditionalSamplingSettings } from "../../providers/openRouterSamplingSettings";
 import type { CustomTemperatureMode, ProfileAiConfigurationInput } from "../../types";
 import { openRouterSamplingModelCapabilityState, type OpenRouterSamplingModelParameter } from "./openRouterSamplingModelCapability";
@@ -70,6 +70,7 @@ export function buildProfileAiConfiguration(
   models: ProviderModel[] = viewerModel ? [viewerModel] : [],
   openRouterSampling?: OpenRouterAdditionalSamplingSettings,
   customTemperatureMode?: CustomTemperatureMode | "legacy",
+  customReasoningMode?: CustomReasoningMode,
 ): ProfileAiConfigurationInput {
   if (!provider || !viewerModel || viewerModel.providerConfigId !== provider.id) {
     throw new Error(copy.selectViewerBeforeSaving);
@@ -112,6 +113,7 @@ export function buildProfileAiConfiguration(
     ...(normalizedReasoning ? { defaultViewerReasoningEffort: normalizedReasoning } : {}),
     ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
     ...(provider.provider === "custom_openai" && customTemperatureMode && customTemperatureMode !== "legacy" ? { defaultViewerCustomTemperatureMode: customTemperatureMode } : {}),
+    ...(provider.provider === "custom_openai" && customReasoningMode ? { defaultViewerCustomReasoningMode: customReasoningMode } : {}),
     ...((provider.provider === "openrouter" || provider.provider === "custom_openai") && openRouterSampling !== undefined
       ? (() => {
           const validatedSampling = validateOpenRouterAdditionalSamplingSettings(openRouterSampling);

@@ -30,8 +30,12 @@ export function profileGenerationDefaults(
   const customTemperatureMode = model.provider === "custom_openai" && useCalibratedPair
     ? profile?.defaultViewerCustomTemperatureMode
     : undefined;
+  const customReasoningMode = model.provider === "custom_openai" && useCalibratedPair
+    ? profile?.defaultViewerCustomReasoningMode
+    : undefined;
   const requested: GenerationSettings = {
     ...(customTemperatureMode ? { customTemperatureMode } : {}),
+    ...(customReasoningMode ? { customReasoningMode } : {}),
     ...(useCalibratedPair && reasoningEffortForModel(model, profile?.defaultViewerReasoningEffort)
       ? { reasoningEffort: profile!.defaultViewerReasoningEffort }
       : {}),
@@ -59,6 +63,7 @@ export function profileGenerationDefaults(
   return {
     ...resolved.effective,
     ...(customTemperatureMode ? { customTemperatureMode } : {}),
+    ...(customReasoningMode ? { customReasoningMode } : {}),
   };
 }
 

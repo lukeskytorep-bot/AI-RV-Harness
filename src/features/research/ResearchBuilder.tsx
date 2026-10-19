@@ -126,6 +126,12 @@ export function ResearchHelpContent({ language }: { language: InterfaceLanguage 
 }
 
 
+
+export function researchCustomReasoningModeForProfile(profile: Profile | null | undefined, model: ProviderModel | null | undefined, template: ResearchTemplateType) {
+  if (!profile || !model || model.provider !== "custom_openai" || template === "reasoning") return undefined;
+  return profile.defaultViewerCustomReasoningMode;
+}
+
 export function ResearchConfigBuilder({ copy, settings, repository, profiles, workspaces, providers, models, targets, usage, template, onBack, onLocked }: { copy: Copy; settings: AppSettings; repository: AppRepository; profiles: Profile[]; workspaces: Workspace[]; providers: ProviderConfig[]; models: ProviderModel[]; targets: TargetRecord[]; usage: TargetUsageRecord[]; template: ResearchTemplateType; onBack: () => void; onLocked: (project: ResearchProjectRecord) => Promise<void> }) {
   const [name, setName] = useState(`${templateName(copy, template)} · ${new Date().toLocaleDateString()}`);
   const [baseProfileId, setBaseProfileId] = useState(profiles[0]?.id ?? "");
@@ -272,6 +278,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
     if (template !== "reasoning" && fixedReasoning && !sharedCapabilities.reasoningEfforts.includes(fixedReasoning)) throw new Error(copy.researchReasoningUnavailable);
     const fixedTemperatureNumber = fixedTemperature.trim() ? Number(fixedTemperature) : undefined;
     const inheritedCustomTemperatureMode = baseModel.provider === "custom_openai" ? baseProfile.defaultViewerCustomTemperatureMode : undefined;
+    const inheritedCustomReasoningMode = researchCustomReasoningModeForProfile(baseProfile, baseModel, template);
     if (template !== "temperature" && fixedTemperatureNumber !== undefined) {
       const customManualTemperature = inheritedCustomTemperatureMode === "manual";
       if ((!sharedCapabilities.temperatureSupported && !customManualTemperature)
@@ -290,6 +297,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
       ...(template !== "reasoning" && fixedReasoning ? { reasoningEffort: fixedReasoning } : {}),
       ...(template !== "temperature" && fixedTemperatureNumber !== undefined ? { temperature: fixedTemperatureNumber } : {}),
       ...(template !== "temperature" && inheritedCustomTemperatureMode ? { customTemperatureMode: inheritedCustomTemperatureMode } : {}),
+      ...(template !== "reasoning" && inheritedCustomReasoningMode ? { customReasoningMode: inheritedCustomReasoningMode } : {}),
       ...(template !== "sampling" ? profileSampling.requested : {}),
       maxOutputTokens,
     };
@@ -327,7 +335,11 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
         const provider = providerConfigsForCredential(profile?.credentialId, providers)[0];
         const matchedModel = models.find((item) => item.providerConfigId === provider?.id && item.modelId === baseModel.modelId);
         if (!profile || !provider || !matchedModel) return [];
-        return [base(`profile_${profile.id}`, profile.name || copy.unnamedProfile, { profileId: profile.id, providerConfigId: provider.id, modelId: matchedModel.modelId })];
+        const requestedSettings = { ...fixedRequestedSettings };
+        delete requestedSettings.customReasoningMode;
+        const profileReasoningMode = researchCustomReasoningModeForProfile(profile, matchedModel, template);
+        if (profileReasoningMode) requestedSettings.customReasoningMode = profileReasoningMode;
+        return [base(`profile_${profile.id}`, profile.name || copy.unnamedProfile, { profileId: profile.id, providerConfigId: provider.id, modelId: matchedModel.modelId, requestedSettings })];
       });
     } else if (template === "model") {
       conditions = modelKeys.flatMap((key) => {
@@ -398,7 +410,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
       if (!conditionModel) return condition;
       const requestedSettings = conditionModel.provider === "custom_openai"
         ? condition.requestedSettings
-        : (() => { const next = { ...condition.requestedSettings }; delete next.customTemperatureMode; return next; })();
+        : (() => { const next = { ...condition.requestedSettings }; delete next.customTemperatureMode; delete next.customReasoningMode; return next; })();
       return {
         ...condition,
         requestedSettings,

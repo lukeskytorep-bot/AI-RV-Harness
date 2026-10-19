@@ -15,6 +15,7 @@ export const PROVIDER_KINDS = [
 
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 export type CustomOpenAiOutputTokenField = "max_tokens" | "max_completion_tokens";
+export type CustomReasoningMode = "default" | "on" | "off";
 
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type CapabilityConfidence = "provider_metadata" | "verified" | "unknown";
@@ -123,6 +124,8 @@ export interface ProviderModel {
 export interface GenerationSettings {
   /** Custom OpenAI temperature intent. Missing preserves legacy capability-driven behavior. */
   customTemperatureMode?: "provider_default" | "manual";
+  /** Optional Custom OpenAI wire override for reasoning.enabled. */
+  customReasoningMode?: CustomReasoningMode;
   reasoningEffort?: ReasoningEffort;
   temperature?: number;
   topP?: number;

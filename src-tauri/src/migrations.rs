@@ -173,6 +173,11 @@ pub(crate) const MIGRATION_SPECS: &[MigrationSpec] = &[
         description: "custom_temperature_mode",
         sql: include_str!("../migrations/033_custom_temperature_mode.sql"),
     },
+    MigrationSpec {
+        version: 34,
+        description: "custom_reasoning_mode",
+        sql: include_str!("../migrations/034_custom_reasoning_mode.sql"),
+    },
 ];
 
 pub(crate) const CURRENT_MIGRATION_VERSION: i64 =
@@ -200,8 +205,8 @@ mod tests {
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>();
-        assert_eq!(versions, (1_i64..=33).collect::<Vec<_>>());
-        assert_eq!(CURRENT_MIGRATION_VERSION, 33);
+        assert_eq!(versions, (1_i64..=34).collect::<Vec<_>>());
+        assert_eq!(CURRENT_MIGRATION_VERSION, 34);
         assert_eq!(registered_migrations().len(), MIGRATION_SPECS.len());
     }
 }

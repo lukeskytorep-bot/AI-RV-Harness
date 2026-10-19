@@ -5,7 +5,7 @@ import type { getCopy } from "../../i18n";
 import { isRouteAllowedForCredential, preferredModelOrder } from "../../modelRoutes";
 import { defaultTemperatureForModel, reasoningEffortForModel } from "../../profileViewerDefaults";
 import { addProvider, refreshProviderModels } from "../../providers/service";
-import { PROVIDER_KINDS, type ProviderConfig, type ProviderKind, type ProviderModel, type ReasoningEffort } from "../../providers/types";
+import { PROVIDER_KINDS, type CustomReasoningMode, type ProviderConfig, type ProviderKind, type ProviderModel, type ReasoningEffort } from "../../providers/types";
 import { factoryViewerEditablePrompt, localizedMonitorEditablePrompt } from "../../resources/systemPrompts";
 import { isTauriRuntime } from "../../storage";
 import type { AppRepository } from "../../storage/repository";
@@ -32,6 +32,7 @@ export interface ProfileSetupController {
   viewerReasoning: "" | ReasoningEffort;
   viewerTemperature: string;
   viewerTemperatureMode: CustomTemperatureMode | "legacy";
+  viewerCustomReasoningMode: CustomReasoningMode;
   viewerSamplingEnabled: boolean;
   viewerTopP: string;
   viewerTopK: string;
@@ -55,6 +56,7 @@ export interface ProfileSetupController {
   setViewerReasoning: (value: "" | ReasoningEffort) => void;
   setViewerTemperature: (value: string) => void;
   setViewerTemperatureMode: (value: CustomTemperatureMode) => void;
+  setViewerCustomReasoningMode: (value: CustomReasoningMode) => void;
   setViewerSamplingEnabled: (value: boolean) => void;
   setViewerTopP: (value: string) => void;
   setViewerTopK: (value: string) => void;
@@ -85,6 +87,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
   const [viewerReasoning, setViewerReasoning] = useState<"" | ReasoningEffort>("");
   const [viewerTemperature, setViewerTemperature] = useState("");
   const [viewerTemperatureMode, setViewerTemperatureMode] = useState<CustomTemperatureMode | "legacy">(existingProfile?.defaultViewerCustomTemperatureMode ?? (existingProfile ? "legacy" : "provider_default"));
+  const [viewerCustomReasoningMode, setViewerCustomReasoningMode] = useState<CustomReasoningMode>(existingProfile?.defaultViewerCustomReasoningMode ?? "default");
   const [viewerSamplingEnabled, setViewerSamplingEnabled] = useState(existingProfile?.defaultViewerOpenRouterSampling?.enabled ?? false);
   const [viewerTopP, setViewerTopP] = useState(existingProfile?.defaultViewerOpenRouterSampling?.topP === undefined ? "" : String(existingProfile.defaultViewerOpenRouterSampling.topP));
   const [viewerTopK, setViewerTopK] = useState(existingProfile?.defaultViewerOpenRouterSampling?.topK === undefined ? "" : String(existingProfile.defaultViewerOpenRouterSampling.topK));
@@ -152,6 +155,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     setViewerReasoning("");
     setViewerTemperature("");
     setViewerTemperatureMode(existingProfile ? "legacy" : "provider_default");
+    setViewerCustomReasoningMode("default");
     setModelSearch("");
     setJudgeModelKey("");
     setMonitorModelKey("");
@@ -206,6 +210,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
       : defaultTemperatureForModel(model);
     setViewerTemperature(temperature === undefined ? "" : String(temperature));
     setViewerTemperatureMode(selectedProvider?.provider === "custom_openai" ? (sameStoredPair ? existingProfile?.defaultViewerCustomTemperatureMode ?? "legacy" : "provider_default") : "legacy");
+    setViewerCustomReasoningMode(selectedProvider?.provider === "custom_openai" ? (sameStoredPair ? existingProfile?.defaultViewerCustomReasoningMode ?? "default" : "default") : "default");
   };
 
   const prepareCachedModels = () => {
@@ -218,6 +223,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     const temperature = defaultTemperatureForModel(viewerModel);
     setViewerTemperature(temperature === undefined ? "" : String(temperature));
     setViewerTemperatureMode(selectedProvider?.provider === "custom_openai" ? "provider_default" : "legacy");
+    setViewerCustomReasoningMode("default");
     setJudgeModelKey("");
     setMonitorModelKey("");
     setViewerSamplingEnabled(false);
@@ -251,6 +257,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
           ? parseOpenRouterAdditionalSamplingInputs(copy, viewerSamplingEnabled, viewerTopP, viewerTopK, viewerSeed)
           : undefined,
         selectedProvider?.provider === "custom_openai" ? viewerTemperatureMode : undefined,
+        selectedProvider?.provider === "custom_openai" ? viewerCustomReasoningMode : undefined,
       ),
       defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(existingProfile?.defaultMonitorSystemPrompt, setupLanguage),
     };
@@ -268,6 +275,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     viewerReasoning,
     viewerTemperature,
     viewerTemperatureMode,
+    viewerCustomReasoningMode,
     viewerSamplingEnabled,
     viewerTopP,
     viewerTopK,
@@ -291,6 +299,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     setViewerReasoning,
     setViewerTemperature,
     setViewerTemperatureMode,
+    setViewerCustomReasoningMode,
     setViewerSamplingEnabled,
     setViewerTopP,
     setViewerTopK,

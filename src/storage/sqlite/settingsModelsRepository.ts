@@ -180,6 +180,8 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
                   default_viewer_model_id = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_model_id END,
                   default_viewer_reasoning_effort = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_reasoning_effort END,
                   default_viewer_temperature = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_temperature END,
+                  default_viewer_custom_temperature_mode = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_custom_temperature_mode END,
+                  default_viewer_custom_reasoning_mode = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_custom_reasoning_mode END,
                   default_monitor_provider_config_id = CASE WHEN default_monitor_provider_config_id = $2 THEN NULL ELSE default_monitor_provider_config_id END,
                   default_monitor_model_id = CASE WHEN default_monitor_provider_config_id = $2 THEN NULL ELSE default_monitor_model_id END,
                   default_judge_provider_config_id = CASE WHEN default_judge_provider_config_id = $2 THEN NULL ELSE default_judge_provider_config_id END,

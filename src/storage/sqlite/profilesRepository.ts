@@ -20,6 +20,7 @@ type ProfileRow = {
   default_viewer_reasoning_effort: ReasoningEffort | null;
   default_viewer_temperature: number | null;
   default_viewer_custom_temperature_mode: "provider_default" | "manual" | null;
+  default_viewer_custom_reasoning_mode: "default" | "on" | "off" | null;
   default_viewer_sampling_enabled: number;
   default_viewer_top_p: number | null;
   default_viewer_top_k: number | null;
@@ -54,6 +55,7 @@ function mapProfile(row: ProfileRow): Profile {
     defaultViewerReasoningEffort: row.default_viewer_reasoning_effort ?? undefined,
     defaultViewerTemperature: row.default_viewer_temperature ?? undefined,
     defaultViewerCustomTemperatureMode: row.default_viewer_custom_temperature_mode ?? undefined,
+    defaultViewerCustomReasoningMode: row.default_viewer_custom_reasoning_mode ?? undefined,
     ...((row.default_viewer_sampling_enabled === 1
       || row.default_viewer_top_p !== null
       || row.default_viewer_top_k !== null
@@ -88,7 +90,7 @@ export class SqliteProfilesRepository implements ProfilesRepository {
               c.provider AS credential_provider,
               p.default_viewer_model_id,
               p.default_viewer_reasoning_effort,
-              p.default_viewer_temperature, p.default_viewer_custom_temperature_mode,
+              p.default_viewer_temperature, p.default_viewer_custom_temperature_mode, p.default_viewer_custom_reasoning_mode,
               p.default_viewer_sampling_enabled, p.default_viewer_top_p, p.default_viewer_top_k, p.default_viewer_seed,
               p.default_viewer_system_prompt,
               p.default_monitor_system_prompt,
@@ -109,7 +111,7 @@ export class SqliteProfilesRepository implements ProfilesRepository {
     const rows = await this.dependencies.select<ProfileRow[]>(
       `SELECT p.id, p.display_name, p.human_display_name, p.note, p.credential_id,
               c.provider AS credential_provider, p.default_viewer_model_id,
-              p.default_viewer_reasoning_effort, p.default_viewer_temperature, p.default_viewer_custom_temperature_mode,
+              p.default_viewer_reasoning_effort, p.default_viewer_temperature, p.default_viewer_custom_temperature_mode, p.default_viewer_custom_reasoning_mode,
               p.default_viewer_sampling_enabled, p.default_viewer_top_p, p.default_viewer_top_k, p.default_viewer_seed,
               p.default_viewer_system_prompt, p.default_monitor_system_prompt,
               p.default_monitor_provider_config_id, p.default_monitor_model_id,
@@ -135,6 +137,7 @@ export class SqliteProfilesRepository implements ProfilesRepository {
       defaultViewerReasoningEffort: ai?.defaultViewerReasoningEffort,
       defaultViewerTemperature: ai?.defaultViewerTemperature,
       defaultViewerCustomTemperatureMode: ai?.defaultViewerCustomTemperatureMode,
+      defaultViewerCustomReasoningMode: ai?.defaultViewerCustomReasoningMode,
       defaultViewerOpenRouterSampling: validateOpenRouterSamplingForProvider(ai?.credentialProvider, ai?.defaultViewerOpenRouterSampling),
       defaultViewerSystemPrompt: ai?.defaultViewerSystemPrompt?.trim() || undefined,
       defaultMonitorSystemPrompt: ai?.defaultMonitorSystemPrompt?.trim() || undefined,
@@ -149,12 +152,12 @@ export class SqliteProfilesRepository implements ProfilesRepository {
       `INSERT INTO profiles (
          id, display_name, human_display_name, note, credential_id,
          default_viewer_model_id, default_viewer_reasoning_effort,
-         default_viewer_temperature, default_viewer_custom_temperature_mode, default_viewer_sampling_enabled, default_viewer_top_p, default_viewer_top_k, default_viewer_seed,
+         default_viewer_temperature, default_viewer_custom_temperature_mode, default_viewer_custom_reasoning_mode, default_viewer_sampling_enabled, default_viewer_top_p, default_viewer_top_k, default_viewer_seed,
          default_viewer_system_prompt, default_monitor_system_prompt,
          default_monitor_provider_config_id, default_monitor_model_id,
          default_judge_provider_config_id, default_judge_model_id,
          created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
       [
         profile.id,
         profile.name,
@@ -165,6 +168,7 @@ export class SqliteProfilesRepository implements ProfilesRepository {
         profile.defaultViewerReasoningEffort ?? null,
         profile.defaultViewerTemperature ?? null,
         profile.defaultViewerCustomTemperatureMode ?? null,
+        profile.defaultViewerCustomReasoningMode ?? null,
         profile.defaultViewerOpenRouterSampling?.enabled ? 1 : 0,
         profile.defaultViewerOpenRouterSampling?.topP ?? null,
         profile.defaultViewerOpenRouterSampling?.topK ?? null,
@@ -201,24 +205,26 @@ export class SqliteProfilesRepository implements ProfilesRepository {
               default_viewer_reasoning_effort = $3,
               default_viewer_temperature = $4,
               default_viewer_custom_temperature_mode = $5,
-              default_viewer_sampling_enabled = CASE WHEN $6 = 1 THEN $7 ELSE default_viewer_sampling_enabled END,
-              default_viewer_top_p = CASE WHEN $6 = 1 THEN $8 ELSE default_viewer_top_p END,
-              default_viewer_top_k = CASE WHEN $6 = 1 THEN $9 ELSE default_viewer_top_k END,
-              default_viewer_seed = CASE WHEN $6 = 1 THEN $10 ELSE default_viewer_seed END,
-              default_viewer_system_prompt = $11,
-              default_monitor_system_prompt = $12,
-              default_monitor_provider_config_id = $13,
-              default_monitor_model_id = $14,
-              default_judge_provider_config_id = $15,
-              default_judge_model_id = $16,
-              updated_at = $17
-        WHERE id = $18 AND archived_at IS NULL`,
+              default_viewer_custom_reasoning_mode = $6,
+              default_viewer_sampling_enabled = CASE WHEN $7 = 1 THEN $8 ELSE default_viewer_sampling_enabled END,
+              default_viewer_top_p = CASE WHEN $7 = 1 THEN $9 ELSE default_viewer_top_p END,
+              default_viewer_top_k = CASE WHEN $7 = 1 THEN $10 ELSE default_viewer_top_k END,
+              default_viewer_seed = CASE WHEN $7 = 1 THEN $11 ELSE default_viewer_seed END,
+              default_viewer_system_prompt = $12,
+              default_monitor_system_prompt = $13,
+              default_monitor_provider_config_id = $14,
+              default_monitor_model_id = $15,
+              default_judge_provider_config_id = $16,
+              default_judge_model_id = $17,
+              updated_at = $18
+        WHERE id = $19 AND archived_at IS NULL`,
       [
         input.credentialId ?? null,
         input.defaultViewerModelId ?? null,
         input.defaultViewerReasoningEffort ?? null,
         input.defaultViewerTemperature ?? null,
         input.defaultViewerCustomTemperatureMode ?? null,
+        input.defaultViewerCustomReasoningMode ?? null,
         sampling === undefined ? 0 : 1,
         sampling?.enabled ? 1 : 0,
         sampling?.topP ?? null,
@@ -251,6 +257,7 @@ export class SqliteProfilesRepository implements ProfilesRepository {
               default_viewer_reasoning_effort = NULL,
               default_viewer_temperature = NULL,
               default_viewer_custom_temperature_mode = NULL,
+              default_viewer_custom_reasoning_mode = NULL,
               updated_at = $2
         WHERE id = $3`,
       [credentialId ?? null, (this.dependencies.now ?? nowIso)(), profileId],
