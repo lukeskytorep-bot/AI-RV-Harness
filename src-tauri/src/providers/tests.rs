@@ -1285,6 +1285,60 @@ fn emits_openrouter_and_custom_manual_sampling_without_leaking_to_other_provider
 }
 
 #[test]
+fn direct0_characterizes_direct_provider_sampling_gate_without_enabling_it() {
+    for provider in [
+        ProviderKind::Openai,
+        ProviderKind::Mistral,
+        ProviderKind::Zai,
+        ProviderKind::Deepseek,
+        ProviderKind::Blackbox,
+    ] {
+        let mut request = chat_request(provider, "direct-0-model");
+        request.top_p = Some(0.5);
+        request.top_k = Some(100);
+        request.seed = Some(42);
+
+        let error = validate_chat_request(&request).unwrap_err();
+        assert!(error.contains("OpenRouter or Custom OpenAI-compatible"));
+
+        // Characterization only: even if a caller bypassed validation, the current
+        // generic builder does not leak the extra sampling fields to direct routes.
+        let base = provider_base_url(provider, None).unwrap();
+        let (_, body) = build_openai_compatible_request(&request, &base);
+        assert!(body.get("top_p").is_none(), "{provider:?} unexpectedly emitted top_p");
+        assert!(body.get("top_k").is_none(), "{provider:?} unexpectedly emitted top_k");
+        assert!(body.get("seed").is_none(), "{provider:?} unexpectedly emitted seed");
+    }
+}
+
+#[test]
+fn direct1a_extracts_mistral_nested_thinking_from_fixture_without_leaking_it_into_final() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../src/providers/direct-compat-fixtures/mistral-nested-thinking-response.json"
+    ))
+    .expect("DIRECT-1A Mistral nested-thinking fixture must be valid JSON");
+
+    let parsed = parse_chat_response(ProviderKind::Mistral, fixture, None).unwrap();
+    assert_eq!(parsed.content, "final");
+    assert_eq!(parsed.finish_reason.as_deref(), Some("stop"));
+    assert_eq!(parsed.reasoning_content.as_deref(), Some("reasoning"));
+    assert_eq!(parsed.reasoning_source.as_deref(), Some("mistral_thinking"));
+}
+
+#[test]
+fn direct1a_extracts_multiple_nested_mistral_thinking_text_items_in_order() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../src/providers/direct-compat-fixtures/mistral-nested-thinking-multi-response.json"
+    ))
+    .expect("DIRECT-1A multi-part Mistral fixture must be valid JSON");
+    let parsed = parse_chat_response(ProviderKind::Mistral, fixture, None).unwrap();
+
+    assert_eq!(parsed.reasoning_content.as_deref(), Some("first second"));
+    assert_eq!(parsed.reasoning_source.as_deref(), Some("mistral_thinking"));
+    assert_eq!(parsed.content, "visible thinking word stays final");
+}
+
+#[test]
 fn validates_openrouter_sampling_transport_ranges() {
     let manual_sampling_routing = || OpenRouterProviderRouting {
         order: vec![],

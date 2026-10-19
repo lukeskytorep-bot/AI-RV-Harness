@@ -94,10 +94,18 @@ fn extract_embedded_reasoning(content: Option<&Value>) -> String {
                 let kind = part.get("type").and_then(Value::as_str).unwrap_or_default().to_ascii_lowercase();
                 kind.contains("reason") || kind.contains("think") || kind.contains("thought")
             })
-            .filter_map(|part| part.get("text").and_then(Value::as_str)
-                .or_else(|| part.pointer("/text/value").and_then(Value::as_str))
-                .or_else(|| part.get("thinking").and_then(Value::as_str))
-                .or_else(|| part.get("reasoning").and_then(Value::as_str)))
+            .map(|part| {
+                if let Some(text) = part.get("text").and_then(Value::as_str)
+                    .or_else(|| part.pointer("/text/value").and_then(Value::as_str))
+                {
+                    return text.to_string();
+                }
+                let thinking = extract_reasoning_text(part.get("thinking"));
+                if !thinking.trim().is_empty() {
+                    return thinking;
+                }
+                extract_reasoning_text(part.get("reasoning"))
+            })
             .collect::<Vec<_>>()
             .join(""))
         .unwrap_or_default()
