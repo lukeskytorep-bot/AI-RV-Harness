@@ -9,7 +9,7 @@ import { PROVIDER_KINDS, type ProviderConfig, type ProviderKind, type ProviderMo
 import { factoryViewerEditablePrompt, localizedMonitorEditablePrompt } from "../../resources/systemPrompts";
 import { isTauriRuntime } from "../../storage";
 import type { AppRepository } from "../../storage/repository";
-import type { InterfaceLanguage, Profile, ProfileAiConfigurationInput } from "../../types";
+import type { CustomTemperatureMode, InterfaceLanguage, Profile, ProfileAiConfigurationInput } from "../../types";
 import { buildProfileAiConfiguration, parseOpenRouterAdditionalSamplingInputs } from "./profileAiConfiguration";
 
 export const NEW_PROFILE_PROVIDER_CHOICE = "__new__";
@@ -31,6 +31,7 @@ export interface ProfileSetupController {
   viewerModelId: string;
   viewerReasoning: "" | ReasoningEffort;
   viewerTemperature: string;
+  viewerTemperatureMode: CustomTemperatureMode | "legacy";
   viewerSamplingEnabled: boolean;
   viewerTopP: string;
   viewerTopK: string;
@@ -53,6 +54,7 @@ export interface ProfileSetupController {
   setBaseUrl: (value: string) => void;
   setViewerReasoning: (value: "" | ReasoningEffort) => void;
   setViewerTemperature: (value: string) => void;
+  setViewerTemperatureMode: (value: CustomTemperatureMode) => void;
   setViewerSamplingEnabled: (value: boolean) => void;
   setViewerTopP: (value: string) => void;
   setViewerTopK: (value: string) => void;
@@ -82,6 +84,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
   const [viewerModelId, setViewerModelId] = useState("");
   const [viewerReasoning, setViewerReasoning] = useState<"" | ReasoningEffort>("");
   const [viewerTemperature, setViewerTemperature] = useState("");
+  const [viewerTemperatureMode, setViewerTemperatureMode] = useState<CustomTemperatureMode | "legacy">(existingProfile?.defaultViewerCustomTemperatureMode ?? (existingProfile ? "legacy" : "provider_default"));
   const [viewerSamplingEnabled, setViewerSamplingEnabled] = useState(existingProfile?.defaultViewerOpenRouterSampling?.enabled ?? false);
   const [viewerTopP, setViewerTopP] = useState(existingProfile?.defaultViewerOpenRouterSampling?.topP === undefined ? "" : String(existingProfile.defaultViewerOpenRouterSampling.topP));
   const [viewerTopK, setViewerTopK] = useState(existingProfile?.defaultViewerOpenRouterSampling?.topK === undefined ? "" : String(existingProfile.defaultViewerOpenRouterSampling.topK));
@@ -148,6 +151,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     setViewerModelId("");
     setViewerReasoning("");
     setViewerTemperature("");
+    setViewerTemperatureMode(existingProfile ? "legacy" : "provider_default");
     setModelSearch("");
     setJudgeModelKey("");
     setMonitorModelKey("");
@@ -201,6 +205,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
       ? existingProfile.defaultViewerTemperature
       : defaultTemperatureForModel(model);
     setViewerTemperature(temperature === undefined ? "" : String(temperature));
+    setViewerTemperatureMode(selectedProvider?.provider === "custom_openai" ? (sameStoredPair ? existingProfile?.defaultViewerCustomTemperatureMode ?? "legacy" : "provider_default") : "legacy");
   };
 
   const prepareCachedModels = () => {
@@ -212,6 +217,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     setViewerReasoning("");
     const temperature = defaultTemperatureForModel(viewerModel);
     setViewerTemperature(temperature === undefined ? "" : String(temperature));
+    setViewerTemperatureMode(selectedProvider?.provider === "custom_openai" ? "provider_default" : "legacy");
     setJudgeModelKey("");
     setMonitorModelKey("");
     setViewerSamplingEnabled(false);
@@ -244,6 +250,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
         (selectedProvider?.provider === "openrouter" || selectedProvider?.provider === "custom_openai")
           ? parseOpenRouterAdditionalSamplingInputs(copy, viewerSamplingEnabled, viewerTopP, viewerTopK, viewerSeed)
           : undefined,
+        selectedProvider?.provider === "custom_openai" ? viewerTemperatureMode : undefined,
       ),
       defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(existingProfile?.defaultMonitorSystemPrompt, setupLanguage),
     };
@@ -260,6 +267,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     viewerModelId,
     viewerReasoning,
     viewerTemperature,
+    viewerTemperatureMode,
     viewerSamplingEnabled,
     viewerTopP,
     viewerTopK,
@@ -282,6 +290,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     setBaseUrl,
     setViewerReasoning,
     setViewerTemperature,
+    setViewerTemperatureMode,
     setViewerSamplingEnabled,
     setViewerTopP,
     setViewerTopK,

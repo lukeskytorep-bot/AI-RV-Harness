@@ -3,7 +3,7 @@ import { isRouteAllowedForCredential, splitModelRouteKey } from "../../modelRout
 import { defaultTemperatureForModel, reasoningEffortForModel } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
 import { validateOpenRouterAdditionalSamplingSettings, type OpenRouterAdditionalSamplingSettings } from "../../providers/openRouterSamplingSettings";
-import type { ProfileAiConfigurationInput } from "../../types";
+import type { CustomTemperatureMode, ProfileAiConfigurationInput } from "../../types";
 import { openRouterSamplingModelCapabilityState, type OpenRouterSamplingModelParameter } from "./openRouterSamplingModelCapability";
 
 export function parseOpenRouterAdditionalSamplingInputs(
@@ -69,6 +69,7 @@ export function buildProfileAiConfiguration(
   providers: ProviderConfig[] = provider ? [provider] : [],
   models: ProviderModel[] = viewerModel ? [viewerModel] : [],
   openRouterSampling?: OpenRouterAdditionalSamplingSettings,
+  customTemperatureMode?: CustomTemperatureMode | "legacy",
 ): ProfileAiConfigurationInput {
   if (!provider || !viewerModel || viewerModel.providerConfigId !== provider.id) {
     throw new Error(copy.selectViewerBeforeSaving);
@@ -77,7 +78,13 @@ export function buildProfileAiConfiguration(
   if (reasoning && !normalizedReasoning) throw new Error(copy.reasoningNotSupported);
 
   let temperature: number | undefined;
-  if (viewerModel.capabilities.temperature.supported) {
+  const customTemperatureOverride = provider.provider === "custom_openai" && customTemperatureMode && customTemperatureMode !== "legacy";
+  if (customTemperatureOverride) {
+    if (customTemperatureMode === "manual") {
+      temperature = Number(temperatureInput);
+      if (!temperatureInput.trim() || !Number.isFinite(temperature)) throw new Error(copy.temperatureOutOfRange);
+    }
+  } else if (viewerModel.capabilities.temperature.supported) {
     temperature = temperatureInput.trim() ? Number(temperatureInput) : defaultTemperatureForModel(viewerModel);
     const capability = viewerModel.capabilities.temperature;
     if (
@@ -104,6 +111,7 @@ export function buildProfileAiConfiguration(
     defaultViewerModelId: viewerModel.modelId,
     ...(normalizedReasoning ? { defaultViewerReasoningEffort: normalizedReasoning } : {}),
     ...(temperature !== undefined ? { defaultViewerTemperature: temperature } : {}),
+    ...(provider.provider === "custom_openai" && customTemperatureMode && customTemperatureMode !== "legacy" ? { defaultViewerCustomTemperatureMode: customTemperatureMode } : {}),
     ...((provider.provider === "openrouter" || provider.provider === "custom_openai") && openRouterSampling !== undefined
       ? (() => {
           const validatedSampling = validateOpenRouterAdditionalSamplingSettings(openRouterSampling);

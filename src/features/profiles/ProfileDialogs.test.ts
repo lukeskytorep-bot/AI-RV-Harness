@@ -152,4 +152,17 @@ describe("profile AI configuration", () => {
     expect(result.defaultViewerOpenRouterSampling).toEqual({ enabled: false, topP: 0.04, topK: 0, seed: 42 });
   });
 
+
+  it("allows Custom manual temperature without advertised capability and distinguishes provider default", () => {
+    const copy = getCopy("en");
+    const customProvider = { ...provider, provider: "custom_openai" as const };
+    const customModel = { ...model, provider: "custom_openai" as const, capabilities: { ...model.capabilities, temperature: { supported: false, confidence: "unknown" as const } } };
+    const manual = buildProfileAiConfiguration(copy, customProvider, customModel, "", "0", "", "", "", [customProvider], [customModel], undefined, "manual");
+    expect(manual.defaultViewerTemperature).toBe(0);
+    expect(manual.defaultViewerCustomTemperatureMode).toBe("manual");
+    const providerDefault = buildProfileAiConfiguration(copy, customProvider, customModel, "", "9", "", "", "", [customProvider], [customModel], undefined, "provider_default");
+    expect(providerDefault.defaultViewerTemperature).toBeUndefined();
+    expect(providerDefault.defaultViewerCustomTemperatureMode).toBe("provider_default");
+  });
+
 });

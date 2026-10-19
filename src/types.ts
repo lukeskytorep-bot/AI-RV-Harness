@@ -6,6 +6,7 @@ export type InterfaceLanguage = "pl" | "en";
 export type SessionLanguageSetting = "same" | InterfaceLanguage;
 export type Theme = "blue" | "aurora" | "light" | "dark" | "green";
 export type ChatMode = "conversation" | "manual_rv";
+export type CustomTemperatureMode = "provider_default" | "manual";
 
 export interface ChatThread {
   id: string;
@@ -85,6 +86,7 @@ export interface Profile {
   defaultViewerModelId?: string;
   defaultViewerReasoningEffort?: ReasoningEffort;
   defaultViewerTemperature?: number;
+  defaultViewerCustomTemperatureMode?: CustomTemperatureMode;
   defaultViewerOpenRouterSampling?: OpenRouterAdditionalSamplingSettings;
   defaultViewerSystemPrompt?: string;
   defaultMonitorSystemPrompt?: string;
@@ -103,6 +105,7 @@ export interface ProfileAiConfigurationInput {
   defaultViewerModelId?: string;
   defaultViewerReasoningEffort?: ReasoningEffort;
   defaultViewerTemperature?: number;
+  defaultViewerCustomTemperatureMode?: CustomTemperatureMode;
   defaultViewerOpenRouterSampling?: OpenRouterAdditionalSamplingSettings;
   defaultViewerSystemPrompt?: string;
   defaultMonitorSystemPrompt?: string;

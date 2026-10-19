@@ -121,6 +121,8 @@ export interface ProviderModel {
 }
 
 export interface GenerationSettings {
+  /** Custom OpenAI temperature intent. Missing preserves legacy capability-driven behavior. */
+  customTemperatureMode?: "provider_default" | "manual";
   reasoningEffort?: ReasoningEffort;
   temperature?: number;
   topP?: number;

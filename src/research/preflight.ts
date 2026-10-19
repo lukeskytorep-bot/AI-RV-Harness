@@ -89,7 +89,7 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
       continue;
     }
     checks.push(pass(`${prefix}:model`, `${condition.label}: model route is cached`));
-    const effective = resolveGenerationSettings(model.capabilities, condition.requestedSettings);
+    const effective = resolveGenerationSettings(model.capabilities, condition.requestedSettings, { provider: model.provider });
     const samplingIssues = (["topP", "topK", "seed"] as const).flatMap((parameter) => {
       if (condition.requestedSettings[parameter] === undefined) return [];
       const state = researchSamplingCapabilityState(model, parameter);

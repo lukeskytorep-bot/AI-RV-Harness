@@ -88,6 +88,16 @@ describe("chat engine isolation", () => {
     expect(packet).toContain("IANA time zone");
   });
 
+  it("Custom manual temperature reaches Conversation transport without advertised capability", async () => {
+    const customProvider: ProviderConfig = { ...provider, provider: "custom_openai", baseUrl: "https://example.test/v1" };
+    const customModel: ProviderModel = { ...model, provider: "custom_openai", route: "custom_openai:m", capabilities: { ...model.capabilities, temperature: { supported: false, confidence: "unknown" } } };
+    for (const temperature of [0, 0.7]) {
+      let captured: number | undefined;
+      await sendChatTurn({ repository: repo([]), threadId: `custom-temp-${temperature}`, mode: "conversation", language: "en", providerConfig: customProvider, model: customModel, content: "Hello", requestedSettings: { customTemperatureMode: "manual", temperature }, chat: async ({ settings }) => { captured = settings.effective.temperature; return { content: "Hi", usage: {} }; } });
+      expect(captured).toBe(temperature);
+    }
+  });
+
   it("Manual RV sends no Conversation system prompt and only attaches RCP when explicitly requested", async () => {
     let packet = "";
     await sendChatTurn({ repository: repo([]), threadId: "r", mode: "manual_rv", language: "en", providerConfig: provider, model, content: "Start", chat: async (request) => {

@@ -101,7 +101,7 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
   const originalProgress=input.onProgress;
   if(sessionFocus)input={...input,onProgress:p=>originalProgress?.({...p,passIndex:currentPassIndex,passCount:sessionFocus.second?2:1,stepCount:4})};
   validate(input);
-  const effectiveSettings = resolveGenerationSettings(input.model.capabilities, input.requestedSettings);
+  const effectiveSettings = resolveGenerationSettings(input.model.capabilities, input.requestedSettings, { provider: input.model.provider });
   if (effectiveSettings.omitted.length) throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
   const continuationRoute = input.resumeSession && input.resumeContinuationRoute ? input.resumeContinuationRoute : captureSessionContinuationRoute(input.providerConfig, input.model);
   const automaticReveal = input.automaticTarget

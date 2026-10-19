@@ -96,6 +96,7 @@ export function buildRvSessionRequestedSettings(input: {
     ...(defaults.topP !== undefined ? { topP: defaults.topP } : {}),
     ...(defaults.topK !== undefined ? { topK: defaults.topK } : {}),
     ...(defaults.seed !== undefined ? { seed: defaults.seed } : {}),
+    ...(defaults.customTemperatureMode ? { customTemperatureMode: defaults.customTemperatureMode } : {}),
     maxOutputTokens: input.model.capabilities.maxOutputTokens
       ? Math.min(input.rvSessionMaxOutputTokens, input.model.capabilities.maxOutputTokens)
       : input.rvSessionMaxOutputTokens,
@@ -328,7 +329,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     const context = JSON.stringify([
       scope, selectedIdentity.identity.id, activeProvider?.id, activeProvider?.credentialId, activeProvider?.baseUrl,
       selectedModel.modelId, selectedModel.route, profile?.defaultViewerModelId,
-      profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profileDefaults,
+      profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profile?.defaultViewerCustomTemperatureMode, profileDefaults,
       capabilities.reasoning.supported, capabilities.reasoning.mandatory, [...capabilities.reasoning.efforts].sort(),
       capabilities.temperature.supported, capabilities.temperature.min, capabilities.temperature.max, capabilities.temperature.default,
     ]);
@@ -336,7 +337,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     initializedGenerationContext.current = context;
     setReasoning(profileDefaults.reasoningEffort ?? "");
     setTemperature(profileDefaults.temperature === undefined ? "" : String(profileDefaults.temperature));
-  }, [viewerRouteReady, selectedIdentity?.identity.id, selectedModel, activeProvider, workspace.id, profile?.id, profile?.credentialId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature]);
+  }, [viewerRouteReady, selectedIdentity?.identity.id, selectedModel, activeProvider, workspace.id, profile?.id, profile?.credentialId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profile?.defaultViewerCustomTemperatureMode]);
 
   useEffect(() => {
     if (protocol !== "telepathic") return;

@@ -89,4 +89,15 @@ describe("Profile Viewer defaults", () => {
   });
 
 
+
+  it("keeps Custom temperature legacy semantics but honors explicit provider-default and manual modes", () => {
+    const custom = { ...model(), provider: "custom_openai" as const, capabilities: { ...model().capabilities, temperature: { supported: false, confidence: "unknown" as const } } };
+    const legacy: Profile = { ...profile, credentialProvider: "custom_openai", defaultViewerTemperature: 0.2 };
+    expect(profileGenerationDefaults(legacy, custom)).toEqual({ reasoningEffort: "high" });
+    const providerDefault: Profile = { ...legacy, defaultViewerCustomTemperatureMode: "provider_default" };
+    expect(profileGenerationDefaults(providerDefault, custom)).toEqual({ reasoningEffort: "high", customTemperatureMode: "provider_default" });
+    const manual: Profile = { ...legacy, defaultViewerCustomTemperatureMode: "manual" };
+    expect(profileGenerationDefaults(manual, custom)).toEqual({ reasoningEffort: "high", temperature: 0.2, customTemperatureMode: "manual" });
+  });
+
 });

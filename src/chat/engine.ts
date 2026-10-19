@@ -322,7 +322,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   if (budget.exceeded) {
     throw new Error("Conversation input exceeds this model's available context.");
   }
-  const settings = resolveGenerationSettings(input.model.capabilities, { ...input.requestedSettings, maxOutputTokens });
+  const settings = resolveGenerationSettings(input.model.capabilities, { ...input.requestedSettings, maxOutputTokens }, { provider: input.model.provider });
   if (settings.omitted.length) throw new Error(`Unsupported generation settings: ${settings.omitted.join(", ")}`);
   input.signal?.throwIfAborted();
   let user = appendUser ? await input.repository.appendChatMessage(input.threadId, "user", content) : storedHistory.at(-1)!;

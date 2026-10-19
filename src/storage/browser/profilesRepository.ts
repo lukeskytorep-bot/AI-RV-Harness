@@ -62,6 +62,7 @@ export class BrowserProfilesRepository implements ProfilesRepository {
       defaultViewerModelId: input.aiConfiguration?.defaultViewerModelId,
       defaultViewerReasoningEffort: input.aiConfiguration?.defaultViewerReasoningEffort,
       defaultViewerTemperature: input.aiConfiguration?.defaultViewerTemperature,
+      defaultViewerCustomTemperatureMode: input.aiConfiguration?.defaultViewerCustomTemperatureMode,
       defaultViewerOpenRouterSampling: validateOpenRouterSamplingForProvider(
         input.aiConfiguration?.credentialProvider,
         input.aiConfiguration?.defaultViewerOpenRouterSampling,
@@ -102,6 +103,7 @@ export class BrowserProfilesRepository implements ProfilesRepository {
           defaultViewerModelId: input.defaultViewerModelId,
           defaultViewerReasoningEffort: input.defaultViewerReasoningEffort,
           defaultViewerTemperature: input.defaultViewerTemperature,
+          defaultViewerCustomTemperatureMode: input.defaultViewerCustomTemperatureMode,
           ...(input.defaultViewerOpenRouterSampling !== undefined
             ? { defaultViewerOpenRouterSampling: validateOpenRouterSamplingForProvider(input.credentialProvider, input.defaultViewerOpenRouterSampling)! }
             : {}),
@@ -135,6 +137,7 @@ export class BrowserProfilesRepository implements ProfilesRepository {
           defaultViewerModelId: undefined,
           defaultViewerReasoningEffort: undefined,
           defaultViewerTemperature: undefined,
+          defaultViewerCustomTemperatureMode: undefined,
           updatedAt: timestamp,
         }
       : profile));

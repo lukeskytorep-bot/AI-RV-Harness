@@ -144,7 +144,7 @@ class TelepathicRunStop extends Error {}
 
 async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunInput): Promise<AutomaticTelepathicRunResult> {
   validate(input);
-  const effectiveSettings = resolveGenerationSettings(input.model.capabilities, input.requestedSettings);
+  const effectiveSettings = resolveGenerationSettings(input.model.capabilities, input.requestedSettings, { provider: input.model.provider });
   if (effectiveSettings.omitted.length) throw new Error(`Unsupported generation settings: ${effectiveSettings.omitted.join(", ")}`);
   const continuationRoute = input.resumeSession ? input.resumeContinuationRoute : captureSessionContinuationRoute(input.providerConfig, input.model);
 

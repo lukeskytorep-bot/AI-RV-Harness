@@ -147,4 +147,17 @@ describe("dynamic provider capabilities", () => {
   });
 
 
+  it("preserves Custom manual temperature intent through repeated resolution without advertised capability", () => {
+    const capabilities = { ...model.capabilities, temperature: { supported: false, confidence: "unknown" as const } };
+    for (const temperature of [0, 0.7]) {
+      const first = resolveGenerationSettings(capabilities, { customTemperatureMode: "manual", temperature }, { provider: "custom_openai" });
+      expect(first.omitted).toEqual([]);
+      expect(first.effective.temperature).toBe(temperature);
+      const second = resolveGenerationSettings(capabilities, { ...first.effective, customTemperatureMode: "manual" }, { provider: "custom_openai" });
+      expect(second.omitted).toEqual([]);
+      expect(second.effective.temperature).toBe(temperature);
+    }
+    expect(() => resolveGenerationSettings(capabilities, { customTemperatureMode: "manual", temperature: 0.7 }, { provider: "openrouter" })).toThrow(/Custom temperature override/);
+  });
+
 });

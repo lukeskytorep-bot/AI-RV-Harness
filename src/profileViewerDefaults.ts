@@ -31,14 +31,18 @@ export function profileGenerationDefaults(
     ...(useCalibratedPair && reasoningEffortForModel(model, profile?.defaultViewerReasoningEffort)
       ? { reasoningEffort: profile!.defaultViewerReasoningEffort }
       : {}),
-    ...(model.capabilities.temperature.supported
-      ? {
-          temperature:
-            useCalibratedPair && profile?.defaultViewerTemperature !== undefined
-              ? profile.defaultViewerTemperature
-              : defaultTemperatureForModel(model),
-        }
-      : {}),
+    ...(model.provider === "custom_openai" && useCalibratedPair && profile?.defaultViewerCustomTemperatureMode === "provider_default"
+      ? {}
+      : model.provider === "custom_openai" && useCalibratedPair && profile?.defaultViewerCustomTemperatureMode === "manual"
+        ? (profile.defaultViewerTemperature !== undefined ? { temperature: profile.defaultViewerTemperature } : {})
+        : model.capabilities.temperature.supported
+          ? {
+              temperature:
+                useCalibratedPair && profile?.defaultViewerTemperature !== undefined
+                  ? profile.defaultViewerTemperature
+                  : defaultTemperatureForModel(model),
+            }
+          : {}),
     ...((model.provider === "openrouter" || model.provider === "custom_openai") && profile?.defaultViewerOpenRouterSampling?.enabled === true
       ? {
           ...(profile.defaultViewerOpenRouterSampling.topP !== undefined ? { topP: profile.defaultViewerOpenRouterSampling.topP } : {}),
@@ -47,7 +51,14 @@ export function profileGenerationDefaults(
         }
       : {}),
   };
-  return resolveGenerationSettings(model.capabilities, requested).effective;
+  const resolved = resolveGenerationSettings(model.capabilities, requested, { provider: model.provider });
+  const customTemperatureMode = model.provider === "custom_openai" && useCalibratedPair
+    ? profile?.defaultViewerCustomTemperatureMode
+    : undefined;
+  return {
+    ...resolved.effective,
+    ...(customTemperatureMode ? { customTemperatureMode } : {}),
+  };
 }
 
 export function normalizeProfileSystemPrompt(value: string): string | undefined {

@@ -209,21 +209,22 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
     setReasoningLevels([]); setProfileIds(baseProfile ? [baseProfile.id] : []); setModelKeys([]);
     if (template === "sampling") setSamplingForm(researchSamplingFormFromRequested(researchSamplingFromProfile(baseProfile, baseModel?.provider).requested));
     setPreflight(null); setPreflightConfig(null); setDryRun(null);
-  }, [template, baseModelKey, baseProfile?.id, baseProfile?.defaultViewerReasoningEffort, baseProfile?.defaultViewerTemperature, settings.defaultMaxOutputTokens]);
+  }, [template, baseModelKey, baseProfile?.id, baseProfile?.defaultViewerReasoningEffort, baseProfile?.defaultViewerTemperature, baseProfile?.defaultViewerCustomTemperatureMode, settings.defaultMaxOutputTokens]);
   useEffect(() => {
     if (fixedReasoning && !sharedCapabilities.reasoningEfforts.includes(fixedReasoning)) setFixedReasoning("");
-    if (!sharedCapabilities.temperatureSupported && fixedTemperature) setFixedTemperature("");
-    if (fixedTemperature && sharedCapabilities.temperatureSupported) {
+    const customManualTemperature = baseModel?.provider === "custom_openai" && baseProfile?.defaultViewerCustomTemperatureMode === "manual";
+    if (!sharedCapabilities.temperatureSupported && fixedTemperature && !customManualTemperature) setFixedTemperature("");
+    if (fixedTemperature && (sharedCapabilities.temperatureSupported || customManualTemperature)) {
       const numeric = Number(fixedTemperature);
       if (!Number.isFinite(numeric)
-        || (sharedCapabilities.temperatureMin !== undefined && numeric < sharedCapabilities.temperatureMin)
-        || (sharedCapabilities.temperatureMax !== undefined && numeric > sharedCapabilities.temperatureMax)) setFixedTemperature("");
+        || (!customManualTemperature && sharedCapabilities.temperatureMin !== undefined && numeric < sharedCapabilities.temperatureMin)
+        || (!customManualTemperature && sharedCapabilities.temperatureMax !== undefined && numeric > sharedCapabilities.temperatureMax)) setFixedTemperature("");
     }
     if (sharedCapabilities.maxOutputTokens) {
       setResearchMaxOutputTokens((current) => String(Math.min(Number(current) || Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, settings.defaultMaxOutputTokens), sharedCapabilities.maxOutputTokens!)));
     }
     setPreflight(null); setPreflightConfig(null); setDryRun(null);
-  }, [sharedCapabilities.reasoningEfforts.join("|"), sharedCapabilities.temperatureSupported, sharedCapabilities.temperatureMin, sharedCapabilities.temperatureMax, sharedCapabilities.maxOutputTokens]);
+  }, [baseModel?.provider, baseProfile?.defaultViewerCustomTemperatureMode, sharedCapabilities.reasoningEfforts.join("|"), sharedCapabilities.temperatureSupported, sharedCapabilities.temperatureMin, sharedCapabilities.temperatureMax, sharedCapabilities.maxOutputTokens]);
   useEffect(() => {
     setTargetIds([]); setPreflight(null); setPreflightConfig(null); setDryRun(null);
   }, [targetSelectionMode, targetSource, targetPoolSignature, randomTargetCount]);
@@ -270,11 +271,13 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
     if (maxOutputTokens !== configuredOutputTokens) setResearchMaxOutputTokens(String(maxOutputTokens));
     if (template !== "reasoning" && fixedReasoning && !sharedCapabilities.reasoningEfforts.includes(fixedReasoning)) throw new Error(copy.researchReasoningUnavailable);
     const fixedTemperatureNumber = fixedTemperature.trim() ? Number(fixedTemperature) : undefined;
+    const inheritedCustomTemperatureMode = baseModel.provider === "custom_openai" ? baseProfile.defaultViewerCustomTemperatureMode : undefined;
     if (template !== "temperature" && fixedTemperatureNumber !== undefined) {
-      if (!sharedCapabilities.temperatureSupported
+      const customManualTemperature = inheritedCustomTemperatureMode === "manual";
+      if ((!sharedCapabilities.temperatureSupported && !customManualTemperature)
         || !Number.isFinite(fixedTemperatureNumber)
-        || (sharedCapabilities.temperatureMin !== undefined && fixedTemperatureNumber < sharedCapabilities.temperatureMin)
-        || (sharedCapabilities.temperatureMax !== undefined && fixedTemperatureNumber > sharedCapabilities.temperatureMax)) throw new Error(copy.researchTemperatureUnavailable);
+        || (!customManualTemperature && sharedCapabilities.temperatureMin !== undefined && fixedTemperatureNumber < sharedCapabilities.temperatureMin)
+        || (!customManualTemperature && sharedCapabilities.temperatureMax !== undefined && fixedTemperatureNumber > sharedCapabilities.temperatureMax)) throw new Error(copy.researchTemperatureUnavailable);
     }
     const profileSampling = researchSamplingFromProfile(baseProfile, baseModel.provider);
     const samplingModels = template === "profile" && profileComparisonModels.length
@@ -286,6 +289,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
     const fixedRequestedSettings = {
       ...(template !== "reasoning" && fixedReasoning ? { reasoningEffort: fixedReasoning } : {}),
       ...(template !== "temperature" && fixedTemperatureNumber !== undefined ? { temperature: fixedTemperatureNumber } : {}),
+      ...(template !== "temperature" && inheritedCustomTemperatureMode ? { customTemperatureMode: inheritedCustomTemperatureMode } : {}),
       ...(template !== "sampling" ? profileSampling.requested : {}),
       maxOutputTokens,
     };
@@ -392,9 +396,13 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
     conditions = conditions.map((condition) => {
       const conditionModel = models.find((item) => item.providerConfigId === condition.providerConfigId && item.modelId === condition.modelId);
       if (!conditionModel) return condition;
+      const requestedSettings = conditionModel.provider === "custom_openai"
+        ? condition.requestedSettings
+        : (() => { const next = { ...condition.requestedSettings }; delete next.customTemperatureMode; return next; })();
       return {
         ...condition,
-        effectiveSettings: resolveGenerationSettings(conditionModel.capabilities, condition.requestedSettings),
+        requestedSettings,
+        effectiveSettings: resolveGenerationSettings(conditionModel.capabilities, requestedSettings, { provider: conditionModel.provider }),
         capabilitySnapshot: structuredClone(conditionModel.capabilities),
       };
     });

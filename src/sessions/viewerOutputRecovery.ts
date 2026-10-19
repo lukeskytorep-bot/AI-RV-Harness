@@ -138,7 +138,7 @@ export function viewerOutputAttemptSettings(input: {
   });
 
   const requested = { ...input.baseSettings.requested, maxOutputTokens: preferred };
-  const settings = resolveGenerationSettings(input.model.capabilities, requested);
+  const settings = resolveGenerationSettings(input.model.capabilities, requested, { provider: input.model.provider });
   if (!settings.effective.maxOutputTokens || settings.omitted.includes("maxOutputTokens")) {
     throw new Error("Selected model route rejected the Viewer output budget required for this step.");
   }

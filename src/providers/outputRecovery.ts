@@ -143,7 +143,7 @@ export async function callWithAnalyticalOutputRecovery(input: AnalyticalOutputOp
       && (input.budgetPolicy === "training_reveal" || (attempt === 1 && input.allowOpenRouterEndpointRecoveryEscalation === true))
       ? { ...capabilities, maxOutputTokens: undefined }
       : capabilities;
-    const settings = resolveGenerationSettings(settingsCapabilities, requestedSettings);
+    const settings = resolveGenerationSettings(settingsCapabilities, requestedSettings, { provider: input.model.provider });
     if (!settings.effective.maxOutputTokens || settings.omitted.includes("maxOutputTokens")) {
       throw withOutcomes(new Error("Model route rejected the required analytical output budget."));
     }

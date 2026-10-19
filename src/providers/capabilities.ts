@@ -243,7 +243,11 @@ export function normalizeModelDiscovery(config: ProviderConfig, payload: unknown
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
-export function resolveGenerationSettings(capabilities: ModelCapabilities, requested: GenerationSettings): EffectiveGenerationSettings {
+export function resolveGenerationSettings(
+  capabilities: ModelCapabilities,
+  requested: GenerationSettings,
+  context?: { provider?: ProviderKind },
+): EffectiveGenerationSettings {
   const effective: GenerationSettings = {};
   const omitted: EffectiveGenerationSettings["omitted"] = [];
   let reasoningResolution: EffectiveGenerationSettings["reasoningResolution"];
@@ -273,13 +277,27 @@ export function resolveGenerationSettings(capabilities: ModelCapabilities, reque
     }
   }
 
+  const customTemperatureMode = context?.provider === "custom_openai" ? requested.customTemperatureMode : undefined;
+  if (requested.customTemperatureMode !== undefined && context?.provider !== "custom_openai") {
+    throw new Error("Custom temperature override is only valid for Custom OpenAI-compatible routes.");
+  }
+  if (customTemperatureMode === "manual" && requested.temperature === undefined) {
+    throw new RangeError("Manual Custom temperature requires a finite temperature value.");
+  }
   if (requested.temperature !== undefined) {
-    const { temperature } = capabilities;
-    const inRange =
-      (temperature.min === undefined || requested.temperature >= temperature.min) &&
-      (temperature.max === undefined || requested.temperature <= temperature.max);
-    if (temperature.supported && inRange) effective.temperature = requested.temperature;
-    else omitted.push("temperature");
+    if (customTemperatureMode === "provider_default") {
+      // An explicit Custom provider-default intent suppresses any stale temperature value.
+    } else if (customTemperatureMode === "manual") {
+      if (!Number.isFinite(requested.temperature)) throw new RangeError("temperature must be a finite number.");
+      effective.temperature = requested.temperature;
+    } else {
+      const { temperature } = capabilities;
+      const inRange =
+        (temperature.min === undefined || requested.temperature >= temperature.min) &&
+        (temperature.max === undefined || requested.temperature <= temperature.max);
+      if (temperature.supported && inRange) effective.temperature = requested.temperature;
+      else omitted.push("temperature");
+    }
   }
 
   if (requested.topP !== undefined) {

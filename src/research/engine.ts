@@ -69,9 +69,10 @@ export function freezeResearchViewerOutputPolicy(config: ResearchConfig, models:
     conditions: config.conditions.map((condition, index) => {
       const requestedSettings = { ...condition.requestedSettings, maxOutputTokens: initial };
       const capability = capabilities[index];
+      const routeModel = models.find(model => model.providerConfigId === condition.providerConfigId && model.modelId === condition.modelId);
       const policy: ResearchViewerOutputPolicy = { version: 1, initialTokens: initial, recoveryTokens: recovery, preserveConfiguredBudget: false };
       return { ...condition, requestedSettings, viewerOutputPolicy: policy,
-        ...(capability ? { capabilitySnapshot: structuredClone(capability), effectiveSettings: resolveGenerationSettings(capability, requestedSettings) }
+        ...(capability ? { capabilitySnapshot: structuredClone(capability), effectiveSettings: resolveGenerationSettings(capability, requestedSettings, { provider: routeModel?.provider }) }
           : condition.effectiveSettings ? { effectiveSettings: { ...condition.effectiveSettings, requested: requestedSettings, effective: { ...condition.effectiveSettings.effective, maxOutputTokens: initial } } } : {}),
       };
     }),
@@ -166,7 +167,7 @@ async function executeResearchSessionsOwned(input: {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       throw new Error("Provider capability metadata changed since Experiment Lock; Research stopped instead of assuming the condition is unchanged.");
     }
-    const currentEffective = resolveGenerationSettings(model.capabilities, condition.requestedSettings);
+    const currentEffective = resolveGenerationSettings(model.capabilities, condition.requestedSettings, { provider: model.provider });
     if (!condition.effectiveSettings || stableStringify(currentEffective) !== stableStringify(condition.effectiveSettings)) {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       throw new Error("Requested/effective settings no longer match Experiment Lock.");

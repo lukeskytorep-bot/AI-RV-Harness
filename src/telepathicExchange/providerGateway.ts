@@ -119,7 +119,7 @@ function isAmbiguousFailure(error: unknown): boolean {
 export async function telepathicRequestFingerprint(packet: TelepathicProviderPacket, route: ResolvedTelepathicAiRoute, fixedLead: boolean, outputBudget?: TelepathicOutputBudgetSnapshot): Promise<string> {
   const messages = composeTelepathicProviderMessages(packet);
   if (!fixedLead) return sha256Text(JSON.stringify({ modelId: route.model.modelId, messages }));
-  const settings = resolveGenerationSettings(route.model.capabilities, route.requestedSettings);
+  const settings = resolveGenerationSettings(route.model.capabilities, route.requestedSettings, { provider: route.model.provider });
   const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,canonical(v)])) : value;
   return sha256Text(JSON.stringify(canonical({ modelId: route.model.modelId, messages, settings,
     outputCeiling: route.model.capabilities.maxOutputTokens, provider: route.providerConfig.provider,
@@ -161,9 +161,9 @@ export async function executeTelepathicProviderPacket(input: {
     status: "prepared",
     scopeKey: input.packet.scopeKey,
     requestSha256,
-    requestSettings: resolveGenerationSettings(input.route.model.capabilities, requestedSettings),
+    requestSettings: resolveGenerationSettings(input.route.model.capabilities, requestedSettings, { provider: input.route.model.provider }),
     ...(outputBudget ? { outputBudgetSnapshot: structuredClone(outputBudget) } : {}),
-    outputDiagnostics: { ...(outputBudget ? { policyVersion: outputBudget.version } : {}), requestedMaxOutputTokens: budget?.requested ?? requestedSettings.maxOutputTokens, effectiveMaxOutputTokens: resolveGenerationSettings(input.route.model.capabilities, requestedSettings).effective.maxOutputTokens, modelMaxOutputTokens: input.route.model.capabilities.maxOutputTokens, completion: "unknown" },
+    outputDiagnostics: { ...(outputBudget ? { policyVersion: outputBudget.version } : {}), requestedMaxOutputTokens: budget?.requested ?? requestedSettings.maxOutputTokens, effectiveMaxOutputTokens: resolveGenerationSettings(input.route.model.capabilities, requestedSettings, { provider: input.route.model.provider }).effective.maxOutputTokens, modelMaxOutputTokens: input.route.model.capabilities.maxOutputTokens, completion: "unknown" },
     ...(input.fixedLead ? { requestMessages: messages.map(({role,content,images}) => ({ role, content, ...(images?.length ? { images: images.map(({mimeType}) => ({ mimeType, dataBase64: "[attachment transmitted]" })) } : {}) })) } : {}),
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -180,7 +180,7 @@ export async function executeTelepathicProviderPacket(input: {
         config: input.route.providerConfig,
         modelId: input.route.model.modelId,
         messages,
-        settings: resolveGenerationSettings(input.route.model.capabilities, requestedSettings),
+        settings: resolveGenerationSettings(input.route.model.capabilities, requestedSettings, { provider: input.route.model.provider }),
         configuredRetries: 0,
         operationId: input.packet.scopeKey,
         operationKind: "conversation",

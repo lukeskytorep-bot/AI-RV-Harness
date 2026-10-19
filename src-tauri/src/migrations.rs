@@ -168,6 +168,11 @@ pub(crate) const MIGRATION_SPECS: &[MigrationSpec] = &[
         description: "openrouter_sampling_profile_settings",
         sql: include_str!("../migrations/032_openrouter_sampling_profile_settings.sql"),
     },
+    MigrationSpec {
+        version: 33,
+        description: "custom_temperature_mode",
+        sql: include_str!("../migrations/033_custom_temperature_mode.sql"),
+    },
 ];
 
 pub(crate) const CURRENT_MIGRATION_VERSION: i64 =
@@ -190,13 +195,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_is_contiguous_and_current_version_is_032() {
+    fn registry_is_contiguous_and_current_version_is_033() {
         let versions = MIGRATION_SPECS
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>();
-        assert_eq!(versions, (1_i64..=32).collect::<Vec<_>>());
-        assert_eq!(CURRENT_MIGRATION_VERSION, 32);
+        assert_eq!(versions, (1_i64..=33).collect::<Vec<_>>());
+        assert_eq!(CURRENT_MIGRATION_VERSION, 33);
         assert_eq!(registered_migrations().len(), MIGRATION_SPECS.len());
     }
 }

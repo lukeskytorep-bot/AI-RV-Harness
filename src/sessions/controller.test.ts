@@ -58,6 +58,14 @@ function fakeRepository(log: string[], snapshots: SessionSnapshot[] = []) {
 }
 
 describe("automatic RCP controller", () => {
+  it("passes Custom manual temperature to automatic RV transport when capability metadata is absent", async () => {
+    const customConfig: ProviderConfig = { ...config, provider: "custom_openai", baseUrl: "https://example.test/v1" };
+    const customModel: ProviderModel = { ...model, provider: "custom_openai", route: "custom_openai:test/model", capabilities: { ...model.capabilities, temperature: { supported: false, confidence: "unknown" } } };
+    let captured: number | undefined;
+    await runAutomaticRcpSession({ repository: fakeRepository([]), workspaceId: "w", profileId: "p", providerConfig: customConfig, model: customModel, protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { customTemperatureMode: "manual", temperature: 0.7, maxOutputTokens: 16384 }, chat: async ({ settings }) => { captured = settings.effective.temperature; return { content: "Distinct blind evidence for this phase.", usage: {} }; } });
+    expect(captured).toBe(0.7);
+  });
+
   it("issues exactly one provider call for Phase 2 and stores its accepted answer once", async () => {
     const log: string[] = [];
     let calls = 0;
