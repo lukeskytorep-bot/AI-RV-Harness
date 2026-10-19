@@ -37,6 +37,14 @@ describe("Research sampling policy", () => {
     expect(() => assertResearchSamplingSupported({ topP: 0.7, topK: 100, seed: 42 }, [mistral])).not.toThrow();
   });
 
+
+  it("reuses stored sampling intent for Blackbox under the documented service request contract without claiming routed-model effectiveness", () => {
+    const stored = profile({ enabled: true, topP: 0.7, topK: 100, seed: 42 });
+    expect(researchSamplingFromProfile(stored, "blackbox").requested).toEqual({ topP: 0.7, topK: 100, seed: 42 });
+    const blackbox = { ...model(undefined, "blackbox:provider/model-a"), provider: "blackbox" as const, route: "blackbox:provider/model-a" };
+    expect(() => assertResearchSamplingSupported({ topP: 0.7, topK: 100, seed: 42 }, [blackbox])).not.toThrow();
+  });
+
   it("reuses the stored sampling intent for Custom without inventing endpoint capability verification", () => {
     const stored = profile({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
     expect(researchSamplingFromProfile(stored, "custom_openai").requested).toEqual({ topP: 0.04, topK: 0, seed: 42 });

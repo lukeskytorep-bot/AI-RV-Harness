@@ -54,7 +54,7 @@ export function validateOpenRouterAdditionalSamplingSettings(
 
 
 export function supportsAdditionalSamplingProvider(provider: string | undefined): boolean {
-  return provider === "openrouter" || provider === "custom_openai" || provider === "mistral";
+  return provider === "openrouter" || provider === "custom_openai" || provider === "mistral" || provider === "blackbox";
 }
 
 export function validateOpenRouterSamplingForProvider(

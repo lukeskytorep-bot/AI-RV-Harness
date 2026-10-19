@@ -62,7 +62,7 @@ describe("Profile Viewer defaults", () => {
   });
 
 
-  it("applies enabled OpenRouter/Custom/Mistral sampling defaults independently of temperature and omits them when disabled or on unrelated providers", () => {
+  it("applies enabled OpenRouter/Custom/Mistral/Blackbox sampling defaults independently of temperature and omits them when disabled or on unrelated providers", () => {
     const samplingProfile: Profile = {
       ...profile,
       defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 0, seed: 42 },
@@ -92,6 +92,9 @@ describe("Profile Viewer defaults", () => {
       topK: 0,
       seed: 42,
     });
+
+    const blackbox = { ...model(), provider: "blackbox" as const, route: "blackbox:viewer" };
+    expect(profileGenerationDefaults(samplingProfile, blackbox)).toEqual({ reasoningEffort: "high", temperature: 1.1, topP: 0.04, topK: 0, seed: 42 });
 
     const unrelated = { ...model(), provider: "zai" as const, route: "zai:viewer" };
     expect(profileGenerationDefaults(samplingProfile, unrelated)).toEqual({ reasoningEffort: "high", temperature: 1.1 });

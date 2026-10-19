@@ -23,7 +23,7 @@ requireCheck(profileBuilder.includes('provider.provider === "openrouter" || prov
 requireCheck(samplingPolicy.includes('model.provider === "custom_openai" || model.provider === "mistral"'), "Research Mistral sampling capability path missing");
 requireCheck(samplingPolicy.includes('provider !== "openrouter" && provider !== "custom_openai" && provider !== "mistral"'), "Research Mistral stored sampling path missing");
 for (const field of ["topP", "topK", "seed"]) {
-  requireCheck(native.includes(`input.config.provider === "mistral") && input.settings.effective.${field}`) || native.includes(`input.config.provider === "custom_openai" || input.config.provider === "mistral") && input.settings.effective.${field}`), `Mistral IPC ${field} transport missing`);
+  requireCheck(native.includes('input.config.provider === "mistral"') && native.includes(`input.settings.effective.${field}`), `Mistral IPC ${field} transport missing`);
 }
 requireCheck(rustValidation.includes('ProviderKind::CustomOpenai | super::ProviderKind::Mistral'), "Rust sampling validation does not allow Mistral");
 requireCheck(rustBuilder.includes('ProviderKind::CustomOpenai | ProviderKind::Mistral'), "Rust request builder does not allow Mistral sampling");

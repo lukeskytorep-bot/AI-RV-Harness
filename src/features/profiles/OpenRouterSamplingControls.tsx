@@ -48,9 +48,11 @@ export function OpenRouterSamplingControls({
 }: OpenRouterSamplingControlsProps) {
   const customOpenAi = providerKind === "custom_openai";
   const mistralDirect = providerKind === "mistral";
-  const topPState = customOpenAi || mistralDirect ? "supported" : openRouterSamplingModelCapabilityState(model, "top_p");
-  const topKState = customOpenAi || mistralDirect ? "supported" : openRouterSamplingModelCapabilityState(model, "top_k");
-  const seedState = customOpenAi || mistralDirect ? "supported" : openRouterSamplingModelCapabilityState(model, "seed");
+  const blackboxDirect = providerKind === "blackbox";
+  const providerContractSampling = customOpenAi || mistralDirect || blackboxDirect;
+  const topPState = providerContractSampling ? "supported" : openRouterSamplingModelCapabilityState(model, "top_p");
+  const topKState = providerContractSampling ? "supported" : openRouterSamplingModelCapabilityState(model, "top_k");
+  const seedState = providerContractSampling ? "supported" : openRouterSamplingModelCapabilityState(model, "seed");
   const topPDisabled = !enabled || topPState !== "supported";
   const topKDisabled = !enabled || topKState !== "supported";
   const seedDisabled = !enabled || seedState !== "supported";
@@ -93,7 +95,7 @@ export function OpenRouterSamplingControls({
           <small>{copy.seedLead}</small>
         </label>
       </div>
-      <small className="sampling-runtime-note">{customOpenAi ? copy.samplingCustomRuntimeLead : mistralDirect ? copy.samplingMistralRuntimeLead : copy.samplingRuntimeLead}</small>
+      <small className="sampling-runtime-note">{customOpenAi ? copy.samplingCustomRuntimeLead : mistralDirect ? copy.samplingMistralRuntimeLead : blackboxDirect ? copy.samplingBlackboxRuntimeLead : copy.samplingRuntimeLead}</small>
     </div>
   </details>;
 }
