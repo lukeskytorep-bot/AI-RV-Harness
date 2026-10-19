@@ -148,7 +148,10 @@ describe("dynamic provider capabilities", () => {
 
 
   it("preserves Custom manual temperature intent through repeated resolution without advertised capability", () => {
-    const capabilities = { ...model.capabilities, temperature: { supported: false, confidence: "unknown" as const } };
+    const [customModel] = normalizeModelDiscovery({ ...config, id: "custom_1", provider: "custom_openai" }, {
+      data: [{ id: "custom/manual-temperature", supported_parameters: [], top_provider: { max_completion_tokens: 8192 } }],
+    });
+    const capabilities = { ...customModel.capabilities, temperature: { supported: false, confidence: "unknown" as const } };
     for (const temperature of [0, 0.7]) {
       const first = resolveGenerationSettings(capabilities, { customTemperatureMode: "manual", temperature }, { provider: "custom_openai" });
       expect(first.omitted).toEqual([]);

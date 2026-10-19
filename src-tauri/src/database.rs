@@ -426,7 +426,7 @@ impl DatabaseWriteOperation {
             Self::JudgeInsertJudgeScores01 => 9,
             Self::MonitorInsertMonitorRuns01 => 7,
             Self::MonitorInsertMonitorInterventions01 => 8,
-            Self::ProfilesInsertProfiles01 => 20,
+            Self::ProfilesInsertProfiles01 => 21,
             Self::ProfilesUpdateProfiles01 => 5,
             Self::ProfilesUpdateProfiles02 => 17,
             Self::ProfilesUpdateProfiles03 => 3,
