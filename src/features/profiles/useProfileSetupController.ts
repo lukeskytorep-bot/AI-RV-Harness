@@ -164,6 +164,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
   const changeProviderKind = (kind: ProviderKind) => {
     setProviderKind(kind);
     setProviderLabel(PROVIDER_LABELS[kind]);
+    setBaseUrl("");
   };
 
   const changeConnection = (providerId: string) => {
@@ -182,7 +183,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
           provider: providerKind,
           label: providerLabel,
           apiKey,
-          ...(providerKind === "custom_openai" ? { baseUrl } : {}),
+          ...((providerKind === "custom_openai" || providerKind === "blackbox") && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
         });
         setApiKey("");
       }

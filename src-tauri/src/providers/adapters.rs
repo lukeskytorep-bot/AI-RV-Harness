@@ -26,11 +26,28 @@ pub(super) fn provider_base_url(provider: ProviderKind, custom: Option<&str>) ->
         ProviderKind::Zai => Some("https://api.z.ai/api/paas/v4"),
         ProviderKind::Deepseek => Some("https://api.deepseek.com"),
         ProviderKind::Mistral => Some("https://api.mistral.ai/v1"),
-        ProviderKind::Blackbox => Some("https://api.blackbox.ai"),
+        ProviderKind::Blackbox => return blackbox_base_url(custom),
         ProviderKind::CustomOpenai => None,
     };
     let candidate = fixed.or(custom).ok_or_else(|| "custom provider requires a base URL".to_string())?;
     validate_base_url(candidate)
+}
+
+fn blackbox_base_url(custom: Option<&str>) -> Result<String, String> {
+    let candidate = custom.filter(|value| !value.trim().is_empty()).unwrap_or("https://api.blackbox.ai");
+    let normalized = validate_base_url(candidate)?;
+    let url = Url::parse(&normalized).map_err(|_| "invalid Blackbox base URL".to_string())?;
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    if host != "blackbox.ai" && !host.ends_with(".blackbox.ai") {
+        return Err("Blackbox base URL must use blackbox.ai or a blackbox.ai subdomain".to_string());
+    }
+    if url.path() != "/" && !url.path().is_empty() {
+        return Err("Blackbox base URL must be an origin without an API path".to_string());
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err("Blackbox base URL must not contain query or fragment components".to_string());
+    }
+    Ok(normalized)
 }
 
 pub(super) fn validate_base_url(value: &str) -> Result<String, String> {

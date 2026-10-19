@@ -1080,14 +1080,29 @@ fn exposes_structured_provider_errors_without_dumping_the_payload() {
 }
 
 #[test]
-fn blackbox_uses_the_documented_openai_compatible_routes() {
+fn direct2a_blackbox_preserves_legacy_default_but_accepts_explicit_blackbox_routes() {
     let request = chat_request(ProviderKind::Blackbox, "blackboxai/openai/gpt-5");
-    let base = provider_base_url(ProviderKind::Blackbox, Some("https://ignored.example/v1")).unwrap();
-    assert_eq!(base, "https://api.blackbox.ai");
-    let (url, body) = build_chat_request(&request, &base).unwrap();
-    assert_eq!(url, "https://api.blackbox.ai/chat/completions");
-    assert_eq!(body.get("model"), Some(&json!("blackboxai/openai/gpt-5")));
-    assert_eq!(endpoint(&base, "models"), "https://api.blackbox.ai/models");
+
+    let legacy = provider_base_url(ProviderKind::Blackbox, None).unwrap();
+    assert_eq!(legacy, "https://api.blackbox.ai");
+    let (legacy_url, legacy_body) = build_chat_request(&request, &legacy).unwrap();
+    assert_eq!(legacy_url, "https://api.blackbox.ai/chat/completions");
+    assert_eq!(legacy_body.get("model"), Some(&json!("blackboxai/openai/gpt-5")));
+
+    let enterprise = provider_base_url(ProviderKind::Blackbox, Some("https://enterprise.blackbox.ai/")).unwrap();
+    assert_eq!(enterprise, "https://enterprise.blackbox.ai");
+    let (enterprise_url, _) = build_chat_request(&request, &enterprise).unwrap();
+    assert_eq!(enterprise_url, "https://enterprise.blackbox.ai/chat/completions");
+
+    let organization = provider_base_url(ProviderKind::Blackbox, Some("https://example-org.blackbox.ai")).unwrap();
+    assert_eq!(organization, "https://example-org.blackbox.ai");
+}
+
+#[test]
+fn direct2a_blackbox_rejects_non_blackbox_or_path_bearing_overrides() {
+    assert!(provider_base_url(ProviderKind::Blackbox, Some("https://evil.example")).is_err());
+    assert!(provider_base_url(ProviderKind::Blackbox, Some("https://enterprise.blackbox.ai/v1")).is_err());
+    assert!(provider_base_url(ProviderKind::Blackbox, Some("https://enterprise.blackbox.ai?x=1")).is_err());
 }
 
 #[tokio::test]

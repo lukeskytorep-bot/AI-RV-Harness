@@ -601,7 +601,7 @@ function FirstRunSetup({
           {(!setup.providers.length || setup.connectionChoice === NEW_PROFILE_PROVIDER_CHOICE) && <div className="setup-provider-grid">
             <label>{copy.provider}<select value={setup.providerKind} onChange={(event) => setup.changeProviderKind(event.target.value as ProviderKind)} disabled={busy}>{setup.providerKinds.map((kind) => <option key={kind} value={kind}>{PROVIDER_LABELS[kind]}</option>)}</select></label>
             <label>{copy.providerLabel}<input value={setup.providerLabel} onChange={(event) => setup.setProviderLabel(event.target.value)} disabled={busy} /></label>
-            {setup.providerKind === "custom_openai" && <label className="wide">{copy.baseUrl}<input type="url" value={setup.baseUrl} onChange={(event) => setup.setBaseUrl(event.target.value)} disabled={busy} placeholder="https://example.com/v1" /></label>}
+            {(setup.providerKind === "custom_openai" || setup.providerKind === "blackbox") && <label className="wide">{copy.baseUrl}<input type="url" value={setup.baseUrl} onChange={(event) => setup.setBaseUrl(event.target.value)} disabled={busy} placeholder={setup.providerKind === "blackbox" ? "https://enterprise.blackbox.ai" : "https://example.com/v1"} /></label>}
             <label className="wide">{copy.apiKey}<input type="password" autoComplete="off" value={setup.apiKey} onChange={(event) => setup.setApiKey(event.target.value)} disabled={busy} /></label>
           </div>}
           <small className="setup-security-note"><LockKeyhole size={13} />{copy.providersReady}</small>

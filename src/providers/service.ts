@@ -29,6 +29,7 @@ export async function addProvider(
   if (!label) throw new Error("Provider label is required.");
   if (!apiKey) throw new Error("API key is required.");
   if (input.provider === "custom_openai" && !input.baseUrl?.trim()) throw new Error("Custom provider requires a base URL.");
+  if (input.baseUrl?.trim() && input.provider !== "custom_openai" && input.provider !== "blackbox") throw new Error("Base URL override is available only for Blackbox and Custom OpenAI-compatible providers.");
   if (input.provider !== "custom_openai" && input.customOutputTokenField) throw new Error("Output-token wire override is available only for Custom OpenAI-compatible providers.");
 
   const credentialId = createId("credential");
