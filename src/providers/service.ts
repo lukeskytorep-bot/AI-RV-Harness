@@ -1,7 +1,7 @@
 import { notifyProviderRoutesChanged } from "./changes";
 import type { AppRepository } from "../storage/repository";
 import { createId } from "../storage/repository";
-import { deleteCredentialSecret, discoverModels, hasCredentialSecret, rebindCredentialSecret, storeCredentialSecret } from "./native";
+import { deleteCredentialSecret, discoverModels, hasCredentialSecret, providerBindingEndpoint, rebindCredentialSecret, storeCredentialSecret } from "./native";
 import type { CustomOpenAiOutputTokenField, ProviderConfig, ProviderKind, ProviderModel } from "./types";
 
 export const PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER = 2000;
@@ -52,6 +52,77 @@ export async function addProvider(
     await deleteCredentialSecret(credentialId).catch(() => undefined);
     throw error;
   }
+}
+
+
+export function blackboxRouteNeedsManualModel(baseUrl?: string): boolean {
+  const raw = baseUrl?.trim();
+  if (!raw) return false;
+  try {
+    return new URL(raw).origin !== "https://api.blackbox.ai";
+  } catch {
+    return false;
+  }
+}
+
+export async function blackboxRequiresManualModel(config: ProviderConfig): Promise<boolean> {
+  if (config.provider !== "blackbox") return false;
+  const endpoint = await providerBindingEndpoint(config);
+  return endpoint !== "https://api.blackbox.ai";
+}
+
+export async function registerManualBlackboxModel(
+  repository: AppRepository,
+  config: ProviderConfig,
+  modelIdInput: string,
+): Promise<ProviderModel> {
+  if (config.provider !== "blackbox") throw new Error("Manual model registration is available only for Blackbox routes.");
+  if (!await blackboxRequiresManualModel(config)) {
+    throw new Error("Manual Blackbox model registration is reserved for routes without confirmed model discovery.");
+  }
+  const modelId = modelIdInput.trim();
+  if (!modelId) throw new Error("Blackbox model ID is required when model discovery is unavailable.");
+  if (modelId.length > 512 || /[\u0000-\u001f\u007f\s]/u.test(modelId)) {
+    throw new Error("Blackbox model ID must be a single non-whitespace identifier of at most 512 characters.");
+  }
+  if (!await hasCredentialSecret(config.credentialId)) {
+    throw new Error("API key is missing from secure storage. Remove this provider connection and add it again.");
+  }
+
+  const capturedAt = new Date().toISOString();
+  const model: ProviderModel = {
+    providerConfigId: config.id,
+    provider: "blackbox",
+    modelId,
+    displayName: modelId,
+    route: `blackbox:${modelId}`,
+    capabilities: {
+      inputModalities: ["text"],
+      outputModalities: ["text"],
+      supportsVision: false,
+      supportsStreaming: false,
+      reasoning: { supported: false, efforts: [], confidence: "unknown" },
+      temperature: { supported: false, confidence: "unknown" },
+      supportedParameters: [],
+      source: "compatibility",
+      capturedAt,
+    },
+    pricing: {},
+    recommended: false,
+    rawMetadata: {
+      source: "manual_model_id",
+      discoveryVerified: false,
+      capabilitiesVerified: false,
+    },
+    refreshedAt: capturedAt,
+  };
+
+  const existing = await repository.listProviderModels(config.id);
+  const next = [...existing.filter((item) => item.modelId !== modelId), model]
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
+  await repository.replaceProviderModels(config.id, next);
+  notifyProviderRoutesChanged();
+  return model;
 }
 
 export async function refreshProviderModels(repository: AppRepository, config: ProviderConfig): Promise<ProviderModel[]> {

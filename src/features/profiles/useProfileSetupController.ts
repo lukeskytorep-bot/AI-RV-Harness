@@ -4,7 +4,7 @@ import { PROVIDER_LABELS } from "../../components/ProviderSettings";
 import type { getCopy } from "../../i18n";
 import { isRouteAllowedForCredential, preferredModelOrder } from "../../modelRoutes";
 import { defaultTemperatureForModel, reasoningEffortForModel } from "../../profileViewerDefaults";
-import { addProvider, refreshProviderModels } from "../../providers/service";
+import { addProvider, blackboxRequiresManualModel, blackboxRouteNeedsManualModel, refreshProviderModels, registerManualBlackboxModel } from "../../providers/service";
 import { PROVIDER_KINDS, type CustomReasoningMode, type ProviderConfig, type ProviderKind, type ProviderModel, type ReasoningEffort } from "../../providers/types";
 import { factoryViewerEditablePrompt, localizedMonitorEditablePrompt } from "../../resources/systemPrompts";
 import { isTauriRuntime } from "../../storage";
@@ -28,6 +28,8 @@ export interface ProfileSetupController {
   providerLabel: string;
   apiKey: string;
   baseUrl: string;
+  blackboxManualModelId: string;
+  blackboxManualModelRequired: boolean;
   viewerModelId: string;
   viewerReasoning: "" | ReasoningEffort;
   viewerTemperature: string;
@@ -53,6 +55,7 @@ export interface ProfileSetupController {
   setProviderLabel: (value: string) => void;
   setApiKey: (value: string) => void;
   setBaseUrl: (value: string) => void;
+  setBlackboxManualModelId: (value: string) => void;
   setViewerReasoning: (value: "" | ReasoningEffort) => void;
   setViewerTemperature: (value: string) => void;
   setViewerTemperatureMode: (value: CustomTemperatureMode) => void;
@@ -83,6 +86,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
   const [providerLabel, setProviderLabel] = useState(PROVIDER_LABELS.openrouter);
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [blackboxManualModelId, setBlackboxManualModelId] = useState("");
   const [viewerModelId, setViewerModelId] = useState("");
   const [viewerReasoning, setViewerReasoning] = useState<"" | ReasoningEffort>("");
   const [viewerTemperature, setViewerTemperature] = useState("");
@@ -102,6 +106,9 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
   const viewerSystemPrompt = existingProfile?.defaultViewerSystemPrompt ?? factoryViewerEditablePrompt(setupLanguage);
 
   const selectedProvider = providers.find((provider) => provider.id === connectionChoice) ?? null;
+  const blackboxManualModelRequired = selectedProvider?.provider === "blackbox"
+    ? blackboxRouteNeedsManualModel(selectedProvider.baseUrl)
+    : providerKind === "blackbox" && blackboxRouteNeedsManualModel(baseUrl);
   const providerModels = useMemo(
     () => preferredModelOrder(models.filter((model) => model.providerConfigId === selectedProvider?.id)),
     [models, selectedProvider?.id],
@@ -165,6 +172,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     setProviderKind(kind);
     setProviderLabel(PROVIDER_LABELS[kind]);
     setBaseUrl("");
+    setBlackboxManualModelId("");
   };
 
   const changeConnection = (providerId: string) => {
@@ -187,9 +195,17 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
         });
         setApiKey("");
       }
-      await refreshProviderModels(repository, provider);
-      await reloadInventory(provider.id);
-      resetViewerSelections();
+      const manualBlackbox = await blackboxRequiresManualModel(provider);
+      if (manualBlackbox) {
+        const manualModel = await registerManualBlackboxModel(repository, provider, blackboxManualModelId);
+        await reloadInventory(provider.id);
+        resetViewerSelections();
+        setViewerModelId(manualModel.modelId);
+      } else {
+        await refreshProviderModels(repository, provider);
+        await reloadInventory(provider.id);
+        resetViewerSelections();
+      }
       return provider;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -272,6 +288,8 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     providerLabel,
     apiKey,
     baseUrl,
+    blackboxManualModelId,
+    blackboxManualModelRequired,
     viewerModelId,
     viewerReasoning,
     viewerTemperature,
@@ -297,6 +315,7 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     setProviderLabel,
     setApiKey,
     setBaseUrl,
+    setBlackboxManualModelId,
     setViewerReasoning,
     setViewerTemperature,
     setViewerTemperatureMode,
