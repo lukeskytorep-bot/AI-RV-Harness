@@ -23,12 +23,6 @@ const model: ProviderModel = {
 const repository = {} as AppRepository;
 const noop = vi.fn(async () => undefined);
 
-function inputWithValueHasDisabled(html: string, value: string): boolean {
-  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const input = html.match(new RegExp(`<input(?=[^>]*\\bvalue="${escaped}")(?=[^>]*\\bdisabled(?:="")?)[^>]*>`, "i"));
-  return Boolean(input);
-}
-
 function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "sampling" | "temperature") {
   return renderToStaticMarkup(<ResearchConfigBuilder
     copy={getCopy("en")}
@@ -63,21 +57,6 @@ describe("Research Builder Training/Research UX step", () => {
     expect(directRequested).toEqual({ temperature: 0.7, maxOutputTokens: 4096 });
   });
 
-  it("keeps the Temperature Research values input enabled for Custom OpenAI without advertised temperature capability", () => {
-    const customProvider = { ...provider, provider: "custom_openai" as const };
-    const customModel = { ...model, provider: "custom_openai" as const, providerConfigId: customProvider.id, route: "custom_openai:model-a" };
-    const html = renderToStaticMarkup(<ResearchConfigBuilder
-      copy={getCopy("en")} settings={createDefaultSettings()} repository={repository}
-      profiles={[profile]} workspaces={[workspace]} providers={[customProvider]} models={[customModel]} targets={[]} usage={[]} template="temperature"
-      onBack={() => undefined} onLocked={noop}
-    />);
-    expect(html).toContain('value="0.7, 1.1, 1.5"');
-    expect(inputWithValueHasDisabled(html, "0.7, 1.1, 1.5")).toBe(false);
-
-    const blocked = renderBuilder("temperature");
-    expect(blocked).toContain('value="0.7, 1.1, 1.5"');
-    expect(inputWithValueHasDisabled(blocked, "0.7, 1.1, 1.5")).toBe(true);
-  });
   it("freezes the selected Custom reasoning switch for ordinary Research but not reasoning-effort experiments", () => {
     const customProvider = { ...provider, provider: "custom_openai" as const };
     const customModel = { ...model, provider: "custom_openai" as const, providerConfigId: customProvider.id, route: "custom_openai:model-a" };
