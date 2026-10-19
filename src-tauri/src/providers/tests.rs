@@ -1105,6 +1105,41 @@ fn direct2a_blackbox_rejects_non_blackbox_or_path_bearing_overrides() {
     assert!(provider_base_url(ProviderKind::Blackbox, Some("https://enterprise.blackbox.ai?x=1")).is_err());
 }
 
+#[test]
+fn direct2b_blackbox_discovery_preserves_legacy_route_but_blocks_unconfirmed_routes() {
+    for explicit in [None, Some(""), Some("   "), Some("https://api.blackbox.ai"), Some("https://api.blackbox.ai/")] {
+        let base = provider_base_url(ProviderKind::Blackbox, explicit).unwrap();
+        assert_eq!(
+            model_discovery_url(ProviderKind::Blackbox, &base).unwrap(),
+            "https://api.blackbox.ai/models"
+        );
+    }
+
+    for explicit in [
+        "https://enterprise.blackbox.ai",
+        "https://example-org.blackbox.ai",
+    ] {
+        let base = provider_base_url(ProviderKind::Blackbox, Some(explicit)).unwrap();
+        let error = model_discovery_url(ProviderKind::Blackbox, &base).unwrap_err();
+        assert!(error.contains("does not establish GET /models"));
+        assert!(error.contains("not evidence that the configured chat route or credential is invalid"));
+    }
+}
+
+#[test]
+fn direct2b_discovery_boundary_does_not_change_other_provider_model_urls() {
+    let mistral = provider_base_url(ProviderKind::Mistral, None).unwrap();
+    assert_eq!(
+        model_discovery_url(ProviderKind::Mistral, &mistral).unwrap(),
+        "https://api.mistral.ai/v1/models"
+    );
+    let google = provider_base_url(ProviderKind::Google, None).unwrap();
+    assert_eq!(
+        model_discovery_url(ProviderKind::Google, &google).unwrap(),
+        "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+    );
+}
+
 #[tokio::test]
 async fn openrouter_wire_requests_omit_application_attribution_headers() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

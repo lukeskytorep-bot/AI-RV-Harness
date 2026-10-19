@@ -449,20 +449,35 @@ pub fn provider_binding_endpoint(provider: String, base_url: Option<String>) -> 
     binding_endpoint(provider, base_url.as_deref())
 }
 
+fn model_discovery_url(provider: ProviderKind, base: &str) -> Result<String, String> {
+    if matches!(provider, ProviderKind::Blackbox) {
+        let normalized = normalized_credential_endpoint(base)?;
+        if normalized != "https://api.blackbox.ai" {
+            return Err(
+                "Blackbox model discovery is not enabled for this Blackbox route: the current chat API contract does not establish GET /models. This is a discovery limitation, not evidence that the configured chat route or credential is invalid."
+                    .to_string(),
+            );
+        }
+    }
+    Ok(if matches!(provider, ProviderKind::Google) {
+        format!("{}?pageSize=1000", endpoint(base, "models"))
+    } else {
+        endpoint(base, "models")
+    })
+}
+
 #[tauri::command]
 pub async fn provider_discover_models(request: ProviderRequest) -> Result<Value, String> {
     let base = provider_base_url(request.provider, request.base_url.as_deref())?;
+    // Resolve the discovery contract before reading the credential. In particular,
+    // explicit Blackbox Enterprise/organization routes must never receive a guessed /models request.
+    let url = model_discovery_url(request.provider, &base)?;
     let binding = normalized_credential_endpoint(&base)?;
     let secret = secrets::get_credential_for_binding(
         &request.credential_id,
         request.provider.binding_kind(),
         &binding,
     )?;
-    let url = if matches!(request.provider, ProviderKind::Google) {
-        format!("{}?pageSize=1000", endpoint(&base, "models"))
-    } else {
-        endpoint(&base, "models")
-    };
     let response = authenticated(client()?.get(url), request.provider, &secret)
         .timeout(Duration::from_secs(120))
         .send()
