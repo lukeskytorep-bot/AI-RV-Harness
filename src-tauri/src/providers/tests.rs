@@ -254,6 +254,38 @@ fn maps_output_token_limit_by_transport_contract() {
 }
 
 #[test]
+fn custom_controls_emit_manual_sampling_temperature_and_reasoning_off_together() {
+    let mut request = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    request.temperature = Some(0.7);
+    request.top_p = Some(0.9);
+    request.top_k = Some(40);
+    request.seed = Some(42);
+    request.reasoning_transport_kind = Some("enabled_boolean".to_string());
+    request.reasoning_transport_value = Some("false".to_string());
+    request.max_output_tokens = Some(32_768);
+    let (_, body) = build_openai_compatible_request(&request, "https://example.test/v1");
+    assert_eq!(body.get("temperature"), Some(&json!(0.7)));
+    assert_eq!(body.get("top_p"), Some(&json!(0.9)));
+    assert_eq!(body.get("top_k"), Some(&json!(40)));
+    assert_eq!(body.get("seed"), Some(&json!(42)));
+    assert_eq!(body.pointer("/reasoning/enabled"), Some(&json!(false)));
+    assert!(body.get("reasoning_effort").is_none());
+    assert_eq!(body.get("max_tokens"), Some(&json!(32_768)));
+    assert!(body.get("provider").is_none());
+}
+
+#[test]
+fn custom_controls_emit_reasoning_on_without_openrouter_routing() {
+    let mut request = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    request.reasoning_transport_kind = Some("enabled_boolean".to_string());
+    request.reasoning_transport_value = Some("true".to_string());
+    let (_, body) = build_openai_compatible_request(&request, "https://example.test/v1");
+    assert_eq!(body.pointer("/reasoning/enabled"), Some(&json!(true)));
+    assert!(body.get("reasoning_effort").is_none());
+    assert!(body.get("provider").is_none());
+}
+
+#[test]
 fn parses_retry_after_seconds_and_current_http_date_with_a_bounded_wait() {
     let now = UNIX_EPOCH + Duration::from_secs(784_111_767);
     assert_eq!(retry_after_value_ms_at("Sun, 06 Nov 1994 08:49:37 GMT", now), Some(10_000));

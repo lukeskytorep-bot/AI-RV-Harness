@@ -1,11 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
+import { resolveGenerationSettings } from "../../providers/capabilities";
 import type { AppRepository } from "../../storage/repository";
 import { getCopy } from "../../i18n";
 import { createDefaultSettings } from "../../startupDefaults";
 import type { Profile, Workspace } from "../../types";
-import { captureCurrentViewerNotes, reconcileResearchBaseModelKey, ResearchConfigBuilder, researchBaseModelInventorySignature, researchCustomReasoningModeForProfile, researchPreflightSignature } from "./ResearchBuilder";
+import { captureCurrentViewerNotes, reconcileResearchBaseModelKey, ResearchConfigBuilder, researchBaseModelInventorySignature, researchCustomReasoningModeForProfile, researchPreflightSignature, researchTemperatureConditionSettings, researchTemperatureExperimentSupportsModel } from "./ResearchBuilder";
 import type { ResearchConfig } from "../../research/types";
 import researchBuilderSource from "./ResearchBuilder.tsx?raw";
 
@@ -22,7 +23,13 @@ const model: ProviderModel = {
 const repository = {} as AppRepository;
 const noop = vi.fn(async () => undefined);
 
-function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "sampling") {
+function inputWithValueHasDisabled(html: string, value: string): boolean {
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const input = html.match(new RegExp(`<input(?=[^>]*\\bvalue="${escaped}")(?=[^>]*\\bdisabled(?:="")?)[^>]*>`, "i"));
+  return Boolean(input);
+}
+
+function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "sampling" | "temperature") {
   return renderToStaticMarkup(<ResearchConfigBuilder
     copy={getCopy("en")}
     settings={createDefaultSettings()}
@@ -40,6 +47,37 @@ function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "s
 }
 
 describe("Research Builder Training/Research UX step", () => {
+
+  it("allows Temperature Research for Custom OpenAI even when discovery does not advertise temperature", () => {
+    const customProvider = { ...provider, provider: "custom_openai" as const };
+    const customModel = { ...model, provider: "custom_openai" as const, providerConfigId: customProvider.id, route: "custom_openai:model-a" };
+    expect(customModel.capabilities.temperature.supported).toBe(false);
+    expect(researchTemperatureExperimentSupportsModel(customModel)).toBe(true);
+    expect(researchTemperatureExperimentSupportsModel(model)).toBe(false);
+    const requested = researchTemperatureConditionSettings({ maxOutputTokens: 4096 }, customModel, 0.7);
+    expect(requested).toMatchObject({ temperature: 0.7, customTemperatureMode: "manual", maxOutputTokens: 4096 });
+    const resolved = resolveGenerationSettings(customModel.capabilities, requested, { provider: customModel.provider });
+    expect(resolved.effective.temperature).toBe(0.7);
+    expect(resolved.omitted).toEqual([]);
+    const directRequested = researchTemperatureConditionSettings({ maxOutputTokens: 4096 }, model, 0.7);
+    expect(directRequested).toEqual({ temperature: 0.7, maxOutputTokens: 4096 });
+  });
+
+  it("keeps the Temperature Research values input enabled for Custom OpenAI without advertised temperature capability", () => {
+    const customProvider = { ...provider, provider: "custom_openai" as const };
+    const customModel = { ...model, provider: "custom_openai" as const, providerConfigId: customProvider.id, route: "custom_openai:model-a" };
+    const html = renderToStaticMarkup(<ResearchConfigBuilder
+      copy={getCopy("en")} settings={createDefaultSettings()} repository={repository}
+      profiles={[profile]} workspaces={[workspace]} providers={[customProvider]} models={[customModel]} targets={[]} usage={[]} template="temperature"
+      onBack={() => undefined} onLocked={noop}
+    />);
+    expect(html).toContain('value="0.7, 1.1, 1.5"');
+    expect(inputWithValueHasDisabled(html, "0.7, 1.1, 1.5")).toBe(false);
+
+    const blocked = renderBuilder("temperature");
+    expect(blocked).toContain('value="0.7, 1.1, 1.5"');
+    expect(inputWithValueHasDisabled(blocked, "0.7, 1.1, 1.5")).toBe(true);
+  });
   it("freezes the selected Custom reasoning switch for ordinary Research but not reasoning-effort experiments", () => {
     const customProvider = { ...provider, provider: "custom_openai" as const };
     const customModel = { ...model, provider: "custom_openai" as const, providerConfigId: customProvider.id, route: "custom_openai:model-a" };

@@ -5,7 +5,7 @@ import { VIEWER_OUTPUT_INITIAL_TOKENS } from "../../sessions/viewerOutputRecover
 import { Archive, Check, ChevronRight, CircleStop, FlaskConical, LockKeyhole, Play, RotateCcw, Search, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { getCopy } from "../../i18n";
-import type { ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
+import type { GenerationSettings, ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
 import type { JudgeScoreRecord } from "../../judge/types";
 import { resolveGenerationSettings } from "../../providers/capabilities";
 import { createAndLockResearch, freezeResearchViewerOutputPolicy, executeResearchSessions, judgeResearch, prepareInterruptedResearchRetry, unblindAndComputeResearch } from "../../research/engine";
@@ -130,6 +130,22 @@ export function ResearchHelpContent({ language }: { language: InterfaceLanguage 
 export function researchCustomReasoningModeForProfile(profile: Profile | null | undefined, model: ProviderModel | null | undefined, template: ResearchTemplateType) {
   if (!profile || !model || model.provider !== "custom_openai" || template === "reasoning") return undefined;
   return profile.defaultViewerCustomReasoningMode;
+}
+
+export function researchTemperatureExperimentSupportsModel(model: ProviderModel | null | undefined): boolean {
+  return Boolean(model && (model.capabilities.temperature.supported || model.provider === "custom_openai"));
+}
+
+export function researchTemperatureConditionSettings(
+  requested: GenerationSettings,
+  model: ProviderModel,
+  temperature: number,
+): GenerationSettings {
+  return {
+    ...requested,
+    temperature,
+    ...(model.provider === "custom_openai" ? { customTemperatureMode: "manual" as const } : {}),
+  };
 }
 
 export function ResearchConfigBuilder({ copy, settings, repository, profiles, workspaces, providers, models, targets, usage, template, onBack, onLocked }: { copy: Copy; settings: AppSettings; repository: AppRepository; profiles: Profile[]; workspaces: Workspace[]; providers: ProviderConfig[]; models: ProviderModel[]; targets: TargetRecord[]; usage: TargetUsageRecord[]; template: ResearchTemplateType; onBack: () => void; onLocked: (project: ResearchProjectRecord) => Promise<void> }) {
@@ -328,7 +344,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
       conditions = reasoningLevels.map((effort) => base(`reasoning_${effort}`, researchReasoningLabel(copy, baseModel, effort), { requestedSettings: { ...fixedRequestedSettings, reasoningEffort: effort } }));
     } else if (template === "temperature") {
       const values = [...new Set(temperatureValues.split(",").map((value) => Number(value.trim())).filter(Number.isFinite))];
-      conditions = values.map((temperature) => base(`temperature_${String(temperature).replace(".", "_")}`, `T=${temperature}`, { requestedSettings: { ...fixedRequestedSettings, temperature } }));
+      conditions = values.map((temperature) => base(`temperature_${String(temperature).replace(".", "_")}`, `T=${temperature}`, { requestedSettings: researchTemperatureConditionSettings(fixedRequestedSettings, baseModel, temperature) }));
     } else if (template === "profile") {
       conditions = profileIds.flatMap((profileId) => {
         const profile = profiles.find((item) => item.id === profileId);
@@ -563,7 +579,7 @@ function TemplateConditions(props: { copy: Copy; template: ResearchTemplateType;
   const { copy, template, baseModel, baseProvider } = props;
   if (template === "practice") return <div className="research-form-section"><strong>{copy.researchConditions}</strong><div className="condition-pills"><span>FIRST</span><span>SECOND</span></div></div>;
   if (template === "reasoning") return <div className="research-form-section"><strong>{copy.reasoningLevels}</strong><div className="research-check-grid">{baseModel?.capabilities.reasoning.efforts.map((effort) => <label key={effort}><input type="checkbox" checked={props.reasoningLevels.includes(effort)} onChange={() => props.setReasoningLevels(toggle(props.reasoningLevels, effort))} /><span>{researchReasoningLabel(copy, baseModel, effort)}</span></label>)}</div>{baseModel?.capabilities.reasoning.mandatory && <small>{copy.reasoningMandatory}</small>}{!baseModel?.capabilities.reasoning.efforts.length && <small>{baseModel?.capabilities.reasoning.registryStatus === "known" ? copy.reasoningAutoOnly : copy.unknown}</small>}</div>;
-  if (template === "temperature") return <FormRow label={copy.temperatureValues}><input value={props.temperatureValues} onChange={(event) => props.setTemperatureValues(event.target.value)} disabled={!baseModel?.capabilities.temperature.supported} /></FormRow>;
+  if (template === "temperature") return <FormRow label={copy.temperatureValues}><input value={props.temperatureValues} onChange={(event) => props.setTemperatureValues(event.target.value)} disabled={!researchTemperatureExperimentSupportsModel(baseModel)} /></FormRow>;
   if (template === "profile") return <div className="research-form-section"><strong>{copy.profilesToCompare}</strong><div className="research-check-grid">{props.profiles.map((profile) => { const provider = props.providers.find((item) => item.credentialId === profile.credentialId); const matched = props.models.some((model) => model.providerConfigId === provider?.id && model.modelId === baseModel?.modelId); return <label key={profile.id} className={!matched ? "disabled" : ""}><input type="checkbox" disabled={!matched} checked={props.profileIds.includes(profile.id)} onChange={() => props.setProfileIds(toggle(props.profileIds, profile.id))} /><span>{profile.name || copy.unnamedProfile}</span></label>; })}</div></div>;
   if (template === "model") return <div className="research-form-section"><strong>{copy.modelsToCompare}</strong><div className="research-check-grid models">{props.models.filter((model) => model.providerConfigId === baseProvider?.id).map((model) => <label key={modelRouteKeyFor(model)}><input type="checkbox" checked={props.modelKeys.includes(modelRouteKeyFor(model))} onChange={() => props.setModelKeys(toggle(props.modelKeys, modelRouteKeyFor(model)))} /><span>{model.displayName}</span></label>)}</div></div>;
   if (template === "sampling") return <ResearchSamplingDesignControls copy={props.copy} form={props.samplingForm} onChange={props.setSamplingForm} targetCount={props.samplingTargetCount} repetitions={props.repetitions} viewerCallsPerSession={props.viewerCallsPerSession} judgeCount={props.judgeCount} />;
