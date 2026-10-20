@@ -152,10 +152,10 @@ it("RV actual Viewer and connection changes initialize compatible defaults",asyn
  await act(async()=>{f.select().value=f.identities[0].id;f.select().dispatchEvent(new Event("change",{bubbles:true}));});
  expect(rvReasoning().value).toBe("");expect(rvTemperature().value).toBe("0.9");
 });
-it("RV changed model capabilities remove unsupported manual generation values",async()=>{
+it("RV same-model metadata refresh preserves manual values while disabling unsupported temperature",async()=>{
  const f=await generationFixture();f.models[0].capabilities.reasoning={supported:false,efforts:[],confidence:"provider_metadata"};f.models[0].capabilities.temperature={supported:false,confidence:"provider_metadata"};
  await act(async()=>notifyProviderRoutesChanged());await f.wait(()=>expect(f.select().value).toBe(f.identities[0].id));
- expect(host.querySelector<HTMLSelectElement>(".generation-grid select")!.value).toBe("");expect(rvTemperature().value).toBe("");expect(rvTemperature().disabled).toBe(true);
+ expect(host.querySelector<HTMLSelectElement>(".generation-grid select")!.value).toBe("");expect(rvTemperature().value).toBe("0.2");expect(rvTemperature().disabled).toBe(true);
 });
 it("RV a different model initializes Profile defaults compatible with its supported efforts",async()=>{
  const f=await generationFixture();
