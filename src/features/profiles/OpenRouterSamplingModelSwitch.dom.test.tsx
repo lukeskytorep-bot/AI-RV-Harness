@@ -81,6 +81,24 @@ async function submit(host: HTMLElement): Promise<void> {
   });
 }
 
+function temperatureInput(host: HTMLElement): HTMLInputElement {
+  const label = Array.from(host.querySelectorAll("label")).find((candidate) =>
+    candidate.querySelector("span")?.textContent === getCopy("en").viewerTemperature
+  );
+  const input = label?.querySelector<HTMLInputElement>('input[type="number"]');
+  if (!input) throw new Error("Temperature input not found");
+  return input;
+}
+
+async function changeInput(input: HTMLInputElement, value: string): Promise<void> {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    setter?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
 describe("OpenRouter sampling model changes", () => {
   it("preserves manual values across Supported → Unsupported/Unknown → Supported and blocks incompatible saves", async () => {
     const models = [
@@ -220,6 +238,85 @@ describe("Custom OpenAI-compatible sampling profile UI", () => {
       await act(async () => root.unmount());
     }
   });
+
+  it.each([0.8, 0.5])("keeps Custom manual temperature %s visible when capability metadata does not advertise temperature", async (storedTemperature) => {
+    const customProvider: ProviderConfig = {
+      ...provider,
+      id: `custom-temp-${storedTemperature}`,
+      provider: "custom_openai",
+      label: "Custom",
+      credentialId: `credential-custom-temp-${storedTemperature}`,
+      baseUrl: "https://example.test/v1",
+    };
+    const customModel: ProviderModel = {
+      ...samplingModel(`custom-temp-model-${storedTemperature}`, "unknown"),
+      providerConfigId: customProvider.id,
+      provider: "custom_openai",
+      route: `custom_openai:custom-temp-model-${storedTemperature}`,
+      capabilities: {
+        ...samplingModel(`custom-temp-model-${storedTemperature}`, "unknown").capabilities,
+        temperature: { supported: false, confidence: "unknown" },
+        supportedParameters: [],
+      },
+      rawMetadata: {},
+    };
+    const customProfile: Profile = {
+      ...profile,
+      credentialId: customProvider.credentialId,
+      credentialProvider: "custom_openai",
+      defaultViewerModelId: customModel.modelId,
+      defaultViewerTemperature: storedTemperature,
+      defaultViewerCustomTemperatureMode: "manual",
+      defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 40, seed: 42 },
+    };
+    const onSave = vi.fn(async (_name: string, _humanName: string | undefined, _note?: string, _ai?: ProfileAiConfigurationInput) => undefined);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<EditProfileDialog copy={getCopy("en")} profile={customProfile} providers={[customProvider]} models={[customModel]} onCancel={vi.fn()} onSave={onSave} />));
+      expect(temperatureInput(host).value).toBe(String(storedTemperature));
+      await submit(host);
+      expect(onSave).toHaveBeenCalledTimes(1);
+      expect(onSave.mock.calls[0][3]).toBeUndefined();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("changes only Custom Top K without requiring the saved manual temperature to be re-entered", async () => {
+    const customProvider: ProviderConfig = {
+      ...provider, id: "custom-temp-sampling", provider: "custom_openai", label: "Custom", credentialId: "credential-custom-temp-sampling", baseUrl: "https://example.test/v1",
+    };
+    const customModel: ProviderModel = {
+      ...samplingModel("custom-temp-sampling-model", "unknown"),
+      providerConfigId: customProvider.id, provider: "custom_openai", route: "custom_openai:custom-temp-sampling-model", rawMetadata: {},
+      capabilities: { ...samplingModel("custom-temp-sampling-model", "unknown").capabilities, temperature: { supported: false, confidence: "unknown" }, supportedParameters: [] },
+    };
+    const customProfile: Profile = {
+      ...profile, credentialId: customProvider.credentialId, credentialProvider: "custom_openai", defaultViewerModelId: customModel.modelId,
+      defaultViewerTemperature: 0.8, defaultViewerCustomTemperatureMode: "manual",
+      defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 40, seed: 42 },
+    };
+    const onSave = vi.fn(async (_name: string, _humanName: string | undefined, _note?: string, _ai?: ProfileAiConfigurationInput) => undefined);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<EditProfileDialog copy={getCopy("en")} profile={customProfile} providers={[customProvider]} models={[customModel]} onCancel={vi.fn()} onSave={onSave} />));
+      expect(temperatureInput(host).value).toBe("0.8");
+      const topKInput = host.querySelector<HTMLInputElement>('input[aria-label="Top K value"]')!;
+      await changeInput(topKInput, "100");
+      await submit(host);
+      expect(onSave).toHaveBeenCalledTimes(1);
+      expect(onSave.mock.calls[0][3]?.defaultViewerTemperature).toBe(0.8);
+      expect(onSave.mock.calls[0][3]?.defaultViewerCustomTemperatureMode).toBe("manual");
+      expect(onSave.mock.calls[0][3]?.defaultViewerOpenRouterSampling?.topK).toBe(100);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it("preserves untouched Custom AI configuration by leaving the edit payload undefined", async () => {
     const customProvider: ProviderConfig = {
       ...provider,

@@ -153,6 +153,15 @@ describe("profile AI configuration", () => {
   });
 
 
+
+  it("distinguishes missing and invalid Custom manual temperature from advertised-range errors", () => {
+    const copy = getCopy("en");
+    const customProvider = { ...provider, provider: "custom_openai" as const };
+    const customModel = { ...model, provider: "custom_openai" as const, capabilities: { ...model.capabilities, temperature: { supported: false, confidence: "unknown" as const } } };
+    expect(() => buildProfileAiConfiguration(copy, customProvider, customModel, "", "", "", "", "", [customProvider], [customModel], undefined, "manual")).toThrow(copy.temperatureRequired);
+    expect(() => buildProfileAiConfiguration(copy, customProvider, customModel, "", "NaN", "", "", "", [customProvider], [customModel], undefined, "manual")).toThrow(copy.temperatureInvalid);
+  });
+
   it("allows Custom manual temperature without advertised capability and distinguishes provider default", () => {
     const copy = getCopy("en");
     const customProvider = { ...provider, provider: "custom_openai" as const };

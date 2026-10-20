@@ -118,6 +118,75 @@ describe("RV Sessions sampling handoff", () => {
     expect(requested).toMatchObject({ topP: 0.04, topK: 100, seed: 42, reasoningEffort: "low", temperature: 0.7, maxOutputTokens: 32_768 });
   });
 
+
+  it("keeps Custom manual temperature in the frozen RV request without advertised temperature capability", () => {
+    const customModel: ProviderModel = {
+      ...openRouterModel,
+      providerConfigId: "provider-custom-manual-temp",
+      provider: "custom_openai",
+      route: "custom_openai:model-custom-manual-temp",
+      capabilities: {
+        ...openRouterModel.capabilities,
+        temperature: { supported: false, confidence: "unknown" },
+        supportedParameters: [],
+      },
+      rawMetadata: {},
+    };
+    const customProfile: Profile = {
+      ...profile,
+      defaultViewerModelId: customModel.modelId,
+      defaultViewerTemperature: 0.8,
+      defaultViewerCustomTemperatureMode: "manual",
+    };
+    const requested = buildRvSessionRequestedSettings({
+      profile: customProfile,
+      model: customModel,
+      reasoning: "",
+      temperature: "0.8",
+      rvSessionMaxOutputTokens: 32_768,
+    });
+    expect(requested).toMatchObject({ temperature: 0.8, customTemperatureMode: "manual", maxOutputTokens: 32_768 });
+  });
+
+
+  it("carries Custom reasoning profile defaults into the frozen RV request and lets a session override them", () => {
+    const customModel: ProviderModel = {
+      ...openRouterModel,
+      providerConfigId: "provider-custom-reasoning",
+      provider: "custom_openai",
+      route: "custom_openai:model-custom-reasoning",
+      rawMetadata: {},
+    };
+    for (const mode of ["off", "on"] as const) {
+      const customProfile: Profile = {
+        ...profile,
+        defaultViewerModelId: customModel.modelId,
+        defaultViewerReasoningEffort: "high",
+        defaultViewerCustomReasoningMode: mode,
+      };
+      const requested = buildRvSessionRequestedSettings({
+        profile: customProfile,
+        model: customModel,
+        reasoning: "high",
+        temperature: "",
+        rvSessionMaxOutputTokens: 32_768,
+      });
+      expect(requested.customReasoningMode).toBe(mode);
+      expect(requested.reasoningEffort).toBeUndefined();
+
+      const sessionDefault = buildRvSessionRequestedSettings({
+        profile: customProfile,
+        model: customModel,
+        reasoning: "high",
+        customReasoningMode: "default",
+        temperature: "",
+        rvSessionMaxOutputTokens: 32_768,
+      });
+      expect(sessionDefault.customReasoningMode).toBe("default");
+      expect(sessionDefault.reasoningEffort).toBe("high");
+    }
+  });
+
   it("keeps disabled and Auto sampling omitted and never applies stored sampling to an unrelated provider", () => {
     const disabledProfile: Profile = {
       ...profile,

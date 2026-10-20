@@ -82,15 +82,16 @@ export function buildProfileAiConfiguration(
   const customTemperatureOverride = provider.provider === "custom_openai" && customTemperatureMode && customTemperatureMode !== "legacy";
   if (customTemperatureOverride) {
     if (customTemperatureMode === "manual") {
+      if (!temperatureInput.trim()) throw new Error(copy.temperatureRequired);
       temperature = Number(temperatureInput);
-      if (!temperatureInput.trim() || !Number.isFinite(temperature)) throw new Error(copy.temperatureOutOfRange);
+      if (!Number.isFinite(temperature)) throw new Error(copy.temperatureInvalid);
     }
   } else if (viewerModel.capabilities.temperature.supported) {
     temperature = temperatureInput.trim() ? Number(temperatureInput) : defaultTemperatureForModel(viewerModel);
     const capability = viewerModel.capabilities.temperature;
+    if (!Number.isFinite(temperature)) throw new Error(copy.temperatureInvalid);
     if (
-      !Number.isFinite(temperature)
-      || (capability.min !== undefined && temperature! < capability.min)
+      (capability.min !== undefined && temperature! < capability.min)
       || (capability.max !== undefined && temperature! > capability.max)
     ) {
       throw new Error(copy.temperatureOutOfRange);

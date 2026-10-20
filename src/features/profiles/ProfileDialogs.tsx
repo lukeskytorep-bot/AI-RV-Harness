@@ -6,7 +6,7 @@ import { ModelRouteSelect } from "../../components/ModelRouteSelect";
 import { PROVIDER_LABELS } from "../../components/ProviderSettings";
 import { getCopy } from "../../i18n";
 import { preferredModelOrder, resolveRoleDefault } from "../../modelRoutes";
-import { defaultTemperatureForModel, reasoningEffortForModel } from "../../profileViewerDefaults";
+import { defaultTemperatureForModel, profileGenerationDefaults, reasoningEffortForModel } from "../../profileViewerDefaults";
 import type { CustomReasoningMode, ProviderConfig, ProviderKind, ProviderModel, ReasoningEffort } from "../../providers/types";
 import { localizedMonitorEditablePrompt } from "../../resources/systemPrompts";
 import type { AppRepository } from "../../storage/repository";
@@ -156,7 +156,7 @@ export function EditProfileDialog({ copy, profile, providers, models, onCancel, 
     setProviderConfigId(nextProvider?.id ?? "");
     setViewerModelId(profile.defaultViewerModelId ?? "");
     setReasoning(reasoningEffortForModel(storedModel, profile.defaultViewerReasoningEffort) ?? "");
-    const storedTemperature = storedModel?.capabilities.temperature.supported ? profile.defaultViewerTemperature ?? defaultTemperatureForModel(storedModel) : undefined;
+    const storedTemperature = profileGenerationDefaults(profile, storedModel).temperature;
     setTemperature(storedTemperature === undefined ? "" : String(storedTemperature));
     setTemperatureMode(nextProvider?.provider === "custom_openai" ? profile.defaultViewerCustomTemperatureMode ?? "legacy" : "legacy");
     setCustomReasoningMode(nextProvider?.provider === "custom_openai" ? profile.defaultViewerCustomReasoningMode ?? "default" : "default");

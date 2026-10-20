@@ -35,7 +35,7 @@ import { getFullRcp, getRvLite, getTelepathicProtocol, type ProtocolResource } f
 import { isTauriRuntime } from "../../storage";
 import type { AppRepository } from "../../storage/repository";
 import type { AppSettings, InterfaceLanguage, Profile, SessionLanguageSetting, Workspace } from "../../types";
-import type { GenerationSettings, ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
+import type { CustomReasoningMode, GenerationSettings, ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
 import { parseModelCapabilitiesSnapshot } from "../../providers/capabilitySnapshot";
 import { runAutomaticRcpSession, submitExternalReveal, type SessionProgress } from "../../sessions/controller";
 import { buildAutomaticTargetReveal, chooseRandomTarget, createUserTarget, resolveAutomaticTargetRevealForResume, targetIsEligibleForProtocol } from "../../targets/service";
@@ -79,19 +79,23 @@ import {
 import { prepareViewerNotesForSession } from "../../aiCenter/viewerNotes";
 import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
 import { requireWorkspaceViewerRoute, viewerIdentityLabel } from "../../aiCenter/viewerIdentitySelection";
-import { reasoningCapabilityLead, reasoningOptionLabel } from "../../providers/reasoningPresentation";
+import { reasoningCapabilityLead, reasoningOptionLabel, reasoningSelectionLead, type ReasoningSelectionSource } from "../../providers/reasoningPresentation";
 import { BatchEvaluation, JudgeEvaluation } from "../judge";
 
 export function buildRvSessionRequestedSettings(input: {
   profile: Profile | null;
   model: ProviderModel;
   reasoning: "" | ReasoningEffort;
+  customReasoningMode?: CustomReasoningMode;
   temperature: string;
   rvSessionMaxOutputTokens: number;
 }): GenerationSettings {
   const defaults = profileGenerationDefaults(input.profile, input.model);
+  const customReasoningMode = input.model.provider === "custom_openai" ? (input.customReasoningMode ?? defaults.customReasoningMode) : undefined;
+  const customReasoningSuppressesEffort = customReasoningMode === "on" || customReasoningMode === "off";
   return {
-    ...(input.reasoning ? { reasoningEffort: input.reasoning } : {}),
+    ...(customReasoningMode ? { customReasoningMode } : {}),
+    ...(!customReasoningSuppressesEffort && input.reasoning ? { reasoningEffort: input.reasoning } : {}),
     ...(input.temperature.trim() ? { temperature: Number(input.temperature) } : {}),
     ...(defaults.topP !== undefined ? { topP: defaults.topP } : {}),
     ...(defaults.topK !== undefined ? { topK: defaults.topK } : {}),
@@ -134,6 +138,8 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const [selectedTargetId, setSelectedTargetId] = useState("__random__");
   const [monitorModelKey, setMonitorModelKey] = useState("");
   const [reasoning, setReasoning] = useState<"" | ReasoningEffort>("");
+  const [customReasoningMode, setCustomReasoningMode] = useState<CustomReasoningMode>("default");
+  const [reasoningSelectionSource, setReasoningSelectionSource] = useState<ReasoningSelectionSource>("provider");
   const [temperature, setTemperature] = useState("");
   const [sessionFocus, setSessionFocus] = useState<SessionFocusPlan>();
   const [historyFocusCounts,setHistoryFocusCounts] = useState<Record<string,number>>({});
@@ -179,11 +185,15 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const selectedIdentity = viewerIdentities.find((item) => item.identity.id === viewerIdentityId) ?? null;
   const activeProvider = selectedIdentity?.providerConfig ?? null;
   const selectedModel = selectedIdentity?.model ?? null;
+  const selectedProfileDefaults = selectedModel ? profileGenerationDefaults(profile, selectedModel) : {};
+  const customManualTemperature = selectedModel?.provider === "custom_openai" && selectedProfileDefaults.customTemperatureMode === "manual";
+  const customReasoningActive = selectedModel?.provider === "custom_openai";
+  const customReasoningSuppressesEffort = customReasoningActive && (customReasoningMode === "on" || customReasoningMode === "off");
   const monitorModel = findCredentialScopedModelByRouteKey(monitorModelKey, profile?.credentialId, providerConfigs, allModels);
   const monitorProvider = monitorModel ? providerConfigs.find((item) => item.id === monitorModel.providerConfigId) ?? null : null;
   const eligibleTargets = targets.filter((target) => targetIsEligibleForProtocol(target, protocol));
   const batchPool = eligibleTargets;
-  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, aiIdentityId: selectedIdentity?.identity.id ?? null, modelId: selectedModel?.modelId ?? null, protocol, liteVariant, sessionFocus: activeSessionFocus, specialTaskOptions, specialTaskText, telepathicQuestionMode, telepathicQuestions, customProtocolVersionId, runType, viewerNotesEnabled, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens: selectedModel ? Math.min(settings.rvSessionMaxOutputTokens, selectedModel.capabilities.maxOutputTokens ?? settings.rvSessionMaxOutputTokens) : settings.rvSessionMaxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
+  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, aiIdentityId: selectedIdentity?.identity.id ?? null, modelId: selectedModel?.modelId ?? null, protocol, liteVariant, sessionFocus: activeSessionFocus, specialTaskOptions, specialTaskText, telepathicQuestionMode, telepathicQuestions, customProtocolVersionId, runType, viewerNotesEnabled, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, customReasoningMode, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens: selectedModel ? Math.min(settings.rvSessionMaxOutputTokens, selectedModel.capabilities.maxOutputTokens ?? settings.rvSessionMaxOutputTokens) : settings.rvSessionMaxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
   const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : protocol === "telepathic" ? 9 : 6;
   const running = sessionRunning || batchRunning || Boolean(postRevealBusy && abortRef.current) || progress?.state === "BlindRunning" || progress?.state === "Preflight";
@@ -325,19 +335,18 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     // context, but never enable dispatch until the hook has revalidated it.
     if (!viewerRouteReady || !selectedIdentity || !selectedModel) return;
     const profileDefaults = profileGenerationDefaults(profile, selectedModel);
-    const capabilities = selectedModel.capabilities;
     const context = JSON.stringify([
       scope, selectedIdentity.identity.id, activeProvider?.id, activeProvider?.credentialId, activeProvider?.baseUrl,
-      selectedModel.modelId, selectedModel.route, profile?.defaultViewerModelId,
-      profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profile?.defaultViewerCustomTemperatureMode, profileDefaults,
-      capabilities.reasoning.supported, capabilities.reasoning.mandatory, [...capabilities.reasoning.efforts].sort(),
-      capabilities.temperature.supported, capabilities.temperature.min, capabilities.temperature.max, capabilities.temperature.default,
+      selectedModel.modelId, selectedModel.route, profile?.defaultViewerModelId, profile?.updatedAt,
+      profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profile?.defaultViewerCustomTemperatureMode, profile?.defaultViewerCustomReasoningMode,
     ]);
     if (initializedGenerationContext.current === context) return;
     initializedGenerationContext.current = context;
     setReasoning(profileDefaults.reasoningEffort ?? "");
+    setCustomReasoningMode(profileDefaults.customReasoningMode ?? "default");
+    setReasoningSelectionSource(profileDefaults.customReasoningMode !== undefined || profileDefaults.reasoningEffort !== undefined ? "profile" : "provider");
     setTemperature(profileDefaults.temperature === undefined ? "" : String(profileDefaults.temperature));
-  }, [viewerRouteReady, selectedIdentity?.identity.id, selectedModel, activeProvider, workspace.id, profile?.id, profile?.credentialId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profile?.defaultViewerCustomTemperatureMode]);
+  }, [viewerRouteReady, selectedIdentity?.identity.id, selectedModel, activeProvider, workspace.id, profile?.id, profile?.credentialId, profile?.defaultViewerModelId, profile?.defaultViewerReasoningEffort, profile?.defaultViewerTemperature, profile?.defaultViewerCustomTemperatureMode, profile?.defaultViewerCustomReasoningMode, profile?.updatedAt]);
 
   useEffect(() => {
     if (protocol !== "telepathic") return;
@@ -488,6 +497,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
       profile,
       model: selectedModel,
       reasoning,
+      customReasoningMode,
       temperature,
       rvSessionMaxOutputTokens: settings.rvSessionMaxOutputTokens,
     });
@@ -1094,8 +1104,9 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         </ConfigBlock>
         {selectedModel && <ConfigBlock label="Generation">
           <div className="generation-grid">
-            <label><span>{copy.reasoning}</span><select value={reasoning} onChange={(event) => setReasoning(event.target.value as "" | ReasoningEffort)}><option value="">{copy.providerDefault}</option>{reasoningOptions(selectedModel.capabilities.reasoning).map((option) => <option key={option.value} value={option.value}>{reasoningOptionLabel(copy, option)}</option>)}</select><small>{reasoningCapabilityLead(copy, selectedModel)}</small></label>
-            <label><span>{copy.temperature}</span><input type="number" step="0.1" value={temperature} onChange={(event) => setTemperature(event.target.value)} placeholder={copy.providerDefault} disabled={!selectedModel.capabilities.temperature.supported} min={selectedModel.capabilities.temperature.min} max={selectedModel.capabilities.temperature.max} /></label>
+            <label><span>{copy.reasoning}</span><select value={reasoning} onChange={(event) => { const next = event.target.value as "" | ReasoningEffort; setReasoning(next); if (customReasoningActive && next) setCustomReasoningMode("default"); setReasoningSelectionSource("session"); }} disabled={customReasoningSuppressesEffort}><option value="">{copy.providerDefault}</option>{reasoningOptions(selectedModel.capabilities.reasoning).map((option) => <option key={option.value} value={option.value}>{reasoningOptionLabel(copy, option)}</option>)}</select><small>{reasoningSelectionLead(copy, selectedModel, { customReasoningMode, reasoningEffort: reasoning, source: reasoningSelectionSource })}</small><small>{reasoningCapabilityLead(copy, selectedModel)}</small></label>
+            {customReasoningActive && <label><span>{copy.customReasoningSwitch}</span><select value={customReasoningMode} onChange={(event) => { const next = event.target.value as CustomReasoningMode; setCustomReasoningMode(next); if (next === "on" || next === "off") setReasoning(""); setReasoningSelectionSource("session"); }}><option value="default">{copy.customReasoningDefault}</option><option value="on">{copy.customReasoningOn}</option><option value="off">{copy.customReasoningOff}</option></select><small>{copy.customReasoningLead}</small>{customReasoningMode !== "default" && <small>{copy.reasoningSentLead}</small>}</label>}
+            <label><span>{copy.temperature}</span><input type="number" step="0.1" value={temperature} onChange={(event) => setTemperature(event.target.value)} placeholder={copy.providerDefault} disabled={!selectedModel.capabilities.temperature.supported && !customManualTemperature} min={customManualTemperature ? undefined : selectedModel.capabilities.temperature.min} max={customManualTemperature ? undefined : selectedModel.capabilities.temperature.max} /></label>
           </div>
         </ConfigBlock>}
         <ConfigBlock label={copy.sessionLanguage}>

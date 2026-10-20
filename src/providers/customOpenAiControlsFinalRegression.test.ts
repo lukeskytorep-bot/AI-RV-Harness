@@ -89,6 +89,30 @@ describe("CUSTOM-CTRL-3 final Custom OpenAI-compatible regression", () => {
     expect(request.reasoningMaxTokens).toBeUndefined();
   });
 
+  it("sends an explicit Custom reasoning On selection as enabled_boolean=true", async () => {
+    const settings = resolveGenerationSettings(capabilities, {
+      customReasoningMode: "on",
+      reasoningEffort: "high",
+    }, { provider: "custom_openai" });
+
+    expect(settings.omitted).toEqual([]);
+    expect(settings.effective.customReasoningMode).toBe("on");
+    expect(settings.effective.reasoningEffort).toBeUndefined();
+
+    await executeProviderChat({
+      config: config(false),
+      modelId: "custom-model",
+      messages: [{ role: "user", content: "test" }],
+      settings,
+      configuredRetries: 0,
+    });
+
+    const request = bridge.invoke.mock.calls.find(([command]) => command === "provider_chat")?.[1]?.request;
+    expect(request.reasoningTransportKind).toBe("enabled_boolean");
+    expect(request.reasoningTransportValue).toBe("true");
+    expect(request.reasoningEffort).toBeUndefined();
+  });
+
   it("omits explicit provider-default temperature while preserving the existing effort path", async () => {
     const settings = resolveGenerationSettings(capabilities, {
       customTemperatureMode: "provider_default",
