@@ -1127,7 +1127,8 @@ mod tests {
 
     #[tokio::test]
     async fn checkpoint_waits_for_a_native_writer_then_rejects_its_stale_lease() {
-        let path = std::env::temp_dir().join(format!("rvh-checkpoint-{}.sqlite", uuid::Uuid::new_v4()));
+        let directory = temp_read_case("checkpoint");
+        let path = directory.join("checkpoint.sqlite");
         let options = SqliteConnectOptions::new().filename(&path).create_if_missing(true)
             .busy_timeout(std::time::Duration::from_secs(5));
         let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(2).connect_with(options).await.unwrap();
@@ -1145,7 +1146,7 @@ mod tests {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_settings").fetch_one(&pool).await.unwrap();
         assert_eq!(count, 0);
         pool.close().await;
-        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     async fn telepathic_purge_pool() -> sqlx::SqlitePool {

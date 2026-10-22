@@ -23,6 +23,12 @@ provider transport failures; it does not authorize automatic API retries.
   the current call record in memory and must never be interpreted as permission
   to purchase another response. An exhausted/permanent storage error can still
   leave only the preceding durable checkpoint after process termination.
+- Round and finalization error handlers propagate checkpoint failures without
+  another save. Direct `saveCheckpoint` failures become a typed
+  `TelepathicSeriesCheckpointError` carrying the original cause and a copied
+  series snapshot. Gateway failures retain their `TelepathicCheckpointError`
+  and call record. Neither handler reopens an exhausted local retry budget or
+  replays an ambiguous commit merely to store an error message.
 - STOP does not authorize a new dispatch. A result already received can still be
   saved locally before the engine observes STOP.
 

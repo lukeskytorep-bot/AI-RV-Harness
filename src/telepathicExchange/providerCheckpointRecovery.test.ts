@@ -3,8 +3,8 @@ import type { ProviderConfig, ProviderModel } from "../providers/types";
 import type { TelepathicParticipant, TelepathicProviderCallRecord } from "./types";
 import { executeTelepathicProviderPacket, TelepathicCheckpointError, type ResolvedTelepathicAiRoute } from "./providerGateway";
 import { buildSenderTargetPacket } from "./packets";
-import { SqliteWriteCoordinator } from "../storage/sqliteWriteCoordinator";
-import { createTelepathicSeriesState, runNextTelepathicAiRound } from "./engine";
+import { SqliteWriteCoordinator, SqliteWriteRetryExhaustedError } from "../storage/sqliteWriteCoordinator";
+import { createTelepathicSeriesState, runNextTelepathicAiRound, advanceTelepathicConversationSeries, runTelepathicFinalReflections, TelepathicSeriesCheckpointError } from "./engine";
 import { InMemoryTelepathicExchangeStore } from "./store";
 function ai(id: string): TelepathicParticipant {
   return {
@@ -130,4 +130,77 @@ describe("local checkpoint recovery without another provider request", () => {
     expect(f.attempt).toHaveBeenCalledTimes(1);
     expect((await store.getTelepathicSeries("recovery"))!.providerCalls.map(call => call.status)).toEqual(["dispatched"]);
   });
+});
+
+describe.each([
+  { mode: "ai_ai_training" as const, fixed: false },
+  { mode: "conversation_exchange" as const, fixed: false },
+  { mode: "ai_ai_training" as const, fixed: true },
+  { mode: "conversation_exchange" as const, fixed: true },
+])("checkpoint failure propagation: $mode, fixed=$fixed", ({ mode, fixed }) => {
+  for (const finalization of [false, true]) {
+    it.each(["uncertain_commit", "exhausted", "direct_commit", "direct_exhausted"] as const)(
+      `${finalization ? "finalization" : "round"}: %s is not replayed by an outer handler`,
+      async failure => {
+        const f = fixture(async () => undefined);
+        const store = new InMemoryTelepathicExchangeStore();
+        const initial = createTelepathicSeriesState({
+          schemaVersion: 1, seriesId: "recovery", seriesWorkspaceId: "w", mode,
+          language: "en", participants: [ai("a"), ai("b")], roundCount: 1,
+          topic: "any", discloseTopicToReceivers: false,
+          senderPolicy: fixed ? { kind: "fixed_ai", participantId: "a" } : { kind: "rotate" },
+          ...(fixed ? { protocolVersion: "fixed_lead_v1" as const, maxGuidanceCycles: 3 as const } : {}),
+        });
+        if (finalization) {
+          initial.rounds[0].status = "completed";
+          initial.currentRoundIndex = initial.rounds.length;
+          initial.status = fixed ? "paused" : "completed";
+        }
+        await store.saveTelepathicSeries(initial);
+        const save = store.saveTelepathicSeries.bind(store);
+        const inner = new SqliteWriteCoordinator([1, 2], async () => undefined);
+        const direct = failure.startsWith("direct_");
+        const exhausted = failure.endsWith("exhausted");
+        const nativeError = new Error(exhausted ? "SQLITE_BUSY" : "[sqlite-no-retry] telepathic commit outcome requires checkpoint inspection: SQLITE_BUSY");
+        const writes: string[] = [];
+        let unsaved: import("./types").TelepathicSeriesState | undefined;
+        let beforeFailure: import("./types").TelepathicSeriesState | undefined;
+        store.saveTelepathicSeries = async state => {
+          const call = state.providerCalls.find(item => item.status === "succeeded");
+          const directCheckpointReady = finalization ? Boolean(state.finalReflections.a) : Boolean(state.rounds[0].target);
+          if (!call || direct && !directCheckpointReady) return save(state);
+          unsaved = state;
+          beforeFailure ??= structuredClone(state);
+          if (exhausted) return inner.run(async () => { writes.push(call.id); throw nativeError; });
+          writes.push(call.id);
+          // The result is durable, but the acknowledgement is ambiguous.
+          await save(state);
+          throw nativeError;
+        };
+        const deps = { store, resolveRoute: async () => f.route, providerAttempt: f.attempt };
+        const run = finalization ? runTelepathicFinalReflections
+          : mode === "conversation_exchange" ? advanceTelepathicConversationSeries : runNextTelepathicAiRound;
+        const error = await run(deps, "recovery").catch(cause => cause);
+        expect(error).toBeInstanceOf(direct ? TelepathicSeriesCheckpointError : TelepathicCheckpointError);
+        if (exhausted) {
+          expect(error.cause).toBeInstanceOf(SqliteWriteRetryExhaustedError);
+          expect(error.cause.cause).toBe(nativeError);
+        } else expect(error.cause).toBe(nativeError);
+        expect(writes).toHaveLength(exhausted ? 3 : 1);
+        expect(new Set(writes).size).toBe(1);
+        expect(f.attempt).toHaveBeenCalledTimes(1);
+        expect(unsaved).toEqual(beforeFailure);
+        if (direct) {
+          expect(error.state.providerCalls[0]).toMatchObject({ status: "succeeded", responseText: "Complete target", providerRequestId: "generation-1" });
+          expect(error.state).toEqual(beforeFailure);
+          expect(error.state).not.toBe(unsaved);
+        } else expect(error.telepathicCall).toMatchObject({ status: "succeeded", responseText: "Complete target", providerRequestId: "generation-1" });
+        const durable = (await store.getTelepathicSeries("recovery"))!;
+        expect(durable.status).not.toBe("blocked");
+        expect(durable.rounds[0].blockedReason).toBeUndefined();
+        if (!exhausted || direct) expect(durable.providerCalls[0].status).toBe("succeeded");
+        else expect(durable.providerCalls[0].status).toBe("dispatched");
+      },
+    );
+  }
 });

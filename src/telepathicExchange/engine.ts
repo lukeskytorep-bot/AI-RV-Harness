@@ -297,9 +297,25 @@ async function invokeAi(
   return null;
 }
 
+/** Carries the unsaved snapshot without starting another recovery budget. */
+export class TelepathicSeriesCheckpointError extends Error {
+  readonly state: TelepathicSeriesState;
+
+  constructor(cause: unknown, state: TelepathicSeriesState) {
+    super(`Telepathic series checkpoint could not be saved: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = "TelepathicSeriesCheckpointError";
+    this.state = structuredClone(state);
+  }
+}
+
+function isCheckpointFailure(error: unknown): boolean {
+  return error instanceof TelepathicCheckpointError || error instanceof TelepathicSeriesCheckpointError;
+}
+
 async function saveCheckpoint(deps: TelepathicExchangeEngineDependencies, state: TelepathicSeriesState): Promise<void> {
   state.updatedAt = now(deps);
-  await deps.store.saveTelepathicSeries(state);
+  try { await deps.store.saveTelepathicSeries(state); }
+  catch (cause) { throw new TelepathicSeriesCheckpointError(cause, state); }
 }
 
 async function ensureTarget(
@@ -778,6 +794,7 @@ export async function advanceTelepathicConversationSeries(deps: TelepathicExchan
       if (state.config.protocolVersion === "fixed_lead_v1" && state.currentRoundIndex >= state.rounds.length) return await finalizeSeries(deps,state);
       return structuredClone(state);
     } catch (error) {
+      if (isCheckpointFailure(error)) throw error;
       round.blockedReason = error instanceof Error ? error.message : String(error);
       state.status = deps.signal?.aborted ? "paused" : "blocked";
       await saveCheckpoint(deps, state);
@@ -826,6 +843,7 @@ export async function runNextTelepathicAiRound(deps: TelepathicExchangeEngineDep
     if (state.config.protocolVersion === "fixed_lead_v1" && state.currentRoundIndex >= state.rounds.length) return await finalizeSeries(deps,state);
     return structuredClone(state);
   } catch (error) {
+    if (isCheckpointFailure(error)) throw error;
     round.blockedReason = error instanceof Error ? error.message : String(error);
     state.status = deps.signal?.aborted ? "paused" : "blocked";
     await saveCheckpoint(deps, state);
@@ -925,7 +943,7 @@ async function finalizeSeries(deps: TelepathicExchangeEngineDependencies, state:
   }
   if (state.config.protocolVersion === "fixed_lead_v1") { state.finalization="completed"; state.status="completed"; await saveCheckpoint(deps,state); }
   return structuredClone(state);
-  } catch(error) { if (state.config.protocolVersion === "fixed_lead_v1") { state.finalization="blocked"; state.status=deps.signal?.aborted ? "paused" : "blocked"; await saveCheckpoint(deps,state); } throw error; }
+  } catch(error) { if (isCheckpointFailure(error)) throw error; if (state.config.protocolVersion === "fixed_lead_v1") { state.finalization="blocked"; state.status=deps.signal?.aborted ? "paused" : "blocked"; await saveCheckpoint(deps,state); } throw error; }
 }
 
 export async function runTelepathicFinalReflections(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState> {
