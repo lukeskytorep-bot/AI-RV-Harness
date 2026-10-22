@@ -1,3 +1,4 @@
+import { SqliteWriteCoordinator } from "../storage/sqliteWriteCoordinator";
 import { scopeOutputBudget, outputAttemptBudget, validateOutputBudgetSnapshot, type TelepathicOutputBudgetSnapshot } from "./outputBudgets";
 import { viewerResponseCompletion } from "../sessions/viewerOutputRecovery";
 import { preflightTelepathicPacket } from "./preflight";
@@ -30,6 +31,14 @@ export interface TelepathicProviderCallHooks {
   createCallId(): string;
   now(): string;
   persist(record: TelepathicProviderCallRecord): Promise<void>;
+}
+
+/** A local checkpoint failure must never trigger another model attempt. */
+export class TelepathicCheckpointError extends Error {
+  constructor(cause: unknown, readonly telepathicCall: TelepathicProviderCallRecord) {
+    super(`Telepathic checkpoint could not be saved: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = "TelepathicCheckpointError";
+  }
 }
 
 /**
@@ -168,12 +177,19 @@ export async function executeTelepathicProviderPacket(input: {
     createdAt: timestamp,
     updatedAt: timestamp,
   };
-  await input.hooks.persist(call);
+  const checkpointWrites = new SqliteWriteCoordinator();
+  const persistCall = async () => {
+    try { await checkpointWrites.run(() => input.hooks.persist(call)); }
+    catch (cause) { throw new TelepathicCheckpointError(cause, structuredClone(call)); }
+  };
+  await persistCall();
   input.signal?.throwIfAborted();
   call = { ...call, status: "dispatched", updatedAt: input.hooks.now() };
-  await input.hooks.persist(call);
+  await persistCall();
+  input.signal?.throwIfAborted();
+  let response: ProviderChatResponse;
   try {
-    const response = await runWithStreamingRepetitionGuard({
+    response = await runWithStreamingRepetitionGuard({
       parentSignal: input.signal,
       language: input.repetitionGuardLanguage,
       execute: (signal, internalOnStreamEvent) => executeProviderChat({
@@ -189,47 +205,7 @@ export async function executeTelepathicProviderPacket(input: {
         internalOnStreamEvent,
       }),
     });
-    const sanitized = sanitizeRepetitiveOutput(response.content, input.repetitionGuardLanguage ?? "en");
-    if (sanitized.truncated) {
-      call = {
-        ...call,
-        status: "failed",
-        outputDiagnostics: { ...call.outputDiagnostics!, completion: "partial" },
-        usage: response.usage,
-        elapsedMs: response.execution?.elapsedMs ?? Math.max(0, Date.parse(input.hooks.now()) - Date.parse(timestamp)),
-        physicalAttempts: response.execution?.physicalAttempts ?? 1,
-        costSource: response.usage.costUsd !== undefined ? "provider" : "unknown",
-        finishReason: "repetition_runaway",
-        ...(response.providerRequestId ? { providerRequestId: response.providerRequestId } : {}),
-        responseText: sanitized.content,
-        errorMessage: "Detected repetition runaway; the partial output was not accepted.",
-        updatedAt: input.hooks.now(),
-      };
-      await input.hooks.persist(call);
-      throw Object.assign(new Error(call.errorMessage), { telepathicCall: call });
-    }
-    let domainError: string | undefined;
-    if (!input.fixedLead || viewerResponseCompletion(response) === "complete") {
-      try { input.validateResponse?.(response.content); }
-      catch (error) { domainError = error instanceof Error ? error.message : String(error); }
-    }
-    call = {
-      ...call,
-      ...(domainError ? { errorMessage: domainError } : {}),
-      status: domainError || input.fixedLead && viewerResponseCompletion(response) !== "complete" ? "failed" : "succeeded",
-      outputDiagnostics: { ...call.outputDiagnostics!, completion: viewerResponseCompletion(response) === "complete" ? "complete" : "partial" },
-      usage: response.usage, elapsedMs: response.execution?.elapsedMs ?? Math.max(0, Date.parse(input.hooks.now()) - Date.parse(timestamp)),
-      physicalAttempts: response.execution?.physicalAttempts ?? 1,
-      costSource: response.usage.costUsd !== undefined ? "provider" : "unknown", finishReason: response.finishReason,
-      ...(response.providerRequestId ? { providerRequestId: response.providerRequestId } : {}),
-      responseText: response.content,
-      updatedAt: input.hooks.now(),
-    };
-    await input.hooks.persist(call);
-    if (call.status === "failed") throw Object.assign(new Error(domainError ?? `Incomplete telepathic output: ${viewerResponseCompletion(response)}`), { telepathicCall: call });
-    return { response, call };
   } catch (error) {
-    if ((error as { telepathicCall?: TelepathicProviderCallRecord })?.telepathicCall?.status === "failed") throw error;
     if (isStreamingRepetitionRunawayError(error)) {
       call = {
         ...call,
@@ -243,7 +219,7 @@ export async function executeTelepathicProviderPacket(input: {
         ...(error.providerRequestId ? { providerRequestId: error.providerRequestId } : {}),
         updatedAt: input.hooks.now(),
       };
-      await input.hooks.persist(call);
+      await persistCall();
       throw Object.assign(error, { telepathicCall: call });
     }
     call = {
@@ -254,7 +230,47 @@ export async function executeTelepathicProviderPacket(input: {
       errorMessage: error instanceof Error ? error.message : String(error),
       updatedAt: input.hooks.now(),
     };
-    await input.hooks.persist(call);
+    await persistCall();
     throw Object.assign(error instanceof Error ? error : new Error(String(error)), { telepathicCall: call });
   }
+  const sanitized = sanitizeRepetitiveOutput(response.content, input.repetitionGuardLanguage ?? "en");
+  if (sanitized.truncated) {
+    call = {
+      ...call,
+      status: "failed",
+      outputDiagnostics: { ...call.outputDiagnostics!, completion: "partial" },
+      usage: response.usage,
+      elapsedMs: response.execution?.elapsedMs ?? Math.max(0, Date.parse(input.hooks.now()) - Date.parse(timestamp)),
+      physicalAttempts: response.execution?.physicalAttempts ?? 1,
+      costSource: response.usage.costUsd !== undefined ? "provider" : "unknown",
+      finishReason: "repetition_runaway",
+      ...(response.providerRequestId ? { providerRequestId: response.providerRequestId } : {}),
+      responseText: sanitized.content,
+      errorMessage: "Detected repetition runaway; the partial output was not accepted.",
+      updatedAt: input.hooks.now(),
+    };
+    await persistCall();
+    throw Object.assign(new Error(call.errorMessage), { telepathicCall: call });
+  }
+  let domainError: string | undefined;
+  if (!input.fixedLead || viewerResponseCompletion(response) === "complete") {
+    try { input.validateResponse?.(response.content); }
+    catch (error) { domainError = error instanceof Error ? error.message : String(error); }
+  }
+  call = {
+    ...call,
+    ...(domainError ? { errorMessage: domainError } : {}),
+    status: domainError || input.fixedLead && viewerResponseCompletion(response) !== "complete" ? "failed" : "succeeded",
+    outputDiagnostics: { ...call.outputDiagnostics!, completion: viewerResponseCompletion(response) === "complete" ? "complete" : "partial" },
+    usage: response.usage, elapsedMs: response.execution?.elapsedMs ?? Math.max(0, Date.parse(input.hooks.now()) - Date.parse(timestamp)),
+    physicalAttempts: response.execution?.physicalAttempts ?? 1,
+    costSource: response.usage.costUsd !== undefined ? "provider" : "unknown", finishReason: response.finishReason,
+    ...(response.providerRequestId ? { providerRequestId: response.providerRequestId } : {}),
+    responseText: response.content,
+    updatedAt: input.hooks.now(),
+  };
+  await persistCall();
+  if (call.status === "failed") throw Object.assign(new Error(domainError ?? `Incomplete telepathic output: ${viewerResponseCompletion(response)}`), { telepathicCall: call });
+  return { response, call };
+
 }

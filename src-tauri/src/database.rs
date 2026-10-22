@@ -799,32 +799,51 @@ pub async fn database_execute_telepathic_fenced_write_batch(
         return Err("database transaction contains too many statements".to_string());
     }
     let pool = sqlite_pool(&db_instances).await?;
-    let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
-    let lease_valid: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM telepathic_series WHERE id=$1 AND run_lease_owner=$2 AND run_lease_version=$3 AND run_lease_expires_at IS NOT NULL AND run_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')",
-    )
-    .bind(&series_id)
-    .bind(&lease_owner)
-    .bind(lease_version)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(|error| error.to_string())?;
-    if lease_valid != 1 {
-        transaction.rollback().await.map_err(|error| error.to_string())?;
-        return Err("telepathic series lease lost before fenced checkpoint".to_string());
-    }
-    let mut rows_affected = Vec::with_capacity(statements.len());
-    for statement in statements {
-        match execute_statement(&mut transaction, statement).await {
-            Ok(rows) => rows_affected.push(rows),
-            Err(message) => {
-                transaction.rollback().await.map_err(|rollback_error| format!("{message}; rollback failed: {rollback_error}"))?;
-                return Err(message);
-            }
+    execute_telepathic_fenced_batch(&pool, &series_id, &lease_owner, lease_version, statements).await
+}
+
+// A retry re-enters this function and checks the current lease inside a fresh
+// write transaction. BEGIN IMMEDIATE avoids a SELECT -> writer upgrade racing
+// the native heartbeat. Only a confirmed rollback may expose a retryable error.
+async fn execute_telepathic_fenced_batch(
+    pool: &sqlx::SqlitePool,
+    series_id: &str,
+    lease_owner: &str,
+    lease_version: i64,
+    statements: Vec<DatabaseWriteStatement>,
+) -> Result<Vec<u64>, String> {
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|error| error.to_string())?;
+    let outcome = async {
+        let lease_valid: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM telepathic_series WHERE id=$1 AND run_lease_owner=$2 AND run_lease_version=$3 AND run_lease_expires_at IS NOT NULL AND run_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+        )
+        .bind(series_id)
+        .bind(lease_owner)
+        .bind(lease_version)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+        if lease_valid != 1 {
+            return Err("telepathic series lease lost before fenced checkpoint".to_string());
+        }
+        let mut rows_affected = Vec::with_capacity(statements.len());
+        for statement in statements {
+            rows_affected.push(execute_statement(&mut transaction, statement).await?);
+        }
+        Ok(rows_affected)
+    }.await;
+    match outcome {
+        Ok(rows) => {
+            // A failed commit acknowledgement is not proof of rollback. Do not
+            // replay the batch automatically, even when its text mentions BUSY.
+            transaction.commit().await.map_err(|error| format!("[sqlite-no-retry] telepathic commit outcome requires checkpoint inspection: {error}"))?;
+            Ok(rows)
+        }
+        Err(message) => {
+            transaction.rollback().await.map_err(|error| format!("[sqlite-no-retry] {message}; rollback failed: {error}"))?;
+            Err(message)
         }
     }
-    transaction.commit().await.map_err(|error| error.to_string())?;
-    Ok(rows_affected)
 }
 
 #[tauri::command]
@@ -1063,6 +1082,71 @@ async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: Controlled
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn checkpoint_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
+            .connect("sqlite::memory:").await.unwrap();
+        sqlx::raw_sql("CREATE TABLE telepathic_series(id TEXT PRIMARY KEY, run_lease_owner TEXT, run_lease_version INTEGER, run_lease_expires_at TEXT); INSERT INTO telepathic_series VALUES('s','owner',1,'2999-01-01T00:00:00.000Z'); CREATE TABLE app_settings(key TEXT PRIMARY KEY NOT NULL, value TEXT, updated_at TEXT);")
+            .execute(&pool).await.unwrap();
+        pool
+    }
+
+    fn checkpoint_statement(key: JsonValue) -> DatabaseWriteStatement {
+        DatabaseWriteStatement { operation: DatabaseWriteOperation::SettingsModelsInsertAppSettings01,
+            values: vec![key, JsonValue::from("accepted"), JsonValue::from("t")] }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_rechecks_owner_version_and_expiry_on_every_attempt() {
+        let pool = checkpoint_pool().await;
+        for update in [
+            "UPDATE telepathic_series SET run_lease_owner='other'",
+            "UPDATE telepathic_series SET run_lease_owner='owner',run_lease_version=2",
+            "UPDATE telepathic_series SET run_lease_version=1,run_lease_expires_at='2000-01-01T00:00:00.000Z'",
+        ] {
+            sqlx::query(update).execute(&pool).await.unwrap();
+            let error = execute_telepathic_fenced_batch(&pool, "s", "owner", 1, vec![checkpoint_statement(JsonValue::from("result"))]).await.unwrap_err();
+            assert!(error.contains("lease lost"));
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_settings").fetch_one(&pool).await.unwrap();
+            assert_eq!(count, 0);
+        }
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn checkpoint_rolls_back_the_whole_batch_before_a_later_attempt() {
+        let pool = checkpoint_pool().await;
+        assert!(execute_telepathic_fenced_batch(&pool, "s", "owner", 1, vec![
+            checkpoint_statement(JsonValue::from("first")), checkpoint_statement(JsonValue::Null)
+        ]).await.is_err());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_settings").fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(execute_telepathic_fenced_batch(&pool, "s", "owner", 1, vec![checkpoint_statement(JsonValue::from("first"))]).await.unwrap(), vec![1]);
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn checkpoint_waits_for_a_native_writer_then_rejects_its_stale_lease() {
+        let path = std::env::temp_dir().join(format!("rvh-checkpoint-{}.sqlite", uuid::Uuid::new_v4()));
+        let options = SqliteConnectOptions::new().filename(&path).create_if_missing(true)
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(2).connect_with(options).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE telepathic_series(id TEXT PRIMARY KEY, run_lease_owner TEXT, run_lease_version INTEGER, run_lease_expires_at TEXT); INSERT INTO telepathic_series VALUES('s','owner',1,'2999-01-01T00:00:00.000Z'); CREATE TABLE app_settings(key TEXT PRIMARY KEY NOT NULL, value TEXT, updated_at TEXT);").execute(&pool).await.unwrap();
+        let mut native_writer = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        sqlx::query("UPDATE telepathic_series SET run_lease_version=2").execute(&mut *native_writer).await.unwrap();
+        let pending = execute_telepathic_fenced_batch(&pool, "s", "owner", 1, vec![checkpoint_statement(JsonValue::from("late"))]);
+        tokio::pin!(pending);
+        tokio::select! {
+            result = &mut pending => panic!("checkpoint passed a held write lock: {result:?}"),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+        }
+        native_writer.commit().await.unwrap();
+        assert!(pending.await.unwrap_err().contains("lease lost"));
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_settings").fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0);
+        pool.close().await;
+        std::fs::remove_file(path).unwrap();
+    }
 
     async fn telepathic_purge_pool() -> sqlx::SqlitePool {
         let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();

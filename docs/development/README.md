@@ -117,3 +117,7 @@ The pinned local runtime ownership repair and manual diagnostic build are descri
 ## Maintenance decisions to preserve
 
 Before changing runtime dependencies, recurring IPC or post-Reveal recovery, read [Engineering Decisions 25 and 26](../architecture/ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md#decision-25--windows-runtime-ownership-and-bounded-ipc-observation). They record the Windows crash investigation/repair, criteria for replacing the local Tauri patch with a verified upstream fix, and the selective restoration of unattended Training. Optional learning rejection must not become a mandatory operator gate. The 17 October user test completed Training in approximately 20 minutes and verified Stop without app closure; it is not a substitute for every Windows acceptance scenario.
+
+## Telepathic checkpoint recovery
+
+See [Telepathic Checkpoint Recovery](TELEPATHIC_CHECKPOINT_RECOVERY_EN.md) for local BUSY retries, shared write coordination, native fencing, and the separation of received responses from persistence failures. This stage does not enable automatic transport retries.

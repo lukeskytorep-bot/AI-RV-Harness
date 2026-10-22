@@ -20,7 +20,7 @@ import {
 } from "./packets";
 import { planTelepathicSeries } from "./planner";
 import { preflightTelepathicPacket } from "./preflight";
-import { executeTelepathicProviderPacket, telepathicRequestFingerprint, type ResolvedTelepathicAiRoute } from "./providerGateway";
+import { TelepathicCheckpointError, executeTelepathicProviderPacket, telepathicRequestFingerprint, type ResolvedTelepathicAiRoute } from "./providerGateway";
 import { loadRevealImageForJudge } from "../artifacts/native";
 import type { ProviderChatAttempt } from "../providers/requestExecutor";
 import type {
@@ -281,6 +281,7 @@ async function invokeAi(
       checkStop(deps);
       return result.response.content.trim();
     } catch (error) {
+      if (error instanceof TelepathicCheckpointError) throw error;
       checkStop(deps);
       if (error instanceof Error && error.message.startsWith("Invalid lead decision")) throw error;
       const call = (error as Error & { telepathicCall?: { status?: string } }).telepathicCall;

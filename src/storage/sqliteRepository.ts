@@ -11,7 +11,7 @@ import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
 import { createDatabaseSnapshotNative, executeDatabaseTransaction, executeDatabaseWrite, executeTelepathicFencedDatabaseTransaction,
   executePostRevealReviewFencedDatabaseTransaction, initializeDatabaseNative, selectDatabaseReadonly, type DatabaseTransactionStatement } from "./databaseNative";
-import { SqliteWriteCoordinator } from "./sqliteWriteCoordinator";
+import { sqliteWriteCoordinator } from "./sqliteWriteCoordinator";
 import { SqliteProfilesRepository } from "./sqlite/profilesRepository";
 import { SqliteTargetsRepository } from "./sqlite/targetsRepository";
 import { SqliteSettingsModelsRepository } from "./sqlite/settingsModelsRepository";
@@ -62,7 +62,7 @@ export class SqliteRepository implements AppRepository {
     if(!profileId)throw new Error("RV ownership requires the durable Profile identity.");
     return profileId;
   }
-  private readonly writes = new SqliteWriteCoordinator();
+  private readonly writes = sqliteWriteCoordinator("sqlite:rv_harness.db");
   private readonly profilesRepository: SqliteProfilesRepository;
   private readonly targetsRepository: SqliteTargetsRepository;
   private readonly settingsModelsRepository: SqliteSettingsModelsRepository;
@@ -117,7 +117,7 @@ export class SqliteRepository implements AppRepository {
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
       executeTransaction: (statements) => this.executeTransaction(statements),
-      executeFencedTransaction: (input) => executeTelepathicFencedDatabaseTransaction(input),
+      executeFencedTransaction: (input) => this.writes.run(() => executeTelepathicFencedDatabaseTransaction(input)),
     });
     this.aiCenterRepository = new SqliteAiCenterRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
