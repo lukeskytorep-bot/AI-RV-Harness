@@ -516,7 +516,7 @@ async function judgeResearchOwned(input: {
       });
       } catch (cause) {
         if (cause instanceof JudgeResponseValidationError) {
-          try { await input.repository.appendSessionEvent(assignment.sessionId, { eventType: "RESEARCH_JUDGE_VALIDATION_BLOCK", role: "controller", content: cause.message, metadata: { modelRoute: judge.model.route } }); }
+          try { await input.repository.appendSessionEvent(assignment.sessionId, { eventType: "RESEARCH_JUDGE_VALIDATION_BLOCK", role: "controller", content: cause.message, metadata: { modelRoute: judge.model.route, judgeIndex: judgeSelections.indexOf(judge) + 1 } }); }
           catch (error) { throw new ResearchJudgeCheckpointError(error); }
         }
         throw cause;

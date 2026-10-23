@@ -661,7 +661,7 @@ export function ResearchProjectView({ copy, repository, project, onRefresh, onBa
   }, [repository, project.id, project.state]);
   const progressUpdate=(value:{completed:number;total:number;anonymousSessionId:string})=>{setProgress(value.completed);setTotal(value.total);setCurrentAnonymous(value.anonymousSessionId);};
   const runSessions=()=>perform("sessions",(owned,signal)=>executeResearchSessions({repository:owned,projectId:project.id,signal,onProgress:progressUpdate}));
-  const runJudging=()=>perform("judging",(owned,signal)=>judgeResearch({repository:owned,recoveryOwner:repository,projectId:project.id,signal,onProgress:progressUpdate}));
+  const runJudging=()=>perform("judging",(owned,signal)=>judgeResearch({repository:owned,recoveryOwner:repository.recoveryOwner ?? repository,projectId:project.id,signal,onProgress:progressUpdate}));
   const unblind=()=>perform("unblind",async(owned,signal)=>{setResults(await unblindAndComputeResearch(owned,project.id,signal));});
   const exportPackage=()=>perform("export",async owned=>{const destination=await chooseDirectory(copy.researchExportChooseFolder);if(!destination)return;const exported=await exportResearchPackage(owned,project.id,destination);setExportPath(exported.directory);});
   const recover=()=>perform("recovery",async owned=>{

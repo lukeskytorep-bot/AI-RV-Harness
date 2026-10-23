@@ -78,7 +78,7 @@ export function createResearchJudgeRequestRecovery(input: {
     let ram = buffers.get(input.owner);
     if (!ram) { ram = new Map(); buffers.set(input.owner, ram); }
     let events = await inspect(input.repository, input.sessionId);
-    if (events.some(e => e.eventType === "RESEARCH_JUDGE_VALIDATION_BLOCK" && e.metadata?.modelRoute === input.modelRoute)) throw new Error("Research Judge response validation exhausted; saved responses were retained.");
+    if (researchJudgeValidationBlocked(events, input.modelRoute, judgeIndex)) throw new Error("Research Judge response validation exhausted; saved responses were retained.");
     let saved = records(events, input.modelRoute, index, judgeIndex).at(-1);
     if (saved && saved.hash !== hash) throw new Error("Research Judge frozen request/route/settings changed; no request was sent.");
     const buffered = ram.get(key);
@@ -88,6 +88,7 @@ export function createResearchJudgeRequestRecovery(input: {
       saved = buffered; ram.delete(key);
     }
     if (saved?.status === "received" && saved.response) return structuredClone(saved.response);
+    if (researchJudgeRequestAvailability(events, input.modelRoute, judgeIndex, { owner: input.owner, sessionId: input.sessionId }) === "blocked") throw new Error("Research Judge recovery exhausted or failure is not retryable.");
     // Historical callbacks durably recorded a response before validation/freeze.
     // Replay it through the unchanged Judge validators, never accept scores here.
     const legacy = index === 0 && !saved && input.allowLegacyResponse !== false && !events.some(e => e.eventType === RESEARCH_JUDGE_REQUEST && e.metadata?.modelRoute === input.modelRoute) ? events.filter(e => e.eventType === "RESEARCH_JUDGE_RESPONSE" && e.metadata?.modelRoute === input.modelRoute).at(-1) : undefined;
@@ -135,11 +136,37 @@ export function createResearchJudgeRequestRecovery(input: {
   };
 }
 
-/** Availability for existing Resume UI; actual grants remain lease-fenced. */
+/** Unindexed historical validation blocks cannot safely be assigned to one slot. */
+export function researchJudgeValidationBlocked(events: SessionEventRecord[], route: string, judgeIndex: number): boolean {
+  return events.some(e => e.eventType === "RESEARCH_JUDGE_VALIDATION_BLOCK" && e.metadata?.modelRoute === route
+    && (!Number.isInteger(e.metadata.judgeIndex) || e.metadata.judgeIndex === judgeIndex));
+}
+
+/** Shared engine/UI decision. Local completion never consumes a transport grant.
+ * The executor additionally reproduces the full request fingerprint before replay. */
+export function researchJudgeRequestAvailability(events: SessionEventRecord[], route: string, judgeIndex: number,
+  context?: { owner: object; sessionId: string }): "local" | "transport" | "blocked" {
+  if (researchJudgeValidationBlocked(events, route, judgeIndex)) return "blocked";
+  if (events.some(e => e.eventType === RESEARCH_JUDGE_REQUEST && e.metadata?.modelRoute === route
+    && (!Number.isInteger(e.metadata.judgeIndex) || Number(e.metadata.judgeIndex) < 1 || Number(e.metadata.judgeIndex) > 3))) return "blocked";
+  const ordinals = new Set(events.filter(e => e.eventType === RESEARCH_JUDGE_REQUEST && e.metadata?.modelRoute === route
+    && (e.metadata.judgeIndex === judgeIndex || !Number.isInteger(e.metadata.judgeIndex))).map(e => Number(e.metadata?.ordinal)));
+  let local = false;
+  try {
+    for (const ordinal of ordinals) {
+      const saved = records(events, route, ordinal, judgeIndex).at(-1);
+      if (!saved) continue;
+      const buffered = context && buffers.get(context.owner)?.get(`${context.sessionId}:${route}:${judgeIndex}:${ordinal}`);
+      if (buffered && (buffered.hash !== saved.hash || saved.response && JSON.stringify(canonical(saved.response)) !== JSON.stringify(canonical(buffered.response)))) return "blocked";
+      if (buffered || saved.status === "received") { local = true; continue; }
+      if (saved.status === "failed" && !saved.retryable || ["dispatched", "paused", "failed"].includes(saved.status) && saved.retryUsed) return "blocked";
+    }
+  } catch { return "blocked"; }
+  return local ? "local" : "transport";
+}
+
+/** Compatibility entry point; callers with slot identity use the shared decision. */
 export function researchJudgeRequestBlocked(events: SessionEventRecord[], route: string): boolean {
-  if (events.some(e => e.eventType === "RESEARCH_JUDGE_VALIDATION_BLOCK" && e.metadata?.modelRoute === route)) return true;
-  const latest = new Map<string, Receipt>();
-  for (const e of events) if (e.eventType === RESEARCH_JUDGE_REQUEST && e.metadata?.modelRoute === route) latest.set(`${e.metadata.judgeIndex}:${e.metadata.ordinal}`, e.metadata as unknown as Receipt);
-  try { for (const receipt of latest.values()) { if (!Number.isInteger(receipt.judgeIndex) || receipt.judgeIndex < 1 || receipt.judgeIndex > 3) return true; records(events, route, receipt.ordinal, receipt.judgeIndex); } } catch { return true; }
-  return [...latest.values()].some(r => r.status !== "received" && (r.status === "failed" && !r.retryable || ["dispatched", "paused", "failed"].includes(r.status) && r.retryUsed));
+  const indexes = new Set([1, ...events.filter(e => e.eventType === RESEARCH_JUDGE_REQUEST && e.metadata?.modelRoute === route).map(e => Number(e.metadata?.judgeIndex))]);
+  return [...indexes].some(index => researchJudgeRequestAvailability(events, route, index) === "blocked");
 }

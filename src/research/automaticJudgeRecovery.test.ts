@@ -11,29 +11,7 @@ import { judgeResearch } from "./engine";
 import { createResearchJudgeRequestRecovery, RESEARCH_JUDGE_REQUEST, ResearchJudgeCheckpointError } from "./judgeRequestRecovery";
 import { getUncertainResearchJudges } from "./judgeRecovery";
 
-const output = JSON.stringify({ scores: { gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 1, confabulationControl: 1 }, strongestMatches: ["The target structure matches."], majorMissesContradictions: [], confabulationObservations: [], conciseRationale: "The evidence matches the target." });
-const provider: ProviderConfig = { id: "pc", provider: "custom_openai", label: "P", credentialId: "c", credentialFingerprint: "f", baseUrl: "https://example.test/v1", enabled: true, createdAt: "t", updatedAt: "t" };
-const model = { providerConfigId: "pc", provider: "custom_openai", modelId: "m", displayName: "M", recommended: true, rawMetadata: {}, refreshedAt: "t", route: "local:m", capabilities: { contextTokens: 262144, maxOutputTokens: 65536, inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: false, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: ["max_tokens"], source: "provider", capturedAt: "t" }, pricing: {} } as ProviderModel;
-const request: JudgeProviderRequest = { config: provider, modelId: "m", messages: [{ role: "user", content: "frozen packet" }], settings: { requested: {}, effective: {}, omitted: [] } };
-const lost = () => new ProviderCallError({ code: "response_body_read", phase: "reading_body", message: "connection lost" });
-function fixture() {
-  let scores: JudgeScoreRecord[] = [];
-  const project = { id: "r", state: "SessionsComplete", config: { sessionLanguage: "en", judges: [{ providerConfigId: "pc", modelId: "m" }] } } as ResearchProjectRecord;
-  const repo = workflowTestRepository({
-    getResearchProject: async () => project, setResearchProjectState: vi.fn(async (_id, state) => { project.state = state; }),
-    listResearchAssignments: async () => [{ id: "a", sessionId: "s", status: scores.length ? "Judged" : "SessionComplete", judgeOrder: 1, anonymousSessionId: "BlindSession_ABCDEF12" }],
-    listProviderConfigs: async () => [provider], listProviderModels: async () => [model],
-    listJudgeScores: async () => structuredClone(scores),
-    getReveal: async () => ({ text: "A stone bridge", artifactManifest: [] }), getViewerEvidence: async () => "A horizontal stone structure over water.", getSessionSnapshot: async () => ({ sessionLanguage: "en" }),
-    recordFrozenJudgeResults: vi.fn(async (items) => {
-      scores = [...scores, ...items.map(({ run, score }: { run: { id: string; modelRoute: string; judgeIndex: number }; score: JudgeScoreRecord }) => ({ ...score, judgeRunId: run.id, modelRoute: run.modelRoute, judgeIndex: run.judgeIndex, total: 6, frozenAt: "t", createdAt: "t" }))]; return structuredClone(scores);
-    }), updateResearchAssignment: vi.fn(),
-  } as unknown as AppRepository);
-  const chat = vi.fn(async (): Promise<ProviderChatResponse> => ({ content: output, finishReason: "stop", usage: { totalTokens: 20 }, providerRequestId: "paid-1" }));
-  const run = (signal?: AbortSignal) => judgeResearch({ repository: repo, projectId: "r", signal, judgeRunner: input => runBlindJudging({ ...input, onAttemptStart: undefined, chat }) });
-  const recover = (owner: object = repo, signal?: AbortSignal) => createResearchJudgeRequestRecovery({ repository: repo, owner, sessionId: "s", modelRoute: model.route, signal });
-  return { repo, chat, run, recover, project };
-}
+import { fixture, model, provider, request, output, lost } from "../testing/researchJudgeRecoveryFixture";
 describe("Research automatic Judge recovery", () => {
   it("retries a lost transport exactly once without an operator decision", async () => {
     const f = fixture(); f.chat.mockRejectedValueOnce(lost()); await f.run();
@@ -144,4 +122,60 @@ it("Research keeps two selected Judges on the same model route independent", asy
  const scores = await f.repo.listJudgeScores("s");expect(scores).toHaveLength(2);expect(scores[0].judgeRunId).not.toBe(scores[1].judgeRunId);
  const receipts = (await f.repo.listSessionEvents("s")).filter(e=>e.eventType===RESEARCH_JUDGE_REQUEST && e.metadata?.status==="received");
  expect(receipts.map(e=>e.metadata?.judgeIndex)).toEqual([1,2]);
+});
+
+for (const sameRoute of [true, false]) it(`Research completed first slot cannot mask second exhaustion; same route=${sameRoute}`, async () => {
+ const f=fixture();
+ f.project.config.judges.push({providerConfigId:"pc",modelId:sameRoute?"m":"other"});
+ if(!sameRoute)f.repo.listProviderModels=async()=>[model,{...model,modelId:"other",route:"local:other"}];
+ f.chat.mockResolvedValueOnce({content:output,finishReason:"stop",usage:{}}).mockRejectedValue(lost());
+ await expect(f.run()).rejects.toThrow();expect(f.chat).toHaveBeenCalledTimes(3);
+ expect(await f.repo.listJudgeScores("s")).toHaveLength(1);
+ expect(await getUncertainResearchJudges(f.repo,"r")).toEqual([{sessionId:"s",modelRoute:sameRoute?model.route:"local:other"}]);
+ // A fresh root has no RAM: the durable allowance remains exhausted.
+ const restarted={...f.repo,recoveryOwner:{}};
+ expect(await getUncertainResearchJudges(restarted,"r")).toHaveLength(1);
+ await expect(judgeResearch({repository:restarted,projectId:"r",judgeRunner:i=>runBlindJudging({...i,onAttemptStart:undefined,chat:f.chat})})).rejects.toThrow(/exhausted/);
+ expect(f.chat).toHaveBeenCalledTimes(3);
+});
+
+it("Research RAM availability is owner scoped and a restart cannot invent a saved response",async()=>{
+ const f=fixture(),save=f.repo.appendSessionEvent.bind(f.repo);f.chat.mockRejectedValueOnce(lost());
+ f.repo.appendSessionEvent=async(id,event)=>{if(event.eventType===RESEARCH_JUDGE_REQUEST && event.metadata?.status==="received")throw new Error("disk full");return save(id,event);};
+ await expect(f.run()).rejects.toBeInstanceOf(ResearchJudgeCheckpointError);
+ expect(await getUncertainResearchJudges(f.repo,"r")).toHaveLength(0);
+ expect(await getUncertainResearchJudges({...f.repo,recoveryOwner:{}},"r")).toHaveLength(1);
+ f.repo.appendSessionEvent=save;await f.run();expect(f.chat).toHaveBeenCalledTimes(2);
+});
+
+it("Research validation blocks are slot scoped; historical unindexed blocks remain conservative",async()=>{
+ const f=fixture();f.project.state="Judging";
+ await f.repo.appendSessionEvent("s",{eventType:"RESEARCH_JUDGE_VALIDATION_BLOCK",role:"controller",metadata:{modelRoute:model.route,judgeIndex:2}});
+ expect(await getUncertainResearchJudges(f.repo,"r")).toHaveLength(0);
+ await f.run();expect(f.chat).toHaveBeenCalledTimes(1);
+ const legacy=fixture();legacy.project.state="Judging";
+ await legacy.repo.appendSessionEvent("s",{eventType:"RESEARCH_JUDGE_VALIDATION_BLOCK",role:"controller",metadata:{modelRoute:model.route}});
+ expect(await getUncertainResearchJudges(legacy.repo,"r")).toHaveLength(1);
+ await expect(legacy.run()).rejects.toThrow(/validation exhausted/);expect(legacy.chat).not.toHaveBeenCalled();
+});
+
+it("Research scopes a second Judge validation failure and does not assign a legacy score twice",async()=>{
+ const f=fixture();f.project.config.judges.push({providerConfigId:"pc",modelId:"m"});
+ f.chat.mockResolvedValueOnce({content:output,finishReason:"stop",usage:{}}).mockResolvedValue({content:"invalid",finishReason:"stop",usage:{}});
+ await expect(f.run()).rejects.toThrow();expect(f.chat).toHaveBeenCalledTimes(3);
+ const events=await f.repo.listSessionEvents("s");
+ expect(events.find(e=>e.eventType==="RESEARCH_JUDGE_VALIDATION_BLOCK")?.metadata?.judgeIndex).toBe(2);
+ const read=f.repo.listJudgeScores.bind(f.repo);
+ f.repo.listJudgeScores=async id=>(await read(id)).map(s=>({...s,judgeIndex:undefined})) as unknown as JudgeScoreRecord[];
+ expect(await getUncertainResearchJudges(f.repo,"r")).toHaveLength(1);
+ await expect(f.run()).rejects.toThrow(/validation exhausted/);expect(f.chat).toHaveBeenCalledTimes(3);
+});
+
+it("Research legacy request records without slot identity cannot unlock a missing second Judge",async()=>{
+ const f=fixture();f.project.config.judges.push({providerConfigId:"pc",modelId:"m"});
+ f.chat.mockResolvedValueOnce({content:output,finishReason:"stop",usage:{}}).mockRejectedValue(lost());
+ await expect(f.run()).rejects.toThrow();
+ await f.repo.appendSessionEvent("s",{eventType:RESEARCH_JUDGE_REQUEST,role:"controller",metadata:{modelRoute:model.route,ordinal:0,status:"dispatched",retryUsed:true}});
+ expect(await getUncertainResearchJudges(f.repo,"r")).toHaveLength(1);
+ await expect(f.run()).rejects.toThrow(/slot identity/);expect(f.chat).toHaveBeenCalledTimes(3);
 });
