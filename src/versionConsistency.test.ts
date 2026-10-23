@@ -9,13 +9,15 @@ import nativeProviderTransport from "../src-tauri/src/providers/transport.rs?raw
 import { APP_VERSION } from "./version";
 
 describe("application version", () => {
-  it("stays aligned across frontend and native manifests without sending a version user agent", () => {
+  it.each(["LF", "CRLF"] as const)("stays aligned across frontend and native manifests with %s line endings without sending a version user agent", (lineEndings) => {
+    // Git checkouts may use CRLF on Windows. Exercise both forms on every OS.
+    const normalizeCheckout = (source: string) => source.replace(/\r?\n/g, lineEndings === "CRLF" ? "\r\n" : "\n").replace(/\r\n/g, "\n");
     expect(APP_VERSION).toBe(packageJson.version);
     expect(packageLock.version).toBe(APP_VERSION);
     expect(packageLock.packages[""].version).toBe(APP_VERSION);
-    expect(cargoLock).toContain(`name = "ai-rv-harness"\nversion = "${APP_VERSION}"`);
+    expect(normalizeCheckout(cargoLock)).toContain(`name = "ai-rv-harness"\nversion = "${APP_VERSION}"`);
     expect(tauriConfig.version).toBe(APP_VERSION);
-    expect(cargoManifest).toMatch(new RegExp(`^version = "${APP_VERSION.replaceAll(".", "\\.")}"$`, "m"));
+    expect(normalizeCheckout(cargoManifest)).toMatch(new RegExp(`^version = "${APP_VERSION.replaceAll(".", "\\.")}"$`, "m"));
     expect(nativeProviderTransport).not.toContain(".user_agent(");
     const confirmationCopy = storageSource.slice(storageSource.indexOf("async fn confirm_start_fresh("), storageSource.indexOf("    let handle = app.clone();", storageSource.indexOf("async fn confirm_start_fresh(")));
     expect(confirmationCopy).toContain('env!("CARGO_PKG_VERSION")');
