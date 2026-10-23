@@ -22,7 +22,7 @@ describe("central provider inference contract", () => {
   it.each([
     ["Conversation and Manual RV", "/chat/engine.ts", "executeProviderChat", "signal: input.signal", "configuredRetries: input.maxRetries"],
     ["AI Monitor", "/monitor/engine.ts", "executeProviderChat", "signal: input.signal", "configuredRetries: input.maxRetries"],
-    ["AI Judge", "/judge/engine.ts", "executeProviderChat", "signal: input.signal", "configuredRetries: input.maxRetries"],
+    ["AI Judge", "/judge/engine.ts", "executeProviderChat", "signal: input.signal", "configuredRetries: input.recoverRequest ? 0 : input.maxRetries"],
     ["Viewer Notes", "/aiCenter/viewerNotes.ts", "executeLearningProposal", "signal: input.signal", "saveLearningSettlement"],
     ["Field Guide", "/aiCenter/fieldGuideUpdate.ts", "executeLearningProposal", "signal: input.signal", "saveLearningSettlement"],
     ["Learning physical allowance", "/aiCenter/learningExecution.ts", "executeProviderChat", "configuredRetries: 0", "onAttemptStart", "assertAbortOwnership(signal)"],

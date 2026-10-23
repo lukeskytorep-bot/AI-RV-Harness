@@ -635,31 +635,31 @@ async fn confirm_start_fresh(
     let (title, message, confirm, cancel) = if language == "pl" {
         if incomplete {
             (
-                "Utworzyć świeżą bazę v0.7.13?",
-                "Niedokończona baza v0.7.13 zostanie zachowana jako kopia diagnostyczna. Następnie AI RV Harness utworzy nową bazę. Oryginalne dane nie zostaną usunięte.",
+                concat!("Utworzyć świeżą bazę v", env!("CARGO_PKG_VERSION"), "?"),
+                concat!("Niedokończona baza v", env!("CARGO_PKG_VERSION"), " zostanie zachowana jako kopia diagnostyczna. Następnie AI RV Harness utworzy nową bazę. Oryginalne dane nie zostaną usunięte."),
                 "Zachowaj kopię i rozpocznij od nowa",
                 "Anuluj",
             )
         } else {
             (
-                "Rozpocząć od nowa w v0.7.13?",
-                "Dotychczasowa baza zostanie zachowana pod nową nazwą. Następnie AI RV Harness utworzy świeżą bazę v0.7.13. Oryginalne dane nie zostaną usunięte.",
-                "Rozpocznij od nowa w v0.7.13",
+                concat!("Rozpocząć od nowa w v", env!("CARGO_PKG_VERSION"), "?"),
+                concat!("Dotychczasowa baza zostanie zachowana pod nową nazwą. Następnie AI RV Harness utworzy świeżą bazę v", env!("CARGO_PKG_VERSION"), ". Oryginalne dane nie zostaną usunięte."),
+                concat!("Rozpocznij od nowa w v", env!("CARGO_PKG_VERSION")),
                 "Anuluj",
             )
         }
     } else if incomplete {
         (
-            "Create a fresh v0.7.13 database?",
-            "The incomplete v0.7.13 database will be preserved as a diagnostic backup. AI RV Harness will then create a new database. The original data will not be deleted.",
+            concat!("Create a fresh v", env!("CARGO_PKG_VERSION"), " database?"),
+            concat!("The incomplete v", env!("CARGO_PKG_VERSION"), " database will be preserved as a diagnostic backup. AI RV Harness will then create a new database. The original data will not be deleted."),
             "Preserve backup and start fresh",
             "Cancel",
         )
     } else {
         (
-            "Start fresh in v0.7.13?",
-            "Your existing database will be preserved under a new name. AI RV Harness will then create a fresh v0.7.13 database. The original data will not be deleted.",
-            "Start fresh in v0.7.13",
+            concat!("Start fresh in v", env!("CARGO_PKG_VERSION"), "?"),
+            concat!("Your existing database will be preserved under a new name. AI RV Harness will then create a fresh v", env!("CARGO_PKG_VERSION"), " database. The original data will not be deleted."),
+            concat!("Start fresh in v", env!("CARGO_PKG_VERSION")),
             "Cancel",
         )
     };

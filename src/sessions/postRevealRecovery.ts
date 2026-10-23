@@ -1,3 +1,4 @@
+import { hasPostRevealReceipt, PostRevealCheckpointError } from "./postRevealReceipt";
 import { providerAttemptOutcomes, type ProviderAttemptOutcome, type ProviderDispatchOutcome } from "../providers/responseEvidence";
 import { withRvWorkflow } from "../application/workflowOwnership";
 import type { AppRepository } from "../storage/repository";
@@ -69,7 +70,7 @@ export async function appendPostRevealReviewCheckpoint(input: {
   dispatchOutcome?: ProviderDispatchOutcome;
   providerAttemptOutcomes?: ProviderAttemptOutcome[];
 }): Promise<void> {
-  await input.repository.appendSessionEvent(input.sessionId, {
+  try { await input.repository.appendSessionEvent(input.sessionId, {
     eventType: EVENT_TYPE,
     role: "controller",
     metadata: {
@@ -80,7 +81,7 @@ export async function appendPostRevealReviewCheckpoint(input: {
       ...(input.dispatchOutcome ? { dispatchOutcome: input.dispatchOutcome } : {}),
       ...(input.providerAttemptOutcomes?.length ? { providerAttemptOutcomes: input.providerAttemptOutcomes } : {}),
     },
-  });
+  }); } catch (cause) { throw new PostRevealCheckpointError(cause); }
 }
 
 export function hasPendingAutomaticViewerInstruction(transcript: string, request: string): boolean {
@@ -99,6 +100,10 @@ export async function getPostRevealReviewRecoveryState(
     repository.getSessionSnapshot(sessionId),
   ]);
   const checkpoints = latestPostRevealReviewCheckpoints(events);
+  for (const stage of ["viewer", "monitor"] as const) {
+    const checkpoint = checkpoints[stage];
+    if (checkpoint && ["dispatched", "uncertain"].includes(checkpoint.status) && hasPostRevealReceipt(repository, sessionId, stage, events)) checkpoints[stage] = { ...checkpoint, status: "pending" };
+  }
   const viewer = completion?.viewer && checkpoints.viewer?.status !== "completed"
     ? { stage: "viewer" as const, status: "completed" as const, attempt: checkpoints.viewer?.attempt ?? 1, updatedAt: "" }
     : checkpoints.viewer;

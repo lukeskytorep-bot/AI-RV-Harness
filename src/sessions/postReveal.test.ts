@@ -1,3 +1,5 @@
+import type { AppRepository } from "../storage/repository";
+import { parsePostRevealTranscript } from "./postRevealTranscript";
 import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
@@ -431,4 +433,33 @@ it("S3.1 Stop after the accepted Viewer review prevents Monitor dispatch; Resume
  await expect(runAutomaticPostRevealReview({repository:repository as never,sessionId:"s",viewer:{providerConfig:config,model},monitor:{providerConfig:monitorConfig,model:monitorModel},signal:controller.signal,chat:chat as never,afterViewerReview:async()=>{controller.abort(new DOMException("Stopped by user","AbortError"));}})).rejects.toThrow();
  expect(chat).toHaveBeenCalledTimes(1);expect(transcript).toContain("Accepted review");expect(repository.appendPostRevealTurn.mock.calls.map(c=>c[1])).toEqual(["user","assistant"]);
  const resumed=await runAutomaticPostRevealReview({repository:repository as never,sessionId:"s",existingTranscript:transcript,viewer:{providerConfig:config,model},monitor:{providerConfig:monitorConfig,model:monitorModel},signal:new AbortController().signal,chat:chat as never});expect(chat).toHaveBeenCalledTimes(2);expect(resumed).toContain('"role":"monitor"');
+});
+
+
+it.each(["transcript", "receipt", "ambiguous_receipt"])("post-Reveal %s save failure preserves the received response without another provider call", async failure => {
+ let transcript = "", broken = true;
+ const repository = workflowTestRepository({
+  getSessionSnapshot: async () => ({ providerConfigId: "pc", modelId: "viewer", sessionLanguage: "en" }),
+  getReveal: async () => ({ text: "Stone lighthouse", hash: "h" }), getViewerEvidence: async () => "Tall stone structure", listTargetClarifications: async () => [],
+  getRvSession: async () => ({ postRevealTranscript: transcript }),
+  appendPostRevealTurn: async (_id: string, role: "user" | "assistant" | "monitor", content: string) => {
+   if (broken && failure === "transcript" && role === "assistant") throw new Error("disk full");
+   transcript += serializePostRevealTurn(role, content); return transcript;
+  },
+ } as unknown as AppRepository);
+ const save = repository.appendSessionEvent.bind(repository);
+ repository.appendSessionEvent = async (id, event) => {
+  if (broken && event.eventType === "POST_REVEAL_RESPONSE_RECEIPT_V1") {
+   if (failure === "ambiguous_receipt") { await save(id, event); throw new Error("commit acknowledgement lost"); }
+   if (failure === "receipt") throw new Error("disk full");
+  }
+  return save(id, event);
+ };
+ const chat = vi.fn(async () => ({ content: "The structure agrees with the target.", finishReason: "stop", usage: { totalTokens: 12 } }));
+ const run = () => runAutomaticPostRevealReview({ repository: repository as never, sessionId: "s", viewer: { providerConfig: config, model }, chat });
+ await expect(run()).rejects.toMatchObject({ name: "PostRevealCheckpointError" }); expect(chat).toHaveBeenCalledTimes(1);
+ expect((await repository.listSessionEvents("s")).some(event => event.metadata?.status === "uncertain")).toBe(false);
+ broken = false; await run(); expect(chat).toHaveBeenCalledTimes(1);
+ expect(parsePostRevealTranscript(transcript).filter(turn => turn.role === "assistant")).toHaveLength(1);
+ expect((await repository.listSessionEvents("s")).filter(event => event.eventType === "POST_REVEAL_RESPONSE_RECEIPT_V1")).toHaveLength(1);
 });

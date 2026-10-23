@@ -1,10 +1,11 @@
+import { createResearchJudgeRequestRecovery, ResearchJudgeCheckpointError } from "./judgeRequestRecovery";
 import { prepareViewerSessionResume, type ViewerResumeDecisionCopy } from "../sessions/viewerResumeDecision";
 import { withResearchExecution } from "./executionLifecycle";
 import { assertAbortOwnership } from "../application/abortOwnership";
-import { getUncertainResearchJudges, recordResearchJudgeAttempt } from "./judgeRecovery";
+import { recordResearchJudgeAttempt } from "./judgeRecovery";
 import { CURRENT_ANALYTICAL_OUTPUT_POLICY, analyticalBudgetPolicyForSnapshot } from "../providers/outputRecovery";
 import { aggregateJudgeScores } from "../domain/scoring";
-import { runBlindJudging, selectMissingJudgeSelections, type JudgeSelection } from "../judge/engine";
+import { runBlindJudging, selectMissingJudgeSelections, JudgeResponseValidationError, type JudgeSelection } from "../judge/engine";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { runAutomaticRcpSession, type AutomaticRcpRunInput, type AutomaticRcpRunResult, type SessionProgress } from "../sessions/controller";
@@ -447,6 +448,8 @@ async function judgeResearchOwned(input: {
   projectId: string;
   signal?: AbortSignal;
   judgeRunner?:typeof runBlindJudging;
+  /** Stable owner across workflow adapters; the UI supplies its root repository. */
+  recoveryOwner?: object;
   onProgress?: (progress: { completed: number; total: number; anonymousSessionId: string }) => void;
 }): Promise<void> {
   if(input.signal?.aborted)return;
@@ -461,13 +464,15 @@ async function judgeResearchOwned(input: {
   const policy = project.config.judgeOutputPolicy;
   const judgeBudgetPolicy = policy ? analyticalBudgetPolicyForSnapshot(policy) : "legacy_analytical";
   const judgeSelections = resolveJudgeSelections(project.config, providers, models);
-  if((await getUncertainResearchJudges(input.repository,project.id)).length)throw new Error("Research Judge has an uncertain paid attempt; resolve it explicitly before Resume.");
   // Durable not-sent markers distinguish queued Judges from historical unrecorded attempts.
   for(const assignment of assignments){
     if(!assignment.sessionId)continue;
     const scores=await input.repository.listJudgeScores(assignment.sessionId);
     const events=await input.repository.listSessionEvents(assignment.sessionId);
-    for(const judge of selectMissingJudgeSelections(scores,judgeSelections))if(!events.some(event=>event.eventType==="RESEARCH_JUDGE_ATTEMPT" && event.metadata?.modelRoute===judge.model.route))await recordResearchJudgeAttempt(input.repository,assignment.sessionId,judge.model.route,"pending");
+    for (const judge of selectMissingJudgeSelections(scores, judgeSelections)) if (!events.some(event => event.eventType === "RESEARCH_JUDGE_ATTEMPT" && event.metadata?.modelRoute === judge.model.route)) {
+      if (project.state === "Judging") await input.repository.appendSessionEvent(assignment.sessionId, { eventType: "RESEARCH_JUDGE_LEGACY_UNKNOWN", role: "controller", metadata: { modelRoute: judge.model.route } });
+      await recordResearchJudgeAttempt(input.repository, assignment.sessionId, judge.model.route, "pending");
+    }
   }
   await input.repository.setResearchProjectState(project.id, "Judging");
   let completed = assignments.filter((assignment) => assignment.status === "Judged").length;
@@ -487,23 +492,39 @@ async function judgeResearchOwned(input: {
     for(const judge of missingJudges){
       if(input.signal?.aborted)return;
       await assertAbortOwnership(input.signal);
-      let dispatched=false;
-      try{await (input.judgeRunner ?? runBlindJudging)({
+      try { await (input.judgeRunner ?? runBlindJudging)({
+      recoverRequest: createResearchJudgeRequestRecovery({ repository: input.repository, owner: input.recoveryOwner ?? input.repository.recoveryOwner ?? input.repository, sessionId: assignment.sessionId, modelRoute: judge.model.route, judgeIndex: judgeSelections.indexOf(judge) + 1, allowLegacyResponse: judgeSelections.filter(item => item.model.route === judge.model.route).length === 1, signal: input.signal }),
       repository: input.repository,
       sessionId: assignment.sessionId,
       language: project.config.sessionLanguage,
       judges: [judge],
-      onResponse:async response=>{await input.repository.appendSessionEvent(assignment.sessionId!,{eventType:"RESEARCH_JUDGE_RESPONSE",role:"controller",content:response.content,metadata:{modelRoute:judge.model.route,usage:response.usage,providerRequestId:response.providerRequestId,finishReason:response.finishReason}});},
+      onResponse: async response => {
+        try {
+          const events = await input.repository.listSessionEvents(assignment.sessionId!);
+          if (!events.some(e => e.eventType === "RESEARCH_JUDGE_RESPONSE" && e.metadata?.modelRoute === judge.model.route && e.content === response.content && e.metadata?.providerRequestId === response.providerRequestId)) {
+            await input.repository.appendSessionEvent(assignment.sessionId!, { eventType: "RESEARCH_JUDGE_RESPONSE", role: "controller", content: response.content, metadata: { modelRoute: judge.model.route, usage: response.usage, providerRequestId: response.providerRequestId, finishReason: response.finishReason } });
+          }
+        } catch (cause) { throw new ResearchJudgeCheckpointError(cause); }
+      },
       anonymousSessionId: assignment.anonymousSessionId,
       maxRetries: project.config.sessionPolicy?.maxRetries,
       timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
       signal: input.signal,
       streamWorkflowContext: "research",
       budgetPolicy: judgeBudgetPolicy,
-      onAttemptStart:async attempt=>{await recordResearchJudgeAttempt(input.repository,assignment.sessionId!,judge.model.route,"dispatched",attempt);dispatched=true;},
+      onAttemptStart: input.judgeRunner ? async attempt => { await recordResearchJudgeAttempt(input.repository, assignment.sessionId!, judge.model.route, "dispatched", attempt); } : undefined,
       });
-      if(dispatched)await recordResearchJudgeAttempt(input.repository,assignment.sessionId,judge.model.route,"completed");
-      }catch(cause){if(dispatched)await recordResearchJudgeAttempt(input.repository,assignment.sessionId,judge.model.route,"uncertain");throw cause;}
+      } catch (cause) {
+        if (cause instanceof JudgeResponseValidationError) {
+          try { await input.repository.appendSessionEvent(assignment.sessionId, { eventType: "RESEARCH_JUDGE_VALIDATION_BLOCK", role: "controller", content: cause.message, metadata: { modelRoute: judge.model.route } }); }
+          catch (error) { throw new ResearchJudgeCheckpointError(error); }
+        }
+        throw cause;
+      }
+      // Validation/freeze failures never masquerade as uncertain transport.
+      // Frozen scores are authoritative if this bookkeeping save fails.
+      try { await recordResearchJudgeAttempt(input.repository, assignment.sessionId, judge.model.route, "completed"); }
+      catch (cause) { throw new ResearchJudgeCheckpointError(cause); }
     }
     const frozen = await input.repository.listJudgeScores(assignment.sessionId);
     if (frozen.length !== judgeSelections.length || frozen.some((score) => !score.frozenAt)) throw new Error("Judge score freeze verification failed.");
@@ -680,7 +701,7 @@ function capabilityMethodSignature(capabilities: ProviderModel["capabilities"]):
 }
 
 export const executeResearchSessions=(input:Parameters<typeof executeResearchSessionsOwned>[0])=>withResearchExecution(input.repository,input.projectId,input.signal,(repository,signal)=>executeResearchSessionsOwned({...input,repository,signal}));
-export const judgeResearch=(input:Parameters<typeof judgeResearchOwned>[0])=>withResearchExecution(input.repository,input.projectId,input.signal,(repository,signal)=>judgeResearchOwned({...input,repository,signal}));
+export const judgeResearch=(input:Parameters<typeof judgeResearchOwned>[0])=>withResearchExecution(input.repository,input.projectId,input.signal,(repository,signal)=>judgeResearchOwned({...input,recoveryOwner:input.recoveryOwner ?? input.repository.recoveryOwner ?? input.repository,repository,signal}));
 export const prepareInterruptedResearchRetry=(repository:ResearchRepository,projectId:string,confirmViewerRetry?: (copy: ViewerResumeDecisionCopy) => Promise<boolean>)=>withResearchExecution(repository,projectId,undefined,owned=>prepareInterruptedResearchRetryOwned(owned,projectId,confirmViewerRetry));
 export const prepareInterruptedResearchRestart=(repository:ResearchRepository,projectId:string,assignmentId:string)=>withResearchExecution(repository,projectId,undefined,owned=>prepareInterruptedResearchRestartOwned(owned,projectId,assignmentId));
 export const unblindAndComputeResearch=(repository:ResearchRepository,projectId:string,signal?:AbortSignal)=>withResearchExecution(repository,projectId,signal,(owned,signal)=>unblindAndComputeResearchOwned(owned,projectId,signal));

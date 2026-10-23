@@ -2,7 +2,7 @@
 
 A local-first desktop workspace for AI conversations, blind Remote Viewing, classic Training, AI–AI telepathic exchange and controlled Research. The application records procedures and evaluations; it does not establish the accuracy or scientific validity of model impressions.
 
-**This guide:** `ai-rv-2` development source, reviewed 16 October 2026 through Training Continuity T5. Package version **0.7.13**, SQLite schema **31**. The **v0.7.14** label identifies development scope. It does not mean that these changes have been published as a release or passed final Windows/provider smoke.
+**This guide:** `ai-rv-2` development source with Automatic Recovery S3, reviewed 23 October 2026. Package version **0.7.14**, SQLite schema **34**. Publication and final Windows/provider acceptance remain separate records.
 
 Use [GitHub Releases](https://github.com/lukeskytorep-bot/AI-RV-Harness/releases) for actual downloads and their own release notes. The historical [v0.7.13 record](Development-Status-v0.7.13.md) is kept separately.
 

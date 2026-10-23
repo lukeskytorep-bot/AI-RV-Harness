@@ -126,8 +126,13 @@ it("Research real SQLite: complete Judge response after Stop is frozen once; lat
  await judgeResearch({repository,projectId:project.id,signal:stop.signal,judgeRunner:runner});expect(paid).toBe(1);expect(select("SELECT * FROM judge_scores")).toHaveLength(1);expect((await repository.getResearchProject(project.id))?.state).toBe("Judging");expect(await getUncertainResearchJudges(repository,project.id)).toEqual([]);const first=select("SELECT * FROM judge_scores");
  await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{totalTokens:30}};}})});expect(paid).toBe(4);expect(select("SELECT * FROM judge_scores")).toHaveLength(4);expect(select("SELECT * FROM judge_scores").find(row=>row.id===first[0].id)).toEqual(first[0]);expect((await repository.getResearchProject(project.id))?.state).toBe("ScoresFrozen");expect(lockedBytes(project.id)).toEqual(method);
 });
-it("Research real SQLite: Stop during Judge length blocks recovery and automatic resend; explicit resolution allows missing work only",async()=>{
- const {repository,project}=await study();await sessions(repository,project.id);const stop=new AbortController();let paid=0;await expect(judgeResearch({repository,projectId:project.id,signal:stop.signal,judgeRunner:input=>runBlindJudging({...input,chat:async()=>{paid++;stop.abort();return{content:"partial candidate",finishReason:"length",usage:{totalTokens:31}};}})})).rejects.toThrow();expect(paid).toBe(1);expect(select("SELECT * FROM judge_scores")).toEqual([]);const uncertain=await getUncertainResearchJudges(repository,project.id);expect(uncertain).toHaveLength(1);const transport=vi.fn();await expect(judgeResearch({repository,projectId:project.id,judgeRunner:transport})).rejects.toThrow(/uncertain/);expect(transport).not.toHaveBeenCalled();await resolveResearchJudgeAttempt(repository,project.id,uncertain[0].sessionId,uncertain[0].modelRoute);expect(await getUncertainResearchJudges(repository,project.id)).toEqual([]);const events=await repository.listSessionEvents(uncertain[0].sessionId);expect(events.some(event=>event.eventType==="RESEARCH_JUDGE_RESPONSE" && event.content==="partial candidate" && (event.metadata?.usage as {totalTokens?:number})?.totalTokens===31)).toBe(true);await repository.endResearchExecution(project.id);expect(await repository.listSessionEvents(uncertain[0].sessionId)).toEqual(events);
+it("Research real SQLite: STOP preserves a partial Judge receipt; normal Resume recovers without operator resolution",async()=>{
+ const {repository,project}=await study();await sessions(repository,project.id);const stop=new AbortController();let paid=0;
+ await expect(judgeResearch({repository,projectId:project.id,signal:stop.signal,judgeRunner:input=>runBlindJudging({...input,chat:async()=>{paid++;stop.abort();return{content:"partial candidate",finishReason:"length",usage:{totalTokens:31}};}})})).rejects.toThrow();
+ expect(paid).toBe(1);expect(select("SELECT * FROM judge_scores")).toEqual([]);expect(await getUncertainResearchJudges(repository,project.id)).toEqual([]);
+ await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{totalTokens:30}};}})});
+ expect(paid).toBe(5);expect(select("SELECT * FROM judge_scores")).toHaveLength(4);
+ expect(select("SELECT * FROM session_events WHERE event_type='RESEARCH_JUDGE_RESPONSE'").some(row=>row.content==="partial candidate")).toBe(true);
 });
 it("Research real SQLite: pre-aborted input does not start work; failed End save permits retry",async()=>{
  const {repository,project}=await study();const before=await repository.getResearchProject(project.id),stop=new AbortController();stop.abort();const calls=vi.fn();await executeResearchSessions({repository,projectId:project.id,signal:stop.signal,sessionRunner:calls});expect(calls).not.toHaveBeenCalled();expect(await repository.getResearchProject(project.id)).toEqual(before);
@@ -138,8 +143,13 @@ it("Research real SQLite: judging never reads the blinding key; pre-aborted fina
  await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>({content:judgeJson,finishReason:"stop",usage:{totalTokens:25}})})});expect(bridge.invoke.mock.calls.slice(callsBefore).some(call=>call[0]==="database_select_readonly" && /blinding_mappings/.test(call[1].query))).toBe(false);
  const stop=new AbortController();stop.abort();await expect(unblindAndComputeResearch(repository,project.id,stop.signal)).rejects.toThrow();expect((await repository.getResearchProject(project.id))?.state).toBe("ScoresFrozen");const results=await unblindAndComputeResearch(repository,project.id,new AbortController().signal);expect(results.sessions).toHaveLength(2);expect((await repository.getResearchProject(project.id))?.state).toBe("Complete");expect(lockedBytes(project.id)).toEqual(method);await expect(repository.endResearchExecution(project.id)).rejects.toThrow(/cannot be ended/);
 });
-it("Research real SQLite: historical Judging with no attempt ledger cannot silently repeat missing paid evaluations",async()=>{
- const {repository,project}=await study();await sessions(repository,project.id);await repository.setResearchProjectState(project.id,"Judging");const unknown=await getUncertainResearchJudges(repository,project.id);expect(unknown).toHaveLength(4);const paid=vi.fn();await expect(judgeResearch({repository,projectId:project.id,judgeRunner:paid})).rejects.toThrow(/uncertain/);expect(paid).not.toHaveBeenCalled();for(const item of unknown)await resolveResearchJudgeAttempt(repository,project.id,item.sessionId,item.modelRoute);expect(await getUncertainResearchJudges(repository,project.id)).toEqual([]);expect(select("SELECT * FROM judge_scores")).toEqual([]);
+it("Research real SQLite: historical unknown attempts consume the single durable automatic grant",async()=>{
+ const {repository,project}=await study();await sessions(repository,project.id);await repository.setResearchProjectState(project.id,"Judging");
+ expect(await getUncertainResearchJudges(repository,project.id)).toEqual([]);let paid=0;
+ await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{}};}})});
+ expect(paid).toBe(4);expect(select("SELECT * FROM judge_scores")).toHaveLength(4);
+ const grants=select("SELECT * FROM session_events WHERE event_type='RESEARCH_JUDGE_REQUEST_V1'").map(row=>JSON.parse(String(row.metadata_json)));
+ expect(grants.filter(row=>row.status==="retry_granted")).toHaveLength(4);expect(grants.filter(row=>row.status==="received").every(row=>row.retryUsed && row.maxTransportRetries===1)).toBe(true);
 });
 it("Research real SQLite: controlled purge removes only the ended project's reserved marker and lease",async()=>{
  const {repository,project}=await study();await repository.endResearchExecution(project.id);await repository.archiveResearchProject(project.id);
@@ -148,4 +158,16 @@ it("Research real SQLite: controlled purge removes only the ended project's rese
  // Execute the native branch's exact SQL under its documented controlled-purge context.
  transaction(()=>{db.exec("DELETE FROM controlled_purge_context;INSERT INTO controlled_purge_context(id,reason,started_at) VALUES(1,'SECURITY-IPC-1C controlled purge',datetime('now'));");for(const query of purgeQueries)write(query,[project.id]);db.exec("DELETE FROM controlled_purge_context");});
  expect(await repository.getResearchProject(project.id)).toBeNull();expect(await repository.getResearchExecutionTermination(project.id)).toBeNull();expect(select("SELECT * FROM app_settings WHERE key=$1",[`rvh.workflow.v1:research:${project.id}`])).toEqual([]);expect(await repository.getRvSession("s")).not.toBeNull();expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+});
+
+it("Research SQLite: BUSY while saving a received Judge retries only the local write", async () => {
+ const {repository,project}=await study();await sessions(repository,project.id);
+ const invoke=bridge.invoke.getMockImplementation()!;let busy=0,paid=0;
+ bridge.invoke.mockImplementation(async(command:string,args:any)=>{
+  if(command==="database_workflow_ownership" && args.request.statements && JSON.stringify(args.request.statements).includes("RESEARCH_JUDGE_REQUEST_V1") && JSON.stringify(args.request.statements).includes("received") && busy===0){busy++;throw new Error("database is locked (code: 5)");}
+  return invoke(command,args);
+ });
+ await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{totalTokens:20}};}})});
+ expect(busy).toBe(1);expect(paid).toBe(4);expect(select("SELECT * FROM judge_scores")).toHaveLength(4);
+ const reconnected=await SqliteRepository.connect();expect((await reconnected.listSessionEvents((await repository.listResearchAssignments(project.id))[0].sessionId!)).some(event=>event.eventType==="RESEARCH_JUDGE_REQUEST_V1" && event.metadata?.status==="received")).toBe(true);
 });

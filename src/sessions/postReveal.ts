@@ -1,3 +1,4 @@
+import { withPostRevealReceipt, postRevealReceiptRoute, releasePostRevealReceipt, PostRevealCheckpointError, isPostRevealCheckpointFailure } from "./postRevealReceipt";
 import { classifyProviderFailure, providerAttemptOutcomes } from "../providers/responseEvidence";
 import { withRvWorkflow } from "../application/workflowOwnership";
 import { inheritAbortOwnership, assertAbortOwnership } from "../application/abortOwnership";
@@ -127,7 +128,9 @@ async function sendPostRevealTurnOwned(input: {
   analyticalOutputBudget({ model: input.model, messages, operationKind: "post_reveal_viewer", attempt: 0, ...(budgetPolicy ? { budgetPolicy } : {}) });
   if (!input.reuseExistingUserTurn) await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
   const automaticTrainingReview = supportedAutomaticPostRevealReviewRequests(language).includes(content);
-  const response = (await callWithAnalyticalOutputRecovery({
+  const response = await withPostRevealReceipt({ repository: input.repository, sessionId: input.sessionId, stage: "viewer", automatic: automaticTrainingReview,
+    signature: { messages, route: postRevealReceiptRoute(input.providerConfig, input.model), settings: snapshot.generationSettings?.requested, budgetPolicy }, requiresProviderState: Boolean(continuationRoute),
+    send: async () => (await callWithAnalyticalOutputRecovery({
     signal: input.signal,
     model: input.model,
     messages,
@@ -149,8 +152,9 @@ async function sendPostRevealTurnOwned(input: {
       attempt: input.chat,
       ...(input.onProviderAttemptStart ? { onAttemptStart: () => input.onProviderAttemptStart?.() } : {}),
     }),
-  })).response;
+  })).response });
   let transcript: string;
+  try {
   if (continuationRoute) {
     const captured = captureSessionContinuationState({ response, providerConfig: input.providerConfig, model: input.model, route: continuationRoute });
     if (captured.issue) {
@@ -165,6 +169,8 @@ async function sendPostRevealTurnOwned(input: {
   } else {
     transcript = await input.repository.appendPostRevealTurn(input.sessionId, "assistant", response.content);
   }
+  } catch (cause) { throw new PostRevealCheckpointError(cause); }
+  releasePostRevealReceipt(input.repository, input.sessionId, response);
   return { transcript, response };
 }
 
@@ -219,6 +225,7 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
   try {
     const repositoryWithRecovery = input.repository as MonitorPostRevealRepository & Partial<Pick<AppRepository, "getRvSession" | "appendSessionEvent" | "listSessionEvents">>;
     const checkpointRepository = {
+      recoveryOwner: (repositoryWithRecovery as { recoveryOwner?: object }).recoveryOwner ?? repositoryWithRecovery,
       appendSessionEvent: repositoryWithRecovery.appendSessionEvent
         ? repositoryWithRecovery.appendSessionEvent.bind(repositoryWithRecovery)
         : async () => undefined,
@@ -306,6 +313,7 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
           }
         }
       } catch (cause) {
+        if (isPostRevealCheckpointFailure(cause)) throw cause;
         transcript = await loadStoredTranscript(transcript);
         viewerRecord = findCompletedAutomaticViewerReviewRecord(transcript, snapshot.sessionLanguage);
         if (viewerRecord) {
@@ -395,6 +403,7 @@ async function runAutomaticPostRevealReviewUnlocked(input: {
       });
       return transcript;
     } catch (cause) {
+      if (isPostRevealCheckpointFailure(cause)) throw cause;
       transcript = await loadStoredTranscript(transcript);
       monitorCompleted = parsePostRevealTranscript(transcript).some((turn) => turn.role === "monitor");
       if (monitorCompleted) {
@@ -523,15 +532,20 @@ async function sendMonitorPostRevealReviewOwned(input: {
     clarifications.length ? `[SUPPLEMENTARY TARGET CLARIFICATIONS — POST-REVEAL ONLY]\n${clarifications.map((item) => item.content).join("\n\n")}` : "",
   ].filter(Boolean).join("\n\n");
   const messages: ProviderMessage[] = [{ role: "system", content: system }, { role: "user", content: packet, ...(images.length ? { images } : {}) }];
-  const response = (await callWithAnalyticalOutputRecovery({
+  const response = await withPostRevealReceipt({ repository: input.repository, sessionId: input.sessionId, stage: "monitor", automatic: true,
+    signature: { messages, route: postRevealReceiptRoute(input.providerConfig, input.model), budgetPolicy: snapshot.postRevealOutputPolicy },
+    send: async () => (await callWithAnalyticalOutputRecovery({
     signal: input.signal,
     model: input.model,
     messages,
     operationKind: "post_reveal_monitor",
     ...(snapshot.researchProjectId ? { budgetPolicy: analyticalBudgetPolicyForSnapshot(snapshot.postRevealOutputPolicy) } : {}),
     call: (settings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "post-reveal.monitor", streamWorkflowContext: input.streamWorkflowContext, attempt: input.chat, ...(input.onProviderAttemptStart ? { onAttemptStart: () => input.onProviderAttemptStart?.() } : {}) }),
-  })).response;
-  const transcript = await input.repository.appendPostRevealTurn(input.sessionId, "monitor", response.content);
+  })).response });
+  let transcript: string;
+  try { transcript = await input.repository.appendPostRevealTurn(input.sessionId, "monitor", response.content); }
+  catch (cause) { throw new PostRevealCheckpointError(cause); }
+  releasePostRevealReceipt(input.repository, input.sessionId, response);
   return { transcript, response };
 }
 

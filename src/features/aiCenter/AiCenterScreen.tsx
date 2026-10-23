@@ -204,7 +204,7 @@ export function AiCenterScreen({ settings, profiles, workspaces, activeProfileId
 function AiCard({ icon, title, status, body, meta, action, onClick }: { icon: ReactNode; title: string; status: string; body: string; meta: string; action: string; onClick: () => void }) {
   return <article className="panel ai-center-card"><div className="ai-center-card-icon">{icon}</div><span className="status-chip ready">{status}</span><h2>{title}</h2><p>{body}</p><small>{meta}</small><button className="secondary-button" onClick={onClick}>{action}</button></article>;
 }
-function EmptyIdentity({ pl }: { pl: boolean }) { return <div className="ai-center-empty"><BrainCircuit size={28} /><strong>{pl ? "Brak zapisanej tożsamości AI" : "No AI identity recorded"}</strong><p>{pl ? "Tożsamość pojawi się po pierwszym uruchomieniu obsługiwanej sesji w wersji 0.7.13." : "An identity appears after the first supported session is started in v0.7.13."}</p></div>; }
+function EmptyIdentity({ pl }: { pl: boolean }) { return <div className="ai-center-empty"><BrainCircuit size={28} /><strong>{pl ? "Brak zapisanej tożsamości AI" : "No AI identity recorded"}</strong><p>{pl ? "Tożsamość pojawi się po pierwszym uruchomieniu obsługiwanej sesji w aplikacji." : "An identity appears after the first supported session is started in the application."}</p></div>; }
 function viewerNoteSourceLabel(snapshot: ViewerNoteSourceSnapshot, liveSessionAvailable: boolean, pl: boolean) {
   const training = snapshot.trainingRunName ? `${snapshot.trainingRunName}${snapshot.trainingRunNumber ? ` (#${snapshot.trainingRunNumber})` : ""}` : undefined;
   const session = snapshot.sessionCode || snapshot.sessionId || (pl ? "nieznana sesja" : "unknown session");

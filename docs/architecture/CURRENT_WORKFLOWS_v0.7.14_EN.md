@@ -1,6 +1,6 @@
 # Current workflows — v0.7.14 development line
 
-Reviewed **16 October 2026**, through Training Continuity T5, against `ai-rv-2` commit `9c92bdbb94d1125406e0094779102458cdeee87c`. Package version remains **0.7.13**; schema **31**. Implemented source behavior is distinct from a published release, interactive Windows acceptance and actual upstream model tests. Start with the English [Developer Guide](../development/README.md).
+Reviewed **23 October 2026** for Automatic Recovery S3 on `ai-rv-2`. Package version **0.7.14**; schema **34**. Source verification is distinct from published releases and Windows/provider acceptance. Start with the English [Developer Guide](../development/README.md).
 
 ## Output and context budgets
 

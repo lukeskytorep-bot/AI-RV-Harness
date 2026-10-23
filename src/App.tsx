@@ -786,21 +786,21 @@ function DatabaseCompatibilityScreen({
       ? {
           title: "Wykryto dane z wcześniejszej wersji",
           paragraphs: [
-            "AI RV Harness v0.7.13 korzysta z nowego modelu danych. Automatyczna migracja danych z v0.7.12 i wcześniejszych wersji nie jest obsługiwana, ponieważ mogłaby doprowadzić do częściowej lub błędnej konwersji.",
+            `AI RV Harness v${APP_VERSION} korzysta z nowego modelu danych. Automatyczna migracja danych z v0.7.12 i wcześniejszych wersji nie jest obsługiwana, ponieważ mogłaby doprowadzić do częściowej lub błędnej konwersji.`,
             "Aby nadal korzystać z dotychczasowych danych, uruchom AI RV Harness v0.7.12.",
-            "Aby rozpocząć pracę w v0.7.13, możesz utworzyć nową bazę danych. Dotychczasowa baza zostanie zachowana jako kopia i nie zostanie usunięta.",
+            `Aby rozpocząć pracę w v${APP_VERSION}, możesz utworzyć nową bazę danych. Dotychczasowa baza zostanie zachowana jako kopia i nie zostanie usunięta.`,
           ],
           close: "Zamknij aplikację",
           open: "Otwórz folder starej bazy",
-          fresh: "Rozpocznij od nowa w v0.7.13",
+          fresh: `Rozpocznij od nowa w v${APP_VERSION}`,
           busy: "Zabezpieczanie starej bazy…",
         }
       : incomplete
         ? {
-            title: "Wykryto niedokończone tworzenie bazy v0.7.13",
+            title: `Wykryto niedokończone tworzenie bazy v${APP_VERSION}`,
             paragraphs: [
-              "Poprzednie tworzenie świeżej bazy AI RV Harness v0.7.13 zostało przerwane przed zakończeniem schematu. Ta częściowa baza nie będzie automatycznie migrowana ani kontynuowana.",
-              "Możesz zachować ją jako kopię diagnostyczną i bezpiecznie utworzyć nową bazę v0.7.13. Częściowy plik nie zostanie usunięty.",
+              `Poprzednie tworzenie świeżej bazy AI RV Harness v${APP_VERSION} zostało przerwane przed zakończeniem schematu. Ta częściowa baza nie będzie automatycznie migrowana ani kontynuowana.`,
+              `Możesz zachować ją jako kopię diagnostyczną i bezpiecznie utworzyć nową bazę v${APP_VERSION}. Częściowy plik nie zostanie usunięty.`,
             ],
             close: "Zamknij aplikację",
             open: "Otwórz folder bazy",
@@ -822,21 +822,21 @@ function DatabaseCompatibilityScreen({
       ? {
           title: "Data from an earlier version was detected",
           paragraphs: [
-            "AI RV Harness v0.7.13 uses a new data model. Automatic migration from v0.7.12 and earlier versions is not supported because it could result in partial or incorrect conversion.",
+            `AI RV Harness v${APP_VERSION} uses a new data model. Automatic migration from v0.7.12 and earlier versions is not supported because it could result in partial or incorrect conversion.`,
             "To continue using your existing data, run AI RV Harness v0.7.12.",
-            "To start using v0.7.13, you may create a new database. Your existing database will be preserved as a backup and will not be deleted.",
+            `To start using v${APP_VERSION}, you may create a new database. Your existing database will be preserved as a backup and will not be deleted.`,
           ],
           close: "Close application",
           open: "Open legacy database folder",
-          fresh: "Start fresh in v0.7.13",
+          fresh: `Start fresh in v${APP_VERSION}`,
           busy: "Preserving legacy database…",
         }
       : incomplete
         ? {
-            title: "An incomplete v0.7.13 database initialization was detected",
+            title: `An incomplete v${APP_VERSION} database initialization was detected`,
             paragraphs: [
-              "A previous attempt to create a fresh AI RV Harness v0.7.13 database was interrupted before the schema was complete. This partial database will not be migrated or resumed automatically.",
-              "You may preserve it as a diagnostic backup and safely create a new v0.7.13 database. The partial file will not be deleted.",
+              `A previous attempt to create a fresh AI RV Harness v${APP_VERSION} database was interrupted before the schema was complete. This partial database will not be migrated or resumed automatically.`,
+              `You may preserve it as a diagnostic backup and safely create a new v${APP_VERSION} database. The partial file will not be deleted.`,
             ],
             close: "Close application",
             open: "Open database folder",
@@ -860,7 +860,7 @@ function DatabaseCompatibilityScreen({
       <section className="first-run-card">
         <header className="first-run-header">
           <span className="first-run-logo"><Database size={28} /></span>
-          <div><small>AI RV Harness v0.7.13</small><h1>{copy.title}</h1></div>
+          <div><small>AI RV Harness v{APP_VERSION}</small><h1>{copy.title}</h1></div>
         </header>
         <div className="first-run-body">
           {copy.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}

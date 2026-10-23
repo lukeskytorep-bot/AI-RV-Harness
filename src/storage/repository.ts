@@ -18,6 +18,7 @@ import type { TelepathicSeriesState } from "../telepathicExchange/types";
 
 
 export interface AppRepository {
+  readonly recoveryOwner?: object;
   withWorkflowOwnership<T>(scope: import("../application/workflowOwnership").WorkflowScope, task: (owned: AppRepository, signal: AbortSignal) => Promise<T>): Promise<T>;
   getWorkflowResearchProjectId(sessionId:string):Promise<string|undefined>;
   getResearchExecutionTermination(projectId:string):Promise<import("../research/executionLifecycle").ResearchExecutionTermination|null>;

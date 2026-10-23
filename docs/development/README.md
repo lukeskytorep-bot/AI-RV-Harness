@@ -1,6 +1,8 @@
 # Developer Guide
 
-Reviewed 16 October 2026 against `ai-rv-2` commit `9c92bdbb94d1125406e0094779102458cdeee87c` (Training Continuity T5). This is the primary English contributor entry point. Package version: 0.7.13; SQLite schema: 31. The v0.7.14 name describes development scope, not a published binary.
+See [Automatic Recovery S3](AUTOMATIC_RECOVERY_S3_EN.md) for receipt recovery, Research Judge retry limits and release-version alignment.
+
+Reviewed 23 October 2026 for Automatic Recovery S3. This is the primary English contributor entry point. Package version: **0.7.14**; SQLite schema: **34**. Native database epoch remains v0.7.13 for compatibility. This source version is not a claim of published binaries or Windows/provider acceptance.
 
 ## Prerequisites and local start
 

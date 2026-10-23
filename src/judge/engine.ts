@@ -14,7 +14,15 @@ import { createId } from "../storage/repository";
 import type { InterfaceLanguage } from "../types";
 import { getJudgePrompt } from "./prompt";
 import { JUDGE_RUBRIC_VERSION, type JudgeNarrative, type JudgeScoreRecord, type JudgingResult } from "./types";
-import { callWithAnalyticalOutputRecovery, type AnalyticalBudgetPolicy } from "../providers/outputRecovery";
+import { callWithAnalyticalOutputRecovery, isOutputLimitFailure, type AnalyticalBudgetPolicy } from "../providers/outputRecovery";
+
+export class JudgeResponseValidationError extends Error {
+  constructor(cause: unknown) { super(cause instanceof Error ? cause.message : String(cause), { cause }); this.name = "JudgeResponseValidationError"; }
+}
+async function judgeAnalyticalResponse(input: Parameters<typeof callWithAnalyticalOutputRecovery>[0]) {
+  try { return await callWithAnalyticalOutputRecovery(input); }
+  catch (cause) { if (!input.signal?.aborted && isOutputLimitFailure(cause)) throw new JudgeResponseValidationError(cause); throw cause; }
+}
 
 export type JudgeRepository = Pick<
   AppRepository,
@@ -25,8 +33,12 @@ export interface JudgeSelection {
   providerConfig: ProviderConfig;
   model: ProviderModel;
 }
+export type JudgeProviderRequest = { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings> };
 
 export interface RunJudgingInput {
+  /** A workflow-owned receipt journal; transport retries are owned here, not
+   * by an additional executor retry loop. No prompts/settings are changed. */
+  recoverRequest?: (request: JudgeProviderRequest, send: () => Promise<ProviderChatResponse>) => Promise<ProviderChatResponse>;
   repository: JudgeRepository;
   sessionId: string;
   language: InterfaceLanguage;
@@ -91,16 +103,21 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
   });
   const packetWire = JSON.stringify(packet);
   const packetHash = await sha256Text(packetWire);
-  const chat = async (request: Parameters<NonNullable<RunJudgingInput["chat"]>>[0]) => {const response=await executeProviderChat({
+  const chat = async (request: Parameters<NonNullable<RunJudgingInput["chat"]>>[0]) => {
+    const send = () => executeProviderChat({
     ...request,
     timeoutMs: input.timeoutMs,
     signal: input.signal,
-    configuredRetries: input.maxRetries,
+    configuredRetries: input.recoverRequest ? 0 : input.maxRetries,
     operationId: "judge.evaluate",
     streamWorkflowContext: input.streamWorkflowContext,
     attempt: input.chat,
     onAttemptStart:input.onAttemptStart,
-  });await input.onResponse?.(response);return response;};
+    });
+    const response = input.recoverRequest ? await input.recoverRequest(request, send) : await send();
+    await input.onResponse?.(response);
+    return response;
+  };
   const scores: JudgeScoreRecord[] = [...existing];
   const pending: Array<{ judge: JudgeSelection; parsed: ParsedJudgeOutput; judgeIndex: number }> = [];
 
@@ -115,7 +132,7 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
       { role: "system", content: getJudgePrompt(language) },
       { role: "user", content: `${languageDirective}\n\n${packetWire}`, ...(judgeImages.length ? { images: judgeImages } : {}) },
     ];
-    const initial = await callWithAnalyticalOutputRecovery({
+    const initial = await judgeAnalyticalResponse({
       signal:input.signal,preserveCompleteAfterAbort:true,
       model: judge.model,
       messages,
@@ -138,7 +155,7 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
         { role: "system", content: "You are a deterministic JSON formatter. Preserve all substantive text and every numeric score. Return one valid JSON object only and do not expose reasoning." },
         { role: "user", content: buildJudgeRepairPrompt(response.content, language) },
       ];
-      const repaired = await callWithAnalyticalOutputRecovery({
+      const repaired = await judgeAnalyticalResponse({
         signal:input.signal,preserveCompleteAfterAbort:true,
         model: judge.model,
         messages: repairMessages,
@@ -155,7 +172,7 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
         ? "Popraw wyłącznie język wartości tekstowych na polski. Zachowaj dokładnie te same wyniki liczbowe, nie dodawaj danych i zwróć wyłącznie JSON o tym samym schemacie."
         : "Correct only the language of all textual values to English. Keep exactly the same numeric scores, add no data, and return only JSON with the same schema.";
       const correctionMessages: ProviderMessage[] = [...messages, { role: "assistant", content: response.content }, { role: "user", content: correction }];
-      response = (await callWithAnalyticalOutputRecovery({
+      response = (await judgeAnalyticalResponse({
         signal:input.signal,preserveCompleteAfterAbort:true,
         model: judge.model,
         messages: correctionMessages,
@@ -164,8 +181,8 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
         call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: correctionMessages, settings }),
       })).response;
       parsed = parseJudgeOutput(response.content);
-      if (JSON.stringify(parsed.scores) !== JSON.stringify(originalScores)) throw new Error("Judge language correction changed frozen score candidates.");
-      if (!narrativeMatchesLanguage(parsed.narrative, language)) throw new Error("Judge returned narrative text in the wrong session language.");
+      if (JSON.stringify(parsed.scores) !== JSON.stringify(originalScores)) throw new JudgeResponseValidationError("Judge language correction changed frozen score candidates.");
+      if (!narrativeMatchesLanguage(parsed.narrative, language)) throw new JudgeResponseValidationError("Judge returned narrative text in the wrong session language.");
     }
     pending.push({ judge, parsed, judgeIndex: existing.length + index + 1 });
     input.onProgress?.(index + 1, input.judges.length);
@@ -219,6 +236,10 @@ export function selectMissingJudgeSelections(existing: JudgeScoreRecord[], selec
 }
 
 export function parseJudgeOutput(content: string): ParsedJudgeOutput {
+  try { return parseJudgeOutputUnsafe(content); }
+  catch (cause) { throw new JudgeResponseValidationError(cause); }
+}
+function parseJudgeOutputUnsafe(content: string): ParsedJudgeOutput {
   const clean = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   let value: unknown;
   try {

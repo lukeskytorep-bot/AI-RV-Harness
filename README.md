@@ -1,8 +1,8 @@
 # AI RV Harness documentation
 
-## Current development documentation — reviewed 16 October 2026
+## Current development documentation — reviewed 23 October 2026
 
-The current `ai-rv-2` source through Training Continuity T5 uses package version 0.7.13 and SQLite schema 31. The v0.7.14 label describes development scope; final Windows/provider smoke and release publication are separate records.
+The current `ai-rv-2` source with Automatic Recovery S3 uses package version **0.7.14** and SQLite schema **34**. Final Windows/provider smoke and release publication remain separate acceptance records. The internal database compatibility epoch remains v0.7.13; changing the application version does not replace or reset existing data.
 
 Start with the English [Developer Guide](development/README.md), [current workflows](architecture/CURRENT_WORKFLOWS_v0.7.14_EN.md) ([PL](architecture/CURRENT_WORKFLOWS_v0.7.14_PL.md)), [user/wiki mirror](wiki/Home.md), and [architecture index](architecture/README.md). Current references cover output-policy versions, two-dispatch learning settlement, finished versus uncertain responses, native ownership and interrupted checkpoint exports. Historical release/checkpoint/audit evidence below is not rewritten into present-day instructions.
 

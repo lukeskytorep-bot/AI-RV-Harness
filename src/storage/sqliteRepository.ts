@@ -78,7 +78,9 @@ export class SqliteRepository implements AppRepository {
   private readonly exportRepository: SqliteExportRepository;
   private readonly controlledPurge: SqliteControlledPurge;
 
-  private constructor(private readonly db: Database, private readonly workflowContext?:WorkflowContext) {
+  readonly recoveryOwner: object;
+  private constructor(private readonly db: Database, private readonly workflowContext?:WorkflowContext, recoveryOwner?: object) {
+    this.recoveryOwner = recoveryOwner ?? this;
     this.profilesRepository = new SqliteProfilesRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
@@ -106,7 +108,7 @@ export class SqliteRepository implements AppRepository {
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
       executeTransaction: (statements) => this.executeTransaction(statements),
-      executePostRevealReviewFencedTransaction: (input) => this.workflowContext ? executeWorkflowOwnedDatabaseTransaction(this.workflowContext,input.statements,input) : executePostRevealReviewFencedDatabaseTransaction(input),
+      executePostRevealReviewFencedTransaction: (input) => this.writes.run(() => this.workflowContext ? executeWorkflowOwnedDatabaseTransaction(this.workflowContext,input.statements,input) : executePostRevealReviewFencedDatabaseTransaction(input)),
       isResearchScoresFrozen: (projectId) => this.researchRepository.isScoresFrozen(projectId),
     });
     this.trainingRepository = new SqliteTrainingRepository({
@@ -173,9 +175,9 @@ export class SqliteRepository implements AppRepository {
       await workflowOwnershipNative({action:"check",profileId:context.profileId,owner:context.owner,version:context.version,entities:nested.entities});
       const ended=new AbortController();nested.signal=AbortSignal.any([context.signal,...(scope.signal?[scope.signal]:[]),ended.signal]);
       registerAbortOwnership(nested.signal,async()=>{if(nested.closed)throw new Error("Workflow ownership has settled");await workflowOwnershipNative({action:"check",profileId:nested.profileId,owner:nested.owner,version:nested.version,entities:nested.entities.map(entity=>({...entity,allowEnded:false}))});},()=>({profileId:nested.profileId,owner:nested.owner,version:nested.version,entities:nested.entities.map(entity=>({...entity,allowEnded:false}))}));
-      try{return await task(new SqliteRepository(this.db,nested),nested.signal);}finally{nested.closed=true;ended.abort(new WorkflowAbortError("workflow_settled","Workflow settled"));}
+      try{return await task(new SqliteRepository(this.db,nested,this.recoveryOwner),nested.signal);}finally{nested.closed=true;ended.abort(new WorkflowAbortError("workflow_settled","Workflow settled"));}
     }
-    return ownSqliteWorkflow(scope,context=>new SqliteRepository(this.db,context),task,owner=>{if(owner)this.workflowOwners.set(scope.profileId,owner);else this.workflowOwners.delete(scope.profileId);});
+    return ownSqliteWorkflow(scope,context=>new SqliteRepository(this.db,context,this.recoveryOwner),task,owner=>{if(owner)this.workflowOwners.set(scope.profileId,owner);else this.workflowOwners.delete(scope.profileId);});
   }
   async createDatabaseSnapshot(destinationPath: string): Promise<void> {
     await this.writes.run(() => createDatabaseSnapshotNative(destinationPath));

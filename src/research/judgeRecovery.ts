@@ -1,3 +1,4 @@
+import { researchJudgeRequestBlocked } from "./judgeRequestRecovery";
 import type {AppRepository} from "../storage/repository";
 import type {ProviderAttemptContext} from "../providers/requestExecutor";
 import {withResearchExecution} from "./executionLifecycle";
@@ -15,8 +16,9 @@ export async function getUncertainResearchJudges(repository:AppRepository,projec
   const [events,scores]=await Promise.all([repository.listSessionEvents(assignment.sessionId),repository.listJudgeScores(assignment.sessionId)]);
   const latest=new Map<string,string>();
   for(const event of events)if(event.eventType===EVENT && typeof event.metadata?.modelRoute==="string" && typeof event.metadata.status==="string")latest.set(event.metadata.modelRoute,event.metadata.status);
-  for(const route of expected)if(!latest.has(route) && !scores.some(score=>score.modelRoute===route && score.frozenAt))out.push({sessionId:assignment.sessionId,modelRoute:route});
-  for(const [route,status]of latest)if(["dispatched","uncertain"].includes(status) && !scores.some(score=>score.modelRoute===route && score.frozenAt))out.push({sessionId:assignment.sessionId,modelRoute:route});
+  for(const event of events)if(event.eventType==="RESEARCH_JUDGE_REQUEST_V1" && typeof event.metadata?.modelRoute==="string" && !latest.has(event.metadata.modelRoute))latest.set(event.metadata.modelRoute,"journal");
+  for(const route of expected)if(researchJudgeRequestBlocked(events,route) && !scores.some(score=>score.modelRoute===route && score.frozenAt))out.push({sessionId:assignment.sessionId,modelRoute:route});
+  for(const [route]of latest)if(researchJudgeRequestBlocked(events,route) && !out.some(item=>item.sessionId===assignment.sessionId && item.modelRoute===route) && !scores.some(score=>score.modelRoute===route && score.frozenAt))out.push({sessionId:assignment.sessionId,modelRoute:route});
  }
  return out;
 }

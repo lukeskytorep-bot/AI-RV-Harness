@@ -1,3 +1,4 @@
+import { APP_VERSION } from "./version";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import app from "./App.tsx?raw";
@@ -79,18 +80,18 @@ describe("DATABASE-COMPATIBILITY-EPOCH-1-R1 boundaries", () => {
   });
 
   it("keeps the required PL and EN legacy database copy exact and separates incomplete initialization", () => {
-    expect(app).toContain("Wykryto dane z wcześniejszej wersji");
-    expect(app).toContain("AI RV Harness v0.7.13 korzysta z nowego modelu danych. Automatyczna migracja danych z v0.7.12 i wcześniejszych wersji nie jest obsługiwana, ponieważ mogłaby doprowadzić do częściowej lub błędnej konwersji.");
-    expect(app).toContain("Aby nadal korzystać z dotychczasowych danych, uruchom AI RV Harness v0.7.12.");
-    expect(app).toContain("Aby rozpocząć pracę w v0.7.13, możesz utworzyć nową bazę danych. Dotychczasowa baza zostanie zachowana jako kopia i nie zostanie usunięta.");
-    expect(app).toContain("Data from an earlier version was detected");
-    expect(app).toContain("AI RV Harness v0.7.13 uses a new data model. Automatic migration from v0.7.12 and earlier versions is not supported because it could result in partial or incorrect conversion.");
-    expect(app).toContain("To continue using your existing data, run AI RV Harness v0.7.12.");
-    expect(app).toContain("To start using v0.7.13, you may create a new database. Your existing database will be preserved as a backup and will not be deleted.");
+    expect(app.replaceAll("${APP_VERSION}", APP_VERSION)).toContain("Wykryto dane z wcześniejszej wersji");
+    expect(app.replaceAll("${APP_VERSION}", APP_VERSION)).toContain("AI RV Harness v0.7.14 korzysta z nowego modelu danych. Automatyczna migracja danych z v0.7.12 i wcześniejszych wersji nie jest obsługiwana, ponieważ mogłaby doprowadzić do częściowej lub błędnej konwersji.");
+    expect(app.replaceAll("${APP_VERSION}", APP_VERSION)).toContain("Aby nadal korzystać z dotychczasowych danych, uruchom AI RV Harness v0.7.12.");
+    expect(app.replaceAll("${APP_VERSION}", APP_VERSION)).toContain("Aby rozpocząć pracę w v0.7.14, możesz utworzyć nową bazę danych. Dotychczasowa baza zostanie zachowana jako kopia i nie zostanie usunięta.");
+    expect(app.replaceAll("${APP_VERSION}", APP_VERSION)).toContain("Data from an earlier version was detected");
+    expect(app.replaceAll("${APP_VERSION}", APP_VERSION)).toContain("AI RV Harness v0.7.14 uses a new data model. Automatic migration from v0.7.12 and earlier versions is not supported because it could result in partial or incorrect conversion.");
+    expect(app.replaceAll("${APP_VERSION}", APP_VERSION)).toContain("To continue using your existing data, run AI RV Harness v0.7.12.");
+    expect(app.replaceAll("${APP_VERSION}", APP_VERSION)).toContain("To start using v0.7.14, you may create a new database. Your existing database will be preserved as a backup and will not be deleted.");
 
-    expect(app).toContain("Wykryto niedokończone tworzenie bazy v0.7.13");
-    expect(app).toContain("An incomplete v0.7.13 database initialization was detected");
-    expect(app).toContain('status.kind === "incomplete_current_initialization"');
+    expect(app.replaceAll("${APP_VERSION}", APP_VERSION)).toContain("Wykryto niedokończone tworzenie bazy v0.7.14");
+    expect(app.replaceAll("${APP_VERSION}", APP_VERSION)).toContain("An incomplete v0.7.14 database initialization was detected");
+    expect(app.replaceAll("${APP_VERSION}", APP_VERSION)).toContain('status.kind === "incomplete_current_initialization"');
   });
 
   it("preserves migrations 021 through 026 and registers factory-target upgrade migration 027 in the current v0.7.13 epoch", () => {
