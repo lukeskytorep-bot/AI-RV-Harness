@@ -1,9 +1,9 @@
 import { TelepathicRecoveryPolicy } from "../../components/TelepathicRecoveryPolicy";
 import { AUTOMATIC_TELEPATHIC_RECOVERY, blockTelepathicRecoveryForCheckpoint, telepathicRecoveryDecision, telepathicRecoveryMessage } from "../../telepathicExchange/recovery";
-import { setTelepathicRecoveryPolicy, isCheckpointFailure } from "../../telepathicExchange/engine";
+import { setTelepathicRecoveryPolicy, revalidateTelepathicConfiguration, isCheckpointFailure } from "../../telepathicExchange/engine";
 import { leadDecisionErrorMessage } from "../../telepathicExchange/leadDecisionResponse";
 import { TelepathicSeriesActions } from "../../components/TelepathicSeriesActions";
-import { useTelepathicExecution, telepathicExecutionStore } from "../../components/useTelepathicExecution";
+import { useTelepathicExecution, telepathicExecutionStore, createTelepathicConfigurationCheckSchedule } from "../../components/useTelepathicExecution";
 import type { TelepathicLocalExecution } from "../../telepathicExchange/executionPresentation";
 import { useTelepathicHistory } from "../../components/useTelepathicHistory";
 import { telepathicStatusLabel } from "../../telepathicExchange/historyStatus";
@@ -122,10 +122,22 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   useEffect(() => () => { detailGeneration.current++; }, [repository, workspace.id, profiles, language]);
   const [busy, setBusy] = useState(false);
   const [execution, setExecution] = useState<TelepathicLocalExecution | null>(null);
+  const configurationChecks = useRef(createTelepathicConfigurationCheckSchedule());
   const { presentation, callPresentation, unavailable } = useTelepathicExecution(repository, activeSeries, activeSeries?.recoveryCalls ?? [], execution, async (seriesId, isCurrent) => {
     if (!repository) return;
     const view = await loadTelepathicConversationView(repository, seriesId);
     if (isCurrent() && view && currentView.current.activeId === seriesId) setActiveSeries(view);
+  }, async seriesId => {
+    if (!activeSeries?.recoveryDecision?.configurationBlocked || !["blocked", "paused"].includes(activeSeries.status) || activeSeries.archivedAt) { configurationChecks.current.reset(); return; }
+    if (busy || unavailable || checkpointFailure || activeSeries.config.seriesId !== seriesId || !configurationChecks.current.due(seriesId)) return;
+    await execute(async () => {
+      const checked = await revalidateTelepathicConfiguration(engineDeps(), seriesId);
+      if (!checked.recoveryBlock && checked.status === "blocked" && checked.config.recoveryPolicy?.mode === "automatic" && telepathicRecoveryDecision(checked).canResume) {
+        if (checked.status === "blocked") await resumeBlockedTelepathicSeries(engineDeps(), seriesId);
+        return checked.currentRoundIndex >= checked.rounds.length ? runTelepathicFinalReflections(engineDeps(), seriesId) : advanceTelepathicConversationSeries(engineDeps(), seriesId);
+      }
+      return checked;
+    });
   });
   const [error, setError] = useState<string | null>(null);
   const [checkpointFailure, setCheckpointFailure] = useState(false);

@@ -17,6 +17,7 @@ export function telepathicExecutionStore(repository: TelepathicExchangeRepositor
     return state;
   };
   return new Proxy(repository, { get(target, key) {
+    if (key === "telepathicRecoveryOwner") return repository.telepathicRecoveryOwner ?? repository;
     if (key === "getTelepathicSeries") return getSeries;
     const value = Reflect.get(target, key, target);
     return typeof value === "function" ? value.bind(target) : value;
@@ -26,12 +27,15 @@ export function telepathicExecutionStore(repository: TelepathicExchangeRepositor
 export function useTelepathicExecution(repository: TelepathicExchangeRepository | null, series: {
   config: { seriesId: string }; status: TelepathicSeriesState["status"]; archivedAt?: string; updatedAt: string;
 } | null, calls: Array<{ id: string; status: TelepathicSeriesState["providerCalls"][number]["status"] }>, execution: TelepathicLocalExecution | null,
-  onOtherOwnerReleased?: (seriesId: string, isCurrent: () => boolean) => Promise<void>) {
+  onOtherOwnerReleased?: (seriesId: string, isCurrent: () => boolean) => Promise<void>,
+  onIdle?: (seriesId: string) => Promise<void>) {
   const seriesId = series?.config.seriesId;
   const [checked, setChecked] = useState<{ seriesId: string; execution: TelepathicLocalExecution | null; lease: TelepathicLeaseState } | null>(null);
   const previousOwner = useRef<{ repository: TelepathicExchangeRepository; seriesId: string; external: boolean } | null>(null);
   const refresh = useRef(onOtherOwnerReleased);
   refresh.current = onOtherOwnerReleased;
+  const idle = useRef(onIdle);
+  idle.current = onIdle;
   useEffect(() => {
     if (!repository || !seriesId || series?.archivedAt) return;
     let cancelled = false, reading = false;
@@ -60,6 +64,9 @@ export function useTelepathicExecution(repository: TelepathicExchangeRepository 
         if (!cancelled) previousOwner.current = { repository, seriesId, external };
       } catch { lease = "unknown"; /* Fail closed, including failed detail refresh. */ }
       if (!cancelled) setChecked({ seriesId, execution, lease });
+      if (!cancelled && lease === "idle") {
+        try { await idle.current?.(seriesId); } catch { /* The operation owns its error presentation. */ }
+      }
       reading = false;
     };
     void check();
@@ -76,4 +83,19 @@ export function useTelepathicExecution(repository: TelepathicExchangeRepository 
     }
   }
   return { presentation, callPresentation, unavailable: presentation === "other" || presentation === "checking" };
+}
+
+/** Reuse the existing ownership tick; do not add another polling loop. Route
+ * inspections back off to 30 s and never grant another provider attempt. */
+export function createTelepathicConfigurationCheckSchedule() {
+  let seriesId: string | undefined, nextAt = 0, attempts = 0;
+  return {
+    reset() { seriesId = undefined; nextAt = 0; attempts = 0; },
+    due(id: string, at = Date.now()) {
+      if (id !== seriesId) { seriesId = id; nextAt = 0; attempts = 0; }
+      if (at < nextAt) return false;
+      nextAt = at + Math.min(30_000, 1000 * 2 ** Math.min(attempts++, 5));
+      return true;
+    },
+  };
 }

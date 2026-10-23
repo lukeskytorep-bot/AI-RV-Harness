@@ -63,7 +63,7 @@ async function fixture(mode: Mode, language: "pl" | "en" = "en", native = false,
  await store.saveTelepathicSeries(state);
  const model = {providerConfigId:"c",provider:"custom_openai",modelId:"m",route:"m",capabilities:{contextTokens:64000,maxOutputTokens:32768,inputModalities:["text"],outputModalities:["text"],reasoning:{supported:true,efforts:["low","high"],confidence:"provider_metadata"},temperature:{supported:true,min:0,max:2,confidence:"provider_metadata"},supportedParameters:["temperature","reasoning","max_tokens"],source:"provider",capturedAt:"t"},pricing:{}} as ProviderModel;
  const profiles = config.participants.filter(p=>p.kind === "ai").map(p=>({id:p.id,name:p.id,defaultViewerModelId:"m",defaultViewerTemperature:0.5,defaultViewerReasoningEffort:"low"} as Profile));
- const facade = (adapter: TelepathicExchangeRepository) => ({getTelepathicSeries:adapter.getTelepathicSeries.bind(adapter),saveTelepathicSeries:adapter.saveTelepathicSeries.bind(adapter),withTelepathicSeriesLease:adapter.withTelepathicSeriesLease.bind(adapter),assertTelepathicSeriesLease:adapter.assertTelepathicSeriesLease.bind(adapter),telepathicSeriesLeaseSignal:adapter.telepathicSeriesLeaseSignal.bind(adapter),getTelepathicSeriesLeaseState:adapter.getTelepathicSeriesLeaseState!.bind(adapter),listTelepathicSeries:adapter.listTelepathicSeries.bind(adapter),listTelepathicSeriesSummaries:adapter.listTelepathicSeriesSummaries.bind(adapter),listProviderConfigs:async()=>[],listProviderModels:async()=>[model]}) as unknown as AppRepository;
+ const facade = (adapter: TelepathicExchangeRepository) => ({getTelepathicSeries:adapter.getTelepathicSeries.bind(adapter),saveTelepathicSeries:(state: Parameters<typeof adapter.saveTelepathicSeries>[0]) => adapter.saveTelepathicSeries(state),withTelepathicSeriesLease:adapter.withTelepathicSeriesLease.bind(adapter),assertTelepathicSeriesLease:adapter.assertTelepathicSeriesLease.bind(adapter),telepathicSeriesLeaseSignal:adapter.telepathicSeriesLeaseSignal.bind(adapter),getTelepathicSeriesLeaseState:adapter.getTelepathicSeriesLeaseState!.bind(adapter),listTelepathicSeries:adapter.listTelepathicSeries.bind(adapter),listTelepathicSeriesSummaries:adapter.listTelepathicSeriesSummaries.bind(adapter),listProviderConfigs:async()=>[],listProviderModels:async()=>[model]}) as unknown as AppRepository;
  let repository = facade(store);
  const container = document.createElement("div");document.body.append(container);let root = createRoot(container);
  const render = () => act(async()=>root.render(mode === "ai_ai_training" ? <TelepathicTrainingPanel copy={getCopy(language)} settings={{...createDefaultSettings(),interfaceLanguage:language,sessionLanguage:language}} profiles={profiles} workspaces={[]} repository={repository}/> : <TelepathicExchangePanel copy={getCopy(language)} settings={{...createDefaultSettings(),interfaceLanguage:language,sessionLanguage:language}} profiles={profiles} workspaces={[]} profile={{id:"human",name:"Human"} as Profile} workspace={{id:"w",profileId:"human",name:"W",kind:"conversation"} as Workspace} repository={repository}/>));
@@ -83,7 +83,7 @@ async function fixture(mode: Mode, language: "pl" | "en" = "en", native = false,
  const noAlarm = (historicalFailure = false) => {expect(container.textContent).not.toMatch(/Series blocked|Seria zatrzymana|Uncertain provider calls|Niepewne wywołania providera/);if (!historicalFailure) expect(container.textContent).not.toMatch(/delivery unconfirmed|wysłanie niepotwierdzone/);expect(button(language === "pl" ? "Zezwól na ponowienie" : "Allow retry")).toBeUndefined();};
  const waiting = async (historicalFailure = false) => {await wait(()=>expect(container.textContent).toContain(language === "pl" ? "Oczekiwanie na odpowiedź" : "Waiting for response"));noAlarm(historicalFailure);if (historicalFailure && mode === "ai_ai_training") {const headings=[...container.querySelectorAll(".telepathic-transcript-message small")].map(node=>node.textContent);expect(headings[0]).toContain("delivery unconfirmed");expect(headings.at(-1)).toContain("Waiting for response");}expect(button(language === "pl" ? "Zatrzymaj" : "Stop")).toBeTruthy();};
  const stop = async () => {await act(async()=>button(language === "pl" ? "Zatrzymaj" : "Stop")!.click());await wait(()=>expect(button("Stop")?.disabled ?? true).toBe(true));};
- return {store,db,config,container,pending,button,wait,mount,run,waiting,stop,noAlarm,
+ return {store,db,config,container,pending,button,wait,mount,run,runText,waiting,stop,noAlarm,
   async remount(snapshot?: typeof state, adapter: TelepathicExchangeRepository = store) {await act(async()=>root.unmount());await vi.waitFor(async()=>expect(await store.getTelepathicSeriesLeaseState!("execution")).toBe("idle"));if(snapshot) await store.saveTelepathicSeries(snapshot);repository=facade(adapter);root=createRoot(container);await render();},
   async externalRun() {const controller = new AbortController();const deps = {store,signal:controller.signal,resolveRoute:async(p:typeof config.participants[number])=>resolveTelepathicAiRouteFromRepository({repository,participant:p,requestedSettings:profileGenerationDefaults(profiles.find(profile=>profile.id === p.ai!.profileId)!,model)})};const task = (mode === "ai_ai_training" ? runNextTelepathicAiRound : advanceTelepathicConversationSeries)(deps,"execution").catch(()=>undefined);await vi.waitFor(()=>expect(pending.length).toBe(1));return {controller,task};},
   async observeOther() {repository=facade(new BrowserTelepathicExchangeRepository());await render();},
@@ -232,4 +232,57 @@ for(const mode of ["conversation_exchange","ai_ai_training"] as const) it(`S2 ${
   fail=false;await act(async()=>{f.button("End")!.click();f.button("End")?.click();});
   await f.wait(async()=>expect((await f.store.getTelepathicSeries("execution"))!.termination?.reason).toBe("user_finished"));expect(mock.dispatch).not.toHaveBeenCalled();
  }finally{write.mockRestore();await f.cleanup();}
+});
+
+for (const mode of ["conversation_exchange", "ai_ai_training"] as const) for (const language of ["pl", "en"] as const) {
+ it(`audit P1 ${mode}/${language}: receipt survives history reopening and a new execution proxy`, async () => {
+  const f = await fixture(mode, language, false, true), save = f.store.saveTelepathicSeries.bind(f.store); let broken = true;
+  const automatic = (await f.store.getTelepathicSeries("execution"))!; automatic.config.recoveryPolicy = { version: 1, mode: "automatic", maxTransportRetriesPerScope: 1 }; await save(automatic);
+  f.store.saveTelepathicSeries = async state => { if (broken && state.providerCalls.some(call => call.status === "succeeded")) throw new Error("disk full"); await save(state); };
+  try {
+   await f.mount(); await f.run();
+   await act(async () => f.pending[0].resolve({ content: "Final received answer retained across history reopen", finishReason: "stop", usage: { totalTokens: 19 } }));
+   await f.wait(() => expect(f.container.textContent).toContain("disk full"));
+   await f.wait(() => expect(f.button(f.runText)?.disabled).toBe(true));
+   expect((await f.store.getTelepathicSeries("execution"))!.providerCalls[0].status).toBe("dispatched");
+   broken = false;
+   const label = language === "pl" ? (mode === "ai_ai_training" ? "Otwórz trening" : "Otwórz wymianę") : (mode === "ai_ai_training" ? "Open training" : "Open exchange");
+   await act(async () => f.container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!.click());
+   await f.wait(() => expect(f.button(f.runText)?.disabled).toBe(false));
+   await act(async () => f.button(f.runText)!.click());
+   await f.wait(async () => expect((await f.store.getTelepathicSeries("execution"))!.finalization).toBe("completed"));
+   const state = (await f.store.getTelepathicSeries("execution"))!;
+   expect(state.providerCalls).toHaveLength(1); expect(state.finalReflections.lead).toContain("retained across history reopen"); expect(mock.dispatch).toHaveBeenCalledTimes(1);
+  } finally { await f.cleanup(); }
+ });
+ it(`automatic configuration recovery ${mode}/${language}: repaired route continues without any recovery button`, async () => {
+  const f = await fixture(mode, language);
+  const initial = (await f.store.getTelepathicSeries("execution"))!; initial.config.recoveryPolicy = { version: 1, mode: "automatic", maxTransportRetriesPerScope: 1 }; await f.store.saveTelepathicSeries(initial);
+  try {
+   await f.mount(); mock.routeError = new Error("model unavailable");
+   await act(async () => f.button(f.runText)!.click());
+   await f.wait(async () => expect((await f.store.getTelepathicSeries("execution"))!.recoveryBlock?.message).toContain("model unavailable"));
+   expect(f.button("Sprawdź konfigurację")).toBeUndefined(); expect(f.button("Check configuration")).toBeUndefined();
+   expect(mock.dispatch).not.toHaveBeenCalled();
+   // Repair the external condition only. No Resume/history/configuration click.
+   mock.routeError = null;
+   await f.wait(() => expect(mock.dispatch).toHaveBeenCalledTimes(1));
+   expect((await f.store.getTelepathicSeries("execution"))!.recoveryBlock).toBeUndefined();
+   await f.stop();
+  } finally { await f.cleanup(); }
+ });
+}
+
+for (const mode of ["conversation_exchange", "ai_ai_training"] as const) it(`${mode}: automatic route inspection never restarts a paused series after STOP`, async () => {
+ const f = await fixture(mode, "en");
+ const paused = (await f.store.getTelepathicSeries("execution"))!;
+ paused.config.recoveryPolicy = { version: 1, mode: "automatic", maxTransportRetriesPerScope: 1 };
+ paused.recoveryBlock = { kind: "configuration", message: "previous route failure before STOP" }; paused.status = "paused"; await f.store.saveTelepathicSeries(paused);
+ try {
+  await f.mount();
+  await f.wait(async () => expect((await f.store.getTelepathicSeries("execution"))!.recoveryBlock).toBeUndefined());
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1000)); });
+  expect(mock.dispatch).not.toHaveBeenCalled(); expect((await f.store.getTelepathicSeries("execution"))!.status).toBe("paused");
+  expect(f.button("Check configuration")).toBeUndefined();
+ } finally { await f.cleanup(); }
 });

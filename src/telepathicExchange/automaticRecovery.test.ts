@@ -1,10 +1,13 @@
+import { telepathicExecutionStore } from "../components/useTelepathicExecution";
+import type { TelepathicExchangeRepository } from "../storage/contracts/telepathicExchangeRepository";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import type { TelepathicParticipant, TelepathicSeriesState } from "./types";
 import type { ProviderChatAttempt } from "../providers/requestExecutor";
 import type { ResolvedTelepathicAiRoute } from "./providerGateway";
 import { ProviderCallError } from "../providers/providerError";
-import { createTelepathicSeriesState, runNextTelepathicAiRound, advanceTelepathicConversationSeries, runTelepathicFinalReflections, resumeBlockedTelepathicSeries, setTelepathicRecoveryPolicy } from "./engine";
+import { createTelepathicSeriesState, runNextTelepathicAiRound, advanceTelepathicConversationSeries, runTelepathicFinalReflections, resumeBlockedTelepathicSeries, setTelepathicRecoveryPolicy, revalidateTelepathicConfiguration } from "./engine";
+import type { TelepathicExchangeEngineDependencies } from "./engine";
 import { InMemoryTelepathicExchangeStore } from "./store";
 import { AUTOMATIC_TELEPATHIC_RECOVERY, telepathicRecoveryDecision, hasRecoverableTelepathicResponse } from "./recovery";
 import { buildTelepathicConversationView } from "./conversationView";
@@ -88,7 +91,7 @@ async function setup(mode: "ai_ai_training" | "conversation_exchange", fixed: bo
  });
  const deps = { store, resolveRoute: route, providerAttempt: attempt };
  const runner = mode === "conversation_exchange" ? advanceTelepathicConversationSeries : runNextTelepathicAiRound;
- const run = async (overrides: Partial<typeof deps> & { signal?: AbortSignal } = {}) => { let result = await runner({ ...deps, ...overrides }, "auto"); if (!fixed && result.status === "completed") result = await runTelepathicFinalReflections({ ...deps, ...overrides }, "auto"); return result; };
+ const run = async (overrides: Partial<TelepathicExchangeEngineDependencies> = {}) => { let result = await runner({ ...deps, ...overrides }, "auto"); if (!fixed && result.status === "completed") result = await runTelepathicFinalReflections({ ...deps, ...overrides }, "auto"); return result; };
  return { store, route, attempt, deps, run, snapshots, initial };
 }
 const targetRequest = (text: string) => text.includes("please prepare one specific target");
@@ -279,4 +282,85 @@ it("an old completely missing outcome can use one retry after opting into the sa
  delete call.responseText; delete call.finishReason; delete call.outputDiagnostics; delete call.responseEvidence; delete call.transportFailure;
  await f.store.saveTelepathicSeries(state); f.attempt.mockClear(); expect(telepathicRecoveryDecision(state).canResume).toBe(true);
  const result = await f.run(); expect(result.providerCalls[0].recovery?.action).toBe("transport_retry"); expect(result.providerCalls.filter(item => item.callStage === "sender_target")).toHaveLength(2);
+});
+
+// Audit regressions: use the same adapters as the mounted panels, not f.store.
+it.each(["ai_ai_training", "conversation_exchange"] as const)("audit P1 %s: a new execution adapter recovers the same repository receipt", async mode => {
+ const f = await setup(mode, true), save = f.store.saveTelepathicSeries.bind(f.store); let broken = true;
+ f.store.saveTelepathicSeries = async state => { if (broken && state.providerCalls.some(call => call.status === "succeeded")) throw new Error("disk full"); await save(state); };
+ const adapter = () => telepathicExecutionStore(f.store as unknown as TelepathicExchangeRepository, () => undefined);
+ const first = adapter(); await expect(f.run({ store: first })).rejects.toMatchObject({ name: "TelepathicCheckpointError" });
+ broken = false; const second = adapter(); expect(second).not.toBe(first);
+ const result = await f.run({ store: second }); expect(result.status).toBe("completed");
+ expect(f.attempt.mock.calls.filter(([request]) => targetRequest(request.messages.map(m => m.content).join("\n")))).toHaveLength(1);
+ expect(result.providerCalls.filter(call => call.callStage === "sender_target")).toHaveLength(1);
+});
+it("audit P2: explicit validation of the restored frozen route enables a separate Resume without dispatch", async () => {
+ const f = await setup("ai_ai_training", true), unavailable = vi.fn(async () => { throw new Error("model unavailable"); });
+ await expect(f.run({ resolveRoute: unavailable })).rejects.toThrow("model unavailable");
+ const blocked = (await f.store.getTelepathicSeries("auto"))!;
+ const stillBlocked = await revalidateTelepathicConfiguration({ ...f.deps, resolveRoute: unavailable }, "auto");
+ expect(stillBlocked.recoveryBlock?.message).toBe("model unavailable"); expect(f.attempt).not.toHaveBeenCalled();
+ const resolver = vi.fn(f.route); const checked = await revalidateTelepathicConfiguration({ ...f.deps, resolveRoute: resolver }, "auto");
+ expect(resolver).toHaveBeenCalledTimes(2); expect(checked.recoveryBlock).toBeUndefined(); expect(telepathicRecoveryDecision(checked).canResume).toBe(true);
+ expect(checked.providerCalls).toEqual(blocked.providerCalls); expect(checked.config).toEqual(blocked.config); expect(f.attempt).not.toHaveBeenCalled();
+ expect((await f.run()).status).toBe("completed");
+});
+it("audit P2: changed frozen identity stays blocked without dispatch", async () => {
+ const f = await setup("ai_ai_training", true);
+ await expect(f.run({ resolveRoute: async () => { throw new Error("unavailable"); } })).rejects.toThrow();
+ const result = await revalidateTelepathicConfiguration({ ...f.deps, resolveRoute: async p => { const route = await f.route(p); return { ...route, snapshot: { ...route.snapshot, modelId: "other" } }; } }, "auto");
+ expect(result.recoveryBlock?.message).toContain("frozen route snapshot"); expect(f.attempt).not.toHaveBeenCalled();
+});
+it("audit P2: live binding differs despite a matching snapshot", async () => {
+ const f = await setup("ai_ai_training", true);
+ await expect(f.run({ resolveRoute: async () => { throw new Error("unavailable"); } })).rejects.toThrow();
+ const result = await revalidateTelepathicConfiguration({ ...f.deps, resolveRoute: async p => { const route = await f.route(p); return { ...route, validatedIdentity: { ...route.validatedIdentity, aiIdentityId: "other" } }; } }, "auto");
+ expect(result.recoveryBlock?.message).toContain("identity binding"); expect(f.attempt).not.toHaveBeenCalled();
+});
+it("audit P2: revalidation preserves exhausted semantic and transport ledgers and rejects changed settings", async () => {
+ const f = await setup("ai_ai_training", true); f.attempt.mockImplementation(async () => { throw outage(); });
+ await expect(f.run()).rejects.toThrow();
+ const blocked = (await f.store.getTelepathicSeries("auto"))!; blocked.recoveryBlock = { kind: "configuration", message: "route temporarily unavailable" }; await f.store.saveTelepathicSeries(blocked);
+ const changed = await revalidateTelepathicConfiguration({ ...f.deps, resolveRoute: async p => ({ ...await f.route(p), requestedSettings: { temperature: 1 } }) }, "auto");
+ expect(changed.recoveryBlock?.message).toContain("fingerprint/settings changed");
+ const checked = await revalidateTelepathicConfiguration(f.deps, "auto");
+ expect(checked.recoveryBlock).toBeUndefined(); expect(checked.providerCalls).toEqual(blocked.providerCalls); expect(telepathicRecoveryDecision(checked).canResume).toBe(false); expect(f.attempt).toHaveBeenCalledTimes(2);
+});
+it("audit P2: a still-invalid context preflight remains blocked without dispatch", async () => {
+ const f = await setup("conversation_exchange", true);
+ const small = async (p: TelepathicParticipant) => { const route = await f.route(p); return { ...route, model: { ...route.model, capabilities: { ...route.model.capabilities, contextTokens: 128 } } }; };
+ await expect(f.run({ resolveRoute: small })).rejects.toThrow("context budget");
+ const blocked = (await f.store.getTelepathicSeries("auto"))!; expect(blocked.recoveryBlock?.validation?.messages.length).toBeGreaterThan(0);
+ const restored = restoreTelepathicRuntime(structuredClone(blocked), JSON.parse(serializeTelepathicPlan(blocked))); expect(restored.recoveryBlock).toEqual(blocked.recoveryBlock);
+ const view = buildTelepathicConversationView(blocked); expect(view.recoveryDecision?.configurationBlocked).toBe(true); expect(view).not.toHaveProperty("recoveryBlock"); expect(view.recoveryDecision).not.toHaveProperty("validation");
+ const stillBlocked = await revalidateTelepathicConfiguration({ ...f.deps, resolveRoute: small }, "auto");
+ expect(stillBlocked.recoveryBlock?.message).toContain("context budget"); expect(f.attempt).not.toHaveBeenCalled();
+ const checked = await revalidateTelepathicConfiguration(f.deps, "auto"); expect(checked.recoveryBlock).toBeUndefined(); expect(f.attempt).not.toHaveBeenCalled();
+ expect(checked.providerCalls).toEqual(blocked.providerCalls);
+});
+it("audit P2: successful configuration validation cannot renew exhausted output attempts", async () => {
+ const f = await setup("ai_ai_training", true); f.attempt.mockImplementation(async () => ({ content: "", finishReason: "length", usage: {} }));
+ await expect(f.run()).rejects.toThrow(); const blocked = (await f.store.getTelepathicSeries("auto"))!;
+ expect(blocked.providerCalls.map(call => call.technicalAttempt)).toEqual([1, 2]);
+ blocked.recoveryBlock = { kind: "configuration", message: "check settings" }; await f.store.saveTelepathicSeries(blocked);
+ const checked = await revalidateTelepathicConfiguration(f.deps, "auto"); expect(checked.recoveryBlock).toBeUndefined();
+ expect(checked.providerCalls).toEqual(blocked.providerCalls); expect(telepathicRecoveryDecision(checked).canResume).toBe(false); expect(f.attempt).toHaveBeenCalledTimes(2);
+});
+it("automatic inspection does not repeatedly save the same unavailable configuration", async () => {
+ const f = await setup("ai_ai_training", true), resolver = async () => { throw new Error("route unavailable"); };
+ await expect(f.run({ resolveRoute: resolver })).rejects.toThrow();
+ const save = vi.spyOn(f.store, "saveTelepathicSeries");
+ await revalidateTelepathicConfiguration({ ...f.deps, resolveRoute: resolver }, "auto");
+ await revalidateTelepathicConfiguration({ ...f.deps, resolveRoute: resolver }, "auto");
+ expect(save).not.toHaveBeenCalled(); expect(f.attempt).not.toHaveBeenCalled();
+});
+it("STOP during automatic configuration inspection persists paused and never dispatches", async () => {
+ const f = await setup("ai_ai_training", true);
+ await expect(f.run({ resolveRoute: async () => { throw new Error("route unavailable"); } })).rejects.toThrow();
+ const controller = new AbortController(), save = vi.spyOn(f.store, "saveTelepathicSeries");
+ await expect(revalidateTelepathicConfiguration({ ...f.deps, signal: controller.signal, resolveRoute: async p => { controller.abort(new DOMException("Stopped by user", "AbortError")); return f.route(p); } }, "auto")).rejects.toMatchObject({ name: "AbortError" });
+ expect(save).toHaveBeenCalledTimes(1);
+ const paused = (await f.store.getTelepathicSeries("auto"))!; expect(paused.status).toBe("paused"); expect(paused.recoveryBlock).toBeDefined(); expect(f.attempt).not.toHaveBeenCalled();
+ const checked = await revalidateTelepathicConfiguration(f.deps, "auto"); expect(checked.status).toBe("paused"); expect(checked.recoveryBlock).toBeUndefined(); expect(f.attempt).not.toHaveBeenCalled();
 });

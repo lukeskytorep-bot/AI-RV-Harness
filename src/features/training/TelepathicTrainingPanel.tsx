@@ -1,9 +1,9 @@
 import { TelepathicRecoveryPolicy } from "../../components/TelepathicRecoveryPolicy";
 import { AUTOMATIC_TELEPATHIC_RECOVERY, blockTelepathicRecoveryForCheckpoint, telepathicRecoveryDecision, telepathicRecoveryMessage } from "../../telepathicExchange/recovery";
-import { setTelepathicRecoveryPolicy, isCheckpointFailure } from "../../telepathicExchange/engine";
+import { setTelepathicRecoveryPolicy, revalidateTelepathicConfiguration, isCheckpointFailure } from "../../telepathicExchange/engine";
 import { leadDecisionErrorMessage } from "../../telepathicExchange/leadDecisionResponse";
 import { TelepathicSeriesActions } from "../../components/TelepathicSeriesActions";
-import { useTelepathicExecution, telepathicExecutionStore } from "../../components/useTelepathicExecution";
+import { useTelepathicExecution, telepathicExecutionStore, createTelepathicConfigurationCheckSchedule } from "../../components/useTelepathicExecution";
 import type { TelepathicLocalExecution } from "../../telepathicExchange/executionPresentation";
 import { useTelepathicHistory } from "../../components/useTelepathicHistory";
 import { TelepathicSetupStep } from "../../components/TelepathicSetupStep";
@@ -92,10 +92,19 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
   useEffect(() => () => { detailGeneration.current++; }, [repository, profiles, language]);
   const [busy, setBusy] = useState(false);
   const [execution, setExecution] = useState<TelepathicLocalExecution | null>(null);
+  const configurationChecks = useRef(createTelepathicConfigurationCheckSchedule());
   const { presentation, callPresentation, unavailable } = useTelepathicExecution(repository, activeSeries, activeSeries ? unresolvedTelepathicProviderCalls(activeSeries) : [], execution, async (seriesId, isCurrent) => {
     if (!repository) return;
     const state = await repository.getTelepathicSeries(seriesId);
     if (isCurrent() && state && activeSeriesIdRef.current === seriesId) applyActiveSeries(state, viewRoundId);
+  }, async seriesId => {
+    if (!activeSeries?.recoveryBlock || !["blocked", "paused"].includes(activeSeries.status) || activeSeries.archivedAt) { configurationChecks.current.reset(); return; }
+    if (busy || unavailable || checkpointFailure || activeSeries.config.seriesId !== seriesId || !configurationChecks.current.due(seriesId)) return;
+    await withBusy(async () => {
+      const checked = await revalidateTelepathicConfiguration(engineDeps(), seriesId);
+      if (!checked.recoveryBlock && checked.status === "blocked" && checked.config.recoveryPolicy?.mode === "automatic" && telepathicRecoveryDecision(checked).canResume) return continueTraining(seriesId);
+      return checked;
+    }, seriesId);
   });
   const [error, setError] = useState<string | null>(null);
   const [checkpointFailure, setCheckpointFailure] = useState(false);
@@ -278,11 +287,8 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
     }, seriesId);
   };
 
-  const runRemaining = async () => {
-    if (!activeSeries || !repository || activeSeries.archivedAt) return;
-    pauseRequested.current = false;
-    await withBusy(async () => {
-      let current = await repository.getTelepathicSeries(activeSeries.config.seriesId);
+  const continueTraining = async (seriesId: string): Promise<TelepathicSeriesState> => {
+      let current = await repository!.getTelepathicSeries(seriesId);
       if (!current) throw new Error("Telepathic Training series not found.");
       if (current.status === "blocked") current = await resumeBlockedTelepathicSeries(engineDeps(), current.config.seriesId);
       while (current.status !== "completed" && current.status !== "cancelled") {
@@ -294,7 +300,11 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
       }
       if (current.status === "completed" && Object.keys(current.finalReflections).length < current.config.participants.filter(p=>p.kind==="ai").length) current=await runTelepathicFinalReflections(engineDeps(),current.config.seriesId);
       return current;
-    }, activeSeries.config.seriesId);
+  };
+  const runRemaining = async () => {
+    if (!activeSeries || !repository || activeSeries.archivedAt) return;
+    pauseRequested.current = false;
+    await withBusy(() => continueTraining(activeSeries.config.seriesId), activeSeries.config.seriesId);
   };
 
   const openSeries = async (seriesId: string) => {

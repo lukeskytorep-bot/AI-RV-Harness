@@ -56,6 +56,8 @@ export function canRetryTelepathicTransport(config: TelepathicSeriesConfig, call
   return call.transportFailure?.retryable === true || resuming && call.transportFailure?.code === "cancelled";
 }
 export interface TelepathicRecoveryDecision {
+  configurationBlocked?: boolean;
+  configurationMessage?: string;
   canResume: boolean;
   needsManualResolution: boolean;
   automatic: boolean;
@@ -66,7 +68,7 @@ export function telepathicRecoveryDecision(state: TelepathicSeriesState): Telepa
   try { automatic = automaticTelepathicRecovery(state.config); } catch { return { automatic, canResume: false, needsManualResolution: false, reason: "provider_failure" }; }
   const result: TelepathicRecoveryDecision = { canResume: true, needsManualResolution: false, automatic };
   if (state.archivedAt || state.termination || state.status === "cancelled") return { ...result, canResume: false, reason: "ended" };
-  if (state.recoveryBlock) return { ...result, canResume: false, reason: "provider_failure" };
+  if (state.recoveryBlock) return { ...result, configurationBlocked: true, configurationMessage: state.recoveryBlock.message, canResume: false, reason: "provider_failure" };
   const activeRoundId = state.rounds[state.currentRoundIndex]?.assignment.roundId;
   if (state.providerCalls.some(call => ["uncertain", "dispatched"].includes(call.status) && (call.callStage === "series_reflection" ? state.currentRoundIndex < state.rounds.length : call.roundId !== activeRoundId))) return { ...result, canResume: false, needsManualResolution: true, reason: "manual" };
   const relevant = state.providerCalls.filter(call => ["uncertain", "dispatched"].includes(call.status) || call.roundId === state.rounds[state.currentRoundIndex]?.assignment.roundId || call.callStage === "series_reflection");
@@ -103,5 +105,6 @@ export function telepathicRecoveryMessage(decision: TelepathicRecoveryDecision, 
     provider_failure: ["Błąd providera lub konfiguracji wymaga sprawdzenia ustawień.", "Check the provider or configuration error before continuing."],
     ended: ["Ta seria nie jest dostępna do wznowienia.", "This series is unavailable for resume."],
   };
-  return decision.reason ? messages[decision.reason][pl ? 0 : 1] : "";
+  const message = decision.reason ? messages[decision.reason][pl ? 0 : 1] : "";
+  return decision.configurationBlocked && decision.configurationMessage ? `${message} ${decision.configurationMessage}` : message;
 }

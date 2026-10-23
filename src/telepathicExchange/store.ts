@@ -2,6 +2,8 @@ import { assertArchiveRevision } from "./persistence";
 import type { TelepathicSeriesState } from "./types";
 
 export interface TelepathicExchangeStore {
+  /** Stable repository identity shared by short-lived execution adapters. */
+  readonly telepathicRecoveryOwner?: object;
   getTelepathicSeries(seriesId: string): Promise<TelepathicSeriesState | null>;
   saveTelepathicSeries(state: TelepathicSeriesState): Promise<void>;
   withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T>;

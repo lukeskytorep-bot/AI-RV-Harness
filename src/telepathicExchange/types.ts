@@ -237,7 +237,8 @@ export interface TelepathicRoundState {
 }
 
 export interface TelepathicSeriesState {
-  recoveryBlock?: { kind: "configuration"; message: string };
+  recoveryBlock?: { kind: "configuration"; message: string;
+    validation?: { participantId: string; callStage: string; scopeKey: string; messages: ProviderMessage[] } };
   termination?: { reason: "user_finished"; endedAt: string };
   schemaVersion: 1;
   config: TelepathicSeriesConfig;

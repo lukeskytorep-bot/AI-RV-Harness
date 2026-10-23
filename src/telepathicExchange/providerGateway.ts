@@ -9,7 +9,7 @@ import { requireWorkspaceViewerRoute } from "../aiCenter/viewerIdentitySelection
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat, type ProviderChatAttempt, ProviderExecutionError } from "../providers/requestExecutor";
 import { providerErrorDetails } from "../providers/providerError";
-import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderModel } from "../providers/types";
+import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderModel, ProviderMessage } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import { composeTelepathicProviderMessages, type TelepathicProviderPacket } from "./packets";
 import type { TelepathicAiRouteSnapshot, TelepathicLanguage, TelepathicParticipant, TelepathicProviderCallRecord } from "./types";
@@ -96,7 +96,7 @@ export async function resolveTelepathicAiRouteFromRepository(input: {
   };
 }
 
-function assertExactRoute(route: ResolvedTelepathicAiRoute): void {
+export function assertExactTelepathicRoute(route: ResolvedTelepathicAiRoute): void {
   const { snapshot, providerConfig, model, validatedIdentity } = route;
   if (
     validatedIdentity.profileId !== snapshot.profileId
@@ -128,7 +128,11 @@ function isAmbiguousFailure(error: unknown): boolean {
 // The scope contract excludes only the deliberate per-attempt output escalation.
 // Effective generation and the actual provider endpoint/route are otherwise fixed.
 export async function telepathicRequestFingerprint(packet: TelepathicProviderPacket, route: ResolvedTelepathicAiRoute, fixedLead: boolean, outputBudget?: TelepathicOutputBudgetSnapshot): Promise<string> {
-  const messages = composeTelepathicProviderMessages(packet);
+  return telepathicStoredRequestFingerprint(composeTelepathicProviderMessages(packet), route, fixedLead, outputBudget);
+}
+
+/** Recheck the frozen request against live routing without executing it. */
+export async function telepathicStoredRequestFingerprint(messages: ProviderMessage[], route: ResolvedTelepathicAiRoute, fixedLead: boolean, outputBudget?: TelepathicOutputBudgetSnapshot): Promise<string> {
   if (!fixedLead) return sha256Text(JSON.stringify({ modelId: route.model.modelId, messages }));
   const settings = resolveGenerationSettings(route.model.capabilities, route.requestedSettings, { provider: route.model.provider });
   const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,canonical(v)])) : value;
@@ -151,7 +155,7 @@ export async function executeTelepathicProviderPacket(input: {
   validateResponse?: (text: string) => void;
   repetitionGuardLanguage?: TelepathicLanguage;
 }): Promise<{ response: ProviderChatResponse; call: TelepathicProviderCallRecord }> {
-  assertExactRoute(input.route);
+  assertExactTelepathicRoute(input.route);
   const messages = composeTelepathicProviderMessages(input.packet);
   if (messages.some((message) => message.continuationState)) throw new Error("Telepathic provider payload cannot contain continuation state.");
   const outputBudget = input.fixedLead ? input.outputBudgetSnapshot ?? scopeOutputBudget(input.packet.scope.callStage, input.route.model.capabilities.maxOutputTokens) : undefined;

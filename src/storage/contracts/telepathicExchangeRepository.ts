@@ -2,6 +2,7 @@ import type { TelepathicHistoryQuery, TelepathicHistoryPage } from "../../telepa
 import type { TelepathicSeriesState } from "../../telepathicExchange/types";
 
 export interface TelepathicExchangeRepository {
+  readonly telepathicRecoveryOwner?: object;
   getTelepathicSeries(seriesId: string): Promise<TelepathicSeriesState | null>;
   listTelepathicSeries(seriesWorkspaceId?: string): Promise<TelepathicSeriesState[]>;
   listTelepathicSeriesSummaries(query: TelepathicHistoryQuery): Promise<TelepathicHistoryPage>;

@@ -1,6 +1,6 @@
 # Telepathic automatic recovery — S2
 
-Reviewed 22 October 2026. Applies to Telepathic Training and Conversation after
+Reviewed 23 October 2026 (S2 audit fix 2). Applies to Telepathic Training and Conversation after
 Automatic Recovery S1 and its audit fix. Research recovery remains a separate
 stage. Classic Training learning policies are unchanged.
 
@@ -56,7 +56,9 @@ a retry grant. Failed inspection or grant persistence propagates a typed
 checkpoint error without an error-handler write or another provider dispatch.
 
 A received answer whose final local save failed is retained in an in-memory
-buffer scoped to the repository and series. A later explicit run reads the
+buffer scoped to the stable repository owner and series. Execution proxies expose
+that owner, so creating a new adapter or reopening a panel does not lose the
+receipt while the repository remains alive. A later explicit run reads the
 durable checkpoint, matches the call ID/scope/fingerprint/attempt, saves the
 buffered result locally, and validates it through the normal receipt path.
 This is not a durable outbox: closing the application can lose a body that never
@@ -79,6 +81,30 @@ the series from history (or explicitly refreshes the Conversation checkpoint).
 Successful inspection enables the next explicit run; it does not itself send a
 request. STOP never starts automatic recovery. Archived/ended series and an
 active lease in another operation remain barriers.
+
+A saved configuration block is inspected automatically by both panels using
+an idle callback on the existing ownership timer. No configuration-check button
+or additional polling timer is added. Inspections back off from 1 second to
+30 seconds, and an unchanged failure does not rewrite the checkpoint.
+Under the series lease the engine rereads the checkpoint, resolves the live
+routes and checks frozen identity, credentials, model and route. Existing
+fixed-lead requests must reproduce their saved settings/endpoint/budget
+fingerprints. New blocks retain the packet validation messages/stage for a
+context preflight without sending a prompt; these raw messages never enter
+the Conversation projection. Older S2 blocks still support route/fingerprint
+inspection; execution always reruns its own preflight.
+
+Once inspection succeeds, a blocked series with saved automatic recovery enabled
+continues automatically if the shared recovery decision permits it. Manual-mode
+series only regain their existing Resume action. An explicitly paused series
+(including STOP during inspection) never starts a provider request by itself;
+it may passively regain Resume once its configuration is valid. End, archive,
+active ownership, storage failure and exhausted limits remain barriers.
+STOP during inspection durably marks the series paused under its lease.
+Inspection itself does not dispatch, reconcile a RAM receipt, alter frozen
+configuration or renew semantic/transport limits. A successful check therefore
+cannot turn an exhausted allowance into a new request. Repeated unavailable
+routes only cause backed-off local inspections, not provider retries.
 
 ## Persistence and verification
 
