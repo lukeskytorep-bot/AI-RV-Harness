@@ -89,11 +89,11 @@ export function outputAttemptBudget(snapshot: TelepathicOutputBudgetSnapshot, te
 
 export function nextDurableTechnicalAttempt(existing: TelepathicProviderCallRecord[]): number {
   if (existing.some(call => ![1, 2].includes(call.technicalAttempt))) throw new Error("Invalid durable Telepathic attempt level.");
-  return Math.max(1, ...existing.map(call => call.technicalAttempt + (call.status === "failed" ? 1 : 0)));
+  return Math.max(1, ...existing.map(call => call.technicalAttempt + (call.status === "failed" && call.recovery?.action !== "transport_retry" ? 1 : 0)));
 }
 
 export function lengthRecoveryUnavailable(snapshot: TelepathicOutputBudgetSnapshot, existing: TelepathicProviderCallRecord[]): boolean {
-  const latestFailed = [...existing].reverse().find(call => call.status === "failed");
+  const latestFailed = [...existing].reverse().find(call => call.status === "failed" && call.recovery?.action !== "transport_retry");
   if (!latestFailed || !["length", "max_tokens", "max_output_tokens", "max_completion_tokens"].includes(String(latestFailed.finishReason ?? "").trim().toLowerCase().replace(/[ -]/g, "_"))) return false;
   // Match the old restriction for old scopes; the new policy applies it consistently to every stage.
   if (snapshot.version === 1 && !["receiver_first", "receiver_guidance"].includes(snapshot.stage)) return false;

@@ -12,6 +12,7 @@ import type { AiIdentity } from "../aiCenter/types";
 import type { TelepathicMode } from "../telepathicExchange/types";
 const execution = vi.hoisted(() => ({ advance: vi.fn(), next: vi.fn() }));
 vi.mock("../telepathicExchange/engine", async original => ({ ...await original<typeof import("../telepathicExchange/engine")>(), advanceTelepathicConversationSeries: execution.advance, runNextTelepathicAiRound: execution.next }));
+import { TelepathicSeriesCheckpointError } from "../telepathicExchange/engine";
 import { legacyLeadState as createTelepathicSeriesState } from "../telepathicExchange/__fixtures__/legacyLeadState";
 import { TelepathicTrainingPanel } from "../features/training/TelepathicTrainingPanel";
 import { TelepathicExchangePanel } from "../features/conversations/TelepathicExchangePanel";
@@ -174,3 +175,70 @@ it("Training enforces the existing six-profile maximum before participants can b
   expect(step(1).querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[6].disabled).toBe(true);
   expect(action(f.labels.participants).disabled).toBe(false);
 });
+
+for (const pl of [false, true]) for (const mode of ["ai_ai_training", "conversation_exchange"] as const) {
+ it(`${mode}/${pl ? "PL" : "EN"}: one saved policy controls Resume and transport exhaustion`, async () => {
+  const f = fixture(mode, pl); await f.render(); await f.pick(0); await f.pick(1);
+  await click(action(f.labels.participants)); await f.selectLead("a"); await click(action(f.labels.lead)); await click(textButton(f.labels.start));
+  const [series] = await f.repository.listTelepathicSeries();
+  expect(series.config.recoveryPolicy).toEqual({ version: 1, mode: "automatic", maxTransportRetriesPerScope: 1 });
+  series.status = "blocked";
+  const owner = series.config.participants.find(p => p.kind === "ai")!;
+  series.providerCalls = [{ id: "lost", seriesId: series.config.seriesId, roundId: series.rounds[0].assignment.roundId, participantId: owner.id, callStage: "sender_target", technicalAttempt: 1, status: "uncertain", scopeKey: "step", requestSha256: "hash", createdAt: "t", updatedAt: "t", transportFailure: { code: "response_body_read", phase: "reading_body", retryable: true } }];
+  series.config.recoveryPolicy!.mode = "manual";
+  series.finalReflections = Object.fromEntries(series.config.participants.filter(p => p.kind === "ai").map(p => [p.id, "saved final"]));
+  await f.repository.saveTelepathicSeries(series);
+  await click(action(mode === "ai_ai_training" ? (pl ? "Otwórz trening" : "Open training") : (pl ? "Otwórz wymianę" : "Open exchange")));
+  expect(textButton(pl ? "Wznów" : "Resume").disabled).toBe(true);
+  expect(host.textContent).toContain(pl ? "Zezwól na ponowienie" : "Allow retry");
+  const policyCheckbox = () => [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(input => input.closest("label")?.textContent?.includes(pl ? "Automatycznie kontynuuj" : "Continue automatically"))!;
+  expect(policyCheckbox().checked).toBe(false);
+  const before = mode === "ai_ai_training" ? execution.next.mock.calls.length : execution.advance.mock.calls.length;
+  await click(policyCheckbox());
+  expect((await f.repository.getTelepathicSeries(series.config.seriesId))!.config.recoveryPolicy?.mode).toBe("automatic");
+  expect(textButton(pl ? "Wznów" : "Resume").disabled).toBe(false);
+  expect(host.textContent).not.toContain(pl ? "Zezwól na ponowienie" : "Allow retry");
+  expect(mode === "ai_ai_training" ? execution.next.mock.calls.length : execution.advance.mock.calls.length).toBe(before);
+  await click(textButton(pl ? "Wznów" : "Resume"));
+  expect(mode === "ai_ai_training" ? execution.next.mock.calls.length : execution.advance.mock.calls.length).toBe(before + 1);
+  const exhausted = (await f.repository.getTelepathicSeries(series.config.seriesId))!;
+  exhausted.status = "blocked"; exhausted.providerCalls[0].status = "failed";
+  exhausted.providerCalls[0].recovery = { action: "transport_retry", originalStatus: "uncertain", at: "t" };
+  exhausted.providerCalls.push({ ...exhausted.providerCalls[0], id: "lost-again", status: "uncertain", recovery: undefined, retryOfCallId: "lost" });
+  await f.repository.saveTelepathicSeries(exhausted);
+  await click(action(mode === "ai_ai_training" ? (pl ? "Otwórz trening" : "Open training") : (pl ? "Otwórz wymianę" : "Open exchange")));
+  expect(textButton(pl ? "Wznów" : "Resume").disabled).toBe(true);
+  expect(host.textContent).toContain(pl ? "limit odzyskiwania" : "recovery is exhausted");
+  expect(host.textContent).not.toContain(pl ? "Zezwól na ponowienie" : "Allow retry");
+ });
+}
+
+for (const pl of [false, true]) for (const mode of ["ai_ai_training", "conversation_exchange"] as const) {
+ it(`${mode}/${pl ? "PL" : "EN"}: checkpoint errors block Resume until an explicit checkpoint read`, async () => {
+  const f = fixture(mode, pl); await f.render(); await f.pick(0); await f.pick(1);
+  await click(action(f.labels.participants)); await f.selectLead("a"); await click(action(f.labels.lead)); await click(textButton(f.labels.start));
+  const [series] = await f.repository.listTelepathicSeries(); series.status = "paused";
+  await f.repository.saveTelepathicSeries(series);
+  const openLabel = mode === "ai_ai_training" ? (pl ? "Otwórz trening" : "Open training") : (pl ? "Otwórz wymianę" : "Open exchange");
+  await click(action(openLabel));
+  const failure = new TelepathicSeriesCheckpointError(new Error("disk full"), series);
+  (mode === "ai_ai_training" ? execution.next : execution.advance).mockRejectedValueOnce(failure);
+  await click(textButton(pl ? "Wznów" : "Resume"));
+  expect(textButton(pl ? "Wznów" : "Resume").disabled).toBe(true);
+  expect(host.textContent).toContain(pl ? "Zapis nie powiódł się" : "The checkpoint could not be saved");
+  const checkbox = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(input => input.closest("label")?.textContent?.includes(pl ? "Automatycznie kontynuuj" : "Continue automatically"))!;
+  expect(checkbox.disabled).toBe(true);
+  await click(action(openLabel));
+  expect(textButton(pl ? "Wznów" : "Resume").disabled).toBe(false);
+  expect([...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(input => input.closest("label")?.textContent?.includes(pl ? "Automatycznie kontynuuj" : "Continue automatically"))!.disabled).toBe(false);
+ });
+}
+for (const mode of ["ai_ai_training", "conversation_exchange"] as const) {
+ it(`${mode}: the setup choice can save manual recovery for a new series`, async () => {
+  const f = fixture(mode); await f.render(); await f.pick(0); await f.pick(1);
+  await click(action(f.labels.participants)); await f.selectLead("a"); await click(action(f.labels.lead));
+  const checkbox = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(input => input.closest("label")?.textContent?.includes("Continue automatically"))!;
+  expect(checkbox.checked).toBe(true); await click(checkbox); await click(textButton(f.labels.start));
+  expect((await f.repository.listTelepathicSeries())[0].config.recoveryPolicy?.mode).toBe("manual");
+ });
+}

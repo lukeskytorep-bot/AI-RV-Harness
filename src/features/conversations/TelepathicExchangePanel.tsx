@@ -1,3 +1,6 @@
+import { TelepathicRecoveryPolicy } from "../../components/TelepathicRecoveryPolicy";
+import { AUTOMATIC_TELEPATHIC_RECOVERY, blockTelepathicRecoveryForCheckpoint, telepathicRecoveryDecision, telepathicRecoveryMessage } from "../../telepathicExchange/recovery";
+import { setTelepathicRecoveryPolicy, isCheckpointFailure } from "../../telepathicExchange/engine";
 import { leadDecisionErrorMessage } from "../../telepathicExchange/leadDecisionResponse";
 import { TelepathicSeriesActions } from "../../components/TelepathicSeriesActions";
 import { useTelepathicExecution, telepathicExecutionStore } from "../../components/useTelepathicExecution";
@@ -112,6 +115,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   const [roundCount, setRoundCount] = useState(3);
   const [topic, setTopic] = useState<TelepathicTopic>("any");
   const [discloseTopic, setDiscloseTopic] = useState(false);
+  const [automaticRecovery, setAutomaticRecovery] = useState(true);
   const [activeSeries, setActiveSeries] = useState<TelepathicConversationSeriesView | null>(null);
   const history = useTelepathicHistory(repository, "conversation_exchange", workspace.id);
   const detailGeneration = useRef(0);
@@ -124,6 +128,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
     if (isCurrent() && view && currentView.current.activeId === seriesId) setActiveSeries(view);
   });
   const [error, setError] = useState<string | null>(null);
+  const [checkpointFailure, setCheckpointFailure] = useState(false);
   useEffect(() => { setActiveSeries(null); setViewRoundId(null); }, [repository, workspace.id]);
   const [targetText, setTargetText] = useState("");
   const [targetImage, setTargetImage] = useState<File | null>(null);
@@ -246,7 +251,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
       : senderKind === "fixed_ai"
         ? { kind: "fixed_ai", participantId: `ai:${fixedAiProfileId}` }
         : { kind: "human_only", humanParticipantId:humanId };
-    return { schemaVersion: 1, seriesId, seriesWorkspaceId: workspace.id, mode: "conversation_exchange",protocolVersion:"fixed_lead_v1",leadInstructionVersion:LEAD_INSTRUCTION_VERSION,maxGuidanceCycles:3, language, participants, roundCount, topic, discloseTopicToReceivers: discloseTopic, senderPolicy };
+    return { schemaVersion: 1, seriesId, seriesWorkspaceId: workspace.id, mode: "conversation_exchange", recoveryPolicy: { ...AUTOMATIC_TELEPATHIC_RECOVERY, mode: automaticRecovery ? "automatic" : "manual" },protocolVersion:"fixed_lead_v1",leadInstructionVersion:LEAD_INSTRUCTION_VERSION,maxGuidanceCycles:3, language, participants, roundCount, topic, discloseTopicToReceivers: discloseTopic, senderPolicy };
   }, [setupComplete, profile, selectedAiParticipants, senderKind, fixedAiProfileId, workspace.id, language, roundCount, topic, discloseTopic]);
 
   const schedule = useMemo(() => previewConfig ? planTelepathicSeries(previewConfig).rounds.map((round) => ({ ...round, sender: previewConfig.participants.find((item) => item.id === round.senderParticipantId)?.displayName ?? round.senderParticipantId })) : [], [previewConfig]);
@@ -290,6 +295,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
       return true;
     } catch (cause) {
       if (epoch !== executionEpoch.current) return false;
+      setCheckpointFailure(isCheckpointFailure(cause));
       setError(cause instanceof Error ? cause.message : String(cause));
       if (repository && recoverySeriesId && applyResult) {
         try {
@@ -316,6 +322,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   };
 
   const startSeries = async () => {
+    setCheckpointFailure(false);
     if (!repository || !profile || !setupComplete || busy) return;
     const seriesId = `telepathic-series-${crypto.randomUUID()}`;
     const humanId = humanParticipantId(seriesId);
@@ -343,7 +350,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
       : senderKind === "fixed_ai"
         ? { kind: "fixed_ai", participantId: `ai:${fixedAiProfileId}` }
         : { kind: "human_only", humanParticipantId:humanId };
-    const config: TelepathicSeriesConfig = { schemaVersion: 1, seriesId, seriesWorkspaceId: workspace.id, mode: "conversation_exchange",protocolVersion:"fixed_lead_v1",leadInstructionVersion:LEAD_INSTRUCTION_VERSION,maxGuidanceCycles:3, language, participants, roundCount, topic, discloseTopicToReceivers: discloseTopic, senderPolicy };
+    const config: TelepathicSeriesConfig = { schemaVersion: 1, seriesId, seriesWorkspaceId: workspace.id, mode: "conversation_exchange", recoveryPolicy: { ...AUTOMATIC_TELEPATHIC_RECOVERY, mode: automaticRecovery ? "automatic" : "manual" },protocolVersion:"fixed_lead_v1",leadInstructionVersion:LEAD_INSTRUCTION_VERSION,maxGuidanceCycles:3, language, participants, roundCount, topic, discloseTopicToReceivers: discloseTopic, senderPolicy };
     await execute(async () => {
       const frozen=await freezeTelepathicTrainingLearning({repository,config});
       const initial = createTelepathicSeriesState(frozen);
@@ -357,7 +364,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   const refreshSeries = async () => {
     if (!repository || !activeSeries) return;
     const loaded = await loadTelepathicConversationView(repository, activeSeries.config.seriesId);
-    if (loaded) setActiveSeries(loaded);
+    if (loaded) { setCheckpointFailure(false); setActiveSeries(loaded); }
   };
 
   const step = activeSeries?.archivedAt ? { kind: "none" as const } : activeSeries?.humanStep ?? { kind: "none" as const };
@@ -365,9 +372,10 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   const human = activeSeries?.config.participants.find((item) => item.kind === "human") ?? null;
   const humanIsSender = Boolean(currentRound && human && currentRound.assignment.senderParticipantId === human.id);
   const unresolvedCalls = activeSeries?.recoveryCalls ?? [];
-  const showRecoveryActions = Boolean(activeSeries && !activeSeries.archivedAt && activeSeries.status !== "cancelled" && (activeSeries.status === "paused" || activeSeries.status === "blocked" || activeSeries.status === "completed" && Object.keys(activeSeries.finalReflections).length < activeSeries.config.participants.filter(p => p.kind === "ai").length));
+  const showRecoveryActions = Boolean(activeSeries && !activeSeries.archivedAt && activeSeries.status !== "cancelled" && (unresolvedCalls.length > 0 || activeSeries.status === "paused" || activeSeries.status === "blocked" || activeSeries.status === "completed" && Object.keys(activeSeries.finalReflections).length < activeSeries.config.participants.filter(p => p.kind === "ai").length));
   const stopSeries = () => { if (!busy || stopping) return; setStopping(true); stopController.current?.abort(new DOMException("Stopped by user", "AbortError")); };
-  const resumeSeries = () => { if (!activeSeries || busy || unavailable || unresolvedCalls.length) return; const id = activeSeries.config.seriesId; void execute(async () => { if (activeSeries.status === "blocked") await resumeBlockedTelepathicSeries(engineDeps(), id); return advanceTelepathicConversationSeries(engineDeps(), id); }); };
+  const recoveryDecision = blockTelepathicRecoveryForCheckpoint(activeSeries?.recoveryDecision ?? { canResume: !unresolvedCalls.length, needsManualResolution: Boolean(unresolvedCalls.length), automatic: false }, checkpointFailure);
+  const resumeSeries = () => { if (!activeSeries || busy || unavailable || !recoveryDecision.canResume) return; const id = activeSeries.config.seriesId; void execute(async () => { if (activeSeries.status === "blocked") await resumeBlockedTelepathicSeries(engineDeps(), id); return activeSeries.currentRoundIndex >= activeSeries.rounds.length ? runTelepathicFinalReflections(engineDeps(), id) : advanceTelepathicConversationSeries(engineDeps(), id); }); };
   const endSeries = () => { if (!activeSeries || busy || unavailable) return; void execute(() => endTelepathicSeries(engineDeps(), activeSeries.config.seriesId)); };
 
   const unresolvedFinalReflectionCalls = unresolvedCalls.filter((call) => call.callStage === "series_reflection" || call.roundId === "series-complete");
@@ -402,7 +410,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
       const series = await loadTelepathicConversationView(repository, seriesId);
       if (epoch !== detailGeneration.current) return;
       if (!series || series.config.seriesWorkspaceId !== workspace.id) throw new Error("Exchange not found in this Workspace.");
-      setActiveSeries(series);
+      setCheckpointFailure(false); setActiveSeries(series);
       const visible = series.rounds[Math.min(series.currentRoundIndex, Math.max(0, series.rounds.length - 1))];
       setViewRoundId(visible?.assignment.roundId ?? null); setError(null);
     } catch (cause) { if (epoch === detailGeneration.current) setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -438,6 +446,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
         <label><span>{pl ? "Liczba rund" : "Rounds"}</span><input type="number" min={1} max={20} value={roundCount} onChange={(event) => setRoundCount(Math.max(1, Math.min(20, Number(event.target.value) || 1)))} /></label>
         <label><span>{pl ? "Temat" : "Topic"}</span><select value={topic} onChange={(event) => setTopic(event.target.value as TelepathicTopic)}>{TOPICS.map((item) => <option key={item} value={item}>{topicLabel(item, pl)}</option>)}</select></label>
 
+        <TelepathicRecoveryPolicy pl={pl} automatic={automaticRecovery} disabled={busy || unavailable} onChange={setAutomaticRecovery}/>
         <label className="telepathic-check"><input type="checkbox" checked={discloseTopic} onChange={(event) => setDiscloseTopic(event.target.checked)} /><span>{pl ? "Pokaż temat odbiorcom" : "Disclose topic to receivers"}</span></label>
       </div></fieldset>
 
@@ -486,7 +495,8 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   }) : null;
 
   return <div className="telepathic-with-history"><div className="telepathic-exchange-stack">
-    {activeSeries.metrics&&<TelepathicMetrics pl={pl} metrics={activeSeries.metrics} actions={<TelepathicSeriesActions pl={pl} busy={busy} stopping={stopping} unavailable={unavailable} recovery={showRecoveryActions} uncertain={unresolvedCalls.length > 0} onStop={stopSeries} onResume={resumeSeries} onEnd={endSeries}/>}/>}
+    {!activeSeries.archivedAt && activeSeries.status !== "cancelled" && <TelepathicRecoveryPolicy pl={pl} automatic={activeSeries.config.recoveryPolicy?.mode === "automatic"} disabled={busy || unavailable || checkpointFailure} onChange={value => void execute(() => setTelepathicRecoveryPolicy(engineDeps(), activeSeries.config.seriesId, value))}/>}
+    {activeSeries.metrics&&<TelepathicMetrics pl={pl} metrics={activeSeries.metrics} actions={<TelepathicSeriesActions pl={pl} busy={busy} stopping={stopping} unavailable={unavailable} recovery={showRecoveryActions} uncertain={unresolvedCalls.length > 0} resumeBlocked={!recoveryDecision.canResume} resumeReason={telepathicRecoveryMessage(recoveryDecision, pl)} onStop={stopSeries} onResume={resumeSeries} onEnd={endSeries}/>}/>}
     {(presentation === "waiting" || presentation === "working" || presentation === "other" || presentation === "checking") && <div role="status" className="telepathic-action-row"><span>{presentation === "waiting" ? (pl ? "Oczekiwanie na odpowiedź" : "Waiting for response") : presentation === "other" ? (pl ? "Praca trwa w innym oknie" : "Work is running in another window") : presentation === "checking" ? (pl ? "Sprawdzanie stanu wykonania" : "Checking execution state") : (pl ? "Praca trwa…" : "Work is running…")}</span></div>}
     <section className="panel telepathic-exchange-panel">
       <div className="telepathic-run-head"><div><RadioTower size={18} /><span><strong>{pl ? "Wymiana telepatyczna" : "Telepathic exchange"}</strong><small>{telepathicStatusLabel(activeSeries.status, pl)} · {pl ? "runda" : "round"} {Math.min(activeSeries.currentRoundIndex + 1, activeSeries.rounds.length)}/{activeSeries.rounds.length}</small></span></div><div className="telepathic-run-actions"><button className="secondary-button" disabled={busy} onClick={() => void refreshSeries()}><RefreshCw size={14} />{pl ? "Odśwież" : "Refresh"}</button><button className="secondary-button" disabled={busy || unavailable} onClick={() => { detailGeneration.current++; setActiveSeries(null); setViewRoundId(null); setError(null); }}>{pl ? "Nowa wymiana" : "New exchange"}</button></div></div>
@@ -519,7 +529,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
     {Object.keys(activeSeries.finalReflections).length>0 && <section className="panel telepathic-exchange-panel"><TelepathicTranscript callPresentation={callPresentation} seriesId={activeSeries.config.seriesId} leadId={activeSeries.plan.rounds[0]?.senderParticipantId ?? ""} participants={activeSeries.config.participants} events={activeSeries.transcript ?? []} pl={pl}/></section>}
 
 
-    {presentation === "recovery" && <section className="panel telepathic-action-box telepathic-blocked-resolution"><h3>{pl ? "Seria zatrzymana" : "Series blocked"}</h3>{activeSeries.repetitionStopped && <p>{pl ? "Wykryto zapętlenie odpowiedzi. Nie przyjęto niepełnego wyniku." : "Response repetition detected. The incomplete output was not accepted."}</p>}<p>{leadDecisionErrorMessage(activeSeries.rounds[activeSeries.currentRoundIndex]?.blockedReason ?? (pl ? "Wynik wywołania nie został potwierdzony." : "The provider result was not confirmed."),pl)}</p>{unresolvedCalls.length > 0 ? <><p>{pl ? "Co najmniej jedno wywołanie providera ma niepewny wynik po wysłaniu. Program nie ponowi go sam. Jeżeli świadomie uznasz tę próbę za nieudaną, możesz pozwolić zwykłemu Resume zdecydować, czy pozostała jeszcze bezpieczna próba." : "At least one provider call has an uncertain result after dispatch. The program will not retry it automatically. If you explicitly treat that attempt as failed, normal Resume can decide whether a safe attempt remains."}</p>{unresolvedCalls.map((call) => <div className="telepathic-uncertain-call" key={call.id}><span><strong>{telepathicStageLabel(call.callStage,pl)}</strong><small>{call.participantId} · attempt {call.technicalAttempt} · {call.status}</small></span><button className="secondary-button" disabled={busy || unavailable} onClick={() => void execute(() => allowRetryForUncertainTelepathicCall(engineDeps(), activeSeries.config.seriesId, call.id))}>{call.technicalAttempt<2?(pl ? "Zezwól na ponowienie" : "Allow retry"):(pl?"Rozstrzygnij wyczerpaną próbę":"Resolve exhausted attempt")}</button></div>)}</> : null}</section>}
+    {presentation === "recovery" && <section className="panel telepathic-action-box telepathic-blocked-resolution"><h3>{pl ? "Seria zatrzymana" : "Series blocked"}</h3>{activeSeries.repetitionStopped && <p>{pl ? "Wykryto zapętlenie odpowiedzi. Nie przyjęto niepełnego wyniku." : "Response repetition detected. The incomplete output was not accepted."}</p>}<p>{leadDecisionErrorMessage(activeSeries.rounds[activeSeries.currentRoundIndex]?.blockedReason ?? (pl ? "Wynik wywołania nie został potwierdzony." : "The provider result was not confirmed."),pl)}</p>{unresolvedCalls.length > 0 && recoveryDecision.needsManualResolution ? <><p>{pl ? "Co najmniej jedno wywołanie providera ma niepewny wynik po wysłaniu. Program nie ponowi go sam. Jeżeli świadomie uznasz tę próbę za nieudaną, możesz pozwolić zwykłemu Resume zdecydować, czy pozostała jeszcze bezpieczna próba." : "At least one provider call has an uncertain result after dispatch. The program will not retry it automatically. If you explicitly treat that attempt as failed, normal Resume can decide whether a safe attempt remains."}</p>{unresolvedCalls.map((call) => <div className="telepathic-uncertain-call" key={call.id}><span><strong>{telepathicStageLabel(call.callStage,pl)}</strong><small>{call.participantId} · attempt {call.technicalAttempt} · {call.status}</small></span><button className="secondary-button" disabled={busy || unavailable} onClick={() => void execute(() => allowRetryForUncertainTelepathicCall(engineDeps(), activeSeries.config.seriesId, call.id))}>{call.technicalAttempt<2?(pl ? "Zezwól na ponowienie" : "Allow retry"):(pl?"Rozstrzygnij wyczerpaną próbę":"Resolve exhausted attempt")}</button></div>)}</> : null}</section>}
     {error && <div className="provider-error">{leadDecisionErrorMessage(error,pl)}</div>}
   </div>{historyPanel}</div>;
 }

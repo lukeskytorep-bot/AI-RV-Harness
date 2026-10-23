@@ -1,3 +1,6 @@
+import type { TelepathicRecoveryPolicy } from "./recovery";
+import type { ProviderCallErrorDetails } from "../providers/providerError";
+import type { ProviderResponseEvidence } from "../providers/responseEvidence";
 import type { TelepathicOutputBudgetSnapshot, TelepathicOutputDiagnostics } from "./outputBudgets";
 import type { ProviderUsage, ProviderMessage, EffectiveGenerationSettings } from "../providers/types";
 import type { ProviderContinuationState } from "../providers/continuationContract";
@@ -55,6 +58,7 @@ export type TelepathicSenderPolicy =
   | { kind: "fixed_ai"; participantId: string };
 
 export interface TelepathicSeriesConfig {
+  recoveryPolicy?: TelepathicRecoveryPolicy;
   schemaVersion: 1;
   protocolVersion?: "fixed_lead_v1";
   leadInstructionVersion?: string;
@@ -191,6 +195,10 @@ export function telepathicProviderScopeKey(scope: TelepathicProviderScope): stri
 export type TelepathicProviderCallStatus = "prepared" | "dispatched" | "succeeded" | "failed" | "uncertain";
 
 export interface TelepathicProviderCallRecord {
+  responseEvidence?: ProviderResponseEvidence;
+  transportFailure?: Pick<ProviderCallErrorDetails, "code" | "phase" | "retryAfterMs"> & { retryable: boolean; earlierAmbiguousAttempt?: boolean };
+  recovery?: { action: "transport_retry" | "recovered_response" | "rejected_response" | "manual_resolution"; originalStatus: TelepathicProviderCallStatus; at: string };
+  retryOfCallId?: string;
   id: string;
   seriesId: string;
   roundId: string;
@@ -229,6 +237,7 @@ export interface TelepathicRoundState {
 }
 
 export interface TelepathicSeriesState {
+  recoveryBlock?: { kind: "configuration"; message: string };
   termination?: { reason: "user_finished"; endedAt: string };
   schemaVersion: 1;
   config: TelepathicSeriesConfig;

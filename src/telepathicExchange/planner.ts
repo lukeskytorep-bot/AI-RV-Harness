@@ -1,3 +1,4 @@
+import { validateTelepathicRecoveryPolicy } from "./recovery";
 import type {
   TelepathicParticipant,
   TelepathicRoundAssignment,
@@ -11,6 +12,7 @@ function assertUniqueParticipants(participants: TelepathicParticipant[]): void {
 }
 
 function validateConfig(config: TelepathicSeriesConfig): void {
+  validateTelepathicRecoveryPolicy(config.recoveryPolicy);
   assertUniqueParticipants(config.participants);
   if (config.protocolVersion === "fixed_lead_v1" && (config.senderPolicy.kind === "rotate" || config.maxGuidanceCycles !== 3 || !config.leadInstructionVersion)) throw new Error("Fixed lead requires a frozen instruction version, three-cycle limit and fixed sender.");
   if (!config.seriesWorkspaceId.trim()) throw new Error("Telepathic series requires an owning Workspace.");

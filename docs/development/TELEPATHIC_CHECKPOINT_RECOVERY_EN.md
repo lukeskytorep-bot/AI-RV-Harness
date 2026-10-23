@@ -52,3 +52,5 @@ The TypeScript SQLite tests use the real repository facade and file-backed
 SQLite with an emulated IPC boundary. They do not execute SQLx. Native Rust tests
 cover atomic rollback, stale owner/version/expiry, and a concurrent native writer.
 Windows runtime and live endpoints require separate acceptance.
+
+For the subsequent implementation, see [Automatic Recovery S2](TELEPATHIC_AUTOMATIC_RECOVERY_EN.md). Its in-memory receipt buffer, saved retry policy and shared UI decision build on this stage without changing its write-retry budget.

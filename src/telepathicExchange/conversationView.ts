@@ -1,3 +1,4 @@
+import { telepathicRecoveryDecision, type TelepathicRecoveryDecision, type TelepathicRecoveryPolicy } from "./recovery";
 import type { TelepathicHistoryPage, TelepathicHistoryCursor } from "./historySummaries";
 import { visibleTranscript } from "./transcript";
 import { telepathicRuntimeMetrics } from "./runtimeMetrics";
@@ -66,12 +67,14 @@ export interface TelepathicConversationRecoveryCallView {
 }
 
 export interface TelepathicConversationSeriesView {
+  recoveryDecision?: TelepathicRecoveryDecision;
   schemaVersion: 1;
   config: {
     schemaVersion: 1;
     seriesId: string;
     seriesWorkspaceId: string;
     mode: "conversation_exchange";
+    recoveryPolicy?: TelepathicRecoveryPolicy;
     language: "pl" | "en";
     participants: TelepathicConversationParticipantView[];
     roundCount: number;
@@ -175,6 +178,7 @@ export function buildTelepathicConversationView(state: TelepathicSeriesState): T
       seriesId: state.config.seriesId,
       seriesWorkspaceId: state.config.seriesWorkspaceId,
       mode: "conversation_exchange",
+      ...(state.config.recoveryPolicy ? { recoveryPolicy: structuredClone(state.config.recoveryPolicy) } : {}),
       language: state.config.language,
       participants: state.config.participants.map((item) => ({ id: item.id, kind: item.kind, displayName: item.displayName })),
       roundCount: state.config.roundCount,
@@ -190,6 +194,7 @@ export function buildTelepathicConversationView(state: TelepathicSeriesState): T
     finalReflections: structuredClone(state.finalReflections),
     humanStep: telepathicConversationHumanStep(state),
     recoveryCalls,
+    recoveryDecision: telepathicRecoveryDecision(state),
     ...(state.status === "blocked" && state.providerCalls.at(-1)?.finishReason === "repetition_runaway" ? { repetitionStopped: true } : {}),
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,

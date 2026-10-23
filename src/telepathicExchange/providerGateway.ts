@@ -1,3 +1,5 @@
+import { isStandardRetryHttpStatus } from "../providers/retry";
+import { parseProviderResponseEvidence, providerAttemptOutcomes } from "../providers/responseEvidence";
 import { SqliteWriteCoordinator } from "../storage/sqliteWriteCoordinator";
 import { scopeOutputBudget, outputAttemptBudget, validateOutputBudgetSnapshot, type TelepathicOutputBudgetSnapshot } from "./outputBudgets";
 import { viewerResponseCompletion } from "../sessions/viewerOutputRecovery";
@@ -139,10 +141,12 @@ export async function executeTelepathicProviderPacket(input: {
   packet: TelepathicProviderPacket;
   route: ResolvedTelepathicAiRoute;
   technicalAttempt: number;
+  retryOfCallId?: string;
   hooks: TelepathicProviderCallHooks;
   attempt?: ProviderChatAttempt;
   signal?: AbortSignal;
   fixedLead?: boolean;
+  requireComplete?: boolean;
   outputBudgetSnapshot?: TelepathicOutputBudgetSnapshot;
   validateResponse?: (text: string) => void;
   repetitionGuardLanguage?: TelepathicLanguage;
@@ -167,6 +171,7 @@ export async function executeTelepathicProviderPacket(input: {
     participantId: input.packet.scope.participantId,
     callStage: input.packet.scope.callStage,
     technicalAttempt: input.technicalAttempt,
+    ...(input.retryOfCallId ? { retryOfCallId: input.retryOfCallId } : {}),
     status: "prepared",
     scopeKey: input.packet.scopeKey,
     requestSha256,
@@ -222,8 +227,15 @@ export async function executeTelepathicProviderPacket(input: {
       await persistCall();
       throw Object.assign(error, { telepathicCall: call });
     }
+    const details = error instanceof ProviderExecutionError ? error.causeError.details : providerErrorDetails(error);
+    const responseEvidence = parseProviderResponseEvidence(details?.responseEvidence);
     call = {
       ...call,
+      ...(responseEvidence ? { responseEvidence, ...(responseEvidence.usage ? { usage: responseEvidence.usage } : {}), ...(responseEvidence.finishReason ? { finishReason: responseEvidence.finishReason } : {}) } : {}),
+      ...(details?.providerRequestId ? { providerRequestId: details.providerRequestId } : {}),
+      ...(details ? { transportFailure: { code: details.code, phase: details.phase, ...(details.retryAfterMs !== undefined ? { retryAfterMs: details.retryAfterMs } : {}),
+        retryable: ["connect", "timeout", "request_send", "response_body_read"].includes(details.code) || details.code === "http_status" && isStandardRetryHttpStatus(details.httpStatus),
+        earlierAmbiguousAttempt: providerAttemptOutcomes(error).slice(0, -1).some(attempt => attempt.outcome === "dispatch_unknown") } } : {}),
       status: isAmbiguousFailure(error) ? "uncertain" : "failed",
       elapsedMs: error instanceof ProviderExecutionError ? error.report.elapsedMs : Math.max(0,Date.parse(input.hooks.now())-Date.parse(timestamp)),
       physicalAttempts: error instanceof ProviderExecutionError ? error.report.physicalAttempts : 1,
@@ -260,8 +272,9 @@ export async function executeTelepathicProviderPacket(input: {
   call = {
     ...call,
     ...(domainError ? { errorMessage: domainError } : {}),
-    status: domainError || input.fixedLead && viewerResponseCompletion(response) !== "complete" ? "failed" : "succeeded",
+    status: domainError || (input.fixedLead || input.requireComplete) && viewerResponseCompletion(response) !== "complete" ? "failed" : "succeeded",
     outputDiagnostics: { ...call.outputDiagnostics!, completion: viewerResponseCompletion(response) === "complete" ? "complete" : "partial" },
+    ...(response.responseEvidence ? { responseEvidence: response.responseEvidence } : {}),
     usage: response.usage, elapsedMs: response.execution?.elapsedMs ?? Math.max(0, Date.parse(input.hooks.now()) - Date.parse(timestamp)),
     physicalAttempts: response.execution?.physicalAttempts ?? 1,
     costSource: response.usage.costUsd !== undefined ? "provider" : "unknown", finishReason: response.finishReason,

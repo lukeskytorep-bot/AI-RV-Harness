@@ -121,3 +121,7 @@ Before changing runtime dependencies, recurring IPC or post-Reveal recovery, rea
 ## Telepathic checkpoint recovery
 
 See [Telepathic Checkpoint Recovery](TELEPATHIC_CHECKPOINT_RECOVERY_EN.md) for local BUSY retries, shared write coordination, native fencing, and the separation of received responses from persistence failures. This stage does not enable automatic transport retries.
+
+## Telepathic automatic recovery
+
+[Automatic Recovery S2](TELEPATHIC_AUTOMATIC_RECOVERY_EN.md) describes saved policy, bounded transport retries, receipt recovery, STOP/restart behavior, and the shared Training/Conversation Resume decision.

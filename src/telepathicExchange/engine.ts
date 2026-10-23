@@ -1,3 +1,4 @@
+import { AUTOMATIC_TELEPATHIC_RECOVERY, validateTelepathicRecoveryLedger, automaticTelepathicRecovery, canRetryTelepathicTransport, hasRecoverableTelepathicResponse, pendingTelepathicTransportRetry, telepathicRecoveryDecision, telepathicRecoveryMessage } from "./recovery";
 import { parseLeadDecisionResponse } from "./leadDecisionResponse";
 import { TELEPATHIC_OUTPUT_POLICY_VERSION, scopeOutputBudget, nextDurableTechnicalAttempt, lengthRecoveryUnavailable } from "./outputBudgets";
 import { recordTranscript } from "./transcript";
@@ -41,11 +42,52 @@ function assertSeriesNotEnded(state: TelepathicSeriesState): void {
   if (state.termination?.reason === "user_finished" || state.status === "cancelled") throw new Error("Telepathic series was ended and cannot be resumed or changed.");
 }
 
+class TelepathicConfigurationError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "TelepathicConfigurationError";
+  }
+}
+
 function checkStop(deps: TelepathicExchangeEngineDependencies): void { deps.signal?.throwIfAborted(); }
 function combinedSignal(deps: TelepathicExchangeEngineDependencies, seriesId: string): AbortSignal | undefined {
   const signals = [deps.signal, deps.store.telepathicSeriesLeaseSignal(seriesId)].filter((s): s is AbortSignal => Boolean(s));
   return signals.length ? AbortSignal.any(signals) : undefined;
 }
+// Keep a received result across a failed local save while this repository is alive.
+// A later explicit run first reads the durable checkpoint; it never blindly
+// replays the failed transaction or resends the prompt to recover this body.
+const bufferedTelepathicResults = new WeakMap<TelepathicExchangeStore, Map<string, import("./types").TelepathicProviderCallRecord>>();
+function rememberTelepathicResult(deps: TelepathicExchangeEngineDependencies, error: unknown): void {
+  if (!(error instanceof TelepathicCheckpointError) || error.telepathicCall.responseText === undefined) return;
+  let results = bufferedTelepathicResults.get(deps.store);
+  if (!results) { results = new Map(); bufferedTelepathicResults.set(deps.store, results); }
+  results.set(error.telepathicCall.seriesId, structuredClone(error.telepathicCall));
+}
+async function readTelepathicRunCheckpoint(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState | null> {
+  const state = await deps.store.getTelepathicSeries(seriesId);
+  const results = bufferedTelepathicResults.get(deps.store), buffered = results?.get(seriesId);
+  if (!state || !buffered || state.archivedAt || state.termination || state.status === "cancelled") return state;
+  const index = state.providerCalls.findIndex(call => call.id === buffered.id && call.requestSha256 === buffered.requestSha256 && call.scopeKey === buffered.scopeKey && call.technicalAttempt === buffered.technicalAttempt);
+  if (index < 0) throw new TelepathicSeriesCheckpointError(new Error("Buffered Telepathic result does not match its durable checkpoint."), state);
+  const durable = state.providerCalls[index];
+  if (["prepared", "dispatched", "uncertain"].includes(durable.status) && durable.responseText !== undefined
+    && (durable.responseText !== buffered.responseText || durable.providerRequestId && buffered.providerRequestId && durable.providerRequestId !== buffered.providerRequestId)) {
+    throw new TelepathicSeriesCheckpointError(new Error("Buffered Telepathic receipt conflicts with the durable checkpoint; no replay was performed."), state);
+  }
+  const usageKeys = new Set([...Object.keys(durable.usage ?? {}), ...Object.keys(buffered.usage ?? {})]);
+  const receiptAlreadySaved = durable.responseText === buffered.responseText && durable.finishReason === buffered.finishReason
+    && durable.providerRequestId === buffered.providerRequestId
+    && [...usageKeys].every(key => durable.usage?.[key as keyof NonNullable<typeof durable.usage>] === buffered.usage?.[key as keyof NonNullable<typeof buffered.usage>])
+    && (hasRecoverableTelepathicResponse(durable, state.config.language) || durable.status === "failed");
+  if (["prepared", "dispatched", "uncertain"].includes(durable.status) && !receiptAlreadySaved) {
+    state.providerCalls[index] = { ...structuredClone(buffered), status: buffered.status === "succeeded" ? "uncertain" : buffered.status };
+    await saveCheckpoint(deps, state);
+  }
+  results?.delete(seriesId);
+  return state;
+}
+
 const activeSeriesRuns = new Set<string>();
 
 async function withTelepathicSeriesRunLock<T>(deps: TelepathicExchangeEngineDependencies, seriesId: string, task: () => Promise<T>): Promise<T> {
@@ -194,15 +236,19 @@ async function invokeAi(
   if (participantItem.kind !== "ai" || !participantItem.ai) throw new Error("This telepathic provider call requires an AI participant.");
 
   checkStop(deps);
+  if (state.recoveryBlock) throw new TelepathicConfigurationError(new Error(state.recoveryBlock.message));
+  automaticTelepathicRecovery(state.config); // validate persisted policy before any dispatch
   const effectivePacket = state.config.mode === "ai_ai_training" || state.config.protocolVersion === "fixed_lead_v1"
     ? await withTelepathicTrainingLearning({ packet, participant: participantItem, language: state.config.language }) : packet;
   const existing = callsForScope(state, packet.scopeKey);
+  validateTelepathicRecoveryLedger(existing);
   const succeeded = [...existing].reverse().find((call) => call.status === "succeeded" && call.responseText !== undefined);
   const validateDecisionResponse = packet.scope.callStage.startsWith("lead_guidance:cycle:") ? (text: string) => {
     const round = state.rounds.find(r=>r.assignment.roundId===packet.scope.roundId)!;
     parseLeadDecisionResponse(text, round, Number(packet.scope.callStage.split(":").at(-1)) as 1|2|3, leadGuidanceVersion(state));
   } : undefined;
   if (succeeded) {
+    if (existing.some(call => call.status === "uncertain" || call.status === "dispatched")) throw new Error("An earlier Telepathic request remains unresolved; a later response does not settle it.");
     // Older candidates recorded transport success before domain validation.
     try { validateDecisionResponse?.(succeeded.responseText!); }
     catch (error) {
@@ -213,30 +259,72 @@ async function invokeAi(
     }
     return succeeded.responseText!.trim();
   }
-  if (existing.some((call) => call.status === "dispatched" || call.status === "uncertain")) {
-    throw new Error("Telepathic provider result is uncertain after dispatch. Resume must not automatically repeat this call until the operator resolves it.");
-  }
-
-  let technicalAttempt = nextDurableTechnicalAttempt(existing);
-  if (technicalAttempt > 2) {
-    if (state.config.protocolVersion === "fixed_lead_v1") throw new Error("Telepathic stage attempts exhausted; no complete output was accepted.");
-    return null;
-  }
-
   await deps.store.assertTelepathicSeriesLease(packet.scope.seriesId);
-  const route = preResolvedRoute ?? await deps.resolveRoute(participantItem);
-  assertResolvedRouteMatchesParticipant(participantItem, route);
+  let route: ResolvedTelepathicAiRoute;
+  try { route = preResolvedRoute ?? await deps.resolveRoute(participantItem); assertResolvedRouteMatchesParticipant(participantItem, route); }
+  catch (cause) { throw new TelepathicConfigurationError(cause); }
   const outputBudget = state.config.protocolVersion === "fixed_lead_v1" ? scopeOutputBudget(packet.scope.callStage, route.model.capabilities.maxOutputTokens, existing, state.config.outputBudgetPolicyVersion ?? 2) : undefined;
   const requestHash = await telepathicRequestFingerprint(effectivePacket, route, state.config.protocolVersion === "fixed_lead_v1", outputBudget);
-  if (state.config.protocolVersion === "fixed_lead_v1" && existing.some(call => call.requestSha256 !== requestHash)) throw new Error("Telepathic request fingerprint/settings changed after its durable attempt was prepared.");
+  if (state.config.protocolVersion === "fixed_lead_v1" && existing.some(call => call.requestSha256 !== requestHash)) throw new TelepathicConfigurationError(new Error("Telepathic request fingerprint/settings changed after its durable attempt was prepared."));
+  const reconcile = async (resuming: boolean) => {
+    if (callsForScope(state, packet.scopeKey).filter(call => ["uncertain", "dispatched"].includes(call.status)).length > 1) throw new Error("Multiple unresolved Telepathic requests require operator review.");
+    for (const call of callsForScope(state, packet.scopeKey)) {
+      if (call.status !== "uncertain" && call.status !== "dispatched" && !(automaticTelepathicRecovery(state.config) && call.status === "failed" && call.transportFailure && call.recovery?.action !== "transport_retry" && call.recovery?.action !== "manual_resolution")) continue;
+      if (call.requestSha256 !== requestHash) throw new TelepathicConfigurationError(new Error("Telepathic request fingerprint changed before recovery."));
+      if (hasRecoverableTelepathicResponse(call, state.config.language)) {
+        const originalStatus = call.status;
+        try { validateDecisionResponse?.(call.responseText!); }
+        catch (error) {
+          call.status = "failed";
+          call.errorMessage = error instanceof Error ? error.message : String(error);
+          call.recovery = { action: "rejected_response", originalStatus, at: now(deps) };
+          for (const event of state.transcript ?? []) if (event.providerCallId === call.id) {
+            event.providerCallStatus = "failed";
+            if (event.id === `${call.id}:output`) { event.kind = "notice"; event.decisionRejectionReason = call.errorMessage; event.text = `[REJECTED DECISION]\n${call.responseText}`; }
+          }
+          recordTranscript(state, { id: `${call.id}:output`, roundId: call.roundId, stage: call.callStage, kind: "notice", authorId: call.participantId, recipientIds: [], text: `[REJECTED DECISION]\n${call.responseText}`, decisionRejectionReason: call.errorMessage, providerCallId: call.id, providerCallStatus: "failed" }, now(deps));
+          await saveCheckpoint(deps, state);
+          throw error;
+        }
+        call.status = "succeeded";
+        call.recovery = { action: "recovered_response", originalStatus, at: now(deps) };
+        call.updatedAt = now(deps);
+        for (const event of state.transcript ?? []) if (event.providerCallId === call.id) event.providerCallStatus = "succeeded";
+        recordTranscript(state, { id: `${call.id}:output`, roundId: call.roundId === "series-complete" ? undefined : call.roundId,
+          stage: call.callStage, kind: call.callStage.includes("reflection") || call.callStage.includes("reveal") ? "reflection" : call.callStage === "sharing_consent" ? "consent" : "response",
+          authorId: call.participantId, recipientIds: [], text: call.responseText!, providerCallId: call.id, providerCallStatus: "succeeded" }, now(deps));
+        await saveCheckpoint(deps, state);
+        continue;
+      }
+      if (!canRetryTelepathicTransport(state.config, callsForScope(state, packet.scopeKey), call, resuming)) {
+        throw new Error(automaticTelepathicRecovery(state.config) ? "Telepathic transport recovery is exhausted or this failure cannot be retried automatically." : "Telepathic provider result is uncertain after dispatch. Resume must not automatically repeat this call until the operator resolves it.");
+      }
+      checkStop(deps);
+      await deps.store.assertTelepathicSeriesLease(packet.scope.seriesId);
+      call.recovery = { action: "transport_retry", originalStatus: call.status, at: now(deps) };
+      call.status = "failed";
+      call.updatedAt = now(deps);
+      for (const event of state.transcript ?? []) if (event.providerCallId === call.id) event.providerCallStatus = "failed";
+      await saveCheckpoint(deps, state);
+    }
+  };
+  await reconcile(true);
+  const recovered = callsForScope(state, packet.scopeKey).find(call => call.status === "succeeded" && call.responseText !== undefined);
+  if (recovered) return recovered.responseText!.trim();
+  let technicalAttempt = nextDurableTechnicalAttempt(callsForScope(state, packet.scopeKey));
+  if (technicalAttempt > 2) {
+    if (state.config.protocolVersion === "fixed_lead_v1" || automaticTelepathicRecovery(state.config)) throw new Error("Telepathic stage attempts exhausted; no complete output was accepted.");
+    return null;
+  }
   await deps.store.assertTelepathicSeriesLease(packet.scope.seriesId);
   if (effectivePacket.scope.callStage === "series_reflection") {
     const preflight = preflightTelepathicPacket({ packet: effectivePacket, model: route.model });
     if (preflight.budget.exceeded) {
-      throw new Error(`Telepathic final-series packet exceeds the model context budget (${preflight.budget.estimatedTotalTokens}/${preflight.budget.contextLimit} estimated tokens). No rounds were truncated.`);
+      throw new TelepathicConfigurationError(new Error(`Telepathic final-series packet exceeds the model context budget (${preflight.budget.estimatedTotalTokens}/${preflight.budget.contextLimit} estimated tokens). No rounds were truncated.`));
     }
   }
 
+  if (state.providerCalls.some(call => call.scopeKey !== packet.scopeKey && ["uncertain", "dispatched"].includes(call.status))) throw new Error("Another Telepathic step has an unresolved provider request; no new step was dispatched.");
   for (; technicalAttempt <= 2; technicalAttempt += 1) {
     if (outputBudget && technicalAttempt === 2 && lengthRecoveryUnavailable(outputBudget, callsForScope(state, packet.scopeKey))) {
       throw new Error("No larger output recovery budget is available for this model.");
@@ -246,9 +334,11 @@ async function invokeAi(
         packet: effectivePacket,
         route,
         technicalAttempt,
+        retryOfCallId: pendingTelepathicTransportRetry(callsForScope(state, packet.scopeKey))?.id,
         attempt: deps.providerAttempt,
         signal: combinedSignal(deps, packet.scope.seriesId),
         fixedLead: state.config.protocolVersion === "fixed_lead_v1",
+        requireComplete: automaticTelepathicRecovery(state.config),
         outputBudgetSnapshot: outputBudget,
         repetitionGuardLanguage: state.config.language,
         validateResponse: validateDecisionResponse,
@@ -284,12 +374,25 @@ async function invokeAi(
       if (error instanceof TelepathicCheckpointError) throw error;
       checkStop(deps);
       if (error instanceof Error && error.message.startsWith("Invalid lead decision")) throw error;
-      const call = (error as Error & { telepathicCall?: { status?: string } }).telepathicCall;
+      const call = (error as Error & { telepathicCall?: import("./types").TelepathicProviderCallRecord }).telepathicCall;
+      if (automaticTelepathicRecovery(state.config) && !call) throw new TelepathicConfigurationError(error);
+      if (automaticTelepathicRecovery(state.config) && call?.transportFailure) {
+        // Execution has settled. Inspect the checkpoint before granting any new HTTP dispatch.
+        let checkpoint: TelepathicSeriesState | null;
+        try { checkpoint = await deps.store.getTelepathicSeries(packet.scope.seriesId); }
+        catch (cause) { throw new TelepathicSeriesCheckpointError(cause, state); }
+        const durable = checkpoint?.providerCalls.find(item => item.id === call.id);
+        if (!durable || durable.status !== call.status || durable.requestSha256 !== call.requestSha256 || durable.responseText !== call.responseText) throw new TelepathicSeriesCheckpointError(new Error("Telepathic checkpoint inspection failed; transport retry was not authorized."), state);
+        await reconcile(false);
+        await waitForTelepathicRecovery(combinedSignal(deps, packet.scope.seriesId), call.transportFailure.retryAfterMs);
+        technicalAttempt -= 1; // transport recovery preserves the semantic/output level
+        continue;
+      }
       if (call?.status === "uncertain") {
         throw new Error("Telepathic provider result is uncertain after dispatch. Resume must not automatically repeat this call until the operator resolves it.", { cause: error });
       }
       if (technicalAttempt >= 2) {
-        if (state.config.protocolVersion === "fixed_lead_v1") throw error;
+        if (state.config.protocolVersion === "fixed_lead_v1" || automaticTelepathicRecovery(state.config)) throw error;
         return null;
       }
     }
@@ -308,7 +411,7 @@ export class TelepathicSeriesCheckpointError extends Error {
   }
 }
 
-function isCheckpointFailure(error: unknown): boolean {
+export function isCheckpointFailure(error: unknown): boolean {
   return error instanceof TelepathicCheckpointError || error instanceof TelepathicSeriesCheckpointError;
 }
 
@@ -324,8 +427,10 @@ async function ensureTarget(
   round: TelepathicRoundState,
   sender: TelepathicParticipant,
 ): Promise<void> {
-  round.status = "preparing_target";
-  await saveCheckpoint(deps, state);
+  if (round.status !== "preparing_target") {
+    round.status = "preparing_target";
+    await saveCheckpoint(deps, state);
+  }
 
   if (!round.target) {
     const senderTargetText = await invokeAi(deps, state, sender, buildSenderTargetPacket({
@@ -388,7 +493,7 @@ async function ensureBlind(
         discloseTopic: state.config.discloseTopicToReceivers,
       });
       const first = await invokeAi(deps, state, receiver, firstPacket);
-      const attempts = callsForScope(state, firstPacket.scopeKey).filter((call) => call.status === "failed" || call.status === "succeeded").length;
+      const attempts = Math.max(0, ...callsForScope(state, firstPacket.scopeKey).filter(call => (call.status === "failed" || call.status === "succeeded") && call.recovery?.action !== "transport_retry").map(call => call.technicalAttempt));
       if (!first) {
         round.blindByParticipant[receiverId] = { ...blind, providerAttemptCount: Math.min(2, attempts), status: "no_submission", sealedAt: now(deps) };
         await saveCheckpoint(deps, state);
@@ -729,23 +834,23 @@ function allBlindClosed(_state: TelepathicSeriesState, round: TelepathicRoundSta
  */
 export async function advanceTelepathicConversationSeries(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState> {
   return withTelepathicSeriesRunLock(deps, seriesId, async () => {
-    const state = await deps.store.getTelepathicSeries(seriesId);
+    const state = await readTelepathicRunCheckpoint(deps, seriesId);
     if (!state) throw new Error("Telepathic series not found.");
     assertSeriesNotEnded(state);
     if (state.config.mode !== "conversation_exchange") throw new Error("This controller runs Conversation telepathic exchange only.");
     if (state.config.protocolVersion === "fixed_lead_v1" && state.currentRoundIndex >= state.rounds.length && state.finalization !== "completed") return finalizeSeries(deps,state);
   if (state.archivedAt) throw new Error("Restore the archived series before Resume.");
   if (state.status === "completed" || state.status === "cancelled") return state;
-    if (state.status === "blocked") throw new Error("Telepathic series is blocked and requires operator resolution before Resume.");
+    if (state.status === "blocked" && !telepathicRecoveryDecision(state).canResume) throw new Error(telepathicRecoveryMessage(telepathicRecoveryDecision(state), false));
     if (state.archivedAt) throw new Error("Telepathic series is archived. Restore it before changing it.");
     const round = state.rounds[state.currentRoundIndex];
     if (!round) throw new Error("Telepathic series has no current round.");
     if (round.status === "cancelled") return state;
+    if (round.status === "blocked" && telepathicRecoveryDecision(state).canResume) round.status = inferBlockedRoundStatus(round);
     if (round.status === "blocked") throw new Error("Telepathic round requires operator resolution before Resume.");
     const sender = participant(state.config, round.assignment.senderParticipantId);
 
-    state.status = "running";
-    await saveCheckpoint(deps, state);
+    if (state.status !== "running") { state.status = "running"; await saveCheckpoint(deps, state); }
     try {
       if (["pending", "preparing_target"].includes(round.status)) {
         if (sender.kind === "ai") await ensureTarget(deps, state, round, sender);
@@ -794,7 +899,8 @@ export async function advanceTelepathicConversationSeries(deps: TelepathicExchan
       if (state.config.protocolVersion === "fixed_lead_v1" && state.currentRoundIndex >= state.rounds.length) return await finalizeSeries(deps,state);
       return structuredClone(state);
     } catch (error) {
-      if (isCheckpointFailure(error)) throw error;
+      if (isCheckpointFailure(error)) { rememberTelepathicResult(deps, error); throw error; }
+      if (error instanceof TelepathicConfigurationError) state.recoveryBlock = { kind: "configuration", message: error.message };
       round.blockedReason = error instanceof Error ? error.message : String(error);
       state.status = deps.signal?.aborted ? "paused" : "blocked";
       await saveCheckpoint(deps, state);
@@ -810,21 +916,21 @@ export async function advanceTelepathicConversationSeries(deps: TelepathicExchan
  */
 export async function runNextTelepathicAiRound(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState> {
   return withTelepathicSeriesRunLock(deps, seriesId, async () => {
-  const state = await deps.store.getTelepathicSeries(seriesId);
+  const state = await readTelepathicRunCheckpoint(deps, seriesId);
   if (!state) throw new Error("Telepathic series not found.");
     assertSeriesNotEnded(state);
     if (state.config.protocolVersion === "fixed_lead_v1" && state.currentRoundIndex >= state.rounds.length && state.finalization !== "completed") return finalizeSeries(deps,state);
   if (state.archivedAt) throw new Error("Restore the archived series before Resume.");
   if (state.status === "completed" || state.status === "cancelled") return state;
-  if (state.status === "blocked") throw new Error("Telepathic series is blocked and requires operator resolution before Resume.");
+  if (state.status === "blocked" && !telepathicRecoveryDecision(state).canResume) throw new Error(telepathicRecoveryMessage(telepathicRecoveryDecision(state), false));
   const round = state.rounds[state.currentRoundIndex];
   if (!round) throw new Error("Telepathic series has no current round.");
+  if (round.status === "blocked" && telepathicRecoveryDecision(state).canResume) round.status = inferBlockedRoundStatus(round);
   if (round.status === "cancelled" || round.status === "blocked") throw new Error("Telepathic round requires operator resolution before Resume.");
   const sender = participant(state.config, round.assignment.senderParticipantId);
   if (sender.kind !== "ai") throw new Error("STEP 3A executable engine currently runs AI-sender rounds; human interaction is connected in STEP 3B.");
 
-  state.status = "running";
-  await saveCheckpoint(deps, state);
+  if (state.status !== "running") { state.status = "running"; await saveCheckpoint(deps, state); }
 
   try {
     if (["pending", "preparing_target"].includes(round.status)) await ensureTarget(deps, state, round, sender);
@@ -843,7 +949,8 @@ export async function runNextTelepathicAiRound(deps: TelepathicExchangeEngineDep
     if (state.config.protocolVersion === "fixed_lead_v1" && state.currentRoundIndex >= state.rounds.length) return await finalizeSeries(deps,state);
     return structuredClone(state);
   } catch (error) {
-    if (isCheckpointFailure(error)) throw error;
+    if (isCheckpointFailure(error)) { rememberTelepathicResult(deps, error); throw error; }
+    if (error instanceof TelepathicConfigurationError) state.recoveryBlock = { kind: "configuration", message: error.message };
     round.blockedReason = error instanceof Error ? error.message : String(error);
     state.status = deps.signal?.aborted ? "paused" : "blocked";
     await saveCheckpoint(deps, state);
@@ -867,13 +974,13 @@ function inferBlockedRoundStatus(round: TelepathicRoundState): TelepathicRoundSt
 
 export async function resumeBlockedTelepathicSeries(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState> {
   return withTelepathicSeriesRunLock(deps, seriesId, async () => {
-    const state = await deps.store.getTelepathicSeries(seriesId);
+    const state = await readTelepathicRunCheckpoint(deps, seriesId);
     if (!state) throw new Error("Telepathic series not found.");
     assertSeriesNotEnded(state);
     if (state.archivedAt) throw new Error("Restore the archived series before recovery.");
     if (state.status !== "blocked") return state;
     const unresolved = unresolvedTelepathicProviderCalls(state);
-    if (unresolved.length) throw new Error("An uncertain or dispatched provider call requires an explicit operator decision before Resume.");
+    if (unresolved.length && !telepathicRecoveryDecision(state).canResume) throw new Error(telepathicRecoveryMessage(telepathicRecoveryDecision(state), false));
     const round = state.rounds[state.currentRoundIndex];
     if (!round && state.config.protocolVersion === "fixed_lead_v1" && state.currentRoundIndex >= state.rounds.length) { state.status="paused"; await saveCheckpoint(deps,state); return structuredClone(state); }
     if (!round) throw new Error("Telepathic series has no current round.");
@@ -885,6 +992,28 @@ export async function resumeBlockedTelepathicSeries(deps: TelepathicExchangeEngi
   });
 }
 
+export async function setTelepathicRecoveryPolicy(deps: TelepathicExchangeEngineDependencies, seriesId: string, automatic: boolean): Promise<TelepathicSeriesState> {
+  return withTelepathicSeriesRunLock(deps, seriesId, async () => {
+    checkStop(deps);
+    const state = await deps.store.getTelepathicSeries(seriesId);
+    if (!state) throw new Error("Telepathic series not found.");
+    assertSeriesNotEnded(state);
+    if (state.archivedAt) throw new Error("Restore the archived series before recovery.");
+    state.config.recoveryPolicy = { ...AUTOMATIC_TELEPATHIC_RECOVERY, mode: automatic ? "automatic" : "manual" };
+    await saveCheckpoint(deps, state);
+    return structuredClone(state);
+  });
+}
+
+async function waitForTelepathicRecovery(signal?: AbortSignal, retryAfterMs?: number): Promise<void> {
+  signal?.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    const abort = () => { globalThis.clearTimeout(timer); reject(signal?.reason); };
+    const timer = globalThis.setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, Math.max(250, Math.min(30000, Number.isFinite(retryAfterMs) ? retryAfterMs! : 250)));
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
 export async function allowRetryForUncertainTelepathicCall(deps: TelepathicExchangeEngineDependencies, seriesId: string, callId: string): Promise<TelepathicSeriesState> {
   return withTelepathicSeriesRunLock(deps, seriesId, async () => {
     const state = await deps.store.getTelepathicSeries(seriesId);
@@ -893,6 +1022,7 @@ export async function allowRetryForUncertainTelepathicCall(deps: TelepathicExcha
     if (state.archivedAt) throw new Error("Restore the archived series before recovery.");
     const call = state.providerCalls.find((item) => item.id === callId);
     if (!call || (call.status !== "uncertain" && call.status !== "dispatched")) throw new Error("The selected provider call is not awaiting operator resolution.");
+    call.recovery = { action: "manual_resolution", originalStatus: call.status, at: now(deps) };
     call.status = "failed";
     call.errorMessage = `${call.errorMessage ?? "Delivery outcome was uncertain."} Operator explicitly allowed a retry.`;
     call.updatedAt = now(deps);
@@ -920,7 +1050,7 @@ async function finalizeSeries(deps: TelepathicExchangeEngineDependencies, state:
   checkStop(deps);
   if(state.archivedAt)throw new Error("Restore the archived series before Resume.");
   if (state.status !== "completed" && !(state.config.protocolVersion === "fixed_lead_v1" && state.currentRoundIndex >= state.rounds.length)) throw new Error("Final series reflection requires all rounds to be complete.");
-  if (state.config.protocolVersion === "fixed_lead_v1") { state.finalization="running"; state.status="paused"; await saveCheckpoint(deps,state); }
+  if (state.config.protocolVersion === "fixed_lead_v1") { const changed = state.finalization !== "running" || state.status !== "paused"; state.finalization="running"; state.status="paused"; if (changed) await saveCheckpoint(deps,state); }
   try {
   for (const item of state.config.participants) {
     checkStop(deps);
@@ -943,12 +1073,12 @@ async function finalizeSeries(deps: TelepathicExchangeEngineDependencies, state:
   }
   if (state.config.protocolVersion === "fixed_lead_v1") { state.finalization="completed"; state.status="completed"; await saveCheckpoint(deps,state); }
   return structuredClone(state);
-  } catch(error) { if (isCheckpointFailure(error)) throw error; if (state.config.protocolVersion === "fixed_lead_v1") { state.finalization="blocked"; state.status=deps.signal?.aborted ? "paused" : "blocked"; await saveCheckpoint(deps,state); } throw error; }
+  } catch(error) { if (isCheckpointFailure(error)) { rememberTelepathicResult(deps, error); throw error; } if (error instanceof TelepathicConfigurationError) state.recoveryBlock = { kind: "configuration", message: error.message }; if (state.config.protocolVersion === "fixed_lead_v1" || state.recoveryBlock) { state.finalization="blocked"; state.status=deps.signal?.aborted ? "paused" : "blocked"; await saveCheckpoint(deps,state); } throw error; }
 }
 
 export async function runTelepathicFinalReflections(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState> {
   return withTelepathicSeriesRunLock(deps,seriesId,async()=>{
-    const state=await deps.store.getTelepathicSeries(seriesId);
+    const state=await readTelepathicRunCheckpoint(deps, seriesId);
     if(!state) throw new Error("Telepathic series not found.");
     assertSeriesNotEnded(state);
     return finalizeSeries(deps,state);
@@ -967,6 +1097,7 @@ export async function endTelepathicSeries(deps: TelepathicExchangeEngineDependen
     state.termination = { reason: "user_finished", endedAt: now(deps) };
     state.status = "cancelled";
     await saveCheckpoint(deps, state);
+    bufferedTelepathicResults.get(deps.store)?.delete(seriesId);
     const persisted = await deps.store.getTelepathicSeries(seriesId);
     if (!persisted?.termination || persisted.status !== "cancelled") throw new Error("Telepathic series end marker was not persisted.");
     return persisted;

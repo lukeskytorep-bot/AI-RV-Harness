@@ -113,7 +113,7 @@ for (const mode of ["conversation_exchange","ai_ai_training"] as const) {
    await f.wait(()=>expect(f.button(mode === "ai_ai_training" ? "Run / continue" : "Continue / Resume")?.disabled).toBe(false));await f.run(2);await f.waiting(true);
    expect((await f.store.getTelepathicSeries("execution"))!.providerCalls.map(c=>c.technicalAttempt)).toEqual([1,2]);
    await act(async()=>f.pending[1].reject(new Error("Second delivery interrupted.")));await f.wait(()=>expect(f.button("Resolve exhausted attempt")?.disabled).toBe(false));
-   await act(async()=>f.button("Resolve exhausted attempt")!.click());await f.wait(()=>expect(f.button(mode === "ai_ai_training" ? "Run / continue" : "Continue / Resume")?.disabled).toBe(false));
+   await act(async()=>f.button("Resolve exhausted attempt")!.click());await f.wait(()=>expect(f.button(mode === "ai_ai_training" ? "Run / continue" : "Continue / Resume")?.disabled).toBe(true));
    await act(async()=>f.button(mode === "ai_ai_training" ? "Run / continue" : "Continue / Resume")!.click());await f.wait(()=>expect(f.container.textContent).toMatch(/attempts exhausted/));expect(mock.dispatch).toHaveBeenCalledTimes(2);
   } finally {await f.cleanup();}
  });
@@ -150,7 +150,7 @@ for (const mode of ["conversation_exchange","ai_ai_training"] as const) {
  it(`${mode}: pre-dispatch route failure retains its actual reason without an uncertain result`, async()=>{
   const f=await fixture(mode);
   try {await f.mount();mock.routeError=new Error("Route unavailable before dispatch");await act(async()=>f.button(mode === "ai_ai_training" ? "Run / continue" : "Continue / Resume")!.click());
-   await f.wait(()=>expect(f.container.textContent).toContain("Route unavailable before dispatch"));expect((await f.store.getTelepathicSeries("execution"))!.providerCalls).toHaveLength(0);expect(mock.dispatch).not.toHaveBeenCalled();expect(f.button("Allow retry")).toBeUndefined();await f.wait(()=>expect(f.button("Resume")?.disabled).toBe(false));
+   await f.wait(()=>expect(f.container.textContent).toContain("Route unavailable before dispatch"));expect((await f.store.getTelepathicSeries("execution"))!.providerCalls).toHaveLength(0);expect(mock.dispatch).not.toHaveBeenCalled();expect(f.button("Allow retry")).toBeUndefined();await f.wait(()=>expect(f.button("Resume")?.disabled).toBe(true));expect((await f.store.getTelepathicSeries("execution"))!.recoveryBlock?.kind).toBe("configuration");
   }finally {await f.cleanup();}
  });
  it(`${mode}: repetition is visibly different from uncertain delivery`, async()=>{
@@ -228,7 +228,7 @@ for(const mode of ["conversation_exchange","ai_ai_training"] as const) it(`S2 ${
  try{
   await f.mount();const before=await f.store.getTelepathicSeries("execution");await act(async()=>f.button("End")!.click());
   await f.wait(()=>expect(f.container.textContent).toContain("End checkpoint write failed"));await f.wait(()=>expect(f.button("End")?.disabled).toBe(false));
-  expect(await f.store.getTelepathicSeries("execution")).toEqual(before);expect(f.button("Resume")?.disabled).toBe(false);expect(mock.dispatch).not.toHaveBeenCalled();
+  expect(await f.store.getTelepathicSeries("execution")).toEqual(before);expect(f.button("Resume")?.disabled).toBe(true);expect(mock.dispatch).not.toHaveBeenCalled();
   fail=false;await act(async()=>{f.button("End")!.click();f.button("End")?.click();});
   await f.wait(async()=>expect((await f.store.getTelepathicSeries("execution"))!.termination?.reason).toBe("user_finished"));expect(mock.dispatch).not.toHaveBeenCalled();
  }finally{write.mockRestore();await f.cleanup();}

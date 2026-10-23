@@ -90,3 +90,18 @@ it("refuses a stale runner if the owner changes during BUSY backoff", async () =
   })).rejects.toThrow("lease lost");
   expect(attempts).toBe(2); expect((await repository.getTelepathicSeries("s"))!.status).not.toBe("paused");
 });
+
+it("preserves the recovery policy, parent link and response evidence after file-backed SQLite restart", async () => {
+  const repository = await SqliteRepository.connect(), series = state();
+  series.config.recoveryPolicy = { version: 1, mode: "automatic", maxTransportRetriesPerScope: 1 };
+  const parent = { id: "transport-parent", seriesId: "s", roundId: series.rounds[0].assignment.roundId, participantId: "a", callStage: "sender_target", technicalAttempt: 1, status: "failed" as const, scopeKey: "same-scope", requestSha256: "same-hash", createdAt: "t", updatedAt: "t", transportFailure: { code: "response_body_read" as const, phase: "reading_body" as const, retryable: true }, recovery: { action: "transport_retry" as const, originalStatus: "uncertain" as const, at: "t" } };
+  const child = { ...parent, id: "transport-child", status: "succeeded" as const, retryOfCallId: parent.id, recovery: undefined, transportFailure: undefined, responseText: "accepted", finishReason: "stop", usage: { totalTokens: 17 }, responseEvidence: { version: 1 as const, transportOutcome: "response_finished" as const, boundary: "sse_done" as const, finishReason: "stop", generationId: "generation-child" } };
+  series.providerCalls = [parent, child]; await repository.saveTelepathicSeries(series);
+  db.close(); db = new DatabaseSync(join(directory, "database.sqlite"));
+  const restored = (await (await SqliteRepository.connect()).getTelepathicSeries("s"))!;
+  expect(restored.config.recoveryPolicy).toEqual(series.config.recoveryPolicy);
+  expect(restored.providerCalls.find(call => call.id === parent.id)).toMatchObject(parent);
+  expect(restored.providerCalls.find(call => call.id === child.id)).toMatchObject(JSON.parse(JSON.stringify(child)));
+  expect(restored.providerCalls.filter(call => call.recovery?.action === "transport_retry")).toHaveLength(1);
+  expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+});
