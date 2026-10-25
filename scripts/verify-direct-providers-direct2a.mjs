@@ -3,6 +3,14 @@ import fs from "node:fs";
 function read(path) { return fs.readFileSync(path, "utf8"); }
 function requireCheck(condition, message) { if (!condition) throw new Error(message); }
 
+// This verifier inspects source-code string literals, not network URLs.
+function containsStringLiteral(source, value) {
+  const expected = JSON.stringify(value);
+  return Array.from(source.matchAll(/"(?:[^"\\]|\\.)*"/g), ([literal]) => literal)
+    .some((literal) => literal === expected);
+}
+
+
 const adapters = read("src-tauri/src/providers/adapters.rs");
 const tests = read("src-tauri/src/providers/tests.rs");
 const service = read("src/providers/service.ts");
@@ -17,7 +25,7 @@ requireCheck(adapters.includes('host != "blackbox.ai" && !host.ends_with(".black
 requireCheck(adapters.includes('Blackbox base URL must be an origin without an API path'), "Blackbox origin-only boundary missing");
 requireCheck(service.includes('input.provider !== "custom_openai" && input.provider !== "blackbox"'), "Frontend provider service does not limit base URL overrides to Blackbox/Custom");
 requireCheck(settings.includes('provider === "custom_openai" || provider === "blackbox"'), "Provider Settings does not expose Blackbox route input");
-requireCheck(settings.includes('https://enterprise.blackbox.ai'), "Enterprise Blackbox route hint missing");
+requireCheck(containsStringLiteral(settings, "https://enterprise.blackbox.ai"), "Enterprise Blackbox route hint missing");
 requireCheck(setup.includes('providerKind === "custom_openai" || providerKind === "blackbox"'), "Profile setup does not persist explicit Blackbox route");
 requireCheck(setup.includes('setBaseUrl("")'), "Provider switch does not clear stale endpoint input");
 requireCheck(firstRun.includes('setup.providerKind === "custom_openai" || setup.providerKind === "blackbox"'), "First-run setup does not expose Blackbox route input");

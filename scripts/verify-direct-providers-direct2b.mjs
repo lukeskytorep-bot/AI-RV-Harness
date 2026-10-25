@@ -3,6 +3,14 @@ import fs from "node:fs";
 function read(path) { return fs.readFileSync(path, "utf8"); }
 function requireCheck(condition, message) { if (!condition) throw new Error(message); }
 
+// This verifier inspects source-code string literals, not network URLs.
+function containsStringLiteral(source, value) {
+  const expected = JSON.stringify(value);
+  return Array.from(source.matchAll(/"(?:[^"\\]|\\.)*"/g), ([literal]) => literal)
+    .some((literal) => literal === expected);
+}
+
+
 const providers = read("src-tauri/src/providers.rs");
 const tests = read("src-tauri/src/providers/tests.rs");
 const adapters = read("src-tauri/src/providers/adapters.rs");
@@ -24,8 +32,8 @@ requireCheck(tests.includes("direct2b_blackbox_discovery_preserves_legacy_route_
 requireCheck(tests.includes('Some("https://api.blackbox.ai")'), "Explicit legacy Blackbox route regression missing");
 requireCheck(tests.includes('Some("https://api.blackbox.ai/")'), "Trailing-slash legacy Blackbox route regression missing");
 requireCheck(tests.includes('Some("   ")'), "Whitespace Blackbox route regression missing");
-requireCheck(tests.includes("https://enterprise.blackbox.ai"), "Enterprise Blackbox route regression missing");
-requireCheck(tests.includes("https://example-org.blackbox.ai"), "Organization Blackbox route regression missing");
+requireCheck(containsStringLiteral(tests, "https://enterprise.blackbox.ai"), "Enterprise Blackbox route regression missing");
+requireCheck(containsStringLiteral(tests, "https://example-org.blackbox.ai"), "Organization Blackbox route regression missing");
 requireCheck(tests.includes('"https://api.blackbox.ai/models"'), "Legacy Blackbox discovery compatibility assertion missing");
 requireCheck(tests.includes("direct2b_discovery_boundary_does_not_change_other_provider_model_urls"), "Other-provider discovery regression missing");
 requireCheck(adapters.includes('unwrap_or("https://api.blackbox.ai")'), "DIRECT-2B must not silently migrate the legacy Blackbox base URL");
