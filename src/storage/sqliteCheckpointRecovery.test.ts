@@ -26,10 +26,20 @@ function write(statement: { operation: string; values: unknown[] }) {
   const query = writes.get(statement.operation); if (!query) throw new Error(statement.operation);
   const prepared = bind(query, statement.values); return Number(db.prepare(prepared.query).run(...prepared.bound as never[]).changes);
 }
+// File-backed setup/cleanup can be slow on Windows release runners. Keep this
+// allowance local to hooks; application and test-body deadlines are unchanged.
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "rvh-checkpoint-")); db = new DatabaseSync(join(directory, "database.sqlite"));
-  db.exec("PRAGMA foreign_keys=ON; CREATE TABLE workspaces(id TEXT PRIMARY KEY); INSERT INTO workspaces VALUES('w'); CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);");
-  for (const migration of ["028_telepathic_exchange_series.sql", "029_telepathic_series_run_lease.sql"]) db.exec(readFileSync(new URL(`../../src-tauri/migrations/${migration}`, import.meta.url), "utf8"));
+  // Enable foreign keys before BEGIN: migration PRAGMAs cannot enable them
+  // inside a transaction. One commit avoids repeated durable DDL writes on Windows.
+  db.exec("PRAGMA foreign_keys=ON");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec("CREATE TABLE workspaces(id TEXT PRIMARY KEY); INSERT INTO workspaces VALUES('w'); CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);");
+    for (const migration of ["028_telepathic_exchange_series.sql", "029_telepathic_series_run_lease.sql"]) db.exec(readFileSync(new URL(`../../src-tauri/migrations/${migration}`, import.meta.url), "utf8"));
+    db.exec("COMMIT");
+  } catch (cause) { db.exec("ROLLBACK"); throw cause; }
+  expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
   beforeFenced = undefined;
   bridge.invoke.mockImplementation(async (command: string, args: any) => {
     if (command === "database_initialize") return;
@@ -45,8 +55,8 @@ beforeEach(() => {
     }
     throw new Error(command);
   });
-});
-afterEach(() => { db.close(); rmSync(directory, { recursive: true, force: true }); });
+}, 60_000);
+afterEach(() => { db.close(); rmSync(directory, { recursive: true, force: true }); }, 60_000);
 function state(): TelepathicSeriesState {
   return createTelepathicSeriesState({ schemaVersion: 1, seriesId: "s", seriesWorkspaceId: "w", mode: "conversation_exchange", language: "en", roundCount: 1, topic: "any", discloseTopicToReceivers: false, senderPolicy: { kind: "rotate" }, participants: [{ id: "a", kind: "human", displayName: "A" }, { id: "b", kind: "human", displayName: "B" }] });
 }
