@@ -19,6 +19,11 @@ describe("Sessions repository boundary", () => {
     expect(contract).toContain("listTargetClarifications(sessionId");
     expect(browserFacade).toContain("new BrowserSessionsRepository({");
     expect(sqliteFacade).toContain("new SqliteSessionsRepository({");
+    expect(contract).toContain("withPostRevealReviewLease<T>");
+    expect(contract).toContain("assertPostRevealReviewLease(sessionId");
+    expect(contract).toContain("postRevealReviewLeaseSignal(sessionId");
+    expect(browserFacade).toContain("withPostRevealReviewLease<T>");
+    expect(sqliteFacade).toContain("withPostRevealReviewLease<T>");
     for (const method of methods) {
       expect(browserFacade).toContain(`${method}: AppRepository["${method}"]`);
       expect(sqliteFacade).toContain(`${method}: AppRepository["${method}"]`);

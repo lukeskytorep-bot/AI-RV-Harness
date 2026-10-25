@@ -2,13 +2,19 @@ import type { TrainingCategory } from "../targets/bundled";
 import type { TrainingTargetRepeatPolicy } from "./curriculum";
 import type { GenerationSettings } from "../providers/types";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
+import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import type { FieldGuideUpdateAuditRecord } from "../aiCenter/fieldGuideTypes";
 
 export type TrainingRunStatus = "Planned" | "Running" | "Paused" | "Interrupted" | "Completed";
 
-export type TrainingTargetStage = "session_revealed" | "review_completed" | "field_guide_update_completed" | "viewer_notes_reflection_completed" | "judging_completed";
+export interface TrainingRunTermination {
+  reason: "user_finished";
+  endedAt: string;
+}
 
-export type TrainingFieldGuidePostUpdateStatus = "UPDATE" | "NO_CHANGE" | "FAILED_CAPACITY" | "STALE_BASE" | "LEGACY_UNRECORDED";
+export type TrainingTargetStage = "blind_initializing" | "blind_running" | "session_revealed" | "review_completed" | "field_guide_update_completed" | "viewer_notes_reflection_completed" | "judging_completed";
+
+export type TrainingFieldGuidePostUpdateStatus = "UPDATE" | "NO_CHANGE" | "FAILED_CAPACITY" | "FAILED_PARSE" | "FAILED_SCHEMA" | "FAILED_PROVIDER" | "FAILED_OUTPUT_PREFLIGHT" | "STALE_BASE" | "LEGACY_UNRECORDED";
 
 export interface TrainingFieldGuidePostUpdateCheckpoint {
   updateStatus: TrainingFieldGuidePostUpdateStatus;
@@ -18,11 +24,21 @@ export interface TrainingFieldGuidePostUpdateCheckpoint {
 }
 
 export interface TrainingTargetCheckpoint {
+  learningSettlements?: import("../aiCenter/learningExecution").LearningSettlement[];
   targetId: string;
   sessionId: string;
   stage: TrainingTargetStage;
+  /** Frozen initialization packet used only until the immutable Session Snapshot exists. */
+  blindInitialization?: {
+    sessionCode: string;
+    rvSystemPrompt?: ViewerSystemPromptSnapshot;
+    viewerNotes?: ViewerNotesSessionSnapshot;
+    automaticRevealHash: string;
+  };
   /** Stable input packet hash for the completed shared post-Reveal Review. */
   postRevealReviewPacketSha256?: string;
+  /** Optional Review failed: skip learning, retain memory, continue Training. */
+  postRevealReviewFailure?: string;
   /** Stable Field Guide Update packet hash when the stage is applicable. */
   fieldGuideUpdatePacketSha256?: string;
   /** Exact Field Guide version in effect after this target's Training update. */
@@ -38,7 +54,8 @@ export interface TrainingExecutionSnapshot {
     maxRetries: number;
     requestTimeoutMs: number;
     sessionCodePrefix: string;
-    maxSessionCostUsd: number;
+    /** Legacy v0.7.13 field; ignored by execution. */
+    maxSessionCostUsd?: number;
   };
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
 }
@@ -75,6 +92,7 @@ export interface TrainingRunRecord {
   activeTargetCheckpoint?: TrainingTargetCheckpoint | null;
   /** Durable audit trail for per-session Field Guide Update decisions. */
   fieldGuideUpdates?: FieldGuideUpdateAuditRecord[];
+  learningSettlements?: import("../aiCenter/learningExecution").LearningSettlement[];
   directoryPath?: string;
   estimatedCostUsd?: number;
   actualCostUsd?: number;
@@ -83,9 +101,11 @@ export interface TrainingRunRecord {
   updatedAt: string;
   completedAt?: string;
   archivedAt?: string;
+  /** Durable terminal marker for a run explicitly ended by the user. */
+  termination?: TrainingRunTermination;
 }
 
-export type CreateTrainingRunInput = Omit<TrainingRunRecord, "id" | "runNumber" | "createdAt" | "updatedAt" | "completedTargetIds" | "sessionIds" | "currentIndex" | "errors">;
+export type CreateTrainingRunInput = Omit<TrainingRunRecord, "id" | "runNumber" | "createdAt" | "updatedAt" | "completedTargetIds" | "sessionIds" | "currentIndex" | "errors" | "termination">;
 
 export interface UpdateTrainingRunInput {
   status?: TrainingRunStatus;
@@ -95,8 +115,10 @@ export interface UpdateTrainingRunInput {
   executionSnapshot?: TrainingExecutionSnapshot;
   activeTargetCheckpoint?: TrainingTargetCheckpoint | null;
   fieldGuideUpdates?: FieldGuideUpdateAuditRecord[];
+  learningSettlements?: import("../aiCenter/learningExecution").LearningSettlement[];
   directoryPath?: string;
   actualCostUsd?: number;
   error?: string;
   completedAt?: string;
+  termination?: TrainingRunTermination;
 }

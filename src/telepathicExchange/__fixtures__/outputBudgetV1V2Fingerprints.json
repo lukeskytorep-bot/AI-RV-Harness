@@ -1,0 +1,114 @@
+[
+  {
+    "stage": "receiver_reveal",
+    "version": 1,
+    "budget": {
+      "version": 1,
+      "stage": "receiver_reveal",
+      "attemptLimits": [
+        16384,
+        32768
+      ],
+      "modelMaxOutputTokens": 65536
+    },
+    "fingerprint": "7d2e6bff6948bad0ad0d7ea2b9c97c4596974b54b6f5d5163ae8c51bd6a095cb"
+  },
+  {
+    "stage": "receiver_reveal",
+    "version": 2,
+    "budget": {
+      "version": 2,
+      "stage": "receiver_reveal",
+      "attemptLimits": [
+        16384,
+        32768
+      ],
+      "modelMaxOutputTokens": 65536
+    },
+    "fingerprint": "61f380221b2c1609dbd0010ade98e2727e73c18300f4ae52e197e37607b45402"
+  },
+  {
+    "stage": "sender_reveal",
+    "version": 1,
+    "budget": {
+      "version": 1,
+      "stage": "sender_reveal",
+      "attemptLimits": [
+        16384,
+        32768
+      ],
+      "modelMaxOutputTokens": 65536
+    },
+    "fingerprint": "7d2e6bff6948bad0ad0d7ea2b9c97c4596974b54b6f5d5163ae8c51bd6a095cb"
+  },
+  {
+    "stage": "sender_reveal",
+    "version": 2,
+    "budget": {
+      "version": 2,
+      "stage": "sender_reveal",
+      "attemptLimits": [
+        16384,
+        32768
+      ],
+      "modelMaxOutputTokens": 65536
+    },
+    "fingerprint": "3b013b57a1e22717041e6214f39a7b2de60db89bcecc5af8e962e5b377804c6e"
+  },
+  {
+    "stage": "shared_answers_comment",
+    "version": 1,
+    "budget": {
+      "version": 1,
+      "stage": "shared_answers_comment",
+      "attemptLimits": [
+        16384,
+        32768
+      ],
+      "modelMaxOutputTokens": 65536
+    },
+    "fingerprint": "7d2e6bff6948bad0ad0d7ea2b9c97c4596974b54b6f5d5163ae8c51bd6a095cb"
+  },
+  {
+    "stage": "shared_answers_comment",
+    "version": 2,
+    "budget": {
+      "version": 2,
+      "stage": "shared_answers_comment",
+      "attemptLimits": [
+        16384,
+        32768
+      ],
+      "modelMaxOutputTokens": 65536
+    },
+    "fingerprint": "9d5debe88ad993e0ee65d9725ed279f3353ddc9521370a614b8170565914e0b2"
+  },
+  {
+    "stage": "series_reflection",
+    "version": 1,
+    "budget": {
+      "version": 1,
+      "stage": "series_reflection",
+      "attemptLimits": [
+        16384,
+        32768
+      ],
+      "modelMaxOutputTokens": 65536
+    },
+    "fingerprint": "7d2e6bff6948bad0ad0d7ea2b9c97c4596974b54b6f5d5163ae8c51bd6a095cb"
+  },
+  {
+    "stage": "series_reflection",
+    "version": 2,
+    "budget": {
+      "version": 2,
+      "stage": "series_reflection",
+      "attemptLimits": [
+        16384,
+        32768
+      ],
+      "modelMaxOutputTokens": 65536
+    },
+    "fingerprint": "ba90166a3d11bbfb7307b25be46f69db3c47c044ec3d3e5b15bbfc251c0cb940"
+  }
+]

@@ -9,6 +9,7 @@ export interface SettingsModelsRepository {
   createProviderConfig(input: CreateProviderConfigInput): Promise<ProviderConfig>;
   updateProviderCredentialMetadata(id: string, credentialHint: string, fingerprint: string): Promise<void>;
   updateProviderCustomOutputTokenField(id: string, field?: CustomOpenAiOutputTokenField): Promise<void>;
+  updateProviderCustomStreamingEnabled(id: string, enabled: boolean): Promise<void>;
   deleteProviderConfig(id: string): Promise<void>;
   updateProviderConnectionStatus(id: string, status: "ok" | "error", error?: string): Promise<void>;
   listProviderModels(providerConfigId?: string): Promise<ProviderModel[]>;

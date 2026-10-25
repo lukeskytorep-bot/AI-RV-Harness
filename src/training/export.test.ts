@@ -18,6 +18,7 @@ describe("training export", () => {
     };
     const targets: TargetRecord[] = [{ id: "target", collection: "user", title: "Mój cel", revealText: "Opis celu", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }];
     const repository = {
+      listSessionEvents: vi.fn().mockResolvedValue([]),
       listRvSessions: vi.fn().mockResolvedValue([{ id: "session", workspaceId: "workspace", profileId: "profile", sessionCode: "RVH-1", state: "Completed", runType: "automatic", preRevealTranscript: "Dokładny prompt\n\nOdpowiedź", postRevealTranscript: `${JSON.stringify({ role: "assistant", content: "Moja samoocena" })}\n`, createdAt: "2026-08-21T10:01:00Z", updatedAt: "2026-08-21T10:09:00Z", completedAt: "2026-08-21T10:09:00Z" }]),
       listWorkspaces: vi.fn().mockResolvedValue([{ id: "workspace", name: "Treningi" }]),
       listProfiles: vi.fn().mockResolvedValue([{ id: "profile", name: "Nemo" }]),
@@ -61,6 +62,7 @@ describe("training export", () => {
     const targets: TargetRecord[] = [{ id: "target", collection: "user", title: "Target", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }];
     const score = (judgeIndex: number, total: number) => ({ id: `score-${judgeIndex}`, judgeRunId: `run-${judgeIndex}`, judgeIndex, modelRoute: "openrouter:same", gestalt: 0, verifiableFeatures: 0, activityFunctionEvent: 0, confabulationControl: 0, total, narrative: { strongestMatches: [], majorMissesContradictions: [], confabulationObservations: [], conciseRationale: "" }, frozenAt: "now", createdAt: "now" });
     const repository = {
+      listSessionEvents: vi.fn().mockResolvedValue([]),
       listRvSessions: vi.fn().mockResolvedValue([{ id: "session", workspaceId: "workspace", profileId: "profile", sessionCode: "RV-1", state: "Completed", runType: "automatic", preRevealTranscript: "Evidence", postRevealTranscript: "", createdAt: "now", updatedAt: "now" }]),
       listWorkspaces: vi.fn().mockResolvedValue([{ id: "workspace", name: "Workspace" }]),
       listProfiles: vi.fn().mockResolvedValue([{ id: "profile", name: "Profile" }]),
@@ -78,4 +80,50 @@ describe("training export", () => {
     expect(summary).toContain("Judge 1: openrouter:same · 1 sessions · mean 2");
     expect(summary).toContain("Judge 2: openrouter:same · 1 sessions · mean 8");
   });
+  it("T1 exports the interrupted active checkpoint settlement even before sessionIds contains it",async()=>{
+    const settlement={kind:"viewer_notes",sessionId:"pending",packetHash:"packet",auditId:"audit",settlement:"failed_preserved",version:null,attempts:2,status:"FAILED_PARSE",failureMessage:"Invalid JSON final response"};
+    const run={id:"run",runNumber:1,name:"Training",createdAt:"2026-10-15T00:00:00Z",updatedAt:"2026-10-15T00:00:00Z",status:"Interrupted",profileId:"p",workspaceId:"w",sessionIds:[],completedTargetIds:[],targetIds:["t"],categories:[],judgeModelRoutes:[],currentIndex:0,protocolVariant:"extended",activeTargetCheckpoint:{targetId:"t",sessionId:"pending",stage:"field_guide_update_completed"}} as unknown as TrainingRunRecord;
+    const repository={listRvSessions:vi.fn(async()=>[]),listWorkspaces:vi.fn(async()=>[]),listProfiles:vi.fn(async()=>[]),listSessionEvents:vi.fn(async()=>[{eventType:"LEARNING_SETTLEMENT",metadata:{settlement}}]),recordExport:vi.fn()} as unknown as AppRepository;
+    await exportTrainingRun(repository,run,[],"en");
+    expect(repository.listSessionEvents).toHaveBeenCalledWith("pending");
+    const files=writeExportPackage.mock.calls[0][0].files as Array<{relativePath:string;content:string}>;
+    const report=files.find(f=>f.relativePath==="learning_settlements.md")!.content;
+    expect(report).toContain("Invalid JSON final response");expect(report).toContain("no saved version exists");expect(report).not.toContain("NO_CHANGE");
+    expect(files.find(f=>f.relativePath==="learning_settlements.json")!.content).toContain('"activeTargetCheckpoint"');
+  });
+
+});
+it("T2 exports bounded rejected candidates and validation for offline review without private reasoning",async()=>{
+ const {sha256Text}=await import("../application/sha256");const content='{"notes":"literal <think>data</think>"}';
+ const finalCandidate={content,contentSha256:await sha256Text(content),byteLength:new TextEncoder().encode(content).length,omittedForSize:false,envelopeRemoved:false,nativeValidation:"rejected"};
+ const run={id:"run",runNumber:1,name:"Training",createdAt:"2026-10-16T00:00:00Z",updatedAt:"2026-10-16T00:00:00Z",status:"Interrupted",profileId:"p",workspaceId:"w",sessionIds:[],completedTargetIds:[],targetIds:["t"],categories:[],judgeModelRoutes:[],currentIndex:0,protocolVariant:"extended",activeTargetCheckpoint:{targetId:"t",sessionId:"pending",stage:"field_guide_update_completed"}} as unknown as TrainingRunRecord;
+ const repository={listRvSessions:vi.fn(async()=>[]),listWorkspaces:vi.fn(async()=>[]),listProfiles:vi.fn(async()=>[]),listSessionEvents:vi.fn(async()=>[{sessionId:"pending",eventType:"LEARNING_PHYSICAL_ATTEMPT",metadata:{kind:"viewer_notes",packetHash:"packet",slot:0,attemptId:"attempt:1",providerRequestId:"provider-id",validation:"native_rejected",finalCandidate:{...finalCandidate,reasoning:"PRIVATE"},reasoning:"PRIVATE",secret:"SECRET"}}]),recordExport:vi.fn()} as unknown as AppRepository;
+ writeExportPackage.mockClear();await exportTrainingRun(repository,run,[],"en");
+ const files=writeExportPackage.mock.calls[0][0].files as Array<{relativePath:string;content:string}>;const report=files.find(f=>f.relativePath==="learning_candidates.json")!;
+ expect(report.content).not.toMatch(/PRIVATE|SECRET/);expect(JSON.parse(report.content)[0]).toMatchObject({sessionId:"pending",attemptId:"attempt:1",providerRequestId:"provider-id",validation:"native_rejected",finalCandidate});expect(repository.listSessionEvents).toHaveBeenCalledTimes(1);
+});
+
+for (const language of ["en", "pl"] as const) it(`T5 ${language}: interrupted first session exports its transcript, checkpoint and distinct memory results once`, async () => {
+ const settled = { kind: "field_guide" as const, sessionId: "pending", packetHash: "p", auditId: "fg", settlement: "failed_preserved" as const, version: { id: "v1", contentSha256: "old-hash" }, attempts: 2, status: "FAILED_CAPACITY", failureMessage: "Capacity 3000/2048" };
+ const notes = { ...settled, kind: "viewer_notes" as const, auditId: "vn", packetHash: "n", settlement: "model_no_change" as const, status: "NO_CHANGE" };
+ const run = { id: "r", runNumber: 1, name: "Interrupted run", createdAt: "2026-10-16", status: "Interrupted", profileId: "p", workspaceId: "w", modelRoute: "saved-provider::saved-model", sessionIds: [], completedTargetIds: [], targetIds: ["t"], judgeModelRoutes: [], protocolVariant: "core", learningSettlements: [settled], activeTargetCheckpoint: { targetId: "t", sessionId: "pending", stage: "viewer_notes_reflection_completed", learningSettlements: [settled, notes] } } as unknown as TrainingRunRecord;
+ const repository = {
+  listRvSessions: vi.fn(async () => [{ id: "pending", sessionCode: "PENDING", state: "Revealed", preRevealTranscript: "Saved blind response", postRevealTranscript: "", createdAt: "2026-10-16" }]),
+  listWorkspaces: vi.fn(async () => []), listProfiles: vi.fn(async () => []),
+  listSessionEvents: vi.fn(async () => [{ eventType: "LEARNING_SETTLEMENT", metadata: { settlement: settled } }]),
+  getReveal: vi.fn(async () => ({ text: "Saved Reveal", artifactManifest: [] })), getSessionSnapshot: vi.fn(async () => null),
+  listJudgeScores: vi.fn(async () => []), listTargetClarifications: vi.fn(async () => []), recordExport: vi.fn(),
+ } as unknown as AppRepository;
+ writeExportPackage.mockClear(); await exportTrainingRun(repository, run, [], language);
+ const files = writeExportPackage.mock.calls[0][0].files as Array<{ relativePath: string; content: string }>;
+ const summary = files.find(f => f.relativePath === "summary.md")!.content;
+ expect(summary).toContain(language === "pl" ? "Bieżący checkpoint" : "Current checkpoint");
+ expect(summary).toContain("viewer_notes_reflection_completed"); expect(summary).toContain("saved-provider::saved-model");
+ expect(summary).toContain("sessions/001_PENDING/complete_session.md"); expect(summary).toContain("0/1");
+ const transcript = files.find(f => f.relativePath === "sessions/001_PENDING/complete_session.md")!.content;
+ expect(transcript).toContain("Saved blind response"); expect(transcript).toContain("Saved Reveal");
+ const audit = JSON.parse(files.find(f => f.relativePath === "learning_settlements.json")!.content);
+ expect(audit.settlements).toHaveLength(2); expect(audit.settlements).toEqual([settled, notes]);
+ expect(files.find(f => f.relativePath === "learning_settlements.md")!.content).toContain("Capacity 3000/2048");
+ expect(summary).toContain(language === "pl" ? "Nieudane aktualizacje pamięci: 1" : "Failed memory updates: 1");
 });

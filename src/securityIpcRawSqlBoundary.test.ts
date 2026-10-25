@@ -33,9 +33,13 @@ describe("SECURITY-IPC-1C-R1 SQLite IPC boundary", () => {
     expect(databaseNative).toContain('operation: operationForWriteQuery(statement.query)');
     expect(databaseNative).toContain('"database_execute_write"');
     expect(databaseNative).toContain('"database_execute_write_batch"');
+    expect(databaseNative).toContain('"database_execute_telepathic_fenced_write_batch"');
+    expect(databaseNative).toContain('"database_execute_post_reveal_review_fenced_write_batch"');
     expect(databaseNative).toContain('"database_select_readonly"');
     expect(databaseNative).toContain('"database_initialize"');
     expect(databaseNative).not.toContain('"database_execute_transaction"');
+    expect(nativeLib).toContain("database_execute_telepathic_fenced_write_batch");
+    expect(nativeLib).toContain("database_execute_post_reveal_review_fenced_write_batch");
     expect(nativeLib).not.toContain("database_execute_transaction");
     expect(nativeDatabase).toContain("read_only(true)");
     expect(nativeDatabase).toContain('sqlx::query("PRAGMA query_only = ON")');
@@ -45,8 +49,14 @@ describe("SECURITY-IPC-1C-R1 SQLite IPC boundary", () => {
 
   it("keeps the fixed Rust write registry explicit and complete", () => {
     expect(writeRegistry).toContain("registeredWriteOperationCount");
-    expect(writeRegistry.match(/\["(?:INSERT|UPDATE|DELETE)/g)?.length).toBe(107);
-    expect(nativeDatabase.match(/#\[serde\(rename = "/g)?.length).toBeGreaterThanOrEqual(107);
+    expect(writeRegistry.match(/\["(?:INSERT|UPDATE|DELETE)/g)?.length).toBe(124);
+    expect(nativeDatabase.match(/#\[serde\(rename = "/g)?.length).toBeGreaterThanOrEqual(124);
+    const atomicTrainingArchive = "UPDATE training_runs SET record_json = json_set(record_json, '$.archivedAt', $1, '$.updatedAt', $1), archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL";
+    const guardedTrainingTermination = "UPDATE training_runs SET status = 'Interrupted', record_json = json_set(record_json, '$.status', 'Interrupted', '$.termination', json($1), '$.updatedAt', $2), updated_at = $2 WHERE id = $3 AND archived_at IS NULL AND status IN ('Paused', 'Interrupted', 'Running') AND COALESCE(json_extract(record_json, '$.currentIndex'), 0) < json_array_length(COALESCE(json_extract(record_json, '$.targetIds'), '[]')) AND COALESCE(json_extract(record_json, '$.termination.reason'), '') = ''";
+    expect(writeRegistry).toContain(atomicTrainingArchive);
+    expect(nativeDatabase).toContain(atomicTrainingArchive);
+    expect(writeRegistry).toContain(guardedTrainingTermination);
+    expect(nativeDatabase).toContain(guardedTrainingTermination);
   });
 
 
@@ -92,4 +102,11 @@ describe("SECURITY-IPC-1C-R1 SQLite IPC boundary", () => {
     expect(nativeDatabase).toContain('sqlx::query("VACUUM INTO $1")');
     expect(nativeDatabase).toContain("SECURITY-IPC-1C controlled purge");
   });
+
+  it("does not allow telepathic series heartbeat renewal after lease expiry", () => {
+    const expiryGuard = "run_lease_expires_at IS NOT NULL AND run_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+    expect(writeRegistry).toContain(expiryGuard);
+    expect(nativeDatabase).toContain(expiryGuard);
+  });
+
 });

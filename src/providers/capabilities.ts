@@ -243,12 +243,23 @@ export function normalizeModelDiscovery(config: ProviderConfig, payload: unknown
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
-export function resolveGenerationSettings(capabilities: ModelCapabilities, requested: GenerationSettings): EffectiveGenerationSettings {
+export function resolveGenerationSettings(
+  capabilities: ModelCapabilities,
+  requested: GenerationSettings,
+  context?: { provider?: ProviderKind },
+): EffectiveGenerationSettings {
   const effective: GenerationSettings = {};
   const omitted: EffectiveGenerationSettings["omitted"] = [];
   let reasoningResolution: EffectiveGenerationSettings["reasoningResolution"];
 
-  if (requested.reasoningMaxTokens !== undefined) {
+  const customReasoningMode = context?.provider === "custom_openai" ? requested.customReasoningMode : undefined;
+  if (requested.customReasoningMode !== undefined && context?.provider !== "custom_openai") {
+    throw new Error("Custom reasoning override is only valid for Custom OpenAI-compatible routes.");
+  }
+
+  const suppressReasoningControls = customReasoningMode === "on" || customReasoningMode === "off";
+
+  if (!suppressReasoningControls && requested.reasoningMaxTokens !== undefined) {
     if (capabilities.reasoning.supportsMaxTokens === true && requested.reasoningMaxTokens > 0) {
       effective.reasoningMaxTokens = Math.floor(requested.reasoningMaxTokens);
     } else {
@@ -256,7 +267,7 @@ export function resolveGenerationSettings(capabilities: ModelCapabilities, reque
     }
   }
 
-  if (requested.reasoningEffort !== undefined) {
+  if (!suppressReasoningControls && requested.reasoningEffort !== undefined) {
     if (effective.reasoningMaxTokens !== undefined) {
       omitted.push("reasoningEffort");
     } else if (capabilities.reasoning.supported && capabilities.reasoning.efforts.includes(requested.reasoningEffort)) {
@@ -273,13 +284,50 @@ export function resolveGenerationSettings(capabilities: ModelCapabilities, reque
     }
   }
 
+  if (customReasoningMode !== undefined) effective.customReasoningMode = customReasoningMode;
+
+  const customTemperatureMode = context?.provider === "custom_openai" ? requested.customTemperatureMode : undefined;
+  if (requested.customTemperatureMode !== undefined && context?.provider !== "custom_openai") {
+    throw new Error("Custom temperature override is only valid for Custom OpenAI-compatible routes.");
+  }
+  if (customTemperatureMode === "manual" && requested.temperature === undefined) {
+    throw new RangeError("Manual Custom temperature requires a finite temperature value.");
+  }
   if (requested.temperature !== undefined) {
-    const { temperature } = capabilities;
-    const inRange =
-      (temperature.min === undefined || requested.temperature >= temperature.min) &&
-      (temperature.max === undefined || requested.temperature <= temperature.max);
-    if (temperature.supported && inRange) effective.temperature = requested.temperature;
-    else omitted.push("temperature");
+    if (customTemperatureMode === "provider_default") {
+      // An explicit Custom provider-default intent suppresses any stale temperature value.
+    } else if (customTemperatureMode === "manual") {
+      if (!Number.isFinite(requested.temperature)) throw new RangeError("temperature must be a finite number.");
+      effective.temperature = requested.temperature;
+    } else {
+      const { temperature } = capabilities;
+      const inRange =
+        (temperature.min === undefined || requested.temperature >= temperature.min) &&
+        (temperature.max === undefined || requested.temperature <= temperature.max);
+      if (temperature.supported && inRange) effective.temperature = requested.temperature;
+      else omitted.push("temperature");
+    }
+  }
+
+  if (requested.topP !== undefined) {
+    if (!Number.isFinite(requested.topP) || requested.topP < 0 || requested.topP > 1) {
+      throw new RangeError("topP must be a finite number between 0 and 1.");
+    }
+    effective.topP = requested.topP;
+  }
+
+  if (requested.topK !== undefined) {
+    if (!Number.isSafeInteger(requested.topK) || requested.topK < 0) {
+      throw new RangeError("topK must be a non-negative safe integer.");
+    }
+    effective.topK = requested.topK;
+  }
+
+  if (requested.seed !== undefined) {
+    if (!Number.isSafeInteger(requested.seed) || requested.seed < 0) {
+      throw new RangeError("seed must be a non-negative safe integer.");
+    }
+    effective.seed = requested.seed;
   }
 
   if (requested.maxOutputTokens !== undefined) {

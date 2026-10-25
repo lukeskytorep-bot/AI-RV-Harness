@@ -143,6 +143,41 @@ pub(crate) const MIGRATION_SPECS: &[MigrationSpec] = &[
         description: "factory_training_classification_upgrade",
         sql: include_str!("../migrations/027_factory_training_classification_upgrade.sql"),
     },
+    MigrationSpec {
+        version: 28,
+        description: "telepathic_exchange_series",
+        sql: include_str!("../migrations/028_telepathic_exchange_series.sql"),
+    },
+    MigrationSpec {
+        version: 29,
+        description: "telepathic_series_run_lease",
+        sql: include_str!("../migrations/029_telepathic_series_run_lease.sql"),
+    },
+    MigrationSpec {
+        version: 30,
+        description: "chat_message_attachment_metadata",
+        sql: include_str!("../migrations/030_chat_message_attachment_metadata.sql"),
+    },
+    MigrationSpec {
+        version: 31,
+        description: "post_reveal_review_lease",
+        sql: include_str!("../migrations/031_post_reveal_review_lease.sql"),
+    },
+    MigrationSpec {
+        version: 32,
+        description: "openrouter_sampling_profile_settings",
+        sql: include_str!("../migrations/032_openrouter_sampling_profile_settings.sql"),
+    },
+    MigrationSpec {
+        version: 33,
+        description: "custom_temperature_mode",
+        sql: include_str!("../migrations/033_custom_temperature_mode.sql"),
+    },
+    MigrationSpec {
+        version: 34,
+        description: "custom_reasoning_mode",
+        sql: include_str!("../migrations/034_custom_reasoning_mode.sql"),
+    },
 ];
 
 pub(crate) const CURRENT_MIGRATION_VERSION: i64 =
@@ -165,13 +200,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_is_contiguous_and_current_version_is_027() {
+    fn registry_is_contiguous_and_current_version_is_033() {
         let versions = MIGRATION_SPECS
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>();
-        assert_eq!(versions, (1_i64..=27).collect::<Vec<_>>());
-        assert_eq!(CURRENT_MIGRATION_VERSION, 27);
+        assert_eq!(versions, (1_i64..=34).collect::<Vec<_>>());
+        assert_eq!(CURRENT_MIGRATION_VERSION, 34);
         assert_eq!(registered_migrations().len(), MIGRATION_SPECS.len());
     }
 }

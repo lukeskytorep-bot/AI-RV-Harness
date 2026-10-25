@@ -38,7 +38,7 @@ describe("Stage 5 typed Workspace boundary", () => {
     expect(profileWorkspace).toContain('kind: "conversation"');
     expect(profileWorkspace).toContain('kind: "rv"');
     expect(profileWorkspace).toContain("archiveProfile(profile.id)");
-    expect(app.match(/createProfileWithInitialWorkspaces/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(app.match(/saveViewerProfile/g)?.length).toBeGreaterThanOrEqual(3);
   });
 
   it("keeps typed screens isolated while allowing legacy_combined on both", () => {
@@ -46,8 +46,10 @@ describe("Stage 5 typed Workspace boundary", () => {
     const conversations = sources["./features/conversations/ConversationsScreen.tsx"] ?? "";
     const rv = sources["./features/rvSessions/RvSessionsScreen.tsx"] ?? "";
     expect(kind).toContain('workspace.kind === "legacy_combined"');
-    expect(conversations).toContain('kind="conversation"');
-    expect(rv).toContain('kind="rv"');
+    expect(conversations).toContain('value={workspace.profileId}');
+    expect(rv).toContain('value={workspace.profileId}');
+    expect(conversations).not.toContain("WorkspaceSwitcherDialog");
+    expect(rv).not.toContain("WorkspaceSwitcherDialog");
   });
 
   it("never selects a Conversation-only Workspace for Training or Research", () => {

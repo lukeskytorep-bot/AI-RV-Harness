@@ -41,6 +41,7 @@ export interface OpenRouterCapacityEnvelope {
   requestedCompletionAllowance: number;
   effectiveRequiredContext: number;
   requiredParameters: string[];
+  manualSamplingParameters: string[];
 }
 
 export interface OpenRouterRoutingDecision {
@@ -103,8 +104,21 @@ export function createOpenRouterCapacityEnvelope(input: {
   const margin = routingSafetyMarginTokens(estimatedInputTokens);
   const requestedCompletionAllowance = Math.max(1, Math.floor(input.settings.effective.maxOutputTokens ?? 8192));
   const requiredParameters = new Set<string>();
+  const manualSamplingParameters: string[] = [];
   if (input.settings.effective.temperature !== undefined) requiredParameters.add("temperature");
   if (input.settings.reasoningResolution || input.settings.effective.reasoningEffort || input.settings.effective.reasoningMaxTokens !== undefined) requiredParameters.add("reasoning");
+  if (input.settings.effective.topP !== undefined) {
+    requiredParameters.add("top_p");
+    manualSamplingParameters.push("top_p");
+  }
+  if (input.settings.effective.topK !== undefined) {
+    requiredParameters.add("top_k");
+    manualSamplingParameters.push("top_k");
+  }
+  if (input.settings.effective.seed !== undefined) {
+    requiredParameters.add("seed");
+    manualSamplingParameters.push("seed");
+  }
   return {
     estimatedInputTokens,
     routingSafetyMarginTokens: margin,
@@ -112,6 +126,7 @@ export function createOpenRouterCapacityEnvelope(input: {
     requestedCompletionAllowance,
     effectiveRequiredContext: estimatedInputTokens + margin + requestedCompletionAllowance,
     requiredParameters: [...requiredParameters],
+    manualSamplingParameters,
   };
 }
 
@@ -133,6 +148,10 @@ export function classifyOpenRouterEndpoint(
   if (endpoint.supportedParameters !== undefined) {
     for (const parameter of envelope.requiredParameters) {
       if (!endpoint.supportedParameters.includes(parameter)) reasons.push(`unsupported_parameter:${parameter}`);
+    }
+  } else if (envelope.manualSamplingParameters.length > 0) {
+    for (const parameter of envelope.manualSamplingParameters) {
+      reasons.push(`unverified_parameter:${parameter}`);
     }
   }
   if (reasons.length > 0) return { ...endpoint, capacityState: "PROVEN_NO", reasons };
@@ -199,8 +218,12 @@ export function mergeOpenRouterProviderRouting(
   if (!existing && !capacity) return undefined;
   const existingOnly = existing?.only?.filter(Boolean);
   const capacityOnly = capacity?.only?.filter(Boolean);
+  const existingOnlyExplicitlyEmpty = existing?.only !== undefined && existingOnly?.length === 0;
+  const capacityOnlyExplicitlyEmpty = capacity?.only !== undefined && capacityOnly?.length === 0;
   let only: string[] | undefined;
-  if (existingOnly?.length && capacityOnly?.length) {
+  if (existingOnlyExplicitlyEmpty || capacityOnlyExplicitlyEmpty) {
+    only = [];
+  } else if (existingOnly?.length && capacityOnly?.length) {
     // Capacity entries are discovered endpoint tags. Keep those exact tags only when
     // the user's/provider's pre-existing selector semantically permits that endpoint.
     only = [...new Set(capacityOnly.filter((routeTag) =>
@@ -221,11 +244,13 @@ export function mergeOpenRouterProviderRouting(
     );
   }
   const allowFallbacks = existing?.allowFallbacks ?? capacity?.allowFallbacks;
+  const requireParameters = existing?.requireParameters === true || capacity?.requireParameters === true ? true : undefined;
   return {
     ...(order ? { order } : {}),
     ...(only ? { only } : {}),
     ...(ignore.length ? { ignore } : {}),
     ...(allowFallbacks !== undefined ? { allowFallbacks } : {}),
+    ...(requireParameters !== undefined ? { requireParameters } : {}),
   };
 }
 
@@ -237,7 +262,67 @@ function hasKnownExclusion(endpoints: OpenRouterEndpointCapability[], envelope: 
   return classifyEndpoints(endpoints, envelope).some((entry) => entry.capacityState === "PROVEN_NO");
 }
 
-function routingFromClassified(endpoints: ClassifiedOpenRouterEndpoint[]): Pick<OpenRouterRoutingDecision, "mode" | "providerRouting" | "humanMessage"> {
+function manualSamplingConfirmed(endpoint: ClassifiedOpenRouterEndpoint, envelope: OpenRouterCapacityEnvelope): boolean {
+  if (envelope.manualSamplingParameters.length === 0) return true;
+  return endpoint.supportedParameters !== undefined
+    && envelope.manualSamplingParameters.every((parameter) => endpoint.supportedParameters!.includes(parameter));
+}
+
+function routeSelectorWouldReopenRejectedEndpoint(
+  selector: string,
+  endpoints: ClassifiedOpenRouterEndpoint[],
+  envelope: OpenRouterCapacityEnvelope,
+): boolean {
+  return endpoints.some((endpoint) =>
+    endpoint.routeTag
+      && openRouterProviderSlugMatches(selector, endpoint.routeTag)
+      && (endpoint.capacityState === "PROVEN_NO" || !manualSamplingConfirmed(endpoint, envelope)),
+  );
+}
+
+function routingFromClassified(
+  endpoints: ClassifiedOpenRouterEndpoint[],
+  envelope: OpenRouterCapacityEnvelope,
+): Pick<OpenRouterRoutingDecision, "mode" | "providerRouting" | "humanMessage"> {
+  const manualSampling = envelope.manualSamplingParameters.length > 0;
+
+  if (manualSampling) {
+    const safeFitTags = [...new Set(endpoints.flatMap((entry) =>
+      entry.capacityState === "PROVEN_FIT"
+        && entry.routeTag
+        && manualSamplingConfirmed(entry, envelope)
+        && !routeSelectorWouldReopenRejectedEndpoint(entry.routeTag, endpoints, envelope)
+        ? [entry.routeTag]
+        : [],
+    ))];
+    if (safeFitTags.length > 0) {
+      return {
+        mode: "verified_fit",
+        providerRouting: { only: safeFitTags, allowFallbacks: true, requireParameters: true },
+      };
+    }
+
+    const safeUnknownTags = [...new Set(endpoints.flatMap((entry) =>
+      entry.capacityState === "UNKNOWN"
+        && entry.routeTag
+        && manualSamplingConfirmed(entry, envelope)
+        && !routeSelectorWouldReopenRejectedEndpoint(entry.routeTag, endpoints, envelope)
+        ? [entry.routeTag]
+        : [],
+    ))];
+    if (safeUnknownTags.length > 0) {
+      return {
+        mode: "unknown_attempt",
+        providerRouting: { only: safeUnknownTags, allowFallbacks: true, requireParameters: true },
+      };
+    }
+
+    return {
+      mode: "local_stop",
+      humanMessage: "No OpenRouter endpoint can be safely verified for the manually configured sampling parameters and this operation. Change the sampling settings, model, or provider route.",
+    };
+  }
+
   const fit = endpoints.filter((entry) => entry.capacityState === "PROVEN_FIT" && entry.routeTag);
   const no = endpoints.filter((entry) => entry.capacityState === "PROVEN_NO");
   const unknown = endpoints.filter((entry) => entry.capacityState === "UNKNOWN");
@@ -307,7 +392,8 @@ export async function resolveOpenRouterRoutingDecision(input: {
   const fresh = cached && now - cached.capturedAtMs <= OPENROUTER_ENDPOINT_CACHE_FRESH_MS ? cached : undefined;
   const capacitySensitiveByThreshold = input.envelope.effectiveRequiredContext >= OPENROUTER_CAPACITY_RISK_THRESHOLD_TOKENS;
   const capacitySensitiveByKnownExclusion = Boolean(fresh && hasKnownExclusion(fresh.endpoints, input.envelope));
-  const capacitySensitive = Boolean(input.forceCapacityProtection) || capacitySensitiveByThreshold || capacitySensitiveByKnownExclusion;
+  const manualSamplingRequired = input.envelope.manualSamplingParameters.length > 0;
+  const capacitySensitive = Boolean(input.forceCapacityProtection) || capacitySensitiveByThreshold || capacitySensitiveByKnownExclusion || manualSamplingRequired;
 
   if (!capacitySensitive) {
     return {
@@ -337,6 +423,17 @@ export async function resolveOpenRouterRoutingDecision(input: {
   }
 
   if (!snapshot || snapshot.endpoints.length === 0) {
+    if (manualSamplingRequired) {
+      return {
+        mode: "local_stop",
+        capacitySensitive: true,
+        metadataSource,
+        envelope: input.envelope,
+        endpoints: [],
+        providerRouting: input.existingRouting,
+        humanMessage: "OpenRouter endpoint metadata is unavailable, so support for the manually configured sampling parameters cannot be verified. No request was sent.",
+      };
+    }
     return {
       mode: "unknown_attempt",
       capacitySensitive: true,
@@ -348,7 +445,7 @@ export async function resolveOpenRouterRoutingDecision(input: {
   }
 
   const endpoints = classifyEndpoints(snapshot.endpoints, input.envelope);
-  const base = routingFromClassified(endpoints);
+  const base = routingFromClassified(endpoints, input.envelope);
   const providerRouting = mergeOpenRouterProviderRouting(input.existingRouting, base.providerRouting);
   const explicitOrderLost = Boolean(
     input.existingRouting?.allowFallbacks === false

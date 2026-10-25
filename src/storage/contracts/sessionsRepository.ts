@@ -19,6 +19,9 @@ export interface SessionsRepository {
   appendSessionEventWithProviderState(sessionId: string, event: SessionEventInput, state: ProviderContinuationState): Promise<SessionEventRecord>;
   getSessionEventProviderState(sessionEventId: string): Promise<ProviderContinuationStateBinding | null>;
   listSessionEvents(sessionId: string): Promise<SessionEventRecord[]>;
+  withPostRevealReviewLease<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
+  assertPostRevealReviewLease(sessionId: string): Promise<void>;
+  postRevealReviewLeaseSignal(sessionId: string): AbortSignal | undefined;
   updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void>;
   appendPostRevealTurn(sessionId: string, role: "user" | "assistant" | "monitor", content: string, metadata?: Record<string, unknown>): Promise<string>;
   appendPostRevealTurnWithProviderState(sessionId: string, content: string, state: ProviderContinuationState): Promise<string>;

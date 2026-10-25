@@ -1,6 +1,7 @@
+import { notifyProviderRoutesChanged } from "./changes";
 import type { AppRepository } from "../storage/repository";
 import { createId } from "../storage/repository";
-import { deleteCredentialSecret, discoverModels, hasCredentialSecret, rebindCredentialSecret, storeCredentialSecret } from "./native";
+import { deleteCredentialSecret, discoverModels, hasCredentialSecret, providerBindingEndpoint, rebindCredentialSecret, storeCredentialSecret } from "./native";
 import type { CustomOpenAiOutputTokenField, ProviderConfig, ProviderKind, ProviderModel } from "./types";
 
 export const PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER = 2000;
@@ -28,13 +29,14 @@ export async function addProvider(
   if (!label) throw new Error("Provider label is required.");
   if (!apiKey) throw new Error("API key is required.");
   if (input.provider === "custom_openai" && !input.baseUrl?.trim()) throw new Error("Custom provider requires a base URL.");
+  if (input.baseUrl?.trim() && input.provider !== "custom_openai" && input.provider !== "blackbox") throw new Error("Base URL override is available only for Blackbox and Custom OpenAI-compatible providers.");
   if (input.provider !== "custom_openai" && input.customOutputTokenField) throw new Error("Output-token wire override is available only for Custom OpenAI-compatible providers.");
 
   const credentialId = createId("credential");
   const providerId = createId("provider");
   await storeCredentialSecret(credentialId, apiKey, input.provider, input.baseUrl?.trim() || undefined);
   try {
-    return await repository.createProviderConfig({
+    const config = await repository.createProviderConfig({
       id: providerId,
       provider: input.provider,
       label,
@@ -44,10 +46,83 @@ export async function addProvider(
       ...(input.provider === "custom_openai" && input.customOutputTokenField ? { customOutputTokenField: input.customOutputTokenField } : {}),
       fingerprint: await credentialFingerprint(apiKey),
     });
+    notifyProviderRoutesChanged();
+    return config;
   } catch (error) {
     await deleteCredentialSecret(credentialId).catch(() => undefined);
     throw error;
   }
+}
+
+
+export function blackboxRouteNeedsManualModel(baseUrl?: string): boolean {
+  const raw = baseUrl?.trim();
+  if (!raw) return false;
+  try {
+    return new URL(raw).origin !== "https://api.blackbox.ai";
+  } catch {
+    return false;
+  }
+}
+
+export async function blackboxRequiresManualModel(config: ProviderConfig): Promise<boolean> {
+  if (config.provider !== "blackbox") return false;
+  const endpoint = await providerBindingEndpoint(config);
+  return endpoint !== "https://api.blackbox.ai";
+}
+
+export async function registerManualBlackboxModel(
+  repository: AppRepository,
+  config: ProviderConfig,
+  modelIdInput: string,
+): Promise<ProviderModel> {
+  if (config.provider !== "blackbox") throw new Error("Manual model registration is available only for Blackbox routes.");
+  if (!await blackboxRequiresManualModel(config)) {
+    throw new Error("Manual Blackbox model registration is reserved for routes without confirmed model discovery.");
+  }
+  const modelId = modelIdInput.trim();
+  if (!modelId) throw new Error("Blackbox model ID is required when model discovery is unavailable.");
+  if (modelId.length > 512 || /[\u0000-\u001f\u007f\s]/u.test(modelId)) {
+    throw new Error("Blackbox model ID must be a single non-whitespace identifier of at most 512 characters.");
+  }
+  if (!await hasCredentialSecret(config.credentialId)) {
+    throw new Error("API key is missing from secure storage. Remove this provider connection and add it again.");
+  }
+
+  const capturedAt = new Date().toISOString();
+  const model: ProviderModel = {
+    providerConfigId: config.id,
+    provider: "blackbox",
+    modelId,
+    displayName: modelId,
+    route: `blackbox:${modelId}`,
+    capabilities: {
+      inputModalities: ["text"],
+      outputModalities: ["text"],
+      supportsVision: false,
+      supportsStreaming: false,
+      reasoning: { supported: false, efforts: [], confidence: "unknown" },
+      temperature: { supported: false, confidence: "unknown" },
+      supportedParameters: [],
+      source: "compatibility",
+      capturedAt,
+    },
+    pricing: {},
+    recommended: false,
+    rawMetadata: {
+      source: "manual_model_id",
+      discoveryVerified: false,
+      capabilitiesVerified: false,
+    },
+    refreshedAt: capturedAt,
+  };
+
+  const existing = await repository.listProviderModels(config.id);
+  const next = [...existing.filter((item) => item.modelId !== modelId), model]
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
+  await repository.replaceProviderModels(config.id, next);
+  notifyProviderRoutesChanged();
+  return model;
 }
 
 export async function refreshProviderModels(repository: AppRepository, config: ProviderConfig): Promise<ProviderModel[]> {
@@ -58,10 +133,12 @@ export async function refreshProviderModels(repository: AppRepository, config: P
     const models = (await discoverModels(config)).slice(0, PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER);
     await repository.replaceProviderModels(config.id, models);
     await repository.updateProviderConnectionStatus(config.id, "ok");
+    notifyProviderRoutesChanged();
     return models;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await repository.updateProviderConnectionStatus(config.id, "error", message);
+    notifyProviderRoutesChanged();
     throw error;
   }
 }
@@ -79,6 +156,7 @@ export async function rebindProviderCredential(
     credentialHint(apiKey),
     await credentialFingerprint(apiKey),
   );
+  notifyProviderRoutesChanged();
   await refreshProviderModels(repository, config);
 }
 
@@ -90,9 +168,21 @@ export async function updateCustomOpenAiOutputTokenField(
 ): Promise<void> {
   if (config.provider !== "custom_openai") throw new Error("Output-token wire override is available only for Custom OpenAI-compatible providers.");
   await repository.updateProviderCustomOutputTokenField(config.id, field);
+  notifyProviderRoutesChanged();
+}
+
+export async function updateCustomOpenAiStreamingEnabled(
+  repository: AppRepository,
+  config: ProviderConfig,
+  enabled: boolean,
+): Promise<void> {
+  if (config.provider !== "custom_openai") throw new Error("Streaming transport setting is available only for Custom OpenAI-compatible providers.");
+  await repository.updateProviderCustomStreamingEnabled(config.id, enabled);
+  notifyProviderRoutesChanged();
 }
 
 export async function removeProvider(repository: AppRepository, config: ProviderConfig): Promise<void> {
   await deleteCredentialSecret(config.credentialId);
   await repository.deleteProviderConfig(config.id);
+  notifyProviderRoutesChanged();
 }

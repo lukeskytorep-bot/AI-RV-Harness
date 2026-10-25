@@ -20,12 +20,13 @@ import {
   Sun,
   Users,
 } from "lucide-react";
-import { ensureProfileViewerIdentity } from "./aiCenter/viewerIdentitySelection";
+import { saveViewerProfile, profileSaveErrorMessage, type ViewerProfileSaveSession } from "./application/viewerProfileSave";
 import rosehipLogo from "./assets/rosehip-logo.png";
 import {
   Component,
   Suspense,
   lazy,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -67,13 +68,13 @@ import { ConversationsScreen } from "./features/conversations";
 import { RvSessionsScreen, type RvSessionsView } from "./features/rvSessions";
 import { FormDialog } from "./components/FormDialog";
 import { ensureBundledTrainingTargets } from "./targets/bundled";
-import { createDefaultSettings } from "./startupDefaults";
+import { applyStoredOutputSettings, createDefaultSettings, storedOutputSettingsNeedUpgrade } from "./startupDefaults";
 import { SettingsSaveQueue } from "./storage/settingsSaveQueue";
 import { profileNeedingInitialSetup } from "./profileModelDefaults";
 import { ModelRouteSelect } from "./components/ModelRouteSelect";
 import { aiIsBeDisplayName } from "./domain/isBeIdentity";
 import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from "./targets/telepathicBundled";
-import { createProfileWithInitialWorkspaces } from "./application/profileWorkspace";
+import { resolveOpenedWorkspaceSelection, resolveProfileWorkspaceSelection } from "./application/profileSelection";
 import { isWorkspaceCompatible, latestCompatibleWorkspace } from "./domain/workspaceKind";
 
 const LazyResearchScreen = lazy(() =>
@@ -116,7 +117,10 @@ export default function App() {
   const [databaseCompatibilityBusy, setDatabaseCompatibilityBusy] = useState(false);
   const [databaseCompatibilityActionError, setDatabaseCompatibilityActionError] = useState<string | null>(null);
   const [initializationAttempt, setInitializationAttempt] = useState(0);
+  const criticalOperationBusyRef = useRef(false);
   const settingsSaveQueueRef = useRef<{ repository: AppRepository; queue: SettingsSaveQueue } | null>(null);
+
+  const setCriticalOperationBusy = useCallback((busy: boolean) => { criticalOperationBusyRef.current = busy; }, []);
 
   const copy = getCopy(settings.interfaceLanguage);
   const activeConversationWorkspace = workspaces.find((item) => item.id === activeConversationWorkspaceId && isWorkspaceCompatible(item, "conversation")) ?? null;
@@ -145,10 +149,9 @@ export default function App() {
           repo.listWorkspaces(),
         ]);
         let nextSettings = { ...createDefaultSettings(), ...storedSettings };
-        const outputSettingsNeedUpgrade = storedSettings.conversationMaxOutputTokens === undefined || storedSettings.rvSessionMaxOutputTokens === undefined;
+        const outputSettingsNeedUpgrade = storedOutputSettingsNeedUpgrade(storedSettings);
         if (outputSettingsNeedUpgrade) {
-          const legacyOutput = storedSettings.defaultMaxOutputTokens ?? nextSettings.defaultMaxOutputTokens;
-          nextSettings = { ...nextSettings, conversationMaxOutputTokens: legacyOutput, rvSessionMaxOutputTokens: legacyOutput };
+          nextSettings = applyStoredOutputSettings(nextSettings, storedSettings);
           stage = "output-token-settings.upgrade";
           await repo.saveSettings(nextSettings);
         }
@@ -241,7 +244,25 @@ export default function App() {
     }));
   };
 
+
+  const handleProfileChange = (profileId: string) => {
+    if (criticalOperationBusyRef.current) return;
+    const selection = resolveProfileWorkspaceSelection({
+      profiles,
+      workspaces,
+      activeProfileId,
+      activeConversationWorkspaceId,
+      activeRvWorkspaceId,
+      selectedProfileId: profileId,
+    });
+    if (!selection || !selection.changed) return;
+    setActiveProfileId(selection.profileId);
+    rememberActiveWorkspace("conversation", selection.conversationWorkspaceId);
+    rememberActiveWorkspace("rv", selection.rvWorkspaceId);
+  };
+
   const navigate = (destination: LegacyPage) => {
+    if (criticalOperationBusyRef.current) return;
     const normalized = normalizePage(destination);
     if (normalized === "ai-center") setAiCenterView("overview");
     if (normalized === "conversations") {
@@ -262,10 +283,20 @@ export default function App() {
     destination: "conversations" | "rv-sessions" = workspace.kind === "rv" ? "rv-sessions" : "conversations",
     rvView: RvSessionsView = "automatic",
   ) => {
+    if (criticalOperationBusyRef.current) return;
     const requiredKind: NewWorkspaceKind = destination === "rv-sessions" ? "rv" : "conversation";
     if (!isWorkspaceCompatible(workspace, requiredKind)) return;
-    rememberActiveWorkspace(requiredKind, workspace.id);
-    setActiveProfileId(workspace.profileId);
+    const selection = resolveOpenedWorkspaceSelection({
+      workspaces,
+      activeProfileId,
+      activeConversationWorkspaceId,
+      activeRvWorkspaceId,
+      workspace,
+      requiredKind,
+    });
+    setActiveProfileId(selection.profileId);
+    rememberActiveWorkspace("conversation", selection.conversationWorkspaceId);
+    rememberActiveWorkspace("rv", selection.rvWorkspaceId);
     if (destination === "rv-sessions") setRvSessionsView(rvView);
     setPage(destination);
     if (repository) {
@@ -275,10 +306,13 @@ export default function App() {
     }
   };
 
+  const profileSaveSession = useRef<ViewerProfileSaveSession>({});
+  useEffect(() => { if (!profileDialog) profileSaveSession.current = {}; }, [profileDialog]);
+
   const createProfile = async (name: string, humanName: string | undefined, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => {
     if (!repository) return;
-    const { profile, conversationWorkspace, rvWorkspace } = await createProfileWithInitialWorkspaces(repository, { name, humanName, note, aiConfiguration });
-    await ensureProfileViewerIdentity({ repository, profileId: profile.id, credentialId: aiConfiguration.credentialId, modelId: aiConfiguration.defaultViewerModelId });
+    const saved = await saveViewerProfile({ repository, values: { name, humanName, note, aiConfiguration }, session: profileSaveSession.current });
+    const { profile, conversationWorkspace, rvWorkspace } = saved.created!;
     const [nextProfiles, nextWorkspaces] = await Promise.all([repository.listProfiles(), repository.listWorkspaces()]);
     setProfiles(nextProfiles);
     setWorkspaces(nextWorkspaces);
@@ -374,6 +408,7 @@ export default function App() {
       <Sidebar page={page} copy={copy} compact={page !== "home"} onNavigate={navigate} />
       <main className="main-pane">
         <TopBar
+          contextLabel={page === "training" ? copy.training : undefined}
           copy={copy}
           profile={lastProfile}
           workspace={activeWorkspace}
@@ -423,7 +458,7 @@ export default function App() {
           ) : page === "targets" ? (
             <TargetsScreen copy={copy} settings={settings} repository={repository} />
           ) : page === "training" ? (
-            <TrainingScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} />
+            <TrainingScreen copy={copy} settings={settings} profiles={profiles} workspaces={workspaces} repository={repository} onOperationBusyChange={setCriticalOperationBusy} />
           ) : page === "ai-center" ? (
             <LazyAiCenterRoute
               copy={copy}
@@ -434,7 +469,7 @@ export default function App() {
               activeWorkspace={activeWorkspace}
               repository={repository!}
               initialView={aiCenterView}
-              onProfileChange={(profileId) => { setActiveProfileId(profileId); rememberActiveWorkspace("rv", latestCompatibleWorkspace(workspaces, "rv", profileId)?.id ?? null); }}
+              onProfileChange={handleProfileChange}
               onProfileChanged={refreshProfiles}
             />
           ) : page === "settings" ? (
@@ -449,9 +484,10 @@ export default function App() {
                 repository={repository}
                 profiles={profiles}
                 workspaces={workspaces}
-                onOpenWorkspace={(workspace) => void openWorkspace(workspace, "conversations")}
+                onProfileChange={handleProfileChange}
                 createdNotice={workspaceCreatedNotice?.workspaceId === activeConversationWorkspace.id ? workspaceCreatedNotice : null}
                 onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
+                onOperationBusyChange={setCriticalOperationBusy}
               />
             ) : <EmptyCard><p>{copy.noCompatibleWorkspace}</p>{activeProfileId && <button className="primary-button" onClick={() => setWorkspaceDialogFor({ profileId: activeProfileId, kind: "conversation" })}>{copy.createWorkspace}</button>}</EmptyCard>
           ) : page === "rv-sessions" ? (
@@ -463,12 +499,12 @@ export default function App() {
                 workspace={activeRvWorkspace}
                 repository={repository}
                 profiles={profiles}
-                workspaces={workspaces}
                 view={rvSessionsView}
                 onViewChange={setRvSessionsView}
-                onOpenWorkspace={(workspace) => void openWorkspace(workspace, "rv-sessions", rvSessionsView)}
+                onProfileChange={handleProfileChange}
                 createdNotice={workspaceCreatedNotice?.workspaceId === activeRvWorkspace.id ? workspaceCreatedNotice : null}
                 onDismissCreatedNotice={() => setWorkspaceCreatedNotice(null)}
+                onOperationBusyChange={setCriticalOperationBusy}
               />
             ) : <EmptyCard><p>{copy.noCompatibleWorkspace}</p>{activeProfileId && <button className="primary-button" onClick={() => setWorkspaceDialogFor({ profileId: activeProfileId, kind: "rv" })}>{copy.createWorkspace}</button>}</EmptyCard>
           ) : (
@@ -516,35 +552,26 @@ function FirstRunSetup({
   const setup = useProfileSetupController({ copy, repository, existingProfile });
   const busy = setup.busy || saving;
 
+  const profileSaveSession = useRef<ViewerProfileSaveSession>({});
+
   const finish = async (skipOptional = false) => {
     if (!setup.selectedProvider || !setup.viewerModel || busy) return;
     setSaving(true);
     setSaveError(null);
     try {
       const aiConfiguration = setup.buildAiConfiguration(skipOptional);
-      let profile: Profile;
-      let initialConversationWorkspace: Workspace | undefined;
-      let initialRvWorkspace: Workspace | undefined;
-      if (existingProfile) {
-        profile = { ...existingProfile, name: profileName.trim(), humanName: humanName.trim() || undefined, ...aiConfiguration, updatedAt: new Date().toISOString() };
-        await repository.updateProfile(existingProfile.id, { name: profileName, humanName, note: existingProfile.note });
-        await repository.setProfileAiConfiguration(existingProfile.id, aiConfiguration);
-      } else {
-        const created = await createProfileWithInitialWorkspaces(repository, { name: profileName, humanName, aiConfiguration });
-        profile = created.profile;
-        initialConversationWorkspace = created.conversationWorkspace;
-        initialRvWorkspace = created.rvWorkspace;
-      }
-      const viewerIdentity = await ensureProfileViewerIdentity({
+      const saved = await saveViewerProfile({
         repository,
-        profileId: profile.id,
-        credentialId: aiConfiguration.credentialId,
-        modelId: aiConfiguration.defaultViewerModelId,
+        values: { name: profileName.trim(), humanName: humanName.trim() || undefined, note: existingProfile?.note, aiConfiguration },
+        existingProfileId: existingProfile?.id,
+        session: profileSaveSession.current,
       });
-      if (!viewerIdentity) throw new Error("Viewer identity could not be created for the selected Profile setup route.");
+      const profile = saved.profile;
+      const initialConversationWorkspace = saved.created?.conversationWorkspace;
+      const initialRvWorkspace = saved.created?.rvWorkspace;
       await onComplete(profile, initialConversationWorkspace, initialRvWorkspace);
     } catch (cause) {
-      setSaveError(cause instanceof Error ? cause.message : String(cause));
+      setSaveError(profileSaveErrorMessage(cause, copy === getCopy("pl") ? "pl" : "en"));
       setSaving(false);
     }
   };
@@ -574,11 +601,13 @@ function FirstRunSetup({
           {(!setup.providers.length || setup.connectionChoice === NEW_PROFILE_PROVIDER_CHOICE) && <div className="setup-provider-grid">
             <label>{copy.provider}<select value={setup.providerKind} onChange={(event) => setup.changeProviderKind(event.target.value as ProviderKind)} disabled={busy}>{setup.providerKinds.map((kind) => <option key={kind} value={kind}>{PROVIDER_LABELS[kind]}</option>)}</select></label>
             <label>{copy.providerLabel}<input value={setup.providerLabel} onChange={(event) => setup.setProviderLabel(event.target.value)} disabled={busy} /></label>
-            {setup.providerKind === "custom_openai" && <label className="wide">{copy.baseUrl}<input type="url" value={setup.baseUrl} onChange={(event) => setup.setBaseUrl(event.target.value)} disabled={busy} placeholder="https://example.com/v1" /></label>}
+            {(setup.providerKind === "custom_openai" || setup.providerKind === "blackbox") && <label className="wide">{copy.baseUrl}<input type="url" value={setup.baseUrl} onChange={(event) => setup.setBaseUrl(event.target.value)} disabled={busy} placeholder={setup.providerKind === "blackbox" ? "https://enterprise.blackbox.ai" : "https://example.com/v1"} /></label>}
             <label className="wide">{copy.apiKey}<input type="password" autoComplete="off" value={setup.apiKey} onChange={(event) => setup.setApiKey(event.target.value)} disabled={busy} /></label>
+            {setup.providerKind === "blackbox" && setup.blackboxManualModelRequired && <label className="wide">{copy.blackboxManualModelId}<input value={setup.blackboxManualModelId} onChange={(event) => setup.setBlackboxManualModelId(event.target.value)} disabled={busy} placeholder="provider/model-id" /><small>{copy.blackboxManualModelLead}</small></label>}
           </div>}
+          {setup.selectedProvider?.provider === "blackbox" && setup.blackboxManualModelRequired && <label>{copy.blackboxManualModelId}<input value={setup.blackboxManualModelId} onChange={(event) => setup.setBlackboxManualModelId(event.target.value)} disabled={busy} placeholder="provider/model-id" /><small>{copy.blackboxManualModelLead}</small></label>}
           <small className="setup-security-note"><LockKeyhole size={13} />{copy.providersReady}</small>
-          <div className="first-run-actions"><span>{setup.selectedProvider && setup.cachedModelCount > 0 && <button className="secondary-button" disabled={busy} onClick={() => { setup.prepareCachedModels(); setStep(2); }}>{copy.useCachedModels} ({setup.cachedModelCount})</button>}</span><button className="primary-button" disabled={!setup.desktop || busy || (!setup.selectedProvider && (!setup.providerLabel.trim() || !setup.apiKey.trim() || (setup.providerKind === "custom_openai" && !setup.baseUrl.trim())))} onClick={() => void setup.connectProvider().then((provider) => { if (provider) setStep(2); })}>{busy ? copy.refreshing : copy.connectLoadModels}<ArrowRight size={15} /></button></div>
+          <div className="first-run-actions"><span>{setup.selectedProvider && setup.cachedModelCount > 0 && <button className="secondary-button" disabled={busy} onClick={() => { setup.prepareCachedModels(); setStep(2); }}>{copy.useCachedModels} ({setup.cachedModelCount})</button>}</span><button className="primary-button" disabled={!setup.desktop || busy || (setup.blackboxManualModelRequired && !setup.blackboxManualModelId.trim()) || (!setup.selectedProvider && (!setup.providerLabel.trim() || !setup.apiKey.trim() || (setup.providerKind === "custom_openai" && !setup.baseUrl.trim())))} onClick={() => void setup.connectProvider().then((provider) => { if (provider) setStep(2); })}>{busy ? copy.refreshing : setup.blackboxManualModelRequired ? copy.blackboxUseManualModel : copy.connectLoadModels}<ArrowRight size={15} /></button></div>
         </div>}
 
         {step === 2 && <div className="first-run-body">
@@ -587,7 +616,7 @@ function FirstRunSetup({
           <label>{copy.modelSearch}<input value={setup.modelSearch} onChange={(event) => setup.setModelSearch(event.target.value)} placeholder={copy.modelSearchPlaceholder} /></label>
           <label>{copy.defaultViewerModel}<select size={Math.min(8, Math.max(3, setup.visibleViewerModels.length))} value={setup.viewerModelId} onChange={(event) => setup.selectViewerModel(event.target.value)}>{setup.visibleViewerModels.map((model) => <option key={model.modelId} value={model.modelId}>{model.favorite ? "★ " : model.recommended ? "✦ " : ""}{model.displayName}</option>)}</select></label>
           {!setup.visibleViewerModels.length && <p className="provider-empty">{copy.noMatchingModels}</p>}
-          <ProfileViewerControls copy={copy} model={setup.viewerModel} reasoning={setup.viewerReasoning} temperature={setup.viewerTemperature} systemPrompt={setup.viewerSystemPrompt} onReasoning={setup.setViewerReasoning} onTemperature={setup.setViewerTemperature} />
+          <ProfileViewerControls copy={copy} model={setup.viewerModel} providerKind={setup.selectedProvider?.provider} reasoning={setup.viewerReasoning} temperature={setup.viewerTemperature} temperatureMode={setup.viewerTemperatureMode} customReasoningMode={setup.viewerCustomReasoningMode} sampling={{ enabled: setup.viewerSamplingEnabled, topP: setup.viewerTopP, topK: setup.viewerTopK, seed: setup.viewerSeed }} systemPrompt={setup.viewerSystemPrompt} onReasoning={setup.setViewerReasoning} onTemperature={setup.setViewerTemperature} onTemperatureMode={setup.setViewerTemperatureMode} onCustomReasoningMode={setup.setViewerCustomReasoningMode} onSamplingEnabled={setup.setViewerSamplingEnabled} onSamplingTopP={setup.setViewerTopP} onSamplingTopK={setup.setViewerTopK} onSamplingSeed={setup.setViewerSeed} />
           <div className="identity-name-grid"><label>{copy.aiIsBeName}<input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div>
           <small className="setup-security-note"><Users size={13} />{copy.identityNamesLead}</small>
           <div className="first-run-actions"><button className="secondary-button" onClick={() => setStep(1)} disabled={busy}>{copy.back}</button><button className="primary-button" disabled={!setup.viewerModelId || busy} onClick={() => setStep(3)}>{copy.continue}<ArrowRight size={15} /></button></div>
@@ -656,10 +685,12 @@ function TopBar({
   workspace,
   theme,
   onThemeChange,
+  contextLabel,
 }: {
   copy: ReturnType<typeof getCopy>;
   profile: Profile | null;
   workspace: Workspace | null;
+  contextLabel?: string;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
 }) {
@@ -668,8 +699,8 @@ function TopBar({
   return (
     <header className="topbar">
       <div className="crumbs">
-        {profile ? <><span className="avatar tiny">{initials(aiIsBeDisplayName(profile))}</span><span>{aiIsBeDisplayName(profile)}</span></> : <span>AI IS-BE</span>}
-        {workspace && <><ChevronRight size={15} /><strong>{workspace.name}</strong></>}
+        {contextLabel ? <strong>{contextLabel}</strong> : <>{profile ? <><span className="avatar tiny">{initials(aiIsBeDisplayName(profile))}</span><span>{aiIsBeDisplayName(profile)}</span></> : <span>AI IS-BE</span>}
+        {workspace && <><ChevronRight size={15} /><strong>{workspace.name}</strong></>}</>}
       </div>
       <div className="top-actions">
         <span className="runtime-pill"><Database size={14} />{isTauriRuntime() ? "SQLite" : "Preview"}</span>
@@ -755,21 +786,21 @@ function DatabaseCompatibilityScreen({
       ? {
           title: "Wykryto dane z wcześniejszej wersji",
           paragraphs: [
-            "AI RV Harness v0.7.13 korzysta z nowego modelu danych. Automatyczna migracja danych z v0.7.12 i wcześniejszych wersji nie jest obsługiwana, ponieważ mogłaby doprowadzić do częściowej lub błędnej konwersji.",
+            `AI RV Harness v${APP_VERSION} korzysta z nowego modelu danych. Automatyczna migracja danych z v0.7.12 i wcześniejszych wersji nie jest obsługiwana, ponieważ mogłaby doprowadzić do częściowej lub błędnej konwersji.`,
             "Aby nadal korzystać z dotychczasowych danych, uruchom AI RV Harness v0.7.12.",
-            "Aby rozpocząć pracę w v0.7.13, możesz utworzyć nową bazę danych. Dotychczasowa baza zostanie zachowana jako kopia i nie zostanie usunięta.",
+            `Aby rozpocząć pracę w v${APP_VERSION}, możesz utworzyć nową bazę danych. Dotychczasowa baza zostanie zachowana jako kopia i nie zostanie usunięta.`,
           ],
           close: "Zamknij aplikację",
           open: "Otwórz folder starej bazy",
-          fresh: "Rozpocznij od nowa w v0.7.13",
+          fresh: `Rozpocznij od nowa w v${APP_VERSION}`,
           busy: "Zabezpieczanie starej bazy…",
         }
       : incomplete
         ? {
-            title: "Wykryto niedokończone tworzenie bazy v0.7.13",
+            title: `Wykryto niedokończone tworzenie bazy v${APP_VERSION}`,
             paragraphs: [
-              "Poprzednie tworzenie świeżej bazy AI RV Harness v0.7.13 zostało przerwane przed zakończeniem schematu. Ta częściowa baza nie będzie automatycznie migrowana ani kontynuowana.",
-              "Możesz zachować ją jako kopię diagnostyczną i bezpiecznie utworzyć nową bazę v0.7.13. Częściowy plik nie zostanie usunięty.",
+              `Poprzednie tworzenie świeżej bazy AI RV Harness v${APP_VERSION} zostało przerwane przed zakończeniem schematu. Ta częściowa baza nie będzie automatycznie migrowana ani kontynuowana.`,
+              `Możesz zachować ją jako kopię diagnostyczną i bezpiecznie utworzyć nową bazę v${APP_VERSION}. Częściowy plik nie zostanie usunięty.`,
             ],
             close: "Zamknij aplikację",
             open: "Otwórz folder bazy",
@@ -791,21 +822,21 @@ function DatabaseCompatibilityScreen({
       ? {
           title: "Data from an earlier version was detected",
           paragraphs: [
-            "AI RV Harness v0.7.13 uses a new data model. Automatic migration from v0.7.12 and earlier versions is not supported because it could result in partial or incorrect conversion.",
+            `AI RV Harness v${APP_VERSION} uses a new data model. Automatic migration from v0.7.12 and earlier versions is not supported because it could result in partial or incorrect conversion.`,
             "To continue using your existing data, run AI RV Harness v0.7.12.",
-            "To start using v0.7.13, you may create a new database. Your existing database will be preserved as a backup and will not be deleted.",
+            `To start using v${APP_VERSION}, you may create a new database. Your existing database will be preserved as a backup and will not be deleted.`,
           ],
           close: "Close application",
           open: "Open legacy database folder",
-          fresh: "Start fresh in v0.7.13",
+          fresh: `Start fresh in v${APP_VERSION}`,
           busy: "Preserving legacy database…",
         }
       : incomplete
         ? {
-            title: "An incomplete v0.7.13 database initialization was detected",
+            title: `An incomplete v${APP_VERSION} database initialization was detected`,
             paragraphs: [
-              "A previous attempt to create a fresh AI RV Harness v0.7.13 database was interrupted before the schema was complete. This partial database will not be migrated or resumed automatically.",
-              "You may preserve it as a diagnostic backup and safely create a new v0.7.13 database. The partial file will not be deleted.",
+              `A previous attempt to create a fresh AI RV Harness v${APP_VERSION} database was interrupted before the schema was complete. This partial database will not be migrated or resumed automatically.`,
+              `You may preserve it as a diagnostic backup and safely create a new v${APP_VERSION} database. The partial file will not be deleted.`,
             ],
             close: "Close application",
             open: "Open database folder",
@@ -829,7 +860,7 @@ function DatabaseCompatibilityScreen({
       <section className="first-run-card">
         <header className="first-run-header">
           <span className="first-run-logo"><Database size={28} /></span>
-          <div><small>AI RV Harness v0.7.13</small><h1>{copy.title}</h1></div>
+          <div><small>AI RV Harness v{APP_VERSION}</small><h1>{copy.title}</h1></div>
         </header>
         <div className="first-run-body">
           {copy.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}

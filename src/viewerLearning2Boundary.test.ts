@@ -9,6 +9,11 @@ function source(relativePath: string): string {
 
 function normalizeS2MonitorStreamingWiring(value: string): string {
   return value
+    // B2 changes only this import to preserve the immutable live pair.
+    .replace('import { FROZEN_ANALYTICAL_V1_INITIAL_TOKENS as ANALYTICAL_OUTPUT_INITIAL_TOKENS, FROZEN_ANALYTICAL_V1_RECOVERY_TOKENS as ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";\n', 'import { ANALYTICAL_OUTPUT_INITIAL_TOKENS, ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";\n')
+    // BUDGET-0 permits exactly the shared analytical import and 16K/32K selector.
+    .replace('import { ANALYTICAL_OUTPUT_INITIAL_TOKENS, ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";\n', "")
+    .replace('attempt > 0 ? ANALYTICAL_OUTPUT_RECOVERY_TOKENS : ANALYTICAL_OUTPUT_INITIAL_TOKENS', 'attempt > 0 ? 8192 : 4096')
     .replace(', ProviderStreamEvent } from "../providers/types";', ' } from "../providers/types";')
     .replace('import type { StreamWorkflowContext } from "../providers/streamPresentation";\n', "")
     .replace('  streamWorkflowContext?: StreamWorkflowContext;\n  onStreamEvent?: (event: ProviderStreamEvent) => void;\n', "")
@@ -37,6 +42,12 @@ function aggregateHash(roots: string[], normalizeMonitorStreaming = false): stri
     const bytes = fs.readFileSync(file);
     const protectedBytes = normalizeMonitorStreaming && relative === "src/monitor/engine.ts"
       ? Buffer.from(normalizeS2MonitorStreamingWiring(bytes.toString("utf8")))
+      : normalizeMonitorStreaming && relative === "src/monitor/engine.test.ts"
+        ? Buffer.from(bytes.toString("utf8")
+          .replace('expect(settings.effective.maxOutputTokens).toBe(16384);', 'expect(settings.effective.maxOutputTokens).toBe(4096);')
+          .replace('expect(monitorOutputTokenBudget(model, 0)).toBe(16384);', 'expect(monitorOutputTokenBudget(model, 0)).toBe(4096);')
+          .replace('expect(monitorOutputTokenBudget(model, 1)).toBe(16384);', 'expect(monitorOutputTokenBudget(model, 1)).toBe(8192);')
+          .replace('    expect(monitorOutputTokenBudget({ ...model, capabilities: { ...model.capabilities, maxOutputTokens: 32768 } }, 1)).toBe(32768);\n', ''))
       : normalizeMonitorStreaming && relative === "src/features/monitor/MonitorPanel.test.tsx"
         ? Buffer.from(bytes.toString("utf8").replace('kind: "legacy_combined", ', ""))
         : bytes;

@@ -1,10 +1,16 @@
+import { ResearchEvaluationPanels } from "./ResearchEvaluationPanels";
+import { ResearchPartialScores } from "./ResearchPartialScores";
+import { useWorkflowOwnership } from "../../components/useWorkflowOwnership";
+import { researchScope, canEndResearchExecution, type ResearchExecutionTermination } from "../../research/executionLifecycle";
+import { getUncertainResearchJudges } from "../../research/judgeRecovery";
+import { VIEWER_OUTPUT_INITIAL_TOKENS } from "../../sessions/viewerOutputRecovery";
 import { Archive, Check, ChevronRight, CircleStop, FlaskConical, LockKeyhole, Play, RotateCcw, Search, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { getCopy } from "../../i18n";
-import type { ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
+import type { GenerationSettings, ProviderConfig, ProviderModel, ReasoningEffort } from "../../providers/types";
 import type { JudgeScoreRecord } from "../../judge/types";
 import { resolveGenerationSettings } from "../../providers/capabilities";
-import { createAndLockResearch, executeResearchSessions, judgeResearch, prepareInterruptedResearchRetry, unblindAndComputeResearch } from "../../research/engine";
+import { createAndLockResearch, freezeResearchViewerOutputPolicy, executeResearchSessions, judgeResearch, prepareInterruptedResearchRetry, unblindAndComputeResearch } from "../../research/engine";
 import { stableStringify } from "../../research/planner";
 import { runResearchPreflight, type ResearchPreflightInventory } from "../../research/preflight";
 import type { ResearchAssignmentRecord, ResearchConditionDefinition, ResearchConfig, ResearchFieldGuideSnapshot, ResearchPreflightResult, ResearchProjectRecord, ResearchProtocolSelection, ResearchResults, ResearchTemplateType, ResearchViewerControl } from "../../research/types";
@@ -19,6 +25,9 @@ import { exportResearchPackage } from "../../exports/research";
 import { sampleResearchTargetIds, type ResearchTargetSelectionMode, type ResearchTargetSource } from "../../research/targetSelection";
 import { profileGenerationDefaults } from "../../profileViewerDefaults";
 import { sharedResearchCapabilities, type SharedResearchCapabilities } from "../../research/studyControls";
+import { assertResearchSamplingSupported, researchRequestedSamplingValue, researchSamplingFromProfile } from "../../research/samplingPolicy";
+import { buildResearchSamplingConditions, researchSamplingConfigurationCount, researchSamplingSessionCount } from "../../research/samplingDesign";
+import { buildResearchSamplingDesignFromForm, ResearchSamplingDesignControls, researchSamplingFormFromRequested, type ResearchSamplingFormState } from "./ResearchSamplingDesignControls";
 import { reasoningOptions } from "../../providers/modelReasoningRegistry";
 import { chooseDirectory } from "../../storage/native";
 import { SessionInspection } from "../../components/SessionInspection";
@@ -48,7 +57,7 @@ function researchReasoningLabel(copy: Copy, model: ProviderModel | null, effort:
   return option.verification === "unverified" ? `${option.label} · ${copy.unverified}` : option.label;
 }
 
-const TEMPLATE_ORDER: ResearchTemplateType[] = ["reasoning", "temperature", "profile", "model", "practice", "system_prompt", "viewer_notes"];
+const TEMPLATE_ORDER: ResearchTemplateType[] = ["reasoning", "temperature", "profile", "model", "practice", "system_prompt", "viewer_notes", "sampling"];
 
 export function researchBaseModelInventorySignature(models: ProviderModel[]): string {
   return models.map(modelRouteKeyFor).sort().join("|");
@@ -98,23 +107,47 @@ export function ResearchBuilder({ copy, settings, profiles, workspaces, reposito
   return <div className="research-hub">
     <section className="panel research-projects-panel"><div className="research-section-head"><div><strong>{copy.existingResearch}</strong><small>{projects.length}</small></div></div>{projects.length ? <div className="research-project-list">{projects.map((project) => <button key={project.id} onClick={() => setActiveProjectId(project.id)}><span><strong>{project.name}</strong><small>{templateName(copy, project.templateType)} · {project.state}</small></span><ChevronRight size={15} /></button>)}</div> : <p className="research-empty">{copy.noResearchProjects}</p>}</section>
     <div className="template-grid">{TEMPLATE_ORDER.map((type, index) => <button className="template-card research-template-button" key={type} onClick={() => setTemplate(type)}><span className="template-number">{String(index + 1).padStart(2, "0")}</span><FlaskConical size={22} /><h3>{templateName(copy, type)}</h3><p>{templateMeta(copy, type)}</p><span className="status-chip ready"><Check size={12} />{copy.newResearch}</span></button>)}</div>
-    <ResearchHelp language={settings.interfaceLanguage} />
   </div>;
 }
 
-function ResearchHelp({ language }: { language: InterfaceLanguage }) {
-  if (language === "pl") return <details className="panel research-help-panel"><summary><strong>Jak działa Research?</strong><span>Instrukcja krok po kroku i słownik pojęć</span></summary><div className="research-help-content">
-    <p>Research służy do porównywania warunków, które mogą wpływać na jakość sesji AI Viewera: poziomu wysiłku rozumowania, temperatury (jeśli model ją obsługuje), modelu, Profilu i powiązanego klucza API, efektu praktyki oraz wariantów system promptu. Kalibrację należy traktować osobno dla każdej pary Profil–model. Można na przykład porównać dwa Profile używające tego samego modelu albo pięć modeli dostępnych w jednym Profilu.</p>
+export function ResearchHelpContent({ language }: { language: InterfaceLanguage }) {
+  if (language === "pl") return <>
+    <p className="module-help-lead">Instrukcja krok po kroku i słownik pojęć</p>
+    <p>Research służy do porównywania warunków, które mogą wpływać na jakość sesji AI Viewera: poziomu wysiłku rozumowania, temperatury (jeśli model ją obsługuje), modelu, Profilu i powiązanego klucza API, efektu praktyki, konfiguracji samplingu oraz wariantów system promptu. Kalibrację należy traktować osobno dla każdej pary Profil–model. Można na przykład porównać dwa Profile używające tego samego modelu albo pięć modeli dostępnych w jednym Profilu.</p>
     <p>Wbudowany system prompt Viewera wykorzystuje wiedzę z dokumentu <em>AI Field Perception Lexicon</em>, który można przeczytać w Ustawieniach. Warianty system promptu pozwalają sprawdzić, które wskazówki pomagają danemu modelowi, a które nie poprawiają wyników.</p>
     <ol><li>Wybierz rodzaj badania.</li><li>Ustaw porównywane warunki, cele i liczbę powtórzeń.</li><li>Opcjonalnie uruchom <strong>Preview / Dry Run</strong> — nic nie wysyła do modeli i nie generuje kosztów.</li><li>Uruchom wymagany <strong>Preflight</strong>.</li><li>Po poprawnym Preflight wykonaj wymagany <strong>Experiment Lock</strong>.</li><li>W widoku zablokowanego projektu wybierz <strong>Start Research</strong>.</li><li>Po sesjach przejdź do oceny i wyników. Możesz użyć maksymalnie trzech AI Judges; oceniają anonimowe pakiety, wyniki są zamrażane, a warunki ujawniane dopiero później.</li></ol>
     <dl><div><dt>Dry Run</dt><dd>Podgląd planu bez wywołań modeli i kosztów.</dd></div><div><dt>Preflight</dt><dd>Kontrola kompletności tras, modeli, celów, ustawień i zgodności przed startem.</dd></div><div><dt>Experiment Lock</dt><dd>Niezmienny zapis planu eksperymentu, warunków i kolejności.</dd></div><div><dt>Blinding</dt><dd>Ukrycie warunku i tożsamości wykonawcy przed sędzią.</dd></div><div><dt>AI Judge</dt><dd>Model oceniający zgodność zapisu pre-reveal z prawdziwym celem.</dd></div><div><dt>Scores Frozen</dt><dd>Oceny zostały zapisane i nie można ich zmienić.</dd></div><div><dt>Unblind</dt><dd>Ujawnienie mapowania anonimowych sesji na warunki po zamrożeniu ocen.</dd></div></dl>
-  </div></details>;
-  return <details className="panel research-help-panel"><summary><strong>How does Research work?</strong><span>Step-by-step guide and glossary</span></summary><div className="research-help-content">
-    <p>Research compares conditions that may affect an AI Viewer session: reasoning effort, temperature (when supported), model, Profile and its API key, practice effects, and system-prompt variants. Calibration should be treated separately for every Profile–model pair. For example, you can compare two Profiles using the same model or five models available through one Profile.</p>
+  </>;
+  return <>
+    <p className="module-help-lead">Step-by-step guide and glossary</p>
+    <p>Research compares conditions that may affect an AI Viewer session: reasoning effort, temperature (when supported), model, Profile and its API key, practice effects, sampling configurations, and system-prompt variants. Calibration should be treated separately for every Profile–model pair. For example, you can compare two Profiles using the same model or five models available through one Profile.</p>
     <p>The built-in Viewer system prompt draws on the <em>AI Field Perception Lexicon</em>, which can be read in Settings. System-prompt variants let you test which guidance helps a particular model and which guidance does not improve results.</p>
     <ol><li>Choose a research type.</li><li>Configure the compared conditions, targets, and repetitions.</li><li>Optionally run <strong>Preview / Dry Run</strong> — it makes no model calls and incurs no cost.</li><li>Run the required <strong>Preflight</strong>.</li><li>After Preflight passes, apply the required <strong>Experiment Lock</strong>.</li><li>In the locked project view, select <strong>Start Research</strong>.</li><li>After the sessions, continue to evaluation and results. You may use up to three AI Judges; they score anonymous packets, scores are frozen, and conditions are revealed only afterward.</li></ol>
     <dl><div><dt>Dry Run</dt><dd>A plan preview without model calls or cost.</dd></div><div><dt>Preflight</dt><dd>Checks routes, models, targets, settings, and compatibility before the run.</dd></div><div><dt>Experiment Lock</dt><dd>An immutable record of the experimental plan, conditions, and order.</dd></div><div><dt>Blinding</dt><dd>Hides the condition and performer identity from the Judge.</dd></div><div><dt>AI Judge</dt><dd>A model that scores correspondence between pre-reveal evidence and the true target.</dd></div><div><dt>Scores Frozen</dt><dd>Scores have been stored and can no longer be changed.</dd></div><div><dt>Unblind</dt><dd>Reveals the mapping between anonymous sessions and conditions after scores are frozen.</dd></div></dl>
-  </div></details>;
+  </>;
+}
+
+
+
+export function researchCustomReasoningModeForProfile(profile: Profile | null | undefined, model: ProviderModel | null | undefined, template: ResearchTemplateType) {
+  if (!profile || !model || model.provider !== "custom_openai" || template === "reasoning") return undefined;
+  return profile.defaultViewerCustomReasoningMode;
+}
+
+export function researchTemperatureExperimentSupportsModel(model: ProviderModel | null | undefined): boolean {
+  return Boolean(model && (model.capabilities.temperature.supported || model.provider === "custom_openai"));
+}
+
+export function researchTemperatureConditionSettings(
+  requested: GenerationSettings,
+  model: ProviderModel,
+  temperature: number,
+): GenerationSettings {
+  return {
+    ...requested,
+    temperature,
+    ...(model.provider === "custom_openai" ? { customTemperatureMode: "manual" as const } : {}),
+  };
 }
 
 export function ResearchConfigBuilder({ copy, settings, repository, profiles, workspaces, providers, models, targets, usage, template, onBack, onLocked }: { copy: Copy; settings: AppSettings; repository: AppRepository; profiles: Profile[]; workspaces: Workspace[]; providers: ProviderConfig[]; models: ProviderModel[]; targets: TargetRecord[]; usage: TargetUsageRecord[]; template: ResearchTemplateType; onBack: () => void; onLocked: (project: ResearchProjectRecord) => Promise<void> }) {
@@ -125,12 +158,13 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
   const [baseModelKey, setBaseModelKey] = useState("");
   const [fixedReasoning, setFixedReasoning] = useState<"" | ReasoningEffort>("");
   const [fixedTemperature, setFixedTemperature] = useState("");
-  const [researchMaxOutputTokens, setResearchMaxOutputTokens] = useState(String(settings.defaultMaxOutputTokens));
+  const [researchMaxOutputTokens, setResearchMaxOutputTokens] = useState(String(Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, settings.defaultMaxOutputTokens)));
   const [reasoningLevels, setReasoningLevels] = useState<ReasoningEffort[]>([]);
   const [temperatureValues, setTemperatureValues] = useState("0.7, 1.1, 1.5");
   const [profileIds, setProfileIds] = useState<string[]>([]);
   const [modelKeys, setModelKeys] = useState<string[]>([]);
   const [variants, setVariants] = useState(["", ""]);
+  const [samplingForm, setSamplingForm] = useState<ResearchSamplingFormState>(() => researchSamplingFormFromRequested({}));
   const [viewerNotesMode, setViewerNotesMode] = useState<"none" | "current">("current");
   const [fieldGuideMode, setFieldGuideMode] = useState<"none" | "current">("current");
   const [promptResearchSource, setPromptResearchSource] = useState<"manual" | "field_guide_history">("manual");
@@ -195,23 +229,26 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
     const defaults = profileGenerationDefaults(baseProfile, baseModel);
     setFixedReasoning(defaults.reasoningEffort ?? "");
     setFixedTemperature(defaults.temperature === undefined ? "" : String(defaults.temperature));
-    setResearchMaxOutputTokens(String(Math.min(baseModel?.capabilities.maxOutputTokens ?? settings.defaultMaxOutputTokens, settings.defaultMaxOutputTokens)));
-    setReasoningLevels([]); setProfileIds(baseProfile ? [baseProfile.id] : []); setModelKeys([]); setPreflight(null); setPreflightConfig(null); setDryRun(null);
-  }, [template, baseModelKey, baseProfile?.id, baseProfile?.defaultViewerReasoningEffort, baseProfile?.defaultViewerTemperature, settings.defaultMaxOutputTokens]);
+    setResearchMaxOutputTokens(String(Math.min(baseModel?.capabilities.maxOutputTokens ?? Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, settings.defaultMaxOutputTokens), Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, settings.defaultMaxOutputTokens))));
+    setReasoningLevels([]); setProfileIds(baseProfile ? [baseProfile.id] : []); setModelKeys([]);
+    if (template === "sampling") setSamplingForm(researchSamplingFormFromRequested(researchSamplingFromProfile(baseProfile, baseModel?.provider).requested));
+    setPreflight(null); setPreflightConfig(null); setDryRun(null);
+  }, [template, baseModelKey, baseProfile?.id, baseProfile?.defaultViewerReasoningEffort, baseProfile?.defaultViewerTemperature, baseProfile?.defaultViewerCustomTemperatureMode, settings.defaultMaxOutputTokens]);
   useEffect(() => {
     if (fixedReasoning && !sharedCapabilities.reasoningEfforts.includes(fixedReasoning)) setFixedReasoning("");
-    if (!sharedCapabilities.temperatureSupported && fixedTemperature) setFixedTemperature("");
-    if (fixedTemperature && sharedCapabilities.temperatureSupported) {
+    const customManualTemperature = baseModel?.provider === "custom_openai" && baseProfile?.defaultViewerCustomTemperatureMode === "manual";
+    if (!sharedCapabilities.temperatureSupported && fixedTemperature && !customManualTemperature) setFixedTemperature("");
+    if (fixedTemperature && (sharedCapabilities.temperatureSupported || customManualTemperature)) {
       const numeric = Number(fixedTemperature);
       if (!Number.isFinite(numeric)
-        || (sharedCapabilities.temperatureMin !== undefined && numeric < sharedCapabilities.temperatureMin)
-        || (sharedCapabilities.temperatureMax !== undefined && numeric > sharedCapabilities.temperatureMax)) setFixedTemperature("");
+        || (!customManualTemperature && sharedCapabilities.temperatureMin !== undefined && numeric < sharedCapabilities.temperatureMin)
+        || (!customManualTemperature && sharedCapabilities.temperatureMax !== undefined && numeric > sharedCapabilities.temperatureMax)) setFixedTemperature("");
     }
     if (sharedCapabilities.maxOutputTokens) {
-      setResearchMaxOutputTokens((current) => String(Math.min(Number(current) || settings.defaultMaxOutputTokens, sharedCapabilities.maxOutputTokens!)));
+      setResearchMaxOutputTokens((current) => String(Math.min(Number(current) || Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, settings.defaultMaxOutputTokens), sharedCapabilities.maxOutputTokens!)));
     }
     setPreflight(null); setPreflightConfig(null); setDryRun(null);
-  }, [sharedCapabilities.reasoningEfforts.join("|"), sharedCapabilities.temperatureSupported, sharedCapabilities.temperatureMin, sharedCapabilities.temperatureMax, sharedCapabilities.maxOutputTokens]);
+  }, [baseModel?.provider, baseProfile?.defaultViewerCustomTemperatureMode, sharedCapabilities.reasoningEfforts.join("|"), sharedCapabilities.temperatureSupported, sharedCapabilities.temperatureMin, sharedCapabilities.temperatureMax, sharedCapabilities.maxOutputTokens]);
   useEffect(() => {
     setTargetIds([]); setPreflight(null); setPreflightConfig(null); setDryRun(null);
   }, [targetSelectionMode, targetSource, targetPoolSignature, randomTargetCount]);
@@ -252,19 +289,34 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
       if (!model || !isRouteAllowedForCredential(key, baseProfile.credentialId, providers, models)) throw new Error(copy.judgeRequiresModels);
       return { providerConfigId: model.providerConfigId, modelId: model.modelId };
     });
-    const maxOutputTokens = Number(researchMaxOutputTokens);
-    if (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 1 || (sharedCapabilities.maxOutputTokens !== undefined && maxOutputTokens > sharedCapabilities.maxOutputTokens)) throw new Error(copy.researchOutputOutOfRange);
+    const configuredOutputTokens = Number(researchMaxOutputTokens);
+    if (!Number.isInteger(configuredOutputTokens) || configuredOutputTokens < 1 || (sharedCapabilities.maxOutputTokens !== undefined && configuredOutputTokens > sharedCapabilities.maxOutputTokens)) throw new Error(copy.researchOutputOutOfRange);
+    const maxOutputTokens = Math.min(Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, configuredOutputTokens), sharedCapabilities.maxOutputTokens ?? Infinity);
+    if (maxOutputTokens !== configuredOutputTokens) setResearchMaxOutputTokens(String(maxOutputTokens));
     if (template !== "reasoning" && fixedReasoning && !sharedCapabilities.reasoningEfforts.includes(fixedReasoning)) throw new Error(copy.researchReasoningUnavailable);
     const fixedTemperatureNumber = fixedTemperature.trim() ? Number(fixedTemperature) : undefined;
+    const inheritedCustomTemperatureMode = baseModel.provider === "custom_openai" ? baseProfile.defaultViewerCustomTemperatureMode : undefined;
+    const inheritedCustomReasoningMode = researchCustomReasoningModeForProfile(baseProfile, baseModel, template);
     if (template !== "temperature" && fixedTemperatureNumber !== undefined) {
-      if (!sharedCapabilities.temperatureSupported
+      const customManualTemperature = inheritedCustomTemperatureMode === "manual";
+      if ((!sharedCapabilities.temperatureSupported && !customManualTemperature)
         || !Number.isFinite(fixedTemperatureNumber)
-        || (sharedCapabilities.temperatureMin !== undefined && fixedTemperatureNumber < sharedCapabilities.temperatureMin)
-        || (sharedCapabilities.temperatureMax !== undefined && fixedTemperatureNumber > sharedCapabilities.temperatureMax)) throw new Error(copy.researchTemperatureUnavailable);
+        || (!customManualTemperature && sharedCapabilities.temperatureMin !== undefined && fixedTemperatureNumber < sharedCapabilities.temperatureMin)
+        || (!customManualTemperature && sharedCapabilities.temperatureMax !== undefined && fixedTemperatureNumber > sharedCapabilities.temperatureMax)) throw new Error(copy.researchTemperatureUnavailable);
     }
+    const profileSampling = researchSamplingFromProfile(baseProfile, baseModel.provider);
+    const samplingModels = template === "profile" && profileComparisonModels.length
+      ? profileComparisonModels
+      : template === "model" && modelComparisonModels.length
+        ? modelComparisonModels
+        : [baseModel];
+    if (template !== "sampling") assertResearchSamplingSupported(profileSampling.requested, samplingModels);
     const fixedRequestedSettings = {
       ...(template !== "reasoning" && fixedReasoning ? { reasoningEffort: fixedReasoning } : {}),
       ...(template !== "temperature" && fixedTemperatureNumber !== undefined ? { temperature: fixedTemperatureNumber } : {}),
+      ...(template !== "temperature" && inheritedCustomTemperatureMode ? { customTemperatureMode: inheritedCustomTemperatureMode } : {}),
+      ...(template !== "reasoning" && inheritedCustomReasoningMode ? { customReasoningMode: inheritedCustomReasoningMode } : {}),
+      ...(template !== "sampling" ? profileSampling.requested : {}),
       maxOutputTokens,
     };
     const shouldCaptureViewerNotes = template === "viewer_notes" || viewerNotesMode === "current";
@@ -289,18 +341,23 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
       ...overrides,
     });
     let conditions: ResearchConditionDefinition[] = [];
+    const samplingDesign = template === "sampling" ? buildResearchSamplingDesignFromForm(samplingForm) : undefined;
     if (template === "reasoning") {
       conditions = reasoningLevels.map((effort) => base(`reasoning_${effort}`, researchReasoningLabel(copy, baseModel, effort), { requestedSettings: { ...fixedRequestedSettings, reasoningEffort: effort } }));
     } else if (template === "temperature") {
       const values = [...new Set(temperatureValues.split(",").map((value) => Number(value.trim())).filter(Number.isFinite))];
-      conditions = values.map((temperature) => base(`temperature_${String(temperature).replace(".", "_")}`, `T=${temperature}`, { requestedSettings: { ...fixedRequestedSettings, temperature } }));
+      conditions = values.map((temperature) => base(`temperature_${String(temperature).replace(".", "_")}`, `T=${temperature}`, { requestedSettings: researchTemperatureConditionSettings(fixedRequestedSettings, baseModel, temperature) }));
     } else if (template === "profile") {
       conditions = profileIds.flatMap((profileId) => {
         const profile = profiles.find((item) => item.id === profileId);
         const provider = providerConfigsForCredential(profile?.credentialId, providers)[0];
         const matchedModel = models.find((item) => item.providerConfigId === provider?.id && item.modelId === baseModel.modelId);
         if (!profile || !provider || !matchedModel) return [];
-        return [base(`profile_${profile.id}`, profile.name || copy.unnamedProfile, { profileId: profile.id, providerConfigId: provider.id, modelId: matchedModel.modelId })];
+        const requestedSettings = { ...fixedRequestedSettings };
+        delete requestedSettings.customReasoningMode;
+        const profileReasoningMode = researchCustomReasoningModeForProfile(profile, matchedModel, template);
+        if (profileReasoningMode) requestedSettings.customReasoningMode = profileReasoningMode;
+        return [base(`profile_${profile.id}`, profile.name || copy.unnamedProfile, { profileId: profile.id, providerConfigId: provider.id, modelId: matchedModel.modelId, requestedSettings })];
       });
     } else if (template === "model") {
       conditions = modelKeys.flatMap((key) => {
@@ -326,6 +383,9 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
           { systemPrompt: await researchPromptFromFieldGuide(snapshot), fieldGuide: structuredClone(snapshot), promptSource: "historical_field_guide" },
         )));
       }
+    } else if (template === "sampling") {
+      conditions = buildResearchSamplingConditions(base("sampling_base", "Sampling"), samplingDesign!);
+      conditions.forEach((condition) => assertResearchSamplingSupported(condition.requestedSettings, [baseModel]));
     } else if (template === "viewer_notes") {
       const frozen = currentViewerNotes!;
       const withoutNotes: ViewerNotesSessionSnapshot = { ...structuredClone(frozen), enabled: false, content: "", contentSha256: await sha256Text(""), estimatedTokens: 0 };
@@ -366,9 +426,13 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
     conditions = conditions.map((condition) => {
       const conditionModel = models.find((item) => item.providerConfigId === condition.providerConfigId && item.modelId === condition.modelId);
       if (!conditionModel) return condition;
+      const requestedSettings = conditionModel.provider === "custom_openai"
+        ? condition.requestedSettings
+        : (() => { const next = { ...condition.requestedSettings }; delete next.customTemperatureMode; delete next.customReasoningMode; return next; })();
       return {
         ...condition,
-        effectiveSettings: resolveGenerationSettings(conditionModel.capabilities, condition.requestedSettings),
+        requestedSettings,
+        effectiveSettings: resolveGenerationSettings(conditionModel.capabilities, requestedSettings, { provider: conditionModel.provider }),
         capabilitySnapshot: structuredClone(conditionModel.capabilities),
       };
     });
@@ -383,12 +447,15 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
       temperature: template === "temperature"
         ? { mode: "condition_variable" }
         : fixedTemperatureNumber !== undefined ? { mode: "fixed", value: fixedTemperatureNumber } : { mode: "provider_default" },
+      sampling: template === "sampling"
+        ? { source: "research", profileId: baseProfile.id, mode: "condition_variable" }
+        : profileSampling.snapshot,
       maxOutputTokens,
     };
-    return {
+    return freezeResearchViewerOutputPolicy({
       schemaVersion: 1, name: name.trim(), workspaceId: workspace.id, templateType: template, sessionLanguage: language,
       protocol: createResearchProtocolSelection(researchProtocolId, language), targetIds: [...selectedTargetIds], targetSelection: { source: targetSource, mode: targetSelectionMode, ...(targetSelectionMode === "random" ? { requestedCount: randomTargetCount } : {}) }, repetitions, requireUnusedTargets: unusedOnly,
-      sessionPolicy: { requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, defaultMaxOutputTokens: settings.defaultMaxOutputTokens, maxSessionCostUsd: settings.maxSessionCostUsd, sessionCodePrefix: settings.sessionCodePrefix },
+      sessionPolicy: { requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, defaultMaxOutputTokens: settings.defaultMaxOutputTokens, sessionCodePrefix: settings.sessionCodePrefix },
       viewerControl,
       fieldGuideControl: {
         mode: template === "system_prompt" ? (promptResearchSource === "field_guide_history" ? "history" : "off") : fieldGuideMode === "current" ? "current" : "off",
@@ -399,8 +466,9 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
       },
       viewerNotesControl: { mode: template === "viewer_notes" ? "experiment" : viewerNotesMode === "current" ? "current" : "off" },
       ...(template === "system_prompt" ? { promptResearchSource } : {}),
+      ...(samplingDesign ? { samplingDesign } : {}),
       conditions, evaluationMode, judges, randomization: { matchedTargets: true, randomizedExecution: true, randomizedJudgeOrder: true },
-    };
+    }, models);
   };
 
   const preview = async () => {
@@ -424,6 +492,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
   const updateSelectedTargets = (next: string[]) => {
     setTargetIds(next); setPreflight(null); setPreflightConfig(null); setDryRun(null); setError(null);
   };
+  const samplingPreviewTargetCount = targetSelectionMode === "random" ? Math.min(randomTargetCount, eligibleTargets.length) : targetIds.length;
 
   return <div className="research-config-builder">
     <div className="research-builder-toolbar"><button className="secondary-button" onClick={onBack}>← {copy.research}</button><div><strong>{templateName(copy, template)}</strong><small>{copy.lockWarning}</small></div></div>
@@ -447,7 +516,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
         onMaxOutputTokens={(value) => { setResearchMaxOutputTokens(value); setPreflight(null); setPreflightConfig(null); setDryRun(null); }}
       />
       {template !== "system_prompt" ? <ResearchFieldGuideControlPanel copy={copy} mode={fieldGuideMode} onMode={(mode) => { setFieldGuideMode(mode); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} /> : <PromptResearchSourcePanel copy={copy} source={promptResearchSource} onSource={(source) => { setPromptResearchSource(source); setSelectedFieldGuideVersionIds([]); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} />}
-      <TemplateConditions copy={copy} template={template} baseModel={baseModel} baseProvider={baseProvider} models={models} providers={providers} profiles={profiles} reasoningLevels={reasoningLevels} setReasoningLevels={setReasoningLevels} temperatureValues={temperatureValues} setTemperatureValues={setTemperatureValues} profileIds={profileIds} setProfileIds={setProfileIds} modelKeys={modelKeys} setModelKeys={setModelKeys} variants={variants} setVariants={setVariants} language={language} promptResearchSource={promptResearchSource} fieldGuideHistory={fieldGuideHistory} selectedFieldGuideVersionIds={selectedFieldGuideVersionIds} setSelectedFieldGuideVersionIds={(ids) => { setSelectedFieldGuideVersionIds(ids); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} fieldGuideHistoryError={fieldGuideHistoryError} />
+      <TemplateConditions copy={copy} template={template} baseModel={baseModel} baseProvider={baseProvider} models={models} providers={providers} profiles={profiles} reasoningLevels={reasoningLevels} setReasoningLevels={setReasoningLevels} temperatureValues={temperatureValues} setTemperatureValues={setTemperatureValues} profileIds={profileIds} setProfileIds={setProfileIds} modelKeys={modelKeys} setModelKeys={setModelKeys} variants={variants} setVariants={setVariants} language={language} promptResearchSource={promptResearchSource} fieldGuideHistory={fieldGuideHistory} selectedFieldGuideVersionIds={selectedFieldGuideVersionIds} setSelectedFieldGuideVersionIds={(ids) => { setSelectedFieldGuideVersionIds(ids); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} fieldGuideHistoryError={fieldGuideHistoryError} samplingForm={samplingForm} setSamplingForm={(next) => { setSamplingForm(next); setPreflight(null); setPreflightConfig(null); setDryRun(null); setError(null); }} samplingTargetCount={samplingPreviewTargetCount} repetitions={repetitions} viewerCallsPerSession={researchProtocolViewerCalls(createResearchProtocolSelection(researchProtocolId, language))} judgeCount={evaluationMode === "save_only" ? 0 : judgeCount} />
       <div className="research-form-section research-target-selector"><div className="research-section-head"><div><strong>{copy.researchTargets}</strong><small>{targetSelectionMode === "random" ? `${randomTargetCount} · ${copy.randomSelection}` : `${targetIds.length} ${copy.selectedOf} ${eligibleTargets.length}`}</small></div></div><div className="research-target-controls"><label><span>{copy.researchTargetSource}</span><select value={targetSource} onChange={(event) => setTargetSource(event.target.value as ResearchTargetSource)}><option value="training">{copy.trainingTargets}</option><option value="user">{copy.myTargets}</option><option value="all">{copy.bothTargetPools}</option></select></label><label><span>{copy.targetSelectionMethod}</span><select value={targetSelectionMode} onChange={(event) => setTargetSelectionMode(event.target.value as ResearchTargetSelectionMode)}><option value="random">{copy.randomSelection}</option><option value="manual">{copy.manualSelection}</option></select></label></div>{targetSelectionMode === "random" ? <div className="research-random-targets"><label><span>{copy.numberOfTargets}</span><input type="number" min={1} max={Math.max(1, eligibleTargets.length)} value={randomTargetCount} onChange={(event) => setRandomTargetCount(Math.max(1, Math.min(eligibleTargets.length || 1, Number(event.target.value) || 1)))} /></label><small>{copy.randomTargetsAtPreflight}</small></div> : <><div className="research-target-search"><Search size={14} /><input value={targetSearch} onChange={(event) => setTargetSearch(event.target.value)} placeholder={copy.searchTargets} /><button className="secondary-button" type="button" disabled={!visibleManualTargets.length} onClick={() => updateSelectedTargets([...new Set([...targetIds, ...visibleManualTargets.map((target) => target.id)])])}>{copy.selectVisible}</button><button className="secondary-button" type="button" disabled={!targetIds.length} onClick={() => updateSelectedTargets([])}>{copy.clearSelection}</button></div><div className="research-check-grid target-manual-grid">{visibleManualTargets.map((target) => <label key={target.id}><input type="checkbox" checked={targetIds.includes(target.id)} onChange={() => updateSelectedTargets(toggle(targetIds, target.id))} /><span>{target.collection === "training" ? copy.trainingTargets : copy.myTargets} · {localizedTargetTitle(target, settings.interfaceLanguage)}</span></label>)}</div></>}{!eligibleTargets.length && <small>{copy.noEligibleTargets}</small>}</div>
       <FormRow label={copy.repetitions}><input type="number" min={1} max={100} value={repetitions} onChange={(event) => setRepetitions(Math.max(1, Math.min(100, Number(event.target.value) || 1)))} /></FormRow><div className="research-inline-check"><label><input type="checkbox" checked={unusedOnly} onChange={(event) => setUnusedOnly(event.target.checked)} />{copy.unusedOnly}</label></div>
       <div className="research-form-section research-evaluation-section"><div className="research-section-head"><div><strong>{copy.researchEvaluation}</strong><small>{copy.researchEvaluationLead}</small></div><select value={evaluationMode} onChange={(event) => setEvaluationMode(event.target.value as "save_only" | "ai_judges")}><option value="save_only">{copy.saveOnlyExternal}</option><option value="ai_judges">{copy.useAiJudges}</option></select></div>{evaluationMode === "save_only" ? <p className="research-evaluation-note">{copy.saveOnlyResearchLead}</p> : <><div className="research-section-head judge-count-row"><strong>{copy.judgeModels}</strong><select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></div>{Array.from({ length: judgeCount }, (_, index) => <ModelRouteSelect className="research-judge-select" key={index} role="judge" profile={baseProfile} providers={providers} models={models} value={judgeKeys[index]} onChange={(next) => setJudgeKeys((current) => current.map((value, itemIndex) => itemIndex === index ? next : value))} emptyLabel={`${copy.judgeModel} ${index + 1}`} />)}</>}</div>
@@ -508,13 +577,14 @@ function PromptResearchSourcePanel({ copy, source, onSource }: { copy: Copy; sou
   return <div className="research-form-section research-field-guide-setting"><div className="research-section-head"><div><strong>{copy.promptResearchSource}</strong><small>{copy.promptResearchSourceLead}</small></div><span className="status-chip ready">{source === "manual" ? copy.promptSourceManualBadge : copy.promptSourceHistoryBadge}</span></div><div className="research-check-grid"><label><input type="radio" name="research-prompt-source" checked={source === "manual"} onChange={() => onSource("manual")} /><span>{copy.manualPromptVariants}</span></label><label><input type="radio" name="research-prompt-source" checked={source === "field_guide_history"} onChange={() => onSource("field_guide_history")} /><span>{copy.trainedFieldGuideHistory}</span></label></div><small>{source === "manual" ? copy.manualPromptStandaloneLead : copy.lockedBlocksAlwaysOn}</small></div>;
 }
 
-function TemplateConditions(props: { copy: Copy; template: ResearchTemplateType; baseModel: ProviderModel | null; baseProvider: ProviderConfig | null; models: ProviderModel[]; providers: ProviderConfig[]; profiles: Profile[]; reasoningLevels: ReasoningEffort[]; setReasoningLevels: (value: ReasoningEffort[]) => void; temperatureValues: string; setTemperatureValues: (value: string) => void; profileIds: string[]; setProfileIds: (value: string[]) => void; modelKeys: string[]; setModelKeys: (value: string[]) => void; variants: string[]; setVariants: (value: string[]) => void; language: InterfaceLanguage; promptResearchSource: "manual" | "field_guide_history"; fieldGuideHistory: ResearchFieldGuideSnapshot[]; selectedFieldGuideVersionIds: string[]; setSelectedFieldGuideVersionIds: (value: string[]) => void; fieldGuideHistoryError: string | null }) {
+function TemplateConditions(props: { copy: Copy; template: ResearchTemplateType; baseModel: ProviderModel | null; baseProvider: ProviderConfig | null; models: ProviderModel[]; providers: ProviderConfig[]; profiles: Profile[]; reasoningLevels: ReasoningEffort[]; setReasoningLevels: (value: ReasoningEffort[]) => void; temperatureValues: string; setTemperatureValues: (value: string) => void; profileIds: string[]; setProfileIds: (value: string[]) => void; modelKeys: string[]; setModelKeys: (value: string[]) => void; variants: string[]; setVariants: (value: string[]) => void; language: InterfaceLanguage; promptResearchSource: "manual" | "field_guide_history"; fieldGuideHistory: ResearchFieldGuideSnapshot[]; selectedFieldGuideVersionIds: string[]; setSelectedFieldGuideVersionIds: (value: string[]) => void; fieldGuideHistoryError: string | null; samplingForm: ResearchSamplingFormState; setSamplingForm: (value: ResearchSamplingFormState) => void; samplingTargetCount: number; repetitions: number; viewerCallsPerSession: number; judgeCount: number }) {
   const { copy, template, baseModel, baseProvider } = props;
   if (template === "practice") return <div className="research-form-section"><strong>{copy.researchConditions}</strong><div className="condition-pills"><span>FIRST</span><span>SECOND</span></div></div>;
   if (template === "reasoning") return <div className="research-form-section"><strong>{copy.reasoningLevels}</strong><div className="research-check-grid">{baseModel?.capabilities.reasoning.efforts.map((effort) => <label key={effort}><input type="checkbox" checked={props.reasoningLevels.includes(effort)} onChange={() => props.setReasoningLevels(toggle(props.reasoningLevels, effort))} /><span>{researchReasoningLabel(copy, baseModel, effort)}</span></label>)}</div>{baseModel?.capabilities.reasoning.mandatory && <small>{copy.reasoningMandatory}</small>}{!baseModel?.capabilities.reasoning.efforts.length && <small>{baseModel?.capabilities.reasoning.registryStatus === "known" ? copy.reasoningAutoOnly : copy.unknown}</small>}</div>;
-  if (template === "temperature") return <FormRow label={copy.temperatureValues}><input value={props.temperatureValues} onChange={(event) => props.setTemperatureValues(event.target.value)} disabled={!baseModel?.capabilities.temperature.supported} /></FormRow>;
+  if (template === "temperature") return <FormRow label={copy.temperatureValues}><input value={props.temperatureValues} onChange={(event) => props.setTemperatureValues(event.target.value)} disabled={!researchTemperatureExperimentSupportsModel(baseModel)} /></FormRow>;
   if (template === "profile") return <div className="research-form-section"><strong>{copy.profilesToCompare}</strong><div className="research-check-grid">{props.profiles.map((profile) => { const provider = props.providers.find((item) => item.credentialId === profile.credentialId); const matched = props.models.some((model) => model.providerConfigId === provider?.id && model.modelId === baseModel?.modelId); return <label key={profile.id} className={!matched ? "disabled" : ""}><input type="checkbox" disabled={!matched} checked={props.profileIds.includes(profile.id)} onChange={() => props.setProfileIds(toggle(props.profileIds, profile.id))} /><span>{profile.name || copy.unnamedProfile}</span></label>; })}</div></div>;
   if (template === "model") return <div className="research-form-section"><strong>{copy.modelsToCompare}</strong><div className="research-check-grid models">{props.models.filter((model) => model.providerConfigId === baseProvider?.id).map((model) => <label key={modelRouteKeyFor(model)}><input type="checkbox" checked={props.modelKeys.includes(modelRouteKeyFor(model))} onChange={() => props.setModelKeys(toggle(props.modelKeys, modelRouteKeyFor(model)))} /><span>{model.displayName}</span></label>)}</div></div>;
+  if (template === "sampling") return <ResearchSamplingDesignControls copy={props.copy} form={props.samplingForm} onChange={props.setSamplingForm} targetCount={props.samplingTargetCount} repetitions={props.repetitions} viewerCallsPerSession={props.viewerCallsPerSession} judgeCount={props.judgeCount} />;
   if (template === "viewer_notes") return <div className="research-form-section"><div className="research-section-head"><div><strong>{props.language === "pl" ? "Aktualne Viewer Notes przy Experiment Lock" : "Current Viewer Notes at Experiment Lock"}</strong><small>{copy.viewerNotesImpactCurrentLead}</small></div></div><div className="condition-pills"><span>{props.language === "pl" ? "BEZ NOTATEK" : "NO NOTES"}</span><span>{props.language === "pl" ? "ZAMROŻONE AKTUALNE NOTATKI" : "FROZEN CURRENT NOTES"}</span></div></div>;
   if (template === "system_prompt" && props.promptResearchSource === "field_guide_history") {
     return <div className="research-form-section"><div className="research-section-head"><div><strong>{copy.fieldGuideHistoryVersions}</strong><small>{copy.fieldGuideHistorySelectionLead}</small></div><span className="status-chip ready">{props.selectedFieldGuideVersionIds.length}/4</span></div>{props.fieldGuideHistoryError && <div className="provider-error">{props.fieldGuideHistoryError}</div>}<div className="research-check-grid">{props.fieldGuideHistory.map((version) => <label key={version.versionId}><input type="checkbox" checked={props.selectedFieldGuideVersionIds.includes(version.versionId)} disabled={!props.selectedFieldGuideVersionIds.includes(version.versionId) && props.selectedFieldGuideVersionIds.length >= 4} onChange={() => props.setSelectedFieldGuideVersionIds(toggle(props.selectedFieldGuideVersionIds, version.versionId))} /><span>v{version.versionNumber} · {new Date(version.versionCreatedAt).toLocaleDateString()} · {version.sourceTrainingRunId ? `${copy.training} ${version.sourceTrainingRunId}` : version.sourceKind} · {version.contentSha256.slice(0, 10)}…</span></label>)}</div>{!props.fieldGuideHistory.length && !props.fieldGuideHistoryError && <small>{copy.fieldGuideHistoryEmpty}</small>}</div>;
@@ -528,16 +598,16 @@ function DryRunPanel({ copy, config }: { copy: Copy; config: ResearchConfig }) {
   const viewerCallsPerSession = researchProtocolViewerCalls(config.protocol);
   const saveOnly = config.judges.length === 0;
   const control = config.viewerControl;
-  return <section className="panel research-review-panel"><div className="research-review-head"><ShieldCheck size={18} /><div><strong>{copy.dryRun}</strong><small>{copy.dryRunLead}</small></div></div><dl><div><dt>{copy.plannedSessions}</dt><dd>{sessions}</dd></div><div><dt>{copy.viewerCalls}</dt><dd>{sessions * viewerCallsPerSession}</dd></div><div><dt>{copy.judgeCalls}</dt><dd>{sessions * config.judges.length}</dd></div><div><dt>{copy.sessionLanguage}</dt><dd>{config.sessionLanguage.toUpperCase()}</dd></div><div><dt>{copy.viewerNotesSetting}</dt><dd>{config.viewerNotesControl?.mode === "current" ? "CURRENT" : config.viewerNotesControl?.mode === "experiment" ? copy.testedVariableBelow : "OFF"}</dd></div><div><dt>{copy.fieldGuideSetting}</dt><dd>{config.fieldGuideControl?.mode === "history" ? "HISTORY" : config.fieldGuideControl?.mode === "current" ? "CURRENT" : "OFF"}</dd></div>{config.promptResearchSource && <div><dt>{copy.promptResearchSource}</dt><dd>{config.promptResearchSource === "manual" ? "MANUAL" : "HISTORY"}</dd></div>}{control && <><div><dt>{copy.baseViewerModel}</dt><dd>{control.model.mode === "fixed" ? control.model.modelId : copy.testedVariableBelow}</dd></div><div><dt>{copy.researchReasoning}</dt><dd>{control.reasoning.mode === "fixed" ? control.reasoning.value?.toUpperCase() : control.reasoning.mode === "provider_default" ? copy.autoProviderDefault : copy.testedVariableBelow}</dd></div><div><dt>{copy.researchTemperature}</dt><dd>{control.temperature.mode === "fixed" ? control.temperature.value : control.temperature.mode === "provider_default" ? copy.autoProviderDefault : copy.testedVariableBelow}</dd></div><div><dt>{copy.researchMaxOutputTokens}</dt><dd>{control.maxOutputTokens}</dd></div><div><dt>{copy.viewerSystemPrompt}</dt><dd>{control.systemPrompt.mode === "fixed" ? `${control.systemPrompt.contentSha256?.slice(0, 12)}…` : copy.testedVariableBelow}</dd></div></>}</dl><div className="dry-run-roles"><span>🔒 Viewer → {researchProtocolLabel(config.protocol)} × {viewerCallsPerSession}</span>{saveOnly ? <><span>💾 {copy.saveOnlyExternal}</span><span>📁 {copy.externalEvaluationFolder}</span></> : <><span>🔒 Judge → anonymous allowlist packet</span><span>🧊 Scores → freeze</span><span>🔓 Blinding Key → results only after freeze</span></>}</div></section>;
+  return <section className="panel research-review-panel"><div className="research-review-head"><ShieldCheck size={18} /><div><strong>{copy.dryRun}</strong><small>{copy.dryRunLead}</small></div></div><dl>{config.samplingDesign && <div><dt>{copy.samplingConfigurations}</dt><dd>{researchSamplingConfigurationCount(config.samplingDesign)}</dd></div>}<div><dt>{copy.plannedSessions}</dt><dd>{sessions}</dd></div><div><dt>{copy.viewerCalls}</dt><dd>{sessions * viewerCallsPerSession}</dd></div><div><dt>{copy.judgeCalls}</dt><dd>{sessions * config.judges.length}</dd></div><div><dt>{copy.sessionLanguage}</dt><dd>{config.sessionLanguage.toUpperCase()}</dd></div><div><dt>{copy.viewerNotesSetting}</dt><dd>{config.viewerNotesControl?.mode === "current" ? "CURRENT" : config.viewerNotesControl?.mode === "experiment" ? copy.testedVariableBelow : "OFF"}</dd></div><div><dt>{copy.fieldGuideSetting}</dt><dd>{config.fieldGuideControl?.mode === "history" ? "HISTORY" : config.fieldGuideControl?.mode === "current" ? "CURRENT" : "OFF"}</dd></div>{config.promptResearchSource && <div><dt>{copy.promptResearchSource}</dt><dd>{config.promptResearchSource === "manual" ? "MANUAL" : "HISTORY"}</dd></div>}{control && <><div><dt>{copy.baseViewerModel}</dt><dd>{control.model.mode === "fixed" ? control.model.modelId : copy.testedVariableBelow}</dd></div><div><dt>{copy.researchReasoning}</dt><dd>{control.reasoning.mode === "fixed" ? control.reasoning.value?.toUpperCase() : control.reasoning.mode === "provider_default" ? copy.autoProviderDefault : copy.testedVariableBelow}</dd></div><div><dt>{copy.researchTemperature}</dt><dd>{control.temperature.mode === "fixed" ? control.temperature.value : control.temperature.mode === "provider_default" ? copy.autoProviderDefault : copy.testedVariableBelow}</dd></div>{control.sampling && <><div><dt>top_p</dt><dd>{samplingControlDisplay(copy, config, "topP")}</dd></div><div><dt>top_k</dt><dd>{samplingControlDisplay(copy, config, "topK")}</dd></div><div><dt>seed</dt><dd>{samplingControlDisplay(copy, config, "seed")}</dd></div></>}<div><dt>{copy.researchMaxOutputTokens}</dt><dd>{control.maxOutputTokens}</dd></div><div><dt>{copy.viewerSystemPrompt}</dt><dd>{control.systemPrompt.mode === "fixed" ? `${control.systemPrompt.contentSha256?.slice(0, 12)}…` : copy.testedVariableBelow}</dd></div></>}</dl><div className="dry-run-roles"><span>🔒 Viewer → {researchProtocolLabel(config.protocol)} × {viewerCallsPerSession}</span>{saveOnly ? <><span>💾 {copy.saveOnlyExternal}</span><span>📁 {copy.externalEvaluationFolder}</span></> : <><span>🔒 Judge → anonymous allowlist packet</span><span>🧊 Scores → freeze</span><span>🔓 Blinding Key → results only after freeze</span></>}</div></section>;
 }
 
 function PreflightPanel({ copy, preflight }: { copy: Copy; preflight: ResearchPreflightResult }) {
-  return <section className="panel research-review-panel"><div className="research-review-head"><span className={preflight.ok ? "preflight-ok" : "preflight-fail"}>{preflight.ok ? <Check size={18} /> : <X size={18} />}</span><div><strong>{preflight.ok ? copy.preflightPassed : copy.preflightFailed}</strong><small>{copy.viewerCalls}: {preflight.estimatedViewerCalls} · {copy.judgeCalls}: {preflight.estimatedJudgeCalls}</small></div></div><div className="preflight-list">{preflight.checks.map((check) => <div key={check.id} className={check.level}><span>{check.level === "pass" ? "✓" : check.level === "warning" ? "!" : "×"}</span><p>{check.message}</p></div>)}</div></section>;
+  return <section className="panel research-review-panel"><div className="research-review-head"><span className={preflight.ok ? "preflight-ok" : "preflight-fail"}>{preflight.ok ? <Check size={18} /> : <X size={18} />}</span><div><strong>{preflight.ok ? copy.preflightPassed : copy.preflightFailed}</strong><small>{copy.viewerCalls}: {preflight.estimatedViewerCalls} · {copy.judgeCalls}: {preflight.estimatedJudgeCalls}{preflight.estimatedCostUsd !== undefined ? ` · ≈ $${preflight.estimatedCostUsd.toFixed(4)}` : ""}</small></div></div><div className="preflight-list">{preflight.checks.map((check) => <div key={check.id} className={check.level}><span>{check.level === "pass" ? "✓" : check.level === "warning" ? "!" : "×"}</span><p>{check.message}</p></div>)}</div></section>;
 }
 
-function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: { copy: Copy; repository: AppRepository; project: ResearchProjectRecord; onRefresh: () => Promise<void>; onBack: () => void }) {
+export function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: { copy: Copy; repository: AppRepository; project: ResearchProjectRecord; onRefresh: () => Promise<void>; onBack: () => void }) {
   const dialogs = useAppDialogs();
-  const [busy, setBusy] = useState<"sessions" | "judging" | "unblind" | "export" | null>(null);
+  const [busy, setBusy] = useState<"sessions" | "judging" | "unblind" | "export" | "recovery" | "end" | "archive" | null>(null);
   const [progress, setProgress] = useState(0);
   const [total, setTotal] = useState(0);
   const [currentAnonymous, setCurrentAnonymous] = useState("");
@@ -548,36 +618,67 @@ function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: {
   const [assignments, setAssignments] = useState<ResearchAssignmentRecord[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const operationGuard=useRef(false);
+  const [stopping,setStopping]=useState(false);
+  const [termination,setTermination]=useState<ResearchExecutionTermination|null|undefined>(undefined);
+  const [evaluationBusy,setEvaluationBusy]=useState(false);
+  const [uncertainJudges,setUncertainJudges]=useState<Array<{sessionId:string;modelRoute:string}>>([]);
+  const ownership=useWorkflowOwnership(repository,`research:${project.id}`);
+  const pl=copy.home!=="Home";
+  const unavailable=ownership.unavailable || termination===undefined || evaluationBusy;
+  const refreshRuntime=async()=>{
+    const marker=await repository.getResearchExecutionTermination(project.id);
+    setTermination(current=>current ?? marker);
+    setUncertainJudges(marker?[]:await getUncertainResearchJudges(repository,project.id));
+  };
+  useEffect(()=>{
+    let closed=false;
+    const refresh=async()=>{try{const marker=await repository.getResearchExecutionTermination(project.id);if(!closed)setTermination(current=>current ?? marker);}catch{if(!closed)setTermination(undefined);}};
+    void refresh();const timer=setInterval(()=>void refresh(),500);
+    return()=>{closed=true;clearInterval(timer);abortRef.current?.abort(new DOMException("Research view closed","AbortError"));};
+  },[repository,project.id]);
+  useEffect(()=>{let closed=false;void getUncertainResearchJudges(repository,project.id).then(rows=>{if(!closed)setUncertainJudges(rows);}).catch(()=>undefined);return()=>{closed=true;};},[repository,project.id,project.state,busy]);
+  const perform=async(phase:NonNullable<typeof busy>,work:(owned:AppRepository,signal?:AbortSignal)=>Promise<void>,admin=false)=>{
+    if(operationGuard.current || unavailable || termination && !["end","archive","export"].includes(phase))return;
+    operationGuard.current=true;setBusy(phase);setStopping(false);setError(null);
+    let refreshed=false;
+    const controller=["sessions","judging","unblind"].includes(phase)?new AbortController():null;abortRef.current=controller;
+    try{
+      if(phase==="end" || phase==="export"){await work(repository);await onRefresh();await refreshRuntime();refreshed=true;}
+      else {
+        const scope=researchScope(project.id,controller?.signal);
+        if(admin)scope.entity.allowEnded=true;
+        await repository.withWorkflowOwnership(scope,async(owned,signal)=>{try{await work(owned,signal);}finally{await onRefresh();await refreshRuntime();refreshed=true;}});
+      }
+    }catch(cause){setError(message(cause));if(!refreshed)await onRefresh().catch(refreshError=>setError(message(refreshError)));}
+    finally{abortRef.current=null;setStopping(false);setBusy(null);operationGuard.current=false;}
+  };
+  const stop=()=>{if(!abortRef.current || abortRef.current.signal.aborted)return;setStopping(true);abortRef.current.abort(new DOMException("Research stopped by user","AbortError"));};
+
 
   useEffect(() => { void repository.getResearchResults(project.id).then(setResults); }, [repository, project.id, project.state]);
-  useEffect(() => { void repository.listResearchAssignments(project.id).then(setAssignments); }, [repository, project.id, project.state]);
+  useEffect(() => { void repository.listResearchAssignments(project.id).then(setAssignments); }, [repository, project.id, project.state, busy]);
   useEffect(() => {
-    if (project.state !== "Interrupted") { setRecoverableCount(0); return; }
-    void repository.listResearchAssignments(project.id).then((items) => setRecoverableCount(items.filter((item) => item.sessionId && !["SessionComplete", "Judged"].includes(item.status)).length));
+    if (!["Running", "Interrupted"].includes(project.state)) { setRecoverableCount(0); return; }
+    void repository.listResearchAssignments(project.id).then((items) => setRecoverableCount(items.filter((item) => item.sessionId && !["SessionComplete", "Judged", "ResumeApproved"].includes(item.status)).length));
   }, [repository, project.id, project.state]);
-  const runSessions = async () => {
-    const controller = new AbortController(); abortRef.current = controller; setBusy("sessions"); setError(null);
-    try { await executeResearchSessions({ repository, projectId: project.id, signal: controller.signal, onProgress: (value) => { setProgress(value.completed); setTotal(value.total); setCurrentAnonymous(value.anonymousSessionId); } }); await onRefresh(); }
-    catch (cause) { setError(message(cause)); await onRefresh(); } finally { abortRef.current = null; setBusy(null); }
-  };
-  const runJudging = async () => { setBusy("judging"); setError(null); try { await judgeResearch({ repository, projectId: project.id, onProgress: (value) => { setProgress(value.completed); setTotal(value.total); setCurrentAnonymous(value.anonymousSessionId); } }); await onRefresh(); } catch (cause) { setError(message(cause)); await onRefresh(); } finally { setBusy(null); } };
-  const unblind = async () => { setBusy("unblind"); setError(null); try { setResults(await unblindAndComputeResearch(repository, project.id)); await onRefresh(); } catch (cause) { setError(message(cause)); } finally { setBusy(null); } };
-  const exportPackage = async () => {
-    const destination = await chooseDirectory(copy.researchExportChooseFolder);
-    if (!destination) return;
-    setBusy("export"); setError(null);
-    try { const exported = await exportResearchPackage(repository, project.id, destination); setExportPath(exported.directory); }
-    catch (cause) { setError(message(cause)); }
-    finally { setBusy(null); }
-  };
-  const recover = async () => {
-    if (!recoverableCount) return;
-    const confirmed = await dialogs.confirm({ title: copy.dialogWarningTitle, description: copy.researchRecoveryConfirm, confirmLabel: copy.dialogContinue, cancelLabel: copy.cancel, severity: "warning" });
-    if (!confirmed) return;
-    setError(null);
-    try { await prepareInterruptedResearchRetry(repository, project.id); setRecoverableCount(0); await onRefresh(); } catch (cause) { setError(message(cause)); }
-  };
-  const archiveProject = async () => {
+  const progressUpdate=(value:{completed:number;total:number;anonymousSessionId:string})=>{setProgress(value.completed);setTotal(value.total);setCurrentAnonymous(value.anonymousSessionId);};
+  const runSessions=()=>perform("sessions",(owned,signal)=>executeResearchSessions({repository:owned,projectId:project.id,signal,onProgress:progressUpdate}));
+  const runJudging=()=>perform("judging",(owned,signal)=>judgeResearch({repository:owned,recoveryOwner:repository.recoveryOwner ?? repository,projectId:project.id,signal,completeMissing:project.state==="Judging",onProgress:progressUpdate}));
+  const unblind=()=>perform("unblind",async(owned,signal)=>{setResults(await unblindAndComputeResearch(owned,project.id,signal));});
+  const exportPackage=()=>perform("export",async owned=>{const destination=await chooseDirectory(copy.researchExportChooseFolder);if(!destination)return;const exported=await exportResearchPackage(owned,project.id,destination);setExportPath(exported.directory);});
+  const recover=()=>perform("recovery",async owned=>{
+    if(!recoverableCount)return;
+    const confirmed=await dialogs.confirm({title:copy.dialogWarningTitle,description:copy.researchRecoveryConfirm,confirmLabel:copy.dialogContinue,cancelLabel:copy.cancel,severity:"warning"});
+    if(confirmed){
+      await prepareInterruptedResearchRetry(owned,project.id,decision=>dialogs.confirm({...decision,severity:"warning"}));
+      const assignments=await owned.listResearchAssignments(project.id);
+      setRecoverableCount(assignments.filter(item=>item.sessionId && !["SessionComplete","Judged","ResumeApproved"].includes(item.status)).length);
+    }
+  });
+
+  const endExecution=()=>perform("end",async owned=>{const marker=await owned.endResearchExecution(project.id);setTermination(marker);});
+  const archiveProject = () => perform("archive",async repository=>{
     const pl = copy.home !== "Home";
     const confirmed = await dialogs.confirm({
       title: pl ? "Archiwizować Research?" : "Archive Research?",
@@ -590,14 +691,12 @@ function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: {
       severity: "warning",
     });
     if (!confirmed) return;
-    setError(null);
-    try { await repository.archiveResearchProject(project.id); await onRefresh(); onBack(); }
-    catch (cause) { setError(message(cause)); }
-  };
+    await repository.archiveResearchProject(project.id);onBack();
+  },true);
 
-  const sessionsReady = ["Locked", "Running", "Interrupted"].includes(project.state);
+  const sessionsReady = !termination && ["Locked", "Running", "Interrupted"].includes(project.state);
   const saveOnly = project.config.judges.length === 0;
-  const judgingReady = !saveOnly && ["SessionsComplete", "Judging"].includes(project.state);
+  const judgingReady = !termination && !saveOnly && ["SessionsComplete", "Judging"].includes(project.state);
   const saveOnlyExportReady = saveOnly && project.state === "SessionsComplete";
   const completedAssignments = assignments.filter((assignment) => assignment.sessionId && ["SessionComplete", "Judged"].includes(assignment.status));
   const resultBySessionId = new Map((results?.sessions ?? []).map((session) => [session.sessionId, session]));
@@ -608,28 +707,81 @@ function ResearchProjectView({ copy, repository, project, onRefresh, onBack }: {
       <section className="panel research-run-card">
         <div className="research-state-head"><div><small>{copy.currentState}</small><strong>{project.state}</strong></div>{project.lockedAt && <span className="status-chip ready"><LockKeyhole size={12} />{copy.configLocked}</span>}</div>
         <div className="research-run-meta"><span>{copy.plannedSessions}<strong>{project.config.targetIds.length * project.config.repetitions * project.config.conditions.length}</strong></span><span>{copy.researchConditions}<strong>{project.config.conditions.length}</strong></span><span>{copy.researchEvaluation}<strong>{saveOnly ? copy.saveOnly : `${project.config.judges.length} AI Judge`}</strong></span></div>
-        {busy && <div className="research-live-progress"><span className="loader-orb" /><div><strong>{busy === "export" ? (saveOnly ? copy.exportSavedSessions : copy.exportResearchPackage) : `${copy.researchProgress} · ${progress}/${total || "…"}`}</strong><small>{currentAnonymous}</small></div>{busy === "sessions" && <button className="stop-button" onClick={() => abortRef.current?.abort()}><CircleStop size={15} />STOP</button>}</div>}
-        {!busy && <div className="research-stage-actions">{recoverableCount > 0 && <button className="secondary-button recovery-button" onClick={() => void recover()}>{copy.preserveResearchRecovery} · {recoverableCount}</button>}{sessionsReady && <button className="primary-button" disabled={!isTauriRuntime() || recoverableCount > 0} onClick={() => void runSessions()}><Play size={15} />{project.state === "Locked" ? copy.startResearch : copy.resumeResearch}</button>}{saveOnlyExportReady && <button className="primary-button" disabled={!isTauriRuntime()} onClick={() => void exportPackage()}>{copy.exportSavedSessions}</button>}{judgingReady && <button className="primary-button" disabled={!isTauriRuntime()} onClick={() => void runJudging()}><ShieldCheck size={15} />{copy.runResearchJudging}</button>}{project.state === "ScoresFrozen" && <button className="primary-button unblind-button" onClick={() => void unblind()}><LockKeyhole size={15} />{copy.unblindCalculate}</button>}{project.state === "Complete" && <><button className="secondary-button" onClick={() => void repository.getResearchResults(project.id).then(setResults)}><RotateCcw size={14} />{copy.researchResults}</button><button className="primary-button" disabled={!isTauriRuntime()} onClick={() => void exportPackage()}>{copy.exportResearchPackage}</button></>}<button className="secondary-button" onClick={() => void archiveProject()}><Archive size={14} />{copy.home === "Home" ? "Archive" : "Archiwizuj"}</button></div>}
-        {saveOnlyExportReady && <p className="research-recovery-note">{copy.saveOnlyReadyLead}</p>}{recoverableCount > 0 && <p className="research-recovery-note">{copy.researchRecoveryRequired}</p>}{exportPath && <div className="export-success"><Check size={14} /><span><strong>{copy.exportComplete}</strong><small>{exportPath}</small></span></div>}{!isTauriRuntime() && (sessionsReady || saveOnlyExportReady) && <p className="research-runtime-note">{copy.researchRequiresDesktop}</p>}{error && <div className="provider-error">{error}</div>}
+        {busy && <div className="research-live-progress"><span className="loader-orb" /><div><strong>{busy === "export" ? (saveOnly ? copy.exportSavedSessions : copy.exportResearchPackage) : `${copy.researchProgress} · ${progress}/${total || "…"}`}</strong><small>{currentAnonymous}</small></div>{["sessions","judging","unblind"].includes(busy) && <button className="stop-button" disabled={stopping} title={pl?"Zatrzymaj wykonywanie. Rozpoczęte wywołanie może zostać naliczone przez dostawcę.":"Stop execution. A started request may still be charged by the provider."} onClick={stop}><CircleStop size={15} />{stopping?(pl?"Zatrzymywanie…":"Stopping…"):"STOP"}</button>}</div>}
+        {!busy && <div className="research-stage-actions">{!termination && recoverableCount > 0 && <button className="secondary-button recovery-button" disabled={unavailable} onClick={() => void recover()}>{copy.preserveResearchRecovery} · {recoverableCount}</button>}{sessionsReady && <button className="primary-button" disabled={unavailable || !isTauriRuntime() || recoverableCount > 0} onClick={() => void runSessions()}><Play size={15} />{project.state === "Locked" ? copy.startResearch : copy.resumeResearch}</button>}{saveOnlyExportReady && <button className="primary-button" disabled={unavailable || !isTauriRuntime()} onClick={() => void exportPackage()}>{copy.exportSavedSessions}</button>}{judgingReady && <button className="primary-button" disabled={unavailable || !isTauriRuntime()} onClick={() => void runJudging()}><ShieldCheck size={15} />{project.state==="Judging"?(pl?"Dokończ brakujące":"Complete missing scores"):copy.runResearchJudging}</button>}{!termination && ["ScoresFrozen","Unblinded"].includes(project.state) && <button disabled={unavailable} className="primary-button unblind-button" onClick={() => void unblind()}><LockKeyhole size={15} />{project.state==="Unblinded"?(pl?"Wznów obliczenie wyników":"Resume results calculation"):copy.unblindCalculate}</button>}{project.state === "Complete" && <><button className="secondary-button" onClick={() => void repository.getResearchResults(project.id).then(setResults)}><RotateCcw size={14} />{copy.researchResults}</button><button className="primary-button" disabled={unavailable || !isTauriRuntime()} onClick={() => void exportPackage()}>{copy.exportResearchPackage}</button></>}{!termination && uncertainJudges.length>0 && <p role="status">{pl ? "Część ocen wymaga dokończenia. Zachowano sesje, odpowiedzi i prawidłowe oceny. Dokończenie wykorzysta zapisane odpowiedzi i może wykonać nowe, ograniczone próby tylko dla brakujących ocen." : "Some scores need completion. Sessions, responses and valid scores are retained. Completion uses saved responses and may make new bounded attempts for missing scores only."}</p>}{!termination && canEndResearchExecution(project) && <button className="secondary-button" disabled={unavailable} onClick={()=>void endExecution()}>{pl?"Zakończ wykonanie":"End execution"}</button>}{termination && <button className="primary-button" disabled={unavailable || !isTauriRuntime()} onClick={()=>void exportPackage()}>{pl?"Zapisz zachowany przebieg":"Export saved work"}</button>}<button className="secondary-button" disabled={unavailable} onClick={() => void archiveProject()}><Archive size={14} />{copy.home === "Home" ? "Archive" : "Archiwizuj"}</button></div>}
+        {termination && <p className="research-recovery-note" role="status">{pl?"Wykonanie zakończone przez użytkownika. Zapisane sesje i wyniki pozostają dostępne.":"Execution ended by user. Saved sessions and results remain available."}</p>}{ownership.unavailable && <small role="status">{ownership.state==="other"?(pl?"Praca trwa w innym oknie":"Work is running in another window"):(pl?"Sprawdzanie stanu wykonania":"Checking execution state")}</small>}{saveOnlyExportReady && <p className="research-recovery-note">{copy.saveOnlyReadyLead}</p>}{!termination && recoverableCount > 0 && <p className="research-recovery-note">{copy.researchRecoveryRequired}</p>}{exportPath && <div className="export-success"><Check size={14} /><span><strong>{copy.exportComplete}</strong><small>{exportPath}</small></span></div>}{!isTauriRuntime() && (sessionsReady || saveOnlyExportReady) && <p className="research-runtime-note">{copy.researchRequiresDesktop}</p>}{error && <div className="provider-error">{error}</div>}
       </section>
-      <aside className="panel research-lock-summary"><strong>{copy.experimentLock}</strong><code>{project.configHash ?? "—"}</code><p>{copy.lockWarning}</p>{project.config.viewerControl && <div className="research-lock-controls"><span><small>{copy.baseViewerModel}</small><strong>{project.config.viewerControl.model.mode === "fixed" ? project.config.viewerControl.model.modelId : copy.testedVariableBelow}</strong></span><span><small>{copy.researchReasoning}</small><strong>{project.config.viewerControl.reasoning.mode === "fixed" ? project.config.viewerControl.reasoning.value?.toUpperCase() : project.config.viewerControl.reasoning.mode === "provider_default" ? copy.autoProviderDefault : copy.testedVariableBelow}</strong></span><span><small>{copy.researchTemperature}</small><strong>{project.config.viewerControl.temperature.mode === "fixed" ? project.config.viewerControl.temperature.value : project.config.viewerControl.temperature.mode === "provider_default" ? copy.autoProviderDefault : copy.testedVariableBelow}</strong></span></div>}<div className="research-lock-controls"><span><small>{copy.viewerNotesSetting}</small><strong>{project.config.viewerNotesControl?.mode === "current" ? "CURRENT" : project.config.viewerNotesControl?.mode === "experiment" ? copy.testedVariableBelow : "OFF"}</strong></span><span><small>{copy.fieldGuideSetting}</small><strong>{project.config.fieldGuideControl?.mode === "history" ? "HISTORY" : project.config.fieldGuideControl?.mode === "current" ? "CURRENT" : "OFF"} · {copy.frozenStatus}</strong></span>{project.config.promptResearchSource && <span><small>{copy.promptResearchSource}</small><strong>{project.config.promptResearchSource === "manual" ? "MANUAL" : "HISTORY"}</strong></span>}</div><ul>{project.config.conditions.map((condition) => <li key={condition.key}>{condition.label}{condition.fieldGuide ? ` · FG v${condition.fieldGuide.versionNumber} · ${condition.fieldGuide.contentSha256.slice(0, 10)}…` : ""}</li>)}</ul></aside>
+      <aside className="panel research-lock-summary"><strong>{copy.experimentLock}</strong><code>{project.configHash ?? "—"}</code><p>{copy.lockWarning}</p>{project.config.viewerControl && <div className="research-lock-controls"><span><small>{copy.baseViewerModel}</small><strong>{project.config.viewerControl.model.mode === "fixed" ? project.config.viewerControl.model.modelId : copy.testedVariableBelow}</strong></span><span><small>{copy.researchReasoning}</small><strong>{project.config.viewerControl.reasoning.mode === "fixed" ? project.config.viewerControl.reasoning.value?.toUpperCase() : project.config.viewerControl.reasoning.mode === "provider_default" ? copy.autoProviderDefault : copy.testedVariableBelow}</strong></span><span><small>{copy.researchTemperature}</small><strong>{project.config.viewerControl.temperature.mode === "fixed" ? project.config.viewerControl.temperature.value : project.config.viewerControl.temperature.mode === "provider_default" ? copy.autoProviderDefault : copy.testedVariableBelow}</strong></span>{project.config.viewerControl.sampling && <><span><small>top_p</small><strong>{samplingControlDisplay(copy, project.config, "topP")}</strong></span><span><small>top_k</small><strong>{samplingControlDisplay(copy, project.config, "topK")}</strong></span><span><small>seed</small><strong>{samplingControlDisplay(copy, project.config, "seed")}</strong></span></>}</div>}<div className="research-lock-controls"><span><small>{copy.viewerNotesSetting}</small><strong>{project.config.viewerNotesControl?.mode === "current" ? "CURRENT" : project.config.viewerNotesControl?.mode === "experiment" ? copy.testedVariableBelow : "OFF"}</strong></span><span><small>{copy.fieldGuideSetting}</small><strong>{project.config.fieldGuideControl?.mode === "history" ? "HISTORY" : project.config.fieldGuideControl?.mode === "current" ? "CURRENT" : "OFF"} · {copy.frozenStatus}</strong></span>{project.config.promptResearchSource && <span><small>{copy.promptResearchSource}</small><strong>{project.config.promptResearchSource === "manual" ? "MANUAL" : "HISTORY"}</strong></span>}</div>{project.config.samplingDesign && <div className="research-lock-controls"><span><small>{copy.samplingConfigurationsCount}</small><strong>{researchSamplingConfigurationCount(project.config.samplingDesign)}</strong></span><span><small>{copy.plannedSessions}</small><strong>{researchSamplingSessionCount(project.config.samplingDesign, project.config.targetIds.length, project.config.repetitions)}</strong></span></div>}<ul>{project.config.conditions.slice(0, project.config.samplingDesign ? 12 : project.config.conditions.length).map((condition) => <li key={condition.key}>{condition.label}{condition.fieldGuide ? ` · FG v${condition.fieldGuide.versionNumber} · ${condition.fieldGuide.contentSha256.slice(0, 10)}…` : ""}</li>)}</ul>{project.config.samplingDesign && project.config.conditions.length > 12 && <small>+{project.config.conditions.length - 12} {copy.samplingMoreConfigurations}</small>}</aside>
     </div>
     {completedAssignments.length > 0 && <section className="panel research-session-history"><div className="research-section-head"><strong>{copy.completedSessions}</strong><small>{completedAssignments.length}</small></div><div>{completedAssignments.map((assignment, index) => { const unblinded = assignment.sessionId ? resultBySessionId.get(assignment.sessionId) : undefined; return <button key={assignment.id} className={selectedSessionId === assignment.sessionId ? "active" : ""} onClick={() => setSelectedSessionId(assignment.sessionId!)}><span>{index + 1}. {assignment.anonymousSessionId} · {assignment.status}</span>{unblinded && <small>{copy.condition}: {unblinded.conditionLabel}</small>}</button>; })}</div></section>}
+    {!saveOnly && ["SessionsComplete", "Judging", "ScoresFrozen"].includes(project.state) && <ResearchPartialScores repository={repository} project={project} pl={pl} revision={`${busy}:${progress}:${currentAnonymous}`} />}
+    {!busy && !termination && !saveOnly && project.state === "Judging" && <button className="secondary-button" disabled={unavailable || !isTauriRuntime()} onClick={() => void exportPackage()}>{pl ? "Eksportuj wyniki częściowe" : "Export partial results"}</button>}
     {selectedSessionId && <SessionInspection repository={repository} workspaceId={project.workspaceId} sessionId={selectedSessionId} language={project.config.sessionLanguage} />}
+    {completedAssignments.length > 0 && <ResearchEvaluationPanels repository={repository} project={project} pl={pl} sourceBusy={Boolean(busy)} onBusyChange={setEvaluationBusy} />}
     {results && <ResearchResultsView copy={copy} results={results} repository={repository} />}
   </div>;
 }
 
-function ResearchResultsView({ copy, results, repository }: { copy: Copy; results: ResearchResults; repository: AppRepository }) {
+export function ResearchResultsView({ copy, results, repository }: { copy: Copy; results: ResearchResults; repository: AppRepository }) {
   const [scoresBySession, setScoresBySession] = useState<Record<string, JudgeScoreRecord[]>>({});
+  const [pairPage, setPairPage] = useState(0);
+  const [sessionPage, setSessionPage] = useState(0);
+  const pl = copy.home !== "Home";
+  const pageSize = 100;
+  const pairPageCount = Math.max(1, Math.ceil(results.pairwise.length / pageSize));
+  const sessionPageCount = Math.max(1, Math.ceil(results.sessions.length / pageSize));
+  const pairwisePage = results.pairwise.slice(pairPage * pageSize, (pairPage + 1) * pageSize);
+  const sessionRows = results.sessions.slice(sessionPage * pageSize, (sessionPage + 1) * pageSize);
+  useEffect(() => { setPairPage(0); setSessionPage(0); }, [results.projectId, results.computedAt]);
   useEffect(() => {
     let cancelled = false;
-    void Promise.all(results.sessions.map(async (session) => [session.sessionId, await repository.listJudgeScores(session.sessionId)] as const)).then((pairs) => {
-      if (!cancelled) setScoresBySession(Object.fromEntries(pairs));
+    void Promise.all(sessionRows.map(async (session) => [session.sessionId, await repository.listJudgeScores(session.sessionId)] as const)).then((pairs) => {
+      if (!cancelled) setScoresBySession((current) => ({ ...current, ...Object.fromEntries(pairs) }));
     });
     return () => { cancelled = true; };
-  }, [repository, results]);
-  return <section className="panel research-results"><div className="research-section-head"><strong>{copy.researchResults}</strong><small>{results.sessions.length} sessions</small></div><div className="research-results-table-wrap"><table><thead><tr><th>{copy.condition}</th><th>{copy.sampleN}</th><th>{copy.mean}</th><th>{copy.median}</th><th>{copy.stdDev}</th><th>{copy.minMax}</th></tr></thead><tbody>{results.conditions.map((condition) => <tr key={condition.conditionKey}><td><strong>{condition.label}</strong></td><td>{condition.n}</td><td>{condition.meanTotal.toFixed(2)}</td><td>{condition.medianTotal.toFixed(2)}</td><td>{condition.stdDevTotal.toFixed(2)}</td><td>{condition.minTotal.toFixed(1)} / {condition.maxTotal.toFixed(1)}</td></tr>)}</tbody></table></div><div className="research-component-results"><strong>{copy.componentMeans}</strong>{results.conditions.map((condition) => <div key={condition.conditionKey}><span>{condition.label}</span><small>G {condition.meanComponents.gestalt.toFixed(2)}/3 · F {condition.meanComponents.verifiableFeatures.toFixed(2)}/3 · A {condition.meanComponents.activityFunctionEvent.toFixed(2)}/2 · C {condition.meanComponents.confabulationControl.toFixed(2)}/2</small></div>)}</div>{results.pairwise.length > 0 && <div className="pairwise-results"><strong>{copy.pairwise}</strong>{results.pairwise.map((pair) => <div key={`${pair.conditionA}-${pair.conditionB}`}><span>{pair.conditionA} ↔ {pair.conditionB}</span><small>n={pair.pairedN} · {copy.winsTiesLosses}: {pair.winsA}/{pair.ties}/{pair.winsB} · Δ={pair.meanPairedDifference.toFixed(2)}</small></div>)}</div>}<div className="research-target-results"><strong>{copy.targetComparisons}</strong><div className="research-results-table-wrap"><table><thead><tr><th>{copy.blindSession}</th><th>{copy.targetId}</th><th>{copy.condition}</th><th>{copy.mean}</th><th>{copy.scoreSpread}</th><th>{copy.judgeResults}</th></tr></thead><tbody>{results.sessions.map((session) => <tr key={session.sessionId}><td><code>{session.anonymousSessionId}</code></td><td><code>{session.targetId}</code></td><td>{session.conditionLabel}{session.fieldGuideVersionNumber !== undefined && <small className="research-result-provenance"> · FG v{session.fieldGuideVersionNumber} · {session.fieldGuideContentSha256?.slice(0, 10)}…</small>}</td><td><strong>{session.total.toFixed(2)}</strong></td><td>σ {session.judgeTotalStdDev.toFixed(2)} · Δ {session.judgeTotalRange.toFixed(2)}</td><td>{(scoresBySession[session.sessionId] ?? []).map((score) => `J${score.judgeIndex} ${score.total.toFixed(1)}`).join(" · ") || "…"}</td></tr>)}</tbody></table></div></div></section>;
+  }, [repository, results.projectId, results.computedAt, sessionPage]);
+  return <section className="panel research-results">
+    <div className="research-section-head"><strong>{copy.researchResults}</strong><small>{results.sessions.length} sessions</small></div>
+    <div className="research-results-table-wrap"><table><thead><tr>
+      <th>{copy.condition}</th><th>top_p</th><th>top_k</th><th>seed</th><th>{copy.viewerTemperature}</th><th>{copy.viewerReasoningLevel}</th><th>{pl ? "Model / trasa" : "Model / route"}</th><th>{copy.sampleN}</th><th>{copy.mean}</th><th>{copy.median}</th><th>{copy.stdDev}</th><th>{copy.minMax}</th>
+    </tr></thead><tbody>{results.conditions.map((condition) => <tr key={condition.conditionKey}>
+      <td><strong>{condition.label}</strong></td>
+      <td>{researchRequestedEffective(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topP"), condition.effectiveSettings?.topP, copy)}</td><td>{researchRequestedEffective(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topK"), condition.effectiveSettings?.topK, copy)}</td><td>{researchRequestedEffective(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "seed"), condition.effectiveSettings?.seed, copy)}</td>
+      <td>{researchRequestedEffective(condition.requestedSettings?.temperature, condition.effectiveSettings?.temperature, copy)}</td><td>{researchRequestedEffectiveText(condition.requestedSettings?.reasoningEffort, condition.effectiveSettings?.reasoningEffort, copy)}</td><td><small>{condition.modelId ?? "—"}<br />{condition.providerConfigId ?? "—"}</small></td>
+      <td>{condition.n}</td><td>{condition.meanTotal.toFixed(2)}</td><td>{condition.medianTotal.toFixed(2)}</td><td>{condition.stdDevTotal.toFixed(2)}</td><td>{condition.minTotal.toFixed(1)} / {condition.maxTotal.toFixed(1)}</td>
+    </tr>)}</tbody></table></div>
+    <div className="research-component-results"><strong>{copy.componentMeans}</strong>{results.conditions.map((condition) => <div key={condition.conditionKey}><span>{condition.label}</span><small>G {condition.meanComponents.gestalt.toFixed(2)}/3 · F {condition.meanComponents.verifiableFeatures.toFixed(2)}/3 · A {condition.meanComponents.activityFunctionEvent.toFixed(2)}/2 · C {condition.meanComponents.confabulationControl.toFixed(2)}/2</small></div>)}</div>
+    {pairwisePage.length > 0 && <div className="pairwise-results"><strong>{copy.pairwise}</strong>{pairwisePage.map((pair) => <div key={`${pair.conditionA}-${pair.conditionB}`}><span>{pair.conditionA} ↔ {pair.conditionB}</span><small>n={pair.pairedN} · {copy.winsTiesLosses}: {pair.winsA}/{pair.ties}/{pair.winsB} · Δ={pair.meanPairedDifference.toFixed(2)}</small></div>)}{pairPageCount > 1 && <ResearchResultsPager pl={pl} page={pairPage} pageCount={pairPageCount} onPage={setPairPage} />}</div>}
+    <div className="research-target-results"><strong>{copy.targetComparisons}</strong><div className="research-results-table-wrap"><table><thead><tr><th>{copy.blindSession}</th><th>{copy.targetId}</th><th>{copy.condition}</th><th>{pl ? "Wykonanie" : "Execution"}</th><th>{copy.mean}</th><th>{copy.scoreSpread}</th><th>{copy.judgeResults}</th></tr></thead><tbody>{sessionRows.map((session) => <tr key={session.sessionId}>
+      <td><code>{session.anonymousSessionId}</code></td><td><code>{session.targetId}</code></td><td>{session.conditionLabel}{session.fieldGuideVersionNumber !== undefined && <small className="research-result-provenance"> · FG v{session.fieldGuideVersionNumber} · {session.fieldGuideContentSha256?.slice(0, 10)}…</small>}</td>
+      <td><small>{session.execution?.actualProviders?.length ? session.execution.actualProviders.join(", ") : (pl ? "provider: nieznany" : "provider: unknown")}<br />{session.execution?.actualModels?.join(", ") || session.modelId || (pl ? "model: nieznany" : "model: unknown")}{session.execution?.costUsd !== undefined ? <><br />${session.execution.costUsd.toFixed(4)}</> : null}</small></td>
+      <td><strong>{session.total.toFixed(2)}</strong></td><td>σ {session.judgeTotalStdDev.toFixed(2)} · Δ {session.judgeTotalRange.toFixed(2)}</td><td>{(scoresBySession[session.sessionId] ?? []).map((score) => `J${score.judgeIndex} ${score.total.toFixed(1)}`).join(" · ") || "…"}</td>
+    </tr>)}</tbody></table></div>{sessionPageCount > 1 && <ResearchResultsPager pl={pl} page={sessionPage} pageCount={sessionPageCount} onPage={setSessionPage} />}</div>
+  </section>;
+}
+
+function ResearchResultsPager({ pl, page, pageCount, onPage }: { pl: boolean; page: number; pageCount: number; onPage: (page: number) => void }) {
+  return <div className="research-stage-actions"><button className="secondary-button" disabled={page <= 0} onClick={() => onPage(page - 1)}>{pl ? "Poprzednia" : "Previous"}</button><small>{pl ? "Strona" : "Page"} {page + 1}/{pageCount}</small><button className="secondary-button" disabled={page + 1 >= pageCount} onClick={() => onPage(page + 1)}>{pl ? "Następna" : "Next"}</button></div>;
+}
+
+function researchResultValue(value: number | undefined, copy: Copy): string | number { return value === undefined ? copy.autoProviderDefault : value; }
+function researchRequestedEffective(requested: number | undefined, effective: number | undefined, copy: Copy): string {
+  const requestedText = String(researchResultValue(requested, copy));
+  const effectiveText = String(researchResultValue(effective, copy));
+  return requestedText === effectiveText ? requestedText : `${requestedText} → ${effectiveText}`;
+}
+function researchRequestedEffectiveText(requested: string | undefined, effective: string | undefined, copy: Copy): string {
+  const requestedText = requested ?? copy.autoProviderDefault;
+  const effectiveText = effective ?? copy.autoProviderDefault;
+  return requestedText === effectiveText ? requestedText : `${requestedText} → ${effectiveText}`;
+}
+
+function samplingControlDisplay(copy: Copy, config: ResearchConfig, parameter: "topP" | "topK" | "seed"): string | number {
+  if (config.templateType === "sampling" && config.samplingDesign) {
+    const axis = config.samplingDesign[parameter];
+    return axis.mode === "varied" ? copy.testedVariableBelow : axis.value ?? copy.autoProviderDefault;
+  }
+  return config.viewerControl?.sampling?.[parameter] ?? copy.autoProviderDefault;
 }
 
 function FormRow({ label, children }: { label: string; children: ReactNode }) { return <label className="research-form-row"><span>{label}</span>{children}</label>; }
@@ -655,8 +807,8 @@ export function researchPreflightSignature(config: ResearchConfig): string {
 }
 
 function templateName(copy: Copy, type: ResearchTemplateType): string {
-  return ({ reasoning: copy.reasoningCalibration, temperature: copy.temperatureTest, profile: copy.profileComparison, model: copy.modelComparison, practice: copy.practiceEffect, system_prompt: copy.promptComparison, viewer_notes: copy.viewerNotesImpact, custom: copy.customVariable } as const)[type];
+  return ({ reasoning: copy.reasoningCalibration, temperature: copy.temperatureTest, profile: copy.profileComparison, model: copy.modelComparison, practice: copy.practiceEffect, system_prompt: copy.promptComparison, viewer_notes: copy.viewerNotesImpact, sampling: copy.samplingConfigurations, custom: copy.customVariable } as const)[type];
 }
 function templateMeta(copy: Copy, type: ResearchTemplateType): string {
-  return ({ reasoning: "NONE · LOW · MEDIUM · HIGH", temperature: copy.temperature, profile: "Profile A · B", model: "Model A · B", practice: "FIRST ↔ SECOND", system_prompt: "Prompt A · B · C · D", viewer_notes: "NO NOTES ↔ FROZEN NOTES", custom: copy.researchConditions } as const)[type];
+  return ({ reasoning: "NONE · LOW · MEDIUM · HIGH", temperature: copy.temperature, profile: "Profile A · B", model: "Model A · B", practice: "FIRST ↔ SECOND", system_prompt: "Prompt A · B · C · D", viewer_notes: "NO NOTES ↔ FROZEN NOTES", sampling: "top_p · top_k · seed", custom: copy.researchConditions } as const)[type];
 }

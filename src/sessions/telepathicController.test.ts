@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getTelepathicProtocol } from "../resources/protocolRegistry";
@@ -9,11 +10,12 @@ import { resumeTelepathicManualQuestionStage, runAutomaticTelepathicSession, tel
 const config: ProviderConfig = { id: "p", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
 const model: ProviderModel = {
   providerConfigId: "p", provider: "openrouter", modelId: "m", displayName: "M", route: "openrouter:m", pricing: {}, recommended: false, rawMetadata: {}, refreshedAt: "now",
-  capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: [], maxOutputTokens: 4096, source: "provider", capturedAt: "now" },
+  capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: [], maxOutputTokens: 65536, contextTokens: 131072, source: "provider", capturedAt: "now" },
 };
 
 function repository(log: string[], snapshots: SessionSnapshot[] = []) {
-  return {
+  return workflowTestRepository({
+    listSessionEvents: async () => [],
     createRvSession: async () => ({} as never),
     updateRvSessionState: async (_id: string, state: string) => { log.push(`state:${state}`); },
     appendSessionEvent: async (_id: string, event: { eventType: string }) => { log.push(`event:${event.eventType}`); },
@@ -24,7 +26,7 @@ function repository(log: string[], snapshots: SessionSnapshot[] = []) {
     recordTargetUsage: async () => undefined,
     createMonitorRun: async () => "monitor_1",
     appendMonitorIntervention: async () => undefined,
-  } as unknown as Pick<AppRepository, "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage" | "createMonitorRun" | "appendMonitorIntervention">;
+  } as unknown as Pick<AppRepository, "listSessionEvents" | "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "recordTargetUsage" | "createMonitorRun" | "appendMonitorIntervention">);
 }
 
 describe("automatic Telepathic Protocol controller", () => {
@@ -59,6 +61,27 @@ describe("automatic Telepathic Protocol controller", () => {
     expect(prompts[12]).toContain("T10 (Telepathic Summary)");
     expect(log.at(-1)).toBe("event:PRE_REVEAL_SEALED");
     expect(snapshots[0].telepathic).toEqual(expect.objectContaining({ controllerStepCount: 9, fixedDeepeningAfterSteps: [3, 4, 5] }));
+  });
+
+  it("retries the same telepathic Viewer step at 16K -> 32K after length", async () => {
+    const budgets: number[] = [];
+    const prompts: string[] = [];
+    let calls = 0;
+    const result = await runAutomaticTelepathicSession({
+      repository: repository([]), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getTelepathicProtocol("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+      step8Questions: { mode: "predefined", questions: ["What is the subject's primary intention?"] },
+      chat: async ({ messages, settings }) => {
+        budgets.push(settings.effective.maxOutputTokens ?? 0);
+        prompts.push(messages.at(-1)?.content ?? "");
+        calls += 1;
+        if (calls === 1) return { content: "partial", finishReason: "length", usage: {} };
+        return { content: `complete ${calls}`, finishReason: "stop", usage: {} };
+      },
+    });
+    expect(result.state).toBe("AwaitingReveal");
+    expect(budgets.slice(0, 2)).toEqual([16384, 32768]);
+    expect(prompts[0]).toBe(prompts[1]);
   });
 
   it("invokes AI Monitor after Steps 2–8 only and uses the telepathic whole-session scope after Step 8", async () => {
@@ -204,7 +227,7 @@ describe("automatic Telepathic Protocol controller", () => {
     ];
     let transcript = session.preRevealTranscript;
     const prompts: string[] = [];
-    const repository = {
+    const repository = workflowTestRepository({
       getSessionSnapshot: async () => snapshot,
       listSessionEvents: async () => events,
       updateRvSessionState: async () => undefined,
@@ -219,7 +242,7 @@ describe("automatic Telepathic Protocol controller", () => {
       saveSessionSnapshot: async () => undefined,
       createMonitorRun: async () => "monitor",
       appendMonitorIntervention: async () => undefined,
-    } as unknown as Parameters<typeof resumeTelepathicManualQuestionStage>[0]["repository"];
+    } as unknown as Parameters<typeof resumeTelepathicManualQuestionStage>[0]["repository"]);
 
     const result = await resumeTelepathicManualQuestionStage({
       repository, session, providerConfig: config, model,

@@ -1,3 +1,4 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { getFullRcp } from "../resources/protocolRegistry";
@@ -34,14 +35,15 @@ const model: ProviderModel = {
     reasoning: { supported: true, efforts: ["low", "high"], confidence: "provider_metadata" },
     temperature: { supported: true, min: 0, max: 2, confidence: "provider_metadata" },
     supportedParameters: ["reasoning_effort", "temperature", "max_tokens"],
-    maxOutputTokens: 8192,
+    maxOutputTokens: 65536, contextTokens: 131072,
     source: "provider",
     capturedAt: "2026-08-08T00:00:00.000Z",
   },
 };
 
 function fakeRepository(log: string[], snapshots: SessionSnapshot[] = []) {
-  return {
+  return workflowTestRepository({
+    listSessionEvents: async () => [],
     createRvSession: async () => { log.push("create"); return {} as never; },
     updateRvSessionState: async (_id: string, state: string) => { log.push(`state:${state}`); },
     appendSessionEvent: async (_id: string, event: { eventType: string }) => { log.push(`event:${event.eventType}`); },
@@ -52,10 +54,41 @@ function fakeRepository(log: string[], snapshots: SessionSnapshot[] = []) {
     createMonitorRun: async () => "monitor_1",
     appendMonitorIntervention: async () => undefined,
     recordTargetUsage: async () => { log.push("target-used"); },
-  } as unknown as Pick<AppRepository, "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "createMonitorRun" | "appendMonitorIntervention" | "recordTargetUsage">;
+  } as unknown as Pick<AppRepository, "listSessionEvents" | "createRvSession" | "updateRvSessionState" | "appendSessionEvent" | "updatePreRevealTranscript" | "saveSessionSnapshot" | "sealPreReveal" | "acceptReveal" | "createMonitorRun" | "appendMonitorIntervention" | "recordTargetUsage">);
 }
 
 describe("automatic RCP controller", () => {
+  it("passes Custom manual temperature to automatic RV transport when capability metadata is absent", async () => {
+    const customConfig: ProviderConfig = { ...config, provider: "custom_openai", baseUrl: "https://example.test/v1" };
+    const customModel: ProviderModel = { ...model, provider: "custom_openai", route: "custom_openai:test/model", capabilities: { ...model.capabilities, temperature: { supported: false, confidence: "unknown" } } };
+    let captured: number | undefined;
+    await runAutomaticRcpSession({ repository: fakeRepository([]), workspaceId: "w", profileId: "p", providerConfig: customConfig, model: customModel, protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { customTemperatureMode: "manual", temperature: 0.7, maxOutputTokens: 16384 }, chat: async ({ settings }) => { captured = settings.effective.temperature; return { content: "Distinct blind evidence for this phase.", usage: {} }; } });
+    expect(captured).toBe(0.7);
+  });
+
+  it("issues exactly one provider call for Phase 2 and stores its accepted answer once", async () => {
+    const log: string[] = [];
+    let calls = 0;
+    const result = await runAutomaticRcpSession({
+      repository: fakeRepository(log),
+      workspaceId: "w",
+      profileId: "p",
+      providerConfig: config,
+      model,
+      protocol: getFullRcp("en"),
+      sessionLanguage: "en",
+      requestedSettings: { maxOutputTokens: 16384 },
+      chat: async () => {
+        calls += 1;
+        return { content: calls === 2 ? "PHASE2_UNIQUE_ANSWER" : `unique phase ${calls} answer`, finishReason: "stop", usage: {} };
+      },
+    });
+
+    expect(calls).toBe(6);
+    expect((result.transcript.match(/PHASE2_UNIQUE_ANSWER/g) ?? []).length).toBe(1);
+    expect(log.filter((entry) => entry === "event:VIEWER_RESPONSE")).toHaveLength(6);
+  });
+
   it("persists each completed phase before issuing the next provider call", async () => {
     const log: string[] = [];
     const snapshots: SessionSnapshot[] = [];
@@ -87,6 +120,58 @@ describe("automatic RCP controller", () => {
     expect(snapshots[0].rvSystemPrompt).toEqual(expect.objectContaining({ contentSha256: "c".repeat(64), fullContent: "FIXED PROFILE VIEWER PROMPT" }));
     expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity", "locked-viewer-base-vocabulary"]);
     expect(snapshots[0].researchConditionInstruction).toEqual(expect.objectContaining({ contentSha256: "d".repeat(64), fullContent: "CUSTOM VARIABLE A" }));
+  });
+
+  it("persists the Session Snapshot before publishing Research session linkage", async () => {
+    const log: string[] = [];
+    let calls = 0;
+    await runAutomaticRcpSession({
+      repository: fakeRepository(log), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 16384 },
+      sessionIdentity: { id: "session_reserved", sessionCode: "RES-TEST" },
+      onSessionCreated: async () => { log.push("linked"); },
+      chat: async () => ({ content: `response ${++calls}`, finishReason: "stop", usage: {} }),
+    });
+    expect(log.indexOf("snapshot")).toBeGreaterThanOrEqual(0);
+    expect(log.indexOf("linked")).toBeGreaterThan(log.indexOf("snapshot"));
+  });
+
+  it("retries the same RCP phase at 16K -> 32K after length and accepts only recovery", async () => {
+    const log: string[] = [];
+    const budgets: number[] = [];
+    let calls = 0;
+    const result = await runAutomaticRcpSession({
+      repository: fakeRepository(log), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 8192 },
+      chat: async ({ settings, messages }) => {
+        budgets.push(settings.effective.maxOutputTokens ?? 0);
+        calls += 1;
+        if (calls === 1) return { content: "partial phase one", finishReason: "length", usage: {} };
+        if (calls === 2) { expect(messages.at(-1)?.content).toContain("Phase 1"); return { content: "complete phase one", finishReason: "stop", usage: {} }; }
+        return { content: `complete phase ${calls - 1}`, finishReason: "stop", usage: {} };
+      },
+    });
+    expect(result.state).toBe("AwaitingReveal");
+    expect(budgets.slice(0, 2)).toEqual([16384, 32768]);
+    expect(calls).toBe(7);
+    expect(result.transcript).not.toContain("partial phase one");
+    expect(result.transcript).toContain("complete phase one");
+    expect(log.filter((item) => item === "event:VIEWER_OUTPUT_INCOMPLETE")).toHaveLength(1);
+  });
+
+  it("stops RCP after a second length result without starting the next phase", async () => {
+    const log: string[] = [];
+    const prompts: string[] = [];
+    const result = await runAutomaticRcpSession({
+      repository: fakeRepository(log), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 8192 },
+      chat: async ({ messages }) => { prompts.push(messages.at(-1)?.content ?? ""); return { content: `partial ${prompts.length}`, finishReason: "length", usage: {} }; },
+    });
+    expect(result.state).toBe("Interrupted");
+    expect(prompts).toHaveLength(2);
+    expect(prompts.every((prompt) => prompt.includes("Phase 1"))).toBe(true);
+    expect(log.filter((item) => item === "event:VIEWER_OUTPUT_INCOMPLETE")).toHaveLength(2);
+    expect(log).not.toContain("sealed");
   });
 
   it("never sends reveal data during blind execution", async () => {
@@ -236,7 +321,7 @@ describe("automatic RCP controller", () => {
     expect(result.state).toBe("AwaitingReveal");
     expect(viewerCalls).toBe(6);
     expect(monitorCalls).toBe(6);
-    expect(monitorBudgets.slice(0, 2)).toEqual([4096, 8192]);
+    expect(monitorBudgets.slice(0, 2)).toEqual([16384, 32768]);
     expect(log.filter((entry) => entry === "event:MONITOR_PROVIDER_ERROR")).toHaveLength(1);
   });
 
@@ -330,4 +415,17 @@ describe("automatic RCP controller", () => {
     expect(rcpPhasePrompt("en", 2, "1234 5678")).not.toMatch(/ASCII sketch/i);
     expect(rcpPhasePrompt("pl", 2, "1234 5678")).not.toMatch(/szkic ASCII/i);
   });
+});
+
+it("B2 RCP freezes the analytical policy independently of actual blind requests",async()=>{
+ const snapshots:SessionSnapshot[]=[],budgets:number[]=[];
+ const policy={version:2 as const,initialTokens:32768 as const,recoveryTokens:49152 as const};
+ let calls=0;
+ await runAutomaticRcpSession({repository:fakeRepository([],snapshots),workspaceId:"w",profileId:"p",providerConfig:config,model,protocol:getFullRcp("en"),sessionLanguage:"en",requestedSettings:{maxOutputTokens:8192},operationKind:"research_viewer",viewerOutputPolicy:{version:1,initialTokens:16384,recoveryTokens:32768,preserveConfiguredBudget:false},postRevealOutputPolicy:policy,chat:async request=>{
+  budgets.push(request.settings.effective.maxOutputTokens!);return {content:`Blind sensory evidence ${++calls}`,finishReason:"stop",usage:{}};
+ }});
+ expect(snapshots[0].postRevealOutputPolicy).toEqual(policy);
+ expect(snapshots[0].postRevealOutputPolicy).not.toBe(policy);
+ expect(budgets.length).toBeGreaterThan(0);expect(new Set(budgets)).toEqual(new Set([16384]));
+ expect(JSON.parse(JSON.stringify(snapshots[0])).postRevealOutputPolicy).toEqual(policy);
 });

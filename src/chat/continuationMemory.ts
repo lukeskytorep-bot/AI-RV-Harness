@@ -1,6 +1,7 @@
 import { CONTINUATION_LIMITS_V1, validateContinuationRequestBudget, validateProviderContinuationState, type ContinuationValidationCode, type ProviderContinuationState } from "../providers/continuationContract";
 import { validateGoogleReplayForRequest } from "../providers/googleContinuation";
 import { validateOpenRouterReplayForRequest } from "../providers/openRouterContinuation";
+import { validateMistralReplayForRequest } from "../providers/mistralContinuation";
 import type { ProviderConfig, ProviderMessage } from "../providers/types";
 
 export interface ConversationContinuationIssue {
@@ -112,7 +113,14 @@ export function applyConversationContinuationMemory(input: {
             requestedModelId: input.requestedModelId,
             normalizedEndpoint: input.normalizedEndpoint,
           })
-        : { ok: false as const, issue: { code: "incompatible_replay" as const, message: "continuation state belongs to a provider transport that is not active yet" } };
+        : entry.state.transport === "mistral-native"
+          ? validateMistralReplayForRequest({
+              state: entry.state,
+              config: input.config,
+              requestedModelId: input.requestedModelId,
+              normalizedEndpoint: input.normalizedEndpoint,
+            })
+          : { ok: false as const, issue: { code: "incompatible_replay" as const, message: "continuation state belongs to a provider transport that is not active yet" } };
     if (compatible.ok === false) {
       firstBreak ??= { messageId: message.id, issue: compatible.issue };
       return message;

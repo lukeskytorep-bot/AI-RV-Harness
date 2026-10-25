@@ -1,0 +1,15 @@
+docs/reports/monitor-stream-telepathy-repair/step-1-audit-fix/REPORT_PL.md
+src/providers/inferenceContract.test.ts
+src/providers/requestExecutor.test.ts
+src/sessions/controller.ts
+src/sessions/customController.ts
+src/sessions/repetitionGuard.ts
+src/sessions/rvLiteController.test.ts
+src/sessions/rvLiteController.ts
+src/sessions/streamingRepetitionGuard.test.ts
+src/sessions/streamingRepetitionGuard.ts
+src/sessions/telepathicController.ts
+src/sessions/viewerOutputRecovery.test.ts
+src/sessions/viewerOutputRecovery.ts
+src/sessions/viewerResumeLedger.test.ts
+src/sessions/viewerResumeLedger.ts

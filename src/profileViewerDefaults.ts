@@ -27,20 +27,44 @@ export function profileGenerationDefaults(
 ): GenerationSettings {
   if (!model) return {};
   const useCalibratedPair = profile?.defaultViewerModelId === model.modelId;
+  const customTemperatureMode = model.provider === "custom_openai" && useCalibratedPair
+    ? profile?.defaultViewerCustomTemperatureMode
+    : undefined;
+  const customReasoningMode = model.provider === "custom_openai" && useCalibratedPair
+    ? profile?.defaultViewerCustomReasoningMode
+    : undefined;
   const requested: GenerationSettings = {
+    ...(customTemperatureMode ? { customTemperatureMode } : {}),
+    ...(customReasoningMode ? { customReasoningMode } : {}),
     ...(useCalibratedPair && reasoningEffortForModel(model, profile?.defaultViewerReasoningEffort)
       ? { reasoningEffort: profile!.defaultViewerReasoningEffort }
       : {}),
-    ...(model.capabilities.temperature.supported
+    ...(model.provider === "custom_openai" && useCalibratedPair && profile?.defaultViewerCustomTemperatureMode === "provider_default"
+      ? {}
+      : model.provider === "custom_openai" && useCalibratedPair && profile?.defaultViewerCustomTemperatureMode === "manual"
+        ? (profile.defaultViewerTemperature !== undefined ? { temperature: profile.defaultViewerTemperature } : {})
+        : model.capabilities.temperature.supported
+          ? {
+              temperature:
+                useCalibratedPair && profile?.defaultViewerTemperature !== undefined
+                  ? profile.defaultViewerTemperature
+                  : defaultTemperatureForModel(model),
+            }
+          : {}),
+    ...((model.provider === "openrouter" || model.provider === "custom_openai" || model.provider === "mistral" || model.provider === "blackbox") && profile?.defaultViewerOpenRouterSampling?.enabled === true
       ? {
-          temperature:
-            useCalibratedPair && profile?.defaultViewerTemperature !== undefined
-              ? profile.defaultViewerTemperature
-              : defaultTemperatureForModel(model),
+          ...(profile.defaultViewerOpenRouterSampling.topP !== undefined ? { topP: profile.defaultViewerOpenRouterSampling.topP } : {}),
+          ...(profile.defaultViewerOpenRouterSampling.topK !== undefined ? { topK: profile.defaultViewerOpenRouterSampling.topK } : {}),
+          ...(profile.defaultViewerOpenRouterSampling.seed !== undefined ? { seed: profile.defaultViewerOpenRouterSampling.seed } : {}),
         }
       : {}),
   };
-  return resolveGenerationSettings(model.capabilities, requested).effective;
+  const resolved = resolveGenerationSettings(model.capabilities, requested, { provider: model.provider });
+  return {
+    ...resolved.effective,
+    ...(customTemperatureMode ? { customTemperatureMode } : {}),
+    ...(customReasoningMode ? { customReasoningMode } : {}),
+  };
 }
 
 export function normalizeProfileSystemPrompt(value: string): string | undefined {

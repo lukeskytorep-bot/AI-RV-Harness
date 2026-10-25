@@ -1,0 +1,66 @@
+{
+  "providerResponse": {
+    "id": "mistral-fixture-response",
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                { "type": "text", "text": "reasoning" }
+              ]
+            },
+            { "type": "text", "text": "final" }
+          ]
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": { "prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14 }
+  },
+  "continuationState": {
+    "schemaVersion": 1,
+    "transport": "mistral-native",
+    "format": "mistral-assistant-content",
+    "replayFingerprint": {
+      "transport": "mistral-native",
+      "normalizedEndpoint": "https://api.mistral.ai/v1",
+      "providerConfigId": "mistral-pc",
+      "credentialId": "mistral-cred",
+      "requestedModelId": "mistral-large-latest",
+      "stateFormat": "mistral-assistant-content",
+      "stateFormatVersion": 1
+    },
+    "content": [
+      {
+        "type": "thinking",
+        "thinking": [
+          { "type": "text", "text": "reasoning" }
+        ]
+      },
+      { "type": "text", "text": "final" }
+    ]
+  },
+  "nextRequest": {
+    "messages": [
+      { "role": "user", "content": "first" },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": [
+              { "type": "text", "text": "reasoning" }
+            ]
+          },
+          { "type": "text", "text": "final" }
+        ]
+      },
+      { "role": "user", "content": "continue" }
+    ]
+  }
+}

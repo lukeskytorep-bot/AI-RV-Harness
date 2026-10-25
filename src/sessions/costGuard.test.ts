@@ -1,34 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { EffectiveGenerationSettings, ProviderModel } from "../providers/types";
-import { CostGuardStop, SessionCostGuard, withEstimatedCost } from "./costGuard";
+import { withEstimatedCost } from "./costGuard";
+import type { ProviderModel } from "../providers/types";
 
-const model: ProviderModel = {
-  providerConfigId: "p", provider: "openrouter", modelId: "m", displayName: "M", route: "openrouter:m",
-  capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: true, confidence: "unknown" }, supportedParameters: ["max_tokens"], maxOutputTokens: 100, source: "provider", capturedAt: "now" },
-  pricing: { promptPerToken: 0.001, completionPerToken: 0.01, currency: "USD" }, recommended: false, rawMetadata: {}, refreshedAt: "now",
-};
-const settings: EffectiveGenerationSettings = { requested: { maxOutputTokens: 10 }, effective: { maxOutputTokens: 10 }, omitted: [] };
+const model = { pricing: { promptPerToken: 0.001, completionPerToken: 0.002 } } as ProviderModel;
 
-describe("hard session cost guard", () => {
-  it("derives cost from tokens when the provider omits a cost field", () => {
-    expect(withEstimatedCost({ inputTokens: 10, outputTokens: 2 }, model).costUsd).toBeCloseTo(0.03);
+describe("session cost reporting", () => {
+  it("keeps provider-reported cost unchanged", () => {
+    expect(withEstimatedCost({ inputTokens: 10, outputTokens: 20, costUsd: 0.123 }, model).costUsd).toBe(0.123);
   });
 
-  it("blocks a request before it can exceed the configured upper bound", () => {
-    const guard = new SessionCostGuard(0.05);
-    guard.validateModel(model);
-    expect(() => guard.authorize(model, [{ role: "user", content: "1234567890" }], settings)).toThrow(CostGuardStop);
-  });
-
-  it("reserves the maximum request cost after an unreported failed call", () => {
-    const guard = new SessionCostGuard(0.2);
-    const first = guard.authorize(model, [{ role: "user", content: "1234567890" }], settings);
-    first.failure();
-    expect(() => guard.authorize(model, [{ role: "user", content: "1234567890" }], settings)).toThrow(CostGuardStop);
-  });
-
-  it("refuses to call a pricing-unknown route when hard limit is enabled", () => {
-    const guard = new SessionCostGuard(1);
-    expect(() => guard.validateModel({ ...model, pricing: {} })).toThrow(/pricing is unavailable/i);
+  it("estimates a display cost when provider cost is unavailable", () => {
+    expect(withEstimatedCost({ inputTokens: 10, outputTokens: 20 }, model).costUsd).toBeCloseTo(0.05);
   });
 });

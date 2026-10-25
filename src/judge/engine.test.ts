@@ -1,8 +1,9 @@
+import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../providers/native", () => ({
   discoverOpenRouterModelEndpoints: vi.fn(async () => ({ data: { endpoints: [
-    { tag: "test/large", context_length: 262_144, max_completion_tokens: 32_768 },
+    { tag: "test/large", context_length: 262_144, max_completion_tokens: 65_536 },
   ] } })),
   providerChatAttempt: vi.fn(),
 }));
@@ -41,7 +42,7 @@ describe("blind Judge engine", () => {
 
   it("uses a fresh allowlisted context and freezes each Judge result", async () => {
     const stored: JudgeScoreRecord[] = [];
-    const repository: JudgeRepository = {
+    const repository: JudgeRepository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "en" }),
       getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "A tall angular steel tower", hash: "hash" }),
       getViewerEvidence: vi.fn().mockResolvedValue("Tall angular form. Cool hard surface."),
@@ -55,7 +56,7 @@ describe("blind Judge engine", () => {
         stored.push(record);
         return record;
       }),
-    };
+    });
     const chat = vi.fn().mockResolvedValue({ content: judgeJson, usage: {} });
     const result = await runBlindJudging({
       repository, sessionId: "session_secret", language: "en",
@@ -86,14 +87,14 @@ describe("blind Judge engine", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
     })));
     const recordFrozenJudgeResult = vi.fn(() => { throw new Error("single-write path must not be used"); });
-    const repository: JudgeRepository = {
+    const repository: JudgeRepository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "en" }),
       getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "A tower", hash: "hash" }),
       getViewerEvidence: vi.fn().mockResolvedValue("Tall angular form."),
       listJudgeScores: vi.fn().mockResolvedValue([]),
       recordFrozenJudgeResult,
       recordFrozenJudgeResults,
-    };
+    });
     const result = await runBlindJudging({
       repository,
       sessionId: "session",
@@ -115,26 +116,26 @@ describe("blind Judge engine", () => {
   });
 
   it("refuses an artifact reveal instead of silently dropping it", async () => {
-    const repository: JudgeRepository = {
+    const repository: JudgeRepository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "en" }),
       getReveal: vi.fn().mockResolvedValue({ source: "external_mixed", text: "Target", artifactManifest: [{ artifactId: "a", path: "secret.png", originalFileName: "secret.png", mimeType: "image/png", size: 10, sha256: "h" }], hash: "hash" }),
       getViewerEvidence: vi.fn().mockResolvedValue("Evidence"),
       listJudgeScores: vi.fn().mockResolvedValue([]),
       recordFrozenJudgeResult: vi.fn(),
-    };
+    });
     await expect(runBlindJudging({ repository, sessionId: "s", language: "en", judges: [{ providerConfig: provider, model }], chat: vi.fn() }))
       .rejects.toThrow(/Vision Judge preflight/);
   });
 
   it("passes permitted images out-of-band with opaque Judge refs and no source filename", async () => {
     const visionModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, supportsVision: true, inputModalities: ["text", "image"] } };
-    const repository: JudgeRepository = {
+    const repository: JudgeRepository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "en" }),
       getReveal: vi.fn().mockResolvedValue({ source: "external_artifact", artifactManifest: [{ artifactId: "a", path: "/private/condition_HIGH.png", originalFileName: "condition_HIGH.png", mimeType: "image/png", size: 10, sha256: "h" }], hash: "hash" }),
       getViewerEvidence: vi.fn().mockResolvedValue("Tall angular form."),
       listJudgeScores: vi.fn().mockResolvedValue([]),
       recordFrozenJudgeResult: vi.fn(async (run, score) => ({ ...score, judgeIndex: run.judgeIndex, modelRoute: run.modelRoute, total: 7.7, frozenAt: "now", createdAt: "now" })),
-    };
+    });
     const chat = vi.fn().mockResolvedValue({ content: judgeJson, usage: {} });
     await runBlindJudging({ repository, sessionId: "s", language: "en", judges: [{ providerConfig: provider, model: visionModel }], chat, loadImage: vi.fn().mockResolvedValue({ mimeType: "image/png", dataBase64: "AA==" }) });
     const userMessage = chat.mock.calls[0][0].messages[1];
@@ -150,13 +151,13 @@ describe("blind Judge engine", () => {
       strongestMatches: ["silna zgodność struktury"], majorMissesContradictions: ["brak zgodności koloru"],
       confabulationObservations: ["jeden niepoparty szczegół"], conciseRationale: "Materiał jest częściowo trafny i zgodny z celem.",
     });
-    const repository: JudgeRepository = {
+    const repository: JudgeRepository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "pl" }),
       getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Wieża", hash: "hash" }),
       getViewerEvidence: vi.fn().mockResolvedValue("Wysoka twarda struktura"),
       listJudgeScores: vi.fn().mockResolvedValue([]),
       recordFrozenJudgeResult: vi.fn(async (run, score) => ({ ...score, judgeIndex: run.judgeIndex, modelRoute: run.modelRoute, total: 7.7, frozenAt: "now", createdAt: "now" })),
-    };
+    });
     const chat = vi.fn().mockResolvedValueOnce({ content: english, usage: {} }).mockResolvedValueOnce({ content: polish, usage: {} });
     const result = await runBlindJudging({ repository, sessionId: "s", language: "en", judges: [{ providerConfig: provider, model }], chat });
     expect(chat).toHaveBeenCalledTimes(2);
@@ -165,29 +166,29 @@ describe("blind Judge engine", () => {
   });
 
   it("retries one reasoning-only length failure with a larger budget", async () => {
-    const highCapacityModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, contextTokens: 100_000, maxOutputTokens: 16_384 } };
-    const repository: JudgeRepository = {
+    const highCapacityModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, contextTokens: 100_000, maxOutputTokens: 65_536 } };
+    const repository: JudgeRepository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "en" }),
       getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Tower", hash: "hash" }),
       getViewerEvidence: vi.fn().mockResolvedValue("Tall angular structure"),
       listJudgeScores: vi.fn().mockResolvedValue([]),
       recordFrozenJudgeResult: vi.fn(async (run, score) => ({ ...score, judgeIndex: run.judgeIndex, modelRoute: run.modelRoute, total: 7.7, frozenAt: "now", createdAt: "now" })),
-    };
+    });
     const chat = vi.fn()
       .mockRejectedValueOnce(new Error("provider returned reasoning without a final assistant response [finish-reason=length]"))
       .mockResolvedValueOnce({ content: judgeJson, usage: {} });
     await runBlindJudging({ repository, sessionId: "s", language: "en", judges: [{ providerConfig: provider, model: highCapacityModel }], chat });
-    expect(chat.mock.calls.map((call) => call[0].settings.effective.maxOutputTokens)).toEqual([8192, 16384]);
+    expect(chat.mock.calls.map((call) => call[0].settings.effective.maxOutputTokens)).toEqual([32768, 49152]);
   });
 
   it("repairs one complete malformed JSON response without changing the Judge route", async () => {
-    const repository: JudgeRepository = {
+    const repository: JudgeRepository = workflowTestRepository({
       getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "en" }),
       getReveal: vi.fn().mockResolvedValue({ source: "external_text", text: "Tower", hash: "hash" }),
       getViewerEvidence: vi.fn().mockResolvedValue("Tall angular structure"),
       listJudgeScores: vi.fn().mockResolvedValue([]),
       recordFrozenJudgeResult: vi.fn(async (run, score) => ({ ...score, judgeIndex: run.judgeIndex, modelRoute: run.modelRoute, total: 7.7, frozenAt: "now", createdAt: "now" })),
-    };
+    });
     const chat = vi.fn()
       .mockResolvedValueOnce({ content: "scores: not valid JSON", finishReason: "stop", usage: {} })
       .mockResolvedValueOnce({ content: judgeJson, finishReason: "stop", usage: {} });

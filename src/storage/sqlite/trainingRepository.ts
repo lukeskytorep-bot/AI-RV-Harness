@@ -1,6 +1,7 @@
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../../training/types";
 import type { TrainingRepository } from "../contracts/trainingRepository";
 import { createId, nowIso } from "../repository";
+import { canResumeOrEndTrainingRun } from "../../training/runLifecycle";
 
 export interface SqliteTrainingRepositoryDependencies {
   select: <T>(query: string, values?: unknown[]) => Promise<T>;
@@ -57,16 +58,54 @@ export class SqliteTrainingRepository implements TrainingRepository {
     );
     if (!rows[0]) throw new Error("Active Training run not found.");
     const current = this.mapRow(rows[0]);
+    if (current.termination?.reason === "user_finished") {
+      if (input.termination?.reason === "user_finished") return;
+      throw new Error("Training run was ended by the user and cannot be modified by active execution.");
+    }
+    const timestamp = this.now();
+    if (input.termination?.reason === "user_finished") {
+      const result = await this.dependencies.executeWrite(
+        "UPDATE training_runs SET status = 'Interrupted', record_json = json_set(record_json, '$.status', 'Interrupted', '$.termination', json($1), '$.updatedAt', $2), updated_at = $2 WHERE id = $3 AND archived_at IS NULL AND status IN ('Paused', 'Interrupted', 'Running') AND COALESCE(json_extract(record_json, '$.currentIndex'), 0) < json_array_length(COALESCE(json_extract(record_json, '$.targetIds'), '[]')) AND COALESCE(json_extract(record_json, '$.termination.reason'), '') = ''",
+        [JSON.stringify(input.termination), timestamp, id],
+      ) as { rowsAffected?: number };
+      if (result.rowsAffected === 0) {
+        const refreshedRows = await this.dependencies.select<TrainingRow[]>(
+          "SELECT record_json, archived_at FROM training_runs WHERE id = $1 AND archived_at IS NULL",
+          [id],
+        );
+        const refreshed = refreshedRows[0] ? this.mapRow(refreshedRows[0]) : undefined;
+        if (refreshed?.termination?.reason === "user_finished") return;
+        if (refreshed && !canResumeOrEndTrainingRun(refreshed)) {
+          throw new Error("This Training run cannot be ended in its current state.");
+        }
+        throw new Error("Active Training run not found.");
+      }
+      return;
+    }
+
     const updated: TrainingRunRecord = {
       ...current,
       ...input,
+      termination: current.termination,
       errors: input.error ? [...current.errors, input.error] : current.errors,
-      updatedAt: this.now(),
+      updatedAt: timestamp,
     };
-    await this.dependencies.executeWrite(
-      "UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL",
+    const result = await this.dependencies.executeWrite(
+      "UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL AND COALESCE(json_extract(record_json, '$.termination.reason'), '') = ''",
       [updated.status, JSON.stringify(updated), updated.updatedAt, id],
-    );
+    ) as { rowsAffected?: number };
+    if (result.rowsAffected === 0) {
+      const refreshedRows = await this.dependencies.select<TrainingRow[]>(
+        "SELECT record_json, archived_at FROM training_runs WHERE id = $1 AND archived_at IS NULL",
+        [id],
+      );
+      const refreshed = refreshedRows[0] ? this.mapRow(refreshedRows[0]) : undefined;
+      if (refreshed?.termination?.reason === "user_finished") {
+        if (input.termination?.reason === "user_finished") return;
+        throw new Error("Training run was ended by the user and cannot be modified by active execution.");
+      }
+      throw new Error("Active Training run not found.");
+    }
   }
 
   async listTrainingRuns(): Promise<TrainingRunRecord[]> {
@@ -84,14 +123,12 @@ export class SqliteTrainingRepository implements TrainingRepository {
   }
 
   async archiveTrainingRun(id: string): Promise<void> {
-    const rows = await this.dependencies.select<TrainingRow[]>("SELECT record_json, archived_at FROM training_runs WHERE id = $1 AND archived_at IS NULL", [id]);
-    if (!rows[0]) throw new Error("Active Training run not found.");
     const timestamp = this.now();
-    const run = { ...this.mapRow(rows[0]), archivedAt: timestamp, updatedAt: timestamp };
-    await this.dependencies.executeWrite(
-      "UPDATE training_runs SET record_json = $1, archived_at = $2, updated_at = $2 WHERE id = $3 AND archived_at IS NULL",
-      [JSON.stringify(run), timestamp, id],
-    );
+    const result = await this.dependencies.executeWrite(
+      "UPDATE training_runs SET record_json = json_set(record_json, '$.archivedAt', $1, '$.updatedAt', $1), archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL",
+      [timestamp, id],
+    ) as { rowsAffected?: number };
+    if (result.rowsAffected === 0) throw new Error("Active Training run not found.");
   }
 
   async restoreTrainingRun(id: string): Promise<void> {

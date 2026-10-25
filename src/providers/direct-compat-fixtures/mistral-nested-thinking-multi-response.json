@@ -1,0 +1,22 @@
+{
+  "model": "mistral-direct-fixture",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": [
+              { "type": "text", "text": "first " },
+              { "type": "text", "text": "second" }
+            ]
+          },
+          { "type": "text", "text": "visible thinking word stays final" }
+        ]
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}

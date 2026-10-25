@@ -1,21 +1,25 @@
 use super::*;
-use super::adapters::{normalized_credential_endpoint, provider_family, validate_base_url, ProviderFamily, OPENROUTER_APP_REFERER, OPENROUTER_APP_TITLE};
+use super::adapters::{normalized_credential_endpoint, provider_family, validate_base_url, ProviderFamily};
 
 #[test]
-fn openrouter_app_attribution_uses_public_project_page() {
-    assert_eq!(
-        OPENROUTER_APP_REFERER,
-        "https://lukeskytorep-bot.github.io/AI-RV-Harness/"
-    );
-    assert_eq!(OPENROUTER_APP_TITLE, "AI RV Harness");
+fn openrouter_requests_omit_application_identity_and_keep_authentication() {
+    let request = authenticated(
+        client().unwrap().post("https://openrouter.ai/api/v1/chat/completions"),
+        ProviderKind::Openrouter,
+        "simulator-secret",
+    ).build().unwrap();
+    assert_eq!(request.headers().get("authorization").unwrap().to_str().unwrap(), "Bearer simulator-secret");
+    for header in ["http-referer", "referer", "x-title", "x-openrouter-title", "user-agent"] {
+        assert!(request.headers().get(header).is_none(), "unexpected identifying header: {header}");
+    }
 }
 use super::reasoning::split_tagged_reasoning;
 use super::endpoint_capabilities::openrouter_model_endpoints_url;
 use super::errors::safe_provider_error;
-use super::request_builders::{build_anthropic_request, build_google_request, build_openai_compatible_request, enable_openrouter_streaming};
+use super::request_builders::{build_anthropic_request, build_google_request, build_openai_compatible_request, enable_chat_streaming, enable_mistral_chat_streaming};
 use super::response_parsers::{parse_anthropic_response, parse_google_response, parse_openai_compatible_response};
 use super::streaming::{
-    send_openrouter_streaming_chat_request, OpenRouterStreamAccumulator, ProviderStreamEvent, SseDecoder, SseFrame,
+    send_blackbox_streaming_chat_request, send_custom_openai_streaming_chat_request, send_mistral_streaming_chat_request, send_openrouter_streaming_chat_request, OpenRouterStreamAccumulator, ProviderStreamEvent, SseDecoder, SseFrame,
     MAX_ACCUMULATED_STREAM_DATA_BYTES, MAX_PENDING_SSE_EVENT_BYTES,
 };
 use super::transport::retry_after_value_ms_at;
@@ -46,6 +50,7 @@ async fn read_simulator_request(socket: &mut TcpStream) -> String {
 
 fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
     ProviderChatRequest {
+        workflow_ownership: None,
         provider,
         credential_id: "credential".to_string(),
         provider_config_id: "provider-config".to_string(),
@@ -63,8 +68,12 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
         reasoning_transport_kind: None,
         reasoning_transport_value: None,
         temperature: None,
+        top_p: None,
+        top_k: None,
+        seed: None,
         max_output_tokens: None,
         custom_output_token_field: None,
+        custom_streaming_enabled: false,
         timeout_ms: None,
         timeout_policy: None,
         provider_routing: None,
@@ -77,10 +86,27 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
 fn enables_openrouter_sse_and_usage_frames_without_changing_other_request_fields() {
     let request = chat_request(ProviderKind::Openrouter, "qwen/qwen3-32b");
     let (_, mut body) = build_openai_compatible_request(&request, "https://openrouter.ai/api/v1");
-    enable_openrouter_streaming(&mut body).unwrap();
+    enable_chat_streaming(&mut body).unwrap();
     assert_eq!(body.get("stream"), Some(&json!(true)));
     assert!(body.get("stream_options").is_none());
     assert_eq!(body.get("model"), Some(&json!("qwen/qwen3-32b")));
+}
+
+
+#[test]
+fn direct1d_enables_mistral_sse_without_openai_stream_options_and_keeps_sampling_wire_fields() {
+    let mut request = chat_request(ProviderKind::Mistral, "mistral-medium-3-5");
+    request.top_p = Some(0.4);
+    request.top_k = Some(20);
+    request.seed = Some(42);
+    let (_, mut body) = build_openai_compatible_request(&request, "https://api.mistral.ai/v1");
+    enable_mistral_chat_streaming(&mut body).unwrap();
+    assert_eq!(body.get("stream"), Some(&json!(true)));
+    assert!(body.get("stream_options").is_none());
+    assert_eq!(body.get("top_p"), Some(&json!(0.4)));
+    assert_eq!(body.get("top_k"), Some(&json!(20)));
+    assert_eq!(body.get("random_seed"), Some(&json!(42)));
+    assert!(body.get("seed").is_none());
 }
 
 #[test]
@@ -137,13 +163,13 @@ fn provider_errors_redact_secret() {
 
 #[test]
 fn provider_call_error_stays_compact_and_serializes_compatibly() {
-    assert!(std::mem::size_of::<ProviderCallError>() <= 128);
+    assert!(std::mem::size_of::<ProviderCallError>() < 128);
     let mut error = ProviderCallError::new("timeout", "request timed out", "awaiting_headers");
-    error.http_status = Some(504);
-    error.provider_error_type = Some("upstream_timeout".into());
-    error.provider_code = Some("gateway_timeout".into());
-    error.retry_after_ms = Some(1_000);
-    error.provider_request_id = Some("request-1".into());
+    error.metadata.http_status = Some(504);
+    error.metadata.provider_error_type = Some("upstream_timeout".into());
+    error.metadata.provider_code = Some("gateway_timeout".into());
+    error.metadata.retry_after_ms = Some(1_000);
+    error.metadata.provider_request_id = Some("request-1".into());
 
     assert_eq!(serde_json::to_value(error).unwrap(), json!({
         "code": "timeout",
@@ -245,6 +271,38 @@ fn maps_output_token_limit_by_transport_contract() {
 }
 
 #[test]
+fn custom_controls_emit_manual_sampling_temperature_and_reasoning_off_together() {
+    let mut request = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    request.temperature = Some(0.7);
+    request.top_p = Some(0.9);
+    request.top_k = Some(40);
+    request.seed = Some(42);
+    request.reasoning_transport_kind = Some("enabled_boolean".to_string());
+    request.reasoning_transport_value = Some("false".to_string());
+    request.max_output_tokens = Some(32_768);
+    let (_, body) = build_openai_compatible_request(&request, "https://example.test/v1");
+    assert_eq!(body.get("temperature"), Some(&json!(0.7)));
+    assert_eq!(body.get("top_p"), Some(&json!(0.9)));
+    assert_eq!(body.get("top_k"), Some(&json!(40)));
+    assert_eq!(body.get("seed"), Some(&json!(42)));
+    assert_eq!(body.pointer("/reasoning/enabled"), Some(&json!(false)));
+    assert!(body.get("reasoning_effort").is_none());
+    assert_eq!(body.get("max_tokens"), Some(&json!(32_768)));
+    assert!(body.get("provider").is_none());
+}
+
+#[test]
+fn custom_controls_emit_reasoning_on_without_openrouter_routing() {
+    let mut request = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    request.reasoning_transport_kind = Some("enabled_boolean".to_string());
+    request.reasoning_transport_value = Some("true".to_string());
+    let (_, body) = build_openai_compatible_request(&request, "https://example.test/v1");
+    assert_eq!(body.pointer("/reasoning/enabled"), Some(&json!(true)));
+    assert!(body.get("reasoning_effort").is_none());
+    assert!(body.get("provider").is_none());
+}
+
+#[test]
 fn parses_retry_after_seconds_and_current_http_date_with_a_bounded_wait() {
     let now = UNIX_EPOCH + Duration::from_secs(784_111_767);
     assert_eq!(retry_after_value_ms_at("Sun, 06 Nov 1994 08:49:37 GMT", now), Some(10_000));
@@ -342,7 +400,7 @@ fn provider_message_deserializes_camel_case_continuation_state() {
         ProviderContinuationState::OpenRouter(state) => {
             assert_eq!(state.replay_fingerprint.actual_model_id.as_deref(), Some("provider-specific-model"));
         }
-        ProviderContinuationState::Google(_) | ProviderContinuationState::Anthropic(_) => {
+        ProviderContinuationState::Google(_) | ProviderContinuationState::Anthropic(_) | ProviderContinuationState::Mistral(_) => {
             panic!("expected OpenRouter continuation state")
         }
     }
@@ -1022,18 +1080,68 @@ fn exposes_structured_provider_errors_without_dumping_the_payload() {
 }
 
 #[test]
-fn blackbox_uses_the_documented_openai_compatible_routes() {
+fn direct2a_blackbox_preserves_legacy_default_but_accepts_explicit_blackbox_routes() {
     let request = chat_request(ProviderKind::Blackbox, "blackboxai/openai/gpt-5");
-    let base = provider_base_url(ProviderKind::Blackbox, Some("https://ignored.example/v1")).unwrap();
-    assert_eq!(base, "https://api.blackbox.ai");
-    let (url, body) = build_chat_request(&request, &base).unwrap();
-    assert_eq!(url, "https://api.blackbox.ai/chat/completions");
-    assert_eq!(body.get("model"), Some(&json!("blackboxai/openai/gpt-5")));
-    assert_eq!(endpoint(&base, "models"), "https://api.blackbox.ai/models");
+
+    let legacy = provider_base_url(ProviderKind::Blackbox, None).unwrap();
+    assert_eq!(legacy, "https://api.blackbox.ai");
+    let (legacy_url, legacy_body) = build_chat_request(&request, &legacy).unwrap();
+    assert_eq!(legacy_url, "https://api.blackbox.ai/chat/completions");
+    assert_eq!(legacy_body.get("model"), Some(&json!("blackboxai/openai/gpt-5")));
+
+    let enterprise = provider_base_url(ProviderKind::Blackbox, Some("https://enterprise.blackbox.ai/")).unwrap();
+    assert_eq!(enterprise, "https://enterprise.blackbox.ai");
+    let (enterprise_url, _) = build_chat_request(&request, &enterprise).unwrap();
+    assert_eq!(enterprise_url, "https://enterprise.blackbox.ai/chat/completions");
+
+    let organization = provider_base_url(ProviderKind::Blackbox, Some("https://example-org.blackbox.ai")).unwrap();
+    assert_eq!(organization, "https://example-org.blackbox.ai");
+}
+
+#[test]
+fn direct2a_blackbox_rejects_non_blackbox_or_path_bearing_overrides() {
+    assert!(provider_base_url(ProviderKind::Blackbox, Some("https://evil.example")).is_err());
+    assert!(provider_base_url(ProviderKind::Blackbox, Some("https://enterprise.blackbox.ai/v1")).is_err());
+    assert!(provider_base_url(ProviderKind::Blackbox, Some("https://enterprise.blackbox.ai?x=1")).is_err());
+}
+
+#[test]
+fn direct2b_blackbox_discovery_preserves_legacy_route_but_blocks_unconfirmed_routes() {
+    for explicit in [None, Some(""), Some("   "), Some("https://api.blackbox.ai"), Some("https://api.blackbox.ai/")] {
+        let base = provider_base_url(ProviderKind::Blackbox, explicit).unwrap();
+        assert_eq!(
+            model_discovery_url(ProviderKind::Blackbox, &base).unwrap(),
+            "https://api.blackbox.ai/models"
+        );
+    }
+
+    for explicit in [
+        "https://enterprise.blackbox.ai",
+        "https://example-org.blackbox.ai",
+    ] {
+        let base = provider_base_url(ProviderKind::Blackbox, Some(explicit)).unwrap();
+        let error = model_discovery_url(ProviderKind::Blackbox, &base).unwrap_err();
+        assert!(error.contains("does not establish GET /models"));
+        assert!(error.contains("not evidence that the configured chat route or credential is invalid"));
+    }
+}
+
+#[test]
+fn direct2b_discovery_boundary_does_not_change_other_provider_model_urls() {
+    let mistral = provider_base_url(ProviderKind::Mistral, None).unwrap();
+    assert_eq!(
+        model_discovery_url(ProviderKind::Mistral, &mistral).unwrap(),
+        "https://api.mistral.ai/v1/models"
+    );
+    let google = provider_base_url(ProviderKind::Google, None).unwrap();
+    assert_eq!(
+        model_discovery_url(ProviderKind::Google, &google).unwrap(),
+        "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+    );
 }
 
 #[tokio::test]
-async fn openrouter_requests_include_application_attribution_headers() {
+async fn openrouter_wire_requests_omit_application_attribution_headers() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -1041,14 +1149,9 @@ async fn openrouter_requests_include_application_attribution_headers() {
         let request = read_simulator_request(&mut socket).await;
         let headers = request.to_ascii_lowercase();
         assert!(headers.contains("authorization: bearer simulator-secret"));
-        assert!(headers.contains(&format!(
-            "http-referer: {}",
-            OPENROUTER_APP_REFERER.to_ascii_lowercase()
-        )));
-        assert!(headers.contains(&format!(
-            "x-openrouter-title: {}",
-            OPENROUTER_APP_TITLE.to_ascii_lowercase()
-        )));
+        for header in ["http-referer:", "referer:", "x-title:", "x-openrouter-title:", "user-agent:"] {
+            assert!(!headers.lines().any(|line| line.starts_with(header)), "unexpected identifying header: {header}");
+        }
         let body = r#"{"data":[]}"#;
         let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
         socket.write_all(response.as_bytes()).await.unwrap();
@@ -1063,6 +1166,42 @@ async fn openrouter_requests_include_application_attribution_headers() {
     .await
     .unwrap();
     assert!(response.status().is_success());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn custom_openai_sampling_reaches_the_local_http_simulator_without_openrouter_routing() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_simulator_request(&mut socket).await;
+        assert!(request.lines().next().unwrap_or_default().contains("/chat/completions"));
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json.get("model"), Some(&json!("custom-model")));
+        assert_eq!(json.get("top_p"), Some(&json!(0.04)));
+        assert_eq!(json.get("top_k"), Some(&json!(0)));
+        assert_eq!(json.get("seed"), Some(&json!(42)));
+        assert!(json.get("provider").is_none());
+        let response_body = r#"{"model":"custom-model","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#;
+        let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response_body.len(), response_body);
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+
+    let base = format!("http://{address}");
+    let mut request = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    request.top_p = Some(0.04);
+    request.top_k = Some(0);
+    request.seed = Some(42);
+    validate_chat_request(&request).unwrap();
+    let (url, body) = build_chat_request(&request, &base).unwrap();
+    assert!(body.get("provider").is_none());
+    let response = authenticated(client().unwrap().post(url).json(&body), ProviderKind::CustomOpenai, "simulator-secret")
+        .send().await.unwrap();
+    let (payload, request_id) = json_response(response, "simulator-secret").await.unwrap();
+    let parsed = parse_chat_response(ProviderKind::CustomOpenai, payload, request_id).unwrap();
+    assert_eq!(parsed.content, "ok");
     server.await.unwrap();
 }
 
@@ -1128,6 +1267,7 @@ fn emits_openrouter_capacity_routing_without_changing_other_provider_bodies() {
         only: vec!["siliconflow".to_string()],
         ignore: vec!["deepinfra".to_string()],
         allow_fallbacks: Some(true),
+        require_parameters: None,
     });
     let (_, body) = build_openai_compatible_request(&openrouter, "https://openrouter.ai/api/v1");
     assert_eq!(body.pointer("/provider/order/0"), Some(&json!("siliconflow")));
@@ -1139,6 +1279,207 @@ fn emits_openrouter_capacity_routing_without_changing_other_provider_bodies() {
     openai.provider_routing = openrouter.provider_routing.clone();
     let (_, body) = build_openai_compatible_request(&openai, "https://api.openai.com/v1");
     assert!(body.get("provider").is_none());
+}
+
+#[test]
+fn emits_openrouter_and_custom_manual_sampling_without_leaking_to_other_providers() {
+    let mut openrouter = chat_request(ProviderKind::Openrouter, "sampling/model");
+    openrouter.top_p = Some(0.04);
+    openrouter.top_k = Some(0);
+    openrouter.seed = Some(42);
+    openrouter.provider_routing = Some(OpenRouterProviderRouting {
+        order: vec![],
+        only: vec!["provider-a/fp8".to_string()],
+        ignore: vec![],
+        allow_fallbacks: Some(true),
+        require_parameters: Some(true),
+    });
+    validate_chat_request(&openrouter).unwrap();
+    let (_, body) = build_openai_compatible_request(&openrouter, "https://openrouter.ai/api/v1");
+    assert_eq!(body.get("top_p"), Some(&json!(0.04)));
+    assert_eq!(body.get("top_k"), Some(&json!(0)));
+    assert_eq!(body.get("seed"), Some(&json!(42)));
+    assert_eq!(body.pointer("/provider/require_parameters"), Some(&json!(true)));
+    assert_eq!(body.pointer("/provider/only/0"), Some(&json!("provider-a/fp8")));
+
+    let mut custom = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    custom.top_p = Some(0.04);
+    custom.top_k = Some(0);
+    custom.seed = Some(42);
+    validate_chat_request(&custom).unwrap();
+    let (_, custom_body) = build_openai_compatible_request(&custom, "https://example.test/v1");
+    assert_eq!(custom_body.get("top_p"), Some(&json!(0.04)));
+    assert_eq!(custom_body.get("top_k"), Some(&json!(0)));
+    assert_eq!(custom_body.get("seed"), Some(&json!(42)));
+    assert!(custom_body.get("provider").is_none());
+
+    let custom_auto = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    let (_, custom_auto_body) = build_openai_compatible_request(&custom_auto, "https://example.test/v1");
+    assert!(custom_auto_body.get("top_p").is_none());
+    assert!(custom_auto_body.get("top_k").is_none());
+    assert!(custom_auto_body.get("seed").is_none());
+
+    let mut custom_top_k = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    custom_top_k.top_k = Some(100);
+    validate_chat_request(&custom_top_k).unwrap();
+    let (_, custom_top_k_body) = build_openai_compatible_request(&custom_top_k, "https://example.test/v1");
+    assert_eq!(custom_top_k_body.get("top_k"), Some(&json!(100)));
+    assert!(custom_top_k_body.get("top_p").is_none());
+    assert!(custom_top_k_body.get("seed").is_none());
+
+    let mut custom_seed = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    custom_seed.seed = Some(42);
+    validate_chat_request(&custom_seed).unwrap();
+    let (_, custom_seed_body) = build_openai_compatible_request(&custom_seed, "https://example.test/v1");
+    assert_eq!(custom_seed_body.get("seed"), Some(&json!(42)));
+    assert!(custom_seed_body.get("top_p").is_none());
+    assert!(custom_seed_body.get("top_k").is_none());
+
+    let mut custom_with_or_routing = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    custom_with_or_routing.seed = Some(42);
+    custom_with_or_routing.provider_routing = Some(OpenRouterProviderRouting {
+        order: vec![], only: vec![], ignore: vec![], allow_fallbacks: None, require_parameters: Some(true),
+    });
+    assert!(validate_chat_request(&custom_with_or_routing).unwrap_err().contains("OpenRouter-only"));
+
+    let mut openai = chat_request(ProviderKind::Openai, "gpt-test");
+    openai.top_p = Some(0.5);
+    assert!(validate_chat_request(&openai).unwrap_err().contains("OpenRouter, Custom OpenAI-compatible, Mistral direct, or Blackbox"));
+    let (_, body) = build_openai_compatible_request(&openai, "https://api.openai.com/v1");
+    assert!(body.get("top_p").is_none());
+    assert!(body.get("top_k").is_none());
+    assert!(body.get("seed").is_none());
+}
+
+#[test]
+fn direct0_characterizes_direct_provider_sampling_gate_without_enabling_it() {
+    for provider in [
+        ProviderKind::Openai,
+        ProviderKind::Zai,
+        ProviderKind::Deepseek,
+    ] {
+        let mut request = chat_request(provider, "direct-0-model");
+        request.top_p = Some(0.5);
+        request.top_k = Some(100);
+        request.seed = Some(42);
+
+        let error = validate_chat_request(&request).unwrap_err();
+        assert!(error.contains("OpenRouter, Custom OpenAI-compatible, Mistral direct, or Blackbox"));
+
+        // Characterization only: even if a caller bypassed validation, the current
+        // generic builder does not leak the extra sampling fields to direct routes.
+        let base = provider_base_url(provider, None).unwrap();
+        let (_, body) = build_openai_compatible_request(&request, &base);
+        assert!(body.get("top_p").is_none(), "{provider:?} unexpectedly emitted top_p");
+        assert!(body.get("top_k").is_none(), "{provider:?} unexpectedly emitted top_k");
+        assert!(body.get("seed").is_none(), "{provider:?} unexpectedly emitted seed");
+    }
+}
+
+#[test]
+fn direct2d_emits_blackbox_sampling_with_native_wire_names_without_openrouter_routing() {
+    let mut request = chat_request(ProviderKind::Blackbox, "provider/model-a");
+    request.top_p = Some(0.7);
+    request.top_k = Some(100);
+    request.seed = Some(42);
+
+    validate_chat_request(&request).unwrap();
+    let (_, body) = build_openai_compatible_request(&request, "https://enterprise.blackbox.ai");
+    assert_eq!(body.get("top_p"), Some(&json!(0.7)));
+    assert_eq!(body.get("top_k"), Some(&json!(100)));
+    assert_eq!(body.get("seed"), Some(&json!(42)));
+    assert!(body.get("random_seed").is_none());
+    assert!(body.get("provider").is_none(), "DIRECT-2D does not synthesize Blackbox routing metadata");
+}
+
+#[test]
+fn direct2d_blackbox_auto_omits_all_optional_sampling_fields() {
+    let request = chat_request(ProviderKind::Blackbox, "provider/model-a");
+    validate_chat_request(&request).unwrap();
+    let (_, body) = build_openai_compatible_request(&request, "https://enterprise.blackbox.ai");
+    assert!(body.get("top_p").is_none());
+    assert!(body.get("top_k").is_none());
+    assert!(body.get("seed").is_none());
+}
+
+#[test]
+fn direct1c_emits_mistral_sampling_with_random_seed_wire_name() {
+    let mut request = chat_request(ProviderKind::Mistral, "mistral-medium-3-5");
+    request.top_p = Some(0.7);
+    request.top_k = Some(100);
+    request.seed = Some(42);
+
+    validate_chat_request(&request).unwrap();
+    let (_, body) = build_openai_compatible_request(&request, "https://api.mistral.ai/v1");
+    assert_eq!(body.get("top_p"), Some(&json!(0.7)));
+    assert_eq!(body.get("top_k"), Some(&json!(100)));
+    assert_eq!(body.get("random_seed"), Some(&json!(42)));
+    assert!(body.get("seed").is_none(), "Mistral must not receive the Harness/OpenRouter seed wire name");
+    assert!(body.get("provider").is_none(), "OpenRouter routing must never leak into Mistral direct");
+}
+
+#[test]
+fn direct1c_mistral_auto_omits_all_optional_sampling_fields() {
+    let request = chat_request(ProviderKind::Mistral, "mistral-medium-3-5");
+    validate_chat_request(&request).unwrap();
+    let (_, body) = build_openai_compatible_request(&request, "https://api.mistral.ai/v1");
+    assert!(body.get("top_p").is_none());
+    assert!(body.get("top_k").is_none());
+    assert!(body.get("random_seed").is_none());
+    assert!(body.get("seed").is_none());
+}
+
+#[test]
+fn direct1a_extracts_mistral_nested_thinking_from_fixture_without_leaking_it_into_final() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../src/providers/direct-compat-fixtures/mistral-nested-thinking-response.json"
+    ))
+    .expect("DIRECT-1A Mistral nested-thinking fixture must be valid JSON");
+
+    let parsed = parse_chat_response(ProviderKind::Mistral, fixture, None).unwrap();
+    assert_eq!(parsed.content, "final");
+    assert_eq!(parsed.finish_reason.as_deref(), Some("stop"));
+    assert_eq!(parsed.reasoning_content.as_deref(), Some("reasoning"));
+    assert_eq!(parsed.reasoning_source.as_deref(), Some("mistral_thinking"));
+}
+
+#[test]
+fn direct1a_extracts_multiple_nested_mistral_thinking_text_items_in_order() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../src/providers/direct-compat-fixtures/mistral-nested-thinking-multi-response.json"
+    ))
+    .expect("DIRECT-1A multi-part Mistral fixture must be valid JSON");
+    let parsed = parse_chat_response(ProviderKind::Mistral, fixture, None).unwrap();
+
+    assert_eq!(parsed.reasoning_content.as_deref(), Some("first second"));
+    assert_eq!(parsed.reasoning_source.as_deref(), Some("mistral_thinking"));
+    assert_eq!(parsed.content, "visible thinking word stays final");
+}
+
+#[test]
+fn validates_openrouter_sampling_transport_ranges() {
+    let manual_sampling_routing = || OpenRouterProviderRouting {
+        order: vec![],
+        only: vec!["provider-a/fp8".to_string()],
+        ignore: vec![],
+        allow_fallbacks: Some(true),
+        require_parameters: Some(true),
+    };
+
+    let mut request = chat_request(ProviderKind::Openrouter, "sampling/model");
+    request.top_p = Some(1.01);
+    request.provider_routing = Some(manual_sampling_routing());
+    assert!(validate_chat_request(&request).unwrap_err().contains("top_p"));
+
+    let mut request = chat_request(ProviderKind::Openrouter, "sampling/model");
+    request.top_k = Some(9_007_199_254_740_992);
+    request.provider_routing = Some(manual_sampling_routing());
+    assert!(validate_chat_request(&request).unwrap_err().contains("top_k"));
+
+    let mut request = chat_request(ProviderKind::Openrouter, "sampling/model");
+    request.seed = Some(9_007_199_254_740_992);
+    request.provider_routing = Some(manual_sampling_routing());
+    assert!(validate_chat_request(&request).unwrap_err().contains("seed"));
 }
 
 #[test]
@@ -1390,7 +1731,7 @@ fn stream_accumulator_treats_null_as_absent_and_invalid_non_null_as_semantic_fai
             "choices": [{"delta": {"reasoning_details": invalid}}]
         }).to_string(), "secret", None).unwrap_err();
         assert_eq!(error.code.as_ref(), "invalid_provider_json");
-        assert_eq!(error.semantic_output_started, Some(true));
+        assert_eq!(error.metadata.semantic_output_started, Some(true));
     }
 
     let mut after_valid = OpenRouterStreamAccumulator::default();
@@ -1401,7 +1742,7 @@ fn stream_accumulator_treats_null_as_absent_and_invalid_non_null_as_semantic_fai
         "choices": [{"delta": {"reasoning_details": {"unexpected": true}}}]
     }).to_string(), "secret", None).unwrap_err();
     assert_eq!(error.code.as_ref(), "invalid_provider_json");
-    assert_eq!(error.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
 }
 
 #[test]
@@ -1640,7 +1981,7 @@ fn partial_failed_stream_state_is_not_inherited_by_a_fresh_accumulator() {
     }).to_string(), "secret", None).unwrap();
     let failure = interrupted.finish(None).unwrap_err();
     assert_eq!(failure.code.as_ref(), "response_body_read");
-    assert_eq!(failure.semantic_output_started, Some(true));
+    assert_eq!(failure.metadata.semantic_output_started, Some(true));
 
     let mut fresh = OpenRouterStreamAccumulator::default();
     fresh.process_data_with_events(&json!({
@@ -1688,7 +2029,7 @@ fn stream_accumulator_bounds_total_data_and_preserves_semantic_retry_boundary() 
     }
     let error = saw_limit.expect("stream accumulation must be bounded");
     assert_eq!(error.code.as_ref(), "response_body_too_large");
-    assert_eq!(error.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
     const { assert!(MAX_ACCUMULATED_STREAM_DATA_BYTES >= 8 * 1024 * 1024) };
 }
 
@@ -1757,12 +2098,12 @@ fn midstream_error_records_whether_semantic_output_already_started() {
     let error_event = json!({"error": {"type": "server", "code": "upstream_disconnect", "message": "gone"}, "choices": [{"delta": {}, "finish_reason": "error"}]}).to_string();
     let mut before = OpenRouterStreamAccumulator::default();
     let error = before.process_data_with_events(&error_event, "secret", Some("r")).unwrap_err();
-    assert_eq!(error.semantic_output_started, None);
+    assert_eq!(error.metadata.semantic_output_started, None);
 
     let mut after = OpenRouterStreamAccumulator::default();
     after.process_data_with_events(&json!({"choices":[{"delta":{"content":"partial"}}]}).to_string(), "secret", None).unwrap();
     let error = after.process_data_with_events(&error_event, "secret", Some("r")).unwrap_err();
-    assert_eq!(error.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
 
     let same_event = json!({
         "error": {"type": "server", "code": "upstream_disconnect", "message": "gone"},
@@ -1770,20 +2111,20 @@ fn midstream_error_records_whether_semantic_output_already_started() {
     }).to_string();
     let mut same_frame = OpenRouterStreamAccumulator::default();
     let error = same_frame.process_data_with_events(&same_event, "secret", Some("r")).unwrap_err();
-    assert_eq!(error.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
 }
 
 #[test]
 fn malformed_stream_event_and_abrupt_eof_are_failures_and_keep_retry_boundary() {
     let mut before = OpenRouterStreamAccumulator::default();
     let error = before.process_data_with_events("{broken", "secret", None).unwrap_err();
-    assert_eq!(error.semantic_output_started, None);
+    assert_eq!(error.metadata.semantic_output_started, None);
 
     let mut after = OpenRouterStreamAccumulator::default();
     after.process_data_with_events(&json!({"choices":[{"delta":{"content":"partial"}}]}).to_string(), "secret", None).unwrap();
     let error = after.finish(None).unwrap_err();
     assert_eq!(error.code.as_ref(), "response_body_read");
-    assert_eq!(error.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
 }
 
 #[test]
@@ -1876,11 +2217,11 @@ fn s2_live_filter_hides_tagged_reasoning_without_changing_raw_accumulation() {
 
     for (open, close) in cases {
         let mut accumulator = OpenRouterStreamAccumulator::default();
-        let raw = format!("before {open}PRIVATE{close} VISIBLE");
+        let raw = format!("{open}PRIVATE{close} VISIBLE");
         let events = accumulator.process_data_with_events(&json!({
             "choices": [{"delta": {"content": raw.clone()}, "finish_reason": "stop"}]
         }).to_string(), "secret", Some("privacy-tags")).unwrap();
-        assert_eq!(streamed_visible_text(&events), "before  VISIBLE");
+        assert_eq!(streamed_visible_text(&events), " VISIBLE");
         accumulator.process_data_with_events("[DONE]", "secret", Some("privacy-tags")).unwrap();
         let result = accumulator.finish(Some("privacy-tags".to_string())).unwrap();
         assert_eq!(result.payload.pointer("/choices/0/message/content").and_then(Value::as_str), Some(raw.as_str()));
@@ -1914,7 +2255,7 @@ fn s2_live_filter_holds_split_reasoning_tags_until_visibility_is_known() {
 fn s2_live_filter_handles_multiple_reasoning_blocks_and_plain_text() {
     let mut accumulator = OpenRouterStreamAccumulator::default();
     let events = accumulator.process_data_with_events(&json!({
-        "choices": [{"delta": {"content": "A<think>x</think>B<reason>y</reason>C"}, "finish_reason": null}]
+        "choices": [{"delta": {"content": "<think>x</think><reason>y</reason>ABC"}, "finish_reason": null}]
     }).to_string(), "secret", Some("privacy-multiple")).unwrap();
     assert_eq!(streamed_visible_text(&events), "ABC");
     let plain = accumulator.process_data_with_events(&json!({
@@ -1945,6 +2286,303 @@ fn s2_live_filter_never_flushes_incomplete_reasoning_to_ui() {
     let done = accumulator.process_data_with_events("[DONE]", "secret", Some("privacy-incomplete")).unwrap();
     assert!(streamed_visible_text(&done).is_empty());
     assert!(matches!(done.last(), Some(ProviderStreamEvent::Finished { .. })));
+}
+
+
+#[tokio::test]
+async fn direct1d_mistral_stream_reconstructs_thinking_final_usage_and_replay_content() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_simulator_request(&mut socket).await;
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json.get("stream"), Some(&json!(true)));
+        assert!(json.get("stream_options").is_none());
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: mistral-stream-1\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.write_all(b": keepalive\n\n").await.unwrap();
+        socket.write_all(b"data: {\"id\":\"mistral-gen\",\"model\":\"mistral-medium-3-5\",\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\",\"text\":\"reason \"}]}]},\"finish_reason\":null}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\",\"text\":\"more\"}]},{\"type\":\"text\",\"text\":\"final \"}]},\"finish_reason\":null}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":5,\"total_tokens\":12}}\n\n").await.unwrap();
+        socket.write_all(b"data: [DONE]\n\n").await.unwrap();
+    });
+
+    let base = format!("http://{address}");
+    let request = chat_request(ProviderKind::Mistral, "mistral-medium-3-5");
+    let (url, mut body) = build_chat_request(&request, &base).unwrap();
+    enable_mistral_chat_streaming(&mut body).unwrap();
+    let result = send_mistral_streaming_chat_request(
+        authenticated(client().unwrap().post(url).json(&body), ProviderKind::Mistral, "simulator-secret"),
+        None,
+        "simulator-secret",
+        &short_stream_policy(500, 500, 2_000),
+        None,
+    ).await.unwrap();
+    assert_eq!(result.payload.pointer("/choices/0/message/content/0/type"), Some(&json!("thinking")));
+    assert_eq!(result.payload.pointer("/choices/0/message/content/0/thinking/0/text"), Some(&json!("reason more")));
+    assert_eq!(result.payload.pointer("/choices/0/message/content/1/text"), Some(&json!("final answer")));
+    let parsed = parse_chat_response(ProviderKind::Mistral, result.payload, result.request_id).unwrap();
+    assert_eq!(parsed.content, "final answer");
+    assert_eq!(parsed.reasoning_content.as_deref(), Some("reason more"));
+    assert_eq!(parsed.reasoning_source.as_deref(), Some("mistral_thinking"));
+    assert_eq!(parsed.usage.total_tokens, Some(12));
+    assert_eq!(parsed.provider_request_id.as_deref(), Some("mistral-stream-1"));
+    assert_eq!(parsed.reasoning_details.as_ref().and_then(|parts| parts.first()).and_then(|part| part.get("type")), Some(&json!("thinking")));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct1d_mistral_stream_accepts_done_without_usage() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_simulator_request(&mut socket).await;
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json.get("stream"), Some(&json!(true)));
+        assert!(json.get("stream_options").is_none());
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: mistral-stream-no-usage\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.write_all(b"data: {\"id\":\"mistral-gen-no-usage\",\"model\":\"mistral-medium-3-5\",\"choices\":[{\"delta\":{\"content\":\"final without usage\"},\"finish_reason\":\"stop\"}]}\n\n").await.unwrap();
+        socket.write_all(b"data: [DONE]\n\n").await.unwrap();
+    });
+
+    let base = format!("http://{address}");
+    let request = chat_request(ProviderKind::Mistral, "mistral-medium-3-5");
+    let (url, mut body) = build_chat_request(&request, &base).unwrap();
+    enable_mistral_chat_streaming(&mut body).unwrap();
+    let result = send_mistral_streaming_chat_request(
+        authenticated(client().unwrap().post(url).json(&body), ProviderKind::Mistral, "simulator-secret"),
+        None,
+        "simulator-secret",
+        &short_stream_policy(500, 500, 2_000),
+        None,
+    ).await.unwrap();
+    let parsed = parse_chat_response(ProviderKind::Mistral, result.payload, result.request_id).unwrap();
+    assert_eq!(parsed.content, "final without usage");
+    assert_eq!(parsed.usage.total_tokens, None);
+    assert_eq!(parsed.provider_request_id.as_deref(), Some("mistral-stream-no-usage"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct1d_mistral_stream_rejects_eof_without_done_after_reasoning() {
+    let (url, server) = start_sse_server(vec![(10, "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\",\"text\":\"partial\"}]}]},\"finish_reason\":null}]}\n\n")]).await;
+    let error = send_mistral_streaming_chat_request(
+        reqwest::Client::new().post(url), None, "secret", &short_stream_policy(500, 500, 2_000), None,
+    ).await.unwrap_err();
+    assert_eq!(error.code.as_ref(), "response_body_read");
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct2e_blackbox_stream_sends_stream_true_and_reconstructs_reasoning_usage_and_provider() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_simulator_request(&mut socket).await;
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json.get("stream"), Some(&json!(true)));
+        assert_eq!(json.get("top_p"), Some(&json!(0.7)));
+        assert_eq!(json.get("top_k"), Some(&json!(100)));
+        assert_eq!(json.get("seed"), Some(&json!(42)));
+        assert!(json.get("stream_options").is_none());
+        assert!(json.get("provider").is_none());
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: blackbox-stream-1\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.write_all(b": keepalive\n\n").await.unwrap();
+        socket.write_all(b"data: {\"id\":\"bb-gen\",\"model\":\"vendor/model-v1\",\"provider\":\"ExampleProvider\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning\":\"private \"},\"finish_reason\":null}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{\"reasoning\":\"thought\",\"content\":\"visible \"},\"finish_reason\":null}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\",\"native_finish_reason\":\"completed\"}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":6,\"total_tokens\":15,\"completion_tokens_details\":{\"reasoning_tokens\":2}}}\n\n").await.unwrap();
+        socket.write_all(b"data: [DONE]\n\n").await.unwrap();
+    });
+
+    let base = format!("http://{address}");
+    let mut request = chat_request(ProviderKind::Blackbox, "vendor/model-v1");
+    request.top_p = Some(0.7);
+    request.top_k = Some(100);
+    request.seed = Some(42);
+    let (url, mut body) = build_chat_request(&request, &base).unwrap();
+    enable_chat_streaming(&mut body).unwrap();
+    let result = send_blackbox_streaming_chat_request(
+        authenticated(client().unwrap().post(url).json(&body), ProviderKind::Blackbox, "simulator-secret"),
+        None,
+        "simulator-secret",
+        &short_stream_policy(500, 500, 2_000),
+        None,
+    ).await.unwrap();
+    let parsed = parse_chat_response(ProviderKind::Blackbox, result.payload, result.request_id).unwrap();
+    assert_eq!(parsed.content, "visible answer");
+    assert_eq!(parsed.reasoning_content.as_deref(), Some("private thought"));
+    assert_eq!(parsed.usage.total_tokens, Some(15));
+    assert_eq!(parsed.usage.reasoning_tokens, Some(2));
+    assert_eq!(parsed.actual_provider.as_deref(), Some("ExampleProvider"));
+    assert_eq!(parsed.provider_request_id.as_deref(), Some("blackbox-stream-1"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct2e_blackbox_stream_accepts_done_without_usage() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_simulator_request(&mut socket).await;
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json.get("stream"), Some(&json!(true)));
+        assert!(json.get("stream_options").is_none());
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: blackbox-stream-no-usage\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"final without usage\"},\"finish_reason\":\"stop\"}]}\n\n").await.unwrap();
+        socket.write_all(b"data: [DONE]\n\n").await.unwrap();
+    });
+    let base = format!("http://{address}");
+    let request = chat_request(ProviderKind::Blackbox, "vendor/model-v1");
+    let (url, mut body) = build_chat_request(&request, &base).unwrap();
+    enable_chat_streaming(&mut body).unwrap();
+    let result = send_blackbox_streaming_chat_request(
+        authenticated(client().unwrap().post(url).json(&body), ProviderKind::Blackbox, "simulator-secret"),
+        None,
+        "simulator-secret",
+        &short_stream_policy(500, 500, 2_000),
+        None,
+    ).await.unwrap();
+    let parsed = parse_chat_response(ProviderKind::Blackbox, result.payload, result.request_id).unwrap();
+    assert_eq!(parsed.content, "final without usage");
+    assert_eq!(parsed.usage.total_tokens, None);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct2e_blackbox_stream_surfaces_choice_error_before_output() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _request = read_simulator_request(&mut socket).await;
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: blackbox-choice-error-before\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"error\",\"error\":{\"type\":\"upstream\",\"code\":502,\"message\":\"upstream failed simulator-secret\"}}]}\n\n").await.unwrap();
+        socket.write_all(b"data: [DONE]\n\n").await.unwrap();
+    });
+
+    let base = format!("http://{address}");
+    let request = chat_request(ProviderKind::Blackbox, "vendor/model-v1");
+    let (url, mut body) = build_chat_request(&request, &base).unwrap();
+    enable_chat_streaming(&mut body).unwrap();
+    let error = send_blackbox_streaming_chat_request(
+        authenticated(client().unwrap().post(url).json(&body), ProviderKind::Blackbox, "simulator-secret"),
+        None,
+        "simulator-secret",
+        &short_stream_policy(500, 500, 2_000),
+        None,
+    ).await.unwrap_err();
+    assert_eq!(error.code.as_ref(), "provider_error");
+    assert_eq!(error.metadata.provider_code.as_deref(), Some("502"));
+    assert_eq!(error.metadata.provider_request_id.as_deref(), Some("blackbox-choice-error-before"));
+    assert_eq!(error.metadata.semantic_output_started, None);
+    assert!(error.message.contains("[REDACTED]"));
+    assert!(!error.message.contains("simulator-secret"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct2e_blackbox_stream_surfaces_choice_error_after_output() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _request = read_simulator_request(&mut socket).await;
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: blackbox-choice-error-after\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{\"reasoning\":\"private\",\"content\":\"partial\"},\"finish_reason\":null}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"error\",\"error\":{\"code\":502,\"message\":\"upstream failed simulator-secret\"}}]}\n\n").await.unwrap();
+        socket.write_all(b"data: [DONE]\n\n").await.unwrap();
+    });
+
+    let base = format!("http://{address}");
+    let request = chat_request(ProviderKind::Blackbox, "vendor/model-v1");
+    let (url, mut body) = build_chat_request(&request, &base).unwrap();
+    enable_chat_streaming(&mut body).unwrap();
+    let error = send_blackbox_streaming_chat_request(
+        authenticated(client().unwrap().post(url).json(&body), ProviderKind::Blackbox, "simulator-secret"),
+        None,
+        "simulator-secret",
+        &short_stream_policy(500, 500, 2_000),
+        None,
+    ).await.unwrap_err();
+    assert_eq!(error.code.as_ref(), "provider_error");
+    assert_eq!(error.metadata.provider_code.as_deref(), Some("502"));
+    assert_eq!(error.metadata.provider_request_id.as_deref(), Some("blackbox-choice-error-after"));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
+    assert!(error.message.contains("[REDACTED]"));
+    assert!(!error.message.contains("simulator-secret"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct2e_blackbox_stream_rejects_eof_without_done_after_output() {
+    let (url, server) = start_sse_server(vec![(10, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")]).await;
+    let error = send_blackbox_streaming_chat_request(
+        reqwest::Client::new().post(url), None, "secret", &short_stream_policy(500, 500, 2_000), None,
+    ).await.unwrap_err();
+    assert_eq!(error.code.as_ref(), "response_body_read");
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn custom_openai_streaming_sends_stream_true_and_accepts_reasoning_usage_and_done() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_simulator_request(&mut socket).await;
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json.get("stream"), Some(&json!(true)));
+        assert_eq!(json.get("model"), Some(&json!("custom-model")));
+        assert!(json.get("provider").is_none());
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: custom-stream-1\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.write_all(b": keepalive\n\n").await.unwrap();
+        socket.write_all(b"data: {\"id\":\"gen-custom\",\"model\":\"custom-model-runtime\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"private\"},\"finish_reason\":null}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"visible final\"},\"finish_reason\":\"stop\"}]}\n\n").await.unwrap();
+        socket.write_all(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n").await.unwrap();
+        socket.write_all(b"data: [DONE]\n\n").await.unwrap();
+    });
+    let base = format!("http://{address}");
+    let request = chat_request(ProviderKind::CustomOpenai, "custom-model");
+    let (url, mut body) = build_chat_request(&request, &base).unwrap();
+    enable_chat_streaming(&mut body).unwrap();
+    let result = send_custom_openai_streaming_chat_request(
+        authenticated(client().unwrap().post(url).json(&body), ProviderKind::CustomOpenai, "simulator-secret"),
+        None,
+        "simulator-secret",
+        &short_stream_policy(500, 500, 2_000),
+        None,
+    ).await.unwrap();
+    let parsed = parse_chat_response(ProviderKind::CustomOpenai, result.payload, result.request_id).unwrap();
+    assert_eq!(parsed.content, "visible final");
+    assert_eq!(parsed.reasoning_content.as_deref(), Some("private"));
+    assert_eq!(parsed.finish_reason.as_deref(), Some("stop"));
+    assert_eq!(parsed.actual_model.as_deref(), Some("custom-model-runtime"));
+    assert_eq!(parsed.usage.total_tokens, Some(5));
+    assert_eq!(parsed.provider_request_id.as_deref(), Some("custom-stream-1"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn custom_openai_streaming_rejects_eof_without_done_after_partial_output() {
+    let (url, server) = start_sse_server(vec![(10, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")]).await;
+    let error = send_custom_openai_streaming_chat_request(
+        reqwest::Client::new().post(url), None, "secret", &short_stream_policy(500, 500, 2_000), None,
+    ).await.unwrap_err();
+    assert_eq!(error.code.as_ref(), "response_body_read");
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
+    server.await.unwrap();
 }
 
 #[tokio::test]
@@ -2000,7 +2638,7 @@ async fn oversized_pending_event_after_semantic_output_closes_retry_boundary() {
         None,
     ).await.unwrap_err();
     assert_eq!(error.code.as_ref(), "response_body_too_large");
-    assert_eq!(error.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
     server.await.unwrap();
 }
 
@@ -2023,7 +2661,7 @@ async fn emergency_ceiling_remains_bounded_even_when_keepalives_continue() {
     ).await.unwrap_err();
     assert_eq!(error.code.as_ref(), "timeout");
     assert!(error.message.contains("emergency"));
-    assert_eq!(error.semantic_output_started, None);
+    assert_eq!(error.metadata.semantic_output_started, None);
     server.await.unwrap();
 }
 
@@ -2042,7 +2680,7 @@ async fn genuinely_idle_stream_times_out_without_creating_semantic_output() {
         None,
     ).await.unwrap_err();
     assert_eq!(error.code.as_ref(), "timeout");
-    assert_eq!(error.semantic_output_started, None);
+    assert_eq!(error.metadata.semantic_output_started, None);
     server.await.unwrap();
 }
 
@@ -2143,4 +2781,392 @@ fn openrouter_cross_language_bridge_replays_ts_restored_state_in_rust_request_bu
     let replayed = body.pointer("/messages/0/reasoning_details").cloned().unwrap();
     assert_eq!(replayed, expected_details);
     std::fs::write(output_path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
+}
+
+// R1: transport completion and semantic validation remain independent.
+async fn r1_body_fixture(body: &str, extra_length: usize) -> Result<(Value, Option<String>), ProviderCallError> {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let wire = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nX-Request-Id: r1-header\r\nConnection: close\r\n\r\n{}", body.len() + extra_length, body);
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_simulator_request(&mut socket).await;
+        socket.write_all(wire.as_bytes()).await.unwrap();
+        socket.shutdown().await.unwrap();
+    });
+    let result = super::transport::send_chat_request(reqwest::Client::new().post(format!("http://{address}")), None, "test-secret").await;
+    server.await.unwrap();
+    result
+}
+
+#[tokio::test]
+async fn r1_full_body_reasoning_only_rejection_keeps_safe_finished_evidence() {
+    let body = json!({"id":"gen-r1","choices":[{"message":{"content":"","reasoning":"PRIVATE_REASONING"},"finish_reason":"stop"}],"usage":{"completion_tokens":20,"completion_tokens_details":{"reasoning_tokens":19},"total_tokens":25}});
+    let (payload, id) = r1_body_fixture(&body.to_string(), 0).await.unwrap();
+    let proof = super::response_evidence::finished(Some(&payload), id.as_deref(), "body_read");
+    let failure = parse_finished_chat_response(ProviderKind::Openrouter, &payload, id, false, proof).unwrap_err();
+    let wire = serde_json::to_value(&failure).unwrap();
+    assert_eq!(wire["responseEvidence"]["transportOutcome"], "response_finished");
+    assert_eq!(wire["responseEvidence"]["boundary"], "body_read");
+    assert_eq!(wire["responseEvidence"]["finishReason"], "stop");
+    assert_eq!(wire["responseEvidence"]["generationId"], "gen-r1");
+    assert_eq!(wire["responseEvidence"]["usage"]["reasoningTokens"], 19);
+    assert!(wire["responseEvidence"]["usage"]["costUsd"].is_null());
+    assert!(!serde_json::to_string(&wire).unwrap().contains("PRIVATE_REASONING"));
+}
+
+#[tokio::test]
+async fn r1_complete_invalid_json_is_finished_but_broken_body_is_not() {
+    let failure = r1_body_fixture("not valid json", 0).await.unwrap_err();
+    assert_eq!(failure.code.as_ref(), "invalid_provider_json");
+    assert!(failure.metadata.response_evidence.is_some());
+    let failure = r1_body_fixture("{", 100).await.unwrap_err();
+    assert!(failure.metadata.response_evidence.is_none());
+}
+
+#[test]
+fn r1_full_rejected_structure_and_empty_content_keep_proof() {
+    for payload in [json!({"choices":[]}), json!({"choices":[{"message":{"content":""},"finish_reason":"stop"}]})] {
+        let proof = super::response_evidence::finished(Some(&payload), None, "body_read");
+        let failure = parse_finished_chat_response(ProviderKind::Openrouter, &payload, None, false, proof).unwrap_err();
+        assert!(failure.metadata.response_evidence.is_some());
+    }
+}
+
+#[test]
+fn r1_done_reasoning_only_is_rejected_with_proof_and_final_content_stays_accepted() {
+    for content in ["", "The actual final response"] {
+        let mut accumulator = OpenRouterStreamAccumulator::default();
+        accumulator.process_data_with_events(&json!({"id":"gen-r1","choices":[{"delta":{"reasoning":"PRIVATE","content":content},"finish_reason":"stop"}],"usage":{"total_tokens":25}}).to_string(), "secret", Some("header")).unwrap();
+        accumulator.process_data_with_events("[DONE]", "secret", Some("header")).unwrap();
+        let streamed = accumulator.finish(Some("header".into())).unwrap();
+        let result = parse_finished_chat_response(ProviderKind::Openrouter, &streamed.payload, streamed.request_id, streamed.semantic_output_started, streamed.response_evidence);
+        let proof = if content.is_empty() { result.unwrap_err().metadata.response_evidence.unwrap() } else { let response = result.unwrap(); assert_eq!(response.content, content); response.response_evidence.unwrap() };
+        let wire = serde_json::to_value(proof).unwrap();assert_eq!(wire["boundary"], "sse_done");assert_eq!(wire["usage"]["totalTokens"], 25);assert!(!wire.to_string().contains("PRIVATE"));
+    }
+}
+
+#[test]
+fn r1_stop_finish_reason_without_done_is_not_completion_proof() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    accumulator.process_data_with_events(&json!({"choices":[{"delta":{"content":"partial"},"finish_reason":"stop"}]}).to_string(), "secret", Some("header")).unwrap();
+    assert!(accumulator.finish(Some("header".into())).unwrap_err().metadata.response_evidence.is_none());
+}
+
+#[test]
+fn r1_malformed_stream_frame_never_creates_completion_proof() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    assert!(accumulator.process_data_with_events("{malformed", "secret", Some("header")).unwrap_err().metadata.response_evidence.is_none());
+    assert!(accumulator.finish(Some("header".into())).unwrap_err().metadata.response_evidence.is_none());
+}
+
+#[tokio::test]
+async fn r1_pre_dispatch_cancel_keeps_completion_unknown() {
+    super::transport::cancel_request("r1-pre-cancel".into()).unwrap();
+    let error = super::transport::run_cancellable_chat_request(Some("r1-pre-cancel"), "reading_body", async { Ok::<(), ProviderCallError>(()) }).await.unwrap_err();
+    assert_eq!(error.phase.as_ref(), "before_dispatch");assert!(error.metadata.response_evidence.is_none());
+}
+
+#[test]
+fn r1_boxed_metadata_preserves_flat_ipc_including_all_completion_evidence() {
+    let payload = json!({"id":"gen-flat","choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":7,"completion_tokens_details":{"reasoning_tokens":2},"total_tokens":12,"cost":0.03}});
+    let mut error = ProviderCallError::new("unknown", "rejected output", "validating_response");
+    error.metadata.http_status = Some(200);
+    error.metadata.provider_error_type = Some("invalid_output".into());
+    error.metadata.provider_code = Some("rejected".into());
+    error.metadata.retry_after_ms = Some(1_000);
+    error.metadata.provider_request_id = Some("request-flat".into());
+    error.metadata.semantic_output_started = Some(true);
+    error.metadata.response_evidence = Some(super::response_evidence::finished(Some(&payload), Some("request-flat"), "sse_done"));
+    let cloned = error.clone();
+    assert_eq!(serde_json::to_value(cloned).unwrap(), json!({
+        "code":"unknown", "message":"rejected output", "phase":"validating_response",
+        "httpStatus":200, "providerErrorType":"invalid_output", "providerCode":"rejected",
+        "retryAfterMs":1000, "providerRequestId":"request-flat", "semanticOutputStarted":true,
+        "responseEvidence":{
+            "version":1,"transportOutcome":"response_finished","boundary":"sse_done",
+            "finishReason":"stop","providerRequestId":"request-flat","generationId":"gen-flat",
+            "usage":{"inputTokens":5,"outputTokens":7,"reasoningTokens":2,"totalTokens":12,"costUsd":0.03}
+        }
+    }));
+}
+
+#[test]
+fn t2_json_literals_and_unicode_survive_native_reasoning_normalization() {
+    for text in [
+        r#"{"decision":"UPDATE","notes":"Do not print <think> markers.","changeSummary":"Clean output"}"#,
+        r#"{"decision":"UPDATE","notes":"Literal <think>example</think> stays.","changeSummary":"Żółć 🌍 \"quote\" \\escape"}"#,
+        "Plain text with literal <reason>example</reason> remains.",
+    ] {
+        assert!(split_tagged_reasoning(text).is_none());
+        let payload = json!({"choices":[{"message":{"content":text,"reasoning":"PRIVATE"},"finish_reason":"stop"}]});
+        let proof = super::response_evidence::finished(Some(&payload), Some("t2-header"), "body_read");
+        let parsed = parse_finished_chat_response(ProviderKind::Openrouter, &payload, Some("t2-header".to_string()), false, proof).unwrap();
+        assert_eq!(parsed.content, text);
+        assert_eq!(parsed.reasoning_content.as_deref(), Some("PRIVATE"));
+        let candidate = parsed.final_candidate.unwrap();
+        assert_eq!(candidate.content.as_deref(), Some(text));
+        assert_eq!(candidate.native_validation, "accepted");
+        assert!(!candidate.envelope_removed);
+        use sha2::{Digest, Sha256};
+        assert_eq!(candidate.content_sha256, format!("{:x}", Sha256::digest(text.as_bytes())));
+        assert!(!serde_json::to_string(&candidate).unwrap().contains("PRIVATE"));
+    }
+}
+
+#[test]
+fn t2_candidate_survives_native_rejection_and_is_bounded_without_truncation() {
+    let text = r#"{"notes":"literal <think> and </think> are data"}"#;
+    let payload = json!({"choices":[{"message":{"content":text,"reasoning":"PRIVATE","reasoning_details":"invalid"},"finish_reason":"stop"}]});
+    let proof = super::response_evidence::finished(Some(&payload), Some("t2-rejected"), "body_read");
+    let failure = parse_finished_chat_response(ProviderKind::Openrouter, &payload, Some("t2-rejected".to_string()), false, proof).unwrap_err();
+    let wire = serde_json::to_value(&failure).unwrap();
+    assert_eq!(wire["finalCandidate"]["content"], text);
+    assert_eq!(wire["finalCandidate"]["nativeValidation"], "rejected");
+    assert_eq!(wire["providerRequestId"], "t2-rejected");
+    assert!(!wire.to_string().contains("PRIVATE"));
+    assert!(std::mem::size_of::<ProviderCallError>() < 128);
+    let huge = "x".repeat(2_000_001);
+    let payload = json!({"choices":[{"message":{"content":huge}}]});
+    let candidate = super::response_parsers::capture_final_candidate(ProviderKind::Openrouter, &payload).unwrap();
+    assert!(candidate.content.is_none());
+    assert!(candidate.omitted_for_size);
+    assert_eq!(candidate.byte_length, 2_000_001);
+}
+
+#[test]
+fn t2_prefix_envelopes_exclude_private_reasoning_from_candidates() {
+    for raw in [" \n<think>PRIVATE</think>{\"notes\":\"literal <think>\"}", "<THINK>PRIVATE</THINK><reason>PRIVATE2</reason>{\"notes\":\"literal <think>\"}"] {
+        let payload = json!({"choices":[{"message":{"content":raw}}]});
+        let candidate = super::response_parsers::capture_final_candidate(ProviderKind::Openrouter, &payload).unwrap();
+        assert_eq!(candidate.content.as_deref(), Some("{\"notes\":\"literal <think>\"}"));
+        assert!(candidate.envelope_removed);
+        assert!(!serde_json::to_string(&candidate).unwrap().contains("PRIVATE"));
+    }
+    let payload = json!({"choices":[{"message":{"content":"<think>PRIVATE unclosed"}}]});
+    let candidate = super::response_parsers::capture_final_candidate(ProviderKind::Openrouter, &payload).unwrap();
+    assert_eq!(candidate.content.as_deref(), Some(""));
+}
+
+#[test]
+fn t2_stream_and_final_parser_agree_at_every_unicode_chunk_boundary() {
+    for (raw, expected) in [
+        ("{\"notes\":\"Żółć 🌍 <think>literal</think>\"}", "{\"notes\":\"Żółć 🌍 <think>literal</think>\"}"),
+        ("<think>PRIVATE</think>{\"notes\":\"Żółć <think> literal\"}", "{\"notes\":\"Żółć <think> literal\"}"),
+        ("<think>PRIVATE</think><reason>PRIVATE2</reason>Plain <think>literal</think>", "Plain <think>literal</think>"),
+    ] {
+        for boundary in raw.char_indices().map(|(i, _)| i).chain(std::iter::once(raw.len())) {
+            let mut accumulator = OpenRouterStreamAccumulator::default();
+            let mut visible = String::new();
+            for (chunk, finish) in [(&raw[..boundary], Value::Null), (&raw[boundary..], json!("stop"))] {
+                let events = accumulator.process_data_with_events(&json!({"choices":[{"delta":{"content":chunk},"finish_reason":finish}]}).to_string(), "test-secret", Some("t2-stream")).unwrap();
+                visible.push_str(&streamed_visible_text(&events));
+            }
+            let events = accumulator.process_data_with_events("[DONE]", "test-secret", Some("t2-stream")).unwrap();
+            visible.push_str(&streamed_visible_text(&events));
+            let result = accumulator.finish(Some("t2-stream".to_string())).unwrap();
+            let parsed = parse_finished_chat_response(ProviderKind::Openrouter, &result.payload, result.request_id, result.semantic_output_started, result.response_evidence).unwrap();
+            assert_eq!(visible, expected, "boundary {boundary}");
+            assert_eq!(parsed.content, expected);
+            assert_eq!(parsed.final_candidate.unwrap().content.as_deref(), Some(expected));
+        }
+    }
+}
+
+#[test]
+fn t2_explicit_reasoning_fields_never_become_final_candidates() {
+    let text = "{\"notes\":\"literal <think>\"}";
+    let payload = json!({"choices":[{"message":{"content":[{"type":"reasoning","text":"PRIVATE_A"},{"thinking":"PRIVATE_B"},{"reasoning":"PRIVATE_C"},{"type":"output_text","text":text}],"reasoning":"PRIVATE_D"}}]});
+    let candidate = super::response_parsers::capture_final_candidate(ProviderKind::Openrouter, &payload).unwrap();
+    assert_eq!(candidate.content.as_deref(), Some(text));
+    assert!(!serde_json::to_string(&candidate).unwrap().contains("PRIVATE"));
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    accumulator.process_data_with_events(&json!({"choices":[{"delta":{"content":payload.pointer("/choices/0/message/content").unwrap().clone()},"finish_reason":"stop"}]}).to_string(), "secret", Some("t2-typed")).unwrap();
+    accumulator.process_data_with_events("[DONE]", "secret", Some("t2-typed")).unwrap();
+    let streamed = accumulator.finish(Some("t2-typed".to_string())).unwrap();
+    let parsed = parse_finished_chat_response(ProviderKind::Openrouter, &streamed.payload, streamed.request_id, streamed.semantic_output_started, streamed.response_evidence).unwrap();
+    assert_eq!(parsed.content, text);
+    assert!(!serde_json::to_string(&parsed.final_candidate).unwrap().contains("PRIVATE"));
+}
+
+#[test]
+fn t2_google_and_signed_anthropic_candidates_exclude_separate_thought_channels() {
+    let text = r#"{"notes":"literal <think>example</think>"}"#;
+    for (provider, payload) in [
+        (ProviderKind::Google, json!({"candidates":[{"content":{"parts":[{"thought":true,"text":"PRIVATE"},{"text":text}]},"finishReason":"STOP"}]})),
+        (ProviderKind::Anthropic, json!({"content":[{"type":"thinking","thinking":"PRIVATE","signature":"opaque"},{"type":"text","text":text}],"stop_reason":"end_turn"})),
+    ] {
+        let proof = super::response_evidence::finished(Some(&payload), Some("t2-provider"), "body_read");
+        let parsed = parse_finished_chat_response(provider, &payload, Some("t2-provider".to_string()), false, proof).unwrap();
+        assert_eq!(parsed.content, text);
+        let candidate = parsed.final_candidate.unwrap();
+        assert_eq!(candidate.content.as_deref(), Some(text));
+        assert!(!serde_json::to_string(&candidate).unwrap().contains("PRIVATE"));
+    }
+}
+
+#[test]
+fn t2_stream_preserves_metadata_usage_and_finish_reasons_across_frames() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    accumulator.process_data_with_events(&json!({
+        "id": "t2-response", "model": "test-model", "provider": "test-provider",
+        "openrouter_metadata": {"route": "test-route"},
+        "choices": [{"delta": {"content": "final"}, "finish_reason": "stop", "native_finish_reason": "end_turn"}]
+    }).to_string(), "secret", Some("t2-request")).unwrap();
+    accumulator.process_data_with_events(&json!({
+        "choices": [], "usage": {"completion_tokens": 7}
+    }).to_string(), "secret", Some("t2-request")).unwrap();
+    accumulator.process_data_with_events("[DONE]", "secret", Some("t2-request")).unwrap();
+    let result = accumulator.finish(Some("t2-request".to_string())).unwrap();
+    assert_eq!(result.request_id.as_deref(), Some("t2-request"));
+    assert_eq!(result.payload["id"], "t2-response");
+    assert_eq!(result.payload["model"], "test-model");
+    assert_eq!(result.payload["provider"], "test-provider");
+    assert_eq!(result.payload["openrouter_metadata"]["route"], "test-route");
+    assert_eq!(result.payload["usage"]["completion_tokens"], 7);
+    assert_eq!(result.payload["choices"][0]["message"]["content"], "final");
+    assert_eq!(result.payload["choices"][0]["finish_reason"], "stop");
+    assert_eq!(result.payload["choices"][0]["native_finish_reason"], "end_turn");
+    assert!(result.semantic_output_started);
+}
+
+#[test]
+fn t2_error_frame_with_typed_reasoning_closes_retry_boundary() {
+    let mut accumulator = OpenRouterStreamAccumulator::default();
+    let error = accumulator.process_data_with_events(&json!({
+        "error": {"type": "server", "code": "upstream_disconnect", "message": "gone"},
+        "choices": [{"delta": {"content": [{"type": "reasoning", "text": "private"}]}}]
+    }).to_string(), "secret", Some("t2-request")).unwrap_err();
+    assert_eq!(error.metadata.semantic_output_started, Some(true));
+    assert_eq!(error.metadata.provider_request_id.as_deref(), Some("t2-request"));
+}
+
+#[tokio::test]
+async fn native_window_destruction_aborts_bound_transport_without_js_callback() {
+    use crate::{workflow_heartbeat as heartbeat, workflow_ownership::{execute, Request}};
+    let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+    sqlx::raw_sql("CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT); CREATE TABLE profiles(id TEXT PRIMARY KEY,archived_at TEXT); INSERT INTO profiles VALUES('p',NULL);").execute(&pool).await.unwrap();
+    let token: heartbeat::Token = serde_json::from_value(execute(&pool, Request::Acquire { profile_id: "p".into(), owner: "transport-owner".into() }).await.unwrap()).unwrap();
+    let window = "native-transport-window";
+    let id = "native-window-bound-request";
+    heartbeat::start(pool, token.clone(), window.into(), None).unwrap();
+    let binding = serde_json::from_value(json!({"profileId":"p","owner":token.owner,"version":token.version,"entities":[{"kind":"profile","id":"p"}]})).unwrap();
+    let guard = heartbeat::bind(&binding, window, id).await.unwrap();
+    let (ready, started) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        super::transport::run_cancellable_chat_request(Some(id), "reading_body", async {
+            ready.send(()).unwrap();
+            std::future::pending::<Result<(), ProviderCallError>>().await
+        }).await
+    });
+    started.await.unwrap();
+    heartbeat::window_destroyed(window);
+    let error = tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap().unwrap_err();
+    assert_eq!(error.code.as_ref(), "cancelled");
+    assert!(guard.failure().unwrap().contains("window closed"));
+}
+
+
+#[test]
+fn direct1b_mistral_parser_preserves_complete_assistant_content_for_replay() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../src/providers/continuation-fixtures/mistral-assistant-content.json"
+    ))
+    .expect("DIRECT-1B Mistral continuation fixture must be valid JSON");
+    let payload = fixture.get("providerResponse").cloned().expect("providerResponse");
+    let expected_content = fixture.pointer("/continuationState/content").and_then(Value::as_array).cloned().unwrap();
+    let parsed = super::response_parsers::parse_chat_response(ProviderKind::Mistral, payload, None).unwrap();
+    assert_eq!(parsed.content, "final");
+    assert_eq!(parsed.reasoning_content.as_deref(), Some("reasoning"));
+    assert_eq!(parsed.reasoning_source.as_deref(), Some("mistral_thinking"));
+    assert_eq!(parsed.reasoning_details, Some(expected_content));
+}
+
+#[test]
+fn direct1b_replays_complete_mistral_assistant_content_on_bound_message() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../src/providers/continuation-fixtures/mistral-assistant-content.json"
+    ))
+    .expect("DIRECT-1B Mistral continuation fixture must be valid JSON");
+    let content = fixture.pointer("/continuationState/content").and_then(Value::as_array).cloned().unwrap();
+    let mut request = chat_request(ProviderKind::Mistral, "mistral-large-latest");
+    request.messages = vec![
+        ProviderMessage {
+            role: "user".to_string(),
+            content: "first".to_string(),
+            images: vec![],
+            continuation_state: None,
+        },
+        ProviderMessage {
+            role: "assistant".to_string(),
+            content: "final".to_string(),
+            images: vec![],
+            continuation_state: Some(ProviderContinuationState::Mistral(MistralContinuationState {
+                schema_version: 1,
+                transport: "mistral-native".to_string(),
+                format: "mistral-assistant-content".to_string(),
+                replay_fingerprint: ProviderReplayFingerprint {
+                    transport: "mistral-native".to_string(),
+                    normalized_endpoint: "https://api.mistral.ai/v1".to_string(),
+                    provider_config_id: "provider-config".to_string(),
+                    credential_id: "credential".to_string(),
+                    requested_model_id: "mistral-large-latest".to_string(),
+                    actual_model_id: None,
+                    state_format: "mistral-assistant-content".to_string(),
+                    state_format_version: 1,
+                },
+                content: content.clone(),
+            })),
+        },
+        ProviderMessage {
+            role: "user".to_string(),
+            content: "continue".to_string(),
+            images: vec![],
+            continuation_state: None,
+        },
+    ];
+    validate_chat_request(&request).unwrap();
+    validate_continuation_bindings(&request, "https://api.mistral.ai/v1").unwrap();
+    let (_, body) = build_openai_compatible_request(&request, "https://api.mistral.ai/v1");
+    assert_eq!(body.pointer("/messages/1/content"), Some(&Value::Array(content)));
+    assert_eq!(body.pointer("/messages/1/role"), Some(&json!("assistant")));
+}
+
+#[test]
+fn direct1b_rejects_mistral_replay_when_visible_text_or_fingerprint_changes() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../src/providers/continuation-fixtures/mistral-assistant-content.json"
+    ))
+    .expect("DIRECT-1B Mistral continuation fixture must be valid JSON");
+    let content = fixture.pointer("/continuationState/content").and_then(Value::as_array).cloned().unwrap();
+    let state = MistralContinuationState {
+        schema_version: 1,
+        transport: "mistral-native".to_string(),
+        format: "mistral-assistant-content".to_string(),
+        replay_fingerprint: ProviderReplayFingerprint {
+            transport: "mistral-native".to_string(),
+            normalized_endpoint: "https://api.mistral.ai/v1".to_string(),
+            provider_config_id: "provider-config".to_string(),
+            credential_id: "credential".to_string(),
+            requested_model_id: "mistral-large-latest".to_string(),
+            actual_model_id: None,
+            state_format: "mistral-assistant-content".to_string(),
+            state_format_version: 1,
+        },
+        content,
+    };
+    let mut request = chat_request(ProviderKind::Mistral, "mistral-large-latest");
+    request.messages = vec![ProviderMessage {
+        role: "assistant".to_string(),
+        content: "changed".to_string(),
+        images: vec![],
+        continuation_state: Some(ProviderContinuationState::Mistral(state.clone())),
+    }];
+    assert!(validate_continuation_bindings(&request, "https://api.mistral.ai/v1").unwrap_err().contains("do not match"));
+
+    request.messages[0].content = "final".to_string();
+    if let Some(ProviderContinuationState::Mistral(state)) = request.messages[0].continuation_state.as_mut() {
+        state.replay_fingerprint.credential_id = "other".to_string();
+    }
+    assert!(validate_continuation_bindings(&request, "https://api.mistral.ai/v1").unwrap_err().contains("fingerprint"));
 }

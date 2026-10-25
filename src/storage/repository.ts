@@ -1,3 +1,4 @@
+import type { TelepathicHistoryQuery, TelepathicHistoryPage } from "../telepathicExchange/historySummaries";
 import type { ProviderContinuationState } from "../providers/continuationContract";
 import type { ProviderContinuationStateBinding } from "./providerContinuationState";
 import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
@@ -13,9 +14,20 @@ import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput 
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, DetachViewerNoteSourceReferencesInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteVersion } from "../aiCenter/types";
 import type { DeletionPreview, PurgeEntityKind } from "./controlledPurge";
 import type { CreateFieldGuideVersionInput, FieldGuideActivationEvent, FieldGuideBundle, FieldGuideCapacity, FieldGuideLegacyBaseline, FieldGuideVersion, ResolveLegacyFieldGuideBaselineInput } from "../aiCenter/fieldGuideTypes";
+import type { TelepathicSeriesState } from "../telepathicExchange/types";
 
 
 export interface AppRepository {
+  listResearchEvaluations(projectId: string): Promise<import("../research/evaluationTypes").ResearchEvaluation[]>;
+  getResearchEvaluation(projectId: string, id: string): Promise<import("../research/evaluationTypes").ResearchEvaluation | null>;
+  saveResearchEvaluation(record: import("../research/evaluationTypes").ResearchEvaluation, expectedRevision: number): Promise<void>;
+  readonly recoveryOwner?: object;
+  withWorkflowOwnership<T>(scope: import("../application/workflowOwnership").WorkflowScope, task: (owned: AppRepository, signal: AbortSignal) => Promise<T>): Promise<T>;
+  getWorkflowResearchProjectId(sessionId:string):Promise<string|undefined>;
+  getResearchExecutionTermination(projectId:string):Promise<import("../research/executionLifecycle").ResearchExecutionTermination|null>;
+  endResearchExecution(projectId:string,endedAt?:string):Promise<import("../research/executionLifecycle").ResearchExecutionTermination>;
+  getWorkflowProfileId(sessionId: string): Promise<string>;
+  getWorkflowOwnership(profileId: string): Promise<"idle" | "local" | "other" | "unknown">;
   listProfiles(): Promise<Profile[]>;
   listArchivedProfiles(): Promise<Profile[]>;
   createProfile(input: CreateProfileInput): Promise<Profile>;
@@ -42,7 +54,8 @@ export interface AppRepository {
   restoreChatThread(threadId: string): Promise<void>;
   setChatThreadFormalRvState(threadId: string, state?: ChatThread["formalRvState"]): Promise<void>;
   listChatMessages(threadId: string): Promise<ChatMessage[]>;
-  appendChatMessage(threadId: string, role: ChatMessage["role"], content: string): Promise<ChatMessage>;
+  appendChatMessage(threadId: string, role: ChatMessage["role"], content: string, metadata?: ChatMessage["metadata"]): Promise<ChatMessage>;
+  updateChatMessageMetadata(messageId: string, metadata?: ChatMessage["metadata"]): Promise<void>;
   appendAssistantMessageWithProviderState(threadId: string, content: string, state: ProviderContinuationState): Promise<ChatMessage>;
   listChatMessageProviderStates(threadId: string): Promise<ProviderContinuationStateBinding[]>;
   resetChatMessageProviderStates(threadId: string): Promise<void>;
@@ -57,6 +70,7 @@ export interface AppRepository {
   createProviderConfig(input: CreateProviderConfigInput): Promise<ProviderConfig>;
   updateProviderCredentialMetadata(id: string, credentialHint: string, fingerprint: string): Promise<void>;
   updateProviderCustomOutputTokenField(id: string, field?: CustomOpenAiOutputTokenField): Promise<void>;
+  updateProviderCustomStreamingEnabled(id: string, enabled: boolean): Promise<void>;
   deleteProviderConfig(id: string): Promise<void>;
   updateProviderConnectionStatus(id: string, status: "ok" | "error", error?: string): Promise<void>;
   listProviderModels(providerConfigId?: string): Promise<ProviderModel[]>;
@@ -78,12 +92,22 @@ export interface AppRepository {
   purgeTrainingRun(id: string): Promise<void>;
   purgeResearchProject(id: string): Promise<void>;
   purgeTarget(id: string): Promise<void>;
+  purgeTelepathicSeries(id: string, expectedArchiveRevision: number): Promise<void>;
   recordTargetUsage(input: TargetUsageInput): Promise<void>;
   listTargetUsage(): Promise<TargetUsageRecord[]>;
   createTrainingRun(input: CreateTrainingRunInput): Promise<TrainingRunRecord>;
   updateTrainingRun(id: string, input: UpdateTrainingRunInput): Promise<void>;
   listTrainingRuns(): Promise<TrainingRunRecord[]>;
   listArchivedTrainingRuns(): Promise<TrainingRunRecord[]>;
+  getTelepathicSeries(seriesId: string): Promise<TelepathicSeriesState | null>;
+  listTelepathicSeries(seriesWorkspaceId?: string): Promise<TelepathicSeriesState[]>;
+  listTelepathicSeriesSummaries(query: TelepathicHistoryQuery): Promise<TelepathicHistoryPage>;
+  saveTelepathicSeries(state: TelepathicSeriesState): Promise<void>;
+  withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T>;
+  assertTelepathicSeriesLease(seriesId: string): Promise<void>;
+  telepathicSeriesLeaseSignal(seriesId: string): AbortSignal | undefined;
+  /** Read-only ownership check; no provider dispatch or lease acquisition. */
+  getTelepathicSeriesLeaseState?(seriesId: string): Promise<"idle" | "local" | "other" | "unknown">;
   archiveTrainingRun(id: string): Promise<void>;
   restoreTrainingRun(id: string): Promise<void>;
   ensureAiIdentity(input: EnsureAiIdentityInput): Promise<AiIdentity>;
@@ -117,6 +141,9 @@ export interface AppRepository {
   appendSessionEventWithProviderState(sessionId: string, event: SessionEventInput, state: ProviderContinuationState): Promise<SessionEventRecord>;
   getSessionEventProviderState(sessionEventId: string): Promise<ProviderContinuationStateBinding | null>;
   listSessionEvents(sessionId: string): Promise<SessionEventRecord[]>;
+  withPostRevealReviewLease<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
+  assertPostRevealReviewLease(sessionId: string): Promise<void>;
+  postRevealReviewLeaseSignal(sessionId: string): AbortSignal | undefined;
   updatePreRevealTranscript(sessionId: string, transcript: string): Promise<void>;
   appendPostRevealTurn(sessionId: string, role: "user" | "assistant" | "monitor", content: string, metadata?: Record<string, unknown>): Promise<string>;
   appendPostRevealTurnWithProviderState(sessionId: string, content: string, state: ProviderContinuationState): Promise<string>;
@@ -126,6 +153,7 @@ export interface AppRepository {
   acceptReveal(sessionId: string, reveal: RevealInput): Promise<void>;
   getReveal(sessionId: string): Promise<RevealInput | null>;
   getViewerEvidence(sessionId: string): Promise<string>;
+  getRvSession(id: string): Promise<RvSession | null>;
   listRvSessions(workspaceId: string): Promise<RvSession[]>;
   listArchivedRvSessions(): Promise<RvSession[]>;
   archiveRvSession(id: string): Promise<void>;
@@ -152,6 +180,7 @@ export interface AppRepository {
   listResearchAssignments(projectId: string): Promise<ResearchAssignmentRecord[]>;
   listBlindingMappings(projectId: string): Promise<BlindingMappingRecord[]>;
   updateResearchAssignment(id: string, sessionId: string | undefined, status: string): Promise<void>;
+  initializeResearchSession(assignmentId: string, session: CreateRvSessionInput): Promise<RvSession>;
   saveResearchResults(projectId: string, results: ResearchResults, hash: string): Promise<void>;
   getResearchResults(projectId: string): Promise<ResearchResults | null>;
   recordExport(workspaceId: string, researchProjectId: string | undefined, exportType: string, artifactPath: string, manifestHash: string): Promise<void>;

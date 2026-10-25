@@ -321,4 +321,178 @@ describe("OpenRouter endpoint capability routing", () => {
     expect(decision.mode).toBe("local_stop");
     expect(decision.humanMessage).toContain("selected OpenRouter provider restriction");
   });
+
+  it("forces endpoint discovery for a small manual top_k request and requires parameter enforcement", async () => {
+    const discover = vi.fn(async () => endpointPayload([
+      { tag: "provider-a/fp8", context_length: 131_072, max_completion_tokens: 16_384, supported_parameters: ["top_k"] },
+    ]));
+    const manual: EffectiveGenerationSettings = {
+      requested: { topK: 0, maxOutputTokens: 4096 },
+      effective: { topK: 0, maxOutputTokens: 4096 },
+      omitted: [],
+    };
+    const envelope = createOpenRouterCapacityEnvelope({ estimatedInputTokens: 1_000, settings: manual });
+    expect(envelope.manualSamplingParameters).toEqual(["top_k"]);
+    expect(envelope.requiredParameters).toContain("top_k");
+
+    const decision = await resolveOpenRouterRoutingDecision({
+      providerConfigId: "pc",
+      modelId: "a/b",
+      envelope,
+      discover,
+    });
+
+    expect(discover).toHaveBeenCalledTimes(1);
+    expect(decision.capacitySensitive).toBe(true);
+    expect(decision.mode).toBe("verified_fit");
+    expect(decision.providerRouting).toEqual({
+      only: ["provider-a/fp8"],
+      allowFallbacks: true,
+      requireParameters: true,
+    });
+  });
+
+  it("fails closed when manual sampling support is missing or endpoint metadata cannot be obtained", async () => {
+    const manual: EffectiveGenerationSettings = {
+      requested: { seed: 42, maxOutputTokens: 4096 },
+      effective: { seed: 42, maxOutputTokens: 4096 },
+      omitted: [],
+    };
+    const envelope = createOpenRouterCapacityEnvelope({ estimatedInputTokens: 1_000, settings: manual });
+
+    const unknownSupport = await resolveOpenRouterRoutingDecision({
+      providerConfigId: "pc",
+      modelId: "a/b",
+      envelope,
+      discover: async () => endpointPayload([
+        { tag: "provider-a/fp8", context_length: 131_072, max_completion_tokens: 16_384 },
+      ]),
+    });
+    expect(unknownSupport.mode).toBe("local_stop");
+    expect(unknownSupport.endpoints[0]?.reasons).toContain("unverified_parameter:seed");
+
+    clearOpenRouterEndpointCapabilityCache();
+    const unavailable = await resolveOpenRouterRoutingDecision({
+      providerConfigId: "pc2",
+      modelId: "a/b",
+      envelope,
+      discover: async () => { throw new Error("offline"); },
+    });
+    expect(unavailable.mode).toBe("local_stop");
+    expect(unavailable.humanMessage).toContain("cannot be verified");
+  });
+
+  it("preserves UNKNOWN capacity only after manual sampling capability is confirmed", async () => {
+    const manual: EffectiveGenerationSettings = {
+      requested: { topP: 0.7, maxOutputTokens: 4096 },
+      effective: { topP: 0.7, maxOutputTokens: 4096 },
+      omitted: [],
+    };
+    const envelope = createOpenRouterCapacityEnvelope({ estimatedInputTokens: 1_000, settings: manual });
+    const decision = await resolveOpenRouterRoutingDecision({
+      providerConfigId: "pc",
+      modelId: "a/b",
+      envelope,
+      discover: async () => endpointPayload([
+        { tag: "provider-a/fp8", supported_parameters: ["top_p"] },
+      ]),
+    });
+    expect(decision.mode).toBe("unknown_attempt");
+    expect(decision.providerRouting).toEqual({
+      only: ["provider-a/fp8"],
+      allowFallbacks: true,
+      requireParameters: true,
+    });
+  });
+
+  it("permits an exact qualified variant selector when a sibling under the same base slug is rejected", async () => {
+    const manual: EffectiveGenerationSettings = {
+      requested: { seed: 42, maxOutputTokens: 4096 },
+      effective: { seed: 42, maxOutputTokens: 4096 },
+      omitted: [],
+    };
+    const envelope = createOpenRouterCapacityEnvelope({ estimatedInputTokens: 1_000, settings: manual });
+    const decision = await resolveOpenRouterRoutingDecision({
+      providerConfigId: "pc-exact",
+      modelId: "a/b",
+      envelope,
+      existingRouting: { only: ["deepinfra/fp16"] },
+      discover: async () => endpointPayload([
+        { tag: "deepinfra/fp16", context_length: 131_072, max_completion_tokens: 16_384, supported_parameters: ["seed"] },
+        { tag: "deepinfra/fp8", context_length: 131_072, max_completion_tokens: 16_384, supported_parameters: [] },
+      ]),
+    });
+    expect(decision.mode).toBe("verified_fit");
+    expect(decision.providerRouting).toEqual({
+      only: ["deepinfra/fp16"],
+      allowFallbacks: true,
+      requireParameters: true,
+    });
+  });
+
+  it("blocks a broad provider selector that could reopen a rejected variant with the same base slug", async () => {
+    const manual: EffectiveGenerationSettings = {
+      requested: { seed: 42, maxOutputTokens: 4096 },
+      effective: { seed: 42, maxOutputTokens: 4096 },
+      omitted: [],
+    };
+    const envelope = createOpenRouterCapacityEnvelope({ estimatedInputTokens: 1_000, settings: manual });
+    const decision = await resolveOpenRouterRoutingDecision({
+      providerConfigId: "pc",
+      modelId: "a/b",
+      envelope,
+      existingRouting: { only: ["deepinfra"] },
+      discover: async () => endpointPayload([
+        { tag: "deepinfra", context_length: 131_072, max_completion_tokens: 16_384, supported_parameters: ["seed"] },
+        { tag: "deepinfra/fp8", context_length: 131_072, max_completion_tokens: 16_384, supported_parameters: [] },
+      ]),
+    });
+    expect(decision.mode).toBe("local_stop");
+    expect(decision.humanMessage).toContain("sampling parameters");
+  });
+
+  it("preserves require_parameters when manual sampling routing is intersected with existing restrictions", () => {
+    expect(mergeOpenRouterProviderRouting(
+      { only: ["siliconflow"], allowFallbacks: false },
+      { only: ["siliconflow/fp8"], allowFallbacks: true, requireParameters: true },
+    )).toEqual({
+      only: ["siliconflow/fp8"],
+      allowFallbacks: false,
+      requireParameters: true,
+    });
+  });
+
+  it("keeps an explicit empty provider allowlist closed instead of widening it", () => {
+    expect(mergeOpenRouterProviderRouting(
+      { only: [] },
+      { only: ["siliconflow/fp8"], requireParameters: true },
+    )).toEqual({ only: [], requireParameters: true });
+  });
+
+  it("selects only the compatible exact variant when two variants share the same base provider slug", async () => {
+    const manual: EffectiveGenerationSettings = {
+      requested: { seed: 42, maxOutputTokens: 4096 },
+      effective: { seed: 42, maxOutputTokens: 4096 },
+      omitted: [],
+    };
+    const envelope = createOpenRouterCapacityEnvelope({ estimatedInputTokens: 1_000, settings: manual });
+    const decision = await resolveOpenRouterRoutingDecision({
+      providerConfigId: "pc",
+      modelId: "a/b",
+      envelope,
+      existingRouting: { only: ["deepinfra"] },
+      discover: async () => endpointPayload([
+        { tag: "deepinfra/fp8", context_length: 131_072, max_completion_tokens: 16_384, supported_parameters: ["seed"] },
+        { tag: "deepinfra/int8", context_length: 131_072, max_completion_tokens: 16_384, supported_parameters: [] },
+      ]),
+    });
+    expect(decision.mode).toBe("verified_fit");
+    expect(decision.providerRouting).toEqual({
+      only: ["deepinfra/fp8"],
+      allowFallbacks: true,
+      requireParameters: true,
+    });
+  });
+
+
 });

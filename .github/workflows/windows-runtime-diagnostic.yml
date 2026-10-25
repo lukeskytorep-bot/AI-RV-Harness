@@ -1,0 +1,93 @@
+name: Windows Runtime Diagnostic Candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-runtime-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@b95584d8105b9ab200e15821fa671848cf2b7017 # master snapshot
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: './src-tauri -> target'
+      - name: Require private symbol encryption before building
+        shell: pwsh
+        env:
+          SYMBOLS_PASSWORD: ${{ secrets.DIAGNOSTIC_SYMBOLS_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SYMBOLS_PASSWORD)) {
+            throw 'Set DIAGNOSTIC_SYMBOLS_PASSWORD as a repository Actions secret; plaintext PDBs are never uploaded.'
+          }
+          Get-Command 7z -ErrorAction Stop | Out-Null
+      - run: npm ci
+      - run: npm run verify:source
+      - run: npm run verify:ux-data
+      - run: npm run verify:architecture
+      - run: npm run verify:v0.7.14-release-gate
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: python -B scripts/test-windows-crash-provenance.py
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets --locked
+      - run: npm run verify:openrouter-continuation-bridge
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - run: npm run verify:runtime-ownership -- --cargo
+      - name: Build optimized candidate and real native handle stress with full symbols
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --profile diagnostic --locked --bin ai-rv-harness --features tauri/custom-protocol
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --manifest-path src-tauri/Cargo.toml --profile diagnostic --locked --example runtime_owner_stress
+      - name: Stress actual WryHandle clone/drop and owner shutdown
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory diagnostic-evidence -Force | Out-Null
+          foreach ($iteration in 1..3) {
+            & src-tauri/target/diagnostic/examples/runtime_owner_stress.exe 2>&1 | Tee-Object -FilePath diagnostic-evidence/runtime-stress.txt -Append
+            if ($LASTEXITCODE -ne 0) { throw "Live-owner stress failed: $LASTEXITCODE" }
+            & src-tauri/target/diagnostic/examples/runtime_owner_stress.exe --drop-before-join 2>&1 | Tee-Object -FilePath diagnostic-evidence/runtime-stress.txt -Append
+            if ($LASTEXITCODE -ne 0) { throw "Owner-shutdown stress failed: $LASTEXITCODE" }
+          }
+      - name: Verify matching EXE/PDB and record exact build provenance
+        run: |
+          python -B scripts/collect-windows-crash-build.py --exe src-tauri/target/diagnostic/ai-rv-harness.exe --pdb src-tauri/target/diagnostic/ai_rv_harness.pdb --output diagnostic-evidence/provenance.json --build-command "cargo build --manifest-path src-tauri/Cargo.toml --profile diagnostic --locked --bin ai-rv-harness --features tauri/custom-protocol"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item src-tauri/target/diagnostic/ai-rv-harness.exe diagnostic-evidence/
+          Copy-Item src-tauri/Cargo.lock diagnostic-evidence/
+          Copy-Item src-tauri/vendor/tauri-runtime-wry/PATCH.json diagnostic-evidence/runtime-patch.json
+      - name: Encrypt private matching symbols
+        shell: pwsh
+        env:
+          SYMBOLS_PASSWORD: ${{ secrets.DIAGNOSTIC_SYMBOLS_PASSWORD }}
+        run: |
+          New-Item -ItemType Directory diagnostic-private -Force | Out-Null
+          & 7z a -t7z diagnostic-private/symbols.7z src-tauri/target/diagnostic/ai_rv_harness.pdb "-p$env:SYMBOLS_PASSWORD" -mhe=on -mx=3
+          if ($LASTEXITCODE -ne 0) { throw 'Private PDB encryption failed' }
+          & 7z t diagnostic-private/symbols.7z "-p$env:SYMBOLS_PASSWORD"
+          if ($LASTEXITCODE -ne 0) { throw 'Private PDB archive verification failed' }
+      - name: Upload diagnostic candidate, evidence and encrypted symbols (no release)
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: windows-runtime-candidate-${{ github.sha }}
+          path: |
+            diagnostic-evidence/
+            diagnostic-private/*.7z
+          if-no-files-found: error
+          retention-days: 30

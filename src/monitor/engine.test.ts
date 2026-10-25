@@ -41,7 +41,7 @@ describe("autonomous AI Monitor decisions", () => {
     const decision = await evaluateMonitor({
       providerConfig: config, model, language: "en", phase: 7, blindTranscript: "Blind Viewer transcript.",
       chat: async ({ settings }) => {
-        expect(settings.effective.maxOutputTokens).toBe(4096);
+        expect(settings.effective.maxOutputTokens).toBe(16384);
         return {
           content: finalContent,
           reasoningContent: "A very long internal analysis that is deliberately separate from final content.".repeat(200),
@@ -54,8 +54,9 @@ describe("autonomous AI Monitor decisions", () => {
   });
 
   it("increases the combined output budget on a retry while respecting the model route limit", () => {
-    expect(monitorOutputTokenBudget(model, 0)).toBe(4096);
-    expect(monitorOutputTokenBudget(model, 1)).toBe(8192);
+    expect(monitorOutputTokenBudget(model, 0)).toBe(16384);
+    expect(monitorOutputTokenBudget(model, 1)).toBe(16384);
+    expect(monitorOutputTokenBudget({ ...model, capabilities: { ...model.capabilities, maxOutputTokens: 32768 } }, 1)).toBe(32768);
     expect(monitorOutputTokenBudget({ ...model, capabilities: { ...model.capabilities, maxOutputTokens: 6000 } }, 1)).toBe(6000);
   });
 

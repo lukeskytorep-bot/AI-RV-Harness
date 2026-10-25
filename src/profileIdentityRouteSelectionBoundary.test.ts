@@ -8,11 +8,11 @@ import app from "./App.tsx?raw";
 
 describe("PROFILE-IDENTITY-ROUTE-SELECTION-1 boundaries", () => {
   it("selects Viewer identities instead of arbitrary provider models in Conversation and RV Sessions", () => {
-    expect(chatPanel).toContain("listEligibleViewerIdentities");
+    expect(chatPanel).toContain("useViewerRoutes");
     expect(chatPanel).toContain("value={viewerIdentityId}");
     expect(chatPanel).toContain("viewerIdentityLabel(item, settings.interfaceLanguage)");
     expect(chatPanel).not.toContain("onChange={(event) => setModelId(event.target.value)}");
-    expect(rvPanel).toContain("listEligibleViewerIdentities");
+    expect(rvPanel).toContain("useViewerRoutes");
     expect(rvPanel).toContain("value={viewerIdentityId}");
     expect(rvPanel).not.toContain("onChange={(event) => setModelId(event.target.value)}");
   });
@@ -37,12 +37,12 @@ describe("PROFILE-IDENTITY-ROUTE-SELECTION-1 boundaries", () => {
   it("bootstraps the selected Viewer identity during First Run before completing setup", () => {
     const firstRunStart = app.indexOf("function FirstRunSetup");
     const firstRunSource = app.slice(firstRunStart);
-    const bootstrap = firstRunSource.indexOf("const viewerIdentity = await ensureProfileViewerIdentity");
+    const bootstrap = firstRunSource.indexOf("const saved = await saveViewerProfile");
     const completion = firstRunSource.indexOf("await onComplete(profile, initialConversationWorkspace, initialRvWorkspace)");
     expect(firstRunStart).toBeGreaterThanOrEqual(0);
     expect(bootstrap).toBeGreaterThanOrEqual(0);
     expect(completion).toBeGreaterThan(bootstrap);
-    expect(firstRunSource).toContain('if (!viewerIdentity) throw new Error("Viewer identity could not be created for the selected Profile setup route.")');
+    expect(firstRunSource).toContain("session: profileSaveSession.current");
   });
 
   it("keeps RV resume bound to the frozen session route rather than the newly selected identity", () => {
