@@ -1,6 +1,3 @@
-import { assertAbortOwnership, nativeWorkflowBinding } from "../application/abortOwnership";
-import { normalizeResearchJudgeOutput, type JudgeNormalizationTrace } from "./researchNormalization";
-import { withRvWorkflow } from "../application/workflowOwnership";
 import { buildJudgePacket } from "../domain/judgePacket";
 import { aggregateJudgeScores, computeJudgeTotal, validateJudgeScores, type JudgeComponentScores } from "../domain/scoring";
 import { resolveGenerationSettings } from "../providers/capabilities";
@@ -16,15 +13,7 @@ import { createId } from "../storage/repository";
 import type { InterfaceLanguage } from "../types";
 import { getJudgePrompt } from "./prompt";
 import { JUDGE_RUBRIC_VERSION, type JudgeNarrative, type JudgeScoreRecord, type JudgingResult } from "./types";
-import { callWithAnalyticalOutputRecovery, isOutputLimitFailure, type AnalyticalBudgetPolicy } from "../providers/outputRecovery";
-
-export class JudgeResponseValidationError extends Error {
-  constructor(cause: unknown) { super(cause instanceof Error ? cause.message : String(cause), { cause }); this.name = "JudgeResponseValidationError"; }
-}
-async function judgeAnalyticalResponse(input: Parameters<typeof callWithAnalyticalOutputRecovery>[0]) {
-  try { return await callWithAnalyticalOutputRecovery(input); }
-  catch (cause) { if (!input.signal?.aborted && isOutputLimitFailure(cause)) throw new JudgeResponseValidationError(cause); throw cause; }
-}
+import { callWithAnalyticalOutputRecovery } from "../providers/outputRecovery";
 
 export type JudgeRepository = Pick<
   AppRepository,
@@ -35,26 +24,17 @@ export interface JudgeSelection {
   providerConfig: ProviderConfig;
   model: ProviderModel;
 }
-export type JudgeProviderRequest = { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings> };
 
 export interface RunJudgingInput {
-  /** A workflow-owned receipt journal; transport retries are owned here, not
-   * by an additional executor retry loop. No prompts/settings are changed. */
-  researchPolicy?: { judgeIndex: number; onNormalization?: (trace: JudgeNormalizationTrace & { sourceSha256: string; normalizedSha256: string }) => Promise<void> };
-  recoverRequest?: (request: JudgeProviderRequest, send: () => Promise<ProviderChatResponse>) => Promise<ProviderChatResponse>;
   repository: JudgeRepository;
   sessionId: string;
   language: InterfaceLanguage;
   judges: JudgeSelection[];
   anonymousSessionId?: string;
-  /** Explicit legacy compatibility for missing scores in already locked Research. */
-  budgetPolicy?: AnalyticalBudgetPolicy;
   loadImage?: (artifact: RevealArtifactRecord) => Promise<ProviderImageInput>;
   maxRetries?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
-  onResponse?:(response:ProviderChatResponse)=>Promise<void>;
-  onAttemptStart?:Parameters<typeof executeProviderChat>[0]["onAttemptStart"];
   streamWorkflowContext?: StreamWorkflowContext;
   chat?: (request: {
     config: ProviderConfig;
@@ -70,7 +50,7 @@ interface ParsedJudgeOutput {
   narrative: JudgeNarrative;
 }
 
-async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResult> {
+export async function runBlindJudging(input: RunJudgingInput): Promise<JudgingResult> {
   if (input.judges.length < 1 || input.judges.length > 3) throw new RangeError("Select between 1 and 3 Judges.");
   for (const judge of input.judges) validateJudgeRoute(judge);
 
@@ -85,18 +65,6 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
   if (!reveal) throw new Error("Reveal is required before Judge evaluation.");
   if (!evidence.trim()) throw new Error("No pre-reveal Viewer evidence is available for judging.");
   if (existing.length + input.judges.length > 3) throw new RangeError("A session may have at most 3 frozen Judge scores.");
-  if (input.researchPolicy && (input.judges.length !== 1 || !Number.isInteger(input.researchPolicy.judgeIndex)
-    || input.researchPolicy.judgeIndex < 1 || input.researchPolicy.judgeIndex > 3
-    || existing.some(score => score.judgeIndex === input.researchPolicy!.judgeIndex))) throw new Error("Invalid or already frozen Research Judge slot.");
-  const parseResponse = async (content: string): Promise<ParsedJudgeOutput> => {
-    if (!input.researchPolicy) return parseJudgeOutput(content);
-    let normalized;
-    try { normalized = normalizeResearchJudgeOutput(content); }
-    catch (cause) { throw new JudgeResponseValidationError(cause); }
-    const parsed = parseJudgeOutput(normalized.content);
-    if (normalized.trace) await input.researchPolicy.onNormalization?.({ ...normalized.trace, sourceSha256: await sha256Text(content), normalizedSha256: await sha256Text(normalized.content) });
-    return parsed;
-  };
   const imageArtifacts = (reveal.artifactManifest ?? []).filter((artifact) => artifact.mimeType.startsWith("image/"));
   if (!reveal.text?.trim() && !imageArtifacts.length) throw new Error("Judge needs reveal text or at least one supported reveal image.");
   if (imageArtifacts.length && input.judges.some((judge) => !judge.model.capabilities.supportsVision || !judge.model.capabilities.inputModalities.includes("image"))) {
@@ -118,21 +86,15 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
   });
   const packetWire = JSON.stringify(packet);
   const packetHash = await sha256Text(packetWire);
-  const chat = async (request: Parameters<NonNullable<RunJudgingInput["chat"]>>[0]) => {
-    const send = () => executeProviderChat({
+  const chat = (request: Parameters<NonNullable<RunJudgingInput["chat"]>>[0]) => executeProviderChat({
     ...request,
     timeoutMs: input.timeoutMs,
     signal: input.signal,
-    configuredRetries: input.recoverRequest ? 0 : input.maxRetries,
+    configuredRetries: input.maxRetries,
     operationId: "judge.evaluate",
     streamWorkflowContext: input.streamWorkflowContext,
     attempt: input.chat,
-    onAttemptStart:input.onAttemptStart,
-    });
-    const response = input.recoverRequest ? await input.recoverRequest(request, send) : await send();
-    await input.onResponse?.(response);
-    return response;
-  };
+  });
   const scores: JudgeScoreRecord[] = [...existing];
   const pending: Array<{ judge: JudgeSelection; parsed: ParsedJudgeOutput; judgeIndex: number }> = [];
 
@@ -147,12 +109,10 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
       { role: "system", content: getJudgePrompt(language) },
       { role: "user", content: `${languageDirective}\n\n${packetWire}`, ...(judgeImages.length ? { images: judgeImages } : {}) },
     ];
-    const initial = await judgeAnalyticalResponse({
-      signal:input.signal,preserveCompleteAfterAbort:true,
+    const initial = await callWithAnalyticalOutputRecovery({
       model: judge.model,
       messages,
       operationKind: "judge",
-      budgetPolicy: input.budgetPolicy,
       call: (settings) => chat({
         config: judge.providerConfig,
         modelId: judge.model.modelId,
@@ -163,23 +123,21 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
     let response = initial.response;
     let parsed: ParsedJudgeOutput;
     try {
-      parsed = await parseResponse(response.content);
+      parsed = parseJudgeOutput(response.content);
     } catch (cause) {
       if (!(cause instanceof Error) || cause.message !== "Judge returned invalid JSON.") throw cause;
       const repairMessages: ProviderMessage[] = [
         { role: "system", content: "You are a deterministic JSON formatter. Preserve all substantive text and every numeric score. Return one valid JSON object only and do not expose reasoning." },
         { role: "user", content: buildJudgeRepairPrompt(response.content, language) },
       ];
-      const repaired = await judgeAnalyticalResponse({
-        signal:input.signal,preserveCompleteAfterAbort:true,
+      const repaired = await callWithAnalyticalOutputRecovery({
         model: judge.model,
         messages: repairMessages,
         operationKind: "judge",
-      budgetPolicy: input.budgetPolicy,
         call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: repairMessages, settings }),
       });
       response = repaired.response;
-      parsed = await parseResponse(response.content);
+      parsed = parseJudgeOutput(response.content);
     }
     if (!narrativeMatchesLanguage(parsed.narrative, language)) {
       const originalScores = parsed.scores;
@@ -187,19 +145,17 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
         ? "Popraw wyłącznie język wartości tekstowych na polski. Zachowaj dokładnie te same wyniki liczbowe, nie dodawaj danych i zwróć wyłącznie JSON o tym samym schemacie."
         : "Correct only the language of all textual values to English. Keep exactly the same numeric scores, add no data, and return only JSON with the same schema.";
       const correctionMessages: ProviderMessage[] = [...messages, { role: "assistant", content: response.content }, { role: "user", content: correction }];
-      response = (await judgeAnalyticalResponse({
-        signal:input.signal,preserveCompleteAfterAbort:true,
+      response = (await callWithAnalyticalOutputRecovery({
         model: judge.model,
         messages: correctionMessages,
         operationKind: "judge",
-      budgetPolicy: input.budgetPolicy,
         call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: correctionMessages, settings }),
       })).response;
-      parsed = await parseResponse(response.content);
-      if (JSON.stringify(parsed.scores) !== JSON.stringify(originalScores)) throw new JudgeResponseValidationError("Judge language correction changed frozen score candidates.");
-      if (!narrativeMatchesLanguage(parsed.narrative, language)) throw new JudgeResponseValidationError("Judge returned narrative text in the wrong session language.");
+      parsed = parseJudgeOutput(response.content);
+      if (JSON.stringify(parsed.scores) !== JSON.stringify(originalScores)) throw new Error("Judge language correction changed frozen score candidates.");
+      if (!narrativeMatchesLanguage(parsed.narrative, language)) throw new Error("Judge returned narrative text in the wrong session language.");
     }
-    pending.push({ judge, parsed, judgeIndex: input.researchPolicy?.judgeIndex ?? existing.length + index + 1 });
+    pending.push({ judge, parsed, judgeIndex: existing.length + index + 1 });
     input.onProgress?.(index + 1, input.judges.length);
   }
 
@@ -251,10 +207,6 @@ export function selectMissingJudgeSelections(existing: JudgeScoreRecord[], selec
 }
 
 export function parseJudgeOutput(content: string): ParsedJudgeOutput {
-  try { return parseJudgeOutputUnsafe(content); }
-  catch (cause) { throw new JudgeResponseValidationError(cause); }
-}
-function parseJudgeOutputUnsafe(content: string): ParsedJudgeOutput {
   const clean = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   let value: unknown;
   try {
@@ -328,14 +280,3 @@ function narrativeMatchesLanguage(narrative: JudgeNarrative, language: Interface
 }
 
 export { computeJudgeTotal };
-
-export const runBlindJudging = (input: Parameters<typeof runBlindJudgingOwned>[0]) => withRvWorkflow(input.repository as AppRepository,input.sessionId,input.signal,(repository,signal)=>runBlindJudgingOwned({...input,repository,signal}));
-
-/** Called only by the isolated evaluation workflow; persistence is its panel adapter. */
-export async function runResearchEvaluationJudging(input: RunJudgingInput & { signal: AbortSignal }): Promise<JudgingResult> {
-  if (!input.researchPolicy) throw new Error("Research evaluation requires an explicit slot policy.");
-  const binding=nativeWorkflowBinding(input.signal);
-  if(binding && (binding.entities.length!==1 || binding.entities[0].kind!=="research_evaluation"))throw new Error("Isolated evaluation workflow is required.");
-  await assertAbortOwnership(input.signal);
-  return runBlindJudgingOwned(input);
-}

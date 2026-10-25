@@ -12,7 +12,7 @@ const native = vi.hoisted(() => ({
 
 vi.mock("./native", () => native);
 
-import { rebindProviderCredential, updateCustomOpenAiOutputTokenField, updateCustomOpenAiStreamingEnabled } from "./service";
+import { rebindProviderCredential, updateCustomOpenAiOutputTokenField } from "./service";
 
 describe("provider credential rebinding", () => {
   beforeEach(() => {
@@ -88,27 +88,5 @@ describe("Custom OpenAI wire parameter override", () => {
     const repository = { updateProviderCustomOutputTokenField: vi.fn() } as unknown as AppRepository;
     await expect(updateCustomOpenAiOutputTokenField(repository, config, "max_completion_tokens")).rejects.toThrow("only for Custom OpenAI-compatible");
     expect(repository.updateProviderCustomOutputTokenField).not.toHaveBeenCalled();
-  });
-});
-
-describe("Custom OpenAI streaming transport setting", () => {
-  it("updates only an explicit Custom OpenAI-compatible connection", async () => {
-    const config = {
-      id: "provider-custom-stream", provider: "custom_openai", label: "Custom", credentialId: "credential-custom",
-      enabled: true, createdAt: "2026-09-10T00:00:00.000Z", updatedAt: "2026-09-10T00:00:00.000Z",
-    } satisfies ProviderConfig;
-    const repository = { updateProviderCustomStreamingEnabled: vi.fn().mockResolvedValue(undefined) } as unknown as AppRepository;
-    await updateCustomOpenAiStreamingEnabled(repository, config, true);
-    expect(repository.updateProviderCustomStreamingEnabled).toHaveBeenCalledWith("provider-custom-stream", true);
-  });
-
-  it("rejects the streaming transport setting for built-in providers", async () => {
-    const config = {
-      id: "provider-openai-stream", provider: "openai", label: "OpenAI", credentialId: "credential-openai",
-      enabled: true, createdAt: "2026-09-10T00:00:00.000Z", updatedAt: "2026-09-10T00:00:00.000Z",
-    } satisfies ProviderConfig;
-    const repository = { updateProviderCustomStreamingEnabled: vi.fn() } as unknown as AppRepository;
-    await expect(updateCustomOpenAiStreamingEnabled(repository, config, true)).rejects.toThrow("only for Custom OpenAI-compatible");
-    expect(repository.updateProviderCustomStreamingEnabled).not.toHaveBeenCalled();
   });
 });

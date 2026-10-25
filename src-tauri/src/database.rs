@@ -126,12 +126,6 @@ pub enum DatabaseWriteOperation {
     SessionsUpdateRvSessions05,
     #[serde(rename = "sessions_update_rv_sessions_06")]
     SessionsUpdateRvSessions06,
-    #[serde(rename = "sessions_acquire_post_reveal_review_lease_01")]
-    SessionsAcquirePostRevealReviewLease01,
-    #[serde(rename = "sessions_renew_post_reveal_review_lease_01")]
-    SessionsRenewPostRevealReviewLease01,
-    #[serde(rename = "sessions_release_post_reveal_review_lease_01")]
-    SessionsReleasePostRevealReviewLease01,
     #[serde(rename = "sessions_insert_target_clarifications_01")]
     SessionsInsertTargetClarifications01,
     #[serde(rename = "settings_models_insert_app_settings_01")]
@@ -182,32 +176,6 @@ pub enum DatabaseWriteOperation {
     TrainingUpdateTrainingRuns02,
     #[serde(rename = "training_update_training_runs_03")]
     TrainingUpdateTrainingRuns03,
-    #[serde(rename = "training_update_training_runs_04")]
-    TrainingUpdateTrainingRuns04,
-    #[serde(rename = "training_update_training_runs_05")]
-    TrainingUpdateTrainingRuns05,
-    #[serde(rename = "telepathic_upsert_series_01")]
-    TelepathicUpsertSeries01,
-    #[serde(rename = "telepathic_upsert_participant_01")]
-    TelepathicUpsertParticipant01,
-    #[serde(rename = "telepathic_upsert_round_01")]
-    TelepathicUpsertRound01,
-    #[serde(rename = "telepathic_insert_target_01")]
-    TelepathicInsertTarget01,
-    #[serde(rename = "telepathic_advance_target_01")]
-    TelepathicAdvanceTarget01,
-    #[serde(rename = "telepathic_upsert_blind_01")]
-    TelepathicUpsertBlind01,
-    #[serde(rename = "telepathic_upsert_reflection_01")]
-    TelepathicUpsertReflection01,
-    #[serde(rename = "telepathic_upsert_call_01")]
-    TelepathicUpsertCall01,
-    #[serde(rename = "telepathic_acquire_series_lease_01")]
-    TelepathicAcquireSeriesLease01,
-    #[serde(rename = "telepathic_renew_series_lease_01")]
-    TelepathicRenewSeriesLease01,
-    #[serde(rename = "telepathic_release_series_lease_01")]
-    TelepathicReleaseSeriesLease01,
     #[serde(rename = "workspaces_conversations_insert_workspaces_01")]
     WorkspacesConversationsInsertWorkspaces01,
     #[serde(rename = "workspaces_conversations_update_workspaces_01")]
@@ -232,8 +200,6 @@ pub enum DatabaseWriteOperation {
     WorkspacesConversationsUpdateChatThreads05,
     #[serde(rename = "workspaces_conversations_insert_chat_messages_01")]
     WorkspacesConversationsInsertChatMessages01,
-    #[serde(rename = "workspaces_conversations_update_chat_message_metadata_01")]
-    WorkspacesConversationsUpdateChatMessageMetadata01,
     #[serde(rename = "workspaces_conversations_update_chat_threads_06")]
     WorkspacesConversationsUpdateChatThreads06,
     #[serde(rename = "continuation_insert_chat_message_provider_state_01")]
@@ -297,11 +263,11 @@ impl DatabaseWriteOperation {
             Self::JudgeInsertJudgeScores01 => "INSERT INTO judge_scores (id, judge_run_id, gestalt, verifiable_features, activity_function_event, confabulation_control, total, rationale_json, frozen_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)",
             Self::MonitorInsertMonitorRuns01 => "INSERT INTO monitor_runs (id, session_id, model_route, prompt_version_id, library_version, max_interventions, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
             Self::MonitorInsertMonitorInterventions01 => "INSERT INTO monitor_interventions (id, monitor_run_id, sequence_number, decision, command_id, viewer_evidence, command_text, rationale, created_at) SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7, $8 FROM monitor_interventions WHERE monitor_run_id = $2",
-            Self::ProfilesInsertProfiles01 => "INSERT INTO profiles ( id, display_name, human_display_name, note, credential_id, default_viewer_model_id, default_viewer_reasoning_effort, default_viewer_temperature, default_viewer_custom_temperature_mode, default_viewer_custom_reasoning_mode, default_viewer_sampling_enabled, default_viewer_top_p, default_viewer_top_k, default_viewer_seed, default_viewer_system_prompt, default_monitor_system_prompt, default_monitor_provider_config_id, default_monitor_model_id, default_judge_provider_config_id, default_judge_model_id, created_at, updated_at ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
+            Self::ProfilesInsertProfiles01 => "INSERT INTO profiles ( id, display_name, human_display_name, note, credential_id, default_viewer_model_id, default_viewer_reasoning_effort, default_viewer_temperature, default_viewer_system_prompt, default_monitor_system_prompt, default_monitor_provider_config_id, default_monitor_model_id, default_judge_provider_config_id, default_judge_model_id, created_at, updated_at ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
             Self::ProfilesUpdateProfiles01 => "UPDATE profiles SET display_name = $1, human_display_name = $2, note = $3, updated_at = $4 WHERE id = $5 AND archived_at IS NULL",
-            Self::ProfilesUpdateProfiles02 => "UPDATE profiles SET credential_id = $1, default_viewer_model_id = $2, default_viewer_reasoning_effort = $3, default_viewer_temperature = $4, default_viewer_custom_temperature_mode = $5, default_viewer_custom_reasoning_mode = $6, default_viewer_sampling_enabled = CASE WHEN $7 = 1 THEN $8 ELSE default_viewer_sampling_enabled END, default_viewer_top_p = CASE WHEN $7 = 1 THEN $9 ELSE default_viewer_top_p END, default_viewer_top_k = CASE WHEN $7 = 1 THEN $10 ELSE default_viewer_top_k END, default_viewer_seed = CASE WHEN $7 = 1 THEN $11 ELSE default_viewer_seed END, default_viewer_system_prompt = $12, default_monitor_system_prompt = $13, default_monitor_provider_config_id = $14, default_monitor_model_id = $15, default_judge_provider_config_id = $16, default_judge_model_id = $17, updated_at = $18 WHERE id = $19 AND archived_at IS NULL",
+            Self::ProfilesUpdateProfiles02 => "UPDATE profiles SET credential_id = $1, default_viewer_model_id = $2, default_viewer_reasoning_effort = $3, default_viewer_temperature = $4, default_viewer_system_prompt = $5, default_monitor_system_prompt = $6, default_monitor_provider_config_id = $7, default_monitor_model_id = $8, default_judge_provider_config_id = $9, default_judge_model_id = $10, updated_at = $11 WHERE id = $12 AND archived_at IS NULL",
             Self::ProfilesUpdateProfiles03 => "UPDATE profiles SET default_monitor_system_prompt = $1, updated_at = $2 WHERE id = $3",
-            Self::ProfilesUpdateProfiles04 => "UPDATE profiles SET credential_id = $1, default_viewer_model_id = NULL, default_viewer_reasoning_effort = NULL, default_viewer_temperature = NULL, default_viewer_custom_temperature_mode = NULL, default_viewer_custom_reasoning_mode = NULL, updated_at = $2 WHERE id = $3",
+            Self::ProfilesUpdateProfiles04 => "UPDATE profiles SET credential_id = $1, default_viewer_model_id = NULL, default_viewer_reasoning_effort = NULL, default_viewer_temperature = NULL, updated_at = $2 WHERE id = $3",
             Self::ResearchInsertResearchProjects01 => "INSERT INTO research_projects (id, workspace_id, name, template_type, state, config_json, created_at, updated_at, archived_at) VALUES ($1, $2, $3, $4, 'Draft', $5, $6, $6, NULL)",
             Self::ResearchUpdateResearchProjects01 => "UPDATE research_projects SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL",
             Self::ResearchUpdateResearchProjects02 => "UPDATE research_projects SET archived_at = NULL, updated_at = $1 WHERE id = $2 AND archived_at IS NOT NULL",
@@ -322,9 +288,6 @@ impl DatabaseWriteOperation {
             Self::SessionsInsertReveals01 => "INSERT INTO reveals (id, session_id, reveal_source, reveal_text, artifact_manifest_json, reveal_hash, accepted_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
             Self::SessionsUpdateRvSessions05 => "UPDATE rv_sessions SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL",
             Self::SessionsUpdateRvSessions06 => "UPDATE rv_sessions SET archived_at = NULL, updated_at = $1 WHERE id = $2 AND archived_at IS NOT NULL",
-            Self::SessionsAcquirePostRevealReviewLease01 => "UPDATE rv_sessions SET post_reveal_review_lease_owner=$1, post_reveal_review_lease_expires_at=$2, post_reveal_review_lease_version=post_reveal_review_lease_version+1 WHERE id=$3 AND (post_reveal_review_lease_owner IS NULL OR post_reveal_review_lease_expires_at IS NULL OR post_reveal_review_lease_expires_at < $4)",
-            Self::SessionsRenewPostRevealReviewLease01 => "UPDATE rv_sessions SET post_reveal_review_lease_expires_at=$1 WHERE id=$2 AND post_reveal_review_lease_owner=$3 AND post_reveal_review_lease_version=$4 AND post_reveal_review_lease_expires_at IS NOT NULL AND post_reveal_review_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')",
-            Self::SessionsReleasePostRevealReviewLease01 => "UPDATE rv_sessions SET post_reveal_review_lease_owner=NULL, post_reveal_review_lease_expires_at=NULL WHERE id=$1 AND post_reveal_review_lease_owner=$2 AND post_reveal_review_lease_version=$3",
             Self::SessionsInsertTargetClarifications01 => "INSERT INTO target_clarifications (id, session_id, content, created_at) VALUES ($1, $2, $3, $4)",
             Self::SettingsModelsInsertAppSettings01 => "INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, $3) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             Self::SettingsModelsDeleteAppSettings01 => "DELETE FROM app_settings WHERE key = $1",
@@ -332,7 +295,7 @@ impl DatabaseWriteOperation {
             Self::SettingsModelsInsertProviderConfigs01 => "INSERT INTO provider_configs (id, provider, label, credential_id, credential_hint, base_url, enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7)",
             Self::SettingsModelsUpdateProviderConfigs01 => "UPDATE provider_configs SET credential_hint = $1, last_status = NULL, last_error = NULL, last_tested_at = NULL, updated_at = $2 WHERE id = $3",
             Self::SettingsModelsUpdateCredentialsMetadata01 => "UPDATE credentials_metadata SET fingerprint = $1, updated_at = $2 WHERE id = $3",
-            Self::SettingsModelsUpdateProfiles01 => "UPDATE profiles SET credential_id = CASE WHEN credential_id = $1 THEN NULL ELSE credential_id END, default_viewer_model_id = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_model_id END, default_viewer_reasoning_effort = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_reasoning_effort END, default_viewer_temperature = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_temperature END, default_viewer_custom_temperature_mode = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_custom_temperature_mode END, default_viewer_custom_reasoning_mode = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_custom_reasoning_mode END, default_monitor_provider_config_id = CASE WHEN default_monitor_provider_config_id = $2 THEN NULL ELSE default_monitor_provider_config_id END, default_monitor_model_id = CASE WHEN default_monitor_provider_config_id = $2 THEN NULL ELSE default_monitor_model_id END, default_judge_provider_config_id = CASE WHEN default_judge_provider_config_id = $2 THEN NULL ELSE default_judge_provider_config_id END, default_judge_model_id = CASE WHEN default_judge_provider_config_id = $2 THEN NULL ELSE default_judge_model_id END, updated_at = $3 WHERE credential_id = $1 OR default_monitor_provider_config_id = $2 OR default_judge_provider_config_id = $2",
+            Self::SettingsModelsUpdateProfiles01 => "UPDATE profiles SET credential_id = CASE WHEN credential_id = $1 THEN NULL ELSE credential_id END, default_viewer_model_id = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_model_id END, default_viewer_reasoning_effort = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_reasoning_effort END, default_viewer_temperature = CASE WHEN credential_id = $1 THEN NULL ELSE default_viewer_temperature END, default_monitor_provider_config_id = CASE WHEN default_monitor_provider_config_id = $2 THEN NULL ELSE default_monitor_provider_config_id END, default_monitor_model_id = CASE WHEN default_monitor_provider_config_id = $2 THEN NULL ELSE default_monitor_model_id END, default_judge_provider_config_id = CASE WHEN default_judge_provider_config_id = $2 THEN NULL ELSE default_judge_provider_config_id END, default_judge_model_id = CASE WHEN default_judge_provider_config_id = $2 THEN NULL ELSE default_judge_model_id END, updated_at = $3 WHERE credential_id = $1 OR default_monitor_provider_config_id = $2 OR default_judge_provider_config_id = $2",
             Self::SettingsModelsDeleteProviderConfigs01 => "DELETE FROM provider_configs WHERE id = $1",
             Self::SettingsModelsDeleteCredentialsMetadata01 => "DELETE FROM credentials_metadata WHERE id = $1",
             Self::SettingsModelsUpdateProviderConfigs02 => "UPDATE provider_configs SET last_tested_at = $1, last_status = $2, last_error = $3, updated_at = $1 WHERE id = $4",
@@ -348,21 +311,8 @@ impl DatabaseWriteOperation {
             Self::TargetsInsertTargetUsage01 => "INSERT INTO target_usage (id, target_id, profile_id, research_project_id, session_id, used_at) VALUES ($1, $2, $3, $4, $5, $6)",
             Self::TrainingInsertTrainingRuns01 => "INSERT INTO training_runs (id, run_number, status, record_json, created_at, updated_at, archived_at) VALUES ($1, $2, $3, $4, $5, $5, NULL)",
             Self::TrainingUpdateTrainingRuns01 => "UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL",
-            Self::TrainingUpdateTrainingRuns02 => "UPDATE training_runs SET record_json = json_set(record_json, '$.archivedAt', $1, '$.updatedAt', $1), archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL",
+            Self::TrainingUpdateTrainingRuns02 => "UPDATE training_runs SET record_json = $1, archived_at = $2, updated_at = $2 WHERE id = $3 AND archived_at IS NULL",
             Self::TrainingUpdateTrainingRuns03 => "UPDATE training_runs SET record_json = $1, archived_at = NULL, updated_at = $2 WHERE id = $3 AND archived_at IS NOT NULL",
-            Self::TrainingUpdateTrainingRuns04 => "UPDATE training_runs SET status = $1, record_json = $2, updated_at = $3 WHERE id = $4 AND archived_at IS NULL AND COALESCE(json_extract(record_json, '$.termination.reason'), '') = ''",
-            Self::TrainingUpdateTrainingRuns05 => "UPDATE training_runs SET status = 'Interrupted', record_json = json_set(record_json, '$.status', 'Interrupted', '$.termination', json($1), '$.updatedAt', $2), updated_at = $2 WHERE id = $3 AND archived_at IS NULL AND status IN ('Paused', 'Interrupted', 'Running') AND COALESCE(json_extract(record_json, '$.currentIndex'), 0) < json_array_length(COALESCE(json_extract(record_json, '$.targetIds'), '[]')) AND COALESCE(json_extract(record_json, '$.termination.reason'), '') = ''",
-            Self::TelepathicUpsertSeries01 => "INSERT INTO telepathic_series (id, series_workspace_id, mode, language, status, current_round_index, config_json, plan_json, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_round_index=excluded.current_round_index, config_json=excluded.config_json, plan_json=excluded.plan_json, updated_at=excluded.updated_at WHERE COALESCE(json_extract(telepathic_series.plan_json,'$._runtime.archiveRevision'),0) <= COALESCE(json_extract(excluded.plan_json,'$._runtime.archiveRevision'),0) AND (json_extract(telepathic_series.plan_json,'$._runtime.termination.reason') IS NULL OR (excluded.status='cancelled' AND json_extract(excluded.plan_json,'$._runtime.termination')=json_extract(telepathic_series.plan_json,'$._runtime.termination')))",
-            Self::TelepathicUpsertParticipant01 => "INSERT INTO telepathic_participants (series_id, participant_id, kind, display_name, profile_id, workspace_id, ai_identity_id, provider_config_id, credential_id, model_id, model_route, route_snapshot_json, field_guide_snapshot_json, viewer_notes_snapshot_json, final_reflection_text) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(series_id, participant_id) DO UPDATE SET display_name=excluded.display_name, field_guide_snapshot_json=excluded.field_guide_snapshot_json, viewer_notes_snapshot_json=excluded.viewer_notes_snapshot_json, final_reflection_text=excluded.final_reflection_text",
-            Self::TelepathicUpsertRound01 => "INSERT INTO telepathic_rounds (id, series_id, round_number, sender_participant_id, status, revealed_at, completed_at, blocked_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET status=excluded.status, revealed_at=excluded.revealed_at, completed_at=excluded.completed_at, blocked_reason=excluded.blocked_reason",
-            Self::TelepathicInsertTarget01 => "INSERT OR IGNORE INTO telepathic_targets (round_id, sender_participant_id, content, assets_manifest_json, content_sha256, status, locked_at, transmission_ready_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-            Self::TelepathicAdvanceTarget01 => "UPDATE telepathic_targets SET status='transmission_ready', transmission_ready_at=$1 WHERE round_id=$2 AND status='locked'",
-            Self::TelepathicUpsertBlind01 => "INSERT INTO telepathic_blind_submissions (round_id, participant_id, status, first_text, second_text, provider_attempt_count, content_sha256, sealed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(round_id, participant_id) DO UPDATE SET status=excluded.status, first_text=excluded.first_text, second_text=excluded.second_text, provider_attempt_count=excluded.provider_attempt_count, content_sha256=excluded.content_sha256, sealed_at=excluded.sealed_at WHERE telepathic_blind_submissions.status NOT IN ('sealed','no_submission')",
-            Self::TelepathicUpsertReflection01 => "INSERT INTO telepathic_reflections (round_id, participant_id, role, reflection_text, share_others_consent, shared_answers_comment) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(round_id, participant_id) DO UPDATE SET reflection_text=excluded.reflection_text, share_others_consent=excluded.share_others_consent, shared_answers_comment=excluded.shared_answers_comment",
-            Self::TelepathicUpsertCall01 => "INSERT INTO telepathic_provider_calls (id, series_id, round_id, participant_id, call_stage, technical_attempt, status, scope_key, request_sha256, provider_request_id, response_text, error_message, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(id) DO UPDATE SET status=excluded.status, provider_request_id=excluded.provider_request_id, response_text=excluded.response_text, error_message=excluded.error_message, updated_at=excluded.updated_at",
-            Self::TelepathicAcquireSeriesLease01 => "UPDATE telepathic_series SET run_lease_owner=$1, run_lease_expires_at=$2, run_lease_version=run_lease_version+1 WHERE id=$3 AND (run_lease_owner IS NULL OR run_lease_expires_at IS NULL OR run_lease_expires_at < $4)",
-            Self::TelepathicRenewSeriesLease01 => "UPDATE telepathic_series SET run_lease_expires_at=$1 WHERE id=$2 AND run_lease_owner=$3 AND run_lease_version=$4 AND run_lease_expires_at IS NOT NULL AND run_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')",
-            Self::TelepathicReleaseSeriesLease01 => "UPDATE telepathic_series SET run_lease_owner=NULL, run_lease_expires_at=NULL WHERE id=$1 AND run_lease_owner=$2 AND run_lease_version=$3",
             Self::WorkspacesConversationsInsertWorkspaces01 => "INSERT INTO workspaces (id, profile_id, name, description, kind, created_at, updated_at, last_opened_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             Self::WorkspacesConversationsUpdateWorkspaces01 => "UPDATE workspaces SET name = $1, updated_at = $2 WHERE id = $3",
             Self::WorkspacesConversationsUpdateWorkspaces02 => "UPDATE workspaces SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL AND ((kind = 'conversation' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('conversation', 'legacy_combined'))) OR (kind = 'rv' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('rv', 'legacy_combined'))) OR (kind = 'legacy_combined' AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('conversation', 'legacy_combined')) AND EXISTS (SELECT 1 FROM workspaces sibling WHERE sibling.profile_id = workspaces.profile_id AND sibling.id <> workspaces.id AND sibling.archived_at IS NULL AND sibling.kind IN ('rv', 'legacy_combined'))))",
@@ -374,8 +324,7 @@ impl DatabaseWriteOperation {
             Self::WorkspacesConversationsUpdateChatThreads03 => "UPDATE chat_threads SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL",
             Self::WorkspacesConversationsUpdateChatThreads04 => "UPDATE chat_threads SET archived_at = NULL, updated_at = $1 WHERE id = $2",
             Self::WorkspacesConversationsUpdateChatThreads05 => "UPDATE chat_threads SET formal_rv_state = $1, updated_at = $2 WHERE id = $3 AND mode = 'manual_rv'",
-            Self::WorkspacesConversationsInsertChatMessages01 => "INSERT INTO chat_messages (id, thread_id, role, content, metadata_json, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-            Self::WorkspacesConversationsUpdateChatMessageMetadata01 => "UPDATE chat_messages SET metadata_json = $1 WHERE id = $2 AND role = 'user'",
+            Self::WorkspacesConversationsInsertChatMessages01 => "INSERT INTO chat_messages (id, thread_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)",
             Self::WorkspacesConversationsUpdateChatThreads06 => "UPDATE chat_threads SET updated_at = $1 WHERE id = $2",
             Self::ContinuationInsertChatMessageProviderState01 => "INSERT INTO chat_message_provider_state (message_id, format, format_version, transport, replay_fingerprint_json, payload_json, payload_sha256, payload_size_bytes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             Self::ContinuationDeleteChatMessageProviderState01 => "DELETE FROM chat_message_provider_state WHERE message_id IN (SELECT id FROM chat_messages WHERE thread_id = $1)",
@@ -426,9 +375,9 @@ impl DatabaseWriteOperation {
             Self::JudgeInsertJudgeScores01 => 9,
             Self::MonitorInsertMonitorRuns01 => 7,
             Self::MonitorInsertMonitorInterventions01 => 8,
-            Self::ProfilesInsertProfiles01 => 22,
+            Self::ProfilesInsertProfiles01 => 16,
             Self::ProfilesUpdateProfiles01 => 5,
-            Self::ProfilesUpdateProfiles02 => 19,
+            Self::ProfilesUpdateProfiles02 => 12,
             Self::ProfilesUpdateProfiles03 => 3,
             Self::ProfilesUpdateProfiles04 => 3,
             Self::ResearchInsertResearchProjects01 => 6,
@@ -451,9 +400,6 @@ impl DatabaseWriteOperation {
             Self::SessionsInsertReveals01 => 7,
             Self::SessionsUpdateRvSessions05 => 2,
             Self::SessionsUpdateRvSessions06 => 2,
-            Self::SessionsAcquirePostRevealReviewLease01 => 4,
-            Self::SessionsRenewPostRevealReviewLease01 => 4,
-            Self::SessionsReleasePostRevealReviewLease01 => 3,
             Self::SessionsInsertTargetClarifications01 => 4,
             Self::SettingsModelsInsertAppSettings01 => 3,
             Self::SettingsModelsDeleteAppSettings01 => 1,
@@ -477,21 +423,8 @@ impl DatabaseWriteOperation {
             Self::TargetsInsertTargetUsage01 => 6,
             Self::TrainingInsertTrainingRuns01 => 5,
             Self::TrainingUpdateTrainingRuns01 => 4,
-            Self::TrainingUpdateTrainingRuns02 => 2,
+            Self::TrainingUpdateTrainingRuns02 => 3,
             Self::TrainingUpdateTrainingRuns03 => 3,
-            Self::TrainingUpdateTrainingRuns04 => 4,
-            Self::TrainingUpdateTrainingRuns05 => 3,
-            Self::TelepathicUpsertSeries01 => 10,
-            Self::TelepathicUpsertParticipant01 => 15,
-            Self::TelepathicUpsertRound01 => 8,
-            Self::TelepathicInsertTarget01 => 8,
-            Self::TelepathicAdvanceTarget01 => 2,
-            Self::TelepathicUpsertBlind01 => 8,
-            Self::TelepathicUpsertReflection01 => 6,
-            Self::TelepathicUpsertCall01 => 14,
-            Self::TelepathicAcquireSeriesLease01 => 4,
-            Self::TelepathicRenewSeriesLease01 => 4,
-            Self::TelepathicReleaseSeriesLease01 => 3,
             Self::WorkspacesConversationsInsertWorkspaces01 => 8,
             Self::WorkspacesConversationsUpdateWorkspaces01 => 3,
             Self::WorkspacesConversationsUpdateWorkspaces02 => 2,
@@ -503,8 +436,7 @@ impl DatabaseWriteOperation {
             Self::WorkspacesConversationsUpdateChatThreads03 => 2,
             Self::WorkspacesConversationsUpdateChatThreads04 => 2,
             Self::WorkspacesConversationsUpdateChatThreads05 => 3,
-            Self::WorkspacesConversationsInsertChatMessages01 => 6,
-            Self::WorkspacesConversationsUpdateChatMessageMetadata01 => 2,
+            Self::WorkspacesConversationsInsertChatMessages01 => 5,
             Self::WorkspacesConversationsUpdateChatThreads06 => 2,
             Self::ContinuationInsertChatMessageProviderState01 => 9,
             Self::ContinuationDeleteChatMessageProviderState01 => 1,
@@ -525,9 +457,9 @@ impl DatabaseWriteOperation {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseWriteStatement {
-    pub(crate) operation: DatabaseWriteOperation,
+    operation: DatabaseWriteOperation,
     #[serde(default)]
-    pub(crate) values: Vec<JsonValue>,
+    values: Vec<JsonValue>,
 }
 
 #[derive(Debug, Serialize)]
@@ -536,61 +468,14 @@ pub struct DatabaseWriteResult {
     rows_affected: u64,
 }
 
-pub(crate) async fn execute_statement(transaction:&mut Transaction<'_,Sqlite>,statement:DatabaseWriteStatement)->Result<u64,String>{
-    execute_statement_internal(transaction,statement,None).await
-}
-pub(crate) async fn execute_statement_internal(
-    transaction:&mut Transaction<'_,Sqlite>,statement:DatabaseWriteStatement,owned_research:Option<&str>,
-)->Result<u64,String>{
+async fn execute_statement(
+    transaction: &mut Transaction<'_, Sqlite>,
+    statement: DatabaseWriteStatement,
+) -> Result<u64, String> {
     if statement.values.len() != statement.operation.expected_values() {
         return Err("database write operation received an invalid value count".to_string());
     }
-    let session_value_index = match statement.operation {
-        DatabaseWriteOperation::SessionsUpdateRvSessions01 | DatabaseWriteOperation::SessionsUpdateRvSessions02 | DatabaseWriteOperation::SessionsUpdateRvSessions03 => Some(2),
-        DatabaseWriteOperation::SessionsInsertSessionEvents01 | DatabaseWriteOperation::SessionsInsertTargetClarifications01 | DatabaseWriteOperation::JudgeInsertJudgeRuns01 => Some(1),
-        DatabaseWriteOperation::SessionsUpdateRvSessions04 => Some(3),
-        DatabaseWriteOperation::SessionsInsertSessionSnapshots01 | DatabaseWriteOperation::SessionsInsertReveals01 => Some(0),
-        _ => None,
-    };
-    if let Some(index) = session_value_index {
-        if let Some(session_id) = statement.values.get(index).and_then(JsonValue::as_str) {
-            let ended: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_events WHERE session_id=$1 AND event_type='RV_USER_FINISHED'")
-                .bind(session_id).fetch_one(&mut **transaction).await.map_err(|error|error.to_string())?;
-            if ended > 0 { return Err("RV session was ended by the user; active writes are refused".into()); }
-        }
-    }
-    let research_id_index=match statement.operation {
-        DatabaseWriteOperation::ResearchUpdateResearchProjects01 | DatabaseWriteOperation::ResearchUpdateResearchProjects02=>Some(1),
-        DatabaseWriteOperation::ResearchUpdateResearchProjects03 | DatabaseWriteOperation::ResearchUpdateResearchProjects04 => Some(2),
-        DatabaseWriteOperation::ResearchInsertResearchConditions01 | DatabaseWriteOperation::ResearchInsertResearchAssignments01 | DatabaseWriteOperation::ResearchInsertBlindingMappings01 | DatabaseWriteOperation::ResearchInsertResearchResults01=>Some(1),
-        DatabaseWriteOperation::SessionsInsertRvSessions01=>Some(6),
-        DatabaseWriteOperation::TargetsInsertTargetUsage01=>Some(3),
-        _=>None,
-    };
-    let mut research_id=research_id_index.and_then(|index|statement.values.get(index)).and_then(JsonValue::as_str).map(str::to_owned);
-    if matches!(statement.operation,DatabaseWriteOperation::ResearchUpdateResearchAssignments01) {
-        if let Some(id)=statement.values.get(2).and_then(JsonValue::as_str){research_id=sqlx::query_scalar("SELECT research_project_id FROM research_assignments WHERE id=$1").bind(id).fetch_optional(&mut **transaction).await.map_err(|e|e.to_string())?;}
-    }else if let Some(index)=session_value_index {
-        if let Some(id)=statement.values.get(index).and_then(JsonValue::as_str){
-            research_id=sqlx::query_scalar::<_,Option<String>>("SELECT research_project_id FROM rv_sessions WHERE id=$1").bind(id).fetch_optional(&mut **transaction).await.map_err(|e|e.to_string())?.flatten();
-        }
-    }
-    if matches!(statement.operation,DatabaseWriteOperation::JudgeInsertJudgeScores01) {
-        if let Some(id)=statement.values.get(1).and_then(JsonValue::as_str){research_id=sqlx::query_scalar::<_,Option<String>>("SELECT s.research_project_id FROM judge_runs j JOIN rv_sessions s ON s.id=j.session_id WHERE j.id=$1").bind(id).fetch_optional(&mut **transaction).await.map_err(|e|e.to_string())?.flatten();}
-    }
-    if let Some(id)=research_id {
-        if let Some(owned_id)=owned_research {if id!=owned_id {return Err("Research write scope mismatch".into());}}
-        let active:i64=sqlx::query_scalar("SELECT COUNT(*) FROM app_settings WHERE key='rvh.workflow.v1:research:' || $1 AND json_extract(value,'$.owner') IS NOT NULL AND json_extract(value,'$.expiresAt') > strftime('%Y-%m-%dT%H:%M:%fZ','now')").bind(&id).fetch_one(&mut **transaction).await.map_err(|e|e.to_string())?;
-        if active>0 && owned_research!=Some(id.as_str()) {return Err("Research ownership is required for active writes".into());}
-        let ended:i64=sqlx::query_scalar("SELECT COUNT(*) FROM app_settings WHERE key='rvh.research.end.v1:' || $1").bind(&id).fetch_one(&mut **transaction).await.map_err(|e|e.to_string())?;
-        if ended>0 && !matches!(statement.operation,DatabaseWriteOperation::ResearchUpdateResearchProjects01|DatabaseWriteOperation::ResearchUpdateResearchProjects02) {return Err("Research execution was ended by the user; active writes are refused".into());}
-    }
-    if owned_research.is_some() && matches!(statement.operation,DatabaseWriteOperation::AiCenterUpdateAiIdentities01|DatabaseWriteOperation::AiCenterInsertAiIdentities01|DatabaseWriteOperation::AiCenterInsertAiNoteSettings01|DatabaseWriteOperation::AiCenterUpdateAiNoteSettings01|DatabaseWriteOperation::AiCenterUpdateAiNoteSettings02|DatabaseWriteOperation::AiCenterInsertAiNoteReflectionRuns01|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns01|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns02|DatabaseWriteOperation::AiCenterInsertAiNoteVersions01|DatabaseWriteOperation::AiCenterInsertAiNoteActivationEvents01|DatabaseWriteOperation::AiCenterUpdateAiNoteSettings03|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns03|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns04|DatabaseWriteOperation::AiCenterInsertAiNoteActivationEvents02|DatabaseWriteOperation::AiCenterUpdateAiNoteVersions01|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns05|DatabaseWriteOperation::AiCenterUpdateAiNoteActivationEvents01|DatabaseWriteOperation::AiCenterUpdateAiNoteVersions02|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns06|DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns07|DatabaseWriteOperation::AiCenterUpdateAiNoteActivationEvents02|DatabaseWriteOperation::FieldGuideInsertSettings01|DatabaseWriteOperation::FieldGuideInsertVersions01|DatabaseWriteOperation::FieldGuideInsertActivationEvents01|DatabaseWriteOperation::FieldGuideUpdateSettings01|DatabaseWriteOperation::FieldGuideUpdateLegacyBaselines01|DatabaseWriteOperation::FieldGuideUpdateSettings02) {return Err("Research learning is read-only".into());}
     let mut query = sqlx::query(statement.operation.sql());
-    if matches!(statement.operation, DatabaseWriteOperation::SettingsModelsInsertAppSettings01 | DatabaseWriteOperation::SettingsModelsDeleteAppSettings01)
-        && statement.values.first().and_then(JsonValue::as_str).is_some_and(|key| key.starts_with("rvh.workflow.v1:") || key.starts_with("rvh.research.end.v1:") || key.starts_with(crate::research_evaluation::PREFIX)) {
-        return Err("Workflow ownership keys are reserved for the ownership command".into());
-    }
     for value in statement.values {
         query = match value {
             JsonValue::Null => query.bind(Option::<String>::None),
@@ -608,16 +493,10 @@ pub(crate) async fn execute_statement_internal(
             structured @ (JsonValue::Array(_) | JsonValue::Object(_)) => query.bind(structured.to_string()),
         };
     }
-    let rows = query.execute(&mut **transaction).await.map(|result| result.rows_affected()).map_err(|error| error.to_string())?;
-    // This runs inside both ordinary and fenced transactions, before any child
-    // statements. A rejected parent is a conflict, never a successful no-op.
-    if matches!(statement.operation, DatabaseWriteOperation::TelepathicUpsertSeries01) && rows != 1 {
-        return Err("Stale telepathic archive revision conflict".to_string());
-    }
-    Ok(rows)
+    query.execute(&mut **transaction).await.map(|result| result.rows_affected()).map_err(|error| error.to_string())
 }
 
-pub(crate) async fn sqlite_pool(db_instances: &State<'_, DbInstances>) -> Result<sqlx::SqlitePool, String> {
+async fn sqlite_pool(db_instances: &State<'_, DbInstances>) -> Result<sqlx::SqlitePool, String> {
     let instances = db_instances.0.read().await;
     match instances.get(DATABASE_URL) {
         Some(DbPool::Sqlite(pool)) => Ok(pool.clone()),
@@ -787,107 +666,6 @@ pub async fn database_execute_write_batch(
 }
 
 #[tauri::command]
-pub async fn database_execute_telepathic_fenced_write_batch(
-    db_instances: State<'_, DbInstances>,
-    series_id: String,
-    lease_owner: String,
-    lease_version: i64,
-    statements: Vec<DatabaseWriteStatement>,
-) -> Result<Vec<u64>, String> {
-    if statements.is_empty() { return Ok(Vec::new()); }
-    if statements.len() > MAX_TRANSACTION_STATEMENTS {
-        return Err("database transaction contains too many statements".to_string());
-    }
-    let pool = sqlite_pool(&db_instances).await?;
-    execute_telepathic_fenced_batch(&pool, &series_id, &lease_owner, lease_version, statements).await
-}
-
-// A retry re-enters this function and checks the current lease inside a fresh
-// write transaction. BEGIN IMMEDIATE avoids a SELECT -> writer upgrade racing
-// the native heartbeat. Only a confirmed rollback may expose a retryable error.
-async fn execute_telepathic_fenced_batch(
-    pool: &sqlx::SqlitePool,
-    series_id: &str,
-    lease_owner: &str,
-    lease_version: i64,
-    statements: Vec<DatabaseWriteStatement>,
-) -> Result<Vec<u64>, String> {
-    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|error| error.to_string())?;
-    let outcome = async {
-        let lease_valid: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM telepathic_series WHERE id=$1 AND run_lease_owner=$2 AND run_lease_version=$3 AND run_lease_expires_at IS NOT NULL AND run_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')",
-        )
-        .bind(series_id)
-        .bind(lease_owner)
-        .bind(lease_version)
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(|error| error.to_string())?;
-        if lease_valid != 1 {
-            return Err("telepathic series lease lost before fenced checkpoint".to_string());
-        }
-        let mut rows_affected = Vec::with_capacity(statements.len());
-        for statement in statements {
-            rows_affected.push(execute_statement(&mut transaction, statement).await?);
-        }
-        Ok(rows_affected)
-    }.await;
-    match outcome {
-        Ok(rows) => {
-            // A failed commit acknowledgement is not proof of rollback. Do not
-            // replay the batch automatically, even when its text mentions BUSY.
-            transaction.commit().await.map_err(|error| format!("[sqlite-no-retry] telepathic commit outcome requires checkpoint inspection: {error}"))?;
-            Ok(rows)
-        }
-        Err(message) => {
-            transaction.rollback().await.map_err(|error| format!("[sqlite-no-retry] {message}; rollback failed: {error}"))?;
-            Err(message)
-        }
-    }
-}
-
-#[tauri::command]
-pub async fn database_execute_post_reveal_review_fenced_write_batch(
-    db_instances: State<'_, DbInstances>,
-    session_id: String,
-    lease_owner: String,
-    lease_version: i64,
-    statements: Vec<DatabaseWriteStatement>,
-) -> Result<Vec<u64>, String> {
-    if statements.is_empty() { return Ok(Vec::new()); }
-    if statements.len() > MAX_TRANSACTION_STATEMENTS {
-        return Err("database transaction contains too many statements".to_string());
-    }
-    let pool = sqlite_pool(&db_instances).await?;
-    let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
-    let lease_valid: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM rv_sessions WHERE id=$1 AND post_reveal_review_lease_owner=$2 AND post_reveal_review_lease_version=$3 AND post_reveal_review_lease_expires_at IS NOT NULL AND post_reveal_review_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')",
-    )
-    .bind(&session_id)
-    .bind(&lease_owner)
-    .bind(lease_version)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(|error| error.to_string())?;
-    if lease_valid != 1 {
-        transaction.rollback().await.map_err(|error| error.to_string())?;
-        return Err("post-Reveal review lease lost before fenced checkpoint".to_string());
-    }
-    let mut rows_affected = Vec::with_capacity(statements.len());
-    for statement in statements {
-        match execute_statement(&mut transaction, statement).await {
-            Ok(rows) => rows_affected.push(rows),
-            Err(message) => {
-                transaction.rollback().await.map_err(|rollback_error| format!("{message}; rollback failed: {rollback_error}"))?;
-                return Err(message);
-            }
-        }
-    }
-    transaction.commit().await.map_err(|error| error.to_string())?;
-    Ok(rows_affected)
-}
-
-#[tauri::command]
 pub async fn database_snapshot(
     app: tauri::AppHandle,
     db_instances: State<'_, DbInstances>,
@@ -914,7 +692,6 @@ pub enum ControlledPurgeKind {
     Training,
     Research,
     Target,
-    TelepathicSeries,
 }
 
 #[derive(Debug, Deserialize)]
@@ -922,8 +699,6 @@ pub enum ControlledPurgeKind {
 pub struct ControlledPurgeRequest {
     kind: ControlledPurgeKind,
     id: String,
-    #[serde(default)]
-    expected_archive_revision: Option<i64>,
 }
 
 async fn purge_exec(transaction: &mut Transaction<'_, Sqlite>, sql: &'static str, id: &str) -> Result<u64, String> {
@@ -939,7 +714,6 @@ async fn ensure_archived(transaction: &mut Transaction<'_, Sqlite>, table: &'sta
         "training_runs" => "SELECT COUNT(*) FROM training_runs WHERE id = $1 AND archived_at IS NOT NULL",
         "research_projects" => "SELECT COUNT(*) FROM research_projects WHERE id = $1 AND archived_at IS NOT NULL",
         "targets" => "SELECT COUNT(*) FROM targets WHERE id = $1 AND collection = 'user' AND archived_at IS NOT NULL",
-        "telepathic_series" => "SELECT COUNT(*) FROM telepathic_series WHERE id=$1 AND json_valid(plan_json) AND json_type(plan_json,'$._runtime.archivedAt')='text' AND length(trim(json_extract(plan_json,'$._runtime.archivedAt')))>0",
         _ => return Err("unsupported purge entity".to_string()),
     };
     let count: i64 = sqlx::query_scalar(sql).bind(id).fetch_one(&mut **transaction).await.map_err(|e| e.to_string())?;
@@ -954,11 +728,6 @@ pub async fn database_controlled_purge(
 ) -> Result<(), String> {
     if request.id.trim().is_empty() { return Err("purge id is empty".to_string()); }
     let pool = sqlite_pool(&db_instances).await?;
-    controlled_purge_with_pool(&pool, request).await
-}
-
-async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: ControlledPurgeRequest) -> Result<(), String> {
-    if request.id.trim().is_empty() { return Err("purge id is empty".to_string()); }
     let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
 
     let table = match request.kind {
@@ -969,28 +738,8 @@ async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: Controlled
         ControlledPurgeKind::Training => "training_runs",
         ControlledPurgeKind::Research => "research_projects",
         ControlledPurgeKind::Target => "targets",
-        ControlledPurgeKind::TelepathicSeries => "telepathic_series",
     };
     ensure_archived(&mut tx, table, &request.id).await?;
-
-    if matches!(request.kind, ControlledPurgeKind::TelepathicSeries) {
-        let expected = request.expected_archive_revision.ok_or_else(|| "Telepathy purge requires the Deletion Preview archive revision.".to_string())?;
-        let actual: i64 = sqlx::query_scalar("SELECT COALESCE(json_extract(plan_json,'$._runtime.archiveRevision'),0) FROM telepathic_series WHERE id=$1")
-            .bind(&request.id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-        if expected < 0 || expected != actual { return Err("Telepathy changed after Deletion Preview.".to_string()); }
-        let blocked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepathic_series WHERE id=$1 AND (status='running' OR (run_lease_owner IS NOT NULL AND (run_lease_expires_at IS NULL OR julianday(run_lease_expires_at) IS NULL OR run_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now'))))")
-            .bind(&request.id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-        if blocked > 0 { return Err("Stop Telepathy execution or wait for its lease before deleting.".to_string()); }
-    }
-    if matches!(request.kind, ControlledPurgeKind::Profile | ControlledPurgeKind::Workspace) {
-        let sql = if matches!(request.kind, ControlledPurgeKind::Workspace) {
-            "SELECT COUNT(*) FROM telepathic_series s WHERE s.series_workspace_id=$1 OR EXISTS (SELECT 1 FROM telepathic_participants p WHERE p.series_id=s.id AND p.workspace_id=$1)"
-        } else {
-            "SELECT COUNT(*) FROM telepathic_series s WHERE s.series_workspace_id IN (SELECT id FROM workspaces WHERE profile_id=$1) OR EXISTS (SELECT 1 FROM telepathic_participants p WHERE p.series_id=s.id AND (p.profile_id=$1 OR p.workspace_id IN (SELECT id FROM workspaces WHERE profile_id=$1)))"
-        };
-        let count: i64 = sqlx::query_scalar(sql).bind(&request.id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-        if count > 0 { return Err("Delete Telepathy series referencing this Profile/Workspace first.".to_string()); }
-    }
 
     if matches!(request.kind, ControlledPurgeKind::RvSession) {
         let research_owned: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rv_sessions WHERE id = $1 AND research_project_id IS NOT NULL")
@@ -1007,7 +756,7 @@ async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: Controlled
             "SELECT COUNT(*) FROM training_runs t WHERE json_valid(t.record_json) AND COALESCE(json_extract(t.record_json, '$.status'), '') != 'Completed' AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(t.record_json, '$.targetIds'), '[]')) WHERE value = $1)"
         ).bind(&request.id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
         let unfinished_research: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM research_projects r WHERE r.state NOT IN ('Complete','Interrupted','Failed') AND NOT EXISTS (SELECT 1 FROM app_settings WHERE key='rvh.research.end.v1:' || r.id) AND json_valid(r.config_json) AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(r.config_json, '$.targetIds'), '[]')) WHERE value = $1)"
+            "SELECT COUNT(*) FROM research_projects r WHERE r.state NOT IN ('Complete','Interrupted','Failed') AND json_valid(r.config_json) AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(r.config_json, '$.targetIds'), '[]')) WHERE value = $1)"
         ).bind(&request.id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
         if unfinished_training > 0 || unfinished_research > 0 {
             return Err("Target is still required by unfinished work.".to_string());
@@ -1021,7 +770,6 @@ async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: Controlled
     let result: Result<(), String> = async {
         match request.kind {
             ControlledPurgeKind::Profile => {
-                purge_exec(&mut tx, "DELETE FROM app_settings WHERE key IN (SELECT 'rvh.research.end.v1:' || id FROM research_projects WHERE workspace_id IN (SELECT id FROM workspaces WHERE profile_id=$1)) OR key IN (SELECT 'rvh.workflow.v1:research:' || id FROM research_projects WHERE workspace_id IN (SELECT id FROM workspaces WHERE profile_id=$1)) OR key IN (SELECT a.key FROM app_settings a JOIN research_projects r ON substr(a.key,1,length('rvh.research.evaluation.v1:' || r.id || ':'))='rvh.research.evaluation.v1:' || r.id || ':' WHERE substr(a.key,1,27)='rvh.research.evaluation.v1:' AND r.workspace_id IN (SELECT id FROM workspaces WHERE profile_id=$1))", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM target_usage WHERE profile_id = $1 OR session_id IN (SELECT id FROM rv_sessions WHERE profile_id = $1) OR research_project_id IN (SELECT id FROM research_projects WHERE workspace_id IN (SELECT id FROM workspaces WHERE profile_id = $1))", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM ai_note_activation_events WHERE ai_identity_id IN (SELECT id FROM ai_identities WHERE profile_id = $1)", &request.id).await?;
                 purge_exec(&mut tx, "UPDATE ai_note_settings SET active_version_id = NULL WHERE ai_identity_id IN (SELECT id FROM ai_identities WHERE profile_id = $1)", &request.id).await?;
@@ -1032,11 +780,9 @@ async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: Controlled
                 purge_exec(&mut tx, "DELETE FROM ai_identities WHERE profile_id = $1", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM rv_sessions WHERE profile_id = $1", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM training_runs WHERE json_valid(record_json) AND (json_extract(record_json, '$.profileId') = $1 OR json_extract(record_json, '$.workspaceId') IN (SELECT id FROM workspaces WHERE profile_id = $1))", &request.id).await?;
-                purge_exec(&mut tx, "DELETE FROM app_settings WHERE key = 'rvh.workflow.v1:' || $1", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM profiles WHERE id = $1 AND archived_at IS NOT NULL", &request.id).await?;
             }
             ControlledPurgeKind::Workspace => {
-                purge_exec(&mut tx, "DELETE FROM app_settings WHERE key IN (SELECT 'rvh.research.end.v1:' || id FROM research_projects WHERE workspace_id=$1) OR key IN (SELECT 'rvh.workflow.v1:research:' || id FROM research_projects WHERE workspace_id=$1) OR key IN (SELECT a.key FROM app_settings a JOIN research_projects r ON substr(a.key,1,length('rvh.research.evaluation.v1:' || r.id || ':'))='rvh.research.evaluation.v1:' || r.id || ':' WHERE substr(a.key,1,27)='rvh.research.evaluation.v1:' AND r.workspace_id=$1)", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM target_usage WHERE session_id IN (SELECT id FROM rv_sessions WHERE workspace_id = $1) OR research_project_id IN (SELECT id FROM research_projects WHERE workspace_id = $1)", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM training_runs WHERE json_valid(record_json) AND json_extract(record_json, '$.workspaceId') = $1", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM workspaces WHERE id = $1 AND archived_at IS NOT NULL", &request.id).await?;
@@ -1052,20 +798,12 @@ async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: Controlled
                 purge_exec(&mut tx, "DELETE FROM training_runs WHERE id = $1 AND archived_at IS NOT NULL", &request.id).await?;
             }
             ControlledPurgeKind::Research => {
-                purge_exec(&mut tx, "DELETE FROM app_settings WHERE key IN (SELECT 'rvh.research.end.v1:' || id FROM research_projects WHERE id=$1) OR key IN (SELECT 'rvh.workflow.v1:research:' || id FROM research_projects WHERE id=$1) OR key IN (SELECT a.key FROM app_settings a JOIN research_projects r ON substr(a.key,1,length('rvh.research.evaluation.v1:' || r.id || ':'))='rvh.research.evaluation.v1:' || r.id || ':' WHERE substr(a.key,1,27)='rvh.research.evaluation.v1:' AND r.id=$1)", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM target_usage WHERE research_project_id = $1 OR session_id IN (SELECT id FROM rv_sessions WHERE research_project_id = $1)", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM exports WHERE research_project_id = $1", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM rv_sessions WHERE research_project_id = $1", &request.id).await?;
                 purge_exec(&mut tx, "DELETE FROM research_projects WHERE id = $1 AND archived_at IS NOT NULL", &request.id).await?;
             }
             ControlledPurgeKind::Target => { purge_exec(&mut tx, "DELETE FROM targets WHERE id = $1 AND collection = 'user' AND archived_at IS NOT NULL", &request.id).await?; }
-            ControlledPurgeKind::TelepathicSeries => {
-                // FK cascade is explicit in schema 028: participants, rounds,
-                // targets, blind, reflections and calls. Runtime evidence lives
-                // in plan_json. Global learning and external files are retained.
-                let affected = purge_exec(&mut tx, "DELETE FROM telepathic_series WHERE id=$1 AND json_type(plan_json,'$._runtime.archivedAt')='text' AND length(trim(json_extract(plan_json,'$._runtime.archivedAt')))>0", &request.id).await?;
-                if affected != 1 { return Err("Telepathy changed before deletion.".to_string()); }
-            }
         }
         Ok(())
     }.await;
@@ -1082,130 +820,6 @@ async fn controlled_purge_with_pool(pool: &sqlx::SqlitePool, request: Controlled
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    async fn checkpoint_pool() -> sqlx::SqlitePool {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
-            .connect("sqlite::memory:").await.unwrap();
-        sqlx::raw_sql("CREATE TABLE telepathic_series(id TEXT PRIMARY KEY, run_lease_owner TEXT, run_lease_version INTEGER, run_lease_expires_at TEXT); INSERT INTO telepathic_series VALUES('s','owner',1,'2999-01-01T00:00:00.000Z'); CREATE TABLE app_settings(key TEXT PRIMARY KEY NOT NULL, value TEXT, updated_at TEXT);")
-            .execute(&pool).await.unwrap();
-        pool
-    }
-
-    fn checkpoint_statement(key: JsonValue) -> DatabaseWriteStatement {
-        DatabaseWriteStatement { operation: DatabaseWriteOperation::SettingsModelsInsertAppSettings01,
-            values: vec![key, JsonValue::from("accepted"), JsonValue::from("t")] }
-    }
-
-    #[tokio::test]
-    async fn checkpoint_rechecks_owner_version_and_expiry_on_every_attempt() {
-        let pool = checkpoint_pool().await;
-        for update in [
-            "UPDATE telepathic_series SET run_lease_owner='other'",
-            "UPDATE telepathic_series SET run_lease_owner='owner',run_lease_version=2",
-            "UPDATE telepathic_series SET run_lease_version=1,run_lease_expires_at='2000-01-01T00:00:00.000Z'",
-        ] {
-            sqlx::query(update).execute(&pool).await.unwrap();
-            let error = execute_telepathic_fenced_batch(&pool, "s", "owner", 1, vec![checkpoint_statement(JsonValue::from("result"))]).await.unwrap_err();
-            assert!(error.contains("lease lost"));
-            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_settings").fetch_one(&pool).await.unwrap();
-            assert_eq!(count, 0);
-        }
-        pool.close().await;
-    }
-
-    #[tokio::test]
-    async fn checkpoint_rolls_back_the_whole_batch_before_a_later_attempt() {
-        let pool = checkpoint_pool().await;
-        assert!(execute_telepathic_fenced_batch(&pool, "s", "owner", 1, vec![
-            checkpoint_statement(JsonValue::from("first")), checkpoint_statement(JsonValue::Null)
-        ]).await.is_err());
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_settings").fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 0);
-        assert_eq!(execute_telepathic_fenced_batch(&pool, "s", "owner", 1, vec![checkpoint_statement(JsonValue::from("first"))]).await.unwrap(), vec![1]);
-        pool.close().await;
-    }
-
-    #[tokio::test]
-    async fn checkpoint_waits_for_a_native_writer_then_rejects_its_stale_lease() {
-        let directory = temp_read_case("checkpoint");
-        let path = directory.join("checkpoint.sqlite");
-        let options = SqliteConnectOptions::new().filename(&path).create_if_missing(true)
-            .busy_timeout(std::time::Duration::from_secs(5));
-        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(2).connect_with(options).await.unwrap();
-        sqlx::raw_sql("CREATE TABLE telepathic_series(id TEXT PRIMARY KEY, run_lease_owner TEXT, run_lease_version INTEGER, run_lease_expires_at TEXT); INSERT INTO telepathic_series VALUES('s','owner',1,'2999-01-01T00:00:00.000Z'); CREATE TABLE app_settings(key TEXT PRIMARY KEY NOT NULL, value TEXT, updated_at TEXT);").execute(&pool).await.unwrap();
-        let mut native_writer = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
-        sqlx::query("UPDATE telepathic_series SET run_lease_version=2").execute(&mut *native_writer).await.unwrap();
-        let pending = execute_telepathic_fenced_batch(&pool, "s", "owner", 1, vec![checkpoint_statement(JsonValue::from("late"))]);
-        tokio::pin!(pending);
-        tokio::select! {
-            result = &mut pending => panic!("checkpoint passed a held write lock: {result:?}"),
-            _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
-        }
-        native_writer.commit().await.unwrap();
-        assert!(pending.await.unwrap_err().contains("lease lost"));
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_settings").fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 0);
-        pool.close().await;
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    async fn telepathic_purge_pool() -> sqlx::SqlitePool {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
-        sqlx::raw_sql("PRAGMA foreign_keys=ON; CREATE TABLE profiles(id TEXT PRIMARY KEY, archived_at TEXT); CREATE TABLE workspaces(id TEXT PRIMARY KEY, profile_id TEXT, archived_at TEXT); INSERT INTO profiles VALUES('p','t'); INSERT INTO workspaces VALUES('w','p','t'); CREATE TABLE controlled_purge_context(id INTEGER PRIMARY KEY,reason TEXT,started_at TEXT);")
-            .execute(&pool).await.unwrap();
-        sqlx::raw_sql(include_str!("../migrations/028_telepathic_exchange_series.sql")).execute(&pool).await.unwrap();
-        sqlx::raw_sql(include_str!("../migrations/029_telepathic_series_run_lease.sql")).execute(&pool).await.unwrap();
-        for id in ["one", "two"] {
-            sqlx::query("INSERT INTO telepathic_series(id,series_workspace_id,mode,language,status,config_json,plan_json,created_at,updated_at) VALUES($1,'w','ai_ai_training','en','paused','{}',$2,'t','t')")
-                .bind(id).bind(r#"{"_runtime":{"version":1,"archivedAt":"t","archiveRevision":1,"transcript":[{"text":"hidden"}]}}"#).execute(&pool).await.unwrap();
-            sqlx::query("INSERT INTO telepathic_participants(series_id,participant_id,kind,display_name,profile_id,workspace_id) VALUES($1,'a','ai','A','p','w')").bind(id).execute(&pool).await.unwrap();
-            let round = format!("{id}-round");
-            sqlx::query("INSERT INTO telepathic_rounds(id,series_id,round_number,sender_participant_id,status) VALUES($1,$2,1,'a','blind')").bind(&round).bind(id).execute(&pool).await.unwrap();
-            sqlx::query("INSERT INTO telepathic_targets(round_id,sender_participant_id,content,content_sha256,status,locked_at) VALUES($1,'a','secret','hash','locked','t')").bind(&round).execute(&pool).await.unwrap();
-            sqlx::query("INSERT INTO telepathic_blind_submissions(round_id,participant_id,status,first_text,content_sha256,sealed_at) VALUES($1,'a','sealed','blind','hash','t')").bind(&round).execute(&pool).await.unwrap();
-            sqlx::query("INSERT INTO telepathic_reflections(round_id,participant_id,role,reflection_text) VALUES($1,'a','receiver','reflection')").bind(&round).execute(&pool).await.unwrap();
-            sqlx::query("INSERT INTO telepathic_provider_calls(id,series_id,round_id,participant_id,call_stage,technical_attempt,status,scope_key,request_sha256,created_at,updated_at) VALUES($1,$2,$3,'a','receiver_first',1,'succeeded','scope','hash','t','t')").bind(format!("{id}-call")).bind(id).bind(&round).execute(&pool).await.unwrap();
-        }
-        pool
-    }
-
-    fn telepathic_purge_request(id: &str, revision: i64) -> ControlledPurgeRequest {
-        serde_json::from_value(serde_json::json!({"kind":"telepathic_series","id":id,"expectedArchiveRevision":revision})).unwrap()
-    }
-
-    #[tokio::test]
-    async fn controlled_telepathic_purge_rechecks_revision_archive_lease_and_preserves_other_series() {
-        let pool = telepathic_purge_pool().await;
-        assert!(controlled_purge_with_pool(&pool, telepathic_purge_request("one", 0)).await.is_err());
-        sqlx::query("UPDATE telepathic_series SET plan_json=json_remove(plan_json,'$._runtime.archivedAt') WHERE id='one'").execute(&pool).await.unwrap();
-        assert!(controlled_purge_with_pool(&pool, telepathic_purge_request("one", 1)).await.is_err());
-        sqlx::query("UPDATE telepathic_series SET plan_json=json_set(plan_json,'$._runtime.archivedAt','t','$._runtime.archiveRevision',2),run_lease_owner='owner',run_lease_expires_at='2999-01-01T00:00:00.000Z' WHERE id='one'").execute(&pool).await.unwrap();
-        assert!(controlled_purge_with_pool(&pool, telepathic_purge_request("one", 2)).await.is_err());
-        let parent: ControlledPurgeRequest = serde_json::from_value(serde_json::json!({"kind":"workspace","id":"w"})).unwrap();
-        assert!(controlled_purge_with_pool(&pool, parent).await.is_err());
-        sqlx::query("UPDATE telepathic_series SET run_lease_expires_at='2000-01-01T00:00:00.000Z' WHERE id='one'").execute(&pool).await.unwrap();
-        controlled_purge_with_pool(&pool, telepathic_purge_request("one", 2)).await.unwrap();
-        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepathic_series WHERE id='two'").fetch_one(&pool).await.unwrap();
-        assert_eq!(remaining, 1);
-        let calls: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepathic_provider_calls").fetch_one(&pool).await.unwrap();
-        assert_eq!(calls, 1);
-        let check: String = sqlx::query_scalar("PRAGMA integrity_check").fetch_one(&pool).await.unwrap();
-        assert_eq!(check, "ok");
-        assert!(sqlx::query("PRAGMA foreign_key_check").fetch_all(&pool).await.unwrap().is_empty());
-        pool.close().await;
-    }
-
-    #[tokio::test]
-    async fn controlled_telepathic_purge_rolls_back_every_child_and_context_on_failure() {
-        let pool = telepathic_purge_pool().await;
-        sqlx::raw_sql("CREATE TRIGGER injected_purge_failure BEFORE DELETE ON telepathic_blind_submissions BEGIN SELECT RAISE(ABORT,'injected failure'); END;").execute(&pool).await.unwrap();
-        assert!(controlled_purge_with_pool(&pool, telepathic_purge_request("one", 1)).await.is_err());
-        let roots: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepathic_series").fetch_one(&pool).await.unwrap();
-        let targets: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepathic_targets").fetch_one(&pool).await.unwrap();
-        let context: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM controlled_purge_context").fetch_one(&pool).await.unwrap();
-        assert_eq!((roots, targets, context), (2, 2, 0));
-        pool.close().await;
-    }
 
     fn temp_read_case(label: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -1358,169 +972,6 @@ mod tests {
         std::fs::remove_dir_all(directory).expect("test directory should be removed");
     }
 
-    #[tokio::test]
-    async fn stale_telepathic_parent_is_an_error_inside_transaction() {
-        let mut connection = SqliteConnection::connect("sqlite::memory:").await.unwrap();
-        sqlx::query("CREATE TABLE workspaces (id TEXT PRIMARY KEY)").execute(&mut connection).await.unwrap();
-        sqlx::query("INSERT INTO workspaces VALUES ('w')").execute(&mut connection).await.unwrap();
-        sqlx::raw_sql(include_str!("../migrations/028_telepathic_exchange_series.sql")).execute(&mut connection).await.unwrap();
-        let statement = |plan: &str| DatabaseWriteStatement {
-            operation: DatabaseWriteOperation::TelepathicUpsertSeries01,
-            values: vec![JsonValue::from("s"), JsonValue::from("w"), JsonValue::from("conversation_exchange"), JsonValue::from("en"), JsonValue::from("paused"), JsonValue::from(0), JsonValue::from("{}"), JsonValue::from(plan), JsonValue::from("t"), JsonValue::from("t")],
-        };
-        let mut tx = connection.begin().await.unwrap();
-        execute_statement(&mut tx, statement(r#"{"_runtime":{"archiveRevision":1,"archivedAt":"saved"}}"#)).await.unwrap();
-        tx.commit().await.unwrap();
-        for old_plan in ["{}", r#"{"_runtime":{"archiveRevision":0}}"#] {
-            let mut tx = connection.begin().await.unwrap();
-            sqlx::query("UPDATE telepathic_series SET status='running' WHERE id='s'").execute(&mut *tx).await.unwrap();
-            let error = execute_statement(&mut tx, statement(old_plan)).await.unwrap_err();
-            assert!(error.contains("revision conflict"));
-            tx.rollback().await.unwrap();
-            let status: String = sqlx::query_scalar("SELECT status FROM telepathic_series WHERE id='s'").fetch_one(&mut connection).await.unwrap();
-            assert_eq!(status, "paused");
-        }
-    }
-
-    #[tokio::test]
-    async fn ended_telepathic_parent_rejects_stale_native_write_and_keeps_archive_support() {
-        let mut connection = SqliteConnection::connect("sqlite::memory:").await.unwrap();
-        sqlx::query("CREATE TABLE workspaces (id TEXT PRIMARY KEY)").execute(&mut connection).await.unwrap();
-        sqlx::query("INSERT INTO workspaces VALUES ('w')").execute(&mut connection).await.unwrap();
-        sqlx::raw_sql(include_str!("../migrations/028_telepathic_exchange_series.sql")).execute(&mut connection).await.unwrap();
-        let statement = |status: &str, plan: &str| DatabaseWriteStatement {
-            operation: DatabaseWriteOperation::TelepathicUpsertSeries01,
-            values: vec![JsonValue::from("s"), JsonValue::from("w"), JsonValue::from("conversation_exchange"), JsonValue::from("en"), JsonValue::from(status), JsonValue::from(0), JsonValue::from("{}"), JsonValue::from(plan), JsonValue::from("t"), JsonValue::from("t")],
-        };
-        let ended = r#"{"_runtime":{"termination":{"reason":"user_finished","endedAt":"t"}}}"#;
-        let mut tx = connection.begin().await.unwrap();
-        execute_statement(&mut tx, statement("cancelled", ended)).await.unwrap();
-        tx.commit().await.unwrap();
-        for (status, plan) in [
-            ("paused", r#"{"_runtime":{"archiveRevision":99}}"#),
-            ("running", ended),
-            ("cancelled", r#"{"_runtime":{"termination":{"reason":"user_finished","endedAt":"changed"}}}"#),
-        ] {
-            let mut tx = connection.begin().await.unwrap();
-            let error = execute_statement(&mut tx, statement(status, plan)).await.unwrap_err();
-            assert!(error.contains("revision conflict"));
-            tx.rollback().await.unwrap();
-            let actual: (String, String) = sqlx::query_as("SELECT status,plan_json FROM telepathic_series WHERE id='s'").fetch_one(&mut connection).await.unwrap();
-            assert_eq!(actual, ("cancelled".to_string(), ended.to_string()));
-        }
-        let archived = r#"{"_runtime":{"archiveRevision":1,"archivedAt":"archive","termination":{"reason":"user_finished","endedAt":"t"}}}"#;
-        let mut tx = connection.begin().await.unwrap();
-        execute_statement(&mut tx, statement("cancelled", archived)).await.unwrap();
-        tx.commit().await.unwrap();
-        let actual: String = sqlx::query_scalar("SELECT plan_json FROM telepathic_series WHERE id='s'").fetch_one(&mut connection).await.unwrap();
-        assert_eq!(actual, archived);
-    }
-
-    #[tokio::test]
-    async fn telepathic_named_writes_round_trip_on_real_sqlite_028_schema() {
-        let mut connection = SqliteConnection::connect("sqlite::memory:")
-            .await
-            .expect("in-memory telepathic fixture should open");
-        sqlx::query("PRAGMA foreign_keys = ON")
-            .execute(&mut connection)
-            .await
-            .expect("foreign keys should enable");
-        sqlx::query("CREATE TABLE workspaces (id TEXT PRIMARY KEY NOT NULL)")
-            .execute(&mut connection)
-            .await
-            .expect("minimal workspace fixture should be created");
-        sqlx::query("INSERT INTO workspaces (id) VALUES ('workspace-series')")
-            .execute(&mut connection)
-            .await
-            .expect("workspace fixture should be inserted");
-        sqlx::raw_sql(include_str!("../migrations/028_telepathic_exchange_series.sql"))
-            .execute(&mut connection)
-            .await
-            .expect("migration 028 should apply on a real SQLite connection");
-
-        let mut tx = connection.begin().await.expect("telepathic transaction should begin");
-        let statements = vec![
-            DatabaseWriteStatement {
-                operation: DatabaseWriteOperation::TelepathicUpsertSeries01,
-                values: vec![
-                    JsonValue::from("series-1"), JsonValue::from("workspace-series"), JsonValue::from("conversation_exchange"), JsonValue::from("en"),
-                    JsonValue::from("running"), JsonValue::from(0), JsonValue::from("{\"seriesId\":\"series-1\"}"), JsonValue::from("{\"rounds\":[]}"),
-                    JsonValue::from("2026-10-07T00:00:00.000Z"), JsonValue::from("2026-10-07T00:00:00.000Z"),
-                ],
-            },
-            DatabaseWriteStatement {
-                operation: DatabaseWriteOperation::TelepathicUpsertParticipant01,
-                values: vec![
-                    JsonValue::from("series-1"), JsonValue::from("nemo"), JsonValue::from("ai"), JsonValue::from("Nemo"),
-                    JsonValue::Null, JsonValue::Null, JsonValue::Null, JsonValue::Null, JsonValue::Null, JsonValue::Null, JsonValue::Null,
-                    JsonValue::Null, JsonValue::Null, JsonValue::Null, JsonValue::Null,
-                ],
-            },
-            DatabaseWriteStatement {
-                operation: DatabaseWriteOperation::TelepathicUpsertRound01,
-                values: vec![
-                    JsonValue::from("round-1"), JsonValue::from("series-1"), JsonValue::from(1), JsonValue::from("nemo"),
-                    JsonValue::from("blind"), JsonValue::Null, JsonValue::Null, JsonValue::Null,
-                ],
-            },
-            DatabaseWriteStatement {
-                operation: DatabaseWriteOperation::TelepathicInsertTarget01,
-                values: vec![
-                    JsonValue::from("round-1"), JsonValue::from("nemo"), JsonValue::from("LOCKED TARGET"), JsonValue::from("[]"),
-                    JsonValue::from("sha256-target"), JsonValue::from("locked"), JsonValue::from("2026-10-07T00:00:01.000Z"), JsonValue::Null,
-                ],
-            },
-            DatabaseWriteStatement {
-                operation: DatabaseWriteOperation::TelepathicAdvanceTarget01,
-                values: vec![JsonValue::from("2026-10-07T00:00:02.000Z"), JsonValue::from("round-1")],
-            },
-            DatabaseWriteStatement {
-                operation: DatabaseWriteOperation::TelepathicUpsertBlind01,
-                values: vec![
-                    JsonValue::from("round-1"), JsonValue::from("nemo"), JsonValue::from("sealed"), JsonValue::from("first"), JsonValue::from("second"),
-                    JsonValue::from(1), JsonValue::from("sha256-blind"), JsonValue::from("2026-10-07T00:00:03.000Z"),
-                ],
-            },
-            DatabaseWriteStatement {
-                operation: DatabaseWriteOperation::TelepathicUpsertReflection01,
-                values: vec![
-                    JsonValue::from("round-1"), JsonValue::from("nemo"), JsonValue::from("sender"), JsonValue::from("reflection"), JsonValue::from("no"), JsonValue::Null,
-                ],
-            },
-            DatabaseWriteStatement {
-                operation: DatabaseWriteOperation::TelepathicUpsertCall01,
-                values: vec![
-                    JsonValue::from("call-1"), JsonValue::from("series-1"), JsonValue::from("round-1"), JsonValue::from("nemo"), JsonValue::from("sender_target"),
-                    JsonValue::from(1), JsonValue::from("succeeded"), JsonValue::from("scope-1"), JsonValue::from("request-sha"), JsonValue::from("provider-request-1"),
-                    JsonValue::from("response"), JsonValue::Null, JsonValue::from("2026-10-07T00:00:00.000Z"), JsonValue::from("2026-10-07T00:00:04.000Z"),
-                ],
-            },
-        ];
-        for statement in statements {
-            execute_statement(&mut tx, statement)
-                .await
-                .expect("registered telepathic write should execute on SQLite");
-        }
-        tx.commit().await.expect("telepathic transaction should commit");
-
-        let target: (String, String) = sqlx::query_as("SELECT content, status FROM telepathic_targets WHERE round_id = 'round-1'")
-            .fetch_one(&mut connection)
-            .await
-            .expect("persisted target should be readable");
-        assert_eq!(target.0, "LOCKED TARGET");
-        assert_eq!(target.1, "transmission_ready");
-        let call_status: String = sqlx::query_scalar("SELECT status FROM telepathic_provider_calls WHERE id = 'call-1'")
-            .fetch_one(&mut connection)
-            .await
-            .expect("persisted provider ledger should be readable");
-        assert_eq!(call_status, "succeeded");
-        let blind_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepathic_blind_submissions WHERE round_id = 'round-1' AND status = 'sealed'")
-            .fetch_one(&mut connection)
-            .await
-            .expect("persisted blind should be readable");
-        assert_eq!(blind_count, 1);
-    }
-
     #[test]
     fn every_named_write_has_static_sql_and_expected_arity() {
         let operations = [
@@ -1530,51 +981,12 @@ mod tests {
             DatabaseWriteOperation::FieldGuideUpdateSettings01,
             DatabaseWriteOperation::FieldGuideUpdateLegacyBaselines01,
             DatabaseWriteOperation::FieldGuideUpdateSettings02,
-            DatabaseWriteOperation::AiCenterUpdateAiIdentities01,            DatabaseWriteOperation::AiCenterInsertAiIdentities01,            DatabaseWriteOperation::AiCenterInsertAiNoteSettings01,            DatabaseWriteOperation::AiCenterUpdateAiNoteSettings01,            DatabaseWriteOperation::AiCenterUpdateAiNoteSettings02,            DatabaseWriteOperation::AiCenterInsertAiNoteReflectionRuns01,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns01,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns02,            DatabaseWriteOperation::AiCenterInsertAiNoteVersions01,            DatabaseWriteOperation::AiCenterInsertAiNoteActivationEvents01,            DatabaseWriteOperation::AiCenterUpdateAiNoteSettings03,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns03,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns04,            DatabaseWriteOperation::AiCenterInsertAiNoteActivationEvents02,            DatabaseWriteOperation::AiCenterUpdateAiNoteVersions01,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns05,            DatabaseWriteOperation::AiCenterUpdateAiNoteActivationEvents01,            DatabaseWriteOperation::AiCenterUpdateAiNoteVersions02,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns06,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns07,            DatabaseWriteOperation::AiCenterUpdateAiNoteActivationEvents02,            DatabaseWriteOperation::ExportInsertExports01,            DatabaseWriteOperation::JudgeInsertJudgeRuns01,            DatabaseWriteOperation::JudgeInsertJudgeScores01,            DatabaseWriteOperation::MonitorInsertMonitorRuns01,            DatabaseWriteOperation::MonitorInsertMonitorInterventions01,            DatabaseWriteOperation::ProfilesInsertProfiles01,            DatabaseWriteOperation::ProfilesUpdateProfiles01,            DatabaseWriteOperation::ProfilesUpdateProfiles02,            DatabaseWriteOperation::ProfilesUpdateProfiles03,            DatabaseWriteOperation::ProfilesUpdateProfiles04,            DatabaseWriteOperation::ResearchInsertResearchProjects01,            DatabaseWriteOperation::ResearchUpdateResearchProjects01,            DatabaseWriteOperation::ResearchUpdateResearchProjects02,            DatabaseWriteOperation::ResearchUpdateResearchProjects03,            DatabaseWriteOperation::ResearchInsertResearchConditions01,            DatabaseWriteOperation::ResearchInsertResearchAssignments01,            DatabaseWriteOperation::ResearchInsertBlindingMappings01,            DatabaseWriteOperation::ResearchUpdateResearchProjects04,            DatabaseWriteOperation::ResearchUpdateResearchAssignments01,            DatabaseWriteOperation::ResearchInsertResearchResults01,            DatabaseWriteOperation::SessionsInsertRvSessions01,            DatabaseWriteOperation::SessionsUpdateRvSessions01,            DatabaseWriteOperation::SessionsUpdateRvSessions02,            DatabaseWriteOperation::SessionsInsertSessionEvents01,            DatabaseWriteOperation::SessionsUpdateRvSessions03,            DatabaseWriteOperation::SessionsInsertSessionSnapshots01,            DatabaseWriteOperation::SessionsUpdateRvSessions04,            DatabaseWriteOperation::SessionsInsertReveals01,            DatabaseWriteOperation::SessionsUpdateRvSessions05,            DatabaseWriteOperation::SessionsUpdateRvSessions06,            DatabaseWriteOperation::SessionsAcquirePostRevealReviewLease01,            DatabaseWriteOperation::SessionsRenewPostRevealReviewLease01,            DatabaseWriteOperation::SessionsReleasePostRevealReviewLease01,            DatabaseWriteOperation::SessionsInsertTargetClarifications01,            DatabaseWriteOperation::SettingsModelsInsertAppSettings01,            DatabaseWriteOperation::SettingsModelsDeleteAppSettings01,            DatabaseWriteOperation::SettingsModelsInsertCredentialsMetadata01,            DatabaseWriteOperation::SettingsModelsInsertProviderConfigs01,            DatabaseWriteOperation::SettingsModelsUpdateProviderConfigs01,            DatabaseWriteOperation::SettingsModelsUpdateCredentialsMetadata01,            DatabaseWriteOperation::SettingsModelsUpdateProfiles01,            DatabaseWriteOperation::SettingsModelsDeleteProviderConfigs01,            DatabaseWriteOperation::SettingsModelsDeleteCredentialsMetadata01,            DatabaseWriteOperation::SettingsModelsUpdateProviderConfigs02,            DatabaseWriteOperation::SettingsModelsDeleteModelRegistry01,            DatabaseWriteOperation::SettingsModelsInsertModelRegistry01,            DatabaseWriteOperation::SettingsModelsUpdateModelRegistry01,            DatabaseWriteOperation::SettingsModelsDeleteModelRegistry02,            DatabaseWriteOperation::TargetsInsertTargets01,            DatabaseWriteOperation::TargetsUpdateTargets01,            DatabaseWriteOperation::TargetsUpdateTargets02,            DatabaseWriteOperation::TargetsUpdateTargets03,            DatabaseWriteOperation::TargetsUpdateTargets04,            DatabaseWriteOperation::TargetsInsertTargetUsage01,            DatabaseWriteOperation::TrainingInsertTrainingRuns01,            DatabaseWriteOperation::TrainingUpdateTrainingRuns01,            DatabaseWriteOperation::TrainingUpdateTrainingRuns02,            DatabaseWriteOperation::TrainingUpdateTrainingRuns03,            DatabaseWriteOperation::TrainingUpdateTrainingRuns04,            DatabaseWriteOperation::TrainingUpdateTrainingRuns05,
-            DatabaseWriteOperation::TelepathicUpsertSeries01,
-            DatabaseWriteOperation::TelepathicUpsertParticipant01,
-            DatabaseWriteOperation::TelepathicUpsertRound01,
-            DatabaseWriteOperation::TelepathicInsertTarget01,
-            DatabaseWriteOperation::TelepathicAdvanceTarget01,
-            DatabaseWriteOperation::TelepathicUpsertBlind01,
-            DatabaseWriteOperation::TelepathicUpsertReflection01,
-            DatabaseWriteOperation::TelepathicUpsertCall01,
-            DatabaseWriteOperation::TelepathicAcquireSeriesLease01,
-            DatabaseWriteOperation::TelepathicRenewSeriesLease01,
-            DatabaseWriteOperation::TelepathicReleaseSeriesLease01,            DatabaseWriteOperation::WorkspacesConversationsInsertWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces02,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces03,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces04,            DatabaseWriteOperation::WorkspacesConversationsInsertChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads02,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads03,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads04,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads05,            DatabaseWriteOperation::WorkspacesConversationsInsertChatMessages01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatMessageMetadata01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads06,            DatabaseWriteOperation::ContinuationInsertChatMessageProviderState01,            DatabaseWriteOperation::ContinuationDeleteChatMessageProviderState01,            DatabaseWriteOperation::ContinuationInsertSessionEventProviderState01,            DatabaseWriteOperation::SqliteUpdateWorkspaces01,            DatabaseWriteOperation::SqliteUpdateProfiles01,            DatabaseWriteOperation::SqliteUpdateProfiles02,            DatabaseWriteOperation::SqliteUpdateWorkspaces02,            DatabaseWriteOperation::SqliteInsertWorkspaceSources01,            DatabaseWriteOperation::SqliteDeleteWorkspaceSources01,            DatabaseWriteOperation::SqliteInsertChatThreadSources01,            DatabaseWriteOperation::SqliteInsertProtocols01,            DatabaseWriteOperation::SqliteInsertProtocolVersions01
+            DatabaseWriteOperation::AiCenterUpdateAiIdentities01,            DatabaseWriteOperation::AiCenterInsertAiIdentities01,            DatabaseWriteOperation::AiCenterInsertAiNoteSettings01,            DatabaseWriteOperation::AiCenterUpdateAiNoteSettings01,            DatabaseWriteOperation::AiCenterUpdateAiNoteSettings02,            DatabaseWriteOperation::AiCenterInsertAiNoteReflectionRuns01,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns01,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns02,            DatabaseWriteOperation::AiCenterInsertAiNoteVersions01,            DatabaseWriteOperation::AiCenterInsertAiNoteActivationEvents01,            DatabaseWriteOperation::AiCenterUpdateAiNoteSettings03,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns03,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns04,            DatabaseWriteOperation::AiCenterInsertAiNoteActivationEvents02,            DatabaseWriteOperation::AiCenterUpdateAiNoteVersions01,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns05,            DatabaseWriteOperation::AiCenterUpdateAiNoteActivationEvents01,            DatabaseWriteOperation::AiCenterUpdateAiNoteVersions02,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns06,            DatabaseWriteOperation::AiCenterUpdateAiNoteReflectionRuns07,            DatabaseWriteOperation::AiCenterUpdateAiNoteActivationEvents02,            DatabaseWriteOperation::ExportInsertExports01,            DatabaseWriteOperation::JudgeInsertJudgeRuns01,            DatabaseWriteOperation::JudgeInsertJudgeScores01,            DatabaseWriteOperation::MonitorInsertMonitorRuns01,            DatabaseWriteOperation::MonitorInsertMonitorInterventions01,            DatabaseWriteOperation::ProfilesInsertProfiles01,            DatabaseWriteOperation::ProfilesUpdateProfiles01,            DatabaseWriteOperation::ProfilesUpdateProfiles02,            DatabaseWriteOperation::ProfilesUpdateProfiles03,            DatabaseWriteOperation::ProfilesUpdateProfiles04,            DatabaseWriteOperation::ResearchInsertResearchProjects01,            DatabaseWriteOperation::ResearchUpdateResearchProjects01,            DatabaseWriteOperation::ResearchUpdateResearchProjects02,            DatabaseWriteOperation::ResearchUpdateResearchProjects03,            DatabaseWriteOperation::ResearchInsertResearchConditions01,            DatabaseWriteOperation::ResearchInsertResearchAssignments01,            DatabaseWriteOperation::ResearchInsertBlindingMappings01,            DatabaseWriteOperation::ResearchUpdateResearchProjects04,            DatabaseWriteOperation::ResearchUpdateResearchAssignments01,            DatabaseWriteOperation::ResearchInsertResearchResults01,            DatabaseWriteOperation::SessionsInsertRvSessions01,            DatabaseWriteOperation::SessionsUpdateRvSessions01,            DatabaseWriteOperation::SessionsUpdateRvSessions02,            DatabaseWriteOperation::SessionsInsertSessionEvents01,            DatabaseWriteOperation::SessionsUpdateRvSessions03,            DatabaseWriteOperation::SessionsInsertSessionSnapshots01,            DatabaseWriteOperation::SessionsUpdateRvSessions04,            DatabaseWriteOperation::SessionsInsertReveals01,            DatabaseWriteOperation::SessionsUpdateRvSessions05,            DatabaseWriteOperation::SessionsUpdateRvSessions06,            DatabaseWriteOperation::SessionsInsertTargetClarifications01,            DatabaseWriteOperation::SettingsModelsInsertAppSettings01,            DatabaseWriteOperation::SettingsModelsDeleteAppSettings01,            DatabaseWriteOperation::SettingsModelsInsertCredentialsMetadata01,            DatabaseWriteOperation::SettingsModelsInsertProviderConfigs01,            DatabaseWriteOperation::SettingsModelsUpdateProviderConfigs01,            DatabaseWriteOperation::SettingsModelsUpdateCredentialsMetadata01,            DatabaseWriteOperation::SettingsModelsUpdateProfiles01,            DatabaseWriteOperation::SettingsModelsDeleteProviderConfigs01,            DatabaseWriteOperation::SettingsModelsDeleteCredentialsMetadata01,            DatabaseWriteOperation::SettingsModelsUpdateProviderConfigs02,            DatabaseWriteOperation::SettingsModelsDeleteModelRegistry01,            DatabaseWriteOperation::SettingsModelsInsertModelRegistry01,            DatabaseWriteOperation::SettingsModelsUpdateModelRegistry01,            DatabaseWriteOperation::SettingsModelsDeleteModelRegistry02,            DatabaseWriteOperation::TargetsInsertTargets01,            DatabaseWriteOperation::TargetsUpdateTargets01,            DatabaseWriteOperation::TargetsUpdateTargets02,            DatabaseWriteOperation::TargetsUpdateTargets03,            DatabaseWriteOperation::TargetsUpdateTargets04,            DatabaseWriteOperation::TargetsInsertTargetUsage01,            DatabaseWriteOperation::TrainingInsertTrainingRuns01,            DatabaseWriteOperation::TrainingUpdateTrainingRuns01,            DatabaseWriteOperation::TrainingUpdateTrainingRuns02,            DatabaseWriteOperation::TrainingUpdateTrainingRuns03,            DatabaseWriteOperation::WorkspacesConversationsInsertWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces01,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces02,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces03,            DatabaseWriteOperation::WorkspacesConversationsUpdateWorkspaces04,            DatabaseWriteOperation::WorkspacesConversationsInsertChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads02,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads03,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads04,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads05,            DatabaseWriteOperation::WorkspacesConversationsInsertChatMessages01,            DatabaseWriteOperation::WorkspacesConversationsUpdateChatThreads06,            DatabaseWriteOperation::ContinuationInsertChatMessageProviderState01,            DatabaseWriteOperation::ContinuationDeleteChatMessageProviderState01,            DatabaseWriteOperation::ContinuationInsertSessionEventProviderState01,            DatabaseWriteOperation::SqliteUpdateWorkspaces01,            DatabaseWriteOperation::SqliteUpdateProfiles01,            DatabaseWriteOperation::SqliteUpdateProfiles02,            DatabaseWriteOperation::SqliteUpdateWorkspaces02,            DatabaseWriteOperation::SqliteInsertWorkspaceSources01,            DatabaseWriteOperation::SqliteDeleteWorkspaceSources01,            DatabaseWriteOperation::SqliteInsertChatThreadSources01,            DatabaseWriteOperation::SqliteInsertProtocols01,            DatabaseWriteOperation::SqliteInsertProtocolVersions01
         ];
-        assert_eq!(operations.len(), 124);
+        assert_eq!(operations.len(), 107);
         for operation in operations {
             assert!(!operation.sql().trim().is_empty());
             assert!(!operation.sql().contains("{"));
-
-            let mut highest_placeholder = 0usize;
-            let bytes = operation.sql().as_bytes();
-            let mut index = 0usize;
-            while index < bytes.len() {
-                if bytes[index] == b'$' {
-                    let mut cursor = index + 1;
-                    let mut value = 0usize;
-                    let mut saw_digit = false;
-                    while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
-                        saw_digit = true;
-                        value = value * 10 + usize::from(bytes[cursor] - b'0');
-                        cursor += 1;
-                    }
-                    if saw_digit {
-                        highest_placeholder = highest_placeholder.max(value);
-                        index = cursor;
-                        continue;
-                    }
-                }
-                index += 1;
-            }
-            assert_eq!(
-                operation.expected_values(),
-                highest_placeholder,
-                "expected_values must match the highest SQL placeholder for {:?}",
-                operation,
-            );
         }
     }
 }

@@ -1,9 +1,6 @@
 # UX-DATA compatibility gate
 
-> **Documentation scope:** `ai-rv-2` development source through Training Continuity T5; reviewed 16 October 2026 against commit `9c92bdbb94d1125406e0094779102458cdeee87c`. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
-> **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
-
-**Status:** current v0.7.14 development architecture guard
+**Status:** current released v0.7.13 architecture guard
 **Introduced:** UX-DATA-9, 10 September 2026
 
 ## Purpose
@@ -16,7 +13,7 @@ The gate is intentionally conservative. It does **not** remove dormant legacy sc
 
 `npm run verify:ux-data` runs `scripts/verify-ux-data-compatibility.mjs` and checks that:
 
-- migrations remain contiguous and registered through `031_post_reveal_review_lease.sql`;
+- migrations remain contiguous and registered through `027_factory_training_classification_upgrade.sql`;
 - browser-native Confirm/Prompt/Alert calls remain private to the shared `AppDialogProvider` fallback;
 - `ChatThreadGroup` lifecycle does not return to production code;
 - the SQLite Conversation adapter still reads legacy `thread_group_id` while new rows store `NULL` and do not operate on `chat_thread_groups`;
@@ -53,14 +50,10 @@ The test then applies migration 024 and requires all of the following:
 6. `controlled_purge_context` remains available and empty outside a purge transaction;
 7. `PRAGMA foreign_key_check` reports no violations.
 
-The v24 → v25 gate additionally requires both provider-state tables, preserves pre-existing Conversation data, verifies foreign-key cascades for message/event-owned state, and keeps `PRAGMA foreign_key_check` clean. The v25 → v26 gate assigns the existing Workspace `legacy_combined`, preserves its Conversation/message and RV Session ownership, and verifies the new Workspace-kind index. Fresh-schema and live-validation tests exercise the complete 001 → 031 registry and SQLx checksums.
+The v24 → v25 gate additionally requires both provider-state tables, preserves pre-existing Conversation data, verifies foreign-key cascades for message/event-owned state, and keeps `PRAGMA foreign_key_check` clean. The v25 → v26 gate assigns the existing Workspace `legacy_combined`, preserves its Conversation/message and RV Session ownership, and verifies the new Workspace-kind index. Fresh-schema and live-validation tests exercise the complete 001 → 026 registry and SQLx checksums.
 
 This complements the domain tests for Archive/Restore and controlled purge. It is not a substitute for them.
 
 ## Compatibility policy
 
 A cleanup is acceptable only when it removes code that is no longer part of the product **without** making historical data unreadable. Physical legacy SQLite fields may be removed only in a later dedicated migration with its own old-database fixture, rollback/backup plan and full native CI evidence.
-
-## Current schema-31 extensions
-
-The gate also retains telepathic exchange schema 028, cross-instance lease schema 029, Conversation attachment metadata schema 030, post-Reveal review lease schema 031, and their native current-epoch compatibility gates. Viewer attempt recovery and Training termination reuse existing records/JSON and introduce no migration 032. The exact filenames and accepted gate set are owned by `src-tauri/src/migrations.rs` and `scripts/verify-ux-data-compatibility.mjs`; checklist prose is not a substitute for running the gate.

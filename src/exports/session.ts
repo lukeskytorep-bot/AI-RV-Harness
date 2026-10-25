@@ -1,4 +1,3 @@
-import { focusPasses, sessionFocusLabel } from "../sessions/sessionFocus";
 import type { RevealArtifactRecord, RevealInput } from "../sessions/types";
 import type { AppRepository } from "../storage/repository";
 import type { InterfaceLanguage } from "../types";
@@ -38,7 +37,6 @@ export async function exportSessionRecord(
     title: `${session.sessionCode} — ${language === "pl" ? "pełny zapis sesji" : "complete session record"}`,
     language,
     session,
-    ...(snapshot?.protocol?.id === "telepathic-protocol" ? { events: await repository.listSessionEvents(session.id), sessionLanguage: snapshot.sessionLanguage } : {}),
     revealText: reveal?.text ?? "",
     revealFilesMarkdown: revealFilesMarkdown(reveal),
     scores,
@@ -47,7 +45,7 @@ export async function exportSessionRecord(
       workspace: workspace?.name ?? session.workspaceId,
       profile: profile?.name ?? snapshot?.identities?.aiIsBeDisplayName ?? session.profileId,
       mode,
-      protocol: snapshot ? `${snapshot.protocol.id} ${snapshot.protocol.version}${snapshot.sessionFocus?` · ${focusPasses(snapshot.sessionFocus).length} ${language==="pl"?"sesje":"sessions"}: ${sessionFocusLabel(snapshot.sessionFocus.first,language)}${snapshot.sessionFocus.second?` → ${sessionFocusLabel(snapshot.sessionFocus.second,language)}`:""}`:""}` : undefined,
+      protocol: snapshot ? `${snapshot.protocol.id} ${snapshot.protocol.version}` : undefined,
       viewerModel: snapshot?.modelRoute ?? snapshot?.modelId,
       monitorModel: snapshot?.monitor?.modelRoute ?? snapshot?.monitor?.modelId,
       judgeModels: scores.map((score) => score.modelRoute),

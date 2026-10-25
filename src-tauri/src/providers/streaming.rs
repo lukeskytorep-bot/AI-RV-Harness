@@ -25,7 +25,6 @@ pub(crate) enum ProviderStreamEvent {
 #[derive(Debug)]
 pub(super) struct StreamingChatResult {
     pub(super) payload: Value,
-    pub(super) response_evidence: Box<super::response_evidence::ProviderResponseEvidence>,
     pub(super) request_id: Option<String>,
     pub(super) semantic_output_started: bool,
     pub(super) continuation_diagnostics: ProviderContinuationStreamDiagnostics,
@@ -154,11 +153,17 @@ fn parse_sse_event(event: &[u8]) -> Result<Option<SseFrame>, ProviderCallError> 
     }
 }
 
-use super::reasoning::REASONING_TAGS;
+const LIVE_REASONING_TAGS: [(&str, &str); 6] = [
+    ("<think>", "</think>"),
+    ("<thinking>", "</thinking>"),
+    ("<reason>", "</reason>"),
+    ("<reasoning>", "</reasoning>"),
+    ("<thought>", "</thought>"),
+    ("<|begin_of_thought|>", "<|end_of_thought|>"),
+];
 
 #[derive(Default)]
 struct LiveVisibleContentFilter {
-    final_started: bool,
     pending: String,
     reasoning_close_tag: Option<&'static str>,
 }
@@ -186,7 +191,9 @@ impl LiveVisibleContentFilter {
                             let text = part
                                 .get("text")
                                 .and_then(Value::as_str)
-                                .or_else(|| part.pointer("/text/value").and_then(Value::as_str));
+                                .or_else(|| part.pointer("/text/value").and_then(Value::as_str))
+                                .or_else(|| part.get("thinking").and_then(Value::as_str))
+                                .or_else(|| part.get("reasoning").and_then(Value::as_str));
                             if let Some(text) = text {
                                 visible.push_str(&self.push_text(text));
                             }
@@ -201,7 +208,6 @@ impl LiveVisibleContentFilter {
     }
 
     fn push_text(&mut self, text: &str) -> String {
-        if self.final_started { return text.to_string(); }
         self.pending.push_str(text);
         let mut visible = String::new();
 
@@ -224,20 +230,26 @@ impl LiveVisibleContentFilter {
                 break;
             }
 
-            let trimmed = self.pending.trim_start();
-            if trimmed.is_empty() { break; }
-            let whitespace = self.pending.len() - trimmed.len();
-            let lower = trimmed.to_ascii_lowercase();
-            if let Some((open, close)) = REASONING_TAGS.iter().find(|(open, _)| lower.starts_with(*open)) {
-                self.pending.drain(..whitespace + open.len());
-                self.reasoning_close_tag = Some(*close);
+            let lower = self.pending.to_ascii_lowercase();
+            let next_open = LIVE_REASONING_TAGS
+                .iter()
+                .filter_map(|(open, close)| lower.find(*open).map(|offset| (offset, *open, *close)))
+                .min_by_key(|entry| entry.0);
+
+            if let Some((offset, open, close)) = next_open {
+                visible.push_str(&self.pending[..offset]);
+                self.pending.drain(..offset + open.len());
+                self.reasoning_close_tag = Some(close);
                 continue;
             }
-            // A tag can be split across SSE chunks. Hold only the undecided
-            // leading prefix; never rescan JSON or final prose for later tags.
-            if REASONING_TAGS.iter().any(|(open, _)| open.starts_with(lower.as_str())) { break; }
-            self.final_started = true;
-            visible.push_str(&std::mem::take(&mut self.pending));
+
+            let opens = LIVE_REASONING_TAGS.map(|(open, _)| open);
+            let keep = longest_ascii_suffix_prefix(&self.pending, &opens);
+            let emit_len = self.pending.len().saturating_sub(keep);
+            if emit_len > 0 {
+                visible.push_str(&self.pending[..emit_len]);
+                self.pending.drain(..emit_len);
+            }
             break;
         }
 
@@ -406,25 +418,11 @@ fn merge_openrouter_reasoning_delta(last: &mut Value, next: &Value) -> bool {
     true
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum StreamingFlavor {
-    #[default]
-    OpenRouter,
-    CustomOpenAi,
-    Mistral,
-    Blackbox,
-}
-
 #[derive(Default)]
 pub(super) struct OpenRouterStreamAccumulator {
-    flavor: StreamingFlavor,
     content: String,
     reasoning: String,
     reasoning_details: OpenRouterReasoningDetailsAccumulator,
-    custom_reasoning_details: Vec<Value>,
-    custom_reasoning_details_seen: bool,
-    mistral_content: Vec<Value>,
-    mistral_saw_thinking: bool,
     finish_reason: Option<String>,
     native_finish_reason: Option<String>,
     actual_model: Option<String>,
@@ -440,10 +438,6 @@ pub(super) struct OpenRouterStreamAccumulator {
 }
 
 impl OpenRouterStreamAccumulator {
-    fn custom_openai() -> Self { Self { flavor: StreamingFlavor::CustomOpenAi, ..Self::default() } }
-    fn mistral() -> Self { Self { flavor: StreamingFlavor::Mistral, ..Self::default() } }
-    fn blackbox() -> Self { Self { flavor: StreamingFlavor::Blackbox, ..Self::default() } }
-
     fn process_frame_with_events(&mut self, frame: SseFrame, secret: &str, request_id: Option<&str>) -> Result<Vec<ProviderStreamEvent>, ProviderCallError> {
         match frame {
             SseFrame::Comment => Ok(Vec::new()),
@@ -491,9 +485,14 @@ impl OpenRouterStreamAccumulator {
                 .and_then(|choices| choices.first())
                 .and_then(|choice| choice.get("delta"))
                 .is_some_and(|delta| {
-                    let content = super::reasoning::extract_openai_text(delta.get("content"));
-                    let (native_reasoning, _) = super::reasoning::extract_openai_reasoning(delta, None);
-                    let reasoning = native_reasoning.unwrap_or_default();
+                    let content = stream_text(delta.get("content"));
+                    let reasoning = ["reasoning", "reasoning_content", "thinking"]
+                        .iter()
+                        .find_map(|field| {
+                            let value = stream_text(delta.get(*field));
+                            (!value.is_empty()).then_some(value)
+                        })
+                        .unwrap_or_default();
                     first_semantic_chunk(
                         delta,
                         &content,
@@ -530,30 +529,6 @@ impl OpenRouterStreamAccumulator {
         let Some(choice) = payload.get("choices").and_then(Value::as_array).and_then(|choices| choices.first()) else {
             return Ok(Vec::new());
         };
-        if matches!(self.flavor, StreamingFlavor::Blackbox) {
-            if let Some(choice_error) = choice.get("error").filter(|value| !value.is_null()) {
-                let delta = choice.get("delta").unwrap_or(&Value::Null);
-                let content = super::reasoning::extract_openai_text(delta.get("content"));
-                let (native_reasoning, _) = super::reasoning::extract_openai_reasoning(delta, None);
-                let reasoning = native_reasoning.unwrap_or_default();
-                let event_has_semantic_output = first_semantic_chunk(
-                    delta,
-                    &content,
-                    &reasoning,
-                    delta.get("reasoning_details").and_then(Value::as_array).map(Vec::as_slice),
-                );
-                let mut normalized_error_payload = payload.clone();
-                if let Some(object) = normalized_error_payload.as_object_mut() {
-                    object.insert("error".to_string(), choice_error.clone());
-                }
-                return Err(stream_provider_error(
-                    &normalized_error_payload,
-                    secret,
-                    request_id,
-                    self.semantic_output_started || event_has_semantic_output,
-                ));
-            }
-        }
         if let Some(value) = choice.get("finish_reason").and_then(Value::as_str) {
             self.finish_reason = Some(value.to_string());
         }
@@ -561,9 +536,14 @@ impl OpenRouterStreamAccumulator {
             self.native_finish_reason = Some(value.to_string());
         }
         let delta = choice.get("delta").unwrap_or(&Value::Null);
-        let content = super::reasoning::extract_openai_text(delta.get("content"));
-        let (native_reasoning, _) = super::reasoning::extract_openai_reasoning(delta, None);
-        let reasoning = native_reasoning.unwrap_or_default();
+        let content = stream_text(delta.get("content"));
+        let reasoning = ["reasoning", "reasoning_content", "thinking"]
+            .iter()
+            .find_map(|field| {
+                let value = stream_text(delta.get(*field));
+                (!value.is_empty()).then_some(value)
+            })
+            .unwrap_or_default();
         let reasoning_details_value = delta.get("reasoning_details");
         let reasoning_details = reasoning_details_value.and_then(Value::as_array);
         if first_semantic_chunk(delta, &content, &reasoning, reasoning_details.map(Vec::as_slice)) {
@@ -580,120 +560,17 @@ impl OpenRouterStreamAccumulator {
         if !reasoning.is_empty() {
             self.reasoning.push_str(&reasoning);
         }
-        if self.flavor == StreamingFlavor::OpenRouter {
-            self.reasoning_details.ingest(reasoning_details_value).map_err(|message| {
-                self.error("invalid_provider_json", message, "parsing_body", request_id)
-            })?;
-        } else if let Some(value) = reasoning_details_value {
-            self.custom_reasoning_details_seen = true;
-            match value {
-                Value::Null => {}
-                Value::Array(items) => self.custom_reasoning_details.extend(items.iter().cloned()),
-                _ => return Err(self.error("invalid_provider_json", "provider streaming reasoning_details must be an array or null when present", "parsing_body", request_id)),
-            }
-        }
-        if self.flavor == StreamingFlavor::Mistral {
-            self.ingest_mistral_content(delta.get("content"), request_id)?;
-        }
+        self.reasoning_details.ingest(reasoning_details_value).map_err(|message| {
+            self.error("invalid_provider_json", message, "parsing_body", request_id)
+        })?;
         Ok(events)
-    }
-
-    fn ingest_mistral_content(&mut self, value: Option<&Value>, request_id: Option<&str>) -> Result<(), ProviderCallError> {
-        let Some(value) = value else { return Ok(()); };
-        match value {
-            Value::Null => Ok(()),
-            Value::String(text) => {
-                if !text.is_empty() { self.push_mistral_text(text); }
-                Ok(())
-            }
-            Value::Array(parts) => {
-                for part in parts {
-                    let Some(object) = part.as_object() else {
-                        return Err(self.error("invalid_provider_json", "Mistral streaming content chunks must be objects", "parsing_body", request_id));
-                    };
-                    match object.get("type").and_then(Value::as_str) {
-                        Some("thinking") => {
-                            let Some(thinking) = object.get("thinking").and_then(Value::as_array) else {
-                                return Err(self.error("invalid_provider_json", "Mistral thinking chunk must contain a thinking array", "parsing_body", request_id));
-                            };
-                            self.mistral_saw_thinking = true;
-                            self.push_mistral_thinking(thinking, request_id)?;
-                        }
-                        Some("text") => {
-                            let Some(text) = object.get("text").and_then(Value::as_str) else {
-                                return Err(self.error("invalid_provider_json", "Mistral text chunk must contain text", "parsing_body", request_id));
-                            };
-                            if !text.is_empty() { self.push_mistral_text(text); }
-                        }
-                        Some(other) => {
-                            return Err(self.error("invalid_provider_json", format!("unsupported Mistral streaming content chunk type: {other}"), "parsing_body", request_id));
-                        }
-                        None => {
-                            return Err(self.error("invalid_provider_json", "Mistral streaming content chunk is missing type", "parsing_body", request_id));
-                        }
-                    }
-                }
-                Ok(())
-            }
-            _ => Err(self.error("invalid_provider_json", "Mistral streaming delta.content must be a string, array, or null", "parsing_body", request_id)),
-        }
-    }
-
-    fn push_mistral_text(&mut self, text: &str) {
-        if let Some(last) = self.mistral_content.last_mut().and_then(Value::as_object_mut) {
-            if last.get("type").and_then(Value::as_str) == Some("text") {
-                if let Some(Value::String(existing)) = last.get_mut("text") {
-                    existing.push_str(text);
-                    return;
-                }
-            }
-        }
-        self.mistral_content.push(json!({"type":"text","text":text}));
-    }
-
-    fn push_mistral_thinking(&mut self, thinking: &[Value], request_id: Option<&str>) -> Result<(), ProviderCallError> {
-        let mut texts = Vec::new();
-        for item in thinking {
-            let Some(object) = item.as_object() else {
-                return Err(self.error("invalid_provider_json", "Mistral thinking entries must be objects", "parsing_body", request_id));
-            };
-            if object.get("type").and_then(Value::as_str) != Some("text") {
-                return Err(self.error("invalid_provider_json", "Mistral thinking entries must be text chunks", "parsing_body", request_id));
-            }
-            let Some(text) = object.get("text").and_then(Value::as_str) else {
-                return Err(self.error("invalid_provider_json", "Mistral thinking text chunk is missing text", "parsing_body", request_id));
-            };
-            if !text.is_empty() { texts.push(text); }
-        }
-        if texts.is_empty() { return Ok(()); }
-        if let Some(last) = self.mistral_content.last_mut().and_then(Value::as_object_mut) {
-            if last.get("type").and_then(Value::as_str) == Some("thinking") {
-                if let Some(Value::Array(existing)) = last.get_mut("thinking") {
-                    for text in texts {
-                        if let Some(Value::Object(previous)) = existing.last_mut() {
-                            if previous.get("type").and_then(Value::as_str) == Some("text") {
-                                if let Some(Value::String(current)) = previous.get_mut("text") {
-                                    current.push_str(text);
-                                    continue;
-                                }
-                            }
-                        }
-                        existing.push(json!({"type":"text","text":text}));
-                    }
-                    return Ok(());
-                }
-            }
-        }
-        let items = texts.into_iter().map(|text| json!({"type":"text","text":text})).collect::<Vec<_>>();
-        self.mistral_content.push(json!({"type":"thinking","thinking":items}));
-        Ok(())
     }
 
     fn error(&self, code: &str, message: impl Into<String>, phase: &str, request_id: Option<&str>) -> ProviderCallError {
         let mut error = ProviderCallError::new(code, message, phase);
-        error.metadata.provider_request_id = request_id.map(|value| value.to_string().into_boxed_str());
+        error.provider_request_id = request_id.map(|value| value.to_string().into_boxed_str());
         if self.semantic_output_started {
-            error.metadata.semantic_output_started = Some(true);
+            error.semantic_output_started = Some(true);
         }
         error
     }
@@ -705,27 +582,21 @@ impl OpenRouterStreamAccumulator {
                 "provider streaming response ended before [DONE]",
                 "reading_body",
             );
-            error.metadata.provider_request_id = request_id.clone().map(String::into_boxed_str);
+            error.provider_request_id = request_id.clone().map(String::into_boxed_str);
             if self.semantic_output_started {
-                error.metadata.semantic_output_started = Some(true);
+                error.semantic_output_started = Some(true);
             }
             return Err(error);
         }
         let semantic_output_started = self.semantic_output_started;
         let mut message = Map::new();
         message.insert("role".into(), Value::String("assistant".to_string()));
-        if self.flavor == StreamingFlavor::Mistral && self.mistral_saw_thinking {
-            message.insert("content".into(), Value::Array(self.mistral_content.clone()));
-        } else {
-            message.insert("content".into(), Value::String(self.content));
-        }
-        if self.flavor != StreamingFlavor::Mistral && !self.reasoning.is_empty() {
+        message.insert("content".into(), Value::String(self.content));
+        if !self.reasoning.is_empty() {
             message.insert("reasoning".into(), Value::String(self.reasoning));
         }
-        if self.flavor == StreamingFlavor::OpenRouter && self.reasoning_details.field_seen {
+        if self.reasoning_details.field_seen {
             message.insert("reasoning_details".into(), Value::Array(self.reasoning_details.details.clone()));
-        } else if matches!(self.flavor, StreamingFlavor::CustomOpenAi | StreamingFlavor::Blackbox) && self.custom_reasoning_details_seen {
-            message.insert("reasoning_details".into(), Value::Array(self.custom_reasoning_details.clone()));
         }
         let mut choice = Map::new();
         choice.insert("index".into(), json!(0));
@@ -754,11 +625,8 @@ impl OpenRouterStreamAccumulator {
         if let Some(value) = self.openrouter_metadata {
             payload.insert("openrouter_metadata".into(), value);
         }
-        let payload = Value::Object(payload);
-        let response_evidence = super::response_evidence::finished(Some(&payload), request_id.as_deref(), "sse_done");
         Ok(StreamingChatResult {
-            payload,
-            response_evidence,
+            payload: Value::Object(payload),
             request_id,
             semantic_output_started,
             continuation_diagnostics: ProviderContinuationStreamDiagnostics {
@@ -779,6 +647,22 @@ fn first_semantic_chunk(delta: &Value, content: &str, reasoning: &str, reasoning
         || delta.get("tool_calls").and_then(Value::as_array).is_some_and(|calls| !calls.is_empty())
 }
 
+fn stream_text(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| match part {
+                Value::String(text) => Some(text.as_str()),
+                Value::Object(_) => part.get("text").and_then(Value::as_str)
+                    .or_else(|| part.pointer("/text/value").and_then(Value::as_str)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+        _ => String::new(),
+    }
+}
 
 fn stream_provider_error(payload: &Value, secret: &str, request_id: Option<&str>, semantic_output_started: bool) -> ProviderCallError {
     let (provider_error_type, provider_code) = provider_error_metadata(payload);
@@ -788,11 +672,11 @@ fn stream_provider_error(payload: &Value, secret: &str, request_id: Option<&str>
         .unwrap_or("provider returned an SSE error event");
     let safe_message = raw_message.replace(secret, "[REDACTED]").chars().take(1200).collect::<String>();
     let mut failure = ProviderCallError::new("provider_error", safe_message, "reading_body");
-    failure.metadata.provider_error_type = provider_error_type;
-    failure.metadata.provider_code = provider_code;
-    failure.metadata.provider_request_id = request_id.map(|value| value.to_string().into_boxed_str());
+    failure.provider_error_type = provider_error_type;
+    failure.provider_code = provider_code;
+    failure.provider_request_id = request_id.map(|value| value.to_string().into_boxed_str());
     if semantic_output_started {
-        failure.metadata.semantic_output_started = Some(true);
+        failure.semantic_output_started = Some(true);
     }
     failure
 }
@@ -809,9 +693,9 @@ fn response_request_id(response: &reqwest::Response) -> Option<String> {
 
 fn timeout_error(message: &str, phase: &str, request_id: Option<&str>, semantic_output_started: bool) -> ProviderCallError {
     let mut error = ProviderCallError::new("timeout", message, phase);
-    error.metadata.provider_request_id = request_id.map(|value| value.to_string().into_boxed_str());
+    error.provider_request_id = request_id.map(|value| value.to_string().into_boxed_str());
     if semantic_output_started {
-        error.metadata.semantic_output_started = Some(true);
+        error.semantic_output_started = Some(true);
     }
     error
 }
@@ -824,13 +708,12 @@ fn earlier_deadline(a: Instant, b: Instant) -> Instant {
     a.min(b)
 }
 
-async fn send_streaming_chat_request(
+pub(super) async fn send_openrouter_streaming_chat_request(
     builder: RequestBuilder,
     request_id: Option<&str>,
     secret: &str,
     policy: &ProviderTimeoutPolicy,
     on_stream: Option<&Channel<ProviderStreamEvent>>,
-    flavor: StreamingFlavor,
 ) -> Result<StreamingChatResult, ProviderCallError> {
     let first_event_timeout = Duration::from_millis(policy.first_event_timeout_ms);
     let idle_timeout = Duration::from_millis(policy.idle_timeout_ms);
@@ -876,23 +759,17 @@ async fn send_streaming_chat_request(
                 safe_provider_error(status, &body, secret, retry_after),
                 "reading_body",
             );
-            failure.metadata.http_status = Some(status.as_u16());
-            failure.metadata.provider_error_type = provider_error_type;
-            failure.metadata.provider_code = provider_code;
-            failure.metadata.retry_after_ms = retry_after;
-            failure.metadata.response_evidence = Some(super::response_evidence::finished(parsed.as_ref(), provider_request_id.as_deref(), "body_read"));
-            failure.metadata.provider_request_id = provider_request_id.map(String::into_boxed_str);
+            failure.http_status = Some(status.as_u16());
+            failure.provider_error_type = provider_error_type;
+            failure.provider_code = provider_code;
+            failure.retry_after_ms = retry_after;
+            failure.provider_request_id = provider_request_id.map(String::into_boxed_str);
             return Err(failure);
         }
 
         let mut stream = response.bytes_stream();
         let mut decoder = SseDecoder::default();
-        let mut accumulator = match flavor {
-            StreamingFlavor::CustomOpenAi => OpenRouterStreamAccumulator::custom_openai(),
-            StreamingFlavor::Mistral => OpenRouterStreamAccumulator::mistral(),
-            StreamingFlavor::Blackbox => OpenRouterStreamAccumulator::blackbox(),
-            StreamingFlavor::OpenRouter => OpenRouterStreamAccumulator::default(),
-        };
+        let mut accumulator = OpenRouterStreamAccumulator::default();
         let mut saw_transport_activity = false;
         let mut last_transport_activity = started;
 
@@ -937,9 +814,9 @@ async fn send_streaming_chat_request(
                         last_transport_activity = Instant::now();
                     }
                     let frames = decoder.push(&bytes).map_err(|mut error| {
-                        error.metadata.provider_request_id = provider_request_id.clone().map(String::into_boxed_str);
+                        error.provider_request_id = provider_request_id.clone().map(String::into_boxed_str);
                         if accumulator.semantic_output_started {
-                            error.metadata.semantic_output_started = Some(true);
+                            error.semantic_output_started = Some(true);
                         }
                         error
                     })?;
@@ -954,17 +831,17 @@ async fn send_streaming_chat_request(
                 }
                 Some(Err(error)) => {
                     let mut failure = request_error(error, "reading_body");
-                    failure.metadata.provider_request_id = provider_request_id.clone().map(String::into_boxed_str);
+                    failure.provider_request_id = provider_request_id.clone().map(String::into_boxed_str);
                     if accumulator.semantic_output_started {
-                        failure.metadata.semantic_output_started = Some(true);
+                        failure.semantic_output_started = Some(true);
                     }
                     return Err(failure);
                 }
                 None => {
                     let frames = decoder.finish().map_err(|mut error| {
-                        error.metadata.provider_request_id = provider_request_id.clone().map(String::into_boxed_str);
+                        error.provider_request_id = provider_request_id.clone().map(String::into_boxed_str);
                         if accumulator.semantic_output_started {
-                            error.metadata.semantic_output_started = Some(true);
+                            error.semantic_output_started = Some(true);
                         }
                         error
                     })?;
@@ -981,46 +858,4 @@ async fn send_streaming_chat_request(
             }
         }
     }).await
-}
-
-
-pub(super) async fn send_openrouter_streaming_chat_request(
-    builder: RequestBuilder,
-    request_id: Option<&str>,
-    secret: &str,
-    policy: &ProviderTimeoutPolicy,
-    on_stream: Option<&Channel<ProviderStreamEvent>>,
-) -> Result<StreamingChatResult, ProviderCallError> {
-    send_streaming_chat_request(builder, request_id, secret, policy, on_stream, StreamingFlavor::OpenRouter).await
-}
-
-pub(super) async fn send_custom_openai_streaming_chat_request(
-    builder: RequestBuilder,
-    request_id: Option<&str>,
-    secret: &str,
-    policy: &ProviderTimeoutPolicy,
-    on_stream: Option<&Channel<ProviderStreamEvent>>,
-) -> Result<StreamingChatResult, ProviderCallError> {
-    send_streaming_chat_request(builder, request_id, secret, policy, on_stream, StreamingFlavor::CustomOpenAi).await
-}
-
-
-pub(super) async fn send_mistral_streaming_chat_request(
-    builder: RequestBuilder,
-    request_id: Option<&str>,
-    secret: &str,
-    policy: &ProviderTimeoutPolicy,
-    on_stream: Option<&Channel<ProviderStreamEvent>>,
-) -> Result<StreamingChatResult, ProviderCallError> {
-    send_streaming_chat_request(builder, request_id, secret, policy, on_stream, StreamingFlavor::Mistral).await
-}
-
-pub(super) async fn send_blackbox_streaming_chat_request(
-    builder: RequestBuilder,
-    request_id: Option<&str>,
-    secret: &str,
-    policy: &ProviderTimeoutPolicy,
-    on_stream: Option<&Channel<ProviderStreamEvent>>,
-) -> Result<StreamingChatResult, ProviderCallError> {
-    send_streaming_chat_request(builder, request_id, secret, policy, on_stream, StreamingFlavor::Blackbox).await
 }

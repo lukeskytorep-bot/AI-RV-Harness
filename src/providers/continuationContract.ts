@@ -11,7 +11,7 @@ export const CONTINUATION_LIMITS_V1 = Object.freeze({
   maxTraversalNodes: 10_000,
 });
 
-export type ProviderContinuationTransport = "openrouter" | "google-native" | "anthropic-native" | "mistral-native";
+export type ProviderContinuationTransport = "openrouter" | "google-native" | "anthropic-native";
 
 export type OpenRouterReasoningFormat =
   | "unknown"
@@ -77,11 +77,6 @@ export type AnthropicThinkingBlock =
   | { type: "thinking"; thinking: string; signature: string }
   | { type: "redacted_thinking"; data: string };
 
-export type MistralThinkingText = { type: "text"; text: string };
-export type MistralAssistantContentChunk =
-  | { type: "thinking"; thinking: MistralThinkingText[] }
-  | { type: "text"; text: string };
-
 export type ProviderContinuationState =
   | {
       schemaVersion: 1;
@@ -103,13 +98,6 @@ export type ProviderContinuationState =
       format: "anthropic-thinking-blocks";
       replayFingerprint: ProviderReplayFingerprint;
       blocks: AnthropicThinkingBlock[];
-    }
-  | {
-      schemaVersion: 1;
-      transport: "mistral-native";
-      format: "mistral-assistant-content";
-      replayFingerprint: ProviderReplayFingerprint;
-      content: MistralAssistantContentChunk[];
     };
 
 export type ContinuationValidationCode =
@@ -384,24 +372,6 @@ function parseGooglePart(value: unknown): GoogleThoughtPart | null {
   };
 }
 
-function parseMistralChunk(value: unknown): MistralAssistantContentChunk | null {
-  if (!isObject(value) || typeof value.type !== "string") return null;
-  if (value.type === "text") {
-    if (!exactKeys(value, ["type", "text"]) || typeof value.text !== "string") return null;
-    return { type: "text", text: value.text };
-  }
-  if (value.type === "thinking") {
-    if (!exactKeys(value, ["type", "thinking"]) || !Array.isArray(value.thinking) || value.thinking.length === 0) return null;
-    const thinking: MistralThinkingText[] = [];
-    for (const item of value.thinking) {
-      if (!isObject(item) || !exactKeys(item, ["type", "text"]) || item.type !== "text" || typeof item.text !== "string") return null;
-      thinking.push({ type: "text", text: item.text });
-    }
-    return { type: "thinking", thinking };
-  }
-  return null;
-}
-
 function parseAnthropicBlock(value: unknown): AnthropicThinkingBlock | null {
   if (!isObject(value) || typeof value.type !== "string") return null;
   if (value.type === "thinking") {
@@ -421,7 +391,7 @@ function validateProviderContinuationStateInternal(input: unknown): Continuation
   if (structureScan === "forbidden") return { ok: false, code: "forbidden_sensitive_field", message: "continuation state contains a forbidden sensitive field" };
   if (structureScan === "invalid") return { ok: false, code: "invalid_payload", message: "continuation state contains a cyclic, excessively deep, or otherwise unsupported structure" };
   if (input.schemaVersion !== 1) return { ok: false, code: "unknown_schema_version", message: "unsupported continuation state schema version" };
-  if (input.transport !== "openrouter" && input.transport !== "google-native" && input.transport !== "anthropic-native" && input.transport !== "mistral-native") {
+  if (input.transport !== "openrouter" && input.transport !== "google-native" && input.transport !== "anthropic-native") {
     return { ok: false, code: "unknown_transport", message: "unsupported continuation transport" };
   }
 
@@ -455,7 +425,7 @@ function validateProviderContinuationStateInternal(input: unknown): Continuation
       return { ok: false, code: "invalid_payload", message: "Google continuation state contains no thought or thoughtSignature data" };
     }
     value = { schemaVersion: 1, transport: "google-native", format: "google-thought-parts", replayFingerprint: fingerprint, parts: googleParts };
-  } else if (input.transport === "anthropic-native") {
+  } else {
     if (input.format !== "anthropic-thinking-blocks") return { ok: false, code: "unknown_format", message: "unsupported Anthropic continuation format" };
     if (!exactKeys(input, ["schemaVersion", "transport", "format", "replayFingerprint", "blocks"])) return { ok: false, code: "invalid_payload", message: "Anthropic continuation state contains unapproved fields" };
     const fingerprint = validateFingerprint(input.replayFingerprint, "anthropic-native", input.format);
@@ -465,20 +435,6 @@ function validateProviderContinuationStateInternal(input: unknown): Continuation
     const blocks = input.blocks.map(parseAnthropicBlock);
     if (!blocks.length || blocks.some((item) => item === null)) return { ok: false, code: "invalid_payload", message: "invalid Anthropic thinking block" };
     value = { schemaVersion: 1, transport: "anthropic-native", format: "anthropic-thinking-blocks", replayFingerprint: fingerprint, blocks: blocks as AnthropicThinkingBlock[] };
-  } else {
-    if (input.format !== "mistral-assistant-content") return { ok: false, code: "unknown_format", message: "unsupported Mistral continuation format" };
-    if (!exactKeys(input, ["schemaVersion", "transport", "format", "replayFingerprint", "content"])) return { ok: false, code: "invalid_payload", message: "Mistral continuation state contains unapproved fields" };
-    const fingerprint = validateFingerprint(input.replayFingerprint, "mistral-native", input.format);
-    if (!fingerprint) return { ok: false, code: "invalid_fingerprint", message: "invalid replay fingerprint" };
-    if (!Array.isArray(input.content)) return { ok: false, code: "invalid_payload", message: "content must be an array" };
-    const limitError = validateBlockCountAndSize(input.content); if (limitError) return limitError;
-    const content = input.content.map(parseMistralChunk);
-    if (!content.length || content.some((item) => item === null)) return { ok: false, code: "invalid_payload", message: "invalid Mistral assistant content chunk" };
-    const mistralContent = content as MistralAssistantContentChunk[];
-    if (!mistralContent.some((chunk) => chunk.type === "thinking") || !mistralContent.some((chunk) => chunk.type === "text")) {
-      return { ok: false, code: "invalid_payload", message: "Mistral continuation state must preserve both thinking and visible text chunks" };
-    }
-    value = { schemaVersion: 1, transport: "mistral-native", format: "mistral-assistant-content", replayFingerprint: fingerprint, content: mistralContent };
   }
 
   const sizeBytes = safeUtf8Bytes(value);

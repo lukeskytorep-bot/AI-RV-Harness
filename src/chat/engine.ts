@@ -1,14 +1,9 @@
-import { chatResponseNeedsResolution, withChatResponseOperation } from "./responseRecovery";
-import { DEFAULT_CONVERSATION_MAX_OUTPUT_TOKENS } from "../startupDefaults";
-import { chatOutputTokens, MANUAL_RV_OUTPUT_BUDGET_PROFILE } from "./outputPolicy";
 import { buildConversationPayload, buildManualRvPayload, type ScopedChatMessage } from "../domain/chatContext";
 import { resolveGenerationSettings } from "../providers/capabilities";
-import { executeProviderChat, ProviderExecutionError } from "../providers/requestExecutor";
-import { callViewerWithOutputRecovery, viewerOutputAcceptedMetadata, viewerOutputAttemptMetadata, viewerOutputPreferredBudget } from "../sessions/viewerOutputRecovery";
+import { executeProviderChat } from "../providers/requestExecutor";
 import { providerBindingEndpoint } from "../providers/native";
 import { captureGoogleContinuationState } from "../providers/googleContinuation";
 import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
-import { captureMistralContinuationState } from "../providers/mistralContinuation";
 import {
   applyConversationContinuationMemory,
   clearConversationContinuationMemory,
@@ -25,7 +20,7 @@ import type { AppRepository } from "../storage/repository";
 import { ProviderContinuationPersistenceError } from "../storage/providerContinuationState";
 import type { ChatMessage, ChatMode, InterfaceLanguage } from "../types";
 import type { WorkspaceSource } from "../sources/types";
-import { estimateContextBudget } from "./contextBudget";
+import { DEFAULT_UNKNOWN_OUTPUT_LIMIT, estimateContextBudget } from "./contextBudget";
 import { buildLocalTemporalContext } from "./temporalContext";
 import { loadConversationViewerContextKey, saveConversationViewerContextKey, viewerLearningSystemMessages, type ConversationViewerLearningSnapshot } from "./viewerLearning";
 
@@ -33,7 +28,6 @@ type ChatRepository = Pick<AppRepository,
   | "listChatMessages"
   | "appendChatMessage"
   | "appendAssistantMessageWithProviderState"
-  | "updateChatMessageMetadata"
   | "listChatMessageProviderStates"
   | "resetChatMessageProviderStates"
 >;
@@ -49,8 +43,6 @@ export function buildChatProviderMessages(input: {
   attachedProtocol?: string;
   sources?: WorkspaceSource[];
   images?: ProviderImageInput[];
-  imageNames?: string[];
-  imageMimeTypes?: string[];
   viewerLearning?: ConversationViewerLearningSnapshot;
   now?: Date;
 }): ProviderMessage[] {
@@ -108,47 +100,6 @@ export function buildChatProviderMessages(input: {
   return messages;
 }
 
-function attachmentAttemptMetadata(input: Parameters<typeof sendChatTurn>[0], attemptNumber: number, state: "prepared" | "included_in_request" | "not_included" | "uncertain") {
-  const names = input.imageNames ?? [];
-  return {
-    attemptNumber,
-    createdAt: new Date().toISOString(),
-    sources: (input.sources ?? []).map((source) => ({ id: source.id, name: source.displayName, type: source.sourceType, included: true })),
-    images: names.map((name, index) => ({
-      name,
-      mimeType: input.images?.[index]?.mimeType ?? input.imageMimeTypes?.[index],
-      state: input.images?.[index] ? state : "not_included" as const,
-    })),
-  };
-}
-
-async function recordAttachmentAttempt(repository: ChatRepository, message: ChatMessage, attempt: ReturnType<typeof attachmentAttemptMetadata>): Promise<ChatMessage> {
-  const metadata = { ...(message.metadata ?? {}), attachmentAttempts: [...(message.metadata?.attachmentAttempts ?? []), attempt] };
-  await repository.updateChatMessageMetadata(message.id, metadata);
-  return { ...message, metadata };
-}
-
-async function replaceLastAttachmentAttempt(repository: ChatRepository, message: ChatMessage, attempt: ReturnType<typeof attachmentAttemptMetadata>): Promise<ChatMessage> {
-  const attempts = [...(message.metadata?.attachmentAttempts ?? [])];
-  if (attempts.length) attempts[attempts.length - 1] = attempt; else attempts.push(attempt);
-  const metadata = { ...(message.metadata ?? {}), attachmentAttempts: attempts };
-  await repository.updateChatMessageMetadata(message.id, metadata);
-  return { ...message, metadata };
-}
-
-async function recordManualRvIncompleteAttempt(repository: ChatRepository, message: ChatMessage, attempt: Parameters<typeof viewerOutputAttemptMetadata>[0]): Promise<ChatMessage> {
-  const entry = { ...viewerOutputAttemptMetadata(attempt), content: attempt.content };
-  const metadata = { ...(message.metadata ?? {}), viewerOutputAttempts: [...(message.metadata?.viewerOutputAttempts ?? []), entry] };
-  await repository.updateChatMessageMetadata(message.id, metadata);
-  return { ...message, metadata };
-}
-
-async function recordManualRvAcceptedOutput(repository: ChatRepository, message: ChatMessage, accepted: Record<string, unknown>): Promise<ChatMessage> {
-  const metadata = { ...(message.metadata ?? {}), viewerOutputAccepted: accepted };
-  await repository.updateChatMessageMetadata(message.id, metadata);
-  return { ...message, metadata };
-}
-
 export async function sendChatTurn(input: {
   repository: ChatRepository;
   threadId: string;
@@ -162,8 +113,6 @@ export async function sendChatTurn(input: {
   attachedProtocol?: string;
   sources?: WorkspaceSource[];
   images?: ProviderImageInput[];
-  imageNames?: string[];
-  imageMimeTypes?: string[];
   viewerLearning?: ConversationViewerLearningSnapshot;
   conversationContextKey?: string;
   maxRetries?: number;
@@ -172,11 +121,9 @@ export async function sendChatTurn(input: {
   onStreamEvent?: (event: ProviderStreamEvent) => void;
   chat?: (request: { config: ProviderConfig; modelId: string; messages: ProviderMessage[]; settings: ReturnType<typeof resolveGenerationSettings>; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProviderChatResponse>;
   allowTextOnlyContinuation?: boolean;
-  allowRetryWithoutImages?: boolean;
-  onUserPrepared?: (user: ChatMessage) => void | Promise<void>;
   resolveBindingEndpoint?: (config: ProviderConfig) => Promise<string>;
 }): Promise<{ user: ChatMessage; assistant: ChatMessage; response: ProviderChatResponse }> {
-  return withChatResponseOperation(input.threadId, () => executeChatTurn(input, true));
+  return executeChatTurn(input, true);
 }
 
 async function hydrateConversationContinuationPersistence(input: {
@@ -204,44 +151,18 @@ async function hydrateConversationContinuationPersistence(input: {
 }
 
 export async function retryChatTurn(input: Omit<Parameters<typeof sendChatTurn>[0], "content">): Promise<{ user: ChatMessage; assistant: ChatMessage; response: ProviderChatResponse }> {
-  return withChatResponseOperation(input.threadId, async () => {
-    const history = await input.repository.listChatMessages(input.threadId);
-    const last = history.at(-1);
-    if (!last || last.role !== "user") throw new Error("There is no unanswered user message to retry.");
-    if (last.metadata?.responseRecovery?.state === "ended") throw new Error("This response was ended and cannot be resumed.");
-    // The durable user record is authoritative; optional caller fields cannot
-    // erase the original image requirement, including after a cache loss.
-    const recordedImages = [...(last.metadata?.attachmentAttempts ?? [])].reverse().find(attempt => attempt.images.length)?.images ?? [];
-    const recordedNames = recordedImages.map(image => image.name);
-    const images = input.images ?? [];
-    const explicitImageFree = input.allowRetryWithoutImages === true && images.length === 0;
-    if (recordedNames.length) {
-      const namesMatch = input.imageNames?.length === recordedNames.length
-        && input.imageNames.every((name, index) => name === recordedNames[index]);
-      const omittedNames = !input.imageNames?.length;
-      if (!namesMatch && !(explicitImageFree && omittedNames)) throw new Error("Retry image list does not match the durable user message. Explicit image-free retry approval is required if image bytes are unavailable.");
-      if (images.length && (images.length !== recordedImages.length || recordedImages.some((image, index) => image.mimeType && images[index].mimeType !== image.mimeType))) {
-        throw new Error("Retry image bytes/count or MIME type does not match the durable user message.");
-      }
-    }
-    if ((recordedNames.length || input.imageNames?.length) && !images.length && !explicitImageFree) throw new Error("Image bytes are unavailable. Explicit image-free retry approval is required.");
-    if (chatResponseNeedsResolution(last)) throw new Error("The previous response outcome is uncertain. Explicit retry approval is required.");
-    return executeChatTurn({ ...input, content: last.content,
-      ...(recordedNames.length ? { imageNames: recordedNames, imageMimeTypes: recordedImages.map(image => image.mimeType ?? "") } : {}),
-    }, false);
-  });
+  const history = await input.repository.listChatMessages(input.threadId);
+  const last = history.at(-1);
+  if (!last || last.role !== "user") throw new Error("There is no unanswered user message to retry.");
+  return executeChatTurn({ ...input, content: last.content }, false);
 }
 
 async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], appendUser: boolean): Promise<{ user: ChatMessage; assistant: ChatMessage; response: ProviderChatResponse }> {
-  input.signal?.throwIfAborted();
   const content = input.content.trim();
   if (!content) throw new Error("Message cannot be empty.");
   if (input.model.providerConfigId !== input.providerConfig.id) throw new Error("Model/provider route mismatch.");
 
   const storedHistory = await input.repository.listChatMessages(input.threadId);
-  if (appendUser && storedHistory.at(-1)?.role === "user" && storedHistory.at(-1)?.metadata?.responseRecovery && !["ended", "complete"].includes(storedHistory.at(-1)!.metadata!.responseRecovery!.state)) {
-    throw new Error("End or recover the unanswered response before sending a new message.");
-  }
   if (input.mode === "conversation") {
     // Hydrate through the existing guarded persistence path first. This ensures
     // malformed persisted continuation is converted into the normal controlled
@@ -284,7 +205,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   }
   let normalizedEndpoint: string | undefined;
   const hasContinuationMemory = input.mode === "conversation" && hasConversationContinuationMemory(input.threadId);
-  if (input.mode === "conversation" && ["openrouter", "google", "mistral"].includes(input.providerConfig.provider) && (!input.chat || hasContinuationMemory)) {
+  if (input.mode === "conversation" && ["openrouter", "google"].includes(input.providerConfig.provider) && (!input.chat || hasContinuationMemory)) {
     normalizedEndpoint = await (input.resolveBindingEndpoint ?? providerBindingEndpoint)(input.providerConfig);
   }
   if (hasContinuationMemory) {
@@ -305,17 +226,7 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   }
 
 
-  const requestedOutputTokens = input.requestedSettings?.maxOutputTokens;
-  const maxOutputTokens = Math.floor(
-    input.mode === "manual_rv"
-      ? viewerOutputPreferredBudget({
-        model: input.model,
-        explicitRequested: requestedOutputTokens,
-        recoveryLevel: 0,
-        budgetProfile: MANUAL_RV_OUTPUT_BUDGET_PROFILE,
-      })
-      : requestedOutputTokens ?? chatOutputTokens("conversation", DEFAULT_CONVERSATION_MAX_OUTPUT_TOKENS, input.model),
-  );
+  const maxOutputTokens = Math.floor(input.requestedSettings?.maxOutputTokens ?? input.model.capabilities.maxOutputTokens ?? DEFAULT_UNKNOWN_OUTPUT_LIMIT);
   if (maxOutputTokens < 1 || (input.model.capabilities.maxOutputTokens && maxOutputTokens > input.model.capabilities.maxOutputTokens)) {
     throw new Error("Maximum output tokens must be a positive integer within the selected model limit.");
   }
@@ -323,123 +234,30 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   if (budget.exceeded) {
     throw new Error("Conversation input exceeds this model's available context.");
   }
-  const settings = resolveGenerationSettings(input.model.capabilities, { ...input.requestedSettings, maxOutputTokens }, { provider: input.model.provider });
+  const settings = resolveGenerationSettings(input.model.capabilities, { ...input.requestedSettings, maxOutputTokens });
   if (settings.omitted.length) throw new Error(`Unsupported generation settings: ${settings.omitted.join(", ")}`);
-  input.signal?.throwIfAborted();
-  let user = appendUser ? await input.repository.appendChatMessage(input.threadId, "user", content) : storedHistory.at(-1)!;
-  const attemptNumber = (user.metadata?.attachmentAttempts?.length ?? 0) + 1;
-  const hasAttachmentMetadata = Boolean(input.sources?.length || input.imageNames?.length);
-  if (hasAttachmentMetadata) {
-    user = await recordAttachmentAttempt(input.repository, user, attachmentAttemptMetadata(input, attemptNumber, "prepared"));
-  }
-  let response: ProviderChatResponse;
-  let providerAttemptStarted = false;
-  const responseAttempt = { id: crypto.randomUUID(), startedAt: new Date().toISOString(), dispatched: false };
-  const priorResponseAttempts = user.metadata?.responseRecovery?.attempts ?? [];
-  const persistResponseState = async (state: NonNullable<ChatMessage["metadata"]>["responseRecovery"]) => {
-    const current = (await input.repository.listChatMessages(input.threadId)).find(message => message.id === user.id);
-    if (!current || current.metadata?.responseRecovery?.state === "ended") throw new Error("This response was ended and cannot be resumed.");
-    const metadata = { ...current.metadata, responseRecovery: state };
-    await input.repository.updateChatMessageMetadata(user.id, metadata);
-    user = { ...user, metadata };
-  };
-  await persistResponseState({ state: "prepared", attempts: [...priorResponseAttempts, responseAttempt] });
-  const markDispatched = async () => {
-    input.signal?.throwIfAborted();
-    providerAttemptStarted = true;
-    responseAttempt.dispatched = true;
-    await persistResponseState({ state: "dispatched", attempts: [...priorResponseAttempts, responseAttempt] });
-    input.signal?.throwIfAborted();
-  };
-  try {
-    await input.onUserPrepared?.(user);
-    input.signal?.throwIfAborted();
-    if (input.mode === "manual_rv") {
-      const recovered = await callViewerWithOutputRecovery({
-        model: input.model,
-        baseSettings: settings,
-        operationKind: "manual_rv_viewer",
-        budgetProfile: MANUAL_RV_OUTPUT_BUDGET_PROFILE,
-        messages,
-        abortSignal: input.signal,
-        onIncompleteAttempt: async (attempt) => {
-          user = await recordManualRvIncompleteAttempt(input.repository, user, attempt);
-        },
-        call: (attemptSettings) => executeProviderChat({
-          config: input.providerConfig,
-          modelId: input.model.modelId,
-          messages,
-          settings: attemptSettings,
-          timeoutMs: input.timeoutMs,
-          signal: input.signal,
-          configuredRetries: input.maxRetries,
-          rejectResponseAfterAbort: true,
-          operationId: "chat.manual-rv",
-          operationKind: "manual_rv_viewer",
-          streamWorkflowContext: "manual_rv",
-          onStreamEvent: input.onStreamEvent,
-          onAttemptStart: markDispatched,
-          attempt: input.chat,
-        }),
-      });
-      response = recovered.response;
-      input.signal?.throwIfAborted();
-      user = await recordManualRvAcceptedOutput(input.repository, user, {
-        ...viewerOutputAcceptedMetadata(recovered),
-        ...(response.finishReason ? { finishReason: response.finishReason } : {}),
-        ...(response.providerRequestId ? { providerRequestId: response.providerRequestId } : {}),
-        usage: response.usage,
-      });
-    } else {
-      response = await executeProviderChat({
-        config: input.providerConfig,
-        modelId: input.model.modelId,
-        messages,
-        settings,
-        timeoutMs: input.timeoutMs,
-        signal: input.signal,
-        configuredRetries: input.maxRetries,
-        rejectResponseAfterAbort: true,
-        operationId: "chat.conversation",
-        streamWorkflowContext: "conversation",
-        onStreamEvent: input.onStreamEvent,
-        onAttemptStart: markDispatched,
-        attempt: input.chat,
-      });
-    }
-  } catch (cause) {
-    const stopped = Boolean(input.signal?.aborted || cause instanceof DOMException && cause.name === "AbortError");
-    const late = (cause as { providerResponse?: ProviderChatResponse })?.providerResponse;
-    const beforeDispatch = cause instanceof ProviderExecutionError && cause.causeError.details.phase === "before_dispatch";
-    const state = providerAttemptStarted && (stopped || !beforeDispatch) ? "uncertain" : "stopped";
-    await persistResponseState({ state, attempts: [...priorResponseAttempts, { ...responseAttempt, outcome: state,
-      reason: stopped ? (input.signal?.reason?.message === "Stopped by user" ? "user_stop" : input.signal?.reason?.message === "Conversation view closed" ? "view_closed" : "cancelled") : "provider_failure",
-      ...(late ? { lateResponse: { content: late.content, usage: { ...late.usage }, ...(late.providerRequestId ? { providerRequestId: late.providerRequestId } : {}), ...(late.finishReason ? { finishReason: late.finishReason } : {}) } } : {}),
-    }] });
-    if (hasAttachmentMetadata) {
-      const beforeDispatch = cause instanceof ProviderExecutionError
-        ? cause.causeError.details.phase === "before_dispatch"
-        : Boolean(cause && typeof cause === "object" && "details" in cause && (cause as { details?: { phase?: string } }).details?.phase === "before_dispatch");
-      const imageState = input.images?.length
-        ? (!providerAttemptStarted || beforeDispatch ? "not_included" : "uncertain")
-        : "not_included";
-      user = await replaceLastAttachmentAttempt(input.repository, user, attachmentAttemptMetadata(input, attemptNumber, imageState));
-    }
-    throw cause;
-  }
-  input.signal?.throwIfAborted();
-  if (hasAttachmentMetadata) {
-    user = await replaceLastAttachmentAttempt(input.repository, user, attachmentAttemptMetadata(input, attemptNumber, input.images?.length ? "included_in_request" : "not_included"));
-  }
+  const user = appendUser ? await input.repository.appendChatMessage(input.threadId, "user", content) : storedHistory.at(-1)!;
+  const response = await executeProviderChat({
+    config: input.providerConfig,
+    modelId: input.model.modelId,
+    messages,
+    settings,
+    timeoutMs: input.timeoutMs,
+    signal: input.signal,
+    configuredRetries: input.maxRetries,
+    operationId: input.mode === "conversation" ? "chat.conversation" : "chat.manual-rv",
+    streamWorkflowContext: input.mode === "conversation" ? "conversation" : "manual_rv",
+    onStreamEvent: input.onStreamEvent,
+    attempt: input.chat,
+  });
   let continuationCapture:
     | ReturnType<typeof captureOpenRouterContinuationState>
     | ReturnType<typeof captureGoogleContinuationState>
-    | ReturnType<typeof captureMistralContinuationState>
     | undefined;
   const continuationDetailsPresent = input.providerConfig.provider === "openrouter"
     ? response.reasoningDetails !== undefined
     : Boolean(response.reasoningDetails?.length);
-  if (input.mode === "conversation" && continuationDetailsPresent && ["openrouter", "google", "mistral"].includes(input.providerConfig.provider)) {
+  if (input.mode === "conversation" && continuationDetailsPresent && ["openrouter", "google"].includes(input.providerConfig.provider)) {
     normalizedEndpoint ??= await (input.resolveBindingEndpoint ?? providerBindingEndpoint)(input.providerConfig);
     continuationCapture = input.providerConfig.provider === "openrouter"
       ? captureOpenRouterContinuationState({
@@ -449,27 +267,17 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
           reasoningDetails: response.reasoningDetails,
           continuationDiagnostics: response.continuationDiagnostics,
         })
-      : input.providerConfig.provider === "google"
-        ? captureGoogleContinuationState({
-            config: input.providerConfig,
-            requestedModelId: input.model.modelId,
-            normalizedEndpoint,
-            parts: response.reasoningDetails,
-            visibleContent: response.content,
-          })
-        : captureMistralContinuationState({
-            config: input.providerConfig,
-            requestedModelId: input.model.modelId,
-            normalizedEndpoint,
-            content: response.reasoningDetails,
-            visibleContent: response.content,
-          });
+      : captureGoogleContinuationState({
+          config: input.providerConfig,
+          requestedModelId: input.model.modelId,
+          normalizedEndpoint,
+          parts: response.reasoningDetails,
+          visibleContent: response.content,
+        });
   }
-  input.signal?.throwIfAborted();
   const assistant = continuationCapture?.state
     ? await input.repository.appendAssistantMessageWithProviderState(input.threadId, response.content, continuationCapture.state)
     : await input.repository.appendChatMessage(input.threadId, "assistant", response.content);
-  await persistResponseState({ state: "complete", attempts: [...priorResponseAttempts, { ...responseAttempt, outcome: "complete" }] });
   if (continuationCapture?.state) rememberConversationContinuationState(input.threadId, assistant.id, continuationCapture.state);
   else if (continuationCapture?.issue) rememberConversationContinuationIssue(input.threadId, assistant.id, continuationCapture.issue);
   if (input.mode === "conversation" && input.conversationContextKey) saveConversationViewerContextKey(input.threadId, input.conversationContextKey);

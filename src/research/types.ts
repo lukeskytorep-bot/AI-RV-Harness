@@ -1,4 +1,3 @@
-import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
 import type { JudgeComponentScores } from "../domain/scoring";
 import type { EffectiveGenerationSettings, GenerationSettings, ModelCapabilities } from "../providers/types";
 import type { InterfaceLanguage, ViewerSystemPromptSnapshot } from "../types";
@@ -15,31 +14,10 @@ export const RESEARCH_TEMPLATE_TYPES = [
   "practice",
   "system_prompt",
   "viewer_notes",
-  "sampling",
   "custom",
 ] as const;
 
 export type ResearchTemplateType = (typeof RESEARCH_TEMPLATE_TYPES)[number];
-
-export type ResearchSamplingParameter = "topP" | "topK" | "seed";
-
-export type ResearchSamplingAxis =
-  | { mode: "fixed"; value?: number }
-  | { mode: "varied"; values: number[] };
-
-export interface ResearchSamplingDesign {
-  version: 1;
-  topP: ResearchSamplingAxis;
-  topK: ResearchSamplingAxis;
-  seed: ResearchSamplingAxis;
-}
-
-export interface ResearchSamplingConditionValues {
-  topP?: number;
-  topK?: number;
-  seed?: number;
-}
-
 export type ResearchState = "Draft" | "Preflight" | "Locked" | "Running" | "SessionsComplete" | "Judging" | "ScoresFrozen" | "Unblinded" | "Complete" | "Interrupted" | "Failed";
 
 export type ResearchSystemPromptSnapshot = ViewerSystemPromptSnapshot;
@@ -83,13 +61,6 @@ export interface ResearchViewerNotesControl {
 }
 
 
-export interface ResearchViewerOutputPolicy {
-  version: 1;
-  initialTokens: number;
-  recoveryTokens: number;
-  preserveConfiguredBudget: boolean;
-}
-
 export interface ResearchConditionDefinition {
   key: string;
   label: string;
@@ -97,16 +68,12 @@ export interface ResearchConditionDefinition {
   providerConfigId: string;
   modelId: string;
   requestedSettings: GenerationSettings;
-  /** Frozen at Experiment Lock for new projects. Absent means legacy single-budget compatibility. */
-  viewerOutputPolicy?: ResearchViewerOutputPolicy;
   effectiveSettings?: EffectiveGenerationSettings;
   capabilitySnapshot?: ModelCapabilities;
   systemPrompt?: ResearchSystemPromptSnapshot;
   conditionInstruction?: ResearchSystemPromptSnapshot;
   practiceOrder?: "FIRST" | "SECOND";
   customValue?: string;
-  /** Structural sampler values for Sampling configurations; never parse these values from labels. */
-  samplingValues?: ResearchSamplingConditionValues;
   /** Immutable Viewer Notes snapshot captured for and frozen by Experiment Lock. */
   viewerNotes?: ViewerNotesSessionSnapshot;
   /** Immutable trained Field Guide snapshot. Research never mutates it. */
@@ -135,8 +102,6 @@ export interface ResearchViewerControl {
     mode: "provider_default" | "fixed" | "condition_variable";
     value?: number;
   };
-  /** Frozen common OpenRouter sampling inherited from the base Profile. Missing means legacy Research. */
-  sampling?: { source: "profile" | "research"; profileId: string; mode?: "fixed" | "condition_variable"; topP?: number; topK?: number; seed?: number };
   maxOutputTokens: number;
 }
 
@@ -159,29 +124,20 @@ export interface ResearchConfig {
     requestTimeoutMs: number;
     maxRetries: number;
     defaultMaxOutputTokens: number;
-    /** Legacy v0.7.13 field; retained only for old locked-project compatibility and ignored by execution. */
-    maxSessionCostUsd?: number;
+    maxSessionCostUsd: number;
     sessionCodePrefix: string;
   };
   viewerControl?: ResearchViewerControl;
   fieldGuideControl?: ResearchFieldGuideControl;
   viewerNotesControl?: ResearchViewerNotesControl;
   promptResearchSource?: ResearchPromptResearchSource;
-  /** Versioned design metadata for the Sampling configurations template. */
-  samplingDesign?: ResearchSamplingDesign;
   conditions: ResearchConditionDefinition[];
   evaluationMode?: "save_only" | "ai_judges";
   judges: ResearchJudgeDefinition[];
-  /** Frozen for new projects; absent means the historical Judge 8K/16K contract. */
-  judgeOutputPolicy?: FrozenAnalyticalOutputPolicy;
-  /** Frozen independently of blind output; absent preserves the historical 16K/32K analysis. */
-  postRevealOutputPolicy?: FrozenAnalyticalOutputPolicy;
   randomization: { matchedTargets: true; randomizedExecution: true; randomizedJudgeOrder: true };
 }
 
 export interface ResearchProjectRecord {
-  /** Mutable execution marker outside Experiment Lock/config. Native stores it in reserved app_settings. */
-  executionTermination?:import("./executionLifecycle").ResearchExecutionTermination;
   id: string;
   workspaceId: string;
   name: string;
@@ -247,24 +203,6 @@ export interface ResearchPreflightResult {
   estimatedJudgeCalls: number;
 }
 
-export interface ResearchSessionExecutionMetadata {
-  configuredProviderConfigId: string;
-  configuredModelId: string;
-  actualProviders?: string[];
-  actualModels?: string[];
-  generationIds?: string[];
-  providerRequestIds?: string[];
-  inputTokens?: number;
-  outputTokens?: number;
-  reasoningTokens?: number;
-  totalTokens?: number;
-  costUsd?: number;
-  requestDurationMs?: number;
-  firstViewerResponseAt?: string;
-  lastViewerResponseAt?: string;
-  viewerCallCount: number;
-}
-
 export interface UnblindedSessionResult extends JudgeComponentScores {
   anonymousSessionId: string;
   sessionId: string;
@@ -276,12 +214,6 @@ export interface UnblindedSessionResult extends JudgeComponentScores {
   judgeCount: number;
   judgeTotalRange: number;
   judgeTotalStdDev: number;
-  samplingValues?: ResearchSamplingConditionValues;
-  requestedSettings?: GenerationSettings;
-  effectiveSettings?: GenerationSettings;
-  providerConfigId?: string;
-  modelId?: string;
-  execution?: ResearchSessionExecutionMetadata;
   /** Exact frozen Field Guide provenance used by this session, when enabled. */
   fieldGuideVersionId?: string;
   fieldGuideVersionNumber?: number;
@@ -291,11 +223,6 @@ export interface UnblindedSessionResult extends JudgeComponentScores {
 export interface ConditionStatistics {
   conditionKey: string;
   label: string;
-  samplingValues?: ResearchSamplingConditionValues;
-  requestedSettings?: GenerationSettings;
-  effectiveSettings?: GenerationSettings;
-  providerConfigId?: string;
-  modelId?: string;
   n: number;
   meanTotal: number;
   medianTotal: number;

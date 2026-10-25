@@ -31,9 +31,7 @@ function normalizeS2TelepathicStreamingWiring(value: string): string {
     .replace('        const phase = typeof metadata.step === "number" ? metadata.step : undefined;\n        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: snapshot.generationSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal, onStreamEvent: createSessionStreamPreviewHandler({ role: "viewer", phase, source: typeof metadata.source === "string" ? metadata.source : "resume", emit: input.onStreamPreview }) });',
       '        response = await chat({ config: input.providerConfig, modelId: input.model.modelId, messages: [...messages], settings: snapshot.generationSettings, timeoutMs: input.requestTimeoutMs, signal: input.signal });')
     .replace('          streamWorkflowContext: input.streamWorkflowContext ?? "rv_session",\n          onStreamEvent: createSessionStreamPreviewHandler({ role: "monitor", phase: step, exchangeNumber, source: "live_monitor", emit: input.onStreamPreview }),\n', "")
-    .replace(/^\s*input\.onStreamPreview\?\.\(null\);\n/gm, "")
-    .replace(/, actualProvider: response\.actualProvider \?\? "unknown"/g, "")
-    .replace('resolveGenerationSettings(input.model.capabilities, input.requestedSettings, { provider: input.model.provider })', 'resolveGenerationSettings(input.model.capabilities, input.requestedSettings)');
+    .replace(/^\s*input\.onStreamPreview\?\.\(null\);\n/gm, "");
 }
 
 describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
@@ -55,8 +53,8 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     for (const runner of ["runAutomaticRvLiteSession", "runAutomaticRcpSession", "runAutomaticCustomSession", "runAutomaticTelepathicSession"]) {
       expect(rvSessions).toContain(`${runner}({`);
     }
-    expect(rvSessions.match(/await finishRevealedSession\(result,repository,signal\);/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
-    expect(rvSessions).toContain("await automaticReview(progress.sessionId, true,repository,signal);");
+    expect(rvSessions.match(/await finishRevealedSession\(result\);/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
+    expect(rvSessions).toContain("await automaticReview(progress.sessionId, true);");
   });
 
   it("keeps Research free of automatic post-Reveal discussion before Judge scores are frozen", () => {
@@ -121,24 +119,15 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     const telepathic = source("src/sessions/telepathicController.ts");
     expect(telepathic).toContain('streamWorkflowContext: input.streamWorkflowContext ?? "rv_session"');
     expect(telepathic).toContain('source: "live_monitor"');
-    const telepathicWithoutS2OrFieldGuideWiring = normalizeS2TelepathicStreamingWiring(telepathic
-      .replace(/^import \{ withAutomaticWorkflow, withRvWorkflow \} from "\.\.\/application\/workflowOwnership";\n/, "")
-      .replace(/async function (runAutomaticTelepathicSession|resumeTelepathicManualQuestionStage)Owned\(/g,"export async function $1(")
-      .replace(/\nexport const runAutomaticTelepathicSession = [\s\S]*$/, ""))
+    const telepathicWithoutS2OrFieldGuideWiring = normalizeS2TelepathicStreamingWiring(telepathic)
       .replace("  lockedViewerBaseVocabulary,\n", "")
       .replace("  LOCKED_BASE_VOCABULARY_VERSION,\n", "")
       .replace(/^\s*\{ id: "locked-viewer-base-vocabulary"[^\n]*\n/m, "")
       .replace(/^\s*\.\.\.\(input\.rvSystemPrompt\.fieldGuide[^\n]*\n/m, "");
-    // C5-R1 and Viewer Output Safety Steps A/B1 intentionally change Viewer execution wiring.
-    // B1 also removes the user-configured session cost blocker while preserving cost reporting.
-    // STEP C intentionally adds Viewer-only repetition-runaway persistence wiring in Telepathic.
-    // MONITOR-STREAM-TELEPATHY-REPAIR-1 additionally wires attempt-local streaming abort/recovery.
-    // AUDIT FIX 2 preserves definitive provider results across a concurrent Stop while gating any later recovery request.
-    // STEP 2 links intervention records by logical identity without changing provider messages or recovery.
-    // T3 changes Viewer completion evidence, durable manual authorization and its one-physical-attempt allowance.
-    // R4 adds additive Viewer actualProvider telemetry; normalization above excludes only that metadata field.
-    // Freeze the accepted execution baseline while the Monitor prompt contract above remains separately byte-stable.
-    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("a89d4a57b6115716b4ec52b2ab69c9f3e216b05c10c62a74f5ae0046b2759439");
+    // C5-R1 intentionally adds Anthropic signed-turn sanitizer stop wiring to the Telepathic
+    // controller. Freeze the accepted C5-R1 baseline while the Monitor prompt contract above
+    // remains separately byte-stable.
+    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("e29230f99554ea038ea7247f364477366596c21f36cb6ea419f08df9bab89c66");
   });
 
   it("keeps AI Judge prompt, rubric, scoring and packet byte-identical while allowing ORP1 resource wiring in the engine", () => {

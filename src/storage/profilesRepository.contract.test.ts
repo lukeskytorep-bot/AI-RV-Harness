@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CustomReasoningMode, ReasoningEffort } from "../providers/types";
+import type { ReasoningEffort } from "../providers/types";
 import type { Profile } from "../types";
 import { BrowserProfilesRepository } from "./browser/profilesRepository";
 import type { ProfilesRepository } from "./contracts/profilesRepository";
@@ -28,12 +28,6 @@ type ProfileRow = {
   default_viewer_model_id: string | null;
   default_viewer_reasoning_effort: ReasoningEffort | null;
   default_viewer_temperature: number | null;
-  default_viewer_custom_temperature_mode: "provider_default" | "manual" | null;
-  default_viewer_custom_reasoning_mode: CustomReasoningMode | null;
-  default_viewer_sampling_enabled: number;
-  default_viewer_top_p: number | null;
-  default_viewer_top_k: number | null;
-  default_viewer_seed: number | null;
   default_viewer_system_prompt: string | null;
   default_monitor_system_prompt: string | null;
   default_monitor_provider_config_id: string | null;
@@ -79,12 +73,6 @@ function toRow(profile: Profile): ProfileRow {
     default_viewer_model_id: profile.defaultViewerModelId ?? null,
     default_viewer_reasoning_effort: profile.defaultViewerReasoningEffort ?? null,
     default_viewer_temperature: profile.defaultViewerTemperature ?? null,
-    default_viewer_custom_temperature_mode: profile.defaultViewerCustomTemperatureMode ?? null,
-    default_viewer_custom_reasoning_mode: profile.defaultViewerCustomReasoningMode ?? null,
-    default_viewer_sampling_enabled: profile.defaultViewerOpenRouterSampling?.enabled ? 1 : 0,
-    default_viewer_top_p: profile.defaultViewerOpenRouterSampling?.topP ?? null,
-    default_viewer_top_k: profile.defaultViewerOpenRouterSampling?.topK ?? null,
-    default_viewer_seed: profile.defaultViewerOpenRouterSampling?.seed ?? null,
     default_viewer_system_prompt: profile.defaultViewerSystemPrompt ?? null,
     default_monitor_system_prompt: profile.defaultMonitorSystemPrompt ?? null,
     default_monitor_provider_config_id: profile.defaultMonitorProviderConfigId ?? null,
@@ -124,20 +112,14 @@ function sqliteHarness(): ContractHarness {
           default_viewer_model_id: values[5] as string | null,
           default_viewer_reasoning_effort: values[6] as ProfileRow["default_viewer_reasoning_effort"],
           default_viewer_temperature: values[7] as number | null,
-          default_viewer_custom_temperature_mode: values[8] as ProfileRow["default_viewer_custom_temperature_mode"],
-          default_viewer_custom_reasoning_mode: values[9] as ProfileRow["default_viewer_custom_reasoning_mode"],
-          default_viewer_sampling_enabled: values[10] as number,
-          default_viewer_top_p: values[11] as number | null,
-          default_viewer_top_k: values[12] as number | null,
-          default_viewer_seed: values[13] as number | null,
-          default_viewer_system_prompt: values[14] as string | null,
-          default_monitor_system_prompt: values[15] as string | null,
-          default_monitor_provider_config_id: values[16] as string | null,
-          default_monitor_model_id: values[17] as string | null,
-          default_judge_provider_config_id: values[18] as string | null,
-          default_judge_model_id: values[19] as string | null,
-          created_at: String(values[20]),
-          updated_at: String(values[21]),
+          default_viewer_system_prompt: values[8] as string | null,
+          default_monitor_system_prompt: values[9] as string | null,
+          default_monitor_provider_config_id: values[10] as string | null,
+          default_monitor_model_id: values[11] as string | null,
+          default_judge_provider_config_id: values[12] as string | null,
+          default_judge_model_id: values[13] as string | null,
+          created_at: String(values[14]),
+          updated_at: String(values[15]),
           archived_at: null,
         });
         return;
@@ -147,28 +129,20 @@ function sqliteHarness(): ContractHarness {
         if (row) Object.assign(row, { display_name: values[0], human_display_name: values[1], note: values[2], updated_at: values[3] });
         return;
       }
-      if (query.includes("default_viewer_sampling_enabled = CASE WHEN $7 = 1")) {
-        const row = rows.find((item) => item.id === values[18] && item.archived_at === null);
+      if (query.includes("default_judge_provider_config_id = $9")) {
+        const row = rows.find((item) => item.id === values[11] && item.archived_at === null);
         if (row) Object.assign(row, {
           credential_id: values[0],
           default_viewer_model_id: values[1],
           default_viewer_reasoning_effort: values[2],
           default_viewer_temperature: values[3],
-          default_viewer_custom_temperature_mode: values[4] as ProfileRow["default_viewer_custom_temperature_mode"],
-          default_viewer_custom_reasoning_mode: values[5] as ProfileRow["default_viewer_custom_reasoning_mode"],
-          ...(values[6] === 1 ? {
-            default_viewer_sampling_enabled: values[7],
-            default_viewer_top_p: values[8],
-            default_viewer_top_k: values[9],
-            default_viewer_seed: values[10],
-          } : {}),
-          default_viewer_system_prompt: values[11],
-          default_monitor_system_prompt: values[12],
-          default_monitor_provider_config_id: values[13],
-          default_monitor_model_id: values[14],
-          default_judge_provider_config_id: values[15],
-          default_judge_model_id: values[16],
-          updated_at: values[17],
+          default_viewer_system_prompt: values[4],
+          default_monitor_system_prompt: values[5],
+          default_monitor_provider_config_id: values[6],
+          default_monitor_model_id: values[7],
+          default_judge_provider_config_id: values[8],
+          default_judge_model_id: values[9],
+          updated_at: values[10],
         });
         return;
       }
@@ -184,8 +158,6 @@ function sqliteHarness(): ContractHarness {
           default_viewer_model_id: null,
           default_viewer_reasoning_effort: null,
           default_viewer_temperature: null,
-          default_viewer_custom_temperature_mode: null,
-          default_viewer_custom_reasoning_mode: null,
           updated_at: values[1],
         });
       }
@@ -237,116 +209,6 @@ function runProfilesRepositoryContract(name: string, createHarness: () => Contra
       expect((await repository.listProfiles())[0]?.defaultViewerModelId).toBeUndefined();
       expect((await repository.listProfiles())[0]?.defaultViewerReasoningEffort).toBeUndefined();
       expect((await repository.listProfiles())[0]?.defaultViewerTemperature).toBeUndefined();
-    });
-
-    it("round-trips OpenRouter sampling, preserves zero values, and keeps stored sampling across credential changes", async () => {
-      const { repository } = createHarness();
-      const profile = await repository.createProfile({
-        name: "Sampling Viewer",
-        aiConfiguration: {
-          credentialId: "credential-or",
-          credentialProvider: "openrouter",
-          defaultViewerModelId: "model-a",
-          defaultViewerTemperature: 0.7,
-          defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 0, seed: 42 },
-        },
-      });
-
-      expect((await repository.listProfiles())[0]).toMatchObject({
-        defaultViewerTemperature: 0.7,
-        defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 0, seed: 42 },
-      });
-
-      await repository.setProfileAiConfiguration(profile.id, {
-        credentialId: "credential-or",
-        credentialProvider: "openrouter",
-        defaultViewerModelId: "model-a",
-        defaultViewerTemperature: 0.7,
-        defaultViewerOpenRouterSampling: { enabled: false, topP: 0.04, topK: 0, seed: 42 },
-      });
-      expect((await repository.listProfiles())[0]?.defaultViewerOpenRouterSampling).toEqual({ enabled: false, topP: 0.04, topK: 0, seed: 42 });
-
-      await repository.setProfileCredential(profile.id, "credential-other", "mistral");
-      const afterProviderChange = (await repository.listProfiles())[0];
-      expect(afterProviderChange?.defaultViewerTemperature).toBeUndefined();
-      expect(afterProviderChange?.defaultViewerOpenRouterSampling).toEqual({ enabled: false, topP: 0.04, topK: 0, seed: 42 });
-    });
-
-    it("rejects malformed sampling enabled values before write and preserves the previous profile", async () => {
-      const { repository } = createHarness();
-      const profile = await repository.createProfile({
-        name: "Sampling Viewer",
-        aiConfiguration: {
-          credentialId: "credential-or",
-          credentialProvider: "openrouter",
-          defaultViewerModelId: "model-a",
-          defaultViewerTemperature: 0.6,
-          defaultViewerOpenRouterSampling: { enabled: true, topK: 64 },
-        },
-      });
-
-      const malformedEnabledValues: unknown[] = ["false", 1, null, undefined];
-      for (const enabled of malformedEnabledValues) {
-        const malformedSampling = enabled === undefined
-          ? { topK: 20 }
-          : { enabled, topK: 20 };
-
-        await expect(repository.setProfileAiConfiguration(profile.id, {
-          credentialId: "credential-or",
-          credentialProvider: "openrouter",
-          defaultViewerModelId: "model-b",
-          defaultViewerTemperature: 0.2,
-          defaultViewerOpenRouterSampling: malformedSampling as never,
-        })).rejects.toThrow("enabled must be a boolean");
-
-        expect((await repository.listProfiles())[0]).toMatchObject({
-          defaultViewerModelId: "model-a",
-          defaultViewerTemperature: 0.6,
-          defaultViewerOpenRouterSampling: { enabled: true, topK: 64 },
-        });
-      }
-    });
-
-    it("round-trips the shared sampling columns for Custom OpenAI-compatible and rejects unrelated providers", async () => {
-      const { repository } = createHarness();
-      const custom = await repository.createProfile({
-        name: "Custom Sampling Viewer",
-        aiConfiguration: {
-          credentialId: "credential-custom",
-          credentialProvider: "custom_openai",
-          defaultViewerModelId: "model-custom",
-          defaultViewerTemperature: 0.8,
-          defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 0, seed: 42 },
-        },
-      });
-      expect((await repository.listProfiles()).find((item) => item.id === custom.id)?.defaultViewerOpenRouterSampling)
-        .toEqual({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
-
-      await repository.setProfileAiConfiguration(custom.id, {
-        credentialId: "credential-custom",
-        credentialProvider: "custom_openai",
-        defaultViewerModelId: "model-custom",
-        defaultViewerTemperature: 1.1,
-      });
-      expect((await repository.listProfiles()).find((item) => item.id === custom.id)).toMatchObject({
-        defaultViewerTemperature: 1.1,
-        defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 0, seed: 42 },
-      });
-
-      await repository.setProfileCredential(custom.id, "credential-other", "mistral");
-      await repository.setProfileCredential(custom.id, "credential-custom", "custom_openai");
-      expect((await repository.listProfiles()).find((item) => item.id === custom.id)?.defaultViewerOpenRouterSampling)
-        .toEqual({ enabled: true, topP: 0.04, topK: 0, seed: 42 });
-
-      const mistral = await repository.createProfile({ name: "Mistral Viewer" });
-      await repository.setProfileAiConfiguration(mistral.id, {
-        credentialId: "credential-m",
-        credentialProvider: "mistral",
-        defaultViewerModelId: "model-m",
-        defaultViewerOpenRouterSampling: { enabled: true, topP: 0.7, topK: 100, seed: 7 },
-      });
-      expect((await repository.listProfiles()).find((item) => item.id === mistral.id)?.defaultViewerOpenRouterSampling)
-        .toEqual({ enabled: true, topP: 0.7, topK: 100, seed: 7 });
     });
 
     it("separates and sorts active and archived Profile records", async () => {

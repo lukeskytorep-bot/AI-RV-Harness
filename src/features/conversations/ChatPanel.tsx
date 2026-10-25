@@ -1,11 +1,8 @@
-import { useViewerRoutes } from "../../components/useViewerRoutes";
-import { ViewerRouteNotice } from "../../components/ViewerRouteNotice";
-import { approveChatResponseRetry, chatResponseNeedsResolution, chatResponseOperationState, endChatResponse, hasUnfinishedChatResponse } from "../../chat/responseRecovery";
-import { CircleStop, Play, Archive, ArrowRight, Crosshair, Download, FileCheck2, KeyRound, LockKeyhole, MessageCircle, Paperclip, Pencil, Plus, RadioTower, ShieldCheck, Sparkles, Waves, X } from "lucide-react";
+import { Archive, ArrowRight, Crosshair, Download, FileCheck2, KeyRound, LockKeyhole, MessageCircle, Paperclip, Pencil, Plus, RadioTower, ShieldCheck, Sparkles, Waves, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { prepareViewerNotesForSession, viewerNotesSystemBlock } from "../../aiCenter/viewerNotes";
-import { requireWorkspaceViewerRoute, viewerIdentityLabel } from "../../aiCenter/viewerIdentitySelection";
+import { listEligibleViewerIdentities, preferredViewerIdentityId, requireExistingViewerIdentity, viewerIdentityLabel, type EligibleViewerIdentity } from "../../aiCenter/viewerIdentitySelection";
 import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
 import { chooseAndImportAttachments } from "../../attachments/native";
 import { ChatMessageList } from "../../chat/ChatMessageList";
@@ -14,7 +11,7 @@ import { estimateContextBudget } from "../../chat/contextBudget";
 import { ConversationContinuationBreakError, estimateConversationContinuationMemoryBytes } from "../../chat/continuationMemory";
 import { buildChatProviderMessages, retryChatTurn, sendChatTurn } from "../../chat/engine";
 import { buildChatMarkdownExport } from "../../chat/export";
-import { chatOutputTokens } from "../../chat/outputPolicy";
+import { defaultChatOutputTokens } from "../../chat/outputPreference";
 import { clearPendingChatTurn, loadPendingChatTurn, savePendingChatTurn, type PendingChatTurn } from "../../chat/pendingTurn";
 import { conversationViewerContextKey, defaultConversationViewerLearningEnabled, loadConversationViewerLearningPreference, loadExistingConversationViewerLearningSnapshot, saveConversationViewerLearningPreference, type ConversationViewerLearningSnapshot } from "../../chat/viewerLearning";
 import { resolveSessionLanguage } from "../../domain/localization";
@@ -25,7 +22,6 @@ import { getFullRcp, getRvLite, getTelepathicProtocol } from "../../resources/pr
 import { buildEffectiveViewerPrompt, localizedViewerEditablePrompt, stripKnownLockedBaseVocabulary } from "../../resources/systemPrompts";
 import { createImportedWorkspaceSource, estimateTextTokens } from "../../sources/service";
 import type { WorkspaceSource } from "../../sources/types";
-import { AsyncRunGuard } from "../../sessions/runGuard";
 import { saveTextFile } from "../../storage/native";
 import { autosizeConversationComposer } from "./composerSizing";
 import type { AppRepository } from "../../storage/repository";
@@ -38,20 +34,23 @@ export interface ChatPanelProps {
   workspace: Workspace;
   repository: AppRepository | null;
   fixedMode?: ChatMode;
-  onBusyChange?: (busy: boolean) => void;
 }
 
-export function ChatPanel({ copy, settings, profile, workspace, repository, fixedMode, onBusyChange }: ChatPanelProps) {
+export function ChatPanel({ copy, settings, profile, workspace, repository, fixedMode }: ChatPanelProps) {
   const [mode, setMode] = useState<ChatMode>(fixedMode ?? "conversation");
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [threadTitle, setThreadTitle] = useState("");
   const [savedThreadTitle, setSavedThreadTitle] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [providerConfigs, setProviderConfigs] = useState<ProviderConfig[]>([]);
+  const [models, setModels] = useState<ProviderModel[]>([]);
+  const [viewerIdentities, setViewerIdentities] = useState<EligibleViewerIdentity[]>([]);
   const [sources, setSources] = useState<WorkspaceSource[]>([]);
   const [activeSourceIds, setActiveSourceIds] = useState<string[]>([]);
   const [chatImages, setChatImages] = useState<ProviderImageInput[]>([]);
   const [chatImageNames, setChatImageNames] = useState<string[]>([]);
+  const [viewerIdentityId, setViewerIdentityId] = useState("");
   const [viewerLearningEnabled, setViewerLearningEnabled] = useState(false);
   const [viewerLearningSnapshot, setViewerLearningSnapshot] = useState<ConversationViewerLearningSnapshot | null>(null);
   const [input, setInput] = useState("");
@@ -60,24 +59,15 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   const [manualViewerNotesEnabled, setManualViewerNotesEnabled] = useState(true);
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [sending, setSending] = useState(false);
-  const [stopping, setStopping] = useState(false);
-  const [responseOwnership, setResponseOwnership] = useState<"idle" | "other" | "unknown">("idle");
-  const responseAbort = useRef<AbortController | null>(null);
-  const responseEpoch = useRef(0);
-  useEffect(() => () => { responseEpoch.current++; responseAbort.current?.abort(new DOMException("Conversation view closed", "AbortError")); }, [workspace.id, repository]);
   const [streamingAssistant, setStreamingAssistant] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pendingRetry, setPendingRetry] = useState<PendingChatTurn | null>(null);
   const [continuationFallback, setContinuationFallback] = useState<"send" | "retry" | null>(null);
-  const operationGuardRef = useRef(new AsyncRunGuard());
   const dialogs = useAppDialogs();
   const language = resolveSessionLanguage(settings.interfaceLanguage, settings.sessionLanguage);
-  const { providerConfigs, models, viewerIdentities, viewerIdentityId, setViewerIdentityId, viewerRouteReady, status: viewerRouteStatus, retry: retryViewerRoute } = useViewerRoutes({ repository, profile, workspace, language });
   const selectedIdentity = viewerIdentities.find((item) => item.identity.id === viewerIdentityId) ?? null;
   const activeProvider = selectedIdentity?.providerConfig ?? null;
   const selectedModel = selectedIdentity?.model ?? null;
-
-  useEffect(() => { onBusyChange?.(sending); return () => onBusyChange?.(false); }, [sending, onBusyChange]);
 
   useEffect(() => {
     if (fixedMode) setMode(fixedMode);
@@ -85,12 +75,27 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
 
   useEffect(() => {
     let cancelled = false;
-    setSources([]); setChatImages([]); setChatImageNames([]);
-    if (repository) void repository.listWorkspaceSources(workspace.id).then(items => {
-      if (!cancelled) setSources(items);
-    }).catch(() => { if (!cancelled) setError(copy.viewerRouteLoadFailed); });
+    void (async () => {
+      if (!repository) return;
+      const [configs, nextSources] = await Promise.all([
+        repository.listProviderConfigs(),
+        repository.listWorkspaceSources(workspace.id),
+      ]);
+      if (cancelled) return;
+      setProviderConfigs(configs);
+      const nextModels = await repository.listProviderModels();
+      const eligible = profile ? await listEligibleViewerIdentities({ repository, profileId: profile.id, language, providerConfigs: configs, models: nextModels }) : [];
+      if (cancelled) return;
+      setModels(nextModels);
+      setViewerIdentities(eligible);
+      setSources(nextSources);
+      setChatImages([]);
+      setChatImageNames([]);
+      setViewerIdentityId(preferredViewerIdentityId(eligible, profile?.defaultViewerModelId));
+      setError(null);
+    })();
     return () => { cancelled = true; };
-  }, [repository, workspace.id]);
+  }, [repository, workspace.id, profile?.id, profile?.defaultViewerModelId, language]);
 
   useEffect(() => {
     let cancelled = false;
@@ -158,7 +163,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
 
   const selectedSources = sources.filter((source) => activeSourceIds.includes(source.id));
   const configuredOutputTokens = mode === "conversation" ? settings.conversationMaxOutputTokens : settings.rvSessionMaxOutputTokens;
-  const effectiveMaxOutputTokens = chatOutputTokens(mode, configuredOutputTokens, selectedModel);
+  const effectiveMaxOutputTokens = defaultChatOutputTokens(configuredOutputTokens, selectedModel?.capabilities.maxOutputTokens);
   const attachedProtocol = mode === "manual_rv" && manualProtocol !== "none"
     ? manualProtocol === "rcp"
       ? getFullRcp(language).content
@@ -325,31 +330,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
   };
 
 
-  const finishResponseUi = async (responseThreadId: string, executionEpoch: number, controller: AbortController) => {
-    try {
-      const storedMessages = await repository!.listChatMessages(responseThreadId);
-      if (executionEpoch !== responseEpoch.current) return;
-      if (!loadPendingChatTurn(responseThreadId, storedMessages)) {
-        clearPendingChatTurn(responseThreadId);
-        setPendingRetry(null);
-      }
-      setMessages(storedMessages);
-      setThreads(await repository!.listChatThreads(workspace.id, mode));
-    } catch (cause) {
-      if (executionEpoch === responseEpoch.current) setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      if (!controller.signal.aborted) controller.abort(new DOMException("Response settled", "AbortError"));
-      if (responseAbort.current === controller) responseAbort.current = null;
-      setStreamingAssistant("");
-      setStopping(false);
-      setSending(false);
-      operationGuardRef.current.release();
-      onBusyChange?.(false);
-    }
-  };
-
   const handleVisibleStreamEvent = (event: ProviderStreamEvent) => {
-    if (responseAbort.current?.signal.aborted) return;
     if (event.event === "started") {
       setStreamingAssistant("");
       return;
@@ -359,25 +340,9 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
 
   const send = async (allowTextOnlyContinuation = false) => {
     const content = input.trim();
-    if (!repository || !threadId || !profile || !selectedIdentity || !activeProvider || !selectedModel || !content || sending || !viewerRouteReady || !operationGuardRef.current.tryAcquire()) return;
-    setSending(true);
-    const executionEpoch = responseEpoch.current;
-    const responseController = new AbortController();
-    responseAbort.current = responseController;
-    setStopping(false);
-    onBusyChange?.(true);
-    try {
-      await requireWorkspaceViewerRoute({ repository, workspace, profile, identityId: selectedIdentity.identity.id, providerConfig: activeProvider, model: selectedModel });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      responseAbort.current = null;
-      setStopping(false);
-      setSending(false);
-      operationGuardRef.current.release();
-      onBusyChange?.(false);
-      return;
-    }
+    if (!repository || !threadId || !activeProvider || !selectedModel || !content || sending) return;
     setInput("");
+    setSending(true);
     setStreamingAssistant("");
     setError(null);
     if (!allowTextOnlyContinuation) setContinuationFallback(null);
@@ -397,11 +362,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setInput(content);
-      responseAbort.current = null;
-      setStopping(false);
       setSending(false);
-      operationGuardRef.current.release();
-      onBusyChange?.(false);
       return;
     }
     let frozenViewerLearning: ConversationViewerLearningSnapshot | undefined;
@@ -415,11 +376,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setInput(content);
-      responseAbort.current = null;
-      setStopping(false);
       setSending(false);
-      operationGuardRef.current.release();
-      onBusyChange?.(false);
       return;
     }
     const frozenConversationContextKey = mode === "conversation" && selectedIdentity
@@ -442,18 +399,13 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       sourceIds: selectedSources.map((source) => source.id),
       images: chatImages,
       imageNames: chatImageNames,
-      imageMimeTypes: chatImages.map((image) => image.mimeType),
       createdAt: new Date().toISOString(),
     };
+    savePendingChatTurn(pending);
+    setPendingRetry(pending);
+    setMessages((current) => [...current, { id: "pending-user", threadId, role: "user", content, createdAt: new Date().toISOString() }]);
     try {
       await sendChatTurn({
-        onUserPrepared: user => {
-          savePendingChatTurn(pending);
-          if (executionEpoch === responseEpoch.current) {
-            setPendingRetry(pending);
-            setMessages(current => [...current, user]);
-          }
-        },
         repository,
         threadId,
         mode,
@@ -465,14 +417,12 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         ...(effectiveRvSystemPrompt ? { rvSystemPrompt: effectiveRvSystemPrompt } : {}),
         sources: selectedSources,
         images: chatImages,
-        imageNames: chatImageNames,
         ...(frozenViewerLearning ? { viewerLearning: frozenViewerLearning } : {}),
         ...(frozenConversationContextKey ? { conversationContextKey: frozenConversationContextKey } : {}),
         maxRetries: settings.maxRetries,
         timeoutMs: settings.requestTimeoutMs,
         ...(attachedProtocol ? { attachedProtocol } : {}),
-        signal: responseController.signal,
-        onStreamEvent: event => { if (!responseController.signal.aborted) handleVisibleStreamEvent(event); },
+        onStreamEvent: handleVisibleStreamEvent,
         allowTextOnlyContinuation,
       });
       clearPendingChatTurn(threadId);
@@ -481,8 +431,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       setChatImages([]);
       setChatImageNames([]);
     } catch (cause) {
-      if (responseController.signal.aborted && (cause instanceof DOMException && cause.name === "AbortError" || (cause as { details?: { code?: string } })?.details?.code === "cancelled")) { setError(null); }
-      else if (cause instanceof ConversationContinuationBreakError && mode === "conversation") {
+      if (cause instanceof ConversationContinuationBreakError && mode === "conversation") {
         setInput(content);
         setContinuationFallback("send");
         setError(null);
@@ -490,54 +439,37 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         setError(cause instanceof Error ? cause.message : String(cause));
       }
     } finally {
-      await finishResponseUi(threadId, executionEpoch, responseController);
+      const storedMessages = await repository.listChatMessages(threadId);
+      if (storedMessages.at(-1)?.role !== "user") {
+        clearPendingChatTurn(threadId);
+        setPendingRetry(null);
+      }
+      setMessages(storedMessages);
+      setStreamingAssistant("");
+      setThreads(await repository.listChatThreads(workspace.id, mode));
+      setSending(false);
     }
   };
 
-  const retryPendingResponse = async (allowTextOnlyContinuation = false, allowRetryWithoutImages = false) => {
-    if (!repository || !profile || !pendingRetry || sending || !viewerRouteReady || pendingRetry.threadId !== threadId || !operationGuardRef.current.tryAcquire()) return;
-    setSending(true);
-    const executionEpoch = responseEpoch.current;
-    const responseController = new AbortController();
-    responseAbort.current = responseController;
-    setStopping(false);
-    onBusyChange?.(true);
-    if (!pendingRetry.aiIdentityId) {
-      setError(settings.interfaceLanguage === "pl" ? "Tego starszego zapisu ponowienia nie można bezpiecznie powiązać z bieżącą tożsamością Viewera. Wyślij wiadomość ponownie jako nową turę." : "This legacy retry record cannot be safely bound to the current Viewer identity. Send the message again as a new turn.");
-      responseAbort.current = null;
-      setStopping(false);
-      setSending(false);
-      operationGuardRef.current.release();
-      onBusyChange?.(false);
-      return;
-    }
+  const retryPendingResponse = async (allowTextOnlyContinuation = false) => {
+    if (!repository || !pendingRetry || sending) return;
     const providerConfig = providerConfigs.find((item) => item.id === pendingRetry.providerConfigId);
     const model = models.find((item) => item.providerConfigId === pendingRetry.providerConfigId && item.modelId === pendingRetry.modelId && (!pendingRetry.modelRoute || item.route === pendingRetry.modelRoute));
     if (!providerConfig || !model) {
       setError(settings.interfaceLanguage === "pl" ? "Zapisany model lub połączenie nie jest obecnie dostępne. Przywróć je, aby ponowić odpowiedź." : "The saved model or connection is currently unavailable. Restore it to retry the response.");
-      responseAbort.current = null;
-      setStopping(false);
-      setSending(false);
-      operationGuardRef.current.release();
-      onBusyChange?.(false);
       return;
     }
-    try {
-      await requireWorkspaceViewerRoute({ repository, workspace, profile, identityId: pendingRetry.aiIdentityId, providerConfig, model });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      responseAbort.current = null;
-      setStopping(false);
-      setSending(false);
-      operationGuardRef.current.release();
-      onBusyChange?.(false);
-      return;
+    if (pendingRetry.aiIdentityId && profile) {
+      try {
+        await requireExistingViewerIdentity({ repository, profileId: profile.id, identityId: pendingRetry.aiIdentityId, providerConfig, model });
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        return;
+      }
     }
+    setSending(true);
     setStreamingAssistant("");
-    const retryLostImages = pendingRetry.imageNames.length > 0 && pendingRetry.images.length === 0;
-    setError(retryLostImages
-      ? (settings.interfaceLanguage === "pl" ? "Po restarcie obraz nie jest przechowywany. Ta próba ponowi odpowiedź bez obrazu; aby wysłać obraz ponownie, utwórz nową turę i dołącz go ponownie." : "Image bytes are not stored across restarts. This retry will run without the image; to send it again, create a new turn and attach it again.")
-      : null);
+    setError(null);
     if (!allowTextOnlyContinuation) setContinuationFallback(null);
     try {
       await retryChatTurn({
@@ -552,70 +484,29 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         ...(pendingRetry.attachedProtocol ? { attachedProtocol: pendingRetry.attachedProtocol } : {}),
         sources: sources.filter((source) => pendingRetry.sourceIds.includes(source.id)),
         images: pendingRetry.images,
-        imageNames: pendingRetry.imageNames,
-        imageMimeTypes: pendingRetry.imageMimeTypes,
-        allowRetryWithoutImages,
         ...(pendingRetry.viewerLearning ? { viewerLearning: pendingRetry.viewerLearning } : {}),
         ...(pendingRetry.conversationContextKey ? { conversationContextKey: pendingRetry.conversationContextKey } : {}),
         maxRetries: settings.maxRetries,
         timeoutMs: settings.requestTimeoutMs,
-        signal: responseController.signal,
-        onStreamEvent: event => { if (!responseController.signal.aborted) handleVisibleStreamEvent(event); },
+        onStreamEvent: handleVisibleStreamEvent,
         allowTextOnlyContinuation,
       });
       clearPendingChatTurn(pendingRetry.threadId);
       setPendingRetry(null);
       setContinuationFallback(null);
     } catch (cause) {
-      if (responseController.signal.aborted && (cause instanceof DOMException && cause.name === "AbortError" || (cause as { details?: { code?: string } })?.details?.code === "cancelled")) { setError(null); }
-      else if (cause instanceof ConversationContinuationBreakError && mode === "conversation") {
+      if (cause instanceof ConversationContinuationBreakError && mode === "conversation") {
         setContinuationFallback("retry");
         setError(null);
       } else {
         setError(cause instanceof Error ? cause.message : String(cause));
       }
     } finally {
-      await finishResponseUi(pendingRetry.threadId, executionEpoch, responseController);
+      setMessages(await repository.listChatMessages(pendingRetry.threadId));
+      setStreamingAssistant("");
+      setThreads(await repository.listChatThreads(workspace.id, mode));
+      setSending(false);
     }
-  };
-
-  const hasResponseToRecover = Boolean(pendingRetry) || hasUnfinishedChatResponse(messages.at(-1));
-  const retryNeedsImageApproval = Boolean(pendingRetry?.imageNames.length && !pendingRetry.images.length);
-  const responseOtherOwner = responseOwnership !== "idle";
-  useEffect(() => {
-    if (!threadId || sending) return;
-    let disposed = false;
-    const check = async () => { const owner = await chatResponseOperationState(threadId); if (!disposed) setResponseOwnership(owner); };
-    void check();
-    const timer = setInterval(() => { void check(); }, 1000);
-    return () => { disposed = true; clearInterval(timer); };
-  }, [threadId, sending]);
-  const responseNeedsResolution = chatResponseNeedsResolution(messages.at(-1));
-  const stopResponse = () => {
-    if (!responseAbort.current || stopping) return;
-    setStopping(true);
-    responseAbort.current.abort(new DOMException("Stopped by user", "AbortError"));
-  };
-  const endResponse = async () => {
-    if (!repository || !threadId || sending || !operationGuardRef.current.tryAcquire()) return;
-    try {
-      await endChatResponse(repository, threadId);
-      clearPendingChatTurn(threadId);
-      setPendingRetry(null);
-      setContinuationFallback(null);
-      setError(null);
-      setMessages(await repository.listChatMessages(threadId));
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { operationGuardRef.current.release(); }
-  };
-  const approveRetry = async () => {
-    if (!repository || !threadId || sending || !operationGuardRef.current.tryAcquire()) return;
-    try {
-      await approveChatResponseRetry(repository, threadId);
-      setMessages(await repository.listChatMessages(threadId));
-      setError(null);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { operationGuardRef.current.release(); }
   };
 
   const renameThread = async () => {
@@ -669,25 +560,18 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
             </div>
           </details>
         </div>
-        <div className="chat-response-actions">
-          {sending || !hasResponseToRecover ? <button type="button" className="stop-button compact-stop-button" disabled={!sending || stopping} onClick={stopResponse} title={settings.interfaceLanguage === "pl" ? "Zatrzymuje teraz i zachowuje postęp. Wznowienie wymaga Twojej decyzji; niepewne wywołanie trzeba najpierw rozstrzygnąć." : "Stops now and saves progress. Resume requires your action; an uncertain call must be resolved first."}><CircleStop size={15} />{stopping ? (settings.interfaceLanguage === "pl" ? "Zatrzymywanie…" : "Stopping…") : "Stop"}</button> : <>
-            <span role="status">{responseOwnership === "other" ? (settings.interfaceLanguage === "pl" ? "Praca w innym oknie" : "Work in another window") : responseOwnership === "unknown" ? (settings.interfaceLanguage === "pl" ? "Sprawdzanie właściciela" : "Checking ownership") : (settings.interfaceLanguage === "pl" ? "Zatrzymano" : "Stopped")}</span>
-            <button type="button" className="secondary-button compact-response-button" disabled={!pendingRetry || responseOtherOwner || !viewerRouteReady || responseNeedsResolution || retryNeedsImageApproval || Boolean(continuationFallback)} onClick={() => void retryPendingResponse()} title={responseNeedsResolution ? (settings.interfaceLanguage === "pl" ? "Najpierw rozstrzygnij niepewne wywołanie." : "Resolve the uncertain call first.") : undefined}><Play size={15} />{settings.interfaceLanguage === "pl" ? "Wznów" : "Resume"}</button>
-            <button type="button" className="secondary-button compact-response-button" disabled={responseOtherOwner} onClick={() => void endResponse()} title={settings.interfaceLanguage === "pl" ? "Kończy tę odpowiedź bez wznowienia. Zapisane wyniki pozostaną." : "Ends this response without resuming it. Saved results are retained."}><CircleStop size={15} />{settings.interfaceLanguage === "pl" ? "Zakończ" : "End"}</button>
-          </>}
-        </div>
         <span className={mode === "conversation" ? "context-badge conversation" : "context-badge blind"}>
           {mode === "conversation" ? <Sparkles size={14} /> : <LockKeyhole size={14} />}
           {mode === "conversation" ? copy.systemActive : copy.viewerSystemActive}
         </span>
       </div>
       <div className="chat-model-bar">
-        <span><KeyRound size={14} />{activeProvider?.label ?? (viewerRouteStatus === "configuration_missing" ? copy.credentialPending : copy.viewerRouteSelect)}</span>
-        <select aria-label={copy.viewerRouteSelect} value={viewerIdentityId} onChange={(event) => setViewerIdentityId(event.target.value)} disabled={!viewerRouteReady || !viewerIdentities.length || sending}>
-          <option value="">{copy.viewerRouteSelect}</option>
+        <span><KeyRound size={14} />{activeProvider?.label ?? copy.credentialPending}</span>
+        <select value={viewerIdentityId} onChange={(event) => setViewerIdentityId(event.target.value)} disabled={!viewerIdentities.length || sending}>
+          <option value="">{viewerIdentities.length ? copy.selectModel : (settings.interfaceLanguage === "pl" ? "Brak tożsamości Viewera" : "No Viewer identity")}</option>
           {viewerIdentities.map((item) => <option key={item.identity.id} value={item.identity.id}>{viewerIdentityLabel(item, settings.interfaceLanguage)}</option>)}
         </select>
-        <ViewerRouteNotice copy={copy} status={viewerRouteStatus} onRetry={retryViewerRoute} disabled={sending} />
+        {!viewerIdentities.length && <small>{settings.interfaceLanguage === "pl" ? "Dodaj model Viewera w Profilu lub rozpocznij Training. Conversation nie tworzy nowej tożsamości automatycznie." : "Add a Viewer model in Profile or start Training. Conversation does not create a new identity automatically."}</small>}
         {mode === "conversation" && <label className="manual-notes-toggle" title={settings.interfaceLanguage === "pl" ? "Dołącz read-only Field Guide i Viewer Notes dokładnie wybranej tożsamości." : "Attach the exact selected identity's read-only Field Guide and Viewer Notes."}><span>{settings.interfaceLanguage === "pl" ? "Użyj Viewer Learning" : "Use Viewer Learning"}</span><input type="checkbox" checked={viewerLearningEnabled} disabled={sending || !viewerLearningSnapshot} onChange={(event) => { const enabled = event.target.checked; setViewerLearningEnabled(enabled); if (threadId) saveConversationViewerLearningPreference(threadId, enabled); }} /></label>}
         <span className={`chat-context-meter ${contextBudget.level}`} title={contextBudget.contextLimit === undefined
           ? `${copy.estimatedContext}: ~${contextBudget.estimatedInputTokens.toLocaleString()} + ${contextBudget.reservedOutputTokens.toLocaleString()} output tokens`
@@ -715,14 +599,12 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         emptyState={<div className="chat-empty"><div className="empty-orbit"><Waves size={32} /></div><h3>{copy.cleanBoundary}</h3><p>{activeProvider ? copy.noChatMessages : copy.providerNeeded}</p></div>}
       />
       {error && <div className="provider-error chat-error">{error}</div>}
-      {continuationFallback && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Natywna ciągłość providera nie pasuje już do bieżącego połączenia lub modelu. Możesz świadomie kontynuować tylko z historią tekstową." : "Provider-native continuity no longer matches the current connection or model. You can explicitly continue with text history only."}</span><button className="secondary-button" disabled={sending || responseOtherOwner || !viewerRouteReady || responseNeedsResolution} onClick={() => void (continuationFallback === "retry" ? retryPendingResponse(true) : send(true))}>{settings.interfaceLanguage === "pl" ? "Kontynuuj tylko tekstowo" : "Continue text-only"}</button></div>}
-      {!sending && hasResponseToRecover && !pendingRetry && <div className="chat-retry-panel" role="status">{settings.interfaceLanguage === "pl" ? "Zachowano przerwaną odpowiedź, ale brakuje danych potrzebnych do bezpiecznego wznowienia. Zakończ ją, aby wysłać nową wiadomość. Zapisana historia pozostanie." : "The interrupted response is preserved, but the details needed for safe resume are unavailable. End it to send a new message. Saved history will be retained."}</div>}
-      {!sending && pendingRetry && retryNeedsImageApproval && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Po restarcie obraz nie jest przechowywany. Możesz jawnie wznowić bez obrazu albo zakończyć tę odpowiedź i dołączyć obraz w nowej wiadomości." : "Images are not stored across restarts. Explicitly resume without the image, or end this response and attach it in a new message."}</span><button type="button" className="secondary-button" disabled={responseOtherOwner || responseNeedsResolution || !viewerRouteReady} onClick={() => void retryPendingResponse(Boolean(continuationFallback), true)}>{settings.interfaceLanguage === "pl" ? "Wznów bez obrazu" : "Resume without image"}</button></div>}
-      {!sending && pendingRetry && responseNeedsResolution && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Wywołanie mogło dotrzeć do providera. Ponowienie może naliczyć kolejny koszt." : "The call may have reached the provider. Retrying may incur another charge."}</span><button type="button" className="secondary-button" disabled={responseOtherOwner} onClick={() => void approveRetry()}>{settings.interfaceLanguage === "pl" ? "Zezwól na ponowienie" : "Allow retry"}</button></div>}
+      {continuationFallback && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Natywna ciągłość providera nie pasuje już do bieżącego połączenia lub modelu. Możesz świadomie kontynuować tylko z historią tekstową." : "Provider-native continuity no longer matches the current connection or model. You can explicitly continue with text history only."}</span><button className="secondary-button" disabled={sending} onClick={() => void (continuationFallback === "retry" ? retryPendingResponse(true) : send(true))}>{settings.interfaceLanguage === "pl" ? "Kontynuuj tylko tekstowo" : "Continue text-only"}</button></div>}
+      {pendingRetry && !continuationFallback && <div className="chat-retry-panel"><span>{settings.interfaceLanguage === "pl" ? "Ostatnia wiadomość nie otrzymała odpowiedzi AI." : "The last message did not receive an AI response."}</span><button className="secondary-button" disabled={sending} onClick={() => void retryPendingResponse()}>{settings.interfaceLanguage === "pl" ? "Ponów odpowiedź" : "Retry response"}</button></div>}
       {(selectedSources.length > 0 || chatImageNames.length > 0) && <div className="attachment-chips">{selectedSources.map((source) => <button type="button" key={source.id} title={copy.removeSource} onClick={() => void toggleSource(source.id)}><FileCheck2 size={12} /><span>{source.displayName} · {source.sourceType.toUpperCase()} · {settings.interfaceLanguage === "pl" ? "aktywne" : "active"} · ~{estimateTextTokens(source.content).toLocaleString()} tokens</span><X size={11} /></button>)}{chatImageNames.map((name, index) => <button type="button" key={`${name}-${index}`} onClick={() => removeChatImage(index)}><span>{name} · IMAGE · {settings.interfaceLanguage === "pl" ? "następna tura" : "next turn"} · ~2,048 tokens</span><X size={11} /></button>)}</div>}
       <div className="composer">
-        <textarea ref={composerTextareaRef} rows={2} placeholder={copy.messagePlaceholder} value={input} onChange={(event) => setInput(event.target.value)} disabled={!viewerRouteReady || !selectedModel || sending || hasResponseToRecover} />
-        <div className="composer-actions"><button type="button" className="composer-attachment-button" title={settings.interfaceLanguage === "pl" ? "Dołącz dokumenty lub obrazy" : "Attach documents or images"} disabled={!viewerRouteReady || !repository || !threadId || sending || attachmentBusy || hasResponseToRecover} onClick={() => void attachFiles()}><Paperclip size={17} /></button><button disabled={!viewerRouteReady || !selectedModel || !input.trim() || sending || contextExceeded || hasResponseToRecover} onClick={() => void send()}>{sending ? copy.sending : copy.send}<ArrowRight size={15} /></button></div>
+        <textarea ref={composerTextareaRef} rows={2} placeholder={copy.messagePlaceholder} value={input} onChange={(event) => setInput(event.target.value)} disabled={!selectedModel || sending || Boolean(pendingRetry)} />
+        <div className="composer-actions"><button type="button" className="composer-attachment-button" title={settings.interfaceLanguage === "pl" ? "Dołącz dokumenty lub obrazy" : "Attach documents or images"} disabled={!repository || !threadId || sending || attachmentBusy || Boolean(pendingRetry)} onClick={() => void attachFiles()}><Paperclip size={17} /></button><button disabled={!selectedModel || !input.trim() || sending || contextExceeded || Boolean(pendingRetry)} onClick={() => void send()}>{sending ? copy.sending : copy.send}<ArrowRight size={15} /></button></div>
       </div>
     </section>
   );

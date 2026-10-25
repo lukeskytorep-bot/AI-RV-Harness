@@ -17,6 +17,7 @@ export interface SanitizedRepetitiveOutput {
   finding?: RepetitionInspection;
 }
 
+const MAX_OUTPUT_CHARACTERS = 120_000;
 const IDENTICAL_LINE_LIMIT = 60;
 const IDENTICAL_CHARACTER_LIMIT = 600;
 const MIN_PERIOD = 12;
@@ -33,13 +34,20 @@ export class RepetitionGuard {
 /**
  * Detects only unmistakable generation runaways. Repeated RV field names,
  * descriptors, touches and ordinary prose are valid protocol data and are not
- * scored. This is a last-resort repetition-runaway detector, not a size limit or semantic classifier.
+ * scored. This is a last-resort output guillotine, not a semantic classifier.
  */
 export function analyzeRepetitiveOutput(content: string): RepetitionInspection {
-  const scannable = maskFencedDrawingLines(content);
-  return findCharacterRun(scannable)
-    ?? findConsecutiveIdenticalLines(scannable)
-    ?? findRepeatedTailBlock(scannable)
+  if (content.length > MAX_OUTPUT_CHARACTERS) {
+    return {
+      severity: "stop",
+      rule: "output-size-limit",
+      fragment: content.slice(MAX_OUTPUT_CHARACTERS, MAX_OUTPUT_CHARACTERS + 120),
+      cutAt: MAX_OUTPUT_CHARACTERS,
+    };
+  }
+  return findCharacterRun(content)
+    ?? findConsecutiveIdenticalLines(content)
+    ?? findRepeatedTailBlock(content)
     ?? { severity: "clear" };
 }
 
@@ -49,8 +57,8 @@ export function detectRepetitiveOutput(content: string): boolean {
 }
 
 /**
- * Preserves valid evidence, removes only an unmistakable runaway suffix and appends a
- * durable marker. Callers must treat a truncated result as incomplete, never as an accepted protocol step.
+ * Preserves valid evidence, removes only the runaway suffix and appends a
+ * durable marker. Controllers continue with the next protocol instruction.
  */
 export function sanitizeRepetitiveOutput(
   content: string,
@@ -81,63 +89,18 @@ export function formatRepetitionStopReason(finding: RepetitionInspection): strin
   return `OUTPUT TRUNCATED: clear generation loop detected${finding.rule ? ` [${finding.rule}]` : ""}${fragment ? ` — ${fragment}` : ""}`;
 }
 
-export interface RepetitionFenceState { marker: "`" | "~"; length: number }
-
-/**
- * Masks one logical line while carrying fence state across bounded/incremental
- * scans. Output length always matches input length so detector offsets still map
- * back to the raw response.
- */
-export function maskRepetitionLine(
-  line: string,
-  fence: RepetitionFenceState | null,
-): { masked: string; nextFence: RepetitionFenceState | null } {
-  const markerMatch = line.match(/^\s*(`{3,}|~{3,})/);
-  const marker = markerMatch?.[1];
-  const isFenceBoundary = Boolean(marker && (!fence || (marker[0] === fence.marker && marker.length >= fence.length)));
-  const inside = Boolean(fence);
-  if (isFenceBoundary && marker) {
-    return {
-      masked: line.replace(/[^\n\r]/g, " "),
-      nextFence: fence ? null : { marker: marker[0] as "`" | "~", length: marker.length },
-    };
-  }
-  if (!inside) return { masked: line, nextFence: fence };
-
-  // Fenced blocks are often used for ASCII sketches in RV. Mask only lines that
-  // are predominantly structural drawing glyphs. Natural-language/code text in
-  // a fence remains scannable, so a real repeated sentence loop is still caught.
-  const body = line.replace(/[\r\n]+$/g, "");
-  const compact = body.replace(/\s/g, "");
-  if (!compact) return { masked: line, nextFence: fence };
-  const alnum = (compact.match(/[\p{L}\p{N}]/gu) ?? []).length;
-  const structural = (compact.match(/[-_=+*~|.:/\\<>\[\]{}()^vVxX]/g) ?? []).length;
-  const drawingLike = structural >= 4 && alnum / compact.length <= 0.3;
-  return { masked: drawingLike ? line.replace(/[^\n\r]/g, " ") : line, nextFence: fence };
-}
-
-function maskFencedDrawingLines(content: string): string {
-  const lines = content.split(/(?<=\n)/);
-  let fence: RepetitionFenceState | null = null;
-  return lines.map((line) => {
-    const result = maskRepetitionLine(line, fence);
-    fence = result.nextFence;
-    return result.masked;
-  }).join("");
-}
-
 function findCharacterRun(content: string): RepetitionInspection | null {
   let runStart = 0;
   let runLength = 0;
   let previous = "";
   for (let index = 0; index < content.length; index += 1) {
     const current = content[index];
-    if (!/\s/.test(current) && !/[-_=+*~|.:]/.test(current) && current === previous) {
+    if (!/\s/.test(current) && current === previous) {
       runLength += 1;
     } else {
       previous = current;
       runStart = index;
-      runLength = /\s/.test(current) || /[-_=+*~|.:]/.test(current) ? 0 : 1;
+      runLength = /\s/.test(current) ? 0 : 1;
     }
     if (runLength >= IDENTICAL_CHARACTER_LIMIT) {
       return {
@@ -161,17 +124,16 @@ function findConsecutiveIdenticalLines(content: string): RepetitionInspection | 
 
   for (const rawLine of lines) {
     const normalized = rawLine.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-    const structuralOnly = normalized !== "" && /^[\-_=+*~|.:\s]+$/.test(normalized);
-    if (normalized && !structuralOnly && normalized === previous) {
+    if (normalized && normalized === previous) {
       runCount += 1;
       if (runCount === 3) thirdLineEnd = offset + rawLine.length;
     } else {
-      previous = structuralOnly ? "" : normalized;
-      runCount = normalized && !structuralOnly ? 1 : 0;
+      previous = normalized;
+      runCount = normalized ? 1 : 0;
       runStart = offset;
       thirdLineEnd = offset + rawLine.length;
     }
-    if (normalized && !structuralOnly && runCount >= IDENTICAL_LINE_LIMIT) {
+    if (normalized && runCount >= IDENTICAL_LINE_LIMIT) {
       return {
         severity: "stop",
         rule: "consecutive-identical-lines",
@@ -192,7 +154,7 @@ function findRepeatedTailBlock(content: string): RepetitionInspection | null {
 
   for (let period = MIN_PERIOD; period <= maxPeriod; period += 1) {
     const block = tail.slice(-period);
-    if (!block.trim() || new Set(block.replace(/\s/g, "")).size < 2 || !/[\p{L}\p{N}]/u.test(block)) continue;
+    if (!block.trim() || new Set(block.replace(/\s/g, "")).size < 2) continue;
     let repeats = 1;
     while (repeats < 200) {
       const end = tail.length - repeats * period;

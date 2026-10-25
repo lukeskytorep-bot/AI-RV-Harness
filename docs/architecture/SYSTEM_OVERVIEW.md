@@ -1,21 +1,18 @@
 # AI RV Harness
 
-> **Documentation scope:** `ai-rv-2` development source through Training Continuity T5; reviewed 16 October 2026 against commit `9c92bdbb94d1125406e0094779102458cdeee87c`. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
-> **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
-
-> Current architecture reference: accepted v0.7.14 development source; documented public baseline v0.7.13
-> Last updated: 16 October 2026
+> Current architecture reference: public AI RV Harness v0.7.13 Windows/Linux release
+> Last updated: 30 September 2026
 
 AI RV Harness is a local-first desktop environment for AI-assisted Remote Viewing sessions, structured training, controlled research, and blinded evaluation. It combines repeatable protocols, multiple AI roles, evidence-preserving session flows, target management, and reproducible research tools in one application.
 
 The project is designed to make AI-assisted RV work easier to organize, inspect, repeat, and evaluate. It does not claim that Remote Viewing has been scientifically proven, that a particular model possesses anomalous perception, or that generated material is accurate. The Harness provides controlled procedures and records; interpretation of results remains the responsibility of the user and researcher.
 
 - **Source repository:** [lukeskytorep-bot/AI-RV-Harness](https://github.com/lukeskytorep-bot/AI-RV-Harness)
-- **Documented public baseline:** AI RV Harness v0.7.13
+- **Current public release:** AI RV Harness v0.7.13
 - **Platforms:** Windows and Linux
 - **Application source license:** MIT
 
-This page describes the accepted development architecture; release-specific claims belong to the historical release records. The public release notes and exact GitHub Release assets remain authoritative for the shipped binaries.
+This page describes the current implemented and released v0.7.13 architecture. The public release notes and exact GitHub Release assets remain authoritative for the shipped binaries.
 
 ## Project goals
 
@@ -170,7 +167,7 @@ The parser does not guess based on writing style or phrases such as “let me th
 
 If a response contains reasoning but no completed final answer, has an unclosed reasoning block, or stops because the output limit was reached, it is treated as incomplete. It is not forwarded as if it were valid evidence or an instruction. Recovery may perform one controlled retry according to the route and session settings.
 
-Monitor calls use a larger output allowance suitable for reasoning models: a preferred first allowance of 16,384 output tokens and a recovery allowance of 32,768, always limited by the selected route's reported maximum. Native reasoning controls remain enabled rather than being globally disabled.
+Monitor calls use a larger output allowance suitable for reasoning models: an initial ceiling of up to 4,096 output tokens and a controlled retry ceiling of up to 8,192, always limited by the selected route's reported maximum. Native reasoning controls remain enabled rather than being globally disabled.
 
 ## AI Center and Viewer Notes
 
@@ -389,17 +386,17 @@ npm run tauri build
 
 Contributors should also run the Rust tests and Clippy checks used by the repository workflows. Consult the checked-in workflow files for the currently supported toolchain and complete release gates.
 
-## Historical verification and current validation
+## Verification status for v0.7.12
 
 The v0.7.12 implementation retains the v0.7.11 reasoning-compatibility coverage and adds AI identity, Viewer Notes, reflection, Research snapshot, Judge-transition, unblinding-recovery, and database-integrity checks.
 
-The historical v0.7.12 release was validated with:
+The release was validated with:
 
 - TypeScript type checking;
 - 74 Vitest files and 207 tests;
 - a production Vite build;
 - a dependency audit with no reported known vulnerabilities at release time;
-- 20 ordered migrations at that historical boundary; later accepted development extends the registry to 031. The current source/UX-data/release-gate results are recorded in the dated documentation-sync report.
+- 27 SQLite migrations, including the closed UX-DATA compatibility layer and current schema 027 factory Training classification boundary, plus negative checks for integrity and lifecycle guards.
 
 Rust checks and platform packaging remain release-workflow gates. Practical AI Center sessions should complement automated validation before the learning effect is treated as empirically proven.
 
@@ -449,9 +446,3 @@ The Home page should remain a stable overview. Detailed operational instructions
 ---
 
 For current packages and version-specific notes, see the project's [GitHub Releases](https://github.com/lukeskytorep-bot/AI-RV-Harness/releases).
-
-## Current continuity and ownership contracts — 16 October 2026
-
-Classic Training optional learning uses one durable two-dispatch allowance per memory kind/session/packet. Known failed updates settle as failed_preserved and continue with exact retained memory/absence; Stop, ownership/DB/hash errors and uncertain dispatch still interrupt. Review/Judge/current learning analytical allowances are 32K/48K and C+32K/C+48K, while automatic blind Viewer and live Monitor retain 16K/32K. Research/telepathic frozen policies keep their versioned pairs. The [current workflow table](CURRENT_WORKFLOWS_v0.7.14_EN.md) is the detailed reference.
-
-Transport completion, semantic acceptance and local commit are distinct. Shared Resume decisions retain attempt history and all earlier unknown physical outcomes. Rust heartbeat renews classic owned work independently of WebView timers, still fencing owner/version/expiry and cancelling bound transport on failure. Training shows saved-run identity and exports active interrupted checkpoints. Primary contributor instructions are in the English [Developer Guide](../development/README.md).

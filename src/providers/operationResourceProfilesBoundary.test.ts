@@ -70,12 +70,10 @@ describe("ORP1 operation-resource profile boundaries", () => {
     expect(consumers).toEqual(["src/providers/streamPresentation.ts"]);
   });
 
-  it("requires explicit learning policy and keeps its headroom centralized", () => {
+  it("keeps the capacity + 8192/+16384 learning-object headroom owned only by the centralized operation-resource policy", () => {
     const profiles = source("src/providers/operationResourceProfiles.ts");
-    expect(profiles).toContain('budgetPolicy: LearningBudgetPolicy');
-    expect(profiles).toContain("assertLearningBudgetPolicy(budgetPolicy)");
-    expect(profiles).not.toContain("trainingReveal = false");
-    expect(source("src/aiCenter/viewerNotes.ts")).not.toContain("reflectionOutputPreflight");
+    expect(profiles).toContain("LEARNING_OBJECT_INITIAL_HEADROOM_TOKENS = 8192");
+    expect(profiles).toContain("LEARNING_OBJECT_RECOVERY_HEADROOM_TOKENS = 16384");
     expect(profiles).toContain("return capacity + (attempt === 0");
     expect(profiles).not.toContain("LEARNING_OBJECT_STRUCTURED_OUTPUT_OVERHEAD_TOKENS");
     expect(profiles).not.toContain("LEARNING_OBJECT_INITIAL_MINIMUM_ALLOWANCE_TOKENS");

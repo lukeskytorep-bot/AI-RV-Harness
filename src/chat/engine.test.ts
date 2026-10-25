@@ -1,18 +1,16 @@
-import { approveChatResponseRetry } from "./responseRecovery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
 import type { ProviderContinuationState } from "../providers/continuationContract";
 import type { ChatMessage } from "../types";
 import { ProviderContinuationPersistenceError } from "../storage/providerContinuationState";
-import { ProviderCallError } from "../providers/providerError";
 import { ConversationContinuationBreakError, clearAllConversationContinuationMemoryForTests, estimateConversationContinuationMemoryBytes } from "./continuationMemory";
 import { retryChatTurn, sendChatTurn } from "./engine";
 
 const provider: ProviderConfig = { id: "provider", provider: "openrouter", label: "OR", credentialId: "cred", enabled: true, createdAt: "x", updatedAt: "x" };
 const model: ProviderModel = {
   providerConfigId: "provider", provider: "openrouter", modelId: "m", displayName: "M", route: "openrouter:m", recommended: false, rawMetadata: {}, refreshedAt: "x", pricing: {},
-  capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: ["max_tokens"], maxOutputTokens: 65536, contextTokens: 131072, source: "provider", capturedAt: "x" },
+  capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: ["max_tokens"], maxOutputTokens: 8192, source: "provider", capturedAt: "x" },
 };
 
 
@@ -35,17 +33,12 @@ function repo(history: ChatMessage[]) {
     return message;
   };
   return {
-    listChatMessages: async (threadId: string) => stored.filter((message) => message.threadId === threadId),
+    listChatMessages: async () => [...stored],
     appendChatMessage,
     appendAssistantMessageWithProviderState: async (threadId: string, content: string, state: ProviderContinuationState) => {
       const message = await appendChatMessage(threadId, "assistant", content);
       providerStates.set(message.id, structuredClone(state));
       return message;
-    },
-    updateChatMessageMetadata: async (messageId: string, metadata: ChatMessage["metadata"]): Promise<void> => {
-      const index = stored.findIndex((message) => message.id === messageId);
-      if (index < 0) throw new Error("message not found");
-      stored[index] = { ...stored[index], metadata: metadata ? structuredClone(metadata) : undefined };
     },
     listChatMessageProviderStates: async (threadId: string) => stored
       .filter((message) => message.threadId === threadId && providerStates.has(message.id))
@@ -88,16 +81,6 @@ describe("chat engine isolation", () => {
     expect(packet).toContain("IANA time zone");
   });
 
-  it("Custom manual temperature reaches Conversation transport without advertised capability", async () => {
-    const customProvider: ProviderConfig = { ...provider, provider: "custom_openai", baseUrl: "https://example.test/v1" };
-    const customModel: ProviderModel = { ...model, provider: "custom_openai", route: "custom_openai:m", capabilities: { ...model.capabilities, temperature: { supported: false, confidence: "unknown" } } };
-    for (const temperature of [0, 0.7]) {
-      let captured: number | undefined;
-      await sendChatTurn({ repository: repo([]), threadId: `custom-temp-${temperature}`, mode: "conversation", language: "en", providerConfig: customProvider, model: customModel, content: "Hello", requestedSettings: { customTemperatureMode: "manual", temperature }, chat: async ({ settings }) => { captured = settings.effective.temperature; return { content: "Hi", usage: {} }; } });
-      expect(captured).toBe(temperature);
-    }
-  });
-
   it("Manual RV sends no Conversation system prompt and only attaches RCP when explicitly requested", async () => {
     let packet = "";
     await sendChatTurn({ repository: repo([]), threadId: "r", mode: "manual_rv", language: "en", providerConfig: provider, model, content: "Start", chat: async (request) => {
@@ -127,57 +110,7 @@ describe("chat engine isolation", () => {
       chat: async (request) => { captured = request; return { content: "Contact", usage: {} }; },
     });
     expect(captured?.messages[0]).toEqual({ role: "system", content: "FIXED PROFILE VIEWER PROMPT" });
-    expect(captured?.settings.effective).toEqual({ reasoningEffort: "high", temperature: 0.9, maxOutputTokens: 32768 });
-  });
-
-  it("Manual RV clamps the first attempt to an 8K model limit and does not repeat the same capped budget after length", async () => {
-    const capped: ProviderModel = {
-      ...model,
-      capabilities: { ...model.capabilities, maxOutputTokens: 8192, contextTokens: 131072 },
-    };
-    const budgets: number[] = [];
-    await expect(sendChatTurn({
-      repository: repo([]),
-      threadId: "manual-8k-cap",
-      mode: "manual_rv",
-      language: "en",
-      providerConfig: provider,
-      model: capped,
-      content: "Start",
-      chat: async ({ settings }) => {
-        budgets.push(settings.effective.maxOutputTokens ?? 0);
-        return { content: "partial", finishReason: "length", usage: {} };
-      },
-    })).rejects.toMatchObject({ name: "ViewerOutputIncompleteError", reason: "no_larger_recovery_budget" });
-    expect(budgets).toEqual([8192]);
-  });
-
-  it("Manual RV retries one length-limited turn at 48K without appending the partial assistant", async () => {
-    const repository = repo([]);
-    const budgets: number[] = [];
-    let calls = 0;
-    const result = await sendChatTurn({
-      repository, threadId: "manual-recovery", mode: "manual_rv", language: "en", providerConfig: provider, model, content: "Start", requestedSettings: { maxOutputTokens: 8192 },
-      chat: async ({ settings }) => {
-        budgets.push(settings.effective.maxOutputTokens ?? 0);
-        calls += 1;
-        return calls === 1
-          ? { content: "partial", finishReason: "length", usage: {} }
-          : { content: "complete", finishReason: "stop", usage: {} };
-      },
-    });
-    expect(budgets).toEqual([32768, 49152]);
-    expect(result.assistant.content).toBe("complete");
-    const stored = await repository.listChatMessages("manual-recovery");
-    expect(stored.map((message) => message.content)).toEqual(["Start", "complete"]);
-    expect(stored[0].metadata?.viewerOutputAttempts).toEqual([expect.objectContaining({ reason: "output_limit", semanticAttempt: 1, recoveryLevel: 0, content: "partial" })]);
-    expect(stored[0].metadata?.viewerOutputAccepted).toEqual(expect.objectContaining({ accepted: true, semanticAttempt: 2, recoveryLevel: 1 }));
-  });
-
-  it("Conversation keeps its existing output budget policy", async () => {
-    let budget = 0;
-    await sendChatTurn({ repository: repo([]), threadId: "conversation-budget", mode: "conversation", language: "en", providerConfig: provider, model, content: "Hello", requestedSettings: { maxOutputTokens: 4096 }, chat: async ({ settings }) => { budget = settings.effective.maxOutputTokens ?? 0; return { content: "Hi", finishReason: "stop", usage: {} }; } });
-    expect(budget).toBe(4096);
+    expect(captured?.settings.effective).toEqual({ reasoningEffort: "high", temperature: 0.9, maxOutputTokens: 8192 });
   });
 
   it("blocks an oversized selected Source before any provider call and never truncates it", async () => {
@@ -208,7 +141,7 @@ describe("chat engine isolation", () => {
       return { content: "Recovered answer", usage: {} };
     } });
     expect(result.user.id).toBe("u1");
-    expect((await repository.listChatMessages("c")).map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect((await repository.listChatMessages()).map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(roles.at(-1)).toBe("user");
   });
 
@@ -641,143 +574,5 @@ describe("Conversation Viewer context continuity boundary", () => {
       chat,
     })).rejects.toBeInstanceOf(ConversationContinuationBreakError);
     expect(chat).not.toHaveBeenCalled();
-  });
-
-  it("persists image metadata only after a successful provider attempt and keeps source metadata on the same user message", async () => {
-    const repository = repo([]);
-    const visionModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, inputModalities: ["text", "image"], supportsVision: true } };
-    let sawImage = false;
-    await sendChatTurn({
-      repository, threadId: "attachments-success", mode: "conversation", language: "en", providerConfig: provider, model: visionModel, content: "Look",
-      sources: [{ id: "s1", workspaceId: "w", sourceType: "pdf", displayName: "notes.pdf", content: "source", contentHash: "h", metadata: {}, createdAt: "x" }],
-      images: [{ mimeType: "image/png", dataBase64: "AAAA" }], imageNames: ["target.png"],
-      chat: async (request) => {
-        sawImage = Boolean(request.messages.at(-1)?.images?.length);
-        const inFlightUser = (await repository.listChatMessages("attachments-success"))[0];
-        expect(inFlightUser.metadata?.attachmentAttempts?.[0].images[0].state).toBe("prepared");
-        return { content: "ok", usage: {} };
-      },
-    });
-    expect(sawImage).toBe(true);
-    const user = (await repository.listChatMessages("attachments-success"))[0];
-    expect(user.metadata?.attachmentAttempts).toHaveLength(1);
-    expect(user.metadata?.attachmentAttempts?.[0]).toMatchObject({
-      attemptNumber: 1,
-      sources: [{ id: "s1", name: "notes.pdf", type: "pdf", included: true }],
-      images: [{ name: "target.png", mimeType: "image/png", state: "included_in_request" }],
-    });
-    expect(JSON.stringify(user.metadata)).not.toContain("AAAA");
-  });
-
-  it("marks an image not included when provider execution stops before dispatch", async () => {
-    const repository = repo([]);
-    const visionModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, inputModalities: ["text", "image"], supportsVision: true } };
-    await expect(sendChatTurn({
-      repository, threadId: "attachments-before-dispatch", mode: "conversation", language: "en", providerConfig: provider, model: visionModel, content: "Look",
-      images: [{ mimeType: "image/jpeg", dataBase64: "BBBB" }], imageNames: ["target.jpg"],
-      chat: async () => { throw new ProviderCallError({ code: "configuration", message: "local stop", phase: "before_dispatch" }); },
-      maxRetries: 0,
-    })).rejects.toThrow("local stop");
-    const user = (await repository.listChatMessages("attachments-before-dispatch"))[0];
-    expect(user.metadata?.attachmentAttempts?.[0].images[0]).toMatchObject({ name: "target.jpg", mimeType: "image/jpeg", state: "not_included" });
-  });
-
-  it("marks an image uncertain after a dispatched attempt fails and appends retry metadata to the same user message", async () => {
-    const repository = repo([]);
-    const visionModel: ProviderModel = { ...model, capabilities: { ...model.capabilities, inputModalities: ["text", "image"], supportsVision: true } };
-    await expect(sendChatTurn({
-      repository, threadId: "attachments-uncertain", mode: "conversation", language: "en", providerConfig: provider, model: visionModel, content: "Look",
-      images: [{ mimeType: "image/webp", dataBase64: "CCCC" }], imageNames: ["target.webp"],
-      chat: async () => { throw new ProviderCallError({ code: "timeout", message: "timed out", phase: "awaiting_headers" }); },
-      maxRetries: 0,
-    })).rejects.toThrow("timed out");
-    let messages = await repository.listChatMessages("attachments-uncertain");
-    expect(messages).toHaveLength(1);
-    expect(messages[0].metadata?.attachmentAttempts?.[0].images[0].state).toBe("uncertain");
-
-    await approveChatResponseRetry(repository, "attachments-uncertain");
-    await retryChatTurn({
-      repository, threadId: "attachments-uncertain", mode: "conversation", language: "en", providerConfig: provider, model: visionModel, allowRetryWithoutImages: true,
-      images: [], imageNames: ["target.webp"], imageMimeTypes: ["image/webp"],
-      chat: async () => ({ content: "text-only retry", usage: {} }),
-    });
-    messages = await repository.listChatMessages("attachments-uncertain");
-    expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
-    expect(messages[0].metadata?.attachmentAttempts).toHaveLength(2);
-    expect(messages[0].metadata?.attachmentAttempts?.[1].images[0]).toMatchObject({ name: "target.webp", mimeType: "image/webp", state: "not_included" });
-  });
-
-});
-
-describe("B1 actual chat requests", () => {
-  it("Conversation without an explicit output setting dispatches factory 16K", async () => {
-    const chat=vi.fn(async()=>({content:"Complete",finishReason:"stop",usage:{}}));
-    await sendChatTurn({repository:repo([]),threadId:"b1-default",mode:"conversation",language:"en",providerConfig:provider,model,content:"Hello",chat});
-    expect(chat.mock.calls).toHaveLength(1);
-    // Inspect the request at the provider adapter boundary.
-    expect(chat).toHaveBeenCalledWith(expect.objectContaining({settings:expect.objectContaining({requested:expect.objectContaining({maxOutputTokens:16384}),effective:expect.objectContaining({maxOutputTokens:16384})})}));
-  });
-  it("Conversation preserves saved 8K and does not introduce length recovery", async () => {
-    const budgets:number[]=[];
-    await sendChatTurn({repository:repo([]),threadId:"b1-saved",mode:"conversation",language:"en",providerConfig:provider,model,content:"Hello",requestedSettings:{maxOutputTokens:8192},chat:async request=>{
-      budgets.push(request.settings.effective.maxOutputTokens!);return {content:"partial",finishReason:"length",usage:{}};
-    }});
-    expect(budgets).toEqual([8192]);
-  });
-  it("complete Manual RV dispatches 32K once, including an operator Reveal turn",async()=>{
-    const repository=repo([]),budgets:number[]=[];
-    await sendChatTurn({repository,threadId:"b1-reveal",mode:"manual_rv",language:"en",providerConfig:provider,model,content:"Reveal: target is a tower. Analyze.",requestedSettings:{maxOutputTokens:8192},chat:async request=>{
-      budgets.push(request.settings.effective.maxOutputTokens!);expect(request.messages.at(-1)?.content).toContain("Reveal:");return {content:"Complete analysis",finishReason:"stop",usage:{}};
-    }});
-    expect(budgets).toEqual([32768]);
-    expect((await repository.listChatMessages("b1-reveal"))[0].metadata?.viewerOutputAccepted).toMatchObject({viewerOutputPolicyVersion:2,requestedMaxOutputTokens:32768,effectiveMaxOutputTokens:32768,semanticAttempt:1});
-  });
-  it("manual Retry uses the same 32K/48K profile without another user message or rewriting old evidence",async()=>{
-    const oldEvidence={viewerOutputPolicyVersion:1,semanticAttempt:1,content:"OLD PARTIAL",requestedMaxOutputTokens:16384,effectiveMaxOutputTokens:16384};
-    const repository=repo([{id:"old-user",threadId:"b1-retry",role:"user",content:"Reveal: inspect this target",createdAt:"old",metadata:{viewerOutputAttempts:[oldEvidence]}}]);
-    const budgets:number[]=[];
-    await retryChatTurn({repository,threadId:"b1-retry",mode:"manual_rv",language:"en",providerConfig:provider,model,requestedSettings:{maxOutputTokens:8192},chat:async request=>{
-      budgets.push(request.settings.effective.maxOutputTokens!);return {content:budgets.length===1?"New partial":"New complete",finishReason:budgets.length===1?"length":"stop",usage:{}};
-    }});
-    expect(budgets).toEqual([32768,49152]);
-    const messages=await repository.listChatMessages("b1-retry");
-    expect(messages.map(m=>m.role)).toEqual(["user","assistant"]);
-    expect(messages[0].metadata?.viewerOutputAttempts?.[0]).toEqual(oldEvidence);
-    expect(messages[0].metadata?.viewerOutputAttempts?.[1]).toMatchObject({viewerOutputPolicyVersion:2,effectiveMaxOutputTokens:32768});
-    expect(messages[0].metadata?.viewerOutputAccepted).toMatchObject({viewerOutputPolicyVersion:2,effectiveMaxOutputTokens:49152,semanticAttempt:2});
-  });
-  for(const ceiling of [32768,40000]) it(`Manual RV respects model ceiling ${ceiling} and avoids ineffective recovery`,async()=>{
-    const capped={...model,capabilities:{...model.capabilities,maxOutputTokens:ceiling}};
-    const budgets:number[]=[];
-    const run=sendChatTurn({repository:repo([]),threadId:`b1-cap-${ceiling}`,mode:"manual_rv",language:"en",providerConfig:provider,model:capped,content:"Start",chat:async request=>{
-      budgets.push(request.settings.effective.maxOutputTokens!);return {content:"partial",finishReason:budgets.length===1?"length":"stop",usage:{}};
-    }});
-    if(ceiling===32768){await expect(run).rejects.toMatchObject({reason:"no_larger_recovery_budget"});expect(budgets).toEqual([32768]);}
-    else{await run;expect(budgets).toEqual([32768,40000]);}
-  });
-  it("two incomplete Manual RV attempts retain both records and never dispatch a third",async()=>{
-    const repository=repo([]),budgets:number[]=[];
-    await expect(sendChatTurn({repository,threadId:"b1-two-length",mode:"manual_rv",language:"en",providerConfig:provider,model,content:"Start",chat:async request=>{
-      budgets.push(request.settings.effective.maxOutputTokens!);return {content:`partial ${budgets.length}`,finishReason:"length",usage:{}};
-    }})).rejects.toMatchObject({reason:"output_limit"});
-    expect(budgets).toEqual([32768,49152]);
-    const messages=await repository.listChatMessages("b1-two-length");expect(messages.map(m=>m.role)).toEqual(["user"]);
-    expect(messages[0].metadata?.viewerOutputAttempts?.map(a=>a.effectiveMaxOutputTokens)).toEqual([32768,49152]);
-  });
-  it("recovery exceeding the context window is blocked before another paid dispatch",async()=>{
-    const limited={...model,capabilities:{...model.capabilities,contextTokens:40000}};
-    const budgets:number[]=[];
-    await expect(sendChatTurn({repository:repo([]),threadId:"b1-context",mode:"manual_rv",language:"en",providerConfig:provider,model:limited,content:"Start",chat:async request=>{
-      budgets.push(request.settings.effective.maxOutputTokens!);return {content:"partial",finishReason:"length",usage:{}};
-    }})).rejects.toMatchObject({reason:"context_limit"});
-    expect(budgets).toEqual([32768]);
-  });
-  it("reasoning and temperature remain identical through Manual RV recovery",async()=>{
-    const configured={...model,capabilities:{...model.capabilities,reasoning:{supported:true,efforts:["high" as const],confidence:"provider_metadata" as const},temperature:{supported:true,min:0,max:2,confidence:"provider_metadata" as const},supportedParameters:["reasoning","temperature","max_tokens"]}};
-    const settings:unknown[]=[];
-    await sendChatTurn({repository:repo([]),threadId:"b1-reasoning",mode:"manual_rv",language:"en",providerConfig:provider,model:configured,content:"Start",requestedSettings:{reasoningEffort:"high",temperature:0.7},chat:async request=>{
-      settings.push(request.settings.effective);return {content:"answer",finishReason:settings.length===1?"length":"stop",usage:{}};
-    }});
-    expect(settings).toEqual([{reasoningEffort:"high",temperature:0.7,maxOutputTokens:32768},{reasoningEffort:"high",temperature:0.7,maxOutputTokens:49152}]);
   });
 });

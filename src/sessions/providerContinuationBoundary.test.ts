@@ -40,7 +40,7 @@ describe("provider continuation workflow boundary", () => {
     ]) {
       const source = read(relative);
       expect(source, relative).toContain("persistSessionAssistantResponse");
-      expect(source, relative).toMatch(/validateSessionContinuationBudget\((?:messages|requestMessages)\)/);
+      expect(source, relative).toContain("validateSessionContinuationBudget(messages)");
     }
     const bridge = read("src/sessions/providerContinuation.ts");
     expect(bridge).toContain("appendSessionEventWithProviderState");

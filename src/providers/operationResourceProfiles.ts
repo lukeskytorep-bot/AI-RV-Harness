@@ -151,12 +151,8 @@ const PROFILE_BY_KIND: Record<OperationKind, OperationResourceProfile> = {
   },
 };
 
-// Explicit current learning policy; analytical Research policies are independent.
-export type LearningBudgetPolicy = "training_reveal";
-
-export function assertLearningBudgetPolicy(policy: unknown): asserts policy is LearningBudgetPolicy {
-  if (policy !== "training_reveal") throw new Error("Learning-object output requires the explicit training_reveal budget policy.");
-}
+export const LEARNING_OBJECT_INITIAL_HEADROOM_TOKENS = 8192;
+export const LEARNING_OBJECT_RECOVERY_HEADROOM_TOKENS = 16384;
 
 export function getOperationResourceProfile(operationKind: OperationKind): OperationResourceProfile {
   return PROFILE_BY_KIND[operationKind];
@@ -183,9 +179,9 @@ export function resolveOperationResourceProfile(input: {
   return getOperationResourceProfile(input.operationKind ?? inferOperationKind(input.operationId));
 }
 
-export function learningObjectOutputAllowance(capacityTokens: number, attempt: 0 | 1, budgetPolicy: LearningBudgetPolicy): number {
-  assertLearningBudgetPolicy(budgetPolicy);
-  if (!Number.isFinite(capacityTokens) || capacityTokens < 1) throw new Error("Learning-object output requires a positive finite capacity.");
-  const capacity = Math.floor(capacityTokens);
-  return capacity + (attempt === 0 ? 32_768 : 49_152);
+export function learningObjectOutputAllowance(capacityTokens: number, attempt: 0 | 1): number {
+  const capacity = Math.max(1, Math.floor(capacityTokens));
+  return capacity + (attempt === 0
+    ? LEARNING_OBJECT_INITIAL_HEADROOM_TOKENS
+    : LEARNING_OBJECT_RECOVERY_HEADROOM_TOKENS);
 }

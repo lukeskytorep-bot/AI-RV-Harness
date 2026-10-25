@@ -1,6 +1,6 @@
 [package]
 name = "ai-rv-harness"
-version = "0.7.14"
+version = "0.7.13"
 description = "AI RV Harness desktop application"
 authors = ["AI RV Harness contributors"]
 edition = "2021"
@@ -38,13 +38,3 @@ keyring = { version = "3.6.3", default-features = false, features = ["apple-nati
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["linux-native"] }
-
-# Pinned local ownership repair; see vendor/tauri-runtime-wry/PATCH.md.
-[patch.crates-io]
-tauri-runtime-wry = { path = "vendor/tauri-runtime-wry" }
-
-# Keep matching private Windows symbols for crash investigation.
-[profile.diagnostic]
-inherits = "release"
-debug = "full"
-strip = "none"

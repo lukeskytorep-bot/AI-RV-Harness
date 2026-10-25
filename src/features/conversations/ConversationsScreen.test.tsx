@@ -22,7 +22,7 @@ describe("ConversationsScreen", () => {
         repository={null}
         profiles={[profile]}
         workspaces={[workspace]}
-        onProfileChange={vi.fn()}
+        onOpenWorkspace={vi.fn()}
         createdNotice={null}
         onDismissCreatedNotice={vi.fn()}
       />,

@@ -15,7 +15,6 @@ import type { AppRepository } from "../../storage/repository";
 import { JudgeResults } from "../../components/JudgeResults";
 
 export interface JudgeEvaluationProps {
-  readOnly?: boolean;
   copy: ReturnType<typeof getCopy>;
   repository: AppRepository | null;
   sessionId: string;
@@ -29,7 +28,7 @@ export interface JudgeEvaluationProps {
   onCompleted?: () => void;
 }
 
-export function JudgeEvaluation({ readOnly=false, copy, repository, sessionId, language, models, providerConfigs, profile, defaultModelKey, maxRetries, timeoutMs, onCompleted }: JudgeEvaluationProps) {
+export function JudgeEvaluation({ copy, repository, sessionId, language, models, providerConfigs, profile, defaultModelKey, maxRetries, timeoutMs, onCompleted }: JudgeEvaluationProps) {
   const [judgeCount, setJudgeCount] = useState(1);
   const [selections, setSelections] = useState([defaultModelKey ?? "", "", ""]);
   const [result, setResult] = useState<JudgingResult | null>(null);
@@ -65,7 +64,7 @@ export function JudgeEvaluation({ readOnly=false, copy, repository, sessionId, l
   }, [repository, sessionId]);
 
   const evaluate = async () => {
-    if (!repository || !ready || busy || readOnly) return;
+    if (!repository || !ready || busy) return;
     const judges = activeSelections.map((model) => {
       const concreteModel = model as ProviderModel;
       const providerConfig = providerConfigs.find((provider) => provider.id === concreteModel.providerConfigId);
@@ -112,14 +111,14 @@ export function JudgeEvaluation({ readOnly=false, copy, repository, sessionId, l
     <div className="judge-heading"><span><ShieldCheck size={18} /></span><div><strong>{copy.judgeEvaluation}</strong><p>{copy.judgeLead}</p></div></div>
     {(!result || addingJudges) && <>
       <div className="judge-config">
-        <label><span>{copy.judgeCount}</span><select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))} disabled={readOnly || busy || Boolean(result)}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>
-        {Array.from({ length: judgeCount }, (_, index) => <label key={index}><span>{copy.judgeModel} {index + 1}</span><ModelRouteSelect role="judge" profile={profile} providers={providerConfigs} models={models} value={selections[index]} onChange={(next) => setSelections((current) => current.map((value, itemIndex) => itemIndex === index ? next : value))} disabled={readOnly || busy || Boolean(result && index < result.scores.length)} emptyLabel={copy.selectModel} /></label>)}
+        <label><span>{copy.judgeCount}</span><select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))} disabled={busy || Boolean(result)}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>
+        {Array.from({ length: judgeCount }, (_, index) => <label key={index}><span>{copy.judgeModel} {index + 1}</span><ModelRouteSelect role="judge" profile={profile} providers={providerConfigs} models={models} value={selections[index]} onChange={(next) => setSelections((current) => current.map((value, itemIndex) => itemIndex === index ? next : value))} disabled={busy || Boolean(result && index < result.scores.length)} emptyLabel={copy.selectModel} /></label>)}
       </div>
-      <div className="judge-actions"><small>{busy ? `${copy.judging} ${completed}/${judgeCount}` : copy.judgeRequiresModels}</small><button className="primary-button" disabled={readOnly || !isTauriRuntime() || !ready || busy} onClick={() => void evaluate()}>{busy ? copy.judging : copy.runJudges}</button></div>
+      <div className="judge-actions"><small>{busy ? `${copy.judging} ${completed}/${judgeCount}` : copy.judgeRequiresModels}</small><button className="primary-button" disabled={!isTauriRuntime() || !ready || busy} onClick={() => void evaluate()}>{busy ? copy.judging : copy.runJudges}</button></div>
     </>}
     {result && <>
       <JudgeResults copy={copy} scores={result.scores} />
-      {!addingJudges && result.scores.length < 3 && <button className="secondary-button" disabled={readOnly || busy} onClick={addAnotherJudge}>{language === "pl" ? "Dodaj kolejnego Judge’a" : "Add another Judge"}</button>}
+      {!addingJudges && result.scores.length < 3 && <button className="secondary-button" disabled={busy} onClick={addAnotherJudge}>{language === "pl" ? "Dodaj kolejnego Judge’a" : "Add another Judge"}</button>}
     </>}
     {error && <div className="provider-error">{error}</div>}
   </section>;

@@ -635,31 +635,31 @@ async fn confirm_start_fresh(
     let (title, message, confirm, cancel) = if language == "pl" {
         if incomplete {
             (
-                concat!("Utworzyć świeżą bazę v", env!("CARGO_PKG_VERSION"), "?"),
-                concat!("Niedokończona baza v", env!("CARGO_PKG_VERSION"), " zostanie zachowana jako kopia diagnostyczna. Następnie AI RV Harness utworzy nową bazę. Oryginalne dane nie zostaną usunięte."),
+                "Utworzyć świeżą bazę v0.7.13?",
+                "Niedokończona baza v0.7.13 zostanie zachowana jako kopia diagnostyczna. Następnie AI RV Harness utworzy nową bazę. Oryginalne dane nie zostaną usunięte.",
                 "Zachowaj kopię i rozpocznij od nowa",
                 "Anuluj",
             )
         } else {
             (
-                concat!("Rozpocząć od nowa w v", env!("CARGO_PKG_VERSION"), "?"),
-                concat!("Dotychczasowa baza zostanie zachowana pod nową nazwą. Następnie AI RV Harness utworzy świeżą bazę v", env!("CARGO_PKG_VERSION"), ". Oryginalne dane nie zostaną usunięte."),
-                concat!("Rozpocznij od nowa w v", env!("CARGO_PKG_VERSION")),
+                "Rozpocząć od nowa w v0.7.13?",
+                "Dotychczasowa baza zostanie zachowana pod nową nazwą. Następnie AI RV Harness utworzy świeżą bazę v0.7.13. Oryginalne dane nie zostaną usunięte.",
+                "Rozpocznij od nowa w v0.7.13",
                 "Anuluj",
             )
         }
     } else if incomplete {
         (
-            concat!("Create a fresh v", env!("CARGO_PKG_VERSION"), " database?"),
-            concat!("The incomplete v", env!("CARGO_PKG_VERSION"), " database will be preserved as a diagnostic backup. AI RV Harness will then create a new database. The original data will not be deleted."),
+            "Create a fresh v0.7.13 database?",
+            "The incomplete v0.7.13 database will be preserved as a diagnostic backup. AI RV Harness will then create a new database. The original data will not be deleted.",
             "Preserve backup and start fresh",
             "Cancel",
         )
     } else {
         (
-            concat!("Start fresh in v", env!("CARGO_PKG_VERSION"), "?"),
-            concat!("Your existing database will be preserved under a new name. AI RV Harness will then create a fresh v", env!("CARGO_PKG_VERSION"), " database. The original data will not be deleted."),
-            concat!("Start fresh in v", env!("CARGO_PKG_VERSION")),
+            "Start fresh in v0.7.13?",
+            "Your existing database will be preserved under a new name. AI RV Harness will then create a fresh v0.7.13 database. The original data will not be deleted.",
+            "Start fresh in v0.7.13",
             "Cancel",
         )
     };
@@ -1561,15 +1561,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn database_after_migrations_001_through_029_passes_live_validation() {
-        let directory = temp_case("migration-028-live-validation");
+    async fn database_after_migrations_001_through_027_passes_live_validation() {
+        let directory = temp_case("migration-027-live-validation");
         let database = directory.join(DATABASE_FILE_NAME);
         create_database_through(&database, MIGRATION_SPECS.len()).await;
 
-        assert_eq!(CURRENT_MIGRATION_VERSION, 34);
+        assert_eq!(CURRENT_MIGRATION_VERSION, 27);
         validate_current_database(&database)
             .await
-            .expect("migration-028 database should pass live validation");
+            .expect("migration-027 database should pass live validation");
 
         fs::remove_dir_all(directory).expect("test directory should be removed");
     }

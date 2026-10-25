@@ -1,4 +1,3 @@
-import type { ProviderResponseEvidence, ProviderAttemptOutcome } from "./responseEvidence";
 import type { ProviderContinuationState } from "./continuationContract";
 
 export const PROVIDER_KINDS = [
@@ -15,7 +14,6 @@ export const PROVIDER_KINDS = [
 
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 export type CustomOpenAiOutputTokenField = "max_tokens" | "max_completion_tokens";
-export type CustomReasoningMode = "default" | "on" | "off";
 
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type CapabilityConfidence = "provider_metadata" | "verified" | "unknown";
@@ -43,7 +41,6 @@ export interface ProviderConfig {
   credentialFingerprint?: string;
   baseUrl?: string;
   customOutputTokenField?: CustomOpenAiOutputTokenField;
-  customStreamingEnabled?: boolean;
   enabled: boolean;
   lastTestedAt?: string;
   lastStatus?: "ok" | "error";
@@ -122,15 +119,8 @@ export interface ProviderModel {
 }
 
 export interface GenerationSettings {
-  /** Custom OpenAI temperature intent. Missing preserves legacy capability-driven behavior. */
-  customTemperatureMode?: "provider_default" | "manual";
-  /** Optional Custom OpenAI wire override for reasoning.enabled. */
-  customReasoningMode?: CustomReasoningMode;
   reasoningEffort?: ReasoningEffort;
   temperature?: number;
-  topP?: number;
-  topK?: number;
-  seed?: number;
   maxOutputTokens?: number;
   reasoningMaxTokens?: number;
 }
@@ -138,7 +128,7 @@ export interface GenerationSettings {
 export interface EffectiveGenerationSettings {
   requested: GenerationSettings;
   effective: GenerationSettings;
-  omitted: Array<"reasoningEffort" | "temperature" | "topP" | "topK" | "seed" | "maxOutputTokens" | "reasoningMaxTokens">;
+  omitted: Array<"reasoningEffort" | "temperature" | "maxOutputTokens" | "reasoningMaxTokens">;
   reasoningResolution?: {
     selected: ReasoningEffort;
     label: string;
@@ -165,7 +155,6 @@ export interface OpenRouterProviderRouting {
   only?: string[];
   ignore?: string[];
   allowFallbacks?: boolean;
-  requireParameters?: boolean;
 }
 
 export interface ProviderChatRequest {
@@ -206,9 +195,6 @@ export type ProviderStreamEvent =
   | { event: "finished"; data: { finishReason?: string } };
 
 export interface ProviderChatResponse {
-  finalCandidate?: import("./finalCandidate").ProviderFinalCandidate;
-  transportRequestId?: string;
-  responseEvidence?: ProviderResponseEvidence;
   content: string;
   reasoningContent?: string;
   reasoningDetails?: unknown[];
@@ -226,7 +212,6 @@ export interface ProviderChatResponse {
     elapsedMs: number;
     recoveredFrom?: string;
     ambiguousBillingAttempts: number;
-    attemptOutcomes?: ProviderAttemptOutcome[];
   };
 }
 

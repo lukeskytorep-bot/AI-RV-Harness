@@ -99,14 +99,4 @@ describe("PROFILE-SETUP-UNIFIED-CONTROLLER-1 boundaries", () => {
     expect(workspaceI18n).toContain('advancedOptions: "Advanced options"');
     expect(workspaceI18n).toContain('advancedOptions: "Opcje zaawansowane"');
   });
-  it("supports the DIRECT-2C manual Blackbox model path without bypassing the shared controller", () => {
-    expect(controllerSource).toContain("blackboxRouteNeedsManualModel");
-    expect(controllerSource).toContain("registerManualBlackboxModel(repository, provider, blackboxManualModelId)");
-    expect(controllerSource).toContain("const manualBlackbox = await blackboxRequiresManualModel(provider)");
-    expect(profileDialogs).toContain("copy.blackboxManualModelId");
-    expect(profileDialogs).toContain("copy.blackboxUseManualModel");
-    expect(appSource).toContain("copy.blackboxManualModelId");
-    expect(appSource).toContain("copy.blackboxUseManualModel");
-  });
-
 });

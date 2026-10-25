@@ -2,7 +2,6 @@ import type { ResearchProjectRecord } from "../../research/types";
 import type { TrainingRunRecord } from "../../training/types";
 import { emptyDeletionCounts, type DeletionPreview, type PurgeEntityKind } from "../controlledPurge";
 import { executeControlledPurgeNative } from "../databaseNative";
-import {previewSqliteTelepathicDelete,telepathicParentPurgeQuery} from "./telepathicPurge";
 
 export interface SqliteControlledPurgeDependencies {
   select<T>(query: string, values?: unknown[]): Promise<T>;
@@ -66,7 +65,7 @@ export class SqliteControlledPurge {
     return this.dependencies.select<ResearchRow[]>("SELECT id, workspace_id, name, state, config_json, locked_at, archived_at FROM research_projects");
   }
 
-  private async collectScope(kind: Exclude<PurgeEntityKind, "target" | "telepathic_series">, id: string): Promise<Scope> {
+  private async collectScope(kind: Exclude<PurgeEntityKind, "target">, id: string): Promise<Scope> {
     const profileIds = new Set<string>();
     const workspaceIds = new Set<string>();
     const threadIds = new Set<string>();
@@ -160,7 +159,6 @@ export class SqliteControlledPurge {
       researchRows.filter((row) => workspaceIds.has(row.workspace_id)).forEach((row) => researchIds.add(row.id));
     }
 
-    if((kind==="profile"||kind==="workspace")&&Number((await this.dependencies.select<CountRow[]>(telepathicParentPurgeQuery(kind),[id]))[0]?.n??0)>0)blockedReason="Delete Telepathy series referencing this Profile/Workspace first.";
     return { label, archived, blockedReason, requiresPhrase, safetyBackupRecommended, profileIds, workspaceIds, threadIds, sessionIds, trainingIds, researchIds, aiIdentityIds };
   }
 
@@ -177,7 +175,6 @@ export class SqliteControlledPurge {
   }
 
   async preview(kind: PurgeEntityKind, id: string): Promise<DeletionPreview> {
-    if(kind==="telepathic_series")return previewSqliteTelepathicDelete(this.dependencies,id);
     if (kind === "target") {
       const target = (await this.dependencies.select<TargetRow[]>("SELECT id, collection, title, archived_at FROM targets WHERE id = $1", [id]))[0];
       if (!target) throw new Error("Target not found.");
@@ -287,11 +284,10 @@ export class SqliteControlledPurge {
     if (preview.blockedReason) throw new Error(preview.blockedReason);
   }
 
-  async purge(kind: PurgeEntityKind, id: string, expectedArchiveRevision?:number): Promise<void> {
+  async purge(kind: PurgeEntityKind, id: string): Promise<void> {
     const preview = await this.preview(kind, id);
     this.assertDeletable(preview);
-    if(kind==="telepathic_series"&&(!Number.isInteger(expectedArchiveRevision)||expectedArchiveRevision!==preview.archiveRevision))throw new Error("Telepathy changed after Deletion Preview.");
-    await executeControlledPurgeNative(kind, id,expectedArchiveRevision);
+    await executeControlledPurgeNative(kind, id);
   }
 
 }

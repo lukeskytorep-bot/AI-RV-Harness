@@ -1,12 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
-import { resolveGenerationSettings } from "../../providers/capabilities";
 import type { AppRepository } from "../../storage/repository";
 import { getCopy } from "../../i18n";
 import { createDefaultSettings } from "../../startupDefaults";
 import type { Profile, Workspace } from "../../types";
-import { captureCurrentViewerNotes, reconcileResearchBaseModelKey, ResearchConfigBuilder, researchBaseModelInventorySignature, researchCustomReasoningModeForProfile, researchPreflightSignature, researchTemperatureConditionSettings, researchTemperatureExperimentSupportsModel } from "./ResearchBuilder";
+import { captureCurrentViewerNotes, reconcileResearchBaseModelKey, ResearchConfigBuilder, researchBaseModelInventorySignature, researchPreflightSignature } from "./ResearchBuilder";
 import type { ResearchConfig } from "../../research/types";
 import researchBuilderSource from "./ResearchBuilder.tsx?raw";
 
@@ -23,7 +22,7 @@ const model: ProviderModel = {
 const repository = {} as AppRepository;
 const noop = vi.fn(async () => undefined);
 
-function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "sampling" | "temperature") {
+function renderBuilder(template: "model" | "viewer_notes" | "system_prompt") {
   return renderToStaticMarkup(<ResearchConfigBuilder
     copy={getCopy("en")}
     settings={createDefaultSettings()}
@@ -41,30 +40,6 @@ function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "s
 }
 
 describe("Research Builder Training/Research UX step", () => {
-
-  it("allows Temperature Research for Custom OpenAI even when discovery does not advertise temperature", () => {
-    const customProvider = { ...provider, provider: "custom_openai" as const };
-    const customModel = { ...model, provider: "custom_openai" as const, providerConfigId: customProvider.id, route: "custom_openai:model-a" };
-    expect(customModel.capabilities.temperature.supported).toBe(false);
-    expect(researchTemperatureExperimentSupportsModel(customModel)).toBe(true);
-    expect(researchTemperatureExperimentSupportsModel(model)).toBe(false);
-    const requested = researchTemperatureConditionSettings({ maxOutputTokens: 4096 }, customModel, 0.7);
-    expect(requested).toMatchObject({ temperature: 0.7, customTemperatureMode: "manual", maxOutputTokens: 4096 });
-    const resolved = resolveGenerationSettings(customModel.capabilities, requested, { provider: customModel.provider });
-    expect(resolved.effective.temperature).toBe(0.7);
-    expect(resolved.omitted).toEqual([]);
-    const directRequested = researchTemperatureConditionSettings({ maxOutputTokens: 4096 }, model, 0.7);
-    expect(directRequested).toEqual({ temperature: 0.7, maxOutputTokens: 4096 });
-  });
-
-  it("freezes the selected Custom reasoning switch for ordinary Research but not reasoning-effort experiments", () => {
-    const customProvider = { ...provider, provider: "custom_openai" as const };
-    const customModel = { ...model, provider: "custom_openai" as const, providerConfigId: customProvider.id, route: "custom_openai:model-a" };
-    const customProfile = { ...profile, defaultViewerCustomReasoningMode: "off" as const };
-    expect(researchCustomReasoningModeForProfile(customProfile, customModel, "model")).toBe("off");
-    expect(researchCustomReasoningModeForProfile(customProfile, customModel, "reasoning")).toBeUndefined();
-    expect(researchCustomReasoningModeForProfile(customProfile, model, "model")).toBeUndefined();
-  });
   it("offers exactly Full RCP and RV Lite as Research-wide protocol choices", () => {
     const html = renderBuilder("model");
     expect(html).toContain("Full RCP · 1.5a");
@@ -164,19 +139,6 @@ describe("Research Builder Training/Research UX step", () => {
     expect(before).toHaveLength(after.length);
     expect(researchBaseModelInventorySignature(before)).not.toBe(researchBaseModelInventorySignature(after));
     expect(reconcileResearchBaseModelKey(profileB, after, "pc-a::model-a")).toBe("pc-a::model-b");
-  });
-
-
-  it("exposes the Sampling configurations form only through the Research builder contract", () => {
-    const html = renderBuilder("sampling");
-    expect(html).toContain("Sampling configurations");
-    expect(html).toContain("top_p");
-    expect(html).toContain("top_k");
-    expect(html).toContain("seed");
-    expect(html).toContain("At least one parameter must be compared");
-    expect(researchBuilderSource).toContain('"viewer_notes", "sampling"');
-    expect(researchBuilderSource).toContain('buildResearchSamplingConditions(base("sampling_base", "Sampling"), samplingDesign!)');
-    expect(researchBuilderSource).toContain('source: "research", profileId: baseProfile.id, mode: "condition_variable"');
   });
 
   it("captures the currently active Viewer Notes version for the exact base Viewer identity", async () => {

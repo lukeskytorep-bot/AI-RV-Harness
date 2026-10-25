@@ -74,23 +74,6 @@ describe("Browser Research repository", () => {
     expect(repository.hasRecordedTargetUse("target-a")).toBe(true);
   });
 
-  it("freezes OpenRouter sampling inside Experiment Lock independently of later profile edits", async () => {
-    const storage = new MemoryStorage();
-    const repository = new BrowserResearchRepository({ storage, now: () => "2026-09-08T20:00:00.000Z", createId: () => "research-1" });
-    const samplingConfig: ResearchConfig = {
-      ...config,
-      conditions: [{ ...config.conditions[0], requestedSettings: { topK: 64, seed: 42 } }],
-    };
-    const samplingPlan: ResearchLockPlan = {
-      ...plan,
-      conditions: [{ ...plan.conditions[0], config: samplingConfig.conditions[0] }],
-    };
-    await repository.createResearchProject(samplingConfig);
-    await repository.lockResearchProject("research-1", samplingPlan);
-    storage.setItem("rvh.dev.profiles", JSON.stringify([{ id: "profile-a", name: "Profile", defaultViewerOpenRouterSampling: { enabled: true, topK: 20, seed: 7 }, createdAt: "t", updatedAt: "later" }]));
-    expect((await repository.listResearchConditions("research-1"))[0]?.config.requestedSettings).toMatchObject({ topK: 64, seed: 42 });
-  });
-
   it("preserves assignment updates and immutable Research results", async () => {
     const storage = new MemoryStorage();
     let id = 0;

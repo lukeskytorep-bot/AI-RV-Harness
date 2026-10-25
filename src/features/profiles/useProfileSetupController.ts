@@ -4,13 +4,13 @@ import { PROVIDER_LABELS } from "../../components/ProviderSettings";
 import type { getCopy } from "../../i18n";
 import { isRouteAllowedForCredential, preferredModelOrder } from "../../modelRoutes";
 import { defaultTemperatureForModel, reasoningEffortForModel } from "../../profileViewerDefaults";
-import { addProvider, blackboxRequiresManualModel, blackboxRouteNeedsManualModel, refreshProviderModels, registerManualBlackboxModel } from "../../providers/service";
-import { PROVIDER_KINDS, type CustomReasoningMode, type ProviderConfig, type ProviderKind, type ProviderModel, type ReasoningEffort } from "../../providers/types";
+import { addProvider, refreshProviderModels } from "../../providers/service";
+import { PROVIDER_KINDS, type ProviderConfig, type ProviderKind, type ProviderModel, type ReasoningEffort } from "../../providers/types";
 import { factoryViewerEditablePrompt, localizedMonitorEditablePrompt } from "../../resources/systemPrompts";
 import { isTauriRuntime } from "../../storage";
 import type { AppRepository } from "../../storage/repository";
-import type { CustomTemperatureMode, InterfaceLanguage, Profile, ProfileAiConfigurationInput } from "../../types";
-import { buildProfileAiConfiguration, parseOpenRouterAdditionalSamplingInputs } from "./profileAiConfiguration";
+import type { InterfaceLanguage, Profile, ProfileAiConfigurationInput } from "../../types";
+import { buildProfileAiConfiguration } from "./profileAiConfiguration";
 
 export const NEW_PROFILE_PROVIDER_CHOICE = "__new__";
 
@@ -28,17 +28,9 @@ export interface ProfileSetupController {
   providerLabel: string;
   apiKey: string;
   baseUrl: string;
-  blackboxManualModelId: string;
-  blackboxManualModelRequired: boolean;
   viewerModelId: string;
   viewerReasoning: "" | ReasoningEffort;
   viewerTemperature: string;
-  viewerTemperatureMode: CustomTemperatureMode | "legacy";
-  viewerCustomReasoningMode: CustomReasoningMode;
-  viewerSamplingEnabled: boolean;
-  viewerTopP: string;
-  viewerTopK: string;
-  viewerSeed: string;
   viewerSystemPrompt: string;
   modelSearch: string;
   judgeModelKey: string;
@@ -55,15 +47,8 @@ export interface ProfileSetupController {
   setProviderLabel: (value: string) => void;
   setApiKey: (value: string) => void;
   setBaseUrl: (value: string) => void;
-  setBlackboxManualModelId: (value: string) => void;
   setViewerReasoning: (value: "" | ReasoningEffort) => void;
   setViewerTemperature: (value: string) => void;
-  setViewerTemperatureMode: (value: CustomTemperatureMode) => void;
-  setViewerCustomReasoningMode: (value: CustomReasoningMode) => void;
-  setViewerSamplingEnabled: (value: boolean) => void;
-  setViewerTopP: (value: string) => void;
-  setViewerTopK: (value: string) => void;
-  setViewerSeed: (value: string) => void;
   setModelSearch: (value: string) => void;
   setJudgeModelKey: (value: string) => void;
   setMonitorModelKey: (value: string) => void;
@@ -86,16 +71,9 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
   const [providerLabel, setProviderLabel] = useState(PROVIDER_LABELS.openrouter);
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
-  const [blackboxManualModelId, setBlackboxManualModelId] = useState("");
   const [viewerModelId, setViewerModelId] = useState("");
   const [viewerReasoning, setViewerReasoning] = useState<"" | ReasoningEffort>("");
   const [viewerTemperature, setViewerTemperature] = useState("");
-  const [viewerTemperatureMode, setViewerTemperatureMode] = useState<CustomTemperatureMode | "legacy">(existingProfile?.defaultViewerCustomTemperatureMode ?? (existingProfile ? "legacy" : "provider_default"));
-  const [viewerCustomReasoningMode, setViewerCustomReasoningMode] = useState<CustomReasoningMode>(existingProfile?.defaultViewerCustomReasoningMode ?? "default");
-  const [viewerSamplingEnabled, setViewerSamplingEnabled] = useState(existingProfile?.defaultViewerOpenRouterSampling?.enabled ?? false);
-  const [viewerTopP, setViewerTopP] = useState(existingProfile?.defaultViewerOpenRouterSampling?.topP === undefined ? "" : String(existingProfile.defaultViewerOpenRouterSampling.topP));
-  const [viewerTopK, setViewerTopK] = useState(existingProfile?.defaultViewerOpenRouterSampling?.topK === undefined ? "" : String(existingProfile.defaultViewerOpenRouterSampling.topK));
-  const [viewerSeed, setViewerSeed] = useState(existingProfile?.defaultViewerOpenRouterSampling?.seed === undefined ? "" : String(existingProfile.defaultViewerOpenRouterSampling.seed));
   const [modelSearch, setModelSearch] = useState("");
   const [judgeModelKey, setJudgeModelKey] = useState("");
   const [monitorModelKey, setMonitorModelKey] = useState("");
@@ -106,9 +84,6 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
   const viewerSystemPrompt = existingProfile?.defaultViewerSystemPrompt ?? factoryViewerEditablePrompt(setupLanguage);
 
   const selectedProvider = providers.find((provider) => provider.id === connectionChoice) ?? null;
-  const blackboxManualModelRequired = selectedProvider?.provider === "blackbox"
-    ? blackboxRouteNeedsManualModel(selectedProvider.baseUrl)
-    : providerKind === "blackbox" && blackboxRouteNeedsManualModel(baseUrl);
   const providerModels = useMemo(
     () => preferredModelOrder(models.filter((model) => model.providerConfigId === selectedProvider?.id)),
     [models, selectedProvider?.id],
@@ -161,8 +136,6 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     setViewerModelId("");
     setViewerReasoning("");
     setViewerTemperature("");
-    setViewerTemperatureMode(existingProfile ? "legacy" : "provider_default");
-    setViewerCustomReasoningMode("default");
     setModelSearch("");
     setJudgeModelKey("");
     setMonitorModelKey("");
@@ -171,8 +144,6 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
   const changeProviderKind = (kind: ProviderKind) => {
     setProviderKind(kind);
     setProviderLabel(PROVIDER_LABELS[kind]);
-    setBaseUrl("");
-    setBlackboxManualModelId("");
   };
 
   const changeConnection = (providerId: string) => {
@@ -191,21 +162,13 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
           provider: providerKind,
           label: providerLabel,
           apiKey,
-          ...((providerKind === "custom_openai" || providerKind === "blackbox") && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
+          ...(providerKind === "custom_openai" ? { baseUrl } : {}),
         });
         setApiKey("");
       }
-      const manualBlackbox = await blackboxRequiresManualModel(provider);
-      if (manualBlackbox) {
-        const manualModel = await registerManualBlackboxModel(repository, provider, blackboxManualModelId);
-        await reloadInventory(provider.id);
-        resetViewerSelections();
-        setViewerModelId(manualModel.modelId);
-      } else {
-        await refreshProviderModels(repository, provider);
-        await reloadInventory(provider.id);
-        resetViewerSelections();
-      }
+      await refreshProviderModels(repository, provider);
+      await reloadInventory(provider.id);
+      resetViewerSelections();
       return provider;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -226,8 +189,6 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
       ? existingProfile.defaultViewerTemperature
       : defaultTemperatureForModel(model);
     setViewerTemperature(temperature === undefined ? "" : String(temperature));
-    setViewerTemperatureMode(selectedProvider?.provider === "custom_openai" ? (sameStoredPair ? existingProfile?.defaultViewerCustomTemperatureMode ?? "legacy" : "provider_default") : "legacy");
-    setViewerCustomReasoningMode(selectedProvider?.provider === "custom_openai" ? (sameStoredPair ? existingProfile?.defaultViewerCustomReasoningMode ?? "default" : "default") : "default");
   };
 
   const prepareCachedModels = () => {
@@ -239,14 +200,8 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     setViewerReasoning("");
     const temperature = defaultTemperatureForModel(viewerModel);
     setViewerTemperature(temperature === undefined ? "" : String(temperature));
-    setViewerTemperatureMode(selectedProvider?.provider === "custom_openai" ? "provider_default" : "legacy");
-    setViewerCustomReasoningMode("default");
     setJudgeModelKey("");
     setMonitorModelKey("");
-    setViewerSamplingEnabled(false);
-    setViewerTopP("");
-    setViewerTopK("");
-    setViewerSeed("");
   };
 
   const buildAiConfiguration = (skipOptional = false): ProfileAiConfigurationInput => {
@@ -270,11 +225,6 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
         judgeKey,
         providers,
         models,
-        (selectedProvider?.provider === "openrouter" || selectedProvider?.provider === "custom_openai" || selectedProvider?.provider === "mistral" || selectedProvider?.provider === "blackbox")
-          ? parseOpenRouterAdditionalSamplingInputs(copy, viewerSamplingEnabled, viewerTopP, viewerTopK, viewerSeed)
-          : undefined,
-        selectedProvider?.provider === "custom_openai" ? viewerTemperatureMode : undefined,
-        selectedProvider?.provider === "custom_openai" ? viewerCustomReasoningMode : undefined,
       ),
       defaultMonitorSystemPrompt: localizedMonitorEditablePrompt(existingProfile?.defaultMonitorSystemPrompt, setupLanguage),
     };
@@ -288,17 +238,9 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     providerLabel,
     apiKey,
     baseUrl,
-    blackboxManualModelId,
-    blackboxManualModelRequired,
     viewerModelId,
     viewerReasoning,
     viewerTemperature,
-    viewerTemperatureMode,
-    viewerCustomReasoningMode,
-    viewerSamplingEnabled,
-    viewerTopP,
-    viewerTopK,
-    viewerSeed,
     viewerSystemPrompt,
     modelSearch,
     judgeModelKey,
@@ -315,15 +257,8 @@ export function useProfileSetupController({ copy, repository, existingProfile = 
     setProviderLabel,
     setApiKey,
     setBaseUrl,
-    setBlackboxManualModelId,
     setViewerReasoning,
     setViewerTemperature,
-    setViewerTemperatureMode,
-    setViewerCustomReasoningMode,
-    setViewerSamplingEnabled,
-    setViewerTopP,
-    setViewerTopK,
-    setViewerSeed,
     setModelSearch,
     setJudgeModelKey,
     setMonitorModelKey,

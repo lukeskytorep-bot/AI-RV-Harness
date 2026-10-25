@@ -12,7 +12,6 @@ mod errors;
 mod reasoning;
 mod request_builders;
 mod response_parsers;
-mod response_evidence;
 mod streaming;
 mod transport;
 mod validation;
@@ -20,9 +19,9 @@ mod validation;
 use adapters::{authenticated, endpoint, normalized_credential_endpoint, provider_base_url};
 use endpoint_capabilities::discover_openrouter_model_endpoints;
 use errors::provider_error_metadata;
-use request_builders::{build_chat_request, enable_chat_streaming, enable_mistral_chat_streaming};
+use request_builders::{build_chat_request, enable_openrouter_streaming};
 use response_parsers::parse_chat_response;
-use streaming::{send_blackbox_streaming_chat_request, send_custom_openai_streaming_chat_request, send_mistral_streaming_chat_request, send_openrouter_streaming_chat_request, ProviderContinuationStreamDiagnostics, ProviderStreamEvent};
+use streaming::{send_openrouter_streaming_chat_request, ProviderContinuationStreamDiagnostics, ProviderStreamEvent};
 use transport::{cancel_request, client, json_response, send_chat_request};
 use validation::validate_chat_request;
 
@@ -99,7 +98,6 @@ struct OpenRouterProviderRouting {
     #[serde(default)]
     ignore: Vec<String>,
     allow_fallbacks: Option<bool>,
-    require_parameters: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -148,8 +146,6 @@ pub struct ProviderChatRequest {
     provider_config_id: String,
     base_url: Option<String>,
     request_id: Option<String>,
-    #[serde(default)]
-    workflow_ownership: Option<crate::workflow_heartbeat::Binding>,
     model_id: String,
     messages: Vec<ProviderMessage>,
     reasoning_effort: Option<String>,
@@ -157,13 +153,8 @@ pub struct ProviderChatRequest {
     reasoning_transport_kind: Option<String>,
     reasoning_transport_value: Option<String>,
     temperature: Option<f64>,
-    top_p: Option<f64>,
-    top_k: Option<u64>,
-    seed: Option<u64>,
     max_output_tokens: Option<u32>,
     custom_output_token_field: Option<CustomOpenAiOutputTokenField>,
-    #[serde(default)]
-    custom_streaming_enabled: bool,
     timeout_ms: Option<u64>,
     #[serde(default)]
     timeout_policy: Option<ProviderTimeoutPolicy>,
@@ -191,7 +182,6 @@ enum ProviderContinuationState {
     OpenRouter(OpenRouterContinuationState),
     Google(GoogleContinuationState),
     Anthropic(AnthropicContinuationState),
-    Mistral(MistralContinuationState),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -222,16 +212,6 @@ struct AnthropicContinuationState {
     format: String,
     replay_fingerprint: ProviderReplayFingerprint,
     blocks: Vec<Value>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct MistralContinuationState {
-    schema_version: u8,
-    transport: String,
-    format: String,
-    replay_fingerprint: ProviderReplayFingerprint,
-    content: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -276,10 +256,6 @@ struct ProviderUsage {
 
 #[derive(Debug, Serialize)]
 pub struct ProviderChatResponse {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    final_candidate: Option<Box<ProviderFinalCandidate>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response_evidence: Option<Box<response_evidence::ProviderResponseEvidence>>,
     content: String,
     reasoning_content: Option<String>,
     reasoning_details: Option<Vec<Value>>,
@@ -291,17 +267,6 @@ pub struct ProviderChatResponse {
     actual_provider: Option<String>,
     continuation_diagnostics: Option<ProviderContinuationStreamDiagnostics>,
     debug_payload: Option<ProviderDebugPayload>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProviderFinalCandidate {
-    content: Option<String>,
-    content_sha256: String,
-    byte_length: usize,
-    omitted_for_size: bool,
-    envelope_removed: bool,
-    native_validation: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -317,16 +282,6 @@ pub struct ProviderCallError {
     code: Box<str>,
     message: Box<str>,
     phase: Box<str>,
-    // Keep Result's inline Err small; serde preserves the existing flat IPC JSON.
-    #[serde(flatten)]
-    metadata: Box<ProviderCallErrorMetadata>,
-}
-
-#[derive(Clone, Debug, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProviderCallErrorMetadata {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    final_candidate: Option<Box<ProviderFinalCandidate>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     http_status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -339,8 +294,6 @@ struct ProviderCallErrorMetadata {
     provider_request_id: Option<Box<str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     semantic_output_started: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response_evidence: Option<Box<response_evidence::ProviderResponseEvidence>>,
 }
 
 impl ProviderCallError {
@@ -349,7 +302,12 @@ impl ProviderCallError {
             code: code.into(),
             message: message.into().into_boxed_str(),
             phase: phase.into(),
-            metadata: Box::default(),
+            http_status: None,
+            provider_error_type: None,
+            provider_code: None,
+            retry_after_ms: None,
+            provider_request_id: None,
+            semantic_output_started: None,
         }
     }
 
@@ -449,35 +407,20 @@ pub fn provider_binding_endpoint(provider: String, base_url: Option<String>) -> 
     binding_endpoint(provider, base_url.as_deref())
 }
 
-fn model_discovery_url(provider: ProviderKind, base: &str) -> Result<String, String> {
-    if matches!(provider, ProviderKind::Blackbox) {
-        let normalized = normalized_credential_endpoint(base)?;
-        if normalized != "https://api.blackbox.ai" {
-            return Err(
-                "Blackbox model discovery is not enabled for this Blackbox route: the current chat API contract does not establish GET /models. This is a discovery limitation, not evidence that the configured chat route or credential is invalid."
-                    .to_string(),
-            );
-        }
-    }
-    Ok(if matches!(provider, ProviderKind::Google) {
-        format!("{}?pageSize=1000", endpoint(base, "models"))
-    } else {
-        endpoint(base, "models")
-    })
-}
-
 #[tauri::command]
 pub async fn provider_discover_models(request: ProviderRequest) -> Result<Value, String> {
     let base = provider_base_url(request.provider, request.base_url.as_deref())?;
-    // Resolve the discovery contract before reading the credential. In particular,
-    // explicit Blackbox Enterprise/organization routes must never receive a guessed /models request.
-    let url = model_discovery_url(request.provider, &base)?;
     let binding = normalized_credential_endpoint(&base)?;
     let secret = secrets::get_credential_for_binding(
         &request.credential_id,
         request.provider.binding_kind(),
         &binding,
     )?;
+    let url = if matches!(request.provider, ProviderKind::Google) {
+        format!("{}?pageSize=1000", endpoint(&base, "models"))
+    } else {
+        endpoint(&base, "models")
+    };
     let response = authenticated(client()?.get(url), request.provider, &secret)
         .timeout(Duration::from_secs(120))
         .send()
@@ -492,57 +435,13 @@ pub async fn provider_discover_model_endpoints(request: ProviderEndpointRequest)
     discover_openrouter_model_endpoints(&request).await
 }
 
-fn parse_finished_chat_response(
-    provider: ProviderKind,
-    payload: &Value,
-    request_id: Option<String>,
-    semantic_output_started: bool,
-    response_evidence: Box<response_evidence::ProviderResponseEvidence>,
-) -> Result<ProviderChatResponse, ProviderCallError> {
-    let mut final_candidate = response_parsers::capture_final_candidate(provider, payload);
-    let mut parsed = parse_chat_response(provider, payload.clone(), request_id.clone()).map_err(|message| {
-        let (provider_error_type, provider_code) = provider_error_metadata(payload);
-        let code = if provider_error_type.is_some() || provider_code.is_some() {
-            "provider_error"
-        } else if message.to_ascii_lowercase().contains("empty") && !message.to_ascii_lowercase().contains("reasoning without") {
-            "empty_assistant_response"
-        } else {
-            "unknown"
-        };
-        let mut failure = ProviderCallError::new(code, message, "validating_response");
-        failure.metadata.provider_error_type = provider_error_type;
-        failure.metadata.provider_code = provider_code;
-        failure.metadata.provider_request_id = request_id.map(String::into_boxed_str);
-        failure.metadata.response_evidence = Some(response_evidence.clone());
-        if let Some(candidate) = final_candidate.as_mut() { candidate.native_validation = "rejected"; }
-        failure.metadata.final_candidate = final_candidate.clone();
-        if semantic_output_started {
-            failure.metadata.semantic_output_started = Some(true);
-        }
-        failure
-    })?;
-    parsed.response_evidence = Some(response_evidence);
-    if let Some(candidate) = final_candidate.as_mut() { candidate.native_validation = "accepted"; }
-    parsed.final_candidate = final_candidate;
-    Ok(parsed)
-}
-
 #[tauri::command]
 pub async fn provider_chat(
-    window: tauri::WebviewWindow,
     request: ProviderChatRequest,
     on_stream: Channel<ProviderStreamEvent>,
     emit_stream_events: bool,
 ) -> Result<ProviderChatResponse, ProviderCallError> {
     validate_chat_request(&request).map_err(ProviderCallError::configuration)?;
-    let ownership = if let Some(binding) = &request.workflow_ownership {
-        let id = request.request_id.as_deref().ok_or_else(|| ProviderCallError::configuration("Owned provider request requires its transport identity"))?;
-        Some(crate::workflow_heartbeat::bind(binding, window.label(), id).await.map_err(ProviderCallError::configuration)?)
-    } else { None };
-    let ownership_error = |mut failure: ProviderCallError| {
-        if let Some(message) = ownership.as_ref().and_then(|guard| guard.failure()) { failure.code = "cancelled".into(); failure.message = message.into(); }
-        failure
-    };
     let base = provider_base_url(request.provider, request.base_url.as_deref()).map_err(ProviderCallError::configuration)?;
     let binding = normalized_credential_endpoint(&base).map_err(ProviderCallError::configuration)?;
     validation::validate_continuation_bindings(&request, &binding).map_err(ProviderCallError::configuration)?;
@@ -553,15 +452,9 @@ pub async fn provider_chat(
     )
     .map_err(ProviderCallError::configuration)?;
     let (url, mut body) = build_chat_request(&request, &base).map_err(ProviderCallError::configuration)?;
-    let use_openrouter_streaming = matches!(request.provider, ProviderKind::Openrouter);
-    let use_custom_streaming = matches!(request.provider, ProviderKind::CustomOpenai) && request.custom_streaming_enabled;
-    let use_mistral_streaming = matches!(request.provider, ProviderKind::Mistral);
-    let use_blackbox_streaming = matches!(request.provider, ProviderKind::Blackbox);
-    let use_streaming = use_openrouter_streaming || use_custom_streaming || use_mistral_streaming || use_blackbox_streaming;
-    if use_mistral_streaming {
-        enable_mistral_chat_streaming(&mut body).map_err(ProviderCallError::configuration)?;
-    } else if use_streaming {
-        enable_chat_streaming(&mut body).map_err(ProviderCallError::configuration)?;
+    let use_streaming = matches!(request.provider, ProviderKind::Openrouter);
+    if use_streaming {
+        enable_openrouter_streaming(&mut body).map_err(ProviderCallError::configuration)?;
     }
     let debug_endpoint = url.clone();
     let debug_request = request.detailed_diagnostics.then(|| {
@@ -579,46 +472,20 @@ pub async fn provider_chat(
             builder
         }
     };
-    let (payload, request_id, semantic_output_started, continuation_diagnostics, response_evidence) = if use_streaming {
-        let streamed = if use_openrouter_streaming {
-            send_openrouter_streaming_chat_request(
-                builder,
-                request.request_id.as_deref(),
-                &secret,
-                &timeout_policy,
-                emit_stream_events.then_some(&on_stream),
-            ).await
-        } else if use_mistral_streaming {
-            send_mistral_streaming_chat_request(
-                builder,
-                request.request_id.as_deref(),
-                &secret,
-                &timeout_policy,
-                emit_stream_events.then_some(&on_stream),
-            ).await
-        } else if use_blackbox_streaming {
-            send_blackbox_streaming_chat_request(
-                builder,
-                request.request_id.as_deref(),
-                &secret,
-                &timeout_policy,
-                emit_stream_events.then_some(&on_stream),
-            ).await
-        } else {
-            send_custom_openai_streaming_chat_request(
-                builder,
-                request.request_id.as_deref(),
-                &secret,
-                &timeout_policy,
-                emit_stream_events.then_some(&on_stream),
-            ).await
-        }.map_err(ownership_error)?;
+    let (payload, request_id, semantic_output_started, continuation_diagnostics) = if use_streaming {
+        let streamed = send_openrouter_streaming_chat_request(
+            builder,
+            request.request_id.as_deref(),
+            &secret,
+            &timeout_policy,
+            emit_stream_events.then_some(&on_stream),
+        )
+        .await?;
         (
             streamed.payload,
             streamed.request_id,
             streamed.semantic_output_started,
-            use_openrouter_streaming.then_some(streamed.continuation_diagnostics),
-            streamed.response_evidence,
+            Some(streamed.continuation_diagnostics),
         )
     } else {
         let (payload, request_id) = send_chat_request(
@@ -626,16 +493,32 @@ pub async fn provider_chat(
             request.request_id.as_deref(),
             &secret,
         )
-        .await.map_err(ownership_error)?;
-        let evidence = response_evidence::finished(Some(&payload), request_id.as_deref(), "body_read");
-        (payload, request_id, false, None, evidence)
+        .await?;
+        (payload, request_id, false, None)
     };
     let debug_response = request.detailed_diagnostics.then(|| {
         let mut value = payload.clone();
         scrub_debug_value(&mut value, &secret, None);
         value
     });
-    let mut parsed = parse_finished_chat_response(request.provider, &payload, request_id, semantic_output_started, response_evidence)?;
+    let mut parsed = parse_chat_response(request.provider, payload.clone(), request_id.clone()).map_err(|message| {
+        let (provider_error_type, provider_code) = provider_error_metadata(&payload);
+        let code = if provider_error_type.is_some() || provider_code.is_some() {
+            "provider_error"
+        } else if message.to_ascii_lowercase().contains("empty") && !message.to_ascii_lowercase().contains("reasoning without") {
+            "empty_assistant_response"
+        } else {
+            "unknown"
+        };
+        let mut failure = ProviderCallError::new(code, message, "validating_response");
+        failure.provider_error_type = provider_error_type;
+        failure.provider_code = provider_code;
+        failure.provider_request_id = request_id.map(String::into_boxed_str);
+        if semantic_output_started {
+            failure.semantic_output_started = Some(true);
+        }
+        failure
+    })?;
     parsed.continuation_diagnostics = continuation_diagnostics;
     parsed.debug_payload = Some(ProviderDebugPayload {
         endpoint: debug_endpoint,

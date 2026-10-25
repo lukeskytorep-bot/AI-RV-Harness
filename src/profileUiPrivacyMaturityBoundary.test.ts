@@ -21,14 +21,7 @@ describe("PROFILE-UI-PRIVACY-MATURITY-1 boundary", () => {
   it("preserves the previous single output setting as the upgrade seed", () => {
     const app = read("./App.tsx");
     expect(app).toContain("outputSettingsNeedUpgrade");
-    expect(app).toContain("applyStoredOutputSettings(nextSettings, storedSettings)");
-    const defaults = read("./startupDefaults.ts");
-    expect(defaults).toContain("const legacyOutput = storedSettings.defaultMaxOutputTokens");
-    expect(defaults).toContain("storedSettings.conversationMaxOutputTokens ?? legacyOutput ?? nextSettings.conversationMaxOutputTokens");
-    expect(app).toContain("storedOutputSettingsNeedUpgrade(storedSettings)");
-    expect(defaults).toContain("conversationMaxOutputTokens < MIN_CONVERSATION_MAX_OUTPUT_TOKENS");
-    expect(defaults).toContain("rvSessionMaxOutputTokens < MIN_RV_SESSION_MAX_OUTPUT_TOKENS");
-    expect(defaults).toContain("storedSettings.rvSessionMaxOutputTokens ?? legacyOutput ?? nextSettings.rvSessionMaxOutputTokens");
+    expect(app).toContain("storedSettings.defaultMaxOutputTokens ?? nextSettings.defaultMaxOutputTokens");
   });
 
   it("keeps Research experimental wording while removing Viewer Learning experimental labels", () => {
@@ -55,15 +48,14 @@ describe("PROFILE-UI-PRIVACY-MATURITY-1 boundary", () => {
     expect(settings).not.toContain("href={PRIVACY_POLICY_URL}");
   });
 
-  it("keeps Workspace tiles bounded while Profile selection uses the shared accessible native select", () => {
+  it("keeps Workspace tiles bounded and gives the switcher named selected rows", () => {
     const profiles = read("./features/profiles/ProfilesScreen.tsx");
-    const selector = read("./components/ProfileSelector.tsx");
+    const switcher = read("./features/workspaces/WorkspaceSwitcherDialog.tsx");
     const styles = read("./styles/shared.css");
     expect(profiles).toContain("workspace-add-button");
     expect(profiles).toContain("Add Conversation Workspace");
-    expect(selector).toContain("<select");
-    expect(selector).toContain("aria-label=");
-    expect(selector).toContain("aiIsBeDisplayName(profile)");
+    expect(switcher).toContain("activeWorkspaceId");
+    expect(switcher).toContain("aria-current");
     expect(styles).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
     expect(styles).toContain("container-type: inline-size");
     expect(styles).toContain("@container (max-width: 640px)");

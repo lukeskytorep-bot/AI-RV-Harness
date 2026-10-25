@@ -1,30 +1,19 @@
-import { selectMissingResearchJudges } from "./judgeSlots";
-import { createResearchJudgeRequestRecovery, ResearchJudgeCheckpointError, ResearchJudgeSlotFailure, researchJudgeRequestAvailability, currentJudgeCompletionId, RESEARCH_JUDGE_COMPLETION_AUTH } from "./judgeRequestRecovery";
-import { prepareViewerSessionResume, type ViewerResumeDecisionCopy } from "../sessions/viewerResumeDecision";
-import { withResearchExecution } from "./executionLifecycle";
-import { assertAbortOwnership } from "../application/abortOwnership";
-import { recordResearchJudgeAttempt } from "./judgeRecovery";
-import { CURRENT_ANALYTICAL_OUTPUT_POLICY, analyticalBudgetPolicyForSnapshot } from "../providers/outputRecovery";
 import { aggregateJudgeScores } from "../domain/scoring";
-import { runBlindJudging, JudgeResponseValidationError, type JudgeSelection } from "../judge/engine";
+import { runBlindJudging, selectMissingJudgeSelections, type JudgeSelection } from "../judge/engine";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { runAutomaticRcpSession, type AutomaticRcpRunInput, type AutomaticRcpRunResult, type SessionProgress } from "../sessions/controller";
 import { runAutomaticRvLiteSession, type AutomaticRvLiteRunInput } from "../sessions/rvLiteController";
-import { createSessionReplay, type SessionReplay } from "../sessions/resumeReplay";
 import type { AppRepository } from "../storage/repository";
-import { createId } from "../storage/repository";
 import { buildResearchLockPlan, stableStringify } from "./planner";
 import { runResearchPreflight, type ResearchPreflightInventory } from "./preflight";
 import { computeConditionStatistics, computePairwiseStatistics } from "./statistics";
-import type { ResearchConfig, ResearchPreflightResult, ResearchProjectRecord, ResearchResults, UnblindedSessionResult, ResearchViewerOutputPolicy } from "./types";
+import type { ResearchConfig, ResearchPreflightResult, ResearchProjectRecord, ResearchResults, UnblindedSessionResult } from "./types";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "../domain/isBeIdentity";
 import { modelRouteKey } from "../modelRoutes";
 import { viewerNotesSnapshotSignature } from "./viewerNotesPolicy";
 import { fieldGuideSnapshotSignature } from "./fieldGuidePolicy";
 import { resolveResearchProtocol } from "./protocolPolicy";
-import { buildAutomaticTargetReveal } from "../targets/service";
-import { VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_RECOVERY_TOKENS } from "../sessions/viewerOutputRecovery";
 
 type ResearchRepository = AppRepository;
 
@@ -33,73 +22,26 @@ export async function createAndLockResearch(
   config: ResearchConfig,
   inventory: ResearchPreflightInventory,
 ): Promise<{ project: ResearchProjectRecord; preflight: ResearchPreflightResult }> {
-  // This API creates a new project, never resumes an existing locked one.
-  // Even a draft with an already frozen blind policy needs explicit analysis
-  // defaults before its new hash is computed. Existing explicit policies stay.
-  const lockedConfig: ResearchConfig = { ...freezeResearchViewerOutputPolicy(config, inventory.models),
-    judgeOutputPolicy: config.judgeOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY),
-    postRevealOutputPolicy: config.postRevealOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY) };
-  analyticalBudgetPolicyForSnapshot(lockedConfig.judgeOutputPolicy);
-  analyticalBudgetPolicyForSnapshot(lockedConfig.postRevealOutputPolicy);
-  const preflight = runResearchPreflight(lockedConfig, inventory);
+  const preflight = runResearchPreflight(config, inventory);
   if (!preflight.ok) throw new Error("Research Preflight contains blocking failures.");
-  const project = await repository.createResearchProject(lockedConfig);
+  const project = await repository.createResearchProject(config);
   await repository.setResearchProjectState(project.id, "Preflight");
-  const plan = await buildResearchLockPlan(project.id, lockedConfig);
+  const plan = await buildResearchLockPlan(project.id, config);
   await repository.lockResearchProject(project.id, plan);
   const locked = await repository.getResearchProject(project.id);
   if (!locked || locked.state !== "Locked") throw new Error("Experiment Lock did not persist correctly.");
   return { project: locked, preflight };
 }
 
-/** Only called for a new draft, before preflight/hash/Experiment Lock; never by Resume. */
-export function freezeResearchViewerOutputPolicy(config: ResearchConfig, models: ProviderModel[] = []): ResearchConfig {
-  const fresh = config.conditions.filter(condition => !condition.viewerOutputPolicy);
-  if (!fresh.length) return config;
-  if (fresh.length !== config.conditions.length) throw new Error("Cannot normalize a mix of frozen and new Research Viewer policies.");
-  const preferred = Math.max(VIEWER_OUTPUT_INITIAL_TOKENS, config.viewerControl?.maxOutputTokens ?? 0,
-    ...fresh.map(condition => condition.requestedSettings.maxOutputTokens ?? 0));
-  const capabilities = fresh.map(condition => condition.capabilitySnapshot
-    ?? models.find(model => model.providerConfigId === condition.providerConfigId && model.modelId === condition.modelId)?.capabilities);
-  const initial = Math.max(1, Math.floor(Math.min(preferred, ...capabilities.map(capability => capability?.maxOutputTokens ?? preferred))));
-  const recovery = Math.max(initial, VIEWER_OUTPUT_RECOVERY_TOKENS);
-  return {
-    ...config,
-    judgeOutputPolicy: config.judgeOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY),
-    postRevealOutputPolicy: config.postRevealOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY),
-    ...(config.viewerControl ? { viewerControl: { ...config.viewerControl, maxOutputTokens: initial } } : {}),
-    conditions: config.conditions.map((condition, index) => {
-      const requestedSettings = { ...condition.requestedSettings, maxOutputTokens: initial };
-      const capability = capabilities[index];
-      const routeModel = models.find(model => model.providerConfigId === condition.providerConfigId && model.modelId === condition.modelId);
-      const policy: ResearchViewerOutputPolicy = { version: 1, initialTokens: initial, recoveryTokens: recovery, preserveConfiguredBudget: false };
-      return { ...condition, requestedSettings, viewerOutputPolicy: policy,
-        ...(capability ? { capabilitySnapshot: structuredClone(capability), effectiveSettings: resolveGenerationSettings(capability, requestedSettings, { provider: routeModel?.provider }) }
-          : condition.effectiveSettings ? { effectiveSettings: { ...condition.effectiveSettings, requested: requestedSettings, effective: { ...condition.effectiveSettings.effective, maxOutputTokens: initial } } } : {}),
-      };
-    }),
-  };
-}
-
-function newResearchSessionIdentity(project: ResearchProjectRecord, assignment: { anonymousSessionId: string }): { id: string; sessionCode: string } {
-  const id = createId("session_research");
-  const compact = id.replace(/[^A-Za-z0-9]/g, "").slice(-10).toUpperCase() || assignment.anonymousSessionId.replace(/[^A-Za-z0-9]/g, "").slice(-10).toUpperCase();
-  const prefix = project.config.sessionPolicy?.sessionCodePrefix?.trim() || "RES";
-  return { id, sessionCode: `${prefix}-${compact}` };
-}
-
-async function executeResearchSessionsOwned(input: {
+export async function executeResearchSessions(input: {
   repository: ResearchRepository;
   projectId: string;
   signal?: AbortSignal;
   sessionRunner?: (input: AutomaticRcpRunInput) => Promise<AutomaticRcpRunResult>;
   rvLiteSessionRunner?: (input: AutomaticRvLiteRunInput) => ReturnType<typeof runAutomaticRvLiteSession>;
-  sessionReplayFactory?: typeof createSessionReplay;
   onProgress?: (progress: { completed: number; total: number; anonymousSessionId: string; session?: SessionProgress }) => void;
 }): Promise<void> {
-  if(input.signal?.aborted)return;
   const project = await requireProject(input.repository, input.projectId);
-  analyticalBudgetPolicyForSnapshot(project.config.postRevealOutputPolicy);
   if (!["Locked", "Running", "Interrupted"].includes(project.state)) throw new Error(`Research sessions cannot run from state ${project.state}.`);
   let protocol;
   try {
@@ -138,10 +80,6 @@ async function executeResearchSessionsOwned(input: {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       throw new Error("Frozen Viewer prompt composition drift detected after Experiment Lock.");
     }
-    if (stableStringify(stored.config.viewerOutputPolicy ?? null) !== stableStringify(locked.viewerOutputPolicy ?? null)) {
-      await input.repository.setResearchProjectState(project.id, "Interrupted");
-      throw new Error("Frozen Viewer output policy drift detected after Experiment Lock.");
-    }
   }
   const targetById = new Map(targets.map((target) => [target.id, target]));
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
@@ -152,6 +90,10 @@ async function executeResearchSessionsOwned(input: {
 
   for (const assignment of assignments.sort((a, b) => a.executionOrder - b.executionOrder)) {
     if (assignment.status === "SessionComplete" || assignment.status === "Judged") continue;
+    if (assignment.sessionId) {
+      await input.repository.setResearchProjectState(project.id, "Interrupted");
+      throw new Error(`Incomplete paid session ${assignment.anonymousSessionId} requires explicit recovery; it will not be rerun silently.`);
+    }
     if (input.signal?.aborted) {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       return;
@@ -169,144 +111,40 @@ async function executeResearchSessionsOwned(input: {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       throw new Error("Provider capability metadata changed since Experiment Lock; Research stopped instead of assuming the condition is unchanged.");
     }
-    const currentEffective = resolveGenerationSettings(model.capabilities, condition.requestedSettings, { provider: model.provider });
+    const currentEffective = resolveGenerationSettings(model.capabilities, condition.requestedSettings);
     if (!condition.effectiveSettings || stableStringify(currentEffective) !== stableStringify(condition.effectiveSettings)) {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       throw new Error("Requested/effective settings no longer match Experiment Lock.");
     }
-    let linkedSessionId: string | undefined = assignment.sessionId;
+    let linkedSessionId: string | undefined;
     const onSessionCreated = async (sessionId: string) => {
       linkedSessionId = sessionId;
       await input.repository.updateResearchAssignment(assignment.id, sessionId, "Running");
     };
     const onProgress = (session: SessionProgress) => input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId, session });
-
-    let runRepository = input.repository;
-    let runChat: SessionReplay["chat"] | undefined;
-    let resumeSession: Awaited<ReturnType<ResearchRepository["getRvSession"]>> | undefined;
-    let resumeContinuationRoute;
-    let sessionLanguage = project.config.sessionLanguage;
-    let requestedSettings = condition.requestedSettings;
-    let rvSystemPrompt = condition.systemPrompt;
-    let researchConditionInstruction = condition.conditionInstruction;
-    let viewerNotes = condition.viewerNotes;
-    let capturedAutomaticReveal;
-    let sessionIdentity: { id: string; sessionCode: string } | undefined;
-    let initializationExistingSession: Awaited<ReturnType<ResearchRepository["getRvSession"]>> | undefined;
-
-    if(input.signal?.aborted){await input.repository.setResearchProjectState(project.id,"Interrupted");return;}
-    await assertAbortOwnership(input.signal);
-    if (!assignment.sessionId || assignment.status === "RestartApproved") {
-      sessionIdentity = newResearchSessionIdentity(project, assignment);
-      const initialized = await input.repository.initializeResearchSession(assignment.id, {
-        id: sessionIdentity.id,
-        workspaceId: project.workspaceId,
-        profileId: condition.profileId,
-        sessionCode: sessionIdentity.sessionCode,
-        runType: "automatic",
-        targetId: target.id,
-        researchProjectId: project.id,
-      });
-      linkedSessionId = initialized.id;
-      initializationExistingSession = initialized;
-    }
-
-    if (assignment.sessionId) {
-      const [session, snapshot] = await Promise.all([
-        input.repository.getRvSession(assignment.sessionId),
-        input.repository.getSessionSnapshot(assignment.sessionId),
-      ]);
-      if (!session && snapshot) {
-        await input.repository.setResearchProjectState(project.id, "Interrupted");
-        throw new Error(`Research Resume cannot recover ${assignment.anonymousSessionId}: Session Snapshot exists without its RV session row.`);
-      }
-      if (!snapshot && (assignment.status === "ResumeApproved" || assignment.status === "Initializing")) {
-        if (!session) {
-          await input.repository.setResearchProjectState(project.id, "Interrupted");
-          throw new Error(`Research initialization ${assignment.anonymousSessionId} lost its RV session row.`);
-        }
-        initializationExistingSession = session;
-        sessionIdentity = { id: session.id, sessionCode: session.sessionCode };
-      } else if (!session || !snapshot) {
-        await input.repository.setResearchProjectState(project.id, "Interrupted");
-        throw new Error(`Research Resume cannot recover ${assignment.anonymousSessionId} because its durable initialization is incomplete.`);
-      }
-      if (snapshot) validateResearchResumeSnapshot({ project, assignment, condition, provider, model, protocol, session: session!, snapshot });
-      if (snapshot && session!.state === "Revealed") {
-        await ensurePersistedResearchReveal({ repository: input.repository, projectId: project.id, sessionId: session.id, targetId: target.id, profileId: condition.profileId });
-        await input.repository.updateResearchAssignment(assignment.id, session.id, "SessionComplete");
-        completed += 1;
-        input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId });
-        continue;
-      }
-      if (snapshot && assignment.status === "Initializing") {
-        await input.repository.updateResearchAssignment(assignment.id, session!.id, "Running");
-      } else if (snapshot && assignment.status !== "ResumeApproved") {
-        await input.repository.setResearchProjectState(project.id, "Interrupted");
-        throw new Error(`Incomplete paid session ${assignment.anonymousSessionId} requires explicit Resume approval; it will not be rerun or restarted silently.`);
-      }
-      if (snapshot) {
-      const events = await input.repository.listSessionEvents(session!.id);
-      const replay = await (input.sessionReplayFactory ?? createSessionReplay)({ repository: input.repository, session: session!, events });
-      runRepository = replay.repository;
-      runChat = replay.chat;
-      resumeSession = session;
-      resumeContinuationRoute = snapshot.continuationRoute;
-      sessionLanguage = snapshot.sessionLanguage;
-      requestedSettings = snapshot.generationSettings.requested;
-      rvSystemPrompt = snapshot.rvSystemPrompt ? {
-        id: snapshot.rvSystemPrompt.id,
-        version: snapshot.rvSystemPrompt.version,
-        content: snapshot.rvSystemPrompt.fullContent,
-        contentSha256: snapshot.rvSystemPrompt.contentSha256,
-        ...(snapshot.rvSystemPrompt.fieldGuide ? { fieldGuide: snapshot.rvSystemPrompt.fieldGuide } : {}),
-      } : undefined;
-      researchConditionInstruction = snapshot.researchConditionInstruction ? {
-        id: snapshot.researchConditionInstruction.id,
-        version: snapshot.researchConditionInstruction.version,
-        content: snapshot.researchConditionInstruction.fullContent,
-        contentSha256: snapshot.researchConditionInstruction.contentSha256,
-      } : undefined;
-      viewerNotes = snapshot.viewerNotes;
-      capturedAutomaticReveal = await buildAutomaticTargetReveal(target, snapshot.sessionLanguage);
-      if (snapshot.automaticRevealHash && capturedAutomaticReveal.hash !== snapshot.automaticRevealHash) {
-        await input.repository.setResearchProjectState(project.id, "Interrupted");
-        throw new Error("Research Resume refused target/reveal drift from the frozen Session Snapshot.");
-      }
-      }
-    }
-
     const common = {
-      repository: runRepository,
+      repository: input.repository,
       workspaceId: project.workspaceId,
       profileId: condition.profileId,
       providerConfig: provider,
       model,
-      sessionLanguage,
-      requestedSettings,
-      ...(condition.viewerOutputPolicy ? { viewerOutputPolicy: condition.viewerOutputPolicy } : {}),
-      ...(project.config.postRevealOutputPolicy ? { postRevealOutputPolicy: project.config.postRevealOutputPolicy } : {}),
+      sessionLanguage: project.config.sessionLanguage,
+      requestedSettings: condition.requestedSettings,
       maxRetries: project.config.sessionPolicy?.maxRetries,
       requestTimeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
       operationKind: "research_viewer" as const,
       streamWorkflowContext: "research" as const,
       sessionCodePrefix: project.config.sessionPolicy?.sessionCodePrefix,
+      ...(project.config.sessionPolicy?.maxSessionCostUsd && project.config.sessionPolicy.maxSessionCostUsd > 0 ? { maxSessionCostUsd: project.config.sessionPolicy.maxSessionCostUsd } : {}),
       automaticTarget: target,
       researchProjectId: project.id,
-      ...(capturedAutomaticReveal ? { capturedAutomaticReveal } : {}),
-      ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
-      ...(researchConditionInstruction ? { researchConditionInstruction } : {}),
-      ...(viewerNotes ? { viewerNotes } : {}),
-      ...(resumeSession ? { resumeSession, ...(resumeContinuationRoute ? { resumeContinuationRoute } : {}) } : {}),
-      ...(!resumeSession && sessionIdentity ? { sessionIdentity } : {}),
-      ...(initializationExistingSession ? { initializationExistingSession } : {}),
-      ...(runChat ? { chat: runChat } : {}),
+      ...(condition.systemPrompt ? { rvSystemPrompt: condition.systemPrompt } : {}),
+      ...(condition.conditionInstruction ? { researchConditionInstruction: condition.conditionInstruction } : {}),
+      ...(condition.viewerNotes ? { viewerNotes: condition.viewerNotes } : {}),
       signal: input.signal,
       onSessionCreated,
       onProgress,
     };
-    if(input.signal?.aborted){await input.repository.setResearchProjectState(project.id,"Interrupted");return;}
-    await assertAbortOwnership(input.signal);
     const result = protocol.id === "full-rcp"
       ? await (input.sessionRunner ?? runAutomaticRcpSession)({
           ...common,
@@ -325,139 +163,33 @@ async function executeResearchSessionsOwned(input: {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       return;
     }
-    if (resumeSession) {
-      await ensurePersistedResearchReveal({ repository: input.repository, projectId: project.id, sessionId: result.sessionId, targetId: target.id, profileId: condition.profileId });
-    }
     await input.repository.updateResearchAssignment(assignment.id, result.sessionId, "SessionComplete");
     completed += 1;
     input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId });
   }
-  await input.repository.setResearchProjectState(project.id, input.signal?.aborted?"Interrupted":"SessionsComplete");
+  await input.repository.setResearchProjectState(project.id, "SessionsComplete");
 }
 
-async function prepareInterruptedResearchRetryOwned(repository: ResearchRepository, projectId: string, confirmViewerRetry?: (copy: ViewerResumeDecisionCopy) => Promise<boolean>): Promise<number> {
+export async function prepareInterruptedResearchRetry(repository: ResearchRepository, projectId: string): Promise<number> {
   const project = await requireProject(repository, projectId);
-  if (!["Interrupted", "Running"].includes(project.state)) throw new Error("Explicit Research Resume approval is available only for an interrupted/running project with a preserved partial session.");
+  if (project.state !== "Interrupted") throw new Error("Explicit Research recovery is available only for an Interrupted project.");
   const assignments = await repository.listResearchAssignments(projectId);
-  const recoverable = assignments.filter((assignment) => assignment.sessionId && !["SessionComplete", "Judged", "ResumeApproved"].includes(assignment.status));
-  let approved = 0;
+  const recoverable = assignments.filter((assignment) => assignment.sessionId && !["SessionComplete", "Judged"].includes(assignment.status));
   for (const assignment of recoverable) {
     const sessionId = assignment.sessionId!;
-    const session = await repository.getRvSession(sessionId);
-    if (!session && assignment.status !== "Initializing") throw new Error(`Research Resume cannot approve missing session ${sessionId}.`);
-    if (session && session.state !== "Revealed") {
-      const prepared = await prepareViewerSessionResume({ repository, sessionId, language: project.config.sessionLanguage,
-        confirm: confirmViewerRetry ?? (async () => { throw new Error("Research Resume requires an explicit decision for the recorded Viewer attempt."); }) });
-      if (!prepared) continue;
-      await repository.updateRvSessionState(sessionId, "Interrupted", "RECOVERY: partial Research session preserved; Resume of the same locked assignment/session approved by user");
-    }
-    await repository.updateResearchAssignment(assignment.id, sessionId, "ResumeApproved");
-    approved += 1;
+    await repository.updateRvSessionState(sessionId, "Interrupted", "RECOVERY: partial Research session preserved; explicit retry approved by user");
+    await repository.updateResearchAssignment(assignment.id, undefined, "RetryApproved");
   }
-  if (approved) await repository.setResearchProjectState(projectId, "Interrupted");
-  return approved;
+  return recoverable.length;
 }
 
-/** Explicitly abandons a partial session and permits a new attempt for the same locked assignment. */
-async function prepareInterruptedResearchRestartOwned(repository: ResearchRepository, projectId: string, assignmentId: string): Promise<void> {
-  const project = await requireProject(repository, projectId);
-  if (!["Interrupted", "Running"].includes(project.state)) throw new Error("Research restart is available only for an interrupted/running project.");
-  const assignment = (await repository.listResearchAssignments(projectId)).find((item) => item.id === assignmentId);
-  if (!assignment?.sessionId || ["SessionComplete", "Judged"].includes(assignment.status)) throw new Error("Research restart requires a preserved incomplete session.");
-  await repository.updateRvSessionState(assignment.sessionId, "Interrupted", "RESTART: preserved partial Research session abandoned by explicit user decision; new attempt may use the same locked assignment");
-  await repository.updateResearchAssignment(assignment.id, undefined, "RestartApproved");
-  await repository.setResearchProjectState(projectId, "Interrupted");
-}
-
-function validateResearchResumeSnapshot(input: {
-  project: ResearchProjectRecord;
-  assignment: Awaited<ReturnType<ResearchRepository["listResearchAssignments"]>>[number];
-  condition: ResearchConfig["conditions"][number];
-  provider: ProviderConfig;
-  model: ProviderModel;
-  protocol: ReturnType<typeof resolveResearchProtocol>;
-  session: NonNullable<Awaited<ReturnType<ResearchRepository["getRvSession"]>>>;
-  snapshot: NonNullable<Awaited<ReturnType<ResearchRepository["getSessionSnapshot"]>>>;
-}): void {
-  const { project, assignment, condition, provider, model, protocol, session, snapshot } = input;
-  analyticalBudgetPolicyForSnapshot(project.config.postRevealOutputPolicy);
-  if (stableStringify(snapshot.postRevealOutputPolicy ?? null) !== stableStringify(project.config.postRevealOutputPolicy ?? null)) {
-    throw new Error("Research Resume refused post-Reveal output policy drift from the frozen Session Snapshot.");
-  }
-  if (session.id !== assignment.sessionId || session.targetId !== assignment.targetId || session.researchProjectId !== project.id) {
-    throw new Error("Research Resume refused a session whose assignment/target/project identity does not match.");
-  }
-  if (snapshot.sessionId !== session.id || snapshot.targetId !== assignment.targetId || snapshot.researchProjectId !== project.id) {
-    throw new Error("Research Resume refused a Session Snapshot whose assignment/target/project identity does not match.");
-  }
-  if (snapshot.workspaceId !== project.workspaceId || snapshot.profileId !== condition.profileId) {
-    throw new Error("Research Resume refused Workspace/Profile drift from the frozen Session Snapshot.");
-  }
-  if (snapshot.providerConfigId !== provider.id || snapshot.provider !== provider.provider || snapshot.modelId !== model.modelId || snapshot.modelRoute !== model.route) {
-    throw new Error("Research Resume refused provider/model route drift from the frozen Session Snapshot.");
-  }
-  if (snapshot.protocol.id !== protocol.id || snapshot.protocol.version !== protocol.version || snapshot.protocol.contentSha256 !== protocol.contentSha256 || snapshot.protocol.language !== protocol.language) {
-    throw new Error("Research Resume cannot reproduce the exact frozen protocol from this application build.");
-  }
-  if (stableStringify(snapshot.generationSettings.requested) !== stableStringify(condition.requestedSettings)
-      || stableStringify(snapshot.generationSettings.effective) !== stableStringify(condition.effectiveSettings?.effective ?? {})) {
-    throw new Error("Research Resume refused generation-setting drift from the locked condition.");
-  }
-  if (condition.viewerOutputPolicy) {
-    if (!snapshot.viewerOutputPolicy || stableStringify(snapshot.viewerOutputPolicy) !== stableStringify(condition.viewerOutputPolicy)) {
-      throw new Error("Research Resume refused Viewer output-policy drift from Experiment Lock.");
-    }
-  } else if (snapshot.viewerOutputPolicy && snapshot.viewerOutputPolicy.preserveConfiguredBudget === false) {
-    throw new Error("Legacy Research Resume refused an output policy that was not part of its Experiment Lock.");
-  }
-  if (viewerNotesSnapshotSignature(snapshot.viewerNotes) !== viewerNotesSnapshotSignature(condition.viewerNotes)) {
-    throw new Error("Research Resume refused Viewer Notes drift from the locked condition.");
-  }
-  const promptHash = snapshot.rvSystemPrompt?.contentSha256;
-  if ((condition.systemPrompt?.contentSha256 ?? undefined) !== promptHash) throw new Error("Research Resume refused Viewer prompt drift from the locked condition.");
-  const instructionHash = snapshot.researchConditionInstruction?.contentSha256;
-  if ((condition.conditionInstruction?.contentSha256 ?? undefined) !== instructionHash) throw new Error("Research Resume refused condition-instruction drift from the locked condition.");
-}
-
-async function ensurePersistedResearchReveal(input: {
-  repository: ResearchRepository;
-  projectId: string;
-  sessionId: string;
-  targetId: string;
-  profileId: string;
-}): Promise<void> {
-  const session = await input.repository.getRvSession(input.sessionId);
-  if (!session || session.state !== "Revealed" || !session.preRevealSealedAt) throw new Error("Research cannot complete an assignment before the session is durably sealed and Revealed.");
-  const reveal = await input.repository.getReveal(input.sessionId);
-  if (!reveal) throw new Error("Research cannot complete an assignment because its durable Reveal record is missing.");
-  let events = await input.repository.listSessionEvents(input.sessionId);
-  if (!events.some((event) => event.eventType === "REVEAL_ACCEPTED" && (event.metadata?.targetId === input.targetId || event.metadata?.source === "automatic_target"))) {
-    await input.repository.appendSessionEvent(input.sessionId, { eventType: "REVEAL_ACCEPTED", role: "controller", metadata: { source: "automatic_target", targetId: input.targetId, recoveredFinalization: true } });
-    events = await input.repository.listSessionEvents(input.sessionId);
-  }
-  let usage = await input.repository.listTargetUsage();
-  if (!usage.some((record) => record.sessionId === input.sessionId && record.targetId === input.targetId)) {
-    await input.repository.recordTargetUsage({ targetId: input.targetId, profileId: input.profileId, researchProjectId: input.projectId, sessionId: input.sessionId });
-    usage = await input.repository.listTargetUsage();
-  }
-  if (!events.some((event) => event.eventType === "REVEAL_ACCEPTED" && (event.metadata?.targetId === input.targetId || event.metadata?.source === "automatic_target"))) throw new Error("Research Reveal finalization did not persist REVEAL_ACCEPTED.");
-  if (!usage.some((record) => record.sessionId === input.sessionId && record.targetId === input.targetId)) throw new Error("Research Reveal finalization did not persist target usage.");
-}
-
-async function judgeResearchOwned(input: {
+export async function judgeResearch(input: {
   repository: ResearchRepository;
   projectId: string;
   signal?: AbortSignal;
-  judgeRunner?:typeof runBlindJudging;
-  /** Stable owner across workflow adapters; the UI supplies its root repository. */
-  recoveryOwner?: object;
-  /** Explicit operator action, never enabled by automatic continuation or restart. */
-  completeMissing?: boolean;
   onProgress?: (progress: { completed: number; total: number; anonymousSessionId: string }) => void;
 }): Promise<void> {
-  if(input.signal?.aborted)return;
   const project = await requireProject(input.repository, input.projectId);
-  if (await input.repository.getResearchExecutionTermination(project.id)) throw new Error("Research execution was ended by the user; completion requires a separate evaluation operation.");
   if (!["SessionsComplete", "Judging"].includes(project.state)) throw new Error(`Research judging cannot run from state ${project.state}.`);
   if (project.config.judges.length === 0) throw new Error("This Research project is configured for Save only / external evaluation.");
   const [assignments, providers, models] = await Promise.all([
@@ -465,172 +197,42 @@ async function judgeResearchOwned(input: {
     input.repository.listProviderConfigs(),
     input.repository.listProviderModels(),
   ]);
-  const policy = project.config.judgeOutputPolicy;
-  const judgeBudgetPolicy = policy ? analyticalBudgetPolicyForSnapshot(policy) : "legacy_analytical";
   const judgeSelections = resolveJudgeSelections(project.config, providers, models);
-  // Durable not-sent markers distinguish queued Judges from historical unrecorded attempts.
-  for(const assignment of assignments){
-    if(!assignment.sessionId)continue;
-    const scores=await input.repository.listJudgeScores(assignment.sessionId);
-    const events=await input.repository.listSessionEvents(assignment.sessionId);
-    for (const judge of selectMissingResearchJudges(scores, judgeSelections)) if (!events.some(event => event.eventType === "RESEARCH_JUDGE_ATTEMPT" && event.metadata?.modelRoute === judge.model.route)) {
-      if (project.state === "Judging") await input.repository.appendSessionEvent(assignment.sessionId, { eventType: "RESEARCH_JUDGE_LEGACY_UNKNOWN", role: "controller", metadata: { modelRoute: judge.model.route } });
-      await recordResearchJudgeAttempt(input.repository, assignment.sessionId, judge.model.route, "pending");
-    }
-  }
   await input.repository.setResearchProjectState(project.id, "Judging");
   let completed = assignments.filter((assignment) => assignment.status === "Judged").length;
 
-  const failures: string[] = [];
   // Deliberately do not read Blinding Mappings or Research Conditions in this function.
   for (const assignment of assignments.sort((a, b) => a.judgeOrder - b.judgeOrder)) {
-    if(input.signal?.aborted)return;
-    await assertAbortOwnership(input.signal);
     if (!assignment.sessionId) throw new Error("A Research assignment has no completed session.");
     const existing = await input.repository.listJudgeScores(assignment.sessionId);
-    const missingJudges = selectMissingResearchJudges(existing, judgeSelections);
+    const missingJudges = selectMissingJudgeSelections(existing, judgeSelections);
     if (!missingJudges.length) {
       if (assignment.status !== "Judged") await input.repository.updateResearchAssignment(assignment.id, assignment.sessionId, "Judged");
       completed += assignment.status === "Judged" ? 0 : 1;
       continue;
     }
-    for(const judge of missingJudges){
-      if(input.signal?.aborted)return;
-      await assertAbortOwnership(input.signal);
-      const judgeIndex = judgeSelections.indexOf(judge) + 1;
-      const initialEvents = await input.repository.listSessionEvents(assignment.sessionId);
-      const initiallyBlocked = researchJudgeRequestAvailability(initialEvents, judge.model.route, judgeIndex, { owner: input.recoveryOwner ?? input.repository.recoveryOwner ?? input.repository, sessionId: assignment.sessionId }) === "blocked";
-      const runSlot = async () => (input.judgeRunner ?? runBlindJudging)({
-      researchPolicy: { judgeIndex, onNormalization: async trace => {
-        try {
-          const events = await input.repository.listSessionEvents(assignment.sessionId!);
-          const completionId = currentJudgeCompletionId(events, judge.model.route, judgeIndex);
-          if (!events.some(e => e.eventType === "RESEARCH_JUDGE_NORMALIZED" && e.metadata?.judgeIndex === judgeIndex && e.metadata?.modelRoute === judge.model.route && e.metadata?.completionId === completionId && e.metadata?.version === trace.version && e.metadata?.sourceSha256 === trace.sourceSha256)) {
-            await input.repository.appendSessionEvent(assignment.sessionId!, { eventType: "RESEARCH_JUDGE_NORMALIZED", role: "controller", metadata: { ...trace, judgeIndex, modelRoute: judge.model.route, completionId } });
-          }
-        } catch (cause) { throw new ResearchJudgeCheckpointError(cause); }
-      } },
-      recoverRequest: createResearchJudgeRequestRecovery({ repository: input.repository, owner: input.recoveryOwner ?? input.repository.recoveryOwner ?? input.repository, sessionId: assignment.sessionId!, modelRoute: judge.model.route, judgeIndex: judgeSelections.indexOf(judge) + 1, allowValidationReplay: true, allowLegacyResponse: judgeSelections.filter(item => item.model.route === judge.model.route).length === 1, signal: input.signal }),
+    await runBlindJudging({
       repository: input.repository,
-      sessionId: assignment.sessionId!,
+      sessionId: assignment.sessionId,
       language: project.config.sessionLanguage,
-      judges: [judge],
-      onResponse: async response => {
-        try {
-          const events = await input.repository.listSessionEvents(assignment.sessionId!);
-          const completionId = currentJudgeCompletionId(events, judge.model.route, judgeIndex);
-          if (!events.some(e => e.metadata?.judgeIndex === judgeIndex && e.metadata?.completionId === completionId && e.eventType === "RESEARCH_JUDGE_RESPONSE" && e.metadata?.modelRoute === judge.model.route && e.content === response.content && e.metadata?.providerRequestId === response.providerRequestId)) {
-            await input.repository.appendSessionEvent(assignment.sessionId!, { eventType: "RESEARCH_JUDGE_RESPONSE", role: "controller", content: response.content, metadata: { modelRoute: judge.model.route, judgeIndex, completionId, usage: response.usage, providerRequestId: response.providerRequestId, finishReason: response.finishReason } });
-          }
-        } catch (cause) { throw new ResearchJudgeCheckpointError(cause); }
-      },
+      judges: missingJudges,
       anonymousSessionId: assignment.anonymousSessionId,
       maxRetries: project.config.sessionPolicy?.maxRetries,
       timeoutMs: project.config.sessionPolicy?.requestTimeoutMs,
       signal: input.signal,
       streamWorkflowContext: "research",
-      budgetPolicy: judgeBudgetPolicy,
-      onAttemptStart: input.judgeRunner ? async attempt => { await recordResearchJudgeAttempt(input.repository, assignment.sessionId!, judge.model.route, "dispatched", attempt); } : undefined,
-      });
-      const saveFailure = async (cause: JudgeResponseValidationError | ResearchJudgeSlotFailure) => {
-        if (cause instanceof JudgeResponseValidationError) {
-          try {
-            const events = await input.repository.listSessionEvents(assignment.sessionId!);
-            const completionId = currentJudgeCompletionId(events, judge.model.route, judgeIndex);
-            if (!events.some(e => e.eventType === "RESEARCH_JUDGE_VALIDATION_BLOCK" && e.metadata?.modelRoute === judge.model.route && e.metadata?.judgeIndex === judgeIndex && e.metadata?.completionId === completionId && e.content === cause.message)) {
-              await input.repository.appendSessionEvent(assignment.sessionId!, { eventType: "RESEARCH_JUDGE_VALIDATION_BLOCK", role: "controller", content: cause.message, metadata: { modelRoute: judge.model.route, judgeIndex, completionId } });
-            }
-          } catch (error) { throw new ResearchJudgeCheckpointError(error); }
-        }
-      };
-      try { await runSlot(); }
-      catch (cause) {
-        if (input.signal?.aborted) throw cause;
-        await assertAbortOwnership(input.signal);
-        if (!(cause instanceof JudgeResponseValidationError) && !(cause instanceof ResearchJudgeSlotFailure)) throw cause;
-        await saveFailure(cause);
-        if (input.completeMissing && initiallyBlocked) {
-          // The old journal and limits remain immutable. One explicit action grants
-          // a fresh, persisted bounded attempt for this missing slot only.
-          const events = await input.repository.listSessionEvents(assignment.sessionId);
-          const previousId = currentJudgeCompletionId(events, judge.model.route, judgeIndex);
-          const previousFailure = events.filter(e => e.metadata?.modelRoute === judge.model.route && e.metadata?.completionId === previousId
-            && (e.metadata?.judgeIndex === judgeIndex || !Number.isInteger(e.metadata?.judgeIndex))
-            && (e.eventType === "RESEARCH_JUDGE_VALIDATION_BLOCK" || e.eventType === "RESEARCH_JUDGE_REQUEST_V1" && ["failed", "paused", "dispatched"].includes(String(e.metadata?.status)))).at(-1);
-          if (!previousFailure) throw new Error("Research Judge completion requires a durable prior failure.");
-          try { await input.repository.appendSessionEvent(assignment.sessionId, { eventType: RESEARCH_JUDGE_COMPLETION_AUTH, role: "controller", metadata: {
-            version: 1, completionId: createId("judge_completion"), previousId, previousFailureEventId: previousFailure.id, modelRoute: judge.model.route, judgeIndex,
-          } }); } catch (error) { throw new ResearchJudgeCheckpointError(error); }
-          try { await runSlot(); }
-          catch (retryCause) {
-            if (input.signal?.aborted) throw retryCause;
-            await assertAbortOwnership(input.signal);
-            if (!(retryCause instanceof JudgeResponseValidationError) && !(retryCause instanceof ResearchJudgeSlotFailure)) throw retryCause;
-            await saveFailure(retryCause); failures.push(`${assignment.anonymousSessionId} · J${judgeIndex}: ${retryCause.message}`); continue;
-          }
-        } else { failures.push(`${assignment.anonymousSessionId} · J${judgeIndex}: ${cause.message}`); continue; }
-      }
-      // Validation/freeze failures never masquerade as uncertain transport.
-      // Frozen scores are authoritative if this bookkeeping save fails.
-      try { await recordResearchJudgeAttempt(input.repository, assignment.sessionId, judge.model.route, "completed"); }
-      catch (cause) { throw new ResearchJudgeCheckpointError(cause); }
-    }
+    });
     const frozen = await input.repository.listJudgeScores(assignment.sessionId);
-    if (selectMissingResearchJudges(frozen, judgeSelections).length) {
-      input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId });
-      continue;
-    }
+    if (frozen.length !== judgeSelections.length || frozen.some((score) => !score.frozenAt)) throw new Error("Judge score freeze verification failed.");
     await input.repository.updateResearchAssignment(assignment.id, assignment.sessionId, "Judged");
     completed += 1;
     input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId });
   }
-  if(input.signal?.aborted)return;
-  if (failures.length) throw new Error(`Research judging incomplete; saved scores retained. ${failures.join("; ")}`);
   await verifyAllResearchScoresFrozen(input.repository, project.id, project.config.judges.length);
   await input.repository.setResearchProjectState(project.id, "ScoresFrozen");
 }
 
-function collectResearchViewerExecutionMetadata(events: Awaited<ReturnType<ResearchRepository["listSessionEvents"]>>, condition: ResearchConfig["conditions"][number]): import("./types").ResearchSessionExecutionMetadata {
-  const actualProviders = new Set<string>();
-  const actualModels = new Set<string>();
-  const generationIds = new Set<string>();
-  const providerRequestIds = new Set<string>();
-  let inputTokens = 0, outputTokens = 0, reasoningTokens = 0, totalTokens = 0, costUsd = 0, requestDurationMs = 0, viewerCallCount = 0;
-  let firstViewerResponseAt: string | undefined, lastViewerResponseAt: string | undefined;
-  let hasInput = false, hasOutput = false, hasReasoning = false, hasTotal = false, hasCost = false, hasDuration = false;
-  for (const event of events) {
-    if (event.eventType !== "VIEWER_RESPONSE" && event.eventType !== "VIEWER_SPECIAL_TASK_RESPONSE") continue;
-    viewerCallCount += 1;
-    if (!firstViewerResponseAt || event.createdAt < firstViewerResponseAt) firstViewerResponseAt = event.createdAt;
-    if (!lastViewerResponseAt || event.createdAt > lastViewerResponseAt) lastViewerResponseAt = event.createdAt;
-    const metadata = event.metadata ?? {};
-    if (typeof metadata.actualProvider === "string" && metadata.actualProvider.trim() && metadata.actualProvider !== "unavailable" && metadata.actualProvider !== "unknown") actualProviders.add(metadata.actualProvider);
-    if (typeof metadata.actualModel === "string" && metadata.actualModel.trim() && metadata.actualModel !== "unavailable") actualModels.add(metadata.actualModel);
-    if (typeof metadata.providerRequestId === "string" && metadata.providerRequestId.trim() && metadata.providerRequestId !== "unavailable") providerRequestIds.add(metadata.providerRequestId);
-    const evidence = metadata.responseEvidence && typeof metadata.responseEvidence === "object" ? metadata.responseEvidence as Record<string, unknown> : undefined;
-    if (typeof evidence?.generationId === "string" && evidence.generationId.trim()) generationIds.add(evidence.generationId);
-    const usage = metadata.usage && typeof metadata.usage === "object" ? metadata.usage as Record<string, unknown> : evidence?.usage && typeof evidence.usage === "object" ? evidence.usage as Record<string, unknown> : undefined;
-    const add = (key: string, on: (value:number)=>void) => { const value = usage?.[key]; if (typeof value === "number" && Number.isFinite(value) && value >= 0) on(value); };
-    add("inputTokens", value => { inputTokens += value; hasInput = true; });
-    add("outputTokens", value => { outputTokens += value; hasOutput = true; });
-    add("reasoningTokens", value => { reasoningTokens += value; hasReasoning = true; });
-    add("totalTokens", value => { totalTokens += value; hasTotal = true; });
-    add("costUsd", value => { costUsd += value; hasCost = true; });
-    if (typeof metadata.requestDurationMs === "number" && Number.isFinite(metadata.requestDurationMs) && metadata.requestDurationMs >= 0) { requestDurationMs += metadata.requestDurationMs; hasDuration = true; }
-  }
-  return {
-    configuredProviderConfigId: condition.providerConfigId, configuredModelId: condition.modelId, viewerCallCount,
-    ...(actualProviders.size ? { actualProviders: [...actualProviders].sort() } : {}),
-    ...(actualModels.size ? { actualModels: [...actualModels].sort() } : {}),
-    ...(generationIds.size ? { generationIds: [...generationIds].sort() } : {}),
-    ...(providerRequestIds.size ? { providerRequestIds: [...providerRequestIds].sort() } : {}),
-    ...(hasInput ? { inputTokens } : {}), ...(hasOutput ? { outputTokens } : {}), ...(hasReasoning ? { reasoningTokens } : {}), ...(hasTotal ? { totalTokens } : {}), ...(hasCost ? { costUsd } : {}), ...(hasDuration ? { requestDurationMs } : {}),
-    ...(firstViewerResponseAt ? { firstViewerResponseAt } : {}), ...(lastViewerResponseAt ? { lastViewerResponseAt } : {}),
-  };
-}
-
-async function unblindAndComputeResearchOwned(repository: ResearchRepository, projectId: string, signal?:AbortSignal): Promise<ResearchResults> {
-  signal?.throwIfAborted();
+export async function unblindAndComputeResearch(repository: ResearchRepository, projectId: string): Promise<ResearchResults> {
   let project = await requireProject(repository, projectId);
   const existingResults = await repository.getResearchResults(projectId);
   if (project.state === "Complete" && existingResults) return existingResults;
@@ -643,7 +245,6 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
   }
   await verifyAllResearchScoresFrozen(repository, projectId, project.config.judges.length);
 
-  signal?.throwIfAborted();
   // This is the explicit evidence boundary: state is marked Unblinded before the key is read.
   // If computation or persistence fails after this point, a later call may safely resume from
   // Unblinded because the key has already been exposed and every frozen score is re-verified.
@@ -660,14 +261,12 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
   const conditionById = new Map(conditions.map((condition) => [condition.id, condition]));
   const sessions: UnblindedSessionResult[] = [];
   for (const assignment of assignments) {
-    await assertAbortOwnership(signal);
     if (!assignment.sessionId) throw new Error("Cannot compute results for an assignment without a session.");
     const mapping = mappingByAnonymous.get(assignment.anonymousSessionId);
     const condition = mapping ? conditionById.get(mapping.conditionId) : undefined;
     if (!mapping || !condition) throw new Error("Blinding Key is incomplete.");
-    const [scores, sessionEvents] = await Promise.all([repository.listJudgeScores(assignment.sessionId), repository.listSessionEvents(assignment.sessionId)]);
+    const scores = await repository.listJudgeScores(assignment.sessionId);
     const aggregate = aggregateJudgeScores(scores);
-    const execution = collectResearchViewerExecutionMetadata(sessionEvents, condition.config);
     sessions.push({
       anonymousSessionId: assignment.anonymousSessionId,
       sessionId: assignment.sessionId,
@@ -683,12 +282,6 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
       judgeCount: aggregate.judgeCount,
       judgeTotalRange: aggregate.totalRange,
       judgeTotalStdDev: aggregate.totalStdDev,
-      ...(condition.config.samplingValues ? { samplingValues: structuredClone(condition.config.samplingValues) } : {}),
-      requestedSettings: structuredClone(condition.config.requestedSettings),
-      ...(condition.config.effectiveSettings ? { effectiveSettings: structuredClone(condition.config.effectiveSettings.effective) } : {}),
-      providerConfigId: condition.config.providerConfigId,
-      modelId: condition.config.modelId,
-      execution,
       ...(condition.config.fieldGuide ? {
         fieldGuideVersionId: condition.config.fieldGuide.versionId,
         fieldGuideVersionNumber: condition.config.fieldGuide.versionNumber,
@@ -705,7 +298,6 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
     pairwise: computePairwiseStatistics(sessions),
     computedAt: new Date().toISOString(),
   };
-  signal?.throwIfAborted();
   await repository.saveResearchResults(projectId, results, await sha256Text(stableStringify(results)));
   await repository.setResearchProjectState(projectId, "Complete");
   return results;
@@ -752,9 +344,3 @@ function capabilityMethodSignature(capabilities: ProviderModel["capabilities"]):
     source: capabilities.source,
   });
 }
-
-export const executeResearchSessions=(input:Parameters<typeof executeResearchSessionsOwned>[0])=>withResearchExecution(input.repository,input.projectId,input.signal,(repository,signal)=>executeResearchSessionsOwned({...input,repository,signal}));
-export const judgeResearch=(input:Parameters<typeof judgeResearchOwned>[0])=>withResearchExecution(input.repository,input.projectId,input.signal,(repository,signal)=>judgeResearchOwned({...input,recoveryOwner:input.recoveryOwner ?? input.repository.recoveryOwner ?? input.repository,repository,signal}));
-export const prepareInterruptedResearchRetry=(repository:ResearchRepository,projectId:string,confirmViewerRetry?: (copy: ViewerResumeDecisionCopy) => Promise<boolean>)=>withResearchExecution(repository,projectId,undefined,owned=>prepareInterruptedResearchRetryOwned(owned,projectId,confirmViewerRetry));
-export const prepareInterruptedResearchRestart=(repository:ResearchRepository,projectId:string,assignmentId:string)=>withResearchExecution(repository,projectId,undefined,owned=>prepareInterruptedResearchRestartOwned(owned,projectId,assignmentId));
-export const unblindAndComputeResearch=(repository:ResearchRepository,projectId:string,signal?:AbortSignal)=>withResearchExecution(repository,projectId,signal,(owned,signal)=>unblindAndComputeResearchOwned(owned,projectId,signal));

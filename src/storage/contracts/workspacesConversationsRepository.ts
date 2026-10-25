@@ -27,8 +27,7 @@ export interface WorkspacesConversationsRepository {
   restoreChatThread(threadId: string): Promise<void>;
   setChatThreadFormalRvState(threadId: string, state?: ChatThread["formalRvState"]): Promise<void>;
   listChatMessages(threadId: string): Promise<ChatMessage[]>;
-  appendChatMessage(threadId: string, role: ChatMessage["role"], content: string, metadata?: ChatMessage["metadata"]): Promise<ChatMessage>;
-  updateChatMessageMetadata(messageId: string, metadata?: ChatMessage["metadata"]): Promise<void>;
+  appendChatMessage(threadId: string, role: ChatMessage["role"], content: string): Promise<ChatMessage>;
   appendAssistantMessageWithProviderState(threadId: string, content: string, state: ProviderContinuationState): Promise<ChatMessage>;
   listChatMessageProviderStates(threadId: string): Promise<ProviderContinuationStateBinding[]>;
   resetChatMessageProviderStates(threadId: string): Promise<void>;

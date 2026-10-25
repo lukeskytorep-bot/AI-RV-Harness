@@ -20,7 +20,7 @@ static CHAT_CANCELLATIONS: LazyLock<Mutex<ChatCancellationRegistry>> =
 static HTTP_CLIENT: LazyLock<Result<Client, String>> = LazyLock::new(|| {
     Client::builder()
         .connect_timeout(Duration::from_secs(30))
-        // Do not identify the application or its version to provider endpoints.
+        .user_agent(format!("AI-RV-Harness/{}", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|error| error.to_string())
 });
@@ -183,7 +183,7 @@ async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result
         .map(str::to_string);
     let body = response.text().await.map_err(|error| {
         let mut failure = request_error(error, "reading_body");
-        failure.metadata.provider_request_id = request_id.clone().map(String::into_boxed_str);
+        failure.provider_request_id = request_id.clone().map(String::into_boxed_str);
         failure
     })?;
     if !status.is_success() {
@@ -194,12 +194,11 @@ async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result
             safe_provider_error(status, &body, secret, retry_after_ms),
             "reading_body",
         );
-        failure.metadata.http_status = Some(status.as_u16());
-        failure.metadata.provider_error_type = provider_error_type;
-        failure.metadata.provider_code = provider_code;
-        failure.metadata.retry_after_ms = retry_after_ms;
-        failure.metadata.response_evidence = Some(super::response_evidence::finished(parsed.as_ref(), request_id.as_deref(), "body_read"));
-        failure.metadata.provider_request_id = request_id.map(String::into_boxed_str);
+        failure.http_status = Some(status.as_u16());
+        failure.provider_error_type = provider_error_type;
+        failure.provider_code = provider_code;
+        failure.retry_after_ms = retry_after_ms;
+        failure.provider_request_id = request_id.map(String::into_boxed_str);
         return Err(failure);
     }
     let value = serde_json::from_str(&body).map_err(|error| {
@@ -208,8 +207,7 @@ async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result
             format!("provider returned invalid JSON: {error}"),
             "parsing_body",
         );
-        failure.metadata.provider_request_id = request_id.clone().map(String::into_boxed_str);
-        failure.metadata.response_evidence = Some(super::response_evidence::finished(None, request_id.as_deref(), "body_read"));
+        failure.provider_request_id = request_id.clone().map(String::into_boxed_str);
         failure
     })?;
     Ok((value, request_id))

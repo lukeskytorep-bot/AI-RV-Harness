@@ -83,16 +83,6 @@ describe("browser Settings and models repository contract", () => {
     expect((await repository.listProviderConfigs())[0]?.customOutputTokenField).toBeUndefined();
   });
 
-  it("persists the Custom OpenAI streaming switch in browser preview data", async () => {
-    const storage = new MemoryStorage();
-    storage.setItem("rvh.dev.providers", JSON.stringify([{ ...provider("custom-stream", timestamp), provider: "custom_openai" }]));
-    const repository = new BrowserSettingsModelsRepository({ storage, clearProfileReferences: () => undefined, now: () => timestamp });
-    await repository.updateProviderCustomStreamingEnabled("custom-stream", true);
-    expect((await repository.listProviderConfigs())[0]?.customStreamingEnabled).toBe(true);
-    await repository.updateProviderCustomStreamingEnabled("custom-stream", false);
-    expect((await repository.listProviderConfigs())[0]?.customStreamingEnabled).toBe(false);
-  });
-
   it("persists provider status, favorites and cache clearing with their existing browser semantics", async () => {
     const storage = new MemoryStorage();
     storage.setItem("rvh.dev.providers", JSON.stringify([provider("provider-a", "2026-09-07T00:00:00.000Z")]));
@@ -127,33 +117,6 @@ describe("SQLite Settings and models repository contract", () => {
     await repository.saveSettings(createDefaultSettings());
     expect(transactions).toHaveLength(1);
     expect(transactions[0]).toHaveLength(Object.keys(createDefaultSettings()).length);
-  });
-
-  it("clears Custom profile modes when deleting a SQLite provider credential binding", async () => {
-    const transactions: DatabaseTransactionStatement[][] = [];
-    const repository = new SqliteSettingsModelsRepository({
-      select: async <T>() => [{ credential_id: "credential-remove" }] as T,
-      executeWrite: async () => ({ rowsAffected: 1 }),
-      executeTransaction: async (statements) => { transactions.push(statements); return []; },
-      now: () => timestamp,
-    });
-    await repository.deleteProviderConfig("provider-remove");
-    const profileUpdate = transactions[0]?.find((statement) => statement.query.includes("UPDATE profiles"));
-    expect(profileUpdate?.query).toContain("default_viewer_custom_temperature_mode");
-    expect(profileUpdate?.query).toContain("default_viewer_custom_reasoning_mode");
-    expect(profileUpdate?.values).toEqual(["credential-remove", "provider-remove", timestamp]);
-  });
-
-  it("reads the Custom OpenAI streaming switch from existing app_settings without a schema change", async () => {
-    const repository = new SqliteSettingsModelsRepository({
-      select: async <T>() => [{
-        id: "provider-custom", provider: "custom_openai", label: "Custom", credential_id: "credential-custom", credential_hint: null,
-        credential_fingerprint: "hash", base_url: "https://example.test/v1", custom_output_token_field: null, custom_streaming_enabled: "true",
-        enabled: 1, last_tested_at: null, last_status: null, last_error: null, created_at: timestamp, updated_at: timestamp,
-      }] as T,
-      executeWrite: async () => ({ rowsAffected: 1 }), executeTransaction: async () => [], now: () => timestamp,
-    });
-    expect((await repository.listProviderConfigs())[0]).toMatchObject({ id: "provider-custom", customStreamingEnabled: true });
   });
 
   it("creates provider and credential metadata atomically", async () => {
@@ -209,21 +172,9 @@ describe("SQLite Settings and models repository contract", () => {
     expect(statements.map((item: { query: string }) => item.query)).toEqual([
       expect.stringContaining("UPDATE profiles"),
       expect.stringContaining("DELETE FROM app_settings"),
-      expect.stringContaining("DELETE FROM app_settings"),
       expect.stringContaining("DELETE FROM provider_configs"),
       expect.stringContaining("DELETE FROM credentials_metadata"),
     ]);
-  });
-
-  it("stores the Custom OpenAI streaming transport choice without a schema migration", async () => {
-    const transactions: DatabaseTransactionStatement[][] = [];
-    const repository = new SqliteSettingsModelsRepository({
-      select: async <T>() => [{ provider: "custom_openai" }] as T, executeWrite: async () => ({ rowsAffected: 1 }),
-      executeTransaction: async (statements) => { transactions.push(statements); return []; }, now: () => timestamp,
-    });
-    await repository.updateProviderCustomStreamingEnabled("provider-a", true);
-    expect(transactions[0]?.[0].query).toContain("INSERT INTO app_settings");
-    expect(transactions[0]?.[0].values).toEqual(["provider.customStreamingEnabled.provider-a", "true", timestamp]);
   });
 
   it("updates or clears the Custom OpenAI wire override atomically", async () => {

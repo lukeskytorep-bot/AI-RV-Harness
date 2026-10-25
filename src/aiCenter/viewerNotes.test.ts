@@ -1,9 +1,8 @@
-import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../providers/native", () => ({
   discoverOpenRouterModelEndpoints: vi.fn(async () => ({ data: { endpoints: [
-    { tag: "test/large", context_length: 262_144, max_completion_tokens: 65_536 },
+    { tag: "test/large", context_length: 262_144, max_completion_tokens: 32_768 },
   ] } })),
   providerChatAttempt: vi.fn(),
 }));
@@ -41,7 +40,7 @@ const packet: ViewerNoteReflectionPacket = {
     updateStatus: "UPDATE",
     versionId: "fg-after",
     versionNumber: 8,
-    contentSha256: await sha256Text("guide after this exact training"),
+    contentSha256: "fg-after-sha",
     content: "Post-training perceptual cue: fine vibration around metallic structures.",
   },
 };
@@ -101,13 +100,6 @@ describe("Viewer Notes", () => {
     expect(prompt).toContain(packet.currentNotes);
     expect(prompt).toContain(rejected);
     expect(prompt).toContain(`Maximum capacity: ${packet.capacityTokens} estimated tokens`);
-    expect(prompt).toContain("Aim for no more than 921 estimated tokens for the complete new Viewer Notes text");
-    expect(prompt).toContain("10% below the maximum capacity of 1024");
-    expect(prompt).toContain("entire replacement notes document, not just the additions");
-    const plPrompt = buildCapacityRetryPrompt("pl", packet, rejected);
-    expect(plPrompt).toContain("najwyżej 921 szacowanych tokenów");
-    expect(plPrompt).toContain("10% poniżej maksymalnej pojemności 1024");
-    expect(plPrompt).toContain("całej nowej wersji notatek");
     expect(prompt).toContain("second and final attempt");
     expect(prompt).toContain("merely as an editor or scribe");
     expect(prompt).toContain(packet.effectiveViewerPrompt.content);
@@ -173,7 +165,7 @@ describe("Viewer Notes", () => {
   });
 
 
-  it.each(["training-complete","training-length","training-json","training-capacity","training-capacity-json","stop-length","stop-json","missing-policy","wrong-policy"] as const)("uses the exact prompt snapshot and post-update Field Guide for Reflection: %s", async scenario => {
+  it("uses the exact prompt snapshot and exact post-update Field Guide version when running Reflection", async () => {
     const providerConfig: ProviderConfig = { id: "provider", provider: "openrouter", label: "Provider", credentialId: "credential", enabled: true, createdAt: "now", updatedAt: "now" };
     const model: ProviderModel = {
       providerConfigId: providerConfig.id,
@@ -186,7 +178,7 @@ describe("Viewer Notes", () => {
     };
     const effectivePrompt = "LOCKED CORE IDENTITY\nLOCKED BASE VOCABULARY\nFROZEN FIELD GUIDE BEFORE TRAINING";
     const effectivePromptSha = await sha256Text(effectivePrompt);
-    const frozenGuide = { aiIdentityId: "identity", language: "en" as const, versionId: "fg-before", versionNumber: 4, content: "guide before", contentSha256: await sha256Text("guide before"), estimatedTokens: 3, estimatorVersion: "conservative-char-v1" as const, capacityTokens: 2048 as const, modelRoute: model.route, capturedAt: "now", sourceKind: "factory-baseline" as const };
+    const frozenGuide = { aiIdentityId: "identity", language: "en" as const, versionId: "fg-before", versionNumber: 4, content: "guide before", contentSha256: "fg-before-sha", estimatedTokens: 3, estimatorVersion: "conservative-char-v1" as const, capacityTokens: 2048 as const, modelRoute: model.route, capturedAt: "now", sourceKind: "factory-baseline" as const };
     const snapshot = {
       schemaVersion: 3, sessionId: "session_1", sessionCode: "RV-1", profileId: "profile", workspaceId: "workspace", providerConfigId: providerConfig.id, credentialId: "credential", provider: "openrouter", modelId: model.modelId, modelRoute: model.route,
       capabilitySnapshot: {}, capabilityCapturedAt: "now", generationSettings: { requested: {}, effective: {}, omitted: [] }, sessionLanguage: "en",
@@ -195,10 +187,10 @@ describe("Viewer Notes", () => {
       viewerNotes: { enabled: true, aiIdentityId: "identity", noteType: "viewer_self_notes", content: "Current procedural notes", contentSha256: "notes-sha", estimatedTokens: 5, estimatorVersion: "conservative-char-v1", capacityTokens: 1024, modelRoute: model.route, capturedAt: "now" },
       revealSource: "automatic", applicationVersion: "0.7.13", createdAt: "now",
     } as SessionSnapshot;
-    const afterGuide = { id: "fg-after", aiIdentityId: "identity", language: "en", versionNumber: 5, content: "guide after this exact training", contentSha256: await sha256Text("guide after this exact training"), estimatedTokens: 6, estimatorVersion: "conservative-char-v1", capacityTokensAtCreation: 2048, activationStatus: "active", sourceSessionId: "session_1", sourceSnapshot: { schemaVersion: 1, sourceKind: "training-reflection", profileId: "profile", capturedAt: "now", sourceSessionId: "session_1", fieldGuideUpdatePacketSha256: "field-packet" }, createdAt: "now" };
+    const afterGuide = { id: "fg-after", aiIdentityId: "identity", language: "en", versionNumber: 5, content: "guide after this exact training", contentSha256: "fg-after-sha", estimatedTokens: 6, estimatorVersion: "conservative-char-v1", capacityTokensAtCreation: 2048, activationStatus: "active", sourceSessionId: "session_1", sourceSnapshot: { schemaVersion: 1, sourceKind: "training-reflection", profileId: "profile", capturedAt: "now", sourceSessionId: "session_1", fieldGuideUpdatePacketSha256: "field-packet" }, createdAt: "now" };
     const begin = vi.fn(async (input: Parameters<AppRepository["beginViewerNoteReflection"]>[0]) => ({ ...input, noteType: "viewer_self_notes", attemptCount: 0, status: "PENDING", createdAt: "now" }));
     const commit = vi.fn(async () => ({ status: "NO_CHANGE" as const }));
-    const repository = workflowTestRepository({
+    const repository = {
       getSessionSnapshot: vi.fn(async () => snapshot),
       getReveal: vi.fn(async () => ({ source: "automatic_target", text: "Reveal", hash: "reveal-sha", artifactManifest: [] })),
       getViewerEvidence: vi.fn(async () => "sealed evidence"),
@@ -211,50 +203,18 @@ describe("Viewer Notes", () => {
       beginViewerNoteReflection: begin,
       commitViewerNoteReflection: commit,
       failViewerNoteReflection: vi.fn(async () => undefined),
-    } as unknown as AppRepository);
-    const budgets:number[]=[];const stopController=new AbortController();
-    const chat = vi.fn(async (request: Parameters<NonNullable<Parameters<typeof runViewerNoteReflection>[0]["chat"]>>[0]) => {
-      budgets.push(request.settings.effective.maxOutputTokens!);
-      if(scenario==="stop-length" || scenario==="stop-json"){stopController.abort(new DOMException("Stopped by user","AbortError"));return scenario==="stop-length"?{content:"partial",finishReason:"length",usage:{}}:{content:"malformed JSON",usage:{}};}
-      if (scenario === "training-capacity-json" && budgets.length === 2) return { responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const}, content: "malformed JSON", usage: {} };
-      if (scenario === "training-capacity-json" && budgets.length === 3) return { responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const}, content: "partial", finishReason: "length", usage: {} };
-      if(scenario==="training-length"&&budgets.length===1||["training-json","training-capacity"].includes(scenario)&&budgets.length===2)return {responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const},content:"partial",finishReason:"length",usage:{}};
-      if(scenario==="training-json"&&budgets.length===1)return {responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const},content:"malformed JSON",usage:{}};
-      if(["training-capacity", "training-capacity-json"].includes(scenario)&&budgets.length===1)return {responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const},content:JSON.stringify({decision:"UPDATE",notes:"x".repeat(6000),changeSummary:"too long"}),usage:{}};
-      return { responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const}, content: '{"decision":"NO_CHANGE","notes":null,"changeSummary":"Distinct procedural notes remain sufficient"}', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, providerRequestId: "req" };
-    });
+    } as unknown as AppRepository;
+    const chat = vi.fn(async (_request: Parameters<NonNullable<Parameters<typeof runViewerNoteReflection>[0]["chat"]>>[0]) => ({ content: '{"decision":"NO_CHANGE","notes":null,"changeSummary":"Distinct procedural notes remain sufficient"}', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, providerRequestId: "req" }));
 
-    const budgetPolicy = (scenario === "missing-policy" ? undefined : scenario === "wrong-policy" ? "default" : "training_reveal") as "training_reveal";
-    const before = JSON.stringify(snapshot);
-    const operation = runViewerNoteReflection({ budgetPolicy, repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: await sha256Text("guide after this exact training") }, chat,signal:stopController.signal });
+    const result = await runViewerNoteReflection({ repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: "fg-after-sha" }, chat });
 
-    if (scenario === "missing-policy" || scenario === "wrong-policy") {
-      await expect(operation).rejects.toThrow(/explicit training_reveal/);
-      expect(chat).not.toHaveBeenCalled();
-      expect(begin).not.toHaveBeenCalled();
-      expect(commit).not.toHaveBeenCalled();
-      expect(JSON.stringify(snapshot)).toBe(before);
-      return;
-    }
-    if(scenario==="stop-length" || scenario==="stop-json"){await expect(operation).rejects.toThrow("Stopped by user");expect(chat).toHaveBeenCalledTimes(1);expect(commit).not.toHaveBeenCalled();expect(JSON.stringify(snapshot)).toBe(before);return;}
-
-    const result = await operation;
-    const failed = ["training-json", "training-capacity", "training-capacity-json"].includes(scenario);
-    expect(result?.settlement?.settlement).toBe(failed ? "failed_preserved" : "model_no_change");
-    expect(budgets).toEqual(scenario === "training-complete" ? [1024+32768] : [1024+32768,1024+49152]);
-    expect(snapshot.viewerNotes?.capacityTokens).toBe(1024);
+    expect(result).toEqual({ status: "NO_CHANGE" });
     const userPrompt = chat.mock.calls[0][0].messages.find((message: { role: string; content: string }) => message.role === "user")?.content ?? "";
     expect(userPrompt).toContain(effectivePrompt);
     expect(userPrompt).toContain("guide after this exact training");
     expect(userPrompt).toContain("Version ID: fg-after");
     expect(repository.listFieldGuideVersions).toHaveBeenCalledWith("identity", "en");
-    if (scenario === "training-capacity" || scenario === "training-capacity-json") {
-      const retryPrompt = chat.mock.calls[1]?.[0].messages.find((message: { role: string; content: string }) => message.role === "user")?.content ?? "";
-      expect(retryPrompt).toContain("Aim for no more than 921 estimated tokens for the complete new Viewer Notes text");
-      expect(retryPrompt).toContain("sealed evidence");
-      expect(retryPrompt).toContain("[BEGIN DATA: REJECTED VIEWER NOTES UPDATE]");
-    }
-    if (failed) expect(commit).not.toHaveBeenCalled(); else expect(commit).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -263,24 +223,24 @@ describe("Viewer Notes", () => {
   ] as const)("does not rerun a completed %s Reflection", async (packetVersion: "viewer-notes-reflection-v1" | "viewer-notes-reflection-v2", status: "UPDATE" | "NO_CHANGE") => {
     const snapshot = { viewerNotes: { enabled: true, aiIdentityId: "identity" }, researchProjectId: undefined } as unknown as SessionSnapshot;
     const chat = vi.fn();
-    const repository = workflowTestRepository({
+    const repository = {
       getSessionSnapshot: vi.fn(async () => snapshot),
       getReveal: vi.fn(async () => ({ text: "Reveal" })),
       getViewerEvidence: vi.fn(async () => "evidence"),
       getViewerNoteBundle: vi.fn(async () => ({ identity: { id: "identity" } })),
       listViewerNoteReflectionRuns: vi.fn(async () => [{ id: "old-run", sourceSnapshot: { sessionId: "session_1" }, status, packetJson: JSON.stringify({ packetVersion }), reflectionPacketSha256: "old-hash" }]),
-    } as unknown as AppRepository);
+    } as unknown as AppRepository;
     const providerConfig = { id: "provider" } as ProviderConfig;
     const model = { modelId: "viewer", route: "route" } as ProviderModel;
     // The completed-run check happens before route/prompt reconstruction and therefore before any paid call.
     Object.assign(snapshot, { sessionId: "session_1", providerConfigId: "provider", modelId: "viewer", modelRoute: "route" });
-    const result = await runViewerNoteReflection({ budgetPolicy: "training_reveal", repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "LEGACY_UNRECORDED", versionId: "training-complete", versionNumber: 1, contentSha256: "training-complete" }, chat });
+    const result = await runViewerNoteReflection({ repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "LEGACY_UNRECORDED", versionId: "legacy", versionNumber: 1, contentSha256: "legacy" }, chat });
     expect(result?.status).toBe(status);
     expect(chat).not.toHaveBeenCalled();
   });
 
   it("keeps Research read-only by exiting before Viewer Notes or Field Guide updates", async () => {
-    const repository = workflowTestRepository({
+    const repository = {
       getSessionSnapshot: vi.fn(async () => ({ viewerNotes: { enabled: true }, researchProjectId: "research-1" })),
       getReveal: vi.fn(async () => ({ text: "Reveal" })),
       getViewerEvidence: vi.fn(async () => "evidence"),
@@ -288,8 +248,8 @@ describe("Viewer Notes", () => {
       beginViewerNoteReflection: vi.fn(),
       commitViewerNoteReflection: vi.fn(),
       listFieldGuideVersions: vi.fn(),
-    } as unknown as AppRepository);
-    const result = await runViewerNoteReflection({ budgetPolicy: "training_reveal", repository, sessionId: "session_1", viewerReview: "review", providerConfig: { id: "provider" } as ProviderConfig, model: {} as ProviderModel, fieldGuideAfterTrainingUpdate: { updateStatus: "LEGACY_UNRECORDED", versionId: "training-complete", versionNumber: 1, contentSha256: "training-complete" }, chat: vi.fn() });
+    } as unknown as AppRepository;
+    const result = await runViewerNoteReflection({ repository, sessionId: "session_1", viewerReview: "review", providerConfig: { id: "provider" } as ProviderConfig, model: {} as ProviderModel, fieldGuideAfterTrainingUpdate: { updateStatus: "LEGACY_UNRECORDED", versionId: "legacy", versionNumber: 1, contentSha256: "legacy" }, chat: vi.fn() });
     expect(result).toBeNull();
     expect(repository.getViewerNoteBundle).not.toHaveBeenCalled();
     expect(repository.beginViewerNoteReflection).not.toHaveBeenCalled();

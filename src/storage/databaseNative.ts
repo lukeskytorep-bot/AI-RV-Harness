@@ -1,4 +1,4 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { operationForWriteQuery, type DatabaseWriteOperation } from "./databaseWriteOperations";
 import type { PurgeEntityKind } from "./controlledPurge";
 
@@ -39,61 +39,10 @@ export async function executeDatabaseTransaction(statements: DatabaseTransaction
   return invoke<number[]>("database_execute_write_batch", { statements: nativeStatements });
 }
 
-
-export async function executePostRevealReviewFencedDatabaseTransaction(input: {
-  sessionId: string;
-  leaseOwner: string;
-  leaseVersion: number;
-  statements: DatabaseTransactionStatement[];
-}): Promise<number[]> {
-  if (input.statements.length === 0) return [];
-  const nativeStatements: NativeWriteStatement[] = input.statements.map((statement) => ({
-    operation: operationForWriteQuery(statement.query),
-    values: statement.values ?? [],
-  }));
-  return invoke<number[]>("database_execute_post_reveal_review_fenced_write_batch", {
-    sessionId: input.sessionId,
-    leaseOwner: input.leaseOwner,
-    leaseVersion: input.leaseVersion,
-    statements: nativeStatements,
-  });
-}
-
-export async function executeTelepathicFencedDatabaseTransaction(input: {
-  seriesId: string;
-  leaseOwner: string;
-  leaseVersion: number;
-  statements: DatabaseTransactionStatement[];
-}): Promise<number[]> {
-  if (input.statements.length === 0) return [];
-  const nativeStatements: NativeWriteStatement[] = input.statements.map((statement) => ({
-    operation: operationForWriteQuery(statement.query),
-    values: statement.values ?? [],
-  }));
-  return invoke<number[]>("database_execute_telepathic_fenced_write_batch", {
-    seriesId: input.seriesId,
-    leaseOwner: input.leaseOwner,
-    leaseVersion: input.leaseVersion,
-    statements: nativeStatements,
-  });
-}
-
 export async function createDatabaseSnapshotNative(destinationPath: string): Promise<void> {
   await invoke("database_snapshot", { destinationPath });
 }
 
-export async function executeControlledPurgeNative(kind: PurgeEntityKind, id: string, expectedArchiveRevision?:number): Promise<void> {
-  await invoke("database_controlled_purge", { request: { kind, id, ...(expectedArchiveRevision===undefined?{}:{expectedArchiveRevision}) } });
-}
-
-export async function workflowOwnershipNative<T>(request: Record<string, unknown>, onFailure?: (failure: { kind: import("../application/abortOwnership").WorkflowAbortKind; message: string }) => void): Promise<T> {
-  // Only Acquire establishes a long-lived heartbeat notification stream.
-  // Reads/checks/writes/Release use plain IPC; native fences still run for every request.
-  const onLost = request.action === "acquire" ? new Channel<{ kind: import("../application/abortOwnership").WorkflowAbortKind; message: string }>() : null;
-  if (onLost && onFailure) onLost.onmessage = onFailure;
-  return invoke<T>("database_workflow_ownership", { request, onLost });
-}
-export async function executeWorkflowOwnedDatabaseTransaction(context: import("../application/workflowOwnership").WorkflowContext, statements: DatabaseTransactionStatement[], postRevealFence?: { sessionId: string; leaseOwner: string; leaseVersion: number }): Promise<number[]> {
-  if (context.closed) throw new Error("Workflow ownership has settled; late writes are refused.");
-  return workflowOwnershipNative<number[]>({ action: "write", profileId: context.profileId, owner: context.owner, version: context.version, entities: context.entities, statements: statements.map(statement=>({ operation:operationForWriteQuery(statement.query), values:statement.values??[] })), ...(postRevealFence ? { postRevealFence } : {}) });
+export async function executeControlledPurgeNative(kind: PurgeEntityKind, id: string): Promise<void> {
+  await invoke("database_controlled_purge", { request: { kind, id } });
 }

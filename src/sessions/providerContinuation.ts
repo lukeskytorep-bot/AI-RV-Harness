@@ -2,7 +2,6 @@ import { validateContinuationRequestBudget, type ProviderContinuationState } fro
 import { captureAnthropicContinuationState, validateAnthropicReplayForRequest } from "../providers/anthropicContinuation";
 import { captureGoogleContinuationState, validateGoogleReplayForRequest } from "../providers/googleContinuation";
 import { captureOpenRouterContinuationState, validateOpenRouterReplayForRequest } from "../providers/openRouterContinuation";
-import { captureMistralContinuationState, validateMistralReplayForRequest } from "../providers/mistralContinuation";
 import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import type { SessionContinuationRouteSnapshot, SessionEventInput, SessionEventRecord, SessionSnapshot } from "./types";
@@ -10,7 +9,6 @@ import type { SessionContinuationRouteSnapshot, SessionEventInput, SessionEventR
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1";
 const GOOGLE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1";
-const MISTRAL_ENDPOINT = "https://api.mistral.ai/v1";
 
 export const ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON = "AUTO-STOP: Anthropic continuation cannot safely replay a signed assistant turn after output sanitization modified its visible text.";
 
@@ -37,13 +35,13 @@ function requireSupportedSessionContinuationRoute(
   route: SessionContinuationRouteSnapshot,
 ): SessionContinuationRouteSnapshot {
   const runtimeRoute = route as unknown as RuntimeSessionContinuationRouteSnapshot;
-  if (runtimeRoute.transport === "openrouter" || runtimeRoute.transport === "google-native" || runtimeRoute.transport === "anthropic-native" || runtimeRoute.transport === "mistral-native") return route;
+  if (runtimeRoute.transport === "openrouter" || runtimeRoute.transport === "google-native" || runtimeRoute.transport === "anthropic-native") return route;
   throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
 }
 
 export function captureSessionContinuationRoute(config: ProviderConfig, model: ProviderModel): SessionContinuationRouteSnapshot | undefined {
   if (model.providerConfigId !== config.id || model.provider !== config.provider) {
-    if (config.provider === "openrouter" || config.provider === "google" || config.provider === "anthropic" || config.provider === "mistral") throw new SessionContinuationError("Viewer model/provider route mismatch while freezing continuation state.");
+    if (config.provider === "openrouter" || config.provider === "google" || config.provider === "anthropic") throw new SessionContinuationError("Viewer model/provider route mismatch while freezing continuation state.");
     return undefined;
   }
   if (config.provider === "openrouter") {
@@ -80,17 +78,6 @@ export function captureSessionContinuationRoute(config: ProviderConfig, model: P
       prefixPolicy: "append-only",
     };
   }
-  if (config.provider === "mistral") {
-    return {
-      transport: "mistral-native",
-      normalizedEndpoint: MISTRAL_ENDPOINT,
-      providerConfigId: config.id,
-      credentialId: config.credentialId,
-      requestedModelId: model.modelId,
-      stateFormat: "mistral-assistant-content",
-      stateFormatVersion: 1,
-    };
-  }
   return undefined;
 }
 
@@ -120,10 +107,6 @@ export function validateFrozenSessionContinuationRequest(
       || route.normalizedEndpoint !== ANTHROPIC_ENDPOINT
       || route.stateFormat !== "anthropic-thinking-blocks"
       || route.prefixPolicy !== "append-only";
-  } else if (route.transport === "mistral-native") {
-    transportMismatch = config.provider !== "mistral"
-      || route.normalizedEndpoint !== MISTRAL_ENDPOINT
-      || route.stateFormat !== "mistral-assistant-content";
   } else {
     throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
   }
@@ -147,8 +130,6 @@ export function validateFrozenSessionContinuationRoute(
     expectedProvider = "google";
   } else if (route.transport === "anthropic-native") {
     expectedProvider = "anthropic";
-  } else if (route.transport === "mistral-native") {
-    expectedProvider = "mistral";
   } else {
     throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
   }
@@ -196,15 +177,6 @@ export function captureSessionContinuationState(input: {
       requestedModelId: input.model.modelId,
       normalizedEndpoint: route.normalizedEndpoint,
       blocks: input.response.reasoningDetails,
-    });
-  }
-  if (route.transport === "mistral-native") {
-    return captureMistralContinuationState({
-      config: input.providerConfig,
-      requestedModelId: input.model.modelId,
-      normalizedEndpoint: route.normalizedEndpoint,
-      content: input.response.reasoningDetails,
-      visibleContent: input.response.content,
     });
   }
   throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
@@ -271,11 +243,6 @@ function replayStateForRoute(input: {
   }
   if (route.transport === "anthropic-native") {
     return validateAnthropicReplayForRequest({
-      state: input.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: route.normalizedEndpoint,
-    });
-  }
-  if (route.transport === "mistral-native") {
-    return validateMistralReplayForRequest({
       state: input.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: route.normalizedEndpoint,
     });
   }

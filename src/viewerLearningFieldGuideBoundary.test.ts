@@ -33,11 +33,6 @@ import nativeCompatibility from "../src-tauri/src/ux_data_compatibility.rs?raw";
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
 const normalizeS2MonitorStreamingWiring = (value: string) => value
-    // B2 keeps the live Monitor on the immutable 16K/32K pair.
-    .replace('import { FROZEN_ANALYTICAL_V1_INITIAL_TOKENS as ANALYTICAL_OUTPUT_INITIAL_TOKENS, FROZEN_ANALYTICAL_V1_RECOVERY_TOKENS as ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";\n', 'import { ANALYTICAL_OUTPUT_INITIAL_TOKENS, ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";\n')
-    // BUDGET-0 permits exactly the shared analytical import and 16K/32K selector.
-    .replace('import { ANALYTICAL_OUTPUT_INITIAL_TOKENS, ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";\n', "")
-    .replace('attempt > 0 ? ANALYTICAL_OUTPUT_RECOVERY_TOKENS : ANALYTICAL_OUTPUT_INITIAL_TOKENS', 'attempt > 0 ? 8192 : 4096')
   .replace(', ProviderStreamEvent } from "../providers/types";', ' } from "../providers/types";')
   .replace('import type { StreamWorkflowContext } from "../providers/streamPresentation";\n', "")
   .replace('  streamWorkflowContext?: StreamWorkflowContext;\n  onStreamEvent?: (event: ProviderStreamEvent) => void;\n', "")
@@ -64,15 +59,8 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(providerRetry).toContain('return category === "standard" ? configured : category === "single_recovery" ? 1 : 0');
     // C2-R1 intentionally extends Browser controlled purge with durable
     // continuation reset/fresh artifacts; protect the accepted R1 bytes.
-    // UX-TEL-5 adds a separate Telepathy path and explicit parent guard.
-    // S4 classifies the separate Research execution marker as terminal for purge.
-    expect(browserControlledPurge).toContain("if(project.executionTermination)return true;");
-    // Evaluation panels add only project-scoped sidecar key cleanup.
-    expect(browserControlledPurge).toContain("rvh.research.evaluation.v1:");
-    // Normalize only those declared additions: all accepted learning/continuation
-    // deletion bytes remain protected by the original hashes.
-    expect(sha256(normalizeTelepathicPurgeWiring(browserControlledPurge.replace("  if(project.executionTermination)return true;\n", "").replace(/  const evaluationKeys=.*\n  atomicWrite\(storage, changes, \[\.\.\.providerStateResetArtifacts,\.\.\.evaluationKeys\]\);/, "  atomicWrite(storage, changes, providerStateResetArtifacts);"),"browser"))).toBe("8f61ac511dd3226833ff1cca14190b162d6ecb32712ccaad558c59caf8410a98");
-    expect(sha256(normalizeTelepathicPurgeWiring(sqliteControlledPurge,"sqlite"))).toBe("5ed7115da8cc2bc36ddc06170c766783f19186bf4cd8672396c291ae26cfcfc4");
+    expect(sha256(browserControlledPurge)).toBe("8f61ac511dd3226833ff1cca14190b162d6ecb32712ccaad558c59caf8410a98");
+    expect(sha256(sqliteControlledPurge)).toBe("5ed7115da8cc2bc36ddc06170c766783f19186bf4cd8672396c291ae26cfcfc4");
     expect(sha256(migration023)).toBe("1a9d300daa180a4507c01497b52deaf84722bd710ed4617f84058932dc7838a4");
   });
 
@@ -110,9 +98,7 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(training).toContain("executionSnapshot:");
     expect(trainingExecution).toContain("prepareFieldGuideForSession");
     expect(trainingExecution).toContain("viewerSystemPromptSnapshotFromFieldGuide");
-    expect(trainingExecution).toContain("blindInitialization");
-    expect(trainingExecution).toContain("rvSystemPrompt: frozenRvSystemPrompt");
-    expect(trainingExecution).toContain("rvSystemPrompt: frozen.rvSystemPrompt");
+    expect(trainingExecution).toContain("rvSystemPrompt,");
   });
 
   it("treats the Profile prompt column as legacy-only after schema 024", () => {
@@ -163,21 +149,3 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     expect(nativeCompatibility).toContain("MIGRATION_SPECS[24].sql");
   });
 });
-
-function normalizeTelepathicPurgeWiring(source:string,backend:"browser"|"sqlite"):string {
- if(backend==="browser")return source
-  .replace('import { telepathicBrowserPreview, telepathicParentBlocked, purgeBrowserTelepathicSeries } from "./telepathicPurge";\n','')
-  .replace('export { previewBrowserTelepathicDelete } from "./telepathicPurge";\n','')
-  .replace('  if(kind==="telepathic_series")return telepathicBrowserPreview(storage,id);\n','')
-  .replace('  if((kind==="profile"||kind==="workspace")&&telepathicParentBlocked(storage,kind,id))scope.blockedReason="Delete Telepathy series referencing this Profile/Workspace first.";\n','')
-  .replace('export function purgeBrowserPermanentDelete(storage: StorageLike, kind: PurgeEntityKind, id: string, expectedArchiveRevision?:number): void | Promise<void> {','export function purgeBrowserPermanentDelete(storage: StorageLike, kind: PurgeEntityKind, id: string): void {')
-  .replace('  if(kind==="telepathic_series")return purgeBrowserTelepathicSeries(storage,id,expectedArchiveRevision);\n','');
- return source
-  .replace('import {previewSqliteTelepathicDelete,telepathicParentPurgeQuery} from "./telepathicPurge";\n','')
-  .replace('Exclude<PurgeEntityKind, "target" | "telepathic_series">','Exclude<PurgeEntityKind, "target">')
-  .replace('    if((kind==="profile"||kind==="workspace")&&Number((await this.dependencies.select<CountRow[]>(telepathicParentPurgeQuery(kind),[id]))[0]?.n??0)>0)blockedReason="Delete Telepathy series referencing this Profile/Workspace first.";\n','')
-  .replace('    if(kind==="telepathic_series")return previewSqliteTelepathicDelete(this.dependencies,id);\n','')
-  .replace('async purge(kind: PurgeEntityKind, id: string, expectedArchiveRevision?:number)','async purge(kind: PurgeEntityKind, id: string)')
-  .replace('    if(kind==="telepathic_series"&&(!Number.isInteger(expectedArchiveRevision)||expectedArchiveRevision!==preview.archiveRevision))throw new Error("Telepathy changed after Deletion Preview.");\n','')
-  .replace('executeControlledPurgeNative(kind, id,expectedArchiveRevision)','executeControlledPurgeNative(kind, id)');
-}

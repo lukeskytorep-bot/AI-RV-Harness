@@ -2,7 +2,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { getCopy } from "../../i18n";
-import appSource from "../../App.tsx?raw";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
 import type { AppRepository } from "../../storage/repository";
 import { CreateProfileDialog } from "./ProfileDialogs";
@@ -63,17 +62,9 @@ function setupWithModels(providerModels: ProviderModel[], viewerModelId: string)
     providerLabel: provider.label,
     apiKey: "",
     baseUrl: "",
-    blackboxManualModelId: "",
-    blackboxManualModelRequired: false,
     viewerModelId,
     viewerReasoning: "",
     viewerTemperature: "0.7",
-    viewerTemperatureMode: "legacy",
-    viewerCustomReasoningMode: "default",
-    viewerSamplingEnabled: false,
-    viewerTopP: "",
-    viewerTopK: "",
-    viewerSeed: "",
     viewerSystemPrompt: "",
     modelSearch: "",
     judgeModelKey: "",
@@ -90,15 +81,8 @@ function setupWithModels(providerModels: ProviderModel[], viewerModelId: string)
     setProviderLabel: vi.fn(),
     setApiKey: vi.fn(),
     setBaseUrl: vi.fn(),
-    setBlackboxManualModelId: vi.fn(),
     setViewerReasoning: vi.fn(),
     setViewerTemperature: vi.fn(),
-    setViewerTemperatureMode: vi.fn(),
-    setViewerCustomReasoningMode: vi.fn(),
-    setViewerSamplingEnabled: vi.fn(),
-    setViewerTopP: vi.fn(),
-    setViewerTopK: vi.fn(),
-    setViewerSeed: vi.fn(),
     setModelSearch: vi.fn(),
     setJudgeModelKey: vi.fn(),
     setMonitorModelKey: vi.fn(),
@@ -119,10 +103,6 @@ function setupWithModels(providerModels: ProviderModel[], viewerModelId: string)
 }
 
 describe("PROFILE-CREATE-PROVIDER-MODEL-UI-1", () => {
-  it("wires the Custom reasoning switch through the first-run ProfileViewerControls", () => {
-    expect(appSource).toContain("customReasoningMode={setup.viewerCustomReasoningMode}");
-    expect(appSource).toContain("onCustomReasoningMode={setup.setViewerCustomReasoningMode}");
-  });
   it("keeps a model beyond the old 250-item visible-list cap selectable in the canonical Create Profile selector", () => {
     const providerModels = Array.from({ length: 300 }, (_, index) => model(index));
     const lateModel = providerModels[299];

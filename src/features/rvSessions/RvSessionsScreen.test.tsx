@@ -22,9 +22,10 @@ function render(view: "manual" | "automatic") {
         workspace={workspace}
         repository={null}
         profiles={[profile]}
+        workspaces={[workspace]}
         view={view}
         onViewChange={vi.fn()}
-        onProfileChange={vi.fn()}
+        onOpenWorkspace={vi.fn()}
         createdNotice={null}
         onDismissCreatedNotice={vi.fn()}
       />,

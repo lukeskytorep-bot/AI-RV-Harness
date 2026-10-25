@@ -1,6 +1,3 @@
-import { useTelepathicHistory } from "../../components/useTelepathicHistory";
-import { TelepathicArchiveGroup } from "../../components/TelepathicArchiveGroup";
-import { setTelepathicArchived } from "../../telepathicExchange/archive";
 import {
   Archive,
   BookOpen,
@@ -20,7 +17,7 @@ import {
   Sun,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { listBuiltinDocuments, readBuiltinDocument, saveBuiltinDocument, type BuiltinDocumentManifest } from "../../attachments/native";
 import { ProviderSettings } from "../../components/ProviderSettings";
@@ -47,7 +44,6 @@ import type { TrainingRunRecord } from "../../training/types";
 import type { ResearchProjectRecord } from "../../research/types";
 import type { TargetRecord } from "../../targets/types";
 import { APP_VERSION } from "../../version";
-import { MIN_CONVERSATION_MAX_OUTPUT_TOKENS, MIN_RV_SESSION_MAX_OUTPUT_TOKENS } from "../../startupDefaults";
 import { CreditsCard } from "./CreditsCard";
 
 export interface SettingsScreenProps {
@@ -232,7 +228,6 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
   const dialogs = useAppDialogs();
   const [busy, setBusy] = useState<"backup" | "restore" | null>(null);
   const [purgingId, setPurgingId] = useState<string | null>(null);
-  const purgeDialogGuard=useRef(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cacheInfo, setCacheInfo] = useState({ routes: 0, approxBytes: 0 });
@@ -240,10 +235,6 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
   const [archivedWorkspaces, setArchivedWorkspaces] = useState<Workspace[]>([]);
   const [archivedThreads, setArchivedThreads] = useState<ChatThread[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<RvSession[]>([]);
-  const telepathicTrainingArchive=useTelepathicHistory(repository,"ai_ai_training",undefined,"archived");
-  const telepathicExchangeArchive=useTelepathicHistory(repository,"conversation_exchange",undefined,"archived");
-  const [restoringTelepathy,setRestoringTelepathy]=useState(false);
-  const restoreTelepathyGuard=useRef(false);
   const [archivedTrainingRuns, setArchivedTrainingRuns] = useState<TrainingRunRecord[]>([]);
   const [archivedResearchProjects, setArchivedResearchProjects] = useState<ResearchProjectRecord[]>([]);
   const [archivedTargets, setArchivedTargets] = useState<TargetRecord[]>([]);
@@ -269,7 +260,6 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
     setArchivedTrainingRuns(trainingRows);
     setArchivedResearchProjects(researchRows);
     setArchivedTargets(targetRows);
-    await Promise.all([telepathicTrainingArchive.reset(),telepathicExchangeArchive.reset()]);
   };
 
   useEffect(() => { if (repository) void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, [repository]);
@@ -328,7 +318,7 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
     }
   };
 
-  const executePurge = async (kind: PurgeEntityKind, id: string, archiveRevision?:number) => {
+  const executePurge = async (kind: PurgeEntityKind, id: string) => {
     if (!repository) return;
     if (kind === "profile") await repository.purgeProfile(id);
     else if (kind === "workspace") await repository.purgeWorkspace(id);
@@ -336,18 +326,16 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
     else if (kind === "rv_session") await repository.purgeRvSession(id);
     else if (kind === "training") await repository.purgeTrainingRun(id);
     else if (kind === "research") await repository.purgeResearchProject(id);
-    else if (kind === "telepathic_series") {if(archiveRevision===undefined)throw new Error("Deletion Preview revision is missing.");await repository.purgeTelepathicSeries(id,archiveRevision);}
     else await repository.purgeTarget(id);
   };
 
   const permanentDelete = async (kind: PurgeEntityKind, id: string) => {
-    if (!repository || purgingId || purgeDialogGuard.current) return;
-    purgeDialogGuard.current=true;
+    if (!repository || purgingId) return;
     setError(null); setMessage(null);
     try {
       const preview = await repository.previewPermanentDelete(kind, id);
       if (preview.blockedReason) {
-        await dialogs.information({ title: pl ? "Nie można usunąć trwale" : "Cannot delete permanently", description: deletionBlockedLabel(preview.blockedReason,pl), confirmLabel: copy.dialogOk, severity: "warning" });
+        await dialogs.information({ title: pl ? "Nie można usunąć trwale" : "Cannot delete permanently", description: preview.blockedReason, confirmLabel: copy.dialogOk, severity: "warning" });
         return;
       }
       if (!preview.archived) throw new Error(pl ? "Trwałe usuwanie jest dostępne wyłącznie dla zarchiwizowanych rekordów." : "Permanent Delete is available only for archived records.");
@@ -383,7 +371,7 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
         ...(preview.requiresPhrase ? { requiredPhrase: preview.requiresPhrase, requiredPhraseLabel: pl ? `Wpisz ${preview.requiresPhrase}, aby potwierdzić` : `Type ${preview.requiresPhrase} to confirm` } : {}),
         action: async () => {
           setPurgingId(id);
-          try { await executePurge(kind, id,preview.archiveRevision); }
+          try { await executePurge(kind, id); }
           finally { setPurgingId(null); }
         },
       });
@@ -392,14 +380,13 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
       await refresh();
       setMessage(pl ? "Rekord został trwale usunięty." : "The record was permanently deleted.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setPurgingId(null); }
-    finally{purgeDialogGuard.current=false;}
   };
 
   const allWorkspaceNames = new Map([...workspaces, ...archivedWorkspaces].map((item) => [item.id, item.name]));
   const archivedWorkspaceIds = new Set(archivedWorkspaces.map((item) => item.id));
   const archivedProfileIds = new Set(archivedProfiles.map((item) => item.id));
   const parentBlocked = (workspaceId: string, profileId?: string) => archivedWorkspaceIds.has(workspaceId) || Boolean(profileId && archivedProfileIds.has(profileId));
-  const archiveCount = telepathicTrainingArchive.items.length + telepathicExchangeArchive.items.length + archivedProfiles.length + archivedWorkspaces.length + archivedThreads.length + archivedSessions.length + archivedTrainingRuns.length + archivedResearchProjects.length + archivedTargets.length;
+  const archiveCount = archivedProfiles.length + archivedWorkspaces.length + archivedThreads.length + archivedSessions.length + archivedTrainingRuns.length + archivedResearchProjects.length + archivedTargets.length;
   const restoreLabel = pl ? "Przywróć" : "Restore";
   const parentTitle = pl ? "Najpierw przywróć nadrzędny Profil i Workspace." : "Restore the parent Profile and Workspace first.";
 
@@ -410,12 +397,11 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
 
   const archiveList = <div className="archive-recovery">
     <div className="storage-backup-explainer"><Archive size={18} /><div><strong>{pl ? "Archiwum i odzyskiwanie" : "Archive and recovery"}</strong><p>{pl ? "Zarchiwizowane dane można przywrócić albo, po sprawdzeniu Deletion Preview, usunąć trwale. Permanent Delete nie jest dostępny z aktywnych widoków." : "Archived data can be restored or, after reviewing a Deletion Preview, deleted permanently. Permanent Delete is not available from active views."}</p></div></div>
-    {archiveCount === 0 && !telepathicTrainingArchive.loading && !telepathicExchangeArchive.loading && !telepathicTrainingArchive.error && !telepathicExchangeArchive.error ? <p className="muted">{pl ? "Archiwum jest puste." : "The archive is empty."}</p> : <div className="archive-groups">
+    {archiveCount === 0 ? <p className="muted">{pl ? "Archiwum jest puste." : "The archive is empty."}</p> : <div className="archive-groups">
       {archivedProfiles.length > 0 && <details open><summary>{pl ? "Profile" : "Profiles"} · {archivedProfiles.length}</summary>{archivedProfiles.map((profile) => <div className="archive-row" key={profile.id}><span><strong>{aiIsBeDisplayName(profile)}</strong><small>{profile.archivedAt ? new Date(profile.archivedAt).toLocaleString() : ""}</small></span>{archiveActions("profile", profile.id, () => repository!.restoreProfile(profile.id))}</div>)}</details>}
       {archivedWorkspaces.length > 0 && <details open><summary>Workspace · {archivedWorkspaces.length}</summary>{archivedWorkspaces.map((workspace) => <div className="archive-row" key={workspace.id}><span><strong>{workspace.name}</strong><small>{workspace.archivedAt ? new Date(workspace.archivedAt).toLocaleString() : ""}</small></span><span className="archive-row-actions"><button className="secondary-button" disabled={archivedProfileIds.has(workspace.profileId) || purgingId === workspace.id} title={archivedProfileIds.has(workspace.profileId) ? parentTitle : undefined} onClick={() => void restoreWorkspace(workspace)}>{restoreLabel}</button><button className="danger-button" disabled={purgingId === workspace.id || Boolean(busy)} onClick={() => void permanentDelete("workspace", workspace.id)}><Trash2 size={14} />{pl ? "Usuń trwale" : "Delete permanently"}</button></span></div>)}</details>}
       {archivedThreads.length > 0 && <details open><summary>{pl ? "Rozmowy / Manual RV" : "Conversations / Manual RV"} · {archivedThreads.length}</summary>{archivedThreads.map((thread) => <div className="archive-row" key={thread.id}><span><strong>{thread.title}</strong><small>{thread.mode === "manual_rv" ? "Manual RV" : (pl ? "Rozmowa" : "Conversation")} · {allWorkspaceNames.get(thread.workspaceId) ?? thread.workspaceId}</small></span>{archiveActions("conversation", thread.id, () => repository!.restoreChatThread(thread.id), archivedWorkspaceIds.has(thread.workspaceId), archivedWorkspaceIds.has(thread.workspaceId) ? parentTitle : undefined)}</div>)}</details>}
       {archivedSessions.length > 0 && <details open><summary>{pl ? "Sesje RV" : "RV Sessions"} · {archivedSessions.length}</summary>{archivedSessions.map((session) => <div className="archive-row" key={session.id}><span><strong>{session.sessionCode}</strong><small>{session.state} · {allWorkspaceNames.get(session.workspaceId) ?? session.workspaceId}</small></span>{archiveActions("rv_session", session.id, () => repository!.restoreRvSession(session.id), parentBlocked(session.workspaceId, session.profileId), parentBlocked(session.workspaceId, session.profileId) ? parentTitle : undefined)}</div>)}</details>}
-      {[{history:telepathicTrainingArchive,title:pl?"Telepatia — Training":"Telepathy — Training"},{history:telepathicExchangeArchive,title:pl?"Telepatia — Conversation":"Telepathy — Conversation"}].map(({history,title})=><TelepathicArchiveGroup key={title} title={title} items={history.items} loading={history.loading} error={history.error} hasMore={Boolean(history.nextCursor)} pl={pl} disabled={Boolean(busy)||restoringTelepathy||Boolean(purgingId)} parentBlocked={parentBlocked} onLoadMore={()=>void history.loadMore()} onRetry={()=>void history.retry()} onDelete={id=>void permanentDelete("telepathic_series",id)} onRestore={id=>{if(!repository||restoreTelepathyGuard.current)return;restoreTelepathyGuard.current=true;setRestoringTelepathy(true);void recover(async()=>{await setTelepathicArchived(repository,id,false);}).finally(()=>{restoreTelepathyGuard.current=false;setRestoringTelepathy(false);});}}/>)}
       {archivedTrainingRuns.length > 0 && <details open><summary>Training · {archivedTrainingRuns.length}</summary>{archivedTrainingRuns.map((run) => <div className="archive-row" key={run.id}><span><strong>#{run.runNumber} · {run.name}</strong><small>{run.status} · {run.sessionIds.length} {pl ? "sesji" : "sessions"} · {allWorkspaceNames.get(run.workspaceId) ?? run.workspaceId}</small></span>{archiveActions("training", run.id, () => repository!.restoreTrainingRun(run.id), parentBlocked(run.workspaceId, run.profileId), parentBlocked(run.workspaceId, run.profileId) ? parentTitle : undefined)}</div>)}</details>}
       {archivedResearchProjects.length > 0 && <details open><summary>Research · {archivedResearchProjects.length}</summary>{archivedResearchProjects.map((project) => <div className="archive-row" key={project.id}><span><strong>{project.name}</strong><small>{project.state} · {allWorkspaceNames.get(project.workspaceId) ?? project.workspaceId}</small></span>{archiveActions("research", project.id, () => repository!.restoreResearchProject(project.id), archivedWorkspaceIds.has(project.workspaceId), archivedWorkspaceIds.has(project.workspaceId) ? parentTitle : undefined)}</div>)}</details>}
       {archivedTargets.length > 0 && <details open><summary>{pl ? "Moje cele" : "My Targets"} · {archivedTargets.length}</summary>{archivedTargets.map((target) => <div className="archive-row" key={target.id}><span><strong>{target.title}</strong><small>{userTargetKind(target) === "telepathic" ? (pl ? "Telepatyczny" : "Telepathic") : (pl ? "Ogólny" : "General")} · {target.archivedAt ? new Date(target.archivedAt).toLocaleString() : ""}</small></span>{archiveActions("target", target.id, () => repository!.restoreTarget(target.id))}</div>)}</details>}
@@ -426,27 +412,7 @@ function StorageSettingsCard({ copy, workspaces, repository, onDataChanged }: { 
 }
 
 function SessionSettingsCard({ copy, settings, onChange }: { copy: ReturnType<typeof getCopy>; settings: AppSettings; onChange: (settings: Partial<AppSettings>) => void }) {
-  return <section className="panel session-settings-card"><PanelHeader title={copy.sessions} icon={<CircleStop size={18} />} /><div className="session-settings-body"><label><span>{copy.sessionLanguage}</span><select value={settings.sessionLanguage} onChange={(event) => onChange({ sessionLanguage: event.target.value as SessionLanguageSetting })}><option value="same">{copy.sameAsInterface}</option><option value="pl">Polski</option><option value="en">English</option></select></label><label><span>{copy.requestTimeout}</span><div><input type="number" min={1} max={600} value={Math.round(settings.requestTimeoutMs / 1000)} onChange={(event) => onChange({ requestTimeoutMs: Math.max(1, Math.min(600, Number(event.target.value) || 120)) * 1000 })} /><small>s</small></div></label><label><span>{copy.retryPolicy}</span><select value={settings.maxRetries} onChange={(event) => onChange({ maxRetries: Number(event.target.value) })}>{[0, 1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label><label><span>{copy.conversationOutputTokens}</span><OutputTokenSettingInput value={settings.conversationMaxOutputTokens} minimum={MIN_CONVERSATION_MAX_OUTPUT_TOKENS} onCommit={(value) => onChange({ conversationMaxOutputTokens: value })} /></label><label><span>{copy.rvSessionOutputTokens}</span><OutputTokenSettingInput value={settings.rvSessionMaxOutputTokens} minimum={MIN_RV_SESSION_MAX_OUTPUT_TOKENS} onCommit={(value) => onChange({ rvSessionMaxOutputTokens: value })} /></label><label><span>{copy.defaultReveal}</span><select value={settings.defaultRevealSource} onChange={(event) => onChange({ defaultRevealSource: event.target.value as AppSettings["defaultRevealSource"] })}><option value="external">{copy.externalBlind}</option><option value="automatic">{copy.automaticTarget}</option></select></label><div className="mandatory-autosave"><ShieldCheck size={16} /><div><strong>{copy.mandatoryAutosave}</strong><p>{copy.sessionRules}</p></div></div></div></section>;
-}
-
-function OutputTokenSettingInput({ value, minimum, onCommit }: { value: number; minimum: number; onCommit: (value: number) => void }) {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
-  const commit = () => {
-    const parsed = Number(draft);
-    const normalized = Number.isFinite(parsed) ? Math.max(minimum, parsed) : minimum;
-    setDraft(String(normalized));
-    if (normalized !== value) onCommit(normalized);
-  };
-  return <input
-    type="number"
-    min={minimum}
-    max={262144}
-    value={draft}
-    onChange={(event) => setDraft(event.target.value)}
-    onBlur={commit}
-    onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
-  />;
+  return <section className="panel session-settings-card"><PanelHeader title={copy.sessions} icon={<CircleStop size={18} />} /><div className="session-settings-body"><label><span>{copy.sessionLanguage}</span><select value={settings.sessionLanguage} onChange={(event) => onChange({ sessionLanguage: event.target.value as SessionLanguageSetting })}><option value="same">{copy.sameAsInterface}</option><option value="pl">Polski</option><option value="en">English</option></select></label><label><span>{copy.requestTimeout}</span><div><input type="number" min={1} max={600} value={Math.round(settings.requestTimeoutMs / 1000)} onChange={(event) => onChange({ requestTimeoutMs: Math.max(1, Math.min(600, Number(event.target.value) || 120)) * 1000 })} /><small>s</small></div></label><label><span>{copy.retryPolicy}</span><select value={settings.maxRetries} onChange={(event) => onChange({ maxRetries: Number(event.target.value) })}>{[0, 1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label><label><span>{copy.conversationOutputTokens}</span><input type="number" min={1} max={262144} value={settings.conversationMaxOutputTokens} onChange={(event) => onChange({ conversationMaxOutputTokens: Math.max(1, Number(event.target.value) || 8192) })} /></label><label><span>{copy.rvSessionOutputTokens}</span><input type="number" min={1} max={262144} value={settings.rvSessionMaxOutputTokens} onChange={(event) => onChange({ rvSessionMaxOutputTokens: Math.max(1, Number(event.target.value) || 8192) })} /></label><label><span>{copy.hardSessionCostLimit}</span><div><input type="number" min={0} step="0.01" value={settings.maxSessionCostUsd} onChange={(event) => onChange({ maxSessionCostUsd: Math.max(0, Number(event.target.value) || 0) })} /><small>USD · {settings.maxSessionCostUsd > 0 ? copy.enabled : copy.disabled}</small></div></label><label><span>{copy.defaultReveal}</span><select value={settings.defaultRevealSource} onChange={(event) => onChange({ defaultRevealSource: event.target.value as AppSettings["defaultRevealSource"] })}><option value="external">{copy.externalBlind}</option><option value="automatic">{copy.automaticTarget}</option></select></label><div className="mandatory-autosave"><ShieldCheck size={16} /><div><strong>{copy.mandatoryAutosave}</strong><p>{copy.sessionRules}</p></div></div></div></section>;
 }
 
 function PromptResourceDialog({ copy, resource, onClose }: { copy: ReturnType<typeof getCopy>; resource: FactoryPromptResource; onClose: () => void }) {
@@ -471,7 +437,6 @@ function PanelHeader({ title, icon }: { title: string; icon: ReactNode }) {
 
 function deletionPreviewDetails(preview: DeletionPreview, pl: boolean): string[] {
   const labels: Array<[keyof DeletionPreview["counts"], string, string]> = [
-    ["telepathicSeries","Serie telepatii","Telepathy series"],["telepathicParticipants","Uczestnicy telepatii","Telepathy participants"],["telepathicRounds","Rundy i prowadzenie","Rounds and guidance"],["telepathicTargets","Zamrożone cele telepatii","Frozen Telepathy targets"],["telepathicBlindSubmissions","Zapisy blind","Blind submissions"],["telepathicReflections","Refleksje rund","Round reflections"],["telepathicFinalReflections","Końcowe refleksje","Final reflections"],["telepathicProviderCalls","Ledger wywołań","Provider call ledger"],["telepathicTranscriptEvents","Wydarzenia transkryptu","Transcript events"],
     ["profiles", "Profile", "Profiles"], ["workspaces", "Workspace", "Workspaces"], ["conversations", "Rozmowy / Manual RV", "Conversations / Manual RV"],
     ["messages", "Wiadomości", "Messages"], ["rvSessions", "Sesje RV", "RV Sessions"], ["sessionEvents", "Zdarzenia sesji", "Session events"],
     ["snapshots", "Snapshoty", "Snapshots"], ["reveals", "Reveal", "Reveals"], ["targetClarifications", "Doprecyzowania celu", "Target clarifications"],
@@ -483,24 +448,10 @@ function deletionPreviewDetails(preview: DeletionPreview, pl: boolean): string[]
     ["viewerNoteReflectionRuns", "Viewer Notes reflection runs", "Viewer Notes reflection runs"], ["viewerNoteActivationEvents", "Viewer Notes activation history", "Viewer Notes activation history"],
   ];
   const details = labels.filter(([key]) => preview.counts[key] > 0).map(([key, plLabel, enLabel]) => `${pl ? plLabel : enLabel}: ${preview.counts[key]}`);
-  if(preview.kind==="telepathic_series")details.push(pl?"Globalne Field Guide i Viewer Notes pozostaną zachowane.":"Global Field Guide and Viewer Notes will be preserved.");
-  if(preview.counts.telepathicAttachmentFilesPreserved>0)details.push(pl?`Pliki załączników na dysku pozostaną zachowane: ${preview.counts.telepathicAttachmentFilesPreserved}. Usuwane są rekordy bazy, nie te pliki.`:`External attachment files will be retained: ${preview.counts.telepathicAttachmentFilesPreserved}. Database records are deleted; these files are not.`);
   if (preview.viewerNotesPreserved > 0) details.push(pl ? `Viewer Notes zachowane mimo usunięcia źródła: ${preview.viewerNotesPreserved}` : `Viewer Notes preserved after source deletion: ${preview.viewerNotesPreserved}`);
   if (preview.viewerNotesDeleted > 0) details.push(pl ? `Viewer Notes usuwane razem z Profile: ${preview.viewerNotesDeleted}` : `Viewer Notes deleted with the Profile: ${preview.viewerNotesDeleted}`);
   details.push(pl ? "Operacja jest nieodwracalna." : "This action cannot be undone.");
   return details;
-}
-
-function deletionBlockedLabel(reason:string,pl:boolean):string {
-  if(!pl)return reason;
-  const labels:Record<string,string>={
-    "Delete Telepathy series referencing this Profile/Workspace first.":"Najpierw usuń serie telepatii powiązane z tym Profilem lub Workspace.",
-    "Stop Telepathy execution or wait for its lease before deleting.":"Zatrzymaj wykonywanie telepatii lub poczekaj na zwolnienie blokady przed usunięciem.",
-    "Stop the active Telepathy series before deleting.":"Zatrzymaj aktywną serię telepatii przed usunięciem.",
-    "Telepathy is running in another operation or its ownership cannot be verified.":"Telepatia działa w innej operacji albo nie można potwierdzić właściciela jej blokady.",
-    "Permanent Delete requires Web Locks coordination. Use the desktop app or a browser supporting Web Locks.":"Trwałe usuwanie wymaga koordynacji Web Locks. Użyj aplikacji desktopowej albo przeglądarki obsługującej Web Locks.",
-  };
-  return labels[reason]??reason;
 }
 
 function wordCount(text: string): number {

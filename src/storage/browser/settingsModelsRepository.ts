@@ -64,14 +64,6 @@ export class BrowserSettingsModelsRepository implements SettingsModelsRepository
       : item));
   }
 
-  async updateProviderCustomStreamingEnabled(id: string, enabled: boolean): Promise<void> {
-    const configs = await this.listProviderConfigs();
-    const current = configs.find((item) => item.id === id);
-    if (!current) throw new Error("Provider connection not found.");
-    if (current.provider !== "custom_openai") throw new Error("Streaming transport setting is available only for Custom OpenAI-compatible providers.");
-    this.write(PROVIDERS_KEY, configs.map((item) => item.id === id ? { ...item, customStreamingEnabled: enabled } : item));
-  }
-
   async deleteProviderConfig(id: string): Promise<void> {
     const configs = await this.listProviderConfigs();
     const removed = configs.find((item) => item.id === id);

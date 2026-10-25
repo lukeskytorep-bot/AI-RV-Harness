@@ -1,25 +1,17 @@
-import { evaluationKey, evaluationPrefix, validateResearchEvaluation, assertEvaluationUpdate, type ResearchEvaluation } from "../research/evaluationTypes";
-import { validateResearchTermination, researchTerminationKey, researchScope, canEndResearchExecution } from "../research/executionLifecycle";
-import { registerAbortOwnership, WorkflowAbortError } from "../application/abortOwnership";
-import { ownSqliteWorkflow } from "./sqlite/workflowOwnership";
-import type { WorkflowContext, WorkflowScope } from "../application/workflowOwnership";
-import { workflowOwnershipNative, executeWorkflowOwnedDatabaseTransaction } from "./databaseNative";
 import Database from "@tauri-apps/plugin-sql";
 import type { CreateProfileInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput } from "../types";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
-import { createDatabaseSnapshotNative, executeDatabaseTransaction, executeDatabaseWrite, executeTelepathicFencedDatabaseTransaction,
-  executePostRevealReviewFencedDatabaseTransaction, initializeDatabaseNative, selectDatabaseReadonly, type DatabaseTransactionStatement } from "./databaseNative";
-import { sqliteWriteCoordinator } from "./sqliteWriteCoordinator";
+import { createDatabaseSnapshotNative, executeDatabaseTransaction, executeDatabaseWrite, initializeDatabaseNative, selectDatabaseReadonly, type DatabaseTransactionStatement } from "./databaseNative";
+import { SqliteWriteCoordinator } from "./sqliteWriteCoordinator";
 import { SqliteProfilesRepository } from "./sqlite/profilesRepository";
 import { SqliteTargetsRepository } from "./sqlite/targetsRepository";
 import { SqliteSettingsModelsRepository } from "./sqlite/settingsModelsRepository";
 import { SqliteWorkspacesConversationsRepository } from "./sqlite/workspacesConversationsRepository";
 import { SqliteSessionsRepository } from "./sqlite/sessionsRepository";
 import { SqliteTrainingRepository } from "./sqlite/trainingRepository";
-import { SqliteTelepathicExchangeRepository } from "./sqlite/telepathicExchangeRepository";
 import { SqliteAiCenterRepository } from "./sqlite/aiCenterRepository";
 import { SqliteFieldGuideRepository } from "./sqlite/fieldGuideRepository";
 import { SqliteMonitorRepository } from "./sqlite/monitorRepository";
@@ -43,43 +35,7 @@ type CustomProtocolRow = {
 };
 
 export class SqliteRepository implements AppRepository {
-  async listResearchEvaluations(projectId: string): Promise<ResearchEvaluation[]> {
-    const prefix = `${evaluationPrefix}${projectId}:`;
-    const rows = await selectDatabaseReadonly<Array<{value:string}>>("SELECT value FROM app_settings WHERE substr(key,1,length($1))=$1 ORDER BY key", [prefix]);
-    return rows.map(row => validateResearchEvaluation(JSON.parse(row.value),{projectId})).sort((a,b)=>a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-  }
-  async getResearchEvaluation(projectId:string,id:string):Promise<ResearchEvaluation|null> {
-    const rows=await selectDatabaseReadonly<Array<{value:string}>>("SELECT value FROM app_settings WHERE key=$1",[evaluationKey(projectId,id)]);
-    return rows[0]?validateResearchEvaluation(JSON.parse(rows[0].value),{projectId,id}):null;
-  }
-  async saveResearchEvaluation(record:ResearchEvaluation,expectedRevision:number):Promise<void> {
-    const c=this.workflowContext;
-    if(!c || c.closed || c.profileId!==`research:${record.projectId}` || c.entities.length!==1 || c.entities[0].kind!=="research_evaluation")throw new Error("Research evaluation ownership is required.");
-    assertEvaluationUpdate(await this.getResearchEvaluation(record.projectId,record.id),record,expectedRevision);
-    await this.writes.run(()=>workflowOwnershipNative({action:"evaluationSave",profileId:c.profileId,owner:c.owner,version:c.version,record,expectedRevision}));
-  }
-
-  async getResearchExecutionTermination(projectId:string):Promise<import("../research/executionLifecycle").ResearchExecutionTermination|null>{
-    const rows=await selectDatabaseReadonly<Array<{value:string}>>("SELECT value FROM app_settings WHERE key=$1",[researchTerminationKey(projectId)]);
-    return rows[0]?validateResearchTermination(JSON.parse(rows[0].value)):null;
-  }
-  async endResearchExecution(projectId:string,endedAt=new Date().toISOString()):Promise<import("../research/executionLifecycle").ResearchExecutionTermination>{
-    return this.withWorkflowOwnership({...researchScope(projectId),terminal:true,entity:{kind:"research",id:projectId,allowEnded:true}},async owned=>{
-      const current=await owned.getResearchProject(projectId);if(!current)throw new Error("Research project not found");
-      const existing=await owned.getResearchExecutionTermination(projectId);if(existing)return existing;
-      if(!canEndResearchExecution(current))throw new Error("Research execution cannot be ended in this state");
-      const context=(owned as SqliteRepository).workflowContext!;
-      return validateResearchTermination(await workflowOwnershipNative({action:"endResearch",profileId:context.profileId,owner:context.owner,version:context.version,endedAt}));
-    });
-  }
-  async getWorkflowResearchProjectId(sessionId:string):Promise<string|undefined>{return (await this.getRvSession(sessionId))?.researchProjectId;}
-  async getWorkflowProfileId(sessionId:string):Promise<string> {
-    const session=await this.getRvSession(sessionId);
-    const profileId=session?.profileId ?? (await this.getSessionSnapshot(sessionId))?.profileId;
-    if(!profileId)throw new Error("RV ownership requires the durable Profile identity.");
-    return profileId;
-  }
-  private readonly writes = sqliteWriteCoordinator("sqlite:rv_harness.db");
+  private readonly writes = new SqliteWriteCoordinator();
   private readonly profilesRepository: SqliteProfilesRepository;
   private readonly targetsRepository: SqliteTargetsRepository;
   private readonly settingsModelsRepository: SqliteSettingsModelsRepository;
@@ -87,7 +43,6 @@ export class SqliteRepository implements AppRepository {
   private readonly researchRepository: SqliteResearchRepository;
   private readonly sessionsRepository: SqliteSessionsRepository;
   private readonly trainingRepository: SqliteTrainingRepository;
-  private readonly telepathicExchangeRepository: SqliteTelepathicExchangeRepository;
   private readonly aiCenterRepository: SqliteAiCenterRepository;
   private readonly fieldGuideRepository: SqliteFieldGuideRepository;
   private readonly monitorRepository: SqliteMonitorRepository;
@@ -95,9 +50,7 @@ export class SqliteRepository implements AppRepository {
   private readonly exportRepository: SqliteExportRepository;
   private readonly controlledPurge: SqliteControlledPurge;
 
-  readonly recoveryOwner: object;
-  private constructor(private readonly db: Database, private readonly workflowContext?:WorkflowContext, recoveryOwner?: object) {
-    this.recoveryOwner = recoveryOwner ?? this;
+  private constructor(private readonly db: Database) {
     this.profilesRepository = new SqliteProfilesRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
@@ -125,18 +78,11 @@ export class SqliteRepository implements AppRepository {
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
       executeTransaction: (statements) => this.executeTransaction(statements),
-      executePostRevealReviewFencedTransaction: (input) => this.writes.run(() => this.workflowContext ? executeWorkflowOwnedDatabaseTransaction(this.workflowContext,input.statements,input) : executePostRevealReviewFencedDatabaseTransaction(input)),
       isResearchScoresFrozen: (projectId) => this.researchRepository.isScoresFrozen(projectId),
     });
     this.trainingRepository = new SqliteTrainingRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
-    });
-    this.telepathicExchangeRepository = new SqliteTelepathicExchangeRepository({
-      select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
-      executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
-      executeTransaction: (statements) => this.executeTransaction(statements),
-      executeFencedTransaction: (input) => this.writes.run(() => executeTelepathicFencedDatabaseTransaction(input)),
     });
     this.aiCenterRepository = new SqliteAiCenterRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
@@ -173,29 +119,13 @@ export class SqliteRepository implements AppRepository {
   }
 
   private executeWrite(query: string, bindValues?: unknown[]) {
-    return this.writes.run(async () => this.workflowContext ? { rowsAffected:(await executeWorkflowOwnedDatabaseTransaction(this.workflowContext,[{query,values:bindValues??[]}]))[0] } : executeDatabaseWrite(query, bindValues ?? []));
+    return this.writes.run(() => executeDatabaseWrite(query, bindValues ?? []));
   }
 
   private executeTransaction(statements: DatabaseTransactionStatement[]) {
-    return this.writes.run(() => this.workflowContext ? executeWorkflowOwnedDatabaseTransaction(this.workflowContext,statements) : executeDatabaseTransaction(statements));
+    return this.writes.run(() => executeDatabaseTransaction(statements));
   }
 
-  private readonly workflowOwners = new Map<string,string>();
-  async getWorkflowOwnership(profileId:string):Promise<"idle"|"local"|"other"|"unknown"> {
-    try { const state=await workflowOwnershipNative<{active:boolean;owner:string|null}>({action:"inspect",profileId});return state.active ? (state.owner===this.workflowOwners.get(profileId)?"local":"other") : "idle"; } catch {return "unknown";}
-  }
-  async withWorkflowOwnership<T>(scope:WorkflowScope,task:(repository:AppRepository,signal:AbortSignal)=>Promise<T>):Promise<T> {
-    if(this.workflowContext) {
-      if(scope.terminal)throw new Error("End requires the active workflow to settle first");
-      const context=this.workflowContext;if(context.closed || context.profileId!==scope.profileId)throw new Error("Invalid or settled workflow ownership scope");
-      const nested={...context,entities:[...context.entities.filter(entity=>entity.kind!==scope.entity.kind).map(entity=>({...entity,allowEnded:scope.entity.kind==="research"?entity.allowEnded:false})),scope.entity]};
-      await workflowOwnershipNative({action:"check",profileId:context.profileId,owner:context.owner,version:context.version,entities:nested.entities});
-      const ended=new AbortController();nested.signal=AbortSignal.any([context.signal,...(scope.signal?[scope.signal]:[]),ended.signal]);
-      registerAbortOwnership(nested.signal,async()=>{if(nested.closed)throw new Error("Workflow ownership has settled");await workflowOwnershipNative({action:"check",profileId:nested.profileId,owner:nested.owner,version:nested.version,entities:nested.entities.map(entity=>({...entity,allowEnded:false}))});},()=>({profileId:nested.profileId,owner:nested.owner,version:nested.version,entities:nested.entities.map(entity=>({...entity,allowEnded:false}))}));
-      try{return await task(new SqliteRepository(this.db,nested,this.recoveryOwner),nested.signal);}finally{nested.closed=true;ended.abort(new WorkflowAbortError("workflow_settled","Workflow settled"));}
-    }
-    return ownSqliteWorkflow(scope,context=>new SqliteRepository(this.db,context,this.recoveryOwner),task,owner=>{if(owner)this.workflowOwners.set(scope.profileId,owner);else this.workflowOwners.delete(scope.profileId);});
-  }
   async createDatabaseSnapshot(destinationPath: string): Promise<void> {
     await this.writes.run(() => createDatabaseSnapshotNative(destinationPath));
   }
@@ -233,16 +163,6 @@ export class SqliteRepository implements AppRepository {
   updateTrainingRun: AppRepository["updateTrainingRun"] = (id, input) => this.trainingRepository.updateTrainingRun(id, input);
   listTrainingRuns: AppRepository["listTrainingRuns"] = () => this.trainingRepository.listTrainingRuns();
   listArchivedTrainingRuns: AppRepository["listArchivedTrainingRuns"] = () => this.trainingRepository.listArchivedTrainingRuns();
-  getTelepathicSeries: AppRepository["getTelepathicSeries"] = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeries(seriesId);
-  listTelepathicSeries: AppRepository["listTelepathicSeries"] = (seriesWorkspaceId) => this.telepathicExchangeRepository.listTelepathicSeries(seriesWorkspaceId);
-  listTelepathicSeriesSummaries: AppRepository["listTelepathicSeriesSummaries"] = (query) => this.telepathicExchangeRepository.listTelepathicSeriesSummaries(query);
-  saveTelepathicSeries: AppRepository["saveTelepathicSeries"] = (state) => this.telepathicExchangeRepository.saveTelepathicSeries(state);
-  withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T> {
-    return this.telepathicExchangeRepository.withTelepathicSeriesLease(seriesId, task);
-  }
-  assertTelepathicSeriesLease: AppRepository["assertTelepathicSeriesLease"] = (seriesId) => this.telepathicExchangeRepository.assertTelepathicSeriesLease(seriesId);
-  telepathicSeriesLeaseSignal: AppRepository["telepathicSeriesLeaseSignal"] = (seriesId) => this.telepathicExchangeRepository.telepathicSeriesLeaseSignal(seriesId);
-  getTelepathicSeriesLeaseState: NonNullable<AppRepository["getTelepathicSeriesLeaseState"]> = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeriesLeaseState(seriesId);
 
   async archiveTrainingRun(id: string): Promise<void> {
     const run = (await this.trainingRepository.listTrainingRuns()).find((item) => item.id === id);
@@ -345,8 +265,7 @@ export class SqliteRepository implements AppRepository {
   restoreChatThread: AppRepository["restoreChatThread"] = (threadId) => this.workspacesConversationsRepository.restoreChatThread(threadId);
   setChatThreadFormalRvState: AppRepository["setChatThreadFormalRvState"] = (threadId, state) => this.workspacesConversationsRepository.setChatThreadFormalRvState(threadId, state);
   listChatMessages: AppRepository["listChatMessages"] = (threadId) => this.workspacesConversationsRepository.listChatMessages(threadId);
-  appendChatMessage: AppRepository["appendChatMessage"] = (threadId, role, content, metadata) => this.workspacesConversationsRepository.appendChatMessage(threadId, role, content, metadata);
-  updateChatMessageMetadata: AppRepository["updateChatMessageMetadata"] = (messageId, metadata) => this.workspacesConversationsRepository.updateChatMessageMetadata(messageId, metadata);
+  appendChatMessage: AppRepository["appendChatMessage"] = (threadId, role, content) => this.workspacesConversationsRepository.appendChatMessage(threadId, role, content);
   appendAssistantMessageWithProviderState: AppRepository["appendAssistantMessageWithProviderState"] = (threadId, content, state) => this.workspacesConversationsRepository.appendAssistantMessageWithProviderState(threadId, content, state);
   listChatMessageProviderStates: AppRepository["listChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.listChatMessageProviderStates(threadId);
   resetChatMessageProviderStates: AppRepository["resetChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.resetChatMessageProviderStates(threadId);
@@ -395,7 +314,6 @@ export class SqliteRepository implements AppRepository {
 
   updateProviderCredentialMetadata: AppRepository["updateProviderCredentialMetadata"] = (id, credentialHint, fingerprint) => this.settingsModelsRepository.updateProviderCredentialMetadata(id, credentialHint, fingerprint);
   updateProviderCustomOutputTokenField: AppRepository["updateProviderCustomOutputTokenField"] = (id, field) => this.settingsModelsRepository.updateProviderCustomOutputTokenField(id, field);
-  updateProviderCustomStreamingEnabled: AppRepository["updateProviderCustomStreamingEnabled"] = (id, enabled) => this.settingsModelsRepository.updateProviderCustomStreamingEnabled(id, enabled);
 
   deleteProviderConfig: AppRepository["deleteProviderConfig"] = (id) => this.settingsModelsRepository.deleteProviderConfig(id);
   updateProviderConnectionStatus: AppRepository["updateProviderConnectionStatus"] = (id, status, error) => this.settingsModelsRepository.updateProviderConnectionStatus(id, status, error);
@@ -419,7 +337,6 @@ export class SqliteRepository implements AppRepository {
   purgeRvSession: AppRepository["purgeRvSession"] = (id) => this.controlledPurge.purge("rv_session", id);
   purgeTrainingRun: AppRepository["purgeTrainingRun"] = (id) => this.controlledPurge.purge("training", id);
   purgeResearchProject: AppRepository["purgeResearchProject"] = (id) => this.controlledPurge.purge("research", id);
-  purgeTelepathicSeries: AppRepository["purgeTelepathicSeries"] = (id,revision) => this.controlledPurge.purge("telepathic_series", id,revision);
   purgeTarget: AppRepository["purgeTarget"] = (id) => this.controlledPurge.purge("target", id);
   recordTargetUsage: AppRepository["recordTargetUsage"] = (input) => this.targetsRepository.recordTargetUsage(input);
   listTargetUsage: AppRepository["listTargetUsage"] = () => this.targetsRepository.listTargetUsage();
@@ -473,17 +390,12 @@ export class SqliteRepository implements AppRepository {
     return { ...input, steps: [...input.steps] };
   }
 
-  createRvSession: AppRepository["createRvSession"] = async (input) => { const session=await this.sessionsRepository.createRvSession(input);if(this.workflowContext)this.workflowContext.entities=[...this.workflowContext.entities.filter(entity=>entity.kind!=="rv"),{kind:"rv",id:session.id,profileId:session.profileId}];return session; };
+  createRvSession: AppRepository["createRvSession"] = (input) => this.sessionsRepository.createRvSession(input);
   updateRvSessionState: AppRepository["updateRvSessionState"] = (id, state, stopReason) => this.sessionsRepository.updateRvSessionState(id, state, stopReason);
   appendSessionEvent: AppRepository["appendSessionEvent"] = (sessionId, event) => this.sessionsRepository.appendSessionEvent(sessionId, event);
   appendSessionEventWithProviderState: AppRepository["appendSessionEventWithProviderState"] = (sessionId, event, state) => this.sessionsRepository.appendSessionEventWithProviderState(sessionId, event, state);
   getSessionEventProviderState: AppRepository["getSessionEventProviderState"] = (sessionEventId) => this.sessionsRepository.getSessionEventProviderState(sessionEventId);
   listSessionEvents: AppRepository["listSessionEvents"] = (sessionId) => this.sessionsRepository.listSessionEvents(sessionId);
-  withPostRevealReviewLease<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
-    return this.sessionsRepository.withPostRevealReviewLease(sessionId, task);
-  }
-  assertPostRevealReviewLease: AppRepository["assertPostRevealReviewLease"] = (sessionId) => this.sessionsRepository.assertPostRevealReviewLease(sessionId);
-  postRevealReviewLeaseSignal: AppRepository["postRevealReviewLeaseSignal"] = (sessionId) => this.sessionsRepository.postRevealReviewLeaseSignal(sessionId);
   updatePreRevealTranscript: AppRepository["updatePreRevealTranscript"] = (sessionId, transcript) => this.sessionsRepository.updatePreRevealTranscript(sessionId, transcript);
   appendPostRevealTurn: AppRepository["appendPostRevealTurn"] = (sessionId, role, content, metadata) => this.sessionsRepository.appendPostRevealTurn(sessionId, role, content, metadata);
   appendPostRevealTurnWithProviderState: AppRepository["appendPostRevealTurnWithProviderState"] = (sessionId, content, state) => this.sessionsRepository.appendPostRevealTurnWithProviderState(sessionId, content, state);
@@ -493,7 +405,6 @@ export class SqliteRepository implements AppRepository {
   acceptReveal: AppRepository["acceptReveal"] = (sessionId, reveal) => this.sessionsRepository.acceptReveal(sessionId, reveal);
   getReveal: AppRepository["getReveal"] = (sessionId) => this.sessionsRepository.getReveal(sessionId);
   getViewerEvidence: AppRepository["getViewerEvidence"] = (sessionId) => this.sessionsRepository.getViewerEvidence(sessionId);
-  getRvSession: AppRepository["getRvSession"] = (id) => this.sessionsRepository.getRvSession(id);
   listRvSessions: AppRepository["listRvSessions"] = (workspaceId) => this.sessionsRepository.listRvSessions(workspaceId);
   listArchivedRvSessions: AppRepository["listArchivedRvSessions"] = async () => {
     const trainingSessionIds = new Set([...(await this.trainingRepository.listTrainingRuns()), ...(await this.trainingRepository.listArchivedTrainingRuns())].flatMap((run) => [...(run.sessionIds ?? []), ...(run.activeTargetCheckpoint?.sessionId ? [run.activeTargetCheckpoint.sessionId] : [])]));
@@ -570,27 +481,6 @@ export class SqliteRepository implements AppRepository {
   listResearchAssignments: AppRepository["listResearchAssignments"] = (projectId) => this.researchRepository.listResearchAssignments(projectId);
   listBlindingMappings: AppRepository["listBlindingMappings"] = (projectId) => this.researchRepository.listBlindingMappings(projectId);
   updateResearchAssignment: AppRepository["updateResearchAssignment"] = (id, sessionId, status) => this.researchRepository.updateResearchAssignment(id, sessionId, status);
-  async initializeResearchSession(assignmentId: string, input: Parameters<AppRepository["initializeResearchSession"]>[1]): Promise<Awaited<ReturnType<AppRepository["initializeResearchSession"]>>> {
-    const timestamp = nowIso();
-    await this.executeTransaction([
-      {
-        query: `INSERT INTO rv_sessions
-          (id, workspace_id, profile_id, session_code, state, run_type, pre_reveal_transcript, post_reveal_transcript, target_id, target_id_snapshot, research_project_id, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, 'Draft', $5, '', '', $6, $6, $7, $8, $8)`,
-        values: [input.id, input.workspaceId, input.profileId, input.sessionCode, input.runType, input.targetId ?? null, input.researchProjectId ?? null, timestamp],
-      },
-      {
-        query: "INSERT INTO session_events (id, session_id, sequence_number, event_type, role, content, metadata_json, created_at) SELECT $1, $2, COALESCE(MAX(sequence_number), 0) + 1, $3, $4, $5, $6, $7 FROM session_events WHERE session_id = $2",
-        values: [createId("event"), input.id, "SESSION_CREATED", "controller", null, JSON.stringify({ sessionCode: input.sessionCode, researchInitialization: true }), timestamp],
-      },
-      { query: "UPDATE research_assignments SET session_id = $1, status = $2 WHERE id = $3", values: [input.id, "Initializing", assignmentId] },
-    ]);
-    return {
-      id: input.id, workspaceId: input.workspaceId, profileId: input.profileId, sessionCode: input.sessionCode, state: "Draft", runType: input.runType,
-      preRevealTranscript: "", postRevealTranscript: "", ...(input.targetId ? { targetId: input.targetId } : {}),
-      ...(input.researchProjectId ? { researchProjectId: input.researchProjectId } : {}), createdAt: timestamp, updatedAt: timestamp,
-    };
-  }
   saveResearchResults: AppRepository["saveResearchResults"] = (projectId, results, hash) => this.researchRepository.saveResearchResults(projectId, results, hash);
   getResearchResults: AppRepository["getResearchResults"] = (projectId) => this.researchRepository.getResearchResults(projectId);
 

@@ -5,20 +5,18 @@ import { describe, expect, it } from "vitest";
 import appSource from "./App.tsx?raw";
 import profileControls from "./features/profiles/ProfileViewerControls.tsx?raw";
 import profileDialogs from "./features/profiles/ProfileDialogs.tsx?raw";
-import transportSource from "../src-tauri/src/providers/transport.rs?raw";
 import openRouterAdapter from "../src-tauri/src/providers/adapters.rs?raw";
 
 const monitorCss = readFileSync(new URL("./styles/monitor.css", import.meta.url), "utf8");
 
-describe("release polish: no OpenRouter attribution and Profile prompt containment", () => {
-  it("omits application attribution while retaining provider authentication", () => {
-    expect(openRouterAdapter).not.toContain("OPENROUTER_APP_REFERER");
-    expect(openRouterAdapter).not.toContain("OPENROUTER_APP_TITLE");
-    for (const header of ["HTTP-Referer", "Referer", "X-Title", "X-OpenRouter-Title"]) {
-      expect(openRouterAdapter).not.toContain(`.header("${header}"`);
-    }
-    expect(transportSource).not.toContain(".user_agent(");
-    expect(openRouterAdapter).toContain("_ => builder.bearer_auth(secret)");
+describe("release polish: OpenRouter attribution and Profile prompt containment", () => {
+  it("attributes OpenRouter traffic to the public AI RV Harness project page without changing the title", () => {
+    expect(openRouterAdapter).toContain(
+      'OPENROUTER_APP_REFERER: &str = "https://lukeskytorep-bot.github.io/AI-RV-Harness/"',
+    );
+    expect(openRouterAdapter).toContain('OPENROUTER_APP_TITLE: &str = "AI RV Harness"');
+    expect(openRouterAdapter).toContain('.header("HTTP-Referer", OPENROUTER_APP_REFERER)');
+    expect(openRouterAdapter).toContain('.header("X-OpenRouter-Title", OPENROUTER_APP_TITLE)');
   });
 
   it("uses the same ProfileViewerControls in First Run and Profile editing", () => {

@@ -1,12 +1,11 @@
-import { FileCheck2, FlaskConical, LockKeyhole, ShieldCheck, type LucideIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { FileCheck2, LockKeyhole, ShieldCheck, type LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 
 import type { getCopy } from "../../i18n";
 import type { AppRepository } from "../../storage/repository";
 import type { AppSettings, Profile, Workspace } from "../../types";
-import { ModuleHelpButton, ModuleHelpPanel } from "../../components/ModuleHelp";
 import { PageHeader } from "../../components/PageHeader";
-import { ResearchBuilder, ResearchHelpContent } from "./ResearchBuilder";
+import { ResearchBuilder } from "./ResearchBuilder";
 
 type Copy = ReturnType<typeof getCopy>;
 
@@ -19,12 +18,9 @@ export interface ResearchScreenProps {
 }
 
 export function ResearchScreen({ copy, settings, profiles, workspaces, repository }: ResearchScreenProps) {
-  const [helpOpen, setHelpOpen] = useState(false);
-  const pl = settings.interfaceLanguage === "pl";
   return (
     <div className="page">
-      <PageHeader title={copy.research} subtitle={copy.researchLead} action={<ModuleHelpButton label={pl ? "Jak działa Research?" : "How does Research work?"} icon={FlaskConical} expanded={helpOpen} controlsId="research-help-panel" onToggle={() => setHelpOpen((current) => !current)} />} />
-      {helpOpen && <ModuleHelpPanel id="research-help-panel" title={pl ? "Jak działa Research?" : "How does Research work?"} icon={FlaskConical}><ResearchHelpContent language={settings.interfaceLanguage} /></ModuleHelpPanel>}
+      <PageHeader title={copy.research} subtitle={copy.researchLead} />
       <div className="research-guardrails">
         <ResearchGuardrail icon={LockKeyhole} title={copy.blinded} value="Allowlist packets" />
         <ResearchGuardrail icon={ShieldCheck} title={copy.locked} value="Config → immutable" />

@@ -37,7 +37,7 @@ describe("UX-DATA-8 controlled purge boundary", () => {
   it("exposes explicit preview and domain purge use cases from AppRepository", () => {
     for (const method of [
       "previewPermanentDelete", "purgeProfile", "purgeWorkspace", "purgeChatThread", "purgeRvSession",
-      "purgeTrainingRun", "purgeResearchProject", "purgeTarget", "purgeTelepathicSeries",
+      "purgeTrainingRun", "purgeResearchProject", "purgeTarget",
     ]) {
       expect(contract).toContain(method);
       expect(browserFacade).toContain(`${method}: AppRepository[\"${method}\"]`);
@@ -60,7 +60,7 @@ describe("UX-DATA-8 controlled purge boundary", () => {
   });
 
   it("delegates destructive deletion to one native controlled-purge command", () => {
-    expect(sqlitePurge).toContain("executeControlledPurgeNative(kind, id,expectedArchiveRevision)");
+    expect(sqlitePurge).toContain("executeControlledPurgeNative(kind, id)");
     expect(sqlitePurge).not.toContain("controlled_purge_context");
     const sessionDelete = nativeDatabase.indexOf("DELETE FROM rv_sessions WHERE profile_id = $1");
     const profileDelete = nativeDatabase.indexOf("DELETE FROM profiles WHERE id = $1 AND archived_at IS NOT NULL");

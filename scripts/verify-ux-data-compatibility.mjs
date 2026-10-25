@@ -26,9 +26,9 @@ const migrationFiles = readdirSync(migrationDir)
   .filter((name) => /^\d{3}_.+\.sql$/.test(name))
   .sort();
 const migrationNumbers = migrationFiles.map((name) => Number(name.slice(0, 3)));
-const expectedNumbers = Array.from({ length: 34 }, (_, index) => index + 1);
+const expectedNumbers = Array.from({ length: 27 }, (_, index) => index + 1);
 if (JSON.stringify(migrationNumbers) !== JSON.stringify(expectedNumbers)) {
-  failures.push(`SQLite migrations must be contiguous 001-034; found: ${migrationFiles.join(", ")}`);
+  failures.push(`SQLite migrations must be contiguous 001-027; found: ${migrationFiles.join(", ")}`);
 }
 
 const tauriLib = read("src-tauri/src/lib.rs");
@@ -116,13 +116,6 @@ for (const marker of ["field_guide_settings", "field_guide_versions", "field_gui
 const migration025 = read("src-tauri/migrations/025_provider_continuation_state.sql");
 const migration026 = read("src-tauri/migrations/026_typed_workspaces.sql");
 const migration027 = read("src-tauri/migrations/027_factory_training_classification_upgrade.sql");
-const migration028 = read("src-tauri/migrations/028_telepathic_exchange_series.sql");
-const migration029 = read("src-tauri/migrations/029_telepathic_series_run_lease.sql");
-const migration030 = read("src-tauri/migrations/030_chat_message_attachment_metadata.sql");
-const migration031 = read("src-tauri/migrations/031_post_reveal_review_lease.sql");
-const migration032 = read("src-tauri/migrations/032_openrouter_sampling_profile_settings.sql");
-const migration033 = read("src-tauri/migrations/033_custom_temperature_mode.sql");
-const migration034 = read("src-tauri/migrations/034_custom_reasoning_mode.sql");
 for (const marker of ["chat_message_provider_state", "session_event_provider_state", "ON DELETE CASCADE", "payload_sha256", "payload_size_bytes"]) {
   if (!migration025.includes(marker)) failures.push(`provider-continuation persistence migration missing marker: ${marker}`);
 }
@@ -131,24 +124,6 @@ for (const marker of ["ADD COLUMN kind", "legacy_combined", "conversation", "rv"
 }
 for (const marker of ["prevent_training_target_update", "prevent_used_target_update", "factory_training_01_01", "factory_training_01_10", "$.categoryOrder", "$.subtype"]) {
   if (!migration027.includes(marker)) failures.push(`factory-target upgrade migration missing marker: ${marker}`);
-}
-for (const marker of ["telepathic_series", "telepathic_participants", "telepathic_rounds", "telepathic_targets", "telepathic_blind_submissions", "telepathic_reflections", "telepathic_provider_calls", "telepathic_target_content_immutable"]) {
-  if (!migration028.includes(marker)) failures.push(`telepathic-exchange migration missing marker: ${marker}`);
-}
-for (const marker of ["run_lease_owner", "run_lease_expires_at", "run_lease_version", "idx_telepathic_series_run_lease"]) {
-  if (!migration029.includes(marker)) failures.push(`telepathic-series lease migration missing marker: ${marker}`);
-}
-for (const marker of ["ALTER TABLE chat_messages ADD COLUMN metadata_json", "json_valid(metadata_json)"]) {
-  if (!migration030.includes(marker)) failures.push(`chat-message metadata migration missing marker: ${marker}`);
-}
-for (const marker of ["post_reveal_review_lease_owner", "post_reveal_review_lease_expires_at", "post_reveal_review_lease_version"]) {
-  if (!migration031.includes(marker)) failures.push(`post-Reveal review lease migration missing marker: ${marker}`);
-}
-for (const marker of ["default_viewer_sampling_enabled", "default_viewer_top_p", "default_viewer_top_k", "default_viewer_seed"]) {
-  if (!migration032.includes(marker)) failures.push(`OpenRouter sampling profile migration missing marker: ${marker}`);
-}
-for (const marker of ["default_viewer_custom_temperature_mode", "provider_default", "manual"]) {
-  if (!migration033.includes(marker)) failures.push(`Custom temperature mode migration missing marker: ${marker}`);
 }
 
 const nativeCompatibility = join(root, "src-tauri", "src", "ux_data_compatibility.rs");
@@ -159,18 +134,11 @@ if (!nativeCompatibilitySource.includes("exact_green_v23_to_v24_preserves_existi
 if (!nativeCompatibilitySource.includes("exact_green_v24_to_v25_adds_provider_state_storage_without_mutating_existing_data")) failures.push("native compatibility gate must test exact green v24 -> v25 upgrade");
 if (!nativeCompatibilitySource.includes("exact_green_v25_to_v26_types_existing_workspaces_without_moving_history")) failures.push("native compatibility gate must test exact green v25 -> v26 typed Workspace upgrade");
 if (!nativeCompatibilitySource.includes("exact_green_v26_to_v27_repairs_factory_classification_without_unlocking_history")) failures.push("native compatibility gate must test exact green v26 -> v27 factory-target metadata upgrade");
-if (!nativeCompatibilitySource.includes("exact_green_v27_to_v28_adds_telepathic_exchange_storage_without_moving_existing_data")) failures.push("native compatibility gate must test exact green v27 -> v28 telepathic exchange upgrade");
-if (!nativeCompatibilitySource.includes("exact_green_v28_to_v29_adds_cross_instance_telepathic_run_lease_without_moving_series_data")) failures.push("native compatibility gate must test exact green v28 -> v29 telepathic run-lease upgrade");
-if (!nativeCompatibilitySource.includes("exact_green_v31_to_v32_adds_openrouter_sampling_profile_defaults_without_mutating_existing_profile_values")) failures.push("native compatibility gate must test exact green v31 -> v32 OpenRouter sampling profile upgrade");
-if (!nativeCompatibilitySource.includes("exact_green_v32_to_v33_adds_custom_temperature_mode_without_mutating_legacy_temperature")) failures.push("native compatibility gate must test exact green v32 -> v33 Custom temperature mode upgrade");
 if (nativeCompatibilitySource.includes("legacy_fixture_manual_chain_through_024")) failures.push("native compatibility gate must not reintroduce a public-v0.7.12 -> v0.7.13 migration chain");
-
-for (const marker of ["default_viewer_custom_reasoning_mode", "default", "on", "off"]) { if (!migration034.includes(marker)) failures.push(`custom reasoning migration missing marker: ${marker}`); }
-if (!nativeCompatibilitySource.includes("exact_green_v33_to_v34_adds_custom_reasoning_mode_without_mutating_existing_reasoning")) failures.push("native compatibility gate must test exact green v33 -> v34 Custom reasoning mode upgrade");
 
 if (failures.length) {
   console.error(["UX-DATA compatibility verification failed:", ...failures.map((failure) => `- ${failure}`)].join("\n"));
   process.exit(1);
 }
 
-console.log(`UX-DATA compatibility verification passed: ${migrationFiles.length} migrations, flat Conversations, shared dialogs/model routes, unified lifecycle, Viewer Notes provenance, Field Guide schema 024, provider continuation schema 025, typed Workspace schema 026, factory-target upgrade schema 027, telepathic exchange schema 028, cross-instance lease schema 029, Conversation attachment metadata schema 030, post-Reveal review lease schema 031, OpenRouter sampling profile schema 032, Custom temperature mode schema 033, Custom reasoning mode schema 034, and native green-v23/v24/v25/v26/v27/v28/v31/v32/v33 upgrade gates are present.`);
+console.log(`UX-DATA compatibility verification passed: ${migrationFiles.length} migrations, flat Conversations, shared dialogs/model routes, unified lifecycle, Viewer Notes provenance, Field Guide schema 024, provider continuation schema 025, typed Workspace schema 026, factory-target upgrade schema 027, and native green-v23/v24/v25/v26 upgrade gates are present.`);

@@ -1,12 +1,9 @@
 # Engineering Design and Integrity Safeguards
 
-> **Documentation scope:** `ai-rv-2` development source through Training Continuity T5; reviewed 16 October 2026 against commit `9c92bdbb94d1125406e0094779102458cdeee87c`. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
-> **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
-
 > **Project:** AI RV Harness  
 > **Document type:** Implemented engineering decisions and integrity safeguards  
 > **Implementation status:** Implemented  
-> **Current reference:** accepted v0.7.14 development source; documented public baseline v0.7.13
+> **Current reference:** public AI RV Harness v0.7.13 Windows/Linux release
 > **Repository:** [lukeskytorep-bot/AI-RV-Harness](https://github.com/lukeskytorep-bot/AI-RV-Harness)  
 > **Scope:** Foundational safeguards through v0.7.12 plus explicitly documented v0.7.13 modularization, UX-DATA lifecycle, Viewer Learning, frozen Training planning, provider continuation, and typed Workspace safeguards
 
@@ -36,7 +33,7 @@ The implementation follows six general principles:
 3. **Make evidence boundaries stateful.** Blind, sealed, revealed, judged, and unblinded are different persistent states, not visual labels.
 4. **Make completed evidence immutable.** Hashes and database constraints protect records after their evidence boundary closes.
 5. **Normalize providers at one boundary.** Vendor-specific response formats are interpreted centrally before application controllers use them.
-6. **Fail closed when mandatory integrity is uncertain.** Incomplete essential evidence, changed research conditions, missing required capabilities or invalid mandatory state stop progression rather than being treated as success. Optional Training learning has an explicit preserve-and-continue policy (Decisions 22 and 26); rejecting a proposal is not a reason to stop the curriculum.
+6. **Fail closed when integrity is uncertain.** An incomplete response, changed research condition, missing capability, or invalid state stops progression rather than being treated as success.
 
 ## Decision 1 — Blindness is enforced by data flow and persistent state
 
@@ -371,8 +368,8 @@ Reasoning remains controlled through the selected model route's native supported
 
 Monitor output allowance is:
 
-- first live Monitor allowance: 16,384 output tokens;
-- live Monitor recovery allowance: 32,768 output tokens;
+- first attempt: up to 4,096 output tokens;
+- controlled retry: up to 8,192 output tokens;
 - always capped by the selected route's reported maximum.
 
 An incomplete Monitor response is eligible for controlled recovery rather than being treated as an intervention.
@@ -389,7 +386,11 @@ Blindly retrying every failure can duplicate paid calls, repeat a Monitor interv
 
 ### Decision
 
-Transport failures use the current shared executor and `retry.ts`: standard statuses 408, 425, 429, 500, 502, 503, 504, 524 and 529 plus supported transient typed errors; bounded single recovery for body/decode/invalid provider JSON/empty response; no retry for semanticOutputStarted, cancellation, configuration and permanent failures. Reasoning-only/length output recovery is separate from transport retry. See [current retry policy](PROVIDER_RETRY_ARCHITECTURE_FINAL_EN.md) for classification order and configured allowances.
+Provider failures are classified into three categories:
+
+1. **Standard retry:** selected temporary HTTP failures such as 425, 429, 502, 503, and 504, using the configured retry allowance.
+2. **Single recovery:** incomplete body, invalid JSON, empty response, reasoning without final content, timeout, connection reset, unexpected EOF, overload, and similar transient failures—at most one controlled recovery when retries are enabled.
+3. **Never retry:** authentication, authorization, invalid model, route mismatch, context limit, safety/content block, user stop, cost stop, and other permanent or policy-related failures.
 
 Viewer and Monitor calls recover independently. If the Monitor completed an intervention and the subsequent Viewer call failed, the Harness retries the missing Viewer call rather than asking the Monitor to generate a second intervention.
 
@@ -409,14 +410,15 @@ The Harness reconstructs a session from persistent events. Completed provider re
 
 During replay, writes that would duplicate session state, transcript entries, seals, Reveal records, Monitor interventions, or target usage are suppressed. When live continuation begins, a distinct `SESSION_RESUMED` event is recorded.
 
-Blind replay and post-Reveal review recovery have distinct boundaries. Post-Reveal resumes the first missing stage from frozen Reveal under a lease, not the blind controller. Safe replay preserves the durable attempt budget. Failures requiring a configuration or safety decision cannot be silently retried, including:
+Only qualifying provider interruptions before the pre-Reveal seal are eligible. Continuation is not offered for:
 
 - user stop;
+- cost-limit stop;
 - authentication or credential failure;
 - safety or content blocking;
 - context-limit failure;
 - invalid model or route mismatch;
-- a blind-controller Resume on a session already sealed or revealed (post-Reveal uses its separate stage recovery).
+- a session already sealed or revealed.
 
 ### Invariant
 
@@ -434,7 +436,7 @@ Automatically restarting an incomplete Research assignment could create undisclo
 
 ### Decision
 
-If a Research assignment already has a linked but incomplete paid session, automatic batch execution stops and marks the study Interrupted. Recovery requires an explicit user action. Supported same-session Resume retains the linked Session, locked policy, accepted events and durable attempt ledger. A new-attempt retry is a separate decision and cannot silently replace partial paid evidence.
+If a Research assignment already has a linked but incomplete paid session, automatic batch execution stops and marks the study Interrupted. Recovery requires an explicit user action. The partial session is preserved and annotated before the assignment can be approved for retry.
 
 ### Invariant
 
@@ -478,19 +480,19 @@ Detailed provider diagnostics require explicit activation. Stored secrets are no
 
 > Diagnostic value should be obtained with the least sensitive retained data, and full payload inspection should require an explicit user choice.
 
-## Decision 15 — Cost reporting does not impose a removed session spend blocker
+## Decision 15 — Cost limits fail closed when a safe upper bound is unavailable
 
 ### Problem
 
-Provider usage and pricing estimates are different from a guaranteed enforced spend cap. Ambiguous dispatch may incur a charge even without a saved result.
+A “hard cost limit” is misleading if the application lacks current pricing, cannot bound maximum output, or cannot estimate image-token billing.
 
 ### Decision
 
-The accepted branch removed SessionCostGuard / CostAuthorization and the hard per-session spend blocker. Usage and preflight estimates remain diagnostics. Do not restore that blocker from earlier reports; preserve uncertain-dispatch protection and disclose possibly billed attempts.
+When a hard session cost limit is enabled, the Harness requires cached finite input/output pricing and a known maximum output allowance. It pre-authorizes the next request against a conservative upper bound. If it cannot safely bound the request—for example because image billing cannot be predicted—it stops rather than claiming the limit is enforced.
 
 ### Invariant
 
-> Cost estimates and billing uncertainty remain explicit; no removed hard per-session limit is presented as an active runtime guarantee.
+> A hard limit is enforced as a conservative upper bound or the request is refused; it is never presented as guaranteed when the necessary pricing data is missing.
 
 ## Decision 16 — Used evidence targets and supplementary clarifications are protected
 
@@ -602,7 +604,7 @@ The Harness favors explicit interruption over silent degradation when continuing
 - a changed provider capability does not silently alter a locked Research condition;
 - missing Judge vision support blocks image-target judging;
 - invalid Judge JSON is not interpreted heuristically;
-- cost reporting does not masquerade as an active hard per-session spend limit;
+- a hard cost limit is not claimed when it cannot be bounded;
 - a partial paid Research session is not silently rerun;
 - Reveal cannot proceed before evidence sealing.
 
@@ -719,7 +721,7 @@ Used user targets preserve their historical identity through `target_id_snapshot
 
 ### Compatibility gate
 
-UX-DATA-9 and the later Viewer Learning, provider-continuation, typed-Workspace, and factory Training extensions turn the accepted UX/data invariants into permanent build checks. `npm run verify:ux-data` verifies the contiguous migration registry through 031, flat Conversation product boundary, shared dialog/model-route boundaries, unified lifecycle surface, Viewer Notes/target preservation markers, Field Guide schema markers, provider-continuation tables, Workspace-kind markers, and factory-target classification markers. Native Rust tests preserve the accepted exact-green v23 → v24 Viewer Learning upgrade, exact-green v24 → v25 provider-state transition, exact-green v25 → v26 typed-Workspace transition, and exact-green v26 → v27 factory Training classification transition without moving historical records. Older public/legacy databases are handled by the compatibility epoch gate rather than silently entering this controlled upgrade path.
+UX-DATA-9 and the later Viewer Learning, provider-continuation, typed-Workspace, and factory Training extensions turn the accepted UX/data invariants into permanent build checks. `npm run verify:ux-data` verifies the contiguous migration registry through 027, flat Conversation product boundary, shared dialog/model-route boundaries, unified lifecycle surface, Viewer Notes/target preservation markers, Field Guide schema markers, provider-continuation tables, Workspace-kind markers, and factory-target classification markers. Native Rust tests preserve the accepted exact-green v23 → v24 Viewer Learning upgrade, exact-green v24 → v25 provider-state transition, exact-green v25 → v26 typed-Workspace transition, and exact-green v26 → v27 factory Training classification transition without moving historical records. Older public/legacy databases are handled by the compatibility epoch gate rather than silently entering this controlled upgrade path.
 
 ## Decision 21 — Training plans and Workspace purposes are frozen explicitly
 
@@ -738,39 +740,3 @@ Training and Research resolve a compatible RV or `legacy_combined` Workspace int
 ### Invariant
 
 > Resume replays the exact persisted Training plan, and RV workflows never derive their technical owner from the active Conversation Workspace.
-
-## Decision 22 — Learning failure is distinct from interrupted execution
-
-Classic Training optional memory has a durable two-dispatch limit per kind/session/packet, shared across transport retry and all repairs. A known exhausted proposal settles failed_preserved and retains the exact prior version/absence; it is not model NO_CHANGE and does not stop later targets. Audit persistence must succeed. Stop, ownership/DB errors and identity/hash corruption remain interruptions. Under Classic Training's explicit preserve_and_continue policy, an unknown optional-learning result preserves memory with an audit and no new dispatch or operator dialog; it is never represented as a successful transport. Other callers retain their own uncertainty contracts. Notes receives the exact Field Guide after update/preservation, and a later Notes failure cannot undo a successful Guide.
-
-## Decision 23 — Transport completion, acceptance and commit are separate
-
-Complete rejected final-channel output can have response_finished evidence. Preserve all physical outcomes; a later completed attempt does not resolve an earlier unknown one. The shared Resume resolver can permit explicit essential-step recovery while retaining history, never reopening settled learning. Preserve a bounded final candidate before normalization and keep private reasoning separate; tags embedded in JSON strings remain literal data.
-
-## Decision 24 — Renew ownership outside a single WebView timer
-
-Rust renews classic owned workflows every 10 seconds with TTL 45 seconds and exact profile/owner/version/window binding. Ownership loss, DB failure and Destroyed cancel bound transport and fence later writes. CloseRequested is not destruction. Release and failed start clean up exact ownership. This is not a mechanism to run while the whole process is asleep, nor a replacement for independent telepathic/review leases.
-
-See [current workflows](CURRENT_WORKFLOWS_v0.7.14_EN.md) and the English [Developer Guide](../development/README.md). Earlier version-specific examples/evidence in this decision record retain their historical applicability.
-
-## Decision 25 — Windows runtime ownership and bounded IPC observation
-
-**Recorded 17 October 2026; local runtime repair implemented, successful user scenario reported.** Training sometimes exited during Reveal or window interaction. The old EXE reported APPCRASH `0xC000001D` at RVA `0x99929`; inspection found an explicit UD2 reference-count trap strongly matching Tauri Context cloning. The affected set was tauri 2.11.5 / tauri-runtime-wry 2.11.4 / tao 0.35.3 / wry 0.55.1. Without a matched dump/PDB, the full corruption sequence remains unproven. Stop was initially suspected by timing; Edward later confirmed Stop works without closing the repaired application.
-
-The local runtime patch keeps the strong event-loop target on its owner thread; Context/dispatchers carry private atomic weak tokens, check ThreadId before upgrade and do not move final destruction to a worker. Monitor/display access uses the appropriate owner-thread path. Preserve native write/dispatch fencing, heartbeat and source/provenance verification. Do not remove UD2 guards or substitute a mechanical Rc-to-Arc change.
-
-Share ownership UI watchers, avoid overlapping requests, poll at 2 seconds visible / 10 seconds hidden, and create loss channels only for Acquire. Extra IPC can add overhead and increase exposure to the affected ownership bug; there is no established universal IPC crash threshold. Reduced polling alone is not a memory-safety fix. The user reported Training completing in approximately 20 minutes with improved responsiveness; no controlled benchmark isolated the effect of each repair.
-
-**Upstream replacement rule:** when a newer Tauri release is considered, verify the released fix and actual resolved runtime/Tao/Wry code against clone/drop, owner-thread access and teardown requirements. A newer version number or an open PR is insufficient. Replace the local patch in a separate reviewed change only when equivalent protection is established; update Cargo.lock, patch-specific gates and documentation together, retain regression coverage and IPC improvements, and test the actual standalone Windows EXE through sustained IPC, Reveal, Stop/Resume and minimize/restore. Record the superseding version and evidence here. Keep matching EXE/PDB provenance; old RVAs do not describe a new binary.
-
-See [Windows runtime ownership repair](../development/WINDOWS_RUNTIME_OWNERSHIP_REPAIR_EN.md) for implementation, dated upstream references and acceptance procedure.
-
-## Decision 26 — Restore unattended Training without accepting invalid learning
-
-Later hardening introduced optional-learning resolution gates and duplicate warnings which could block unattended Training. The correction selectively restored earlier working progression; it did not roll back the whole application, accepted larger output budgets, evidence boundaries or native storage protection.
-
-Classic Training explicitly selects `preserve_and_continue` for optional post-Reveal learning. After bounded recovery, an invalid JSON/schema/capacity proposal preserves the exact previous learning version or absence, records `failed_preserved`, and continues to eligible remaining stages and the next target. It is not model `NO_CHANGE`. An unknown optional-learning result is preserved and audited without another paid dispatch or a user confirmation; it is not relabelled as a successfully completed transport. An unavailable optional Viewer Review skips dependent learning while retaining the Session and continuing. Stop, actual loss of ownership, database/audit persistence failure, identity/hash corruption and mandatory evidence failures still interrupt. Blind Viewer, Judge, Research and non-Training callers retain their own contracts.
-
-Detailed proposal, capacity and preservation diagnostics remain in existing AI Center / Field Guide / Viewer Notes histories. Do not reintroduce repetitive learning-warning lists or failure counters beneath Training results. A model may fail to count tokens or shorten a proposal correctly; `finish_reason=stop` proves neither schema nor capacity validity. Keep validation, bounded attempts and preservation instead of turning that optional failure into a manual gate. Do not automatically spill rejected Guide content into Notes or increase document capacities. Prompt improvements for shorter output are a separate future task.
-
-Before future hardening, regress invalid JSON, capacity overflow, unavailable Review and uncertain optional dispatch: preserve old data, retain audit, avoid blind paid retries, require no user dialog, and reach the next target. Test Stop and mandatory persistence/ownership failure separately. See [automatic Training learning](../development/TRAINING_AUTOMATIC_LEARNING.md).

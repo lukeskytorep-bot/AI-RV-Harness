@@ -13,7 +13,7 @@ const model: ProviderModel = {
   route: "openrouter:reasoner",
   capabilities: {
     contextTokens: 100_000,
-    maxOutputTokens: 40_000,
+    maxOutputTokens: 32_000,
     inputModalities: ["text"],
     outputModalities: ["text"],
     supportsVision: false,
@@ -31,7 +31,7 @@ const model: ProviderModel = {
 };
 
 describe("analytical output recovery", () => {
-  it("uses 32768 first and one recovery clamped to the real 40000 output ceiling", async () => {
+  it("uses 8192 first and 16384 once after a reasoning-only length failure", async () => {
     const budgets: number[] = [];
     const call = vi.fn(async (settings) => {
       budgets.push(settings.effective.maxOutputTokens ?? 0);
@@ -39,7 +39,7 @@ describe("analytical output recovery", () => {
       return { content: "final answer", usage: {} };
     });
     const result = await callWithAnalyticalOutputRecovery({ model, messages: [{ role: "user", content: "Evaluate" }], operationKind: "judge", call });
-    expect(budgets).toEqual([32768, 40000]);
+    expect(budgets).toEqual([8192, 16384]);
     expect(result.attempt).toBe(1);
     expect(call).toHaveBeenCalledTimes(2);
   });
@@ -67,9 +67,9 @@ describe("analytical output recovery", () => {
       recoveryReasoningMaxTokensSupported: true,
       call,
     });
-    expect(seen[0]).toMatchObject({ effort: "high", reasoningMax: undefined, output: 32768 });
+    expect(seen[0]).toMatchObject({ effort: "high", reasoningMax: undefined, output: 8192 });
     expect(seen[0].prompt).toBe("Frozen packet");
-    expect(seen[1]).toMatchObject({ effort: undefined, reasoningMax: 10_000, output: 40000 });
+    expect(seen[1]).toMatchObject({ effort: undefined, reasoningMax: 10_000, output: 16384 });
     expect(seen[1].prompt).toContain("Frozen packet");
     expect(seen[1].prompt).toContain("RECOVERY ONLY");
   });
@@ -130,7 +130,7 @@ describe("analytical output recovery", () => {
     expect(physical).toHaveBeenCalledTimes(3);
   });
 
-  it("uses explicit capacity + 32768 first and capacity + 49152 once for learning-object output recovery", async () => {
+  it("uses capacity + 8192 first and capacity + 16384 once for learning-object output recovery", async () => {
     const budgets: number[] = [];
     const call = vi.fn(async (settings) => {
       budgets.push(settings.effective.maxOutputTokens ?? 0);
@@ -142,10 +142,9 @@ describe("analytical output recovery", () => {
       messages: [{ role: "user", content: "Reflect" }],
       operationKind: "viewer_notes_reflection",
       learningObjectCapacityTokens: 1024,
-      budgetPolicy: "training_reveal",
       call,
     });
-    expect(budgets).toEqual([33792, 50176]);
+    expect(budgets).toEqual([9216, 17408]);
     expect(result.attempt).toBe(1);
   });
 
@@ -163,7 +162,7 @@ describe("analytical output recovery", () => {
       operationKind: "post_reveal_viewer",
       attempt: 1,
       allowOpenRouterEndpointRecoveryEscalation: true,
-    })).toBe(49152);
+    })).toBe(16384);
 
     const learningModelLevel10240 = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 10240 } };
     expect(analyticalOutputBudget({
@@ -171,26 +170,25 @@ describe("analytical output recovery", () => {
       messages: [{ role: "user", content: "Update" }],
       operationKind: "field_guide_update",
       learningObjectCapacityTokens: 2048,
-      budgetPolicy: "training_reveal",
       attempt: 0,
-    })).toBe(34816);
+    })).toBe(10240);
     expect(analyticalOutputBudget({
       model: learningModelLevel10240,
       messages: [{ role: "user", content: "Update" }],
       operationKind: "field_guide_update",
       learningObjectCapacityTokens: 2048,
-      budgetPolicy: "training_reveal",
       attempt: 1,
       allowOpenRouterEndpointRecoveryEscalation: true,
-    })).toBe(51200);
+    })).toBe(18432);
   });
 
-  it("keeps ordinary analytical OpenRouter recovery clamped without explicit escalation", () => {
+  it("keeps ordinary OpenRouter recovery clamped unless the Stage 1 endpoint escalation is explicitly enabled", () => {
     const limitedModel = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 8192 } };
     expect(analyticalOutputBudget({
       model: limitedModel,
       messages: [{ role: "user", content: "Existing capacity retry" }],
-      operationKind: "post_reveal_viewer",
+      operationKind: "field_guide_update",
+      learningObjectCapacityTokens: 2048,
       attempt: 1,
     })).toBe(8192);
   });
@@ -210,17 +208,16 @@ describe("analytical output recovery", () => {
       messages: [{ role: "user", content: "Reflect" }],
       operationKind: "viewer_notes_reflection",
       learningObjectCapacityTokens: 2048,
-      budgetPolicy: "training_reveal",
       attempt: 1,
     })).toBe(10240);
   });
 
-  it("routes Viewer Review recovery 49152 past model-level 8192 to a PROVEN_FIT OpenRouter endpoint", async () => {
+  it("routes Viewer Review recovery 16384 past model-level 8192 to a PROVEN_FIT OpenRouter endpoint", async () => {
     const limitedModel = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 8192 } };
     const config: ProviderConfig = { id: "pc-review-routing", provider: "openrouter", label: "OR", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
     const endpointDiscovery = vi.fn(async () => ({ data: { endpoints: [
       { tag: "small-route", context_length: 65536, max_completion_tokens: 8192, supported_parameters: ["reasoning"] },
-      { tag: "large-route", context_length: 131072, max_completion_tokens: 49152, supported_parameters: ["reasoning"] },
+      { tag: "large-route", context_length: 131072, max_completion_tokens: 32768, supported_parameters: ["reasoning"] },
     ] } }));
     const dispatched: Array<{ output?: number; routing?: string[]; required?: number }> = [];
     let physical = 0;
@@ -249,19 +246,19 @@ describe("analytical output recovery", () => {
     });
     expect(result.attempt).toBe(1);
     expect(dispatched[0]).toMatchObject({ output: 8192, required: 8192 });
-    expect(dispatched[1]).toMatchObject({ output: 49152, required: 49152, routing: ["large-route"] });
+    expect(dispatched[1]).toMatchObject({ output: 16384, required: 16384, routing: ["large-route"] });
     // Endpoint metadata stay fresh-cached between the two analytical attempts.
     // Recovery reclassifies the cached snapshot for the larger budget; it must
     // not require a second discovery network call.
     expect(endpointDiscovery).toHaveBeenCalledTimes(1);
   });
 
-  it("routes explicit learning recovery C+49152 past the generic model ceiling", async () => {
+  it("routes learning-object recovery capacity+16384 past model-level capacity+8192", async () => {
     const learningModel = { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 10240 } };
     const config: ProviderConfig = { id: "pc-learning-routing", provider: "openrouter", label: "OR", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
     const endpointDiscovery = vi.fn(async () => ({ data: { endpoints: [
       { tag: "small-route", context_length: 65536, max_completion_tokens: 10240 },
-      { tag: "large-route", context_length: 131072, max_completion_tokens: 51200 },
+      { tag: "large-route", context_length: 131072, max_completion_tokens: 32768 },
     ] } }));
     const outputs: number[] = [];
     const routed: Array<string[] | undefined> = [];
@@ -271,7 +268,6 @@ describe("analytical output recovery", () => {
       messages: [{ role: "user", content: "Frozen Field Guide packet" }],
       operationKind: "field_guide_update",
       learningObjectCapacityTokens: 2048,
-      budgetPolicy: "training_reveal",
       allowOpenRouterEndpointRecoveryEscalation: true,
       call: (settings, attempt) => executeProviderChat({
         config,
@@ -290,7 +286,7 @@ describe("analytical output recovery", () => {
         },
       }),
     });
-    expect(outputs).toEqual([34816, 51200]);
+    expect(outputs).toEqual([10240, 18432]);
     expect(routed[1]).toEqual(["large-route"]);
   });
 
@@ -325,7 +321,7 @@ describe("analytical output recovery", () => {
     });
     expect(result.attempt).toBe(1);
     expect(physical).toBe(2);
-    expect(dispatchedBudgets).toEqual([8192, 49152]);
+    expect(dispatchedBudgets).toEqual([8192, 16384]);
     expect(endpointDiscovery).toHaveBeenCalledTimes(1);
   });
 
@@ -376,7 +372,6 @@ describe("analytical output recovery", () => {
       messages: [{ role: "user", content: "Reflect" }],
       operationKind: "viewer_notes_reflection",
       learningObjectCapacityTokens: 1024,
-      budgetPolicy: "training_reveal",
       call,
     })).rejects.toThrow(/incomplete assistant response/);
     expect(call).toHaveBeenCalledTimes(2);
@@ -387,65 +382,4 @@ describe("analytical output recovery", () => {
     expect(() => analyticalOutputBudget({ model: smallContext, messages: [{ role: "user", content: "x".repeat(1400) }], operationKind: "judge", attempt: 0 }))
       .toThrow(/available context/);
   });
-
-  it("classifies exhausted recovery budget as an output-limit failure", () => {
-    expect(isOutputLimitFailure(new Error("Provider exhausted the available analytical output budget; this route cannot increase beyond 4096 tokens."))).toBe(true);
-  });
-
-
-  it("uses 32k then 48k for Training Reveal analytical review", async () => {
-    const budgets: number[] = [];
-    const call = vi.fn(async (settings) => {
-      budgets.push(settings.effective.maxOutputTokens ?? 0);
-      if (budgets.length === 1) return { content: "", reasoningContent: "thinking", finishReason: "length", usage: {} };
-      return { content: "complete review", finishReason: "stop", usage: {} };
-    });
-    const result = await callWithAnalyticalOutputRecovery({
-      model: { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 32768 } },
-      messages: [{ role: "user", content: "Training Reveal review" }],
-      operationKind: "post_reveal_viewer",
-      budgetPolicy: "training_reveal",
-      call,
-    });
-    expect(budgets).toEqual([32768, 49152]);
-    expect(result.attempt).toBe(1);
-  });
-
-  it("uses capacity + 32k then capacity + 48k for Training learning updates", async () => {
-    const budgets: number[] = [];
-    const call = vi.fn(async (settings) => {
-      budgets.push(settings.effective.maxOutputTokens ?? 0);
-      if (budgets.length === 1) return { content: "", reasoningContent: "thinking", finishReason: "length", usage: {} };
-      return { content: '{"decision":"NO_CHANGE"}', finishReason: "stop", usage: {} };
-    });
-    await callWithAnalyticalOutputRecovery({
-      model: { ...model, capabilities: { ...model.capabilities, maxOutputTokens: 40000 } },
-      messages: [{ role: "user", content: "Training learning update" }],
-      operationKind: "field_guide_update",
-      learningObjectCapacityTokens: 2048,
-      budgetPolicy: "training_reveal",
-      call,
-    });
-    expect(budgets).toEqual([34816, 51200]);
-  });
-
-  it("keeps default analysis independent from explicit learning headroom", () => {
-    expect(analyticalOutputBudget({ model, messages: [{ role: "user", content: "Review" }], operationKind: "post_reveal_viewer", attempt: 0 })).toBe(32768);
-    expect(analyticalOutputBudget({ model, messages: [{ role: "user", content: "Notes" }], operationKind: "viewer_notes_reflection", learningObjectCapacityTokens: 2048,
-      budgetPolicy: "training_reveal", attempt: 0 })).toBe(34816);
-  });
-
-});
-
-it("S1 analytical recovery never starts a second callback after Stop", async () => {
-  const controller = new AbortController();
-  const call = vi.fn(async () => { controller.abort(); return { content: "partial", finishReason: "length", usage: {} }; });
-  await expect(callWithAnalyticalOutputRecovery({ model, messages: [], operationKind: "judge", signal: controller.signal, call })).rejects.toMatchObject({ name: "AbortError" });
-  expect(call).toHaveBeenCalledTimes(1);
-});
-
-it.each([0,1] as const)("T1 FIX: one permitted analytical iteration at slot %s preserves the original error object and evidence",async initialAttempt=>{
- const error=new ProviderCallError({code:"unknown",message:"provider returned reasoning without a final assistant response [finish-reason=stop]",phase:"validating_response",responseEvidence:{version:1,transportOutcome:"response_finished",boundary:"sse_done"}});
- const call=vi.fn(async()=>{throw error;});
- await expect(callWithAnalyticalOutputRecovery({model,messages:[{role:"user",content:"Evaluate"}],operationKind:"judge",initialAttempt,maximumAttempts:1,call})).rejects.toBe(error);expect(call).toHaveBeenCalledTimes(1);
 });

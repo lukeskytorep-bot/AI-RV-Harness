@@ -27,19 +27,17 @@ describe("CONVERSATION-COMPOSER-1 integration boundary", () => {
 
   it("does not change the existing send/newline/IME keyboard behavior", () => {
     const textarea = composerTextareaMarkup();
-    expect(chatPanel).toContain("Boolean(pendingRetry) || hasUnfinishedChatResponse(messages.at(-1))");
     expect(textarea).toContain("onChange={(event) => setInput(event.target.value)}");
     expect(textarea).not.toContain("onKeyDown");
     expect(textarea).not.toContain("onKeyPress");
     expect(chatPanel).toContain('onClick={() => void send()}');
   });
 
-  it("keeps durable response recovery in composer/attachment/send guards while allowing vertical manual resize", () => {
+  it("keeps disabled state, attachments and send actions unchanged while allowing vertical manual resize", () => {
     const textarea = composerTextareaMarkup();
-    expect(chatPanel).toContain("Boolean(pendingRetry) || hasUnfinishedChatResponse(messages.at(-1))");
-    expect(textarea).toContain("disabled={!viewerRouteReady || !selectedModel || sending || hasResponseToRecover}");
+    expect(textarea).toContain("disabled={!selectedModel || sending || Boolean(pendingRetry)}");
     expect(chatPanel).toContain("composer-attachment-button");
-    expect(chatPanel).toContain("disabled={!viewerRouteReady || !selectedModel || !input.trim() || sending || contextExceeded || hasResponseToRecover}");
+    expect(chatPanel).toContain("disabled={!selectedModel || !input.trim() || sending || contextExceeded || Boolean(pendingRetry)}");
     expect(composerCss).toContain("resize: vertical;");
   });
 

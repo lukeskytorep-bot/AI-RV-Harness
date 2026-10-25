@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import anthropicFixture from "../providers/continuation-fixtures/anthropic-thinking-blocks.json";
 import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
-import mistralFixture from "../providers/continuation-fixtures/mistral-assistant-content.json";
 import type { ProviderContinuationState } from "../providers/continuationContract";
 import { captureGoogleContinuationState } from "../providers/googleContinuation";
 import { captureOpenRouterContinuationState } from "../providers/openRouterContinuation";
@@ -361,44 +360,6 @@ describe("provider continuation session bridge", () => {
     expect(requiresAnthropicContinuationStopAfterContentMutation(anthropicRoute, "same", "same")).toBe(false);
     expect(requiresAnthropicContinuationStopAfterContentMutation(openRouterRoute, "raw", "sanitized")).toBe(false);
     expect(ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON).toContain("Anthropic continuation");
-  });
-
-  it("freezes, persists and rehydrates Mistral complete assistant content on the exact Session event", async () => {
-    const mistralConfig: ProviderConfig = { ...config, id: "mistral-pc", provider: "mistral", label: "Mistral", credentialId: "mistral-cred" };
-    const mistralModel: ProviderModel = { ...model, providerConfigId: mistralConfig.id, provider: "mistral", modelId: "mistral-large-latest", route: "mistral:mistral-large-latest" };
-    const route = captureSessionContinuationRoute(mistralConfig, mistralModel);
-    expect(route).toMatchObject({ transport: "mistral-native", stateFormat: "mistral-assistant-content" });
-    if (!route) throw new Error("Expected Mistral continuation route.");
-    const mistralSnapshot: SessionSnapshot = {
-      ...snapshot(), providerConfigId: mistralConfig.id, credentialId: mistralConfig.credentialId, provider: "mistral",
-      modelId: mistralModel.modelId, modelRoute: mistralModel.route, continuationRoute: route,
-    };
-    expect(validateFrozenSessionContinuationRoute(mistralSnapshot, mistralConfig, mistralModel)).toEqual(route);
-
-    let storedState: ProviderContinuationStateBinding | undefined;
-    const appendSessionEventWithProviderState = vi.fn(async (_sessionId: string, event: SessionEventInput, state: ProviderContinuationState) => {
-      storedState = { ownerId: "mistral-event", format: state.format, formatVersion: state.schemaVersion, transport: state.transport, replayFingerprint: state.replayFingerprint, state: structuredClone(state), payloadSha256: "a".repeat(64), payloadSizeBytes: JSON.stringify(state).length, createdAt: "now" };
-      return { ...event, id: "mistral-event", sessionId: "session-1", sequenceNumber: 1, createdAt: "now" } as SessionEventRecord;
-    });
-    const chunks = structuredClone(mistralFixture.continuationState.content);
-    const persisted = await persistSessionAssistantResponse({
-      repository: { appendSessionEvent: vi.fn(async () => undefined), appendSessionEventWithProviderState },
-      sessionId: "session-1",
-      event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: "final" },
-      response: { content: "final", reasoningContent: "reasoning", reasoningDetails: chunks, reasoningSource: "mistral_thinking", usage: {} },
-      providerConfig: mistralConfig, model: mistralModel, route,
-    });
-    expect(persisted.state?.transport).toBe("mistral-native");
-    expect(appendSessionEventWithProviderState).toHaveBeenCalledTimes(1);
-    if (!storedState) throw new Error("Expected persisted Mistral state.");
-    const event: SessionEventRecord = { id: "mistral-event", sessionId: "session-1", sequenceNumber: 1, createdAt: "now", eventType: "VIEWER_RESPONSE", role: "assistant", content: "final", metadata: { continuationState: { status: "stored" } } };
-    const hydrated = await hydrateSessionMessageContinuation({
-      repository: { getSessionEventProviderState: vi.fn(async () => storedState!) },
-      snapshot: mistralSnapshot, config: mistralConfig, model: mistralModel, event,
-      message: { role: "assistant", content: "final" },
-    });
-    expect(hydrated.continuationState?.transport).toBe("mistral-native");
-    expect(hydrated.continuationState && "content" in hydrated.continuationState ? hydrated.continuationState.content : undefined).toEqual(chunks);
   });
 
 });

@@ -1,5 +1,3 @@
-import { classifyProviderAttempt, parseProviderResponseEvidence, type ProviderAttemptOutcome, type ProviderResponseEvidence } from "./responseEvidence";
-import { assertAbortOwnership, providerAbortFromSignal } from "../application/abortOwnership";
 import { discoverOpenRouterModelEndpoints, providerChatAttempt } from "./native";
 import { normalizeProviderCallError, ProviderCallError } from "./providerError";
 import {
@@ -28,7 +26,6 @@ export interface ProviderExecutionReport {
   elapsedMs: number;
   recoveredFrom?: string;
   ambiguousBillingAttempts: number;
-  attemptOutcomes?: ProviderAttemptOutcome[];
 }
 
 export interface ProviderExecutionResult<T> {
@@ -58,7 +55,6 @@ export type ProviderChatAttempt = (request: {
   signal?: AbortSignal;
   providerRouting?: OpenRouterProviderRouting;
   onStreamEvent?: (event: ProviderStreamEvent) => void;
-  internalOnStreamEvent?: (event: ProviderStreamEvent) => void;
   transportEnvelope?: EffectiveRequestEnvelope;
 }) => Promise<ProviderChatResponse>;
 
@@ -71,14 +67,11 @@ export function providerChatOnce(request: Parameters<ProviderChatAttempt>[0], at
 }
 
 export interface ExecuteProviderRequestInput<T> {
-  rejectResponseAfterAbort?: boolean;
   operationId: string;
   configuredRetries?: number;
   signal?: AbortSignal;
   executeAttempt: (context: ProviderAttemptContext) => Promise<T>;
-  responseEvidence?: (value: T) => ProviderResponseEvidence | undefined;
   onAttemptFailure?: (error: ProviderCallError, context: ProviderAttemptContext) => void | Promise<void>;
-  onAttemptStart?: (context: ProviderAttemptContext) => void | Promise<void>;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   random?: () => number;
 }
@@ -91,12 +84,9 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
   let physicalAttempts = 0;
   let ambiguousBillingAttempts = 0;
   let recoveredFrom: string | undefined;
-  const attemptOutcomes: ProviderAttemptOutcome[] = [];
-  const attachOutcomes = (cause: unknown) => Object.assign(cause !== null && typeof cause === "object" ? cause : new Error(String(cause)), { providerAttemptOutcomes: structuredClone(attemptOutcomes) });
 
   while (true) {
-    if (input.signal?.aborted) throw attachOutcomes(providerAbortFromSignal(input.signal));
-    try { await assertAbortOwnership(input.signal); } catch (failure) { throw attachOutcomes(failure); }
+    if (input.signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
     const context: ProviderAttemptContext = {
       operationId: input.operationId,
       logicalRequestId,
@@ -104,20 +94,8 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
       startedAtMs: Date.now(),
     };
     physicalAttempts += 1;
-    let dispatchStarted = false;
-    let receivedEvidence: ProviderResponseEvidence | undefined;
-    let responseReturned = false;
-    const identity = { attemptId: `${logicalRequestId}:${context.physicalAttempt}`, logicalRequestId, physicalAttempt: context.physicalAttempt };
     try {
-      await input.onAttemptStart?.(context);
-      input.signal?.throwIfAborted();
-      await assertAbortOwnership(input.signal);
-      dispatchStarted = true;
       const value = await input.executeAttempt(context);
-      responseReturned = true;
-      receivedEvidence = parseProviderResponseEvidence(input.responseEvidence?.(value));
-      if (input.rejectResponseAfterAbort && input.signal?.aborted) throw Object.assign(providerAbortFromSignal(input.signal), { providerResponse: value });
-      attemptOutcomes.push({ ...identity, outcome: classifyProviderAttempt({ responseEvidence: receivedEvidence }), validation: "accepted", ...(receivedEvidence ? { responseEvidence: receivedEvidence } : {}) });
       return {
         value,
         report: {
@@ -127,20 +105,15 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
           elapsedMs: Date.now() - operationStartedAt,
           ...(recoveredFrom ? { recoveredFrom } : {}),
           ambiguousBillingAttempts,
-          attemptOutcomes: structuredClone(attemptOutcomes),
         },
       };
     } catch (cause) {
-      const normalized = normalizeProviderCallError(cause);
-      const error = new ProviderCallError({ ...normalized.details, ...identity, ...(receivedEvidence ? { responseEvidence: receivedEvidence } : {}) }, { cause: normalized });
-      const evidence = parseProviderResponseEvidence(error.details.responseEvidence);
-      const outcome = dispatchStarted ? classifyProviderAttempt(error.details) : "not_dispatched";
-      attemptOutcomes.push({ ...identity, ...(error.details.transportRequestId ? { transportRequestId: error.details.transportRequestId } : {}), outcome, validation: responseReturned ? "accepted" : evidence ? "rejected" : "not_evaluated", ...(evidence ? { responseEvidence: evidence } : {}) });
-      if (input.signal?.aborted || (cause instanceof DOMException && cause.name === "AbortError")) throw attachOutcomes(cause);
+      if (input.signal?.aborted || (cause instanceof DOMException && cause.name === "AbortError")) throw cause;
+      const error = normalizeProviderCallError(cause);
       if (["response_body_read", "response_body_decode", "invalid_provider_json"].includes(error.details.code)) {
         ambiguousBillingAttempts += 1;
       }
-      try { await input.onAttemptFailure?.(error, context); } catch (failure) { throw attachOutcomes(failure); }
+      await input.onAttemptFailure?.(error, context);
       const allowance = providerRetryAllowance(error, input.configuredRetries ?? 2);
       const failedAttemptIndex = physicalAttempts - 1;
       if (failedAttemptIndex >= allowance) {
@@ -151,12 +124,11 @@ export async function executeProviderRequest<T>(input: ExecuteProviderRequestInp
           elapsedMs: Date.now() - operationStartedAt,
           ...(recoveredFrom ? { recoveredFrom } : {}),
           ambiguousBillingAttempts,
-          attemptOutcomes: structuredClone(attemptOutcomes),
         });
       }
       recoveredFrom ??= error.details.code;
       const delayMs = providerRetryDelayMs(failedAttemptIndex, error, input.random);
-      try { await (input.sleep ?? waitForRetry)(delayMs, input.signal); } catch (failure) { throw attachOutcomes(failure); }
+      await (input.sleep ?? waitForRetry)(delayMs, input.signal);
     }
   }
 }
@@ -168,7 +140,6 @@ export async function executeProviderChat(input: {
   settings: EffectiveGenerationSettings;
   timeoutMs?: number;
   signal?: AbortSignal;
-  rejectResponseAfterAbort?: boolean;
   configuredRetries?: number;
   operationId?: string;
   operationKind?: OperationKind;
@@ -178,11 +149,8 @@ export async function executeProviderChat(input: {
   capacityProtectedRouting?: boolean;
   streamWorkflowContext?: StreamWorkflowContext;
   onStreamEvent?: (event: ProviderStreamEvent) => void;
-  internalOnStreamEvent?: (event: ProviderStreamEvent) => void;
   onAttemptFailure?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptFailure"];
-  onAttemptStart?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptStart"];
 }): Promise<ProviderChatResponse> {
-  input.signal?.throwIfAborted();
   const attempt = input.attempt ?? providerChatAttempt;
   if ((attempt as ProviderChatAttempt & { [PROVIDER_EXECUTOR_BRAND]?: boolean })[PROVIDER_EXECUTOR_BRAND]) {
     throw new Error("Nested provider retry executor detected. Pass a one-attempt transport callback instead.");
@@ -221,24 +189,13 @@ export async function executeProviderChat(input: {
       phase: "before_dispatch",
     });
   }
-  const presentLiveStream = transportEnvelope.presentationMode === "live" && Boolean(input.onStreamEvent);
-  const internalStreamHandler = input.internalOnStreamEvent || presentLiveStream
-    ? (event: ProviderStreamEvent) => {
-        if (input.signal?.aborted) return;
-        input.internalOnStreamEvent?.(event);
-        if (presentLiveStream) input.onStreamEvent?.(event);
-      }
-    : undefined;
   let result: ProviderExecutionResult<ProviderChatResponse>;
   try {
     result = await executeProviderRequest({
       operationId: input.operationId ?? "provider.chat",
       configuredRetries: input.configuredRetries,
       signal: input.signal,
-      rejectResponseAfterAbort: input.rejectResponseAfterAbort,
       onAttemptFailure: input.onAttemptFailure,
-      onAttemptStart: input.onAttemptStart,
-      responseEvidence: response => response.responseEvidence,
       executeAttempt: () => attempt({
         config: input.config,
         modelId: input.modelId,
@@ -253,7 +210,7 @@ export async function executeProviderChat(input: {
         signal: input.signal,
         providerRouting: providerRouting ? structuredClone(providerRouting) : undefined,
         transportEnvelope: structuredClone(transportEnvelope),
-        ...(internalStreamHandler ? { onStreamEvent: internalStreamHandler } : {}),
+        ...(transportEnvelope.presentationMode === "live" && input.onStreamEvent ? { onStreamEvent: input.onStreamEvent } : {}),
       }),
     });
   } catch (cause) {
@@ -281,7 +238,7 @@ export async function executeProviderChat(input: {
 }
 
 export function createProviderChatExecutor(options: {
-  configuredRetries?: number | (() => number);
+  configuredRetries?: number;
   operationId?: string;
   operationKind?: OperationKind;
   attempt?: ProviderChatAttempt;
@@ -292,7 +249,7 @@ export function createProviderChatExecutor(options: {
 }): ProviderChatAttempt {
   const executor: ProviderChatAttempt & { [PROVIDER_EXECUTOR_BRAND]?: boolean } = (request) => executeProviderChat({
     ...request,
-    configuredRetries: typeof options.configuredRetries === "function" ? options.configuredRetries() : options.configuredRetries,
+    configuredRetries: options.configuredRetries,
     operationId: options.operationId,
     operationKind: options.operationKind,
     attempt: options.attempt,
@@ -306,7 +263,7 @@ export function createProviderChatExecutor(options: {
 }
 
 async function waitForRetry(milliseconds: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) throw providerAbortFromSignal(signal);
+  if (signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
   await new Promise<void>((resolve, reject) => {
     const finish = () => signal?.removeEventListener("abort", abort);
     const timer = globalThis.setTimeout(() => {
@@ -316,7 +273,7 @@ async function waitForRetry(milliseconds: number, signal?: AbortSignal): Promise
     const abort = () => {
       globalThis.clearTimeout(timer);
       finish();
-      reject(signal?.aborted ? providerAbortFromSignal(signal) : new DOMException("Provider request cancelled", "AbortError"));
+      reject(new DOMException("Provider request cancelled", "AbortError"));
     };
     signal?.addEventListener("abort", abort, { once: true });
   });

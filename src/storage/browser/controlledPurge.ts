@@ -8,8 +8,6 @@ import type { TrainingRunRecord } from "../../training/types";
 import type { ChatMessage, ChatThread, Profile, Workspace } from "../../types";
 import type { WorkspaceSource } from "../../sources/types";
 import { emptyDeletionCounts, type DeletionPreview, type PurgeEntityKind } from "../controlledPurge";
-import { telepathicBrowserPreview, telepathicParentBlocked, purgeBrowserTelepathicSeries } from "./telepathicPurge";
-export { previewBrowserTelepathicDelete } from "./telepathicPurge";
 import { BROWSER_CHAT_MESSAGE_PROVIDER_STATE_KEY, browserChatMessageProviderStateFreshKey, browserChatMessageProviderStateResetKey, ProviderContinuationPersistenceError } from "../providerContinuationState";
 
 const K = {
@@ -94,7 +92,6 @@ function trainingSessionIds(runs: TrainingRunRecord[]): Set<string> {
 }
 
 function terminalResearch(project: ResearchProjectRecord): boolean {
-  if(project.executionTermination)return true;
   return ["Complete", "Interrupted", "Failed"].includes(project.state);
 }
 
@@ -255,11 +252,9 @@ function previewTarget(storage: StorageLike, id: string): DeletionPreview {
 }
 
 export function previewBrowserPermanentDelete(storage: StorageLike, kind: PurgeEntityKind, id: string): DeletionPreview {
-  if(kind==="telepathic_series")return telepathicBrowserPreview(storage,id);
   if (kind === "target") return previewTarget(storage, id);
   const c = collections(storage);
   const scope = collectScope(storage, kind, id);
-  if((kind==="profile"||kind==="workspace")&&telepathicParentBlocked(storage,kind,id))scope.blockedReason="Delete Telepathy series referencing this Profile/Workspace first.";
   const counts = emptyDeletionCounts();
   const monitorRunIds = setOf(c.monitorRuns.filter((item) => scope.sessionIds.has(item.sessionId)).map((item) => item.id));
   const judgeRunIds = setOf(c.judgeRuns.filter((item) => scope.sessionIds.has(item.sessionId)).map((item) => item.id));
@@ -324,8 +319,7 @@ function atomicWrite(storage: StorageLike, changes: Map<string, unknown>, remova
   }
 }
 
-export function purgeBrowserPermanentDelete(storage: StorageLike, kind: PurgeEntityKind, id: string, expectedArchiveRevision?:number): void | Promise<void> {
-  if(kind==="telepathic_series")return purgeBrowserTelepathicSeries(storage,id,expectedArchiveRevision);
+export function purgeBrowserPermanentDelete(storage: StorageLike, kind: PurgeEntityKind, id: string): void {
   const preview = previewBrowserPermanentDelete(storage, kind, id);
   assertDeletable(preview);
   const c = collections(storage);
@@ -405,6 +399,5 @@ export function purgeBrowserPermanentDelete(storage: StorageLike, kind: PurgeEnt
     browserChatMessageProviderStateResetKey(threadId),
     browserChatMessageProviderStateFreshKey(threadId),
   ]);
-  const evaluationKeys=Object.keys(storage).filter(key=>[...scope.researchIds].some(id=>key.startsWith(`rvh.research.evaluation.v1:${id}:`)));
-  atomicWrite(storage, changes, [...providerStateResetArtifacts,...evaluationKeys]);
+  atomicWrite(storage, changes, providerStateResetArtifacts);
 }

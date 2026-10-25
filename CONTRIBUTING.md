@@ -15,25 +15,17 @@ Security vulnerabilities must be reported according to [SECURITY.md](SECURITY.md
 
 The desktop application uses React, TypeScript, Vite, Tauri, Rust, and SQLite.
 
-Use the English [Developer Guide](docs/development/README.md) for Node 24, native platform prerequisites, preview limitations and the complete workflow recipe. From the repository root:
-
 ```bash
 npm ci
-npm run verify:source
-npm run verify:ux-data
-npm run verify:architecture
-npm run verify:v0.7.14-release-gate
 npm run typecheck
 npm test
 npm run build
-cargo test --manifest-path src-tauri/Cargo.toml --all-targets --locked
-npm run verify:openrouter-continuation-bridge
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+cd src-tauri
+cargo test --locked
+cargo clippy --locked -- -D warnings
 ```
 
-Use Rust stable with Clippy as required by the checked-in CI/platform workflows. Keep `src-tauri/Cargo.lock` committed and update it only for an intentional dependency change. The bridge runs the separately orchestrated continuation fixtures. Never hide an enlarged shared error with lint suppression or threshold changes.
-
-Primary developer documentation and new developer-facing wiki/architecture pages must be English. An existing Polish counterpart should be kept consistent; historical Polish audit/release records retain their dated scope. A documentation-only change may use link/source/gate checks without rerunning unchanged runtime suites, but must say so.
+Use the supported Node and Rust toolchains from the repository workflows. Keep `src-tauri/Cargo.lock` committed and change it only when Rust dependencies require regeneration.
 
 ## Engineering invariants
 
@@ -46,11 +38,7 @@ Contributions must preserve the project safeguards documented in [`docs/architec
 - provider reasoning is normalized separately from final assistant content;
 - retries and continuation do not duplicate completed Viewer or Monitor work;
 - Viewer Notes remain profile-wide but bound to one exact AI identity, versioned, and separated from Monitor, Judge, and post-Viewer-review material;
-- database migrations are additive and their integrity constraints are tested;
-- native owner/version/expiry fencing remains active, including after heartbeat loss;
-- full transport completion, semantic acceptance and local commit remain distinct;
-- each classic Training learning update has one durable two-dispatch allowance across retries/repairs/restart; known failed updates preserve memory and continue, while Stop/DB/ownership/hash/uncertain dispatch still interrupt;
-- a saved Training run retains its Profile/model on Resume, and interrupted checkpoints remain exportable.
+- database migrations are additive and their integrity constraints are tested.
 
 If a proposed change intentionally alters one of these invariants, explain the reason and update the architecture documentation in the same pull request.
 

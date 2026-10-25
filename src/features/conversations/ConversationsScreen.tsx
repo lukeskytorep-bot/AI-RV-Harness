@@ -1,15 +1,13 @@
-import { BrainCircuit, Check, MessageCircle, X } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { Check, CircleHelp, RadioTower, X } from "lucide-react";
+import { useRef, useState } from "react";
 
-import { ModuleHelpButton, ModuleHelpPanel } from "../../components/ModuleHelp";
 import { PageHeader } from "../../components/PageHeader";
-import { ProfileSelector } from "../../components/ProfileSelector";
 import { aiIsBeDisplayName } from "../../domain/isBeIdentity";
 import type { getCopy } from "../../i18n";
 import type { AppRepository } from "../../storage/repository";
 import type { AppSettings, Profile, Workspace } from "../../types";
+import { WorkspaceSwitcherDialog } from "../workspaces";
 import { ChatPanel } from "./ChatPanel";
-import { TelepathicExchangePanel } from "./TelepathicExchangePanel";
 
 export interface ConversationsScreenProps {
   copy: ReturnType<typeof getCopy>;
@@ -19,10 +17,9 @@ export interface ConversationsScreenProps {
   repository: AppRepository | null;
   profiles: Profile[];
   workspaces: Workspace[];
-  onProfileChange: (profileId: string) => void;
+  onOpenWorkspace: (workspace: Workspace) => void;
   createdNotice: { workspaceId: string; workspaceName: string; profileName: string } | null;
   onDismissCreatedNotice: () => void;
-  onOperationBusyChange?: (busy: boolean) => void;
 }
 
 export function ConversationsScreen({
@@ -33,16 +30,14 @@ export function ConversationsScreen({
   repository,
   profiles,
   workspaces,
-  onProfileChange,
+  onOpenWorkspace,
   createdNotice,
   onDismissCreatedNotice,
-  onOperationBusyChange,
 }: ConversationsScreenProps) {
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [surface, setSurface] = useState<"conversation" | "telepathic">("conversation");
-  const [operationBusy, setOperationBusy] = useState(false);
-  const operationBusyRef = useRef(false);
-  const handleBusyChange = useCallback((busy: boolean) => { operationBusyRef.current = busy; setOperationBusy(busy); onOperationBusyChange?.(busy); }, [onOperationBusyChange]);
+  const switcherButtonRef = useRef<HTMLButtonElement>(null);
+  const closeSwitcher = () => { setSwitcherOpen(false); requestAnimationFrame(() => switcherButtonRef.current?.focus()); };
 
   return (
     <>
@@ -50,15 +45,13 @@ export function ConversationsScreen({
         <PageHeader
           title={copy.conversationsNav}
           subtitle={`${workspace.name} · ${profile ? aiIsBeDisplayName(profile) : "—"}`}
-          action={<div className="module-header-actions"><ProfileSelector profiles={profiles} value={workspace.profileId} onChange={onProfileChange} language={settings.interfaceLanguage} disabled={operationBusy} /><ModuleHelpButton label={surface === "telepathic" ? (settings.interfaceLanguage === "pl" ? "Jak działa wymiana telepatyczna?" : "How does telepathic exchange work?") : (settings.interfaceLanguage === "pl" ? "Jak działa rozmowa?" : "How does Conversation work?")} icon={surface === "telepathic" ? BrainCircuit : MessageCircle} expanded={helpOpen} controlsId="conversation-help-panel" onToggle={() => setHelpOpen((current) => !current)} /></div>}
+          action={<div className="workspace-header-actions"><button ref={switcherButtonRef} className="secondary-button" onClick={() => setSwitcherOpen(true)}><RadioTower size={15} />{copy.switchWorkspace}</button><button className="secondary-button" aria-expanded={helpOpen} aria-controls="conversation-help-panel" onClick={() => setHelpOpen((current) => !current)}><CircleHelp size={15} />{settings.interfaceLanguage === "pl" ? "Jak działa rozmowa?" : "How does Conversation work?"}</button></div>}
         />
-        {helpOpen && (surface === "telepathic" ? <TelepathicExchangeHelpPanel language={settings.interfaceLanguage} /> : <ConversationHelpPanel language={settings.interfaceLanguage} />)}
-        <div className="conversation-surface-switch" role="tablist" aria-label={settings.interfaceLanguage === "pl" ? "Tryb rozmowy" : "Conversation mode"}><button role="tab" aria-selected={surface === "conversation"} className={surface === "conversation" ? "active" : ""} disabled={operationBusy} onClick={() => { if (!operationBusyRef.current) setSurface("conversation"); }}>{settings.interfaceLanguage === "pl" ? "Zwykła rozmowa" : "Normal conversation"}</button><button role="tab" aria-selected={surface === "telepathic"} className={surface === "telepathic" ? "active" : ""} disabled={operationBusy} onClick={() => { if (!operationBusyRef.current) setSurface("telepathic"); }}>{settings.interfaceLanguage === "pl" ? "Wymiana telepatyczna" : "Telepathic exchange"}</button></div>
+        {helpOpen && <ConversationHelpPanel language={settings.interfaceLanguage} />}
         {createdNotice && <div className="workspace-created-notice"><Check size={16} /><span><strong>{copy.workspaceCreated}</strong><small>{createdNotice.profileName} → {createdNotice.workspaceName}</small></span><button className="icon-button" onClick={onDismissCreatedNotice}><X size={14} /></button></div>}
-        {surface === "conversation"
-          ? <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} fixedMode="conversation" onBusyChange={handleBusyChange} />
-          : <TelepathicExchangePanel key={workspace.id} copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} profiles={profiles} workspaces={workspaces} onBusyChange={handleBusyChange} />}
+        <ChatPanel copy={copy} settings={settings} profile={profile} workspace={workspace} repository={repository} fixedMode="conversation" />
       </div>
+      {switcherOpen && <WorkspaceSwitcherDialog copy={copy} profiles={profiles} workspaces={workspaces} kind="conversation" activeWorkspaceId={workspace.id} onOpenWorkspace={onOpenWorkspace} onClose={closeSwitcher} />}
     </>
   );
 }
@@ -66,7 +59,8 @@ export function ConversationsScreen({
 
 function ConversationHelpPanel({ language }: { language: AppSettings["interfaceLanguage"] }) {
   const pl = language === "pl";
-  return <ModuleHelpPanel id="conversation-help-panel" title={pl ? "Jak działa rozmowa?" : "How does Conversation work?"} icon={MessageCircle}>
+  return <section id="conversation-help-panel" className="panel workspace-help-panel" aria-label={pl ? "Jak działa rozmowa?" : "How does Conversation work?"}>
+    <h2>{pl ? "Jak działa rozmowa?" : "How does Conversation work?"}</h2>
     {pl ? <>
       <p>Rozmowa pozwala prowadzić zwykły dialog z wybraną tożsamością Viewera należącą do aktywnego Profilu i Conversation Workspace. Wpisz wiadomość w polu na dole i wybierz <strong>Wyślij</strong>. Rozmowa oraz jej historia są zapisywane lokalnie; możesz utworzyć kolejną rozmowę, zmienić jej nazwę, wyeksportować ją albo zarchiwizować.</p>
       <p>Przycisk spinacza pozwala dodać dokumenty i obrazy. Dokumenty są zapisywane jako <strong>Źródła Workspace</strong> i możesz zdecydować, które z nich są aktywne. Obrazy są przekazywane w następnej turze tylko wtedy, gdy wybrana trasa modelu obsługuje vision; aplikacja odrzuci obraz zamiast wysyłać go do niezgodnego modelu.</p>
@@ -78,15 +72,5 @@ function ConversationHelpPanel({ language }: { language: AppSettings["interfaceL
       <p>For a trained identity with an available package, <strong>Use Viewer Learning</strong> is enabled by default. That identity’s exact active <strong>Field Guide</strong> and <strong>Viewer Notes</strong> are attached as read-only context. You may disable the option for an individual conversation. Conversation never creates, updates, or activates Field Guide or Viewer Notes versions.</p>
       <p>The <strong>Estimated context</strong> indicator shows the approximate use of the context window. If active sources and conversation history approach the model limit, remove unnecessary sources or start a new conversation.</p>
     </>}
-  </ModuleHelpPanel>;
-}
-
-
-function TelepathicExchangeHelpPanel({ language }: { language: AppSettings["interfaceLanguage"] }) {
-  const pl = language === "pl";
-  return <ModuleHelpPanel id="conversation-help-panel" title={pl ? "Jak działa wymiana telepatyczna?" : "How does telepathic exchange work?"} icon={BrainCircuit}>
-    <p>{pl ? "Wybierz uczestników i zdecyduj, kto przygotowuje cel: Ty albo jeden wybrany Profil AI, stały przez całą serię. Twórca celu otrzymuje losowy obszar, ukryty przed odbiorcami. Nadawca zapisuje i zamraża cel przed rozpoczęciem opisu. Odbiorcy nie widzą go; najpierw zapisują wrażenia, a prowadzący może następnie poprowadzić do trzech dodatkowych cykli pytań. Nie muszą zgadywać, czym jest cel." : "Choose the participants and decide who prepares the target: you or one selected AI Profile, fixed throughout the series. The target creator receives a random area hidden from receivers. The sender saves and locks the target before any descriptions begin. Receivers cannot see it; they first record impressions, then the lead may conduct up to three additional question cycles. They do not have to guess what the target is."}</p>
-    <p>{pl ? "Kiedy wszystkie opisy zostaną zamknięte, aplikacja ujawnia zamrożony cel i pokazuje odpowiedzi. AI piszą refleksje automatycznie; własna refleksja człowieka pozostaje jego decyzją. AI może następnie wybrać, czy chce poznać odpowiedzi innych. Każda nowa runda jest oddzielna, a dopiero po całej serii AI automatycznie przegląda zapis wszystkich swoich rund. Zatrzymaj przerywa dalsze wysyłanie. Metryki pokazują rzeczywiste wywołania, tokeny, czas i dostępny koszt." : "After all descriptions are closed, the app reveals the locked target and shows the answers. AI reflections run automatically; the human writes their own reflection. An AI may then choose whether to see the other answers. Each new round is separate; only after the whole series may an AI automatically review all its own rounds. Stop interrupts further dispatch. Metrics show actual calls, tokens, time and available cost."}</p>
-    <p>{pl ? "Gdy Reveal zawiera obraz, dodaj krótki opis tekstowy, ponieważ nie wszystkie modele odczytują obrazy." : "If Reveal includes an image, add a short text description because not every model can read images."}</p>
-  </ModuleHelpPanel>;
+  </section>;
 }

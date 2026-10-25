@@ -1,5 +1,4 @@
-import { withWorkflow } from "../../application/workflowOwnership";
-import { prepareViewerNotesForSession, runViewerNoteReflection, viewerNoteReflectionCompletesStage } from "../../aiCenter/viewerNotes";
+import { prepareViewerNotesForSession, runViewerNoteReflection } from "../../aiCenter/viewerNotes";
 import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
 import { sha256Text } from "../../application/sha256";
 import { fieldGuideUpdateCompletesStage, runFieldGuideUpdate } from "../../aiCenter/fieldGuideUpdate";
@@ -9,19 +8,15 @@ import { profileGenerationDefaults } from "../../profileViewerDefaults";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
 import { getRvLite } from "../../resources/protocolRegistry";
 import type { SessionProgress } from "../../sessions/controller";
-import { findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview, OptionalTrainingReviewUnavailable } from "../../sessions/postReveal";
+import { findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview } from "../../sessions/postReveal";
 import { runAutomaticRvLiteSession } from "../../sessions/rvLiteController";
-import { createSessionReplay } from "../../sessions/resumeReplay";
-import { createSessionCode } from "../../sessions/sessionCode";
-import { buildAutomaticTargetReveal } from "../../targets/service";
 import type { AppRepository } from "../../storage/repository";
 import type { TargetRecord } from "../../targets/types";
 import type { TrainingFieldGuidePostUpdateCheckpoint, TrainingRunRecord, TrainingTargetCheckpoint } from "../../training/types";
 import { FACTORY_PLANNER_VERSION, FACTORY_ROUND_SIZE } from "../../training/curriculum";
 import type { AppSettings, InterfaceLanguage, Profile, ViewerSystemPromptSnapshot } from "../../types";
-import { isTrainingRunUserFinished, userFinishedTrainingError } from "../../training/runLifecycle";
 
-type ExecutionSettings = Pick<AppSettings, "maxRetries" | "requestTimeoutMs" | "sessionCodePrefix">;
+type ExecutionSettings = Pick<AppSettings, "maxRetries" | "requestTimeoutMs" | "sessionCodePrefix" | "maxSessionCostUsd">;
 
 const defaultDependencies = {
   prepareFieldGuideForSession,
@@ -94,81 +89,6 @@ async function currentTrainingRecord(repository: AppRepository, id: string, fall
   return (await repository.listTrainingRuns()).find((run) => run.id === id) ?? fallback;
 }
 
-async function frozenBlindResumeInput(input: ExecuteTrainingRunInput, checkpoint: TrainingTargetCheckpoint, target: TargetRecord) {
-  const [session, snapshot] = await Promise.all([
-    input.repository.getRvSession(checkpoint.sessionId),
-    input.repository.getSessionSnapshot(checkpoint.sessionId),
-  ]);
-  if (!session || !snapshot) throw new Error("Training Resume cannot recover the blind session because its durable Session Snapshot is missing.");
-  if (session.id !== checkpoint.sessionId || session.targetId !== checkpoint.targetId || snapshot.targetId !== checkpoint.targetId) {
-    throw new Error("Training Resume refused a blind checkpoint whose session/target identity does not match.");
-  }
-  if (snapshot.profileId !== input.profile.id || snapshot.workspaceId !== input.initial.workspaceId) {
-    throw new Error("Training Resume refused a blind checkpoint whose frozen Profile or Workspace does not match the Training run.");
-  }
-  if (snapshot.providerConfigId !== input.providerConfig.id || snapshot.provider !== input.providerConfig.provider || snapshot.modelId !== input.model.modelId || snapshot.modelRoute !== input.model.route) {
-    throw new Error("Training Resume refused provider/model route drift from the frozen blind Session Snapshot.");
-  }
-  if (snapshot.protocol.id !== "rv-lite" || snapshot.sessionLanguage !== snapshot.protocol.language) {
-    throw new Error("Training Resume found an incompatible frozen RV Lite protocol snapshot.");
-  }
-  const variant = snapshot.protocol.variant ?? input.initial.protocolVariant;
-  const protocol = getRvLite(snapshot.sessionLanguage, variant);
-  if (protocol.contentSha256 !== snapshot.protocol.contentSha256 || protocol.version !== snapshot.protocol.version) {
-    throw new Error("Training Resume cannot reproduce the exact frozen RV Lite protocol from this application build.");
-  }
-  const capturedAutomaticReveal = await buildAutomaticTargetReveal(target, snapshot.sessionLanguage);
-  if (snapshot.automaticRevealHash && capturedAutomaticReveal.hash !== snapshot.automaticRevealHash) {
-    throw new Error("Training Resume refused target/reveal drift from the frozen blind Session Snapshot.");
-  }
-  const rvSystemPrompt = snapshot.rvSystemPrompt ? {
-    id: snapshot.rvSystemPrompt.id,
-    version: snapshot.rvSystemPrompt.version,
-    language: snapshot.sessionLanguage,
-    content: snapshot.rvSystemPrompt.fullContent,
-    contentSha256: snapshot.rvSystemPrompt.contentSha256,
-    ...(snapshot.rvSystemPrompt.fieldGuide ? { fieldGuide: snapshot.rvSystemPrompt.fieldGuide } : {}),
-  } : undefined;
-  return { session, snapshot, protocol, capturedAutomaticReveal, rvSystemPrompt };
-}
-
-
-async function ensurePersistedTrainingBlindReveal(input: {
-  repository: AppRepository;
-  sessionId: string;
-  targetId: string;
-}): Promise<void> {
-  const session = await input.repository.getRvSession(input.sessionId);
-  if (!session || session.state !== "Revealed" || !session.preRevealSealedAt) {
-    throw new Error("Training cannot advance to session_revealed before the blind session is durably sealed and Revealed.");
-  }
-  const reveal = await input.repository.getReveal(input.sessionId);
-  if (!reveal) throw new Error("Training cannot advance to session_revealed because the durable Reveal record is missing.");
-
-  let events = await input.repository.listSessionEvents(input.sessionId);
-  const revealAccepted = events.some((event) => event.eventType === "REVEAL_ACCEPTED" && (event.metadata?.targetId === input.targetId || event.metadata?.source === "automatic_target"));
-  if (!revealAccepted) {
-    await input.repository.appendSessionEvent(input.sessionId, {
-      eventType: "REVEAL_ACCEPTED",
-      role: "controller",
-      metadata: { source: "automatic_target", targetId: input.targetId, recoveredFinalization: true },
-    });
-    events = await input.repository.listSessionEvents(input.sessionId);
-  }
-
-  let usage = await input.repository.listTargetUsage();
-  if (!usage.some((record) => record.sessionId === input.sessionId && record.targetId === input.targetId)) {
-    await input.repository.recordTargetUsage({ targetId: input.targetId, profileId: session.profileId, sessionId: input.sessionId });
-    usage = await input.repository.listTargetUsage();
-  }
-
-  if (!events.some((event) => event.eventType === "REVEAL_ACCEPTED" && (event.metadata?.targetId === input.targetId || event.metadata?.source === "automatic_target"))) {
-    throw new Error("Training Reveal finalization did not persist REVEAL_ACCEPTED.");
-  }
-  if (!usage.some((record) => record.sessionId === input.sessionId && record.targetId === input.targetId)) {
-    throw new Error("Training Reveal finalization did not persist target usage.");
-  }
-}
 
 async function trainingPostRevealReviewPacketSha256(repository: AppRepository, sessionId: string, language: InterfaceLanguage, request: string): Promise<string> {
   const [snapshot, reveal, evidence] = await Promise.all([
@@ -208,7 +128,7 @@ async function resolveTrainingFieldGuideAfterUpdate(input: {
   if (!snapshot || !frozen) throw new Error("Training Viewer Notes Reflection cannot resolve the frozen Field Guide snapshot.");
 
   const audit = input.explicitResult?.audit
-    ?? [...(input.trainingRun.fieldGuideUpdates ?? [])].reverse().find((item) => item.sourceSessionId === input.checkpoint.sessionId && (fieldGuideUpdateCompletesStage(item.status) || input.trainingRun.learningSettlements?.some(s => s.auditId === item.id)));
+    ?? [...(input.trainingRun.fieldGuideUpdates ?? [])].reverse().find((item) => item.sourceSessionId === input.checkpoint.sessionId && fieldGuideUpdateCompletesStage(item.status));
   const status = input.explicitResult?.status ?? audit?.status;
 
   if (status === "UPDATE") {
@@ -219,11 +139,11 @@ async function resolveTrainingFieldGuideAfterUpdate(input: {
     return { updateStatus: "UPDATE", versionId: exact.id, versionNumber: exact.versionNumber, contentSha256: exact.contentSha256 };
   }
 
-  if (status === "NO_CHANGE" || status === "FAILED_CAPACITY" || status === "STALE_BASE" || ((input.explicitResult?.settlement?.settlement === "failed_preserved" || input.trainingRun.learningSettlements?.some(s => s.auditId === audit?.id && s.settlement === "failed_preserved")) && status)) {
+  if (status === "NO_CHANGE" || status === "FAILED_CAPACITY" || status === "STALE_BASE") {
     if (audit && (audit.baseVersionId !== frozen.versionId || audit.baseContentSha256 !== frozen.contentSha256)) {
       throw new Error("Training Field Guide audit base does not match the frozen session Field Guide.");
     }
-    return { updateStatus: status as TrainingFieldGuidePostUpdateCheckpoint["updateStatus"], versionId: frozen.versionId, versionNumber: frozen.versionNumber, contentSha256: frozen.contentSha256 };
+    return { updateStatus: status, versionId: frozen.versionId, versionNumber: frozen.versionNumber, contentSha256: frozen.contentSha256 };
   }
 
   // Compatibility for a historical checkpoint created before this contract existed.
@@ -235,43 +155,30 @@ async function resolveTrainingFieldGuideAfterUpdate(input: {
   return { updateStatus: "LEGACY_UNRECORDED", versionId: frozen.versionId, versionNumber: frozen.versionNumber, contentSha256: frozen.contentSha256 };
 }
 
-async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<TrainingExecutionOutcome> {
-  const persisted = (await input.repository.listTrainingRuns()).find((run) => run.id === input.initial.id);
-  if (!persisted) throw new Error("Training run is no longer available.");
-  if (isTrainingRunUserFinished(persisted)) return { run: persisted, error: userFinishedTrainingError().message };
-
+export async function executeTrainingRun(input: ExecuteTrainingRunInput): Promise<TrainingExecutionOutcome> {
   const dependencies = { ...defaultDependencies, ...input.dependencies };
   const targetById = new Map(input.targets.map((target) => [target.id, target]));
-  const completed = new Set(persisted.completedTargetIds);
+  const completed = new Set(input.initial.completedTargetIds);
   const now = input.now ?? (() => new Date().toISOString());
   let working: TrainingRunRecord = {
-    ...persisted,
-    sessionIds: persisted.sessionIds ?? [],
-    currentIndex: firstPendingTrainingTargetIndex(persisted),
+    ...input.initial,
+    sessionIds: input.initial.sessionIds ?? [],
+    currentIndex: firstPendingTrainingTargetIndex(input.initial),
     status: "Running",
-    executionSnapshot: persisted.executionSnapshot ?? {
+    executionSnapshot: input.initial.executionSnapshot ?? {
       language: input.language,
       generationSettings: profileGenerationDefaults(input.profile, input.model),
       transport: { ...input.settings },
       ...(input.rvSystemPrompt ? { rvSystemPrompt: input.rvSystemPrompt } : {}),
     },
   };
-  const assertCanContinue = async () => {
-    input.signal?.throwIfAborted();
-    const latest = (await input.repository.listTrainingRuns()).find(run => run.id === working.id);
-    if (!latest) throw new Error("Training run is no longer available.");
-    if (isTrainingRunUserFinished(latest)) throw userFinishedTrainingError();
-    if (latest.archivedAt) throw new Error("Restore the archived Training run before execution.");
-    input.signal?.throwIfAborted();
-  };
   const execution = working.executionSnapshot!;
   input.onRunChange?.(working);
 
   try {
-    await assertCanContinue();
     await input.repository.updateTrainingRun(working.id, { status: "Running", currentIndex: working.currentIndex, executionSnapshot: execution });
     for (let index = working.currentIndex; index < working.targetIds.length; index += 1) {
-      await assertCanContinue();
+      if (input.signal?.aborted) throw new DOMException("Training cancelled", "AbortError");
       const targetId = working.targetIds[index];
       if (completed.has(targetId)) continue;
       const target = targetById.get(targetId);
@@ -279,8 +186,11 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
       input.onProgress?.({ index, total: working.targetIds.length, target });
 
       let checkpoint = working.activeTargetCheckpoint?.targetId === targetId ? working.activeTargetCheckpoint : undefined;
-      await assertCanContinue();
       if (!checkpoint) {
+        // Freeze the currently active Field Guide for this session, not for the
+        // whole multi-target Training run. A successful update after target N
+        // must therefore be visible to target N+1, while Resume continues from
+        // the immutable snapshot already stored by the session controller.
         const fieldGuide = await dependencies.prepareFieldGuideForSession({
           repository: input.repository,
           profile: input.profile,
@@ -288,146 +198,42 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
           model: input.model,
           language: execution.language,
         });
-        const frozenRvSystemPrompt = await dependencies.viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
-        const frozenViewerNotes = await dependencies.prepareViewerNotesForSession({
+        const rvSystemPrompt = await dependencies.viewerSystemPromptSnapshotFromFieldGuide(fieldGuide);
+        const viewerNotes = await dependencies.prepareViewerNotesForSession({
           repository: input.repository,
           profileId: input.profile.id,
           providerConfig: input.providerConfig,
           model: input.model,
           enabled: working.viewerNotesEnabled ?? false,
         });
-        const frozenReveal = await buildAutomaticTargetReveal(target, execution.language);
-        const sessionId = `session_${crypto.randomUUID()}`;
-        const sessionCode = createSessionCode(execution.transport.sessionCodePrefix);
-        checkpoint = {
-          targetId,
-          sessionId,
-          stage: "blind_initializing",
-          blindInitialization: {
-            sessionCode,
-            rvSystemPrompt: frozenRvSystemPrompt,
-            viewerNotes: frozenViewerNotes,
-            automaticRevealHash: frozenReveal.hash,
-          },
-        };
+        const session = await dependencies.runAutomaticRvLiteSession({
+          repository: input.repository,
+          workspaceId: working.workspaceId,
+          profileId: input.profile.id,
+          profileName: aiIsBeDisplayName(input.profile),
+          humanIsBeDisplayName: humanIsBeDisplayName(input.profile),
+          providerConfig: input.providerConfig,
+          model: input.model,
+          protocol: getRvLite(execution.language, working.protocolVariant),
+          sessionLanguage: execution.language,
+          requestedSettings: execution.generationSettings,
+          viewerNotes,
+          rvSystemPrompt,
+          automaticTarget: target,
+          signal: input.signal,
+          maxRetries: execution.transport.maxRetries,
+          requestTimeoutMs: execution.transport.requestTimeoutMs,
+          operationKind: "training_blind_viewer",
+          streamWorkflowContext: "training",
+          sessionCodePrefix: execution.transport.sessionCodePrefix,
+          ...(execution.transport.maxSessionCostUsd > 0 ? { maxSessionCostUsd: execution.transport.maxSessionCostUsd } : {}),
+          onProgress: (sessionProgress) => input.onProgress?.({ index, total: working.targetIds.length, target, sessionProgress }),
+        });
+        if (session.state !== "Revealed") throw new Error(session.stopReason ?? "The training session was interrupted.");
+        checkpoint = { targetId, sessionId: session.sessionId, stage: "session_revealed" };
         working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
         await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
         input.onRunChange?.(working);
-      }
-
-      if (checkpoint.stage === "blind_initializing") {
-        await assertCanContinue();
-        const init = checkpoint.blindInitialization;
-        if (!init) throw new Error("Training Resume cannot recover a blind_initializing checkpoint without its frozen initialization packet.");
-        const existingSession = await input.repository.getRvSession(checkpoint.sessionId);
-        const existingSnapshot = await input.repository.getSessionSnapshot(checkpoint.sessionId);
-        if (existingSnapshot && !existingSession) {
-          throw new Error("Training Resume found a Session Snapshot without its RV session row.");
-        }
-        if (existingSnapshot) {
-          if (existingSnapshot.targetId !== checkpoint.targetId || existingSnapshot.workspaceId !== working.workspaceId || existingSnapshot.profileId !== input.profile.id) {
-            throw new Error("Training Resume refused a blind_initializing checkpoint whose persisted Session Snapshot identity does not match.");
-          }
-          if (existingSnapshot.automaticRevealHash !== init.automaticRevealHash) {
-            throw new Error("Training Resume refused target/reveal drift during blind initialization.");
-          }
-          checkpoint = { ...checkpoint, stage: "blind_running", blindInitialization: undefined };
-          working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
-          await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
-          input.onRunChange?.(working);
-        } else {
-          const currentReveal = await buildAutomaticTargetReveal(target, execution.language);
-          if (currentReveal.hash !== init.automaticRevealHash) {
-            throw new Error("Training Resume cannot recreate the exact frozen target Reveal for blind initialization.");
-          }
-          const markSnapshotReady = async (sessionId: string) => {
-            if (sessionId !== checkpoint!.sessionId) throw new Error("Training blind initialization created an unexpected session id.");
-            checkpoint = { ...checkpoint!, stage: "blind_running", blindInitialization: undefined };
-            working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
-            await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
-            input.onRunChange?.(working);
-          };
-          const session = await dependencies.runAutomaticRvLiteSession({
-            repository: input.repository,
-            workspaceId: working.workspaceId,
-            profileId: input.profile.id,
-            profileName: aiIsBeDisplayName(input.profile),
-            humanIsBeDisplayName: humanIsBeDisplayName(input.profile),
-            providerConfig: input.providerConfig,
-            model: input.model,
-            protocol: getRvLite(execution.language, working.protocolVariant),
-            sessionLanguage: execution.language,
-            requestedSettings: execution.generationSettings,
-            ...(init.viewerNotes ? { viewerNotes: init.viewerNotes } : {}),
-            ...(init.rvSystemPrompt ? { rvSystemPrompt: init.rvSystemPrompt } : {}),
-            automaticTarget: target,
-            capturedAutomaticReveal: currentReveal,
-            ...(existingSession ? { resumeSession: existingSession } : { sessionIdentity: { id: checkpoint.sessionId, sessionCode: init.sessionCode } }),
-            signal: input.signal,
-            maxRetries: execution.transport.maxRetries,
-            requestTimeoutMs: execution.transport.requestTimeoutMs,
-            operationKind: "training_blind_viewer",
-            streamWorkflowContext: "training",
-            sessionCodePrefix: execution.transport.sessionCodePrefix,
-            onSessionCreated: markSnapshotReady,
-            onProgress: (sessionProgress) => input.onProgress?.({ index, total: working.targetIds.length, target, sessionProgress }),
-          });
-          if (session.state !== "Revealed") throw new Error(session.stopReason ?? "The training session was interrupted.");
-          if (session.sessionId !== checkpoint.sessionId) throw new Error("Training blind initialization completed under a different session id.");
-          await ensurePersistedTrainingBlindReveal({ repository: input.repository, sessionId: checkpoint.sessionId, targetId: checkpoint.targetId });
-          checkpoint = { ...checkpoint, stage: "session_revealed", blindInitialization: undefined };
-          working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
-          await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
-          input.onRunChange?.(working);
-        }
-      }
-
-      if (checkpoint.stage === "blind_running") {
-        await assertCanContinue();
-        const frozen = await frozenBlindResumeInput(input, checkpoint, target);
-        if (frozen.session.state === "Revealed") {
-          await ensurePersistedTrainingBlindReveal({ repository: input.repository, sessionId: checkpoint.sessionId, targetId: checkpoint.targetId });
-          checkpoint = { ...checkpoint, stage: "session_revealed" };
-          working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
-          await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
-          input.onRunChange?.(working);
-        } else {
-          const events = await input.repository.listSessionEvents(checkpoint.sessionId);
-          const replay = await createSessionReplay({ repository: input.repository, session: frozen.session, events });
-          const session = await dependencies.runAutomaticRvLiteSession({
-            repository: replay.repository,
-            workspaceId: frozen.snapshot.workspaceId,
-            profileId: frozen.snapshot.profileId,
-            profileName: frozen.snapshot.identities?.aiIsBeDisplayName,
-            humanIsBeDisplayName: frozen.snapshot.identities?.humanIsBeDisplayName,
-            providerConfig: input.providerConfig,
-            model: input.model,
-            protocol: frozen.protocol,
-            sessionLanguage: frozen.snapshot.sessionLanguage,
-            requestedSettings: frozen.snapshot.generationSettings.requested,
-            ...(frozen.snapshot.viewerNotes ? { viewerNotes: frozen.snapshot.viewerNotes } : {}),
-            ...(frozen.rvSystemPrompt ? { rvSystemPrompt: frozen.rvSystemPrompt } : {}),
-            automaticTarget: target,
-            capturedAutomaticReveal: frozen.capturedAutomaticReveal,
-            resumeSession: frozen.session,
-            ...(frozen.snapshot.continuationRoute ? { resumeContinuationRoute: frozen.snapshot.continuationRoute } : {}),
-            chat: replay.chat,
-            signal: input.signal,
-            maxRetries: execution.transport.maxRetries,
-            requestTimeoutMs: execution.transport.requestTimeoutMs,
-            operationKind: "training_blind_viewer",
-            streamWorkflowContext: "training",
-            sessionCodePrefix: execution.transport.sessionCodePrefix,
-            onProgress: (sessionProgress) => input.onProgress?.({ index, total: working.targetIds.length, target, sessionProgress }),
-          });
-          if (session.state !== "Revealed") throw new Error(session.stopReason ?? "The training session was interrupted.");
-          if (session.sessionId !== checkpoint.sessionId) throw new Error("Training Resume created a different blind session instead of resuming the checkpointed session.");
-          await ensurePersistedTrainingBlindReveal({ repository: input.repository, sessionId: checkpoint.sessionId, targetId: checkpoint.targetId });
-          checkpoint = { ...checkpoint, stage: "session_revealed" };
-          working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
-          await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
-          input.onRunChange?.(working);
-        }
       }
 
       let viewerReview: string | null = null;
@@ -444,12 +250,10 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
       );
 
       if (checkpoint.stage === "session_revealed") {
-        await assertCanContinue();
         const storedReview = await loadStoredViewerReview();
         viewerReview = storedReview?.content ?? null;
         viewerReviewRequest = storedReview?.request ?? null;
-        if (!viewerReview && !checkpoint.postRevealReviewFailure) {
-          try {
+        if (!viewerReview) {
           const transcript = await dependencies.runAutomaticPostRevealReview({
             repository: input.repository,
             sessionId: checkpoint.sessionId,
@@ -458,62 +262,43 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
             maxRetries: execution.transport.maxRetries,
             signal: input.signal,
             streamWorkflowContext: "training",
-            budgetPolicy: "training_reveal",
-            failurePolicy: "preserve_and_continue",
           });
           const completedReview = findCompletedAutomaticViewerReviewRecord(transcript, execution.language);
           viewerReview = completedReview?.content ?? null;
           viewerReviewRequest = completedReview?.request ?? null;
-          } catch (cause) {
-            if (!(cause instanceof OptionalTrainingReviewUnavailable)) throw cause;
-            await assertCanContinue();
-            // A late durable response wins over a provider error. Otherwise no
-            // memory is learned from a missing Review and Training continues.
-            const stored = await loadStoredViewerReview();
-            viewerReview = stored?.content ?? null;
-            viewerReviewRequest = stored?.request ?? null;
-            if (!viewerReview) checkpoint = { ...checkpoint, postRevealReviewFailure: cause.message };
-          }
         }
-        if ((!viewerReview || !viewerReviewRequest) && !checkpoint.postRevealReviewFailure) throw new Error("Completed automatic Viewer Review could not be recovered after post-Reveal execution.");
-        checkpoint = { ...checkpoint, stage: "review_completed", ...(viewerReviewRequest ? { postRevealReviewPacketSha256: await reviewPacketSha256(viewerReviewRequest) } : {}) };
+        if (!viewerReview || !viewerReviewRequest) throw new Error("Completed automatic Viewer Review could not be recovered after post-Reveal execution.");
+        checkpoint = { ...checkpoint, stage: "review_completed", postRevealReviewPacketSha256: await reviewPacketSha256(viewerReviewRequest) };
         working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
         await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
         input.onRunChange?.(working);
       }
 
       if (checkpoint.stage === "review_completed") {
-        await assertCanContinue();
         if (!viewerReview) {
           const storedReview = await loadStoredViewerReview();
           viewerReview = storedReview?.content ?? null;
           viewerReviewRequest = storedReview?.request ?? null;
         }
-        if (!viewerReview && !checkpoint.postRevealReviewFailure) throw new Error("Completed automatic Viewer Review is required before Field Guide Update.");
-        await assertCanContinue();
+        if (!viewerReview) throw new Error("Completed automatic Viewer Review is required before Field Guide Update.");
         const fieldGuideResult = await dependencies.runFieldGuideUpdate({
           repository: input.repository,
           trainingRun: working,
           sessionId: checkpoint.sessionId,
-          postRevealReview: viewerReview ?? "",
+          postRevealReview: viewerReview,
           providerConfig: input.providerConfig,
           model: input.model,
           timeoutMs: execution.transport.requestTimeoutMs,
           maxRetries: execution.transport.maxRetries,
           signal: input.signal,
-          budgetPolicy: "training_reveal",
-          failurePolicy: "preserve_and_continue",
-          unavailableReviewReason: checkpoint.postRevealReviewFailure,
         });
-        if (!fieldGuideResult) await assertCanContinue();
-        if (fieldGuideResult && !fieldGuideResult.settlement && !fieldGuideUpdateCompletesStage(fieldGuideResult.status)) {
+        if (fieldGuideResult && !fieldGuideUpdateCompletesStage(fieldGuideResult.status)) {
           throw new Error(`Field Guide Update did not complete (${fieldGuideResult.status}).${fieldGuideResult.audit.failureMessage ? ` ${fieldGuideResult.audit.failureMessage}` : ""}`);
         }
         const refreshed = await currentTrainingRecord(input.repository, working.id, working);
         const checkpointWithPacket: TrainingTargetCheckpoint = {
           ...checkpoint,
           stage: "field_guide_update_completed",
-          ...(fieldGuideResult?.settlement ? { learningSettlements: [fieldGuideResult.settlement] } : {}),
           ...(fieldGuideResult?.audit.packetSha256 ? { fieldGuideUpdatePacketSha256: fieldGuideResult.audit.packetSha256 } : {}),
         };
         const fieldGuideAfterUpdate = await resolveTrainingFieldGuideAfterUpdate({
@@ -529,7 +314,6 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
       }
 
       if (checkpoint.stage === "field_guide_update_completed") {
-        await assertCanContinue();
         if (!checkpoint.fieldGuideAfterUpdate) {
           const fieldGuideAfterUpdate = await resolveTrainingFieldGuideAfterUpdate({ repository: input.repository, trainingRun: working, checkpoint });
           checkpoint = { ...checkpoint, fieldGuideAfterUpdate };
@@ -540,28 +324,19 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
         const fieldGuideAfterTrainingUpdate = checkpoint.fieldGuideAfterUpdate;
         if (!fieldGuideAfterTrainingUpdate) throw new Error("Training checkpoint is missing the exact Field Guide version required by Viewer Notes Reflection.");
         if (!viewerReview) viewerReview = (await loadStoredViewerReview())?.content ?? null;
-        if (!viewerReview && !checkpoint.postRevealReviewFailure) throw new Error("Completed automatic Viewer Review is required before Viewer Notes Reflection.");
-        await assertCanContinue();
-        const reflectionResult = await dependencies.runViewerNoteReflection({
+        if (!viewerReview) throw new Error("Completed automatic Viewer Review is required before Viewer Notes Reflection.");
+        await dependencies.runViewerNoteReflection({
           repository: input.repository,
           sessionId: checkpoint.sessionId,
-          viewerReview: viewerReview ?? "",
+          viewerReview,
           providerConfig: input.providerConfig,
           model: input.model,
           fieldGuideAfterTrainingUpdate,
           timeoutMs: execution.transport.requestTimeoutMs,
           maxRetries: execution.transport.maxRetries,
           signal: input.signal,
-          budgetPolicy: "training_reveal",
-          failurePolicy: "preserve_and_continue",
-          unavailableReviewReason: checkpoint.postRevealReviewFailure,
         });
-        if (!reflectionResult) await assertCanContinue();
         const sessionSnapshot = await input.repository.getSessionSnapshot(checkpoint.sessionId);
-        if (!sessionSnapshot) throw new Error("Viewer Notes checkpoint requires the durable Session Snapshot.");
-        if (sessionSnapshot.viewerNotes?.enabled && (!reflectionResult || (!reflectionResult.settlement && !viewerNoteReflectionCompletesStage(reflectionResult.status)))) {
-          throw new Error("Viewer Notes Reflection did not complete; the checkpoint remains resumable.");
-        }
         const reflectionPacketSha256 = sessionSnapshot?.viewerNotes?.enabled
           ? (await input.repository.listViewerNoteReflectionRuns(sessionSnapshot.viewerNotes.aiIdentityId))
               .filter((run) => run.sourceSessionId === checkpoint!.sessionId && run.status !== "PENDING")
@@ -570,19 +345,17 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
         checkpoint = {
           ...checkpoint,
           stage: "viewer_notes_reflection_completed",
-          ...(reflectionResult?.settlement ? { learningSettlements: [...(checkpoint.learningSettlements ?? []), reflectionResult.settlement] } : {}),
           ...(reflectionPacketSha256 ? { viewerNotesReflectionPacketSha256: reflectionPacketSha256 } : {}),
         };
-        working = { ...await currentTrainingRecord(input.repository, working.id, working), activeTargetCheckpoint: checkpoint, updatedAt: now() };
+        working = { ...working, activeTargetCheckpoint: checkpoint, updatedAt: now() };
         await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
         input.onRunChange?.(working);
       }
 
-      await assertCanContinue();
+      if (input.signal?.aborted) throw new DOMException("Training cancelled", "AbortError");
       if (input.judges.length && checkpoint.stage === "viewer_notes_reflection_completed") {
         const existingScores = await input.repository.listJudgeScores(checkpoint.sessionId);
         const missingJudges = selectMissingJudgeSelections(existingScores, input.judges);
-        await assertCanContinue();
         if (missingJudges.length) {
           await dependencies.runBlindJudging({
             repository: input.repository,
@@ -600,7 +373,7 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
         await input.repository.updateTrainingRun(working.id, { activeTargetCheckpoint: checkpoint });
         input.onRunChange?.(working);
       }
-      await assertCanContinue();
+      if (input.signal?.aborted) throw new DOMException("Training cancelled", "AbortError");
       await input.repository.updateRvSessionState(checkpoint.sessionId, "Completed");
 
       completed.add(target.id);
@@ -628,28 +401,15 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
       }
     }
 
-    await assertCanContinue();
     working = { ...working, status: "Completed", currentIndex: working.targetIds.length, completedAt: now(), updatedAt: now() };
     await input.repository.updateTrainingRun(working.id, { status: "Completed", currentIndex: working.currentIndex, completedAt: working.completedAt });
     input.onRunChange?.(working);
     return { run: working };
   } catch (cause) {
-    const latest = (await input.repository.listTrainingRuns()).find((run) => run.id === working.id);
-    if (latest && isTrainingRunUserFinished(latest)) {
-      input.onRunChange?.(latest);
-      return { run: latest, error: userFinishedTrainingError().message };
-    }
     const message = cause instanceof Error ? cause.message : String(cause);
     working = { ...working, status: "Interrupted", errors: [...working.errors, message], updatedAt: now() };
     await input.repository.updateTrainingRun(working.id, { status: "Interrupted", error: message });
     input.onRunChange?.(working);
     return { run: working, error: message };
   }
-}
-
-export async function executeTrainingRun(input:ExecuteTrainingRunInput):Promise<TrainingExecutionOutcome> {
- const persisted=(await input.repository.listTrainingRuns()).find(run=>run.id===input.initial.id);
- if(!persisted)throw new Error("Training run is no longer available.");
- if(isTrainingRunUserFinished(persisted))return {run:persisted,error:userFinishedTrainingError().message};
- return withWorkflow(input.repository,{profileId:persisted.profileId,entity:{kind:"training",id:persisted.id},signal:input.signal},(repository,signal)=>executeTrainingRunOwned({...input,repository,signal}));
 }

@@ -1,15 +1,9 @@
-mod research_evaluation;
-#[cfg(test)]
-#[path = "../vendor/tauri-runtime-wry/src/main_thread_target.rs"]
-mod runtime_target_ownership;
 mod secrets;
 mod migrations;
 mod providers;
 mod artifacts;
 mod storage;
 mod database;
-mod workflow_ownership;
-mod workflow_heartbeat;
 mod dialogs;
 mod documents;
 #[cfg(test)]
@@ -27,9 +21,6 @@ pub fn run() {
                 .add_migrations("sqlite:rv_harness.db", migrations)
                 .build(),
         )
-        .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::Destroyed) { workflow_heartbeat::window_destroyed(window.label()); }
-        })
         .invoke_handler(tauri::generate_handler![
             providers::store_credential,
             providers::rebind_credential,
@@ -75,9 +66,6 @@ pub fn run() {
             database::database_select_readonly,
             database::database_execute_write,
             database::database_execute_write_batch,
-            database::database_execute_telepathic_fenced_write_batch,
-            database::database_execute_post_reveal_review_fenced_write_batch,
-            workflow_ownership::database_workflow_ownership,
             database::database_snapshot,
             database::database_controlled_purge
         ])

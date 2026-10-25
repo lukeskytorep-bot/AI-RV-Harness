@@ -1,21 +1,19 @@
 {
   "name": "ai-rv-harness",
   "private": true,
-  "version": "0.7.14",
+  "version": "0.7.13",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build && node scripts/report-vite-bundle.mjs",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
-    "verify:source": "node scripts/verify-source-integrity-selftest.mjs && node scripts/verify-source-integrity.mjs . && node scripts/verify-runtime-ownership-patch-selftest.mjs && node scripts/verify-runtime-ownership-patch.mjs",
+    "verify:source": "node scripts/verify-source-integrity-selftest.mjs && node scripts/verify-source-integrity.mjs .",
     "verify:ux-data": "node scripts/verify-ux-data-compatibility.mjs .",
     "test:watch": "vitest",
     "tauri": "tauri",
     "verify:architecture": "node scripts/verify-architecture-selftest.mjs && node scripts/verify-architecture.mjs",
-    "verify:v0.7.14-release-gate": "node scripts/verify-v0.7.14-release-gate.mjs",
-    "verify:openrouter-continuation-bridge": "node scripts/verify-openrouter-continuation-cross-language.mjs",
-    "verify:runtime-ownership": "node scripts/verify-runtime-ownership-patch.mjs"
+    "verify:openrouter-continuation-bridge": "node scripts/verify-openrouter-continuation-cross-language.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
@@ -35,7 +33,6 @@
     "@vitejs/plugin-react": "6.0.5",
     "typescript": "7.0.2",
     "vite": "8.2.1",
-    "vitest": "4.1.10",
-    "jsdom": "26.1.0"
+    "vitest": "4.1.10"
   }
 }

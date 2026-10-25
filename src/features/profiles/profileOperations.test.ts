@@ -18,7 +18,6 @@ describe("profile operations", () => {
   it("persists identity and optional AI defaults before closing and refreshing", async () => {
     const order: string[] = [];
     const repository = {
-      listProfiles: vi.fn(async () => [{ id: "profile-1" }]),
       updateProfile: vi.fn(async () => { order.push("profile"); }),
       setProfileAiConfiguration: vi.fn(async () => { order.push("ai"); }),
       listProviderConfigs: vi.fn(async () => [{ id: "provider-1", provider: "openrouter", label: "OpenRouter", credentialId: "credential-1", credentialFingerprint: "fp-1", enabled: true, createdAt: "now", updatedAt: "now" }]),
@@ -33,6 +32,6 @@ describe("profile operations", () => {
 
     expect(repository.updateProfile).toHaveBeenCalledWith("profile-1", { name: "Orion", humanName: "Luke", note: "note" });
     expect(repository.setProfileAiConfiguration).toHaveBeenCalledWith("profile-1", aiConfiguration);
-    expect(order).toEqual(["identity", "profile", "ai", "close", "refresh"]);
+    expect(order).toEqual(["profile", "ai", "identity", "close", "refresh"]);
   });
 });

@@ -2,8 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppRepository } from "../storage/repository";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import type { AiIdentity } from "./types";
-import type { Profile, Workspace } from "../types";
-import { ensureProfileViewerIdentity, listEligibleViewerIdentities, preferredViewerIdentityId, requireExistingViewerIdentity, requireWorkspaceViewerRoute, viewerIdentityLabel } from "./viewerIdentitySelection";
+import { ensureProfileViewerIdentity, listEligibleViewerIdentities, preferredViewerIdentityId, requireExistingViewerIdentity, viewerIdentityLabel } from "./viewerIdentitySelection";
 
 const nativeCredentialFingerprints = vi.hoisted(() => new Map<string, string>());
 const credentialIdentityFingerprintMock = vi.hoisted(() => vi.fn(async (credentialId: string) => {
@@ -69,17 +68,6 @@ describe("Viewer identity route selection", () => {
     expect(preferredViewerIdentityId(items, "same")).toBe("");
   });
 
-  it("prefers the Profile credential when two connections have the same model slug", async () => {
-    const c1 = config("one"); const c2 = config("two"); bind(c1, c2);
-    const m1 = model(c1.id, "same"); const m2 = model(c2.id, "same");
-    const items = await listEligibleViewerIdentities({ repository: repo({ identities: [identity("ai-one",c1,m1),identity("ai-two",c2,m2)] }),profileId:"profile",language:"en",providerConfigs:[c1,c2],models:[m1,m2] });
-    expect(preferredViewerIdentityId(items,"same",c2.credentialId)).toBe("ai-two");
-  });
-  it("does not silently substitute another credential for an unavailable Profile default", async () => {
-    const c = config("one"); bind(c); const m = model(c.id,"same");
-    const items = await listEligibleViewerIdentities({ repository: repo({ identities: [identity("ai-one",c,m)] }),profileId:"profile",language:"en",providerConfigs:[c],models:[m] });
-    expect(preferredViewerIdentityId(items,"same","unavailable-credential")).toBe("");
-  });
   it("does not silently choose the first identity when multiple eligible identities have no Profile default", async () => {
     const c = config("pc"); bind(c);
     const gemma = model(c.id, "gemma"); const qwen = model(c.id, "qwen");
@@ -147,23 +135,6 @@ describe("Viewer identity route selection", () => {
     const c = config("pc"); bind(c); const gemma = model(c.id, "gemma"); const qwen = model(c.id, "qwen"); const i = identity("ai-g", c, gemma);
     const repository = { listAiIdentities: vi.fn(async () => [i]) } as unknown as AppRepository;
     await expect(requireExistingViewerIdentity({ repository, profileId: "profile", identityId: i.id, providerConfig: c, model: qwen })).rejects.toThrow("selected Viewer identity");
-  });
-
-  it("fails closed when a Workspace belongs to another Profile even if an old Viewer route is still in memory", async () => {
-    const c = config("pc"); bind(c); const m = model(c.id, "gemma"); const i = identity("ai-g", c, m);
-    const repository = { listAiIdentities: vi.fn(async () => [i]) } as unknown as AppRepository;
-    const profile = { id: "profile", name: "A", createdAt: now, updatedAt: now } as Profile;
-    const workspace = { id: "workspace-b", profileId: "profile-b", name: "B", kind: "conversation", createdAt: now, updatedAt: now, lastOpenedAt: now } as Workspace;
-    await expect(requireWorkspaceViewerRoute({ repository, workspace, profile, identityId: i.id, providerConfig: c, model: m })).rejects.toThrow("Workspace");
-    expect(repository.listAiIdentities).not.toHaveBeenCalled();
-  });
-
-  it("accepts a Viewer route only when Workspace, Profile, identity, provider, model and credential binding all agree", async () => {
-    const c = config("pc"); bind(c); const m = model(c.id, "gemma"); const i = identity("ai-g", c, m);
-    const repository = { listAiIdentities: vi.fn(async () => [i]) } as unknown as AppRepository;
-    const profile = { id: "profile", name: "A", createdAt: now, updatedAt: now } as Profile;
-    const workspace = { id: "workspace-a", profileId: profile.id, name: "A", kind: "conversation", createdAt: now, updatedAt: now, lastOpenedAt: now } as Workspace;
-    await expect(requireWorkspaceViewerRoute({ repository, workspace, profile, identityId: i.id, providerConfig: c, model: m })).resolves.toEqual(i);
   });
 
   it("bootstraps a durable factory-only identity from Profile Setup without Training", async () => {

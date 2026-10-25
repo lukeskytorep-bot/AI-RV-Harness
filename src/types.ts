@@ -1,12 +1,10 @@
 import type { FieldGuideSessionSnapshot } from "./aiCenter/fieldGuideTypes";
-import type { CustomReasoningMode, ReasoningEffort } from "./providers/types";
-import type { OpenRouterAdditionalSamplingSettings } from "./providers/openRouterSamplingSettings";
+import type { ReasoningEffort } from "./providers/types";
 
 export type InterfaceLanguage = "pl" | "en";
 export type SessionLanguageSetting = "same" | InterfaceLanguage;
 export type Theme = "blue" | "aurora" | "light" | "dark" | "green";
 export type ChatMode = "conversation" | "manual_rv";
-export type CustomTemperatureMode = "provider_default" | "manual";
 
 export interface ChatThread {
   id: string;
@@ -21,35 +19,11 @@ export interface ChatThread {
   archivedAt?: string;
 }
 
-export type ChatAttachmentDeliveryState = "prepared" | "included_in_request" | "not_included" | "uncertain";
-
-export interface ChatAttachmentAttemptMetadata {
-  attemptNumber: number;
-  createdAt: string;
-  sources: Array<{ id: string; name: string; type: string; included: boolean }>;
-  images: Array<{ name: string; mimeType?: string; state: ChatAttachmentDeliveryState }>;
-}
-
-export interface ChatResponseRecovery {
-  state: "prepared" | "dispatched" | "stopped" | "uncertain" | "retry_approved" | "ended" | "complete";
-  attempts: Array<{ id: string; startedAt: string; dispatched: boolean; outcome?: "stopped" | "uncertain" | "complete"; reason?: "user_stop" | "view_closed" | "cancelled" | "provider_failure"; lateResponse?: { content: string; usage: Record<string, unknown>; providerRequestId?: string; finishReason?: string } }>;
-  endedAt?: string;
-  retryApprovedAt?: string;
-}
-
-export interface ChatMessageMetadata {
-  responseRecovery?: ChatResponseRecovery;
-  attachmentAttempts?: ChatAttachmentAttemptMetadata[];
-  viewerOutputAttempts?: Array<Record<string, unknown>>;
-  viewerOutputAccepted?: Record<string, unknown>;
-}
-
 export interface ChatMessage {
   id: string;
   threadId: string;
   role: "user" | "assistant";
   content: string;
-  metadata?: ChatMessageMetadata;
   createdAt: string;
 }
 
@@ -61,8 +35,6 @@ export interface AppSettings {
   maxRetries: number;
   defaultMaxOutputTokens: number;
   conversationMaxOutputTokens: number;
-  /** One-time Conversation factory budget upgrade; later user choices survive. */
-  conversationOutputBudgetVersion?: number;
   rvSessionMaxOutputTokens: number;
   maxSessionCostUsd: number;
   defaultRevealSource: "external" | "automatic";
@@ -86,9 +58,6 @@ export interface Profile {
   defaultViewerModelId?: string;
   defaultViewerReasoningEffort?: ReasoningEffort;
   defaultViewerTemperature?: number;
-  defaultViewerCustomTemperatureMode?: CustomTemperatureMode;
-  defaultViewerCustomReasoningMode?: CustomReasoningMode;
-  defaultViewerOpenRouterSampling?: OpenRouterAdditionalSamplingSettings;
   defaultViewerSystemPrompt?: string;
   defaultMonitorSystemPrompt?: string;
   defaultMonitorProviderConfigId?: string;
@@ -106,9 +75,6 @@ export interface ProfileAiConfigurationInput {
   defaultViewerModelId?: string;
   defaultViewerReasoningEffort?: ReasoningEffort;
   defaultViewerTemperature?: number;
-  defaultViewerCustomTemperatureMode?: CustomTemperatureMode;
-  defaultViewerCustomReasoningMode?: CustomReasoningMode;
-  defaultViewerOpenRouterSampling?: OpenRouterAdditionalSamplingSettings;
   defaultViewerSystemPrompt?: string;
   defaultMonitorSystemPrompt?: string;
   defaultMonitorProviderConfigId?: string;

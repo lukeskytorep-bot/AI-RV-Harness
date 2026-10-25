@@ -1,4 +1,5 @@
 import { sha256Text } from "../application/sha256";
+import { credentialIdentityFingerprint } from "../providers/native";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import {
   buildEffectiveViewerPrompt,
@@ -11,7 +12,7 @@ import type { AppRepository } from "../storage/repository";
 import type { AiIdentity } from "./types";
 import { requireExistingViewerIdentity } from "./viewerIdentitySelection";
 import type { InterfaceLanguage, Profile, ViewerSystemPromptSnapshot } from "../types";
-import { ensureViewerIdentityForRoute } from "./viewerIdentityRoute";
+import { buildViewerIdentityInput } from "./viewerNotes";
 import type {
   FieldGuideBundle,
   FieldGuideCapacity,
@@ -41,7 +42,10 @@ async function ensureViewerIdentity(input: {
   providerConfig: ProviderConfig;
   model: ProviderModel;
 }) {
-  return ensureViewerIdentityForRoute(input);
+  let secureFingerprint: string | undefined;
+  try { secureFingerprint = await credentialIdentityFingerprint(input.providerConfig.credentialId); }
+  catch { secureFingerprint = input.providerConfig.credentialFingerprint; }
+  return input.repository.ensureAiIdentity(buildViewerIdentityInput(input.profileId, input.providerConfig, input.model, secureFingerprint));
 }
 
 function unresolvedCustomBaselines(baselines: FieldGuideLegacyBaseline[]): FieldGuideLegacyBaseline[] {

@@ -1,5 +1,3 @@
-import { readableBlindTranscript } from "../sessions/blindTranscriptEvidence";
-import type { SessionEventRecord } from "../sessions/types";
 import { aggregateJudgeScores } from "../domain/scoring";
 import type { JudgeScoreRecord } from "../judge/types";
 import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
@@ -12,8 +10,6 @@ export interface CompleteSessionMarkdownInput {
   title: string;
   language: InterfaceLanguage;
   session: RvSession;
-  events?: SessionEventRecord[];
-  sessionLanguage?: InterfaceLanguage;
   revealText: string;
   revealFilesMarkdown: string;
   scores: JudgeScoreRecord[];
@@ -26,12 +22,9 @@ export function renderCompleteSessionMarkdown(input: CompleteSessionMarkdownInpu
   const clarificationText = input.clarifications.length
     ? input.clarifications.map((item) => `### ${item.createdAt}\n\n${item.content}`).join("\n\n")
     : "—";
-  const blind = input.events ? readableBlindTranscript(input.events, input.session.preRevealTranscript, input.sessionLanguage ?? input.language) : input.session.preRevealTranscript;
-  const blindRecord = blind === input.session.preRevealTranscript ? blind
-    : `${pl ? "> Pełną instrukcję wysłaną Viewerowi pokazano obok polecenia Monitora. Oryginalny zapieczętowany zapis pozostaje niezmieniony." : "> The full instruction sent to the Viewer is shown alongside the Monitor command. The original sealed record remains unchanged."}\n\n${blind}`;
   const body = `## ${pl ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}
 
-${blindRecord.trim() || "—"}
+${input.session.preRevealTranscript.trim() || "—"}
 
 ## Target Reveal
 

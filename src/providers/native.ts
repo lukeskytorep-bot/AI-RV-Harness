@@ -1,12 +1,9 @@
-import { nativeWorkflowBinding, providerAbortFromSignal } from "../application/abortOwnership";
-import { parseProviderFinalCandidate } from "./finalCandidate";
-import { parseProviderResponseEvidence } from "./responseEvidence";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { isTauriRuntime } from "../storage";
 import { normalizeModelDiscovery } from "./capabilities";
 import type { EffectiveRequestEnvelope } from "./effectiveRequestEnvelope";
 import { detailedProviderDiagnosticsEnabled, recordProviderDebug } from "./debug";
-import { normalizeProviderCallError, ProviderCallError } from "./providerError";
+import { normalizeProviderCallError } from "./providerError";
 import type {
   EffectiveGenerationSettings,
   ProviderChatResponse,
@@ -20,8 +17,6 @@ import type {
 import type { ProviderTimeoutPolicy } from "./streamingPolicy";
 
 type NativeChatResponse = {
-  final_candidate?: unknown;
-  response_evidence?: unknown;
   content: string;
   reasoning_content?: string | null;
   reasoning_details?: unknown[] | null;
@@ -125,7 +120,7 @@ export async function providerChatAttempt(input: {
   transportEnvelope?: EffectiveRequestEnvelope;
 }): Promise<ProviderChatResponse> {
   requireDesktop();
-  if (input.signal?.aborted) throw providerAbortFromSignal(input.signal);
+  if (input.signal?.aborted) throw new DOMException("Provider request cancelled", "AbortError");
   const requestId = crypto.randomUUID();
   const cancel = () => {
     void invoke("cancel_provider_request", { requestId }).catch(() => undefined);
@@ -140,31 +135,25 @@ export async function providerChatAttempt(input: {
         ...nativeConfig(input.config),
         providerConfigId: input.config.id,
         requestId,
-        ...(nativeWorkflowBinding(input.signal) ? { workflowOwnership: nativeWorkflowBinding(input.signal) } : {}),
         modelId: input.modelId,
         messages: input.messages,
         reasoningEffort: input.settings.effective.reasoningEffort,
         reasoningMaxTokens: input.settings.effective.reasoningMaxTokens,
-        reasoningTransportKind: input.config.provider === "custom_openai" && input.settings.effective.customReasoningMode && input.settings.effective.customReasoningMode !== "default" ? "enabled_boolean" : input.settings.reasoningResolution?.transport.kind,
-        reasoningTransportValue: input.config.provider === "custom_openai" && input.settings.effective.customReasoningMode && input.settings.effective.customReasoningMode !== "default" ? String(input.settings.effective.customReasoningMode === "on") : input.settings.reasoningResolution?.transport.value,
+        reasoningTransportKind: input.settings.reasoningResolution?.transport.kind,
+        reasoningTransportValue: input.settings.reasoningResolution?.transport.value,
         temperature: input.settings.effective.temperature,
-        ...((input.config.provider === "openrouter" || input.config.provider === "custom_openai" || input.config.provider === "mistral" || input.config.provider === "blackbox") && input.settings.effective.topP !== undefined ? { topP: input.settings.effective.topP } : {}),
-        ...((input.config.provider === "openrouter" || input.config.provider === "custom_openai" || input.config.provider === "mistral" || input.config.provider === "blackbox") && input.settings.effective.topK !== undefined ? { topK: input.settings.effective.topK } : {}),
-        ...((input.config.provider === "openrouter" || input.config.provider === "custom_openai" || input.config.provider === "mistral" || input.config.provider === "blackbox") && input.settings.effective.seed !== undefined ? { seed: input.settings.effective.seed } : {}),
         maxOutputTokens: input.settings.effective.maxOutputTokens,
         ...(input.config.provider === "custom_openai" && input.config.customOutputTokenField ? { customOutputTokenField: input.config.customOutputTokenField } : {}),
-        ...(input.config.provider === "custom_openai" ? { customStreamingEnabled: input.config.customStreamingEnabled ?? false } : {}),
         timeoutMs: input.timeoutMs,
         timeoutPolicy: input.timeoutPolicy,
         detailedDiagnostics: detailedProviderDiagnosticsEnabled(),
-        ...(input.config.provider === "openrouter" && input.providerRouting ? { providerRouting: input.providerRouting } : {}),
+        providerRouting: input.providerRouting,
       },
       onStream,
       emitStreamEvents: Boolean(input.onStreamEvent),
     });
   } catch (cause) {
-    const original = normalizeProviderCallError(cause);
-    const normalized = new ProviderCallError({ ...original.details, transportRequestId: requestId }, { cause: original });
+    const normalized = normalizeProviderCallError(cause);
     recordProviderDebug({
       provider: input.config.provider,
       modelId: input.modelId,
@@ -172,7 +161,6 @@ export async function providerChatAttempt(input: {
       error: normalized.message,
       ...(input.transportEnvelope ? { transport: structuredClone(input.transportEnvelope) } : {}),
     });
-    if (input.signal?.aborted) throw providerAbortFromSignal(input.signal, normalized);
     throw normalized;
   } finally {
     input.signal?.removeEventListener("abort", cancel);
@@ -207,9 +195,6 @@ export async function providerChatAttempt(input: {
     ...(input.transportEnvelope ? { transport: structuredClone(input.transportEnvelope) } : {}),
   });
   return {
-    ...(parseProviderFinalCandidate(response.final_candidate) ? { finalCandidate: parseProviderFinalCandidate(response.final_candidate) } : {}),
-    transportRequestId: requestId,
-    ...(parseProviderResponseEvidence(response.response_evidence) ? { responseEvidence: parseProviderResponseEvidence(response.response_evidence) } : {}),
     content: response.content,
     reasoningContent: response.reasoning_content ?? undefined,
     reasoningDetails: response.reasoning_details ?? undefined,

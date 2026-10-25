@@ -8,11 +8,6 @@ export function computeConditionStatistics(sessions: UnblindedSessionResult[]): 
     return {
       conditionKey,
       label: rows[0].conditionLabel,
-      ...(rows[0].samplingValues ? { samplingValues: rows[0].samplingValues } : {}),
-      ...(rows[0].requestedSettings ? { requestedSettings: rows[0].requestedSettings } : {}),
-      ...(rows[0].effectiveSettings ? { effectiveSettings: rows[0].effectiveSettings } : {}),
-      ...(rows[0].providerConfigId ? { providerConfigId: rows[0].providerConfigId } : {}),
-      ...(rows[0].modelId ? { modelId: rows[0].modelId } : {}),
       n: rows.length,
       meanTotal: mean(totals),
       medianTotal: median(totals),
@@ -30,27 +25,26 @@ export function computeConditionStatistics(sessions: UnblindedSessionResult[]): 
 }
 
 export function computePairwiseStatistics(sessions: UnblindedSessionResult[]): PairwiseStatistics[] {
-  const byCondition = new Map<string, Map<string, number>>();
-  for (const session of sessions) {
-    const pairs = byCondition.get(session.conditionKey) ?? new Map<string, number>();
-    pairs.set(session.pairKey, session.total);
-    byCondition.set(session.conditionKey, pairs);
-  }
-  const conditionKeys = [...byCondition.keys()].sort();
+  const conditionKeys = [...new Set(sessions.map((session) => session.conditionKey))].sort();
   const pairs: PairwiseStatistics[] = [];
   for (let a = 0; a < conditionKeys.length; a += 1) {
     for (let b = a + 1; b < conditionKeys.length; b += 1) {
       const conditionA = conditionKeys[a];
       const conditionB = conditionKeys[b];
-      const rowsA = byCondition.get(conditionA)!;
-      const rowsB = byCondition.get(conditionB)!;
+      const byPair = new Map<string, Map<string, number>>();
+      for (const session of sessions.filter((row) => row.conditionKey === conditionA || row.conditionKey === conditionB)) {
+        const map = byPair.get(session.pairKey) ?? new Map<string, number>();
+        map.set(session.conditionKey, session.total);
+        byPair.set(session.pairKey, map);
+      }
       const differences: number[] = [];
       let winsA = 0;
       let winsB = 0;
       let ties = 0;
-      for (const [pairKey, va] of rowsA) {
-        const vb = rowsB.get(pairKey);
-        if (vb === undefined) continue;
+      for (const values of byPair.values()) {
+        const va = values.get(conditionA);
+        const vb = values.get(conditionB);
+        if (va === undefined || vb === undefined) continue;
         const difference = round2(va - vb);
         differences.push(difference);
         if (difference > 0) winsA += 1;
