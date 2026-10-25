@@ -18,6 +18,9 @@ import type { TelepathicSeriesState } from "../telepathicExchange/types";
 
 
 export interface AppRepository {
+  listResearchEvaluations(projectId: string): Promise<import("../research/evaluationTypes").ResearchEvaluation[]>;
+  getResearchEvaluation(projectId: string, id: string): Promise<import("../research/evaluationTypes").ResearchEvaluation | null>;
+  saveResearchEvaluation(record: import("../research/evaluationTypes").ResearchEvaluation, expectedRevision: number): Promise<void>;
   readonly recoveryOwner?: object;
   withWorkflowOwnership<T>(scope: import("../application/workflowOwnership").WorkflowScope, task: (owned: AppRepository, signal: AbortSignal) => Promise<T>): Promise<T>;
   getWorkflowResearchProjectId(sessionId:string):Promise<string|undefined>;

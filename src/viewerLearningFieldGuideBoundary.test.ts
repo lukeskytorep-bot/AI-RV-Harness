@@ -67,9 +67,11 @@ describe("VIEWER-LEARNING-1 Field Guide boundaries", () => {
     // UX-TEL-5 adds a separate Telepathy path and explicit parent guard.
     // S4 classifies the separate Research execution marker as terminal for purge.
     expect(browserControlledPurge).toContain("if(project.executionTermination)return true;");
+    // Evaluation panels add only project-scoped sidecar key cleanup.
+    expect(browserControlledPurge).toContain("rvh.research.evaluation.v1:");
     // Normalize only those declared additions: all accepted learning/continuation
     // deletion bytes remain protected by the original hashes.
-    expect(sha256(normalizeTelepathicPurgeWiring(browserControlledPurge.replace("  if(project.executionTermination)return true;\n", ""),"browser"))).toBe("8f61ac511dd3226833ff1cca14190b162d6ecb32712ccaad558c59caf8410a98");
+    expect(sha256(normalizeTelepathicPurgeWiring(browserControlledPurge.replace("  if(project.executionTermination)return true;\n", "").replace(/  const evaluationKeys=.*\n  atomicWrite\(storage, changes, \[\.\.\.providerStateResetArtifacts,\.\.\.evaluationKeys\]\);/, "  atomicWrite(storage, changes, providerStateResetArtifacts);"),"browser"))).toBe("8f61ac511dd3226833ff1cca14190b162d6ecb32712ccaad558c59caf8410a98");
     expect(sha256(normalizeTelepathicPurgeWiring(sqliteControlledPurge,"sqlite"))).toBe("5ed7115da8cc2bc36ddc06170c766783f19186bf4cd8672396c291ae26cfcfc4");
     expect(sha256(migration023)).toBe("1a9d300daa180a4507c01497b52deaf84722bd710ed4617f84058932dc7838a4");
   });

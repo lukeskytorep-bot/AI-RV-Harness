@@ -1,5 +1,6 @@
+import { evaluationKey, evaluationPrefix, validateResearchEvaluation, assertEvaluationUpdate, type ResearchEvaluation } from "../research/evaluationTypes";
 import { validateResearchTermination, researchScope, canEndResearchExecution, researchTermination } from "../research/executionLifecycle";
-import { ownBrowserWorkflow, browserOwnershipState } from "./browser/workflowOwnership";
+import { ownBrowserWorkflow, browserOwnershipState, assertBrowserEvaluationWriter } from "./browser/workflowOwnership";
 import type { WorkflowScope } from "../application/workflowOwnership";
 import type { CreateProfileInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
@@ -42,6 +43,18 @@ function write<T>(key: string, value: T): void {
 }
 
 export class BrowserRepository implements AppRepository {
+  async listResearchEvaluations(projectId:string):Promise<ResearchEvaluation[]> {
+    return Object.keys(localStorage).filter(key=>key.startsWith(`${evaluationPrefix}${projectId}:`)).map(key=>validateResearchEvaluation(JSON.parse(localStorage.getItem(key)!),{projectId})).sort((a,b)=>a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }
+  async getResearchEvaluation(projectId:string,id:string):Promise<ResearchEvaluation|null>{
+    const raw=localStorage.getItem(evaluationKey(projectId,id));return raw?validateResearchEvaluation(JSON.parse(raw),{projectId,id}):null;
+  }
+  async saveResearchEvaluation(record:ResearchEvaluation,expectedRevision:number):Promise<void>{
+    assertBrowserEvaluationWriter(this,record.projectId);
+    assertEvaluationUpdate(await this.getResearchEvaluation(record.projectId,record.id),record,expectedRevision);
+    localStorage.setItem(evaluationKey(record.projectId,record.id),JSON.stringify(record));
+  }
+
   async getResearchExecutionTermination(projectId:string):Promise<import("../research/executionLifecycle").ResearchExecutionTermination|null>{
     // Deliberately fail closed for corrupt runtime data; the marker is outside frozen config.
     const projects=JSON.parse(localStorage.getItem("rvh.dev.research_projects")??"[]") as Array<import("../research/types").ResearchProjectRecord>;

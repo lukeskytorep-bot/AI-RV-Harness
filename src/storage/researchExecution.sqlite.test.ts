@@ -1,3 +1,6 @@
+import { stableStringify } from "../research/planner";
+import { assertEvaluationUpdate, type ResearchEvaluation } from "../research/evaluationTypes";
+import { createResearchEvaluation, runResearchEvaluation, evaluationScope } from "../research/evaluationEngine";
 import {DatabaseSync,backup} from "node:sqlite";
 import {readFileSync,readdirSync,mkdtempSync,rmSync} from "node:fs";
 import {join} from "node:path";
@@ -62,17 +65,25 @@ function transaction<T>(fn:()=>T){db.exec("BEGIN IMMEDIATE");try{const value=fn(
 function guard(request:any){const key=`rvh.workflow.v1:${request.profileId}`;write(sql("UPDATE app_settings SET value=value"),[key]);
  if(Number(scalar(sql("SELECT COUNT(*) FROM app_settings WHERE key=$1 AND json_extract(value,'$.owner')=$2"),[key,request.owner,request.version]))!==1)throw new Error("Workflow ownership lost");
  const projectId=request.profileId.startsWith("research:")?request.profileId.slice(9):undefined;
- if(projectId){if(Number(scalar(sql("SELECT COUNT(*) FROM research_projects r JOIN workspaces"),[projectId]))!==1)throw new Error("Research was archived or removed");if(!request.entities.some((entity:any)=>entity.kind==="research" && entity.id===projectId && entity.allowEnded) && Number(scalar(sql("SELECT COUNT(*) FROM app_settings WHERE key='rvh.research.end.v1:'"),[projectId])))throw new Error("Research execution was ended");}
+ if(projectId){if(Number(scalar(sql("SELECT COUNT(*) FROM research_projects r JOIN workspaces"),[projectId]))!==1)throw new Error("Research was archived or removed");if(!request.entities.some((entity:any)=>(entity.kind==="research" && entity.id===projectId && entity.allowEnded || request.entities.length===1 && entity.kind==="research_evaluation" && entity.id===projectId)) && Number(scalar(sql("SELECT COUNT(*) FROM app_settings WHERE key='rvh.research.end.v1:'"),[projectId])))throw new Error("Research execution was ended");}
  else if(Number(scalar(sql("SELECT COUNT(*) FROM profiles WHERE id=$1 AND archived_at"),[request.profileId]))!==1)throw new Error("Profile unavailable");
- for(const entity of request.entities){if(entity.kind==="research")continue;const profile=entity.profileId ?? request.profileId;if(projectId && Number(scalar(sql("SELECT COUNT(*) FROM profiles WHERE id=$1 AND archived_at"),[profile]))!==1)throw new Error("Profile archived");if(entity.kind==="rv" && projectId && Number(scalar(sql("SELECT COUNT(*) FROM rv_sessions WHERE id=$1 AND research_project_id=$2"),[entity.id,projectId]))!==1)throw new Error("Research scope mismatch");const prefix=entity.kind==="training"?"SELECT COUNT(*) FROM training_runs WHERE id=$1":entity.kind==="rv"?"SELECT COUNT(*) FROM rv_sessions WHERE id=$1 AND profile_id=$2":"SELECT COUNT(*) FROM profiles WHERE id=$1 AND id=$2";if(Number(scalar(sql(prefix),[entity.id,profile]))!==1)throw new Error("Workflow was ended, archived or removed");}
+ for(const entity of request.entities){if(entity.kind==="research" || entity.kind==="research_evaluation")continue;const profile=entity.profileId ?? request.profileId;if(projectId && Number(scalar(sql("SELECT COUNT(*) FROM profiles WHERE id=$1 AND archived_at"),[profile]))!==1)throw new Error("Profile archived");if(entity.kind==="rv" && projectId && Number(scalar(sql("SELECT COUNT(*) FROM rv_sessions WHERE id=$1 AND research_project_id=$2"),[entity.id,projectId]))!==1)throw new Error("Research scope mismatch");const prefix=entity.kind==="training"?"SELECT COUNT(*) FROM training_runs WHERE id=$1":entity.kind==="rv"?"SELECT COUNT(*) FROM rv_sessions WHERE id=$1 AND profile_id=$2":"SELECT COUNT(*) FROM profiles WHERE id=$1 AND id=$2";if(Number(scalar(sql(prefix),[entity.id,profile]))!==1)throw new Error("Workflow was ended, archived or removed");}
 }
 async function ownership(request:any){const key=`rvh.workflow.v1:${request.profileId}`;
  if(request.action==="acquire")return transaction(()=>{write(sql("INSERT OR IGNORE INTO app_settings"),[key]);if(request.profileId.startsWith("research:")){if(Number(scalar(sql("SELECT COUNT(*) FROM research_projects r JOIN workspaces"),[request.profileId.slice(9)]))!==1)throw new Error("Research unavailable");}else if(Number(scalar(sql("SELECT COUNT(*) FROM profiles WHERE id=$1 AND archived_at"),[request.profileId]))!==1)throw new Error("Profile unavailable");const changed=write(sql("UPDATE app_settings SET value=json_set(value,'$.owner',$1"),[request.owner,key]);if(!changed)throw new Error("Work is running in another window");return{profileId:request.profileId,owner:request.owner,version:Number(scalar(sql("SELECT json_extract(value,'$.version')"),[key]))};});
  if(request.action==="renew")return write(sql("UPDATE app_settings SET value=json_set(value,'$.expiresAt'"),[key,request.owner,request.version])===1;
  if(request.action==="release")return write(sql("UPDATE app_settings SET value=json_set(value,'$.owner',NULL"),[key,request.owner,request.version])===1;
  if(request.action==="inspect"){const raw=scalar(sql("SELECT value FROM app_settings WHERE key=$1"),[key]);return{...(raw?JSON.parse(String(raw)):{}),active:Number(scalar(sql("SELECT COUNT(*) FROM app_settings WHERE key=$1 AND json_extract(value,'$.owner') IS NOT NULL"),[key]))===1};}
+ if(request.action==="evaluationSave")return transaction(()=>{
+  const projectId=request.profileId.slice(9);guard({...request,entities:[{kind:"research_evaluation",id:projectId}]});
+  const key=`rvh.research.evaluation.v1:${projectId}:${request.record.id}`;
+  const raw=scalar("SELECT value FROM app_settings WHERE key=$1",[key]);
+  assertEvaluationUpdate(raw?JSON.parse(String(raw)):null,request.record,request.expectedRevision);
+  write("INSERT INTO app_settings(key,value,updated_at) VALUES($1,$2,'t') ON CONFLICT(key) DO UPDATE SET value=excluded.value",[key,stableStringify(JSON.parse(JSON.stringify(request.record)))]);return true;
+ });
  if(request.action==="endResearch")return transaction(()=>{const id=request.profileId.slice(9);guard({...request,entities:[{kind:"research",id,allowEnded:true}]});const markerKey=`rvh.research.end.v1:${id}`;const existing=scalar(sql("SELECT value FROM app_settings WHERE key=$1"),[markerKey]);if(existing)return JSON.parse(String(existing));const state=String(scalar(sql("SELECT state FROM research_projects WHERE id=$1"),[id]));if(!["Locked","Running","Interrupted","SessionsComplete","Judging","ScoresFrozen","Unblinded"].includes(state))throw new Error("Research cannot be ended");const marker={reason:"user_finished",endedAt:request.endedAt,stateAtEnd:state,phase:["SessionsComplete","Judging"].includes(state)?"judging":["ScoresFrozen","Unblinded"].includes(state)?"finalization":"sessions"};write(sql("INSERT INTO app_settings(key,value,updated_at) VALUES($1,$2"),[markerKey,JSON.stringify(marker)]);return marker;});
  return transaction(()=>{guard(request);if(request.action==="check")return true;
+ if(request.entities.some((e:any)=>e.kind==="research_evaluation"))throw new Error("Research evaluation cannot change source work");
  if(request.postRevealFence){const fence=request.postRevealFence;const valid=scalar(sql("SELECT COUNT(*) FROM rv_sessions WHERE id=$1 AND post_reveal_review_lease_owner"),[fence.sessionId,fence.leaseOwner,fence.leaseVersion]);if(Number(valid)!==1)throw new Error("Review fence lost");}
  return request.statements.map((input:any)=>statement(input,request.profileId.startsWith("research:")?request.profileId.slice(9):undefined));});
 }
@@ -170,4 +181,57 @@ it("Research SQLite: BUSY while saving a received Judge retries only the local w
  await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{totalTokens:20}};}})});
  expect(busy).toBe(1);expect(paid).toBe(4);expect(select("SELECT * FROM judge_scores")).toHaveLength(4);
  const reconnected=await SqliteRepository.connect();expect((await reconnected.listSessionEvents((await repository.listResearchAssignments(project.id))[0].sessionId!)).some(event=>event.eventType==="RESEARCH_JUDGE_REQUEST_V1" && event.metadata?.status==="received")).toBe(true);
+});
+
+it("Research SQLite: missing Judge 1 coexists with frozen Judge 2; completion survives reconnect without overwrites", async () => {
+ const {repository,project}=await study();await sessions(repository,project.id);const method=lockedBytes(project.id);let paid=0;
+ const runner:typeof runBlindJudging=input=>runBlindJudging({...input,chat:async()=>{paid++;return{content:paid===1?JSON.stringify({...JSON.parse(judgeJson),strongestMatches:null}):judgeJson,finishReason:"stop",usage:{}};}});
+ await expect(judgeResearch({repository,projectId:project.id,judgeRunner:runner})).rejects.toThrow(/incomplete/);
+ expect(paid).toBe(4);const before=select("SELECT * FROM judge_scores");expect(before).toHaveLength(3);
+ const reconnected=await SqliteRepository.connect();
+ await expect(judgeResearch({repository:reconnected,projectId:project.id,judgeRunner:runner})).rejects.toThrow(/incomplete/);expect(paid).toBe(4);
+ await judgeResearch({repository:reconnected,projectId:project.id,completeMissing:true,judgeRunner:runner});expect(paid).toBe(5);
+ const after=select("SELECT * FROM judge_scores");expect(after).toHaveLength(4);for(const score of before)expect(after.find(row=>row.id===score.id)).toEqual(score);
+ expect(select("SELECT * FROM session_events WHERE event_type='RESEARCH_JUDGE_COMPLETION_AUTH_V1'")).toHaveLength(1);
+ expect((await reconnected.getResearchProject(project.id))?.state).toBe("ScoresFrozen");expect(lockedBytes(project.id)).toEqual(method);
+ expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+});
+
+it("Research SQLite: persisted completion transport allowance is not renewed on reconnect", async () => {
+ const {repository,project}=await study();await sessions(repository,project.id);let paid=0;
+ const {ProviderCallError}=await import("../providers/providerError");
+ const runner:typeof runBlindJudging=input=>runBlindJudging({...input,chat:async()=>{paid++;throw new ProviderCallError({code:"response_body_read",phase:"reading_body",message:"lost"});}});
+ await expect(judgeResearch({repository,projectId:project.id,judgeRunner:runner})).rejects.toThrow(/incomplete/);expect(paid).toBe(8);
+ await expect(judgeResearch({repository,projectId:project.id,completeMissing:true,judgeRunner:runner})).rejects.toThrow(/incomplete/);expect(paid).toBe(16);
+ const reconnected=await SqliteRepository.connect();await expect(judgeResearch({repository:reconnected,projectId:project.id,judgeRunner:runner})).rejects.toThrow(/exhausted/);expect(paid).toBe(16);
+ expect(select("SELECT * FROM session_events WHERE event_type='RESEARCH_JUDGE_COMPLETION_AUTH_V1'")).toHaveLength(4);
+ expect(select("SELECT * FROM judge_scores")).toHaveLength(0);
+});
+
+it("Research evaluation SQLite: two new panels survive End and reconnect without changing original sessions or scores", async () => {
+ const {repository,project}=await study();await sessions(repository,project.id);
+ await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>({content:judgeJson,finishReason:"stop",usage:{}})})});
+ await repository.endResearchExecution(project.id);
+ const marker=await repository.getResearchExecutionTermination(project.id),originalScores=select("SELECT * FROM judge_scores"),originalRuns=select("SELECT * FROM judge_runs"),originalSessions=select("SELECT * FROM rv_sessions"),method=lockedBytes(project.id);
+ const a=await createResearchEvaluation({repository,projectId:project.id});let paid=0;
+ await runResearchEvaluation({repository,projectId:project.id,evaluationId:a.id,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{}};}});
+ const reconnected=await SqliteRepository.connect();const b=await createResearchEvaluation({repository:reconnected,projectId:project.id,judges:[project.config.judges[1]]});
+ await runResearchEvaluation({repository:reconnected,projectId:project.id,evaluationId:b.id,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{}};}});
+ expect(paid).toBe(6);expect((await reconnected.listResearchEvaluations(project.id)).map(p=>p.status)).toEqual(["Complete","Complete"]);
+ expect(select("SELECT * FROM judge_scores")).toEqual(originalScores);expect(select("SELECT * FROM judge_runs")).toEqual(originalRuns);expect(select("SELECT * FROM rv_sessions")).toEqual(originalSessions);
+ expect(await reconnected.getResearchExecutionTermination(project.id)).toEqual(marker);expect(lockedBytes(project.id)).toEqual(method);
+ await expect(judgeResearch({repository:reconnected,projectId:project.id})).rejects.toThrow(/ended/);
+ await reconnected.withWorkflowOwnership(evaluationScope(project.id),async owned=>{await expect(owned.updateResearchAssignment("irrelevant",undefined,"Running")).rejects.toThrow(/source work/);});
+ expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+});
+
+it("Research evaluation SQLite: Stop/reconnect resumes only missing panel slots and retains dispatched receipts", async () => {
+ const {repository,project}=await study();await sessions(repository,project.id);await repository.endResearchExecution(project.id);
+ const panel=await createResearchEvaluation({repository,projectId:project.id}),stop=new AbortController();let paid=0;
+ await expect(runResearchEvaluation({repository,projectId:project.id,evaluationId:panel.id,signal:stop.signal,chat:async()=>{paid++;stop.abort();return{content:judgeJson,finishReason:"stop",usage:{}};}})).rejects.toThrow();
+ const before=await repository.getResearchEvaluation(project.id,panel.id);expect(Object.values(before!.scores).flat()).toHaveLength(1);
+ const reconnected=await SqliteRepository.connect();await runResearchEvaluation({repository:reconnected,projectId:project.id,evaluationId:panel.id,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{}};}});
+ expect(paid).toBe(4);const after=await reconnected.getResearchEvaluation(project.id,panel.id);expect(after?.status).toBe("Complete");
+ for(const [id,scores] of Object.entries(before!.scores))expect(after?.scores[id]).toEqual(expect.arrayContaining(scores));
+ expect(await reconnected.getResearchExecutionTermination(project.id)).toMatchObject({reason:"user_finished"});
 });

@@ -1,5 +1,5 @@
 import type { AppRepository } from "../storage/repository";
-export interface WorkflowEntity { kind: "training" | "rv" | "profile" | "research"; id: string; profileId?:string; allowEnded?:boolean; }
+export interface WorkflowEntity { kind: "training" | "rv" | "profile" | "research" | "research_evaluation"; id: string; profileId?:string; allowEnded?:boolean; }
 /** profileId is the lock partition: a Profile id or research:<projectId>. Research entities carry their persisted Profile id separately. */
 export interface WorkflowScope { profileId: string; entity: WorkflowEntity; signal?: AbortSignal; terminal?: boolean; }
 export interface WorkflowToken { profileId: string; owner: string; version: number; }

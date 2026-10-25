@@ -20,9 +20,9 @@ export async function getUncertainResearchJudges(repository:AppRepository,projec
   if(expected.length){
    // Frozen scores are a prefix in the same order used by selectMissingJudgeSelections.
    // Consume each score once, even when several selected Judges share a route.
-   const prefixValid=scores.length<=expected.length && scores.every((score,index)=>Boolean(score.frozenAt) && score.modelRoute===expected[index]);
+   const prefixValid=scores.length<=expected.length && new Set(scores.map(score=>score.judgeIndex)).size===scores.length && scores.every(score=>Number.isInteger(score.judgeIndex) && Boolean(score.frozenAt) && score.modelRoute===expected[score.judgeIndex-1]);
    for(let index=0;index<expected.length;index++){
-    if(prefixValid && index<scores.length)continue;
+    if(prefixValid && scores.some(score=>score.judgeIndex===index+1))continue;
     const route=expected[index];
     if(!route){out.push({sessionId:assignment.sessionId,modelRoute:project!.config.judges[index].modelId});continue;}
     if(!prefixValid || researchJudgeRequestAvailability(events,route,index+1,{owner:repository.recoveryOwner ?? repository,sessionId:assignment.sessionId})==="blocked")out.push({sessionId:assignment.sessionId,modelRoute:route});

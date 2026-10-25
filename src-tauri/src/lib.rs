@@ -1,3 +1,4 @@
+mod research_evaluation;
 #[cfg(test)]
 #[path = "../vendor/tauri-runtime-wry/src/main_thread_target.rs"]
 mod runtime_target_ownership;

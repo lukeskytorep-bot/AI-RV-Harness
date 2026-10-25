@@ -15,7 +15,8 @@ export async function exportResearchPackage(repository: AppRepository, projectId
   const results = await repository.getResearchResults(projectId);
   if (!project) throw new Error("Research project not found.");
   const termination=await repository.getResearchExecutionTermination(projectId);
-  const saveOnly = project.config.judges.length === 0 && project.state === "SessionsComplete" || Boolean(termination && !results);
+  const partial = !termination && project.config.judges.length > 0 && ["SessionsComplete", "Judging", "ScoresFrozen"].includes(project.state);
+  const saveOnly = partial || project.config.judges.length === 0 && project.state === "SessionsComplete" || Boolean(termination && !results);
   const completedWithScores = project.state === "Complete" && Boolean(results);
   if (!saveOnly && !completedWithScores && !termination) throw new Error("Research sessions must be complete before export.");
   const [assignments, mappings, conditions, sessions] = await Promise.all([
@@ -30,6 +31,7 @@ export async function exportResearchPackage(repository: AppRepository, projectId
   const files: ExportTextFile[] = [];
   const artifactCopies: ExportArtifactCopy[] = [];
   const snapshots: Record<string, unknown> = {};
+  const partialScores: Array<{ anonymousSessionId: string; scores: Awaited<ReturnType<AppRepository["listJudgeScores"]>> }> = [];
   const blindingKey: Array<Record<string, unknown>> = [];
   const privatePrefix = saveOnly ? "private_master/" : "";
   if(termination)files.push({relativePath:`${privatePrefix}master/execution_termination.json`,content:pretty(termination)});
@@ -62,8 +64,9 @@ export async function exportResearchPackage(repository: AppRepository, projectId
       repository.getReveal(session.id), repository.getViewerEvidence(session.id), repository.getSessionSnapshot(session.id), repository.listJudgeScores(session.id), repository.listTargetClarifications(session.id),
     ]);
     const base = `sessions/${assignment.anonymousSessionId}`;
-    if(termination)files.push({relativePath:`${privatePrefix}master/${base}/judge_scores.json`,content:pretty(judgeScores)});
-    if(termination)files.push({relativePath:`${privatePrefix}master/${base}/session_events.json`,content:pretty(await repository.listSessionEvents(session.id))});
+    if(partial)partialScores.push({ anonymousSessionId: assignment.anonymousSessionId, scores: judgeScores });
+    if(termination || partial)files.push({relativePath:`${privatePrefix}master/${base}/judge_scores.json`,content:pretty(judgeScores)});
+    if(termination || partial)files.push({relativePath:`${privatePrefix}master/${base}/session_events.json`,content:pretty(await repository.listSessionEvents(session.id))});
     if (!saveOnly) {
       files.push({ relativePath: `${base}/pre_reveal.md`, content: session.preRevealTranscript });
       files.push({ relativePath: `${base}/viewer_evidence.md`, content: viewerEvidence });
@@ -132,6 +135,25 @@ export async function exportResearchPackage(repository: AppRepository, projectId
     const file=files.find(file=>file.relativePath==="README.md");if(file)file.content=readme;
     if(!results){for(const name of ["summary.md","summary.html"]){const file=files.find(file=>file.relativePath===name);if(file)file.content=name.endsWith("html")?`<!doctype html><html lang="${project.config.sessionLanguage}"><meta charset="utf-8"><title>Research</title><body><h1>${escapeHtml(project.name)}</h1><p>${status}</p></body></html>`:`# ${project.name}\n\n${status}\n`;}}
   }
+  if (partial) {
+    const received = partialScores.reduce((n, row) => n + row.scores.length, 0), expected = assignments.length * project.config.judges.length;
+    const pl = project.config.sessionLanguage === "pl";
+    const status = pl ? `Wyniki częściowe: ${received}/${expected} ocen. To nie jest końcowy ranking badania.` : `Partial results: ${received}/${expected} scores. This is not the final study ranking.`;
+    files.push({ relativePath: "partial_results/scores.json", content: pretty({ partial: true, received, expected, sessions: partialScores }) });
+    const header = ["anonymous_session_id", "judge_index", "gestalt", "verifiable_features", "activity_function_event", "confabulation_control", "total"];
+    const rows = partialScores.flatMap(row => row.scores.map(score => [row.anonymousSessionId, score.judgeIndex, score.gestalt, score.verifiableFeatures, score.activityFunctionEvent, score.confabulationControl, score.total]));
+    files.push({ relativePath: "partial_results/scores.csv", content: [header, ...rows].map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n" });
+    for (const file of files) {
+      if (["README.md", "summary.md"].includes(file.relativePath)) file.content = `# ${project.name}\n\n${status}\n\n${pl ? "Oceny: partial_results. Pełne dane i klucz odślepienia: private_master — zachowaj ten folder jako prywatny. Pakiety dla sędziego: external_evaluation." : "Scores: partial_results. Full records and blinding key: private_master — keep this folder private. Judge packets: external_evaluation."}\n`;
+      if (file.relativePath === "summary.html") file.content = `<!doctype html><html lang="${project.config.sessionLanguage}"><meta charset="utf-8"><title>Research</title><body><h1>${escapeHtml(project.name)}</h1><p>${status}</p></body></html>`;
+      if (file.relativePath === "summary.csv") file.content = `partial,received_scores,expected_scores\r\ntrue,${received},${expected}\r\n`;
+    }
+  }
+  // Keep secondary panels separate and private in the full project backup.
+  // Each panel also has its own dedicated anonymous export action.
+  if (typeof repository.listResearchEvaluations === "function") {
+    for (const panel of await repository.listResearchEvaluations(projectId)) files.push({ relativePath: `${privatePrefix}master/evaluation_panels/${panel.id}.json`, content: pretty(panel) });
+  }
   const manifestEntries = await Promise.all(files.map(async (file) => ({ path: file.relativePath, kind: "text", sha256: await sha256Text(file.content) })));
   for (const assignment of assignments) {
     if (!assignment.sessionId) continue;
@@ -147,7 +169,7 @@ export async function exportResearchPackage(repository: AppRepository, projectId
   files.push({ relativePath: "manifest.json", content: manifestContent });
   const exportId = `RV_Harness_Research_${project.id.replace(/[^A-Za-z0-9_-]/g, "_")}_${Date.now()}`;
   const directory = await writeExportPackage({ exportId, files, artifactCopies, ...(baseDirectory?.trim() ? { destination: "external" as const, baseDirectory: baseDirectory.trim() } : {}) });
-  await repository.recordExport(project.workspaceId, project.id, saveOnly ? "research_save_only_package" : "research_package", directory, manifestHash);
+  await repository.recordExport(project.workspaceId, project.id, saveOnly && !partial ? "research_save_only_package" : "research_package", directory, manifestHash);
   return { directory, manifestHash };
 }
 

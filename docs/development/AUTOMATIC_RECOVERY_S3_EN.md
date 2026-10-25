@@ -2,6 +2,8 @@
 
 Reviewed 23 October 2026. Base: S2 with AUDIT_FIX_2. Application version: 0.7.14.
 
+The subsequent [Research Judge completion](RESEARCH_JUDGE_COMPLETION_EN.md) extends the validation-block and Resume behavior described below with local alias recovery, independent slots and explicit bounded completion.
+
 ## Research Judge
 
 Research uses a lease-owned request journal in existing session events:

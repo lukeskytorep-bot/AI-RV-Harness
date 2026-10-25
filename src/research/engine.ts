@@ -1,11 +1,12 @@
-import { createResearchJudgeRequestRecovery, ResearchJudgeCheckpointError } from "./judgeRequestRecovery";
+import { selectMissingResearchJudges } from "./judgeSlots";
+import { createResearchJudgeRequestRecovery, ResearchJudgeCheckpointError, ResearchJudgeSlotFailure, researchJudgeRequestAvailability, currentJudgeCompletionId, RESEARCH_JUDGE_COMPLETION_AUTH } from "./judgeRequestRecovery";
 import { prepareViewerSessionResume, type ViewerResumeDecisionCopy } from "../sessions/viewerResumeDecision";
 import { withResearchExecution } from "./executionLifecycle";
 import { assertAbortOwnership } from "../application/abortOwnership";
 import { recordResearchJudgeAttempt } from "./judgeRecovery";
 import { CURRENT_ANALYTICAL_OUTPUT_POLICY, analyticalBudgetPolicyForSnapshot } from "../providers/outputRecovery";
 import { aggregateJudgeScores } from "../domain/scoring";
-import { runBlindJudging, selectMissingJudgeSelections, JudgeResponseValidationError, type JudgeSelection } from "../judge/engine";
+import { runBlindJudging, JudgeResponseValidationError, type JudgeSelection } from "../judge/engine";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { runAutomaticRcpSession, type AutomaticRcpRunInput, type AutomaticRcpRunResult, type SessionProgress } from "../sessions/controller";
@@ -450,10 +451,13 @@ async function judgeResearchOwned(input: {
   judgeRunner?:typeof runBlindJudging;
   /** Stable owner across workflow adapters; the UI supplies its root repository. */
   recoveryOwner?: object;
+  /** Explicit operator action, never enabled by automatic continuation or restart. */
+  completeMissing?: boolean;
   onProgress?: (progress: { completed: number; total: number; anonymousSessionId: string }) => void;
 }): Promise<void> {
   if(input.signal?.aborted)return;
   const project = await requireProject(input.repository, input.projectId);
+  if (await input.repository.getResearchExecutionTermination(project.id)) throw new Error("Research execution was ended by the user; completion requires a separate evaluation operation.");
   if (!["SessionsComplete", "Judging"].includes(project.state)) throw new Error(`Research judging cannot run from state ${project.state}.`);
   if (project.config.judges.length === 0) throw new Error("This Research project is configured for Save only / external evaluation.");
   const [assignments, providers, models] = await Promise.all([
@@ -469,7 +473,7 @@ async function judgeResearchOwned(input: {
     if(!assignment.sessionId)continue;
     const scores=await input.repository.listJudgeScores(assignment.sessionId);
     const events=await input.repository.listSessionEvents(assignment.sessionId);
-    for (const judge of selectMissingJudgeSelections(scores, judgeSelections)) if (!events.some(event => event.eventType === "RESEARCH_JUDGE_ATTEMPT" && event.metadata?.modelRoute === judge.model.route)) {
+    for (const judge of selectMissingResearchJudges(scores, judgeSelections)) if (!events.some(event => event.eventType === "RESEARCH_JUDGE_ATTEMPT" && event.metadata?.modelRoute === judge.model.route)) {
       if (project.state === "Judging") await input.repository.appendSessionEvent(assignment.sessionId, { eventType: "RESEARCH_JUDGE_LEGACY_UNKNOWN", role: "controller", metadata: { modelRoute: judge.model.route } });
       await recordResearchJudgeAttempt(input.repository, assignment.sessionId, judge.model.route, "pending");
     }
@@ -477,13 +481,14 @@ async function judgeResearchOwned(input: {
   await input.repository.setResearchProjectState(project.id, "Judging");
   let completed = assignments.filter((assignment) => assignment.status === "Judged").length;
 
+  const failures: string[] = [];
   // Deliberately do not read Blinding Mappings or Research Conditions in this function.
   for (const assignment of assignments.sort((a, b) => a.judgeOrder - b.judgeOrder)) {
     if(input.signal?.aborted)return;
     await assertAbortOwnership(input.signal);
     if (!assignment.sessionId) throw new Error("A Research assignment has no completed session.");
     const existing = await input.repository.listJudgeScores(assignment.sessionId);
-    const missingJudges = selectMissingJudgeSelections(existing, judgeSelections);
+    const missingJudges = selectMissingResearchJudges(existing, judgeSelections);
     if (!missingJudges.length) {
       if (assignment.status !== "Judged") await input.repository.updateResearchAssignment(assignment.id, assignment.sessionId, "Judged");
       completed += assignment.status === "Judged" ? 0 : 1;
@@ -492,17 +497,30 @@ async function judgeResearchOwned(input: {
     for(const judge of missingJudges){
       if(input.signal?.aborted)return;
       await assertAbortOwnership(input.signal);
-      try { await (input.judgeRunner ?? runBlindJudging)({
-      recoverRequest: createResearchJudgeRequestRecovery({ repository: input.repository, owner: input.recoveryOwner ?? input.repository.recoveryOwner ?? input.repository, sessionId: assignment.sessionId, modelRoute: judge.model.route, judgeIndex: judgeSelections.indexOf(judge) + 1, allowLegacyResponse: judgeSelections.filter(item => item.model.route === judge.model.route).length === 1, signal: input.signal }),
+      const judgeIndex = judgeSelections.indexOf(judge) + 1;
+      const initialEvents = await input.repository.listSessionEvents(assignment.sessionId);
+      const initiallyBlocked = researchJudgeRequestAvailability(initialEvents, judge.model.route, judgeIndex, { owner: input.recoveryOwner ?? input.repository.recoveryOwner ?? input.repository, sessionId: assignment.sessionId }) === "blocked";
+      const runSlot = async () => (input.judgeRunner ?? runBlindJudging)({
+      researchPolicy: { judgeIndex, onNormalization: async trace => {
+        try {
+          const events = await input.repository.listSessionEvents(assignment.sessionId!);
+          const completionId = currentJudgeCompletionId(events, judge.model.route, judgeIndex);
+          if (!events.some(e => e.eventType === "RESEARCH_JUDGE_NORMALIZED" && e.metadata?.judgeIndex === judgeIndex && e.metadata?.modelRoute === judge.model.route && e.metadata?.completionId === completionId && e.metadata?.version === trace.version && e.metadata?.sourceSha256 === trace.sourceSha256)) {
+            await input.repository.appendSessionEvent(assignment.sessionId!, { eventType: "RESEARCH_JUDGE_NORMALIZED", role: "controller", metadata: { ...trace, judgeIndex, modelRoute: judge.model.route, completionId } });
+          }
+        } catch (cause) { throw new ResearchJudgeCheckpointError(cause); }
+      } },
+      recoverRequest: createResearchJudgeRequestRecovery({ repository: input.repository, owner: input.recoveryOwner ?? input.repository.recoveryOwner ?? input.repository, sessionId: assignment.sessionId!, modelRoute: judge.model.route, judgeIndex: judgeSelections.indexOf(judge) + 1, allowValidationReplay: true, allowLegacyResponse: judgeSelections.filter(item => item.model.route === judge.model.route).length === 1, signal: input.signal }),
       repository: input.repository,
-      sessionId: assignment.sessionId,
+      sessionId: assignment.sessionId!,
       language: project.config.sessionLanguage,
       judges: [judge],
       onResponse: async response => {
         try {
           const events = await input.repository.listSessionEvents(assignment.sessionId!);
-          if (!events.some(e => e.eventType === "RESEARCH_JUDGE_RESPONSE" && e.metadata?.modelRoute === judge.model.route && e.content === response.content && e.metadata?.providerRequestId === response.providerRequestId)) {
-            await input.repository.appendSessionEvent(assignment.sessionId!, { eventType: "RESEARCH_JUDGE_RESPONSE", role: "controller", content: response.content, metadata: { modelRoute: judge.model.route, usage: response.usage, providerRequestId: response.providerRequestId, finishReason: response.finishReason } });
+          const completionId = currentJudgeCompletionId(events, judge.model.route, judgeIndex);
+          if (!events.some(e => e.metadata?.judgeIndex === judgeIndex && e.metadata?.completionId === completionId && e.eventType === "RESEARCH_JUDGE_RESPONSE" && e.metadata?.modelRoute === judge.model.route && e.content === response.content && e.metadata?.providerRequestId === response.providerRequestId)) {
+            await input.repository.appendSessionEvent(assignment.sessionId!, { eventType: "RESEARCH_JUDGE_RESPONSE", role: "controller", content: response.content, metadata: { modelRoute: judge.model.route, judgeIndex, completionId, usage: response.usage, providerRequestId: response.providerRequestId, finishReason: response.finishReason } });
           }
         } catch (cause) { throw new ResearchJudgeCheckpointError(cause); }
       },
@@ -514,12 +532,43 @@ async function judgeResearchOwned(input: {
       budgetPolicy: judgeBudgetPolicy,
       onAttemptStart: input.judgeRunner ? async attempt => { await recordResearchJudgeAttempt(input.repository, assignment.sessionId!, judge.model.route, "dispatched", attempt); } : undefined,
       });
-      } catch (cause) {
+      const saveFailure = async (cause: JudgeResponseValidationError | ResearchJudgeSlotFailure) => {
         if (cause instanceof JudgeResponseValidationError) {
-          try { await input.repository.appendSessionEvent(assignment.sessionId, { eventType: "RESEARCH_JUDGE_VALIDATION_BLOCK", role: "controller", content: cause.message, metadata: { modelRoute: judge.model.route, judgeIndex: judgeSelections.indexOf(judge) + 1 } }); }
-          catch (error) { throw new ResearchJudgeCheckpointError(error); }
+          try {
+            const events = await input.repository.listSessionEvents(assignment.sessionId!);
+            const completionId = currentJudgeCompletionId(events, judge.model.route, judgeIndex);
+            if (!events.some(e => e.eventType === "RESEARCH_JUDGE_VALIDATION_BLOCK" && e.metadata?.modelRoute === judge.model.route && e.metadata?.judgeIndex === judgeIndex && e.metadata?.completionId === completionId && e.content === cause.message)) {
+              await input.repository.appendSessionEvent(assignment.sessionId!, { eventType: "RESEARCH_JUDGE_VALIDATION_BLOCK", role: "controller", content: cause.message, metadata: { modelRoute: judge.model.route, judgeIndex, completionId } });
+            }
+          } catch (error) { throw new ResearchJudgeCheckpointError(error); }
         }
-        throw cause;
+      };
+      try { await runSlot(); }
+      catch (cause) {
+        if (input.signal?.aborted) throw cause;
+        await assertAbortOwnership(input.signal);
+        if (!(cause instanceof JudgeResponseValidationError) && !(cause instanceof ResearchJudgeSlotFailure)) throw cause;
+        await saveFailure(cause);
+        if (input.completeMissing && initiallyBlocked) {
+          // The old journal and limits remain immutable. One explicit action grants
+          // a fresh, persisted bounded attempt for this missing slot only.
+          const events = await input.repository.listSessionEvents(assignment.sessionId);
+          const previousId = currentJudgeCompletionId(events, judge.model.route, judgeIndex);
+          const previousFailure = events.filter(e => e.metadata?.modelRoute === judge.model.route && e.metadata?.completionId === previousId
+            && (e.metadata?.judgeIndex === judgeIndex || !Number.isInteger(e.metadata?.judgeIndex))
+            && (e.eventType === "RESEARCH_JUDGE_VALIDATION_BLOCK" || e.eventType === "RESEARCH_JUDGE_REQUEST_V1" && ["failed", "paused", "dispatched"].includes(String(e.metadata?.status)))).at(-1);
+          if (!previousFailure) throw new Error("Research Judge completion requires a durable prior failure.");
+          try { await input.repository.appendSessionEvent(assignment.sessionId, { eventType: RESEARCH_JUDGE_COMPLETION_AUTH, role: "controller", metadata: {
+            version: 1, completionId: createId("judge_completion"), previousId, previousFailureEventId: previousFailure.id, modelRoute: judge.model.route, judgeIndex,
+          } }); } catch (error) { throw new ResearchJudgeCheckpointError(error); }
+          try { await runSlot(); }
+          catch (retryCause) {
+            if (input.signal?.aborted) throw retryCause;
+            await assertAbortOwnership(input.signal);
+            if (!(retryCause instanceof JudgeResponseValidationError) && !(retryCause instanceof ResearchJudgeSlotFailure)) throw retryCause;
+            await saveFailure(retryCause); failures.push(`${assignment.anonymousSessionId} · J${judgeIndex}: ${retryCause.message}`); continue;
+          }
+        } else { failures.push(`${assignment.anonymousSessionId} · J${judgeIndex}: ${cause.message}`); continue; }
       }
       // Validation/freeze failures never masquerade as uncertain transport.
       // Frozen scores are authoritative if this bookkeeping save fails.
@@ -527,12 +576,16 @@ async function judgeResearchOwned(input: {
       catch (cause) { throw new ResearchJudgeCheckpointError(cause); }
     }
     const frozen = await input.repository.listJudgeScores(assignment.sessionId);
-    if (frozen.length !== judgeSelections.length || frozen.some((score) => !score.frozenAt)) throw new Error("Judge score freeze verification failed.");
+    if (selectMissingResearchJudges(frozen, judgeSelections).length) {
+      input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId });
+      continue;
+    }
     await input.repository.updateResearchAssignment(assignment.id, assignment.sessionId, "Judged");
     completed += 1;
     input.onProgress?.({ completed, total: assignments.length, anonymousSessionId: assignment.anonymousSessionId });
   }
   if(input.signal?.aborted)return;
+  if (failures.length) throw new Error(`Research judging incomplete; saved scores retained. ${failures.join("; ")}`);
   await verifyAllResearchScoresFrozen(input.repository, project.id, project.config.judges.length);
   await input.repository.setResearchProjectState(project.id, "ScoresFrozen");
 }

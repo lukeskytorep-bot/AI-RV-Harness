@@ -162,3 +162,29 @@ it("exports requested OpenRouter samplers from frozen requestedSettings for clas
   expect(summaryHtml).toContain("<td>Auto</td><td>100</td><td>Auto</td>");
   expect(resultCsv).not.toContain("Auto,0.04,Auto,0,Auto,42");
 });
+
+it("exports incomplete judging without final ranking and keeps the frozen design out of anonymous scores and Judge packets", async () => {
+  const { fixture } = await import("../testing/researchJudgeRecoveryFixture");
+  const f = fixture(); await f.run(); f.project.state = "Judging";
+  f.project.config.judges.push({ providerConfigId: "pc", modelId: "m" });
+  f.project.config.conditions = [{ key: "secret", label: "PRIVATE_CONDITION_123", profileId: "secret_profile", providerConfigId: "pc", modelId: "PRIVATE_VIEWER_123", requestedSettings: { topP: 0.123 } }];
+  Object.assign(f.repo, {
+    listRvSessions: async () => [{ id: "s", workspaceId: "w", profileId: "secret_profile", sessionCode: "RES-1", state: "Completed", runType: "automatic", preRevealTranscript: "sealed blind evidence", postRevealTranscript: "", preRevealSealedAt: "t", preRevealHash: "hash", researchProjectId: "r", createdAt: "t", updatedAt: "t" }],
+    listBlindingMappings: async () => [{ anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "c", pairKey: "pair" }],
+    listResearchConditions: async () => [{ id: "c", conditionKey: "secret", config: f.project.config.conditions[0] }],
+    listTargetClarifications: async () => [], recordExport: vi.fn(),
+  });
+  writeExportPackage.mockResolvedValueOnce("/exports/partial");
+  await exportResearchPackage(f.repo, "r");
+  const request = writeExportPackage.mock.calls.at(-1)![0] as { files: Array<{ relativePath: string; content: string }> };
+  const read = (path: string) => request.files.find(file => file.relativePath === path)?.content;
+  expect(JSON.parse(read("partial_results/scores.json")!)).toMatchObject({ partial: true, received: 1, expected: 2, sessions: [{ anonymousSessionId: "BlindSession_ABCDEF12", scores: [{ judgeIndex: 1 }] }] });
+  expect(read("partial_results/scores.csv")).toContain("anonymous_session_id,judge_index");
+  expect(read("README.md")).toContain("not the final study ranking");
+  expect(request.files.some(file => file.relativePath.startsWith("results/"))).toBe(false);
+  const publicContent = request.files.filter(file => file.relativePath.startsWith("partial_results/") || file.relativePath.startsWith("external_evaluation/")).map(file => file.content).join("\n");
+  expect(publicContent).not.toContain("PRIVATE_CONDITION_123");expect(publicContent).not.toContain("PRIVATE_VIEWER_123");expect(publicContent).not.toContain("0.123");
+  expect(read("private_master/blinding/blinding_key.json")).toContain("PRIVATE_CONDITION_123");
+  expect(read("private_master/master/sessions/BlindSession_ABCDEF12/session_events.json")).toContain("RESEARCH_JUDGE_REQUEST_V1");
+  expect((await f.repo.getResearchProject("r"))?.state).toBe("Judging");
+});

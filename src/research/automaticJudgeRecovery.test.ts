@@ -107,7 +107,7 @@ it("Research output exhaustion remains a validation block across Resume", async 
  const f = fixture(); f.chat.mockResolvedValue({ content: "partial candidate", finishReason: "length", usage: {} });
  await expect(f.run()).rejects.toThrow(); expect(f.chat).toHaveBeenCalledTimes(2);
  expect(await getUncertainResearchJudges(f.repo,"r")).toHaveLength(1);
- await expect(f.run()).rejects.toThrow(/validation exhausted/); expect(f.chat).toHaveBeenCalledTimes(2); expect(await f.repo.listJudgeScores("s")).toHaveLength(0);
+ await expect(f.run()).rejects.toThrow(/incomplete assistant response/); expect(f.chat).toHaveBeenCalledTimes(2); expect(await f.repo.listJudgeScores("s")).toHaveLength(0);
 });
 it("Research buffers use the stable root across distinct workflow adapters", async () => {
  const f = fixture(), root = f.repo, save = f.repo.appendSessionEvent.bind(f.repo);let broken = true;
@@ -167,8 +167,8 @@ it("Research scopes a second Judge validation failure and does not assign a lega
  expect(events.find(e=>e.eventType==="RESEARCH_JUDGE_VALIDATION_BLOCK")?.metadata?.judgeIndex).toBe(2);
  const read=f.repo.listJudgeScores.bind(f.repo);
  f.repo.listJudgeScores=async id=>(await read(id)).map(s=>({...s,judgeIndex:undefined})) as unknown as JudgeScoreRecord[];
- expect(await getUncertainResearchJudges(f.repo,"r")).toHaveLength(1);
- await expect(f.run()).rejects.toThrow(/validation exhausted/);expect(f.chat).toHaveBeenCalledTimes(3);
+ expect(await getUncertainResearchJudges(f.repo,"r")).toHaveLength(2);
+ await expect(f.run()).rejects.toThrow(/slot does not match/);expect(f.chat).toHaveBeenCalledTimes(3);
 });
 
 it("Research legacy request records without slot identity cannot unlock a missing second Judge",async()=>{

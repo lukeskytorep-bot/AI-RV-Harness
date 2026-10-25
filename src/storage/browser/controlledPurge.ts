@@ -405,5 +405,6 @@ export function purgeBrowserPermanentDelete(storage: StorageLike, kind: PurgeEnt
     browserChatMessageProviderStateResetKey(threadId),
     browserChatMessageProviderStateFreshKey(threadId),
   ]);
-  atomicWrite(storage, changes, providerStateResetArtifacts);
+  const evaluationKeys=Object.keys(storage).filter(key=>[...scope.researchIds].some(id=>key.startsWith(`rvh.research.evaluation.v1:${id}:`)));
+  atomicWrite(storage, changes, [...providerStateResetArtifacts,...evaluationKeys]);
 }

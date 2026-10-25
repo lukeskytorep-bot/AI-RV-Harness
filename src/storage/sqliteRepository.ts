@@ -1,3 +1,4 @@
+import { evaluationKey, evaluationPrefix, validateResearchEvaluation, assertEvaluationUpdate, type ResearchEvaluation } from "../research/evaluationTypes";
 import { validateResearchTermination, researchTerminationKey, researchScope, canEndResearchExecution } from "../research/executionLifecycle";
 import { registerAbortOwnership, WorkflowAbortError } from "../application/abortOwnership";
 import { ownSqliteWorkflow } from "./sqlite/workflowOwnership";
@@ -42,6 +43,22 @@ type CustomProtocolRow = {
 };
 
 export class SqliteRepository implements AppRepository {
+  async listResearchEvaluations(projectId: string): Promise<ResearchEvaluation[]> {
+    const prefix = `${evaluationPrefix}${projectId}:`;
+    const rows = await selectDatabaseReadonly<Array<{value:string}>>("SELECT value FROM app_settings WHERE substr(key,1,length($1))=$1 ORDER BY key", [prefix]);
+    return rows.map(row => validateResearchEvaluation(JSON.parse(row.value),{projectId})).sort((a,b)=>a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }
+  async getResearchEvaluation(projectId:string,id:string):Promise<ResearchEvaluation|null> {
+    const rows=await selectDatabaseReadonly<Array<{value:string}>>("SELECT value FROM app_settings WHERE key=$1",[evaluationKey(projectId,id)]);
+    return rows[0]?validateResearchEvaluation(JSON.parse(rows[0].value),{projectId,id}):null;
+  }
+  async saveResearchEvaluation(record:ResearchEvaluation,expectedRevision:number):Promise<void> {
+    const c=this.workflowContext;
+    if(!c || c.closed || c.profileId!==`research:${record.projectId}` || c.entities.length!==1 || c.entities[0].kind!=="research_evaluation")throw new Error("Research evaluation ownership is required.");
+    assertEvaluationUpdate(await this.getResearchEvaluation(record.projectId,record.id),record,expectedRevision);
+    await this.writes.run(()=>workflowOwnershipNative({action:"evaluationSave",profileId:c.profileId,owner:c.owner,version:c.version,record,expectedRevision}));
+  }
+
   async getResearchExecutionTermination(projectId:string):Promise<import("../research/executionLifecycle").ResearchExecutionTermination|null>{
     const rows=await selectDatabaseReadonly<Array<{value:string}>>("SELECT value FROM app_settings WHERE key=$1",[researchTerminationKey(projectId)]);
     return rows[0]?validateResearchTermination(JSON.parse(rows[0].value)):null;

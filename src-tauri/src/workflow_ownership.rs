@@ -19,6 +19,7 @@ pub enum Request {
     Release { profile_id: String, owner: String, version: i64 },
     Inspect { profile_id: String },
     Check { profile_id: String, owner: String, version: i64, entities: Vec<Entity> },
+    EvaluationSave { profile_id: String, owner: String, version: i64, record: Value, expected_revision: i64 },
     EndResearch { profile_id: String, owner: String, version: i64, ended_at: String },
     Write { profile_id: String, owner: String, version: i64, entities: Vec<Entity>, statements: Vec<DatabaseWriteStatement>, post_reveal_fence: Option<ReviewFence> },
 }
@@ -42,7 +43,8 @@ async fn guard(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, profile_id: &str, o
         if active!=1 {return Err("Active Research project or parent not found".into());}
         let allow_ended=entities.iter().any(|entity|entity.kind=="research" && entity.id==project_id && entity.allow_ended);
         let ended:i64=sqlx::query_scalar("SELECT COUNT(*) FROM app_settings WHERE key='rvh.research.end.v1:' || $1").bind(project_id).fetch_one(&mut **tx).await.map_err(|e|e.to_string())?;
-        if ended>0 && !allow_ended {return Err("Research execution was ended by the user".into());}
+        let evaluation_only=entities.len()==1 && entities[0].kind=="research_evaluation" && entities[0].id==project_id;
+        if ended>0 && !allow_ended && !evaluation_only {return Err("Research execution was ended by the user".into());}
     } else {
         let profile: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM profiles WHERE id=$1 AND archived_at IS NULL").bind(profile_id).fetch_one(&mut **tx).await.map_err(|e|e.to_string())?;
         if profile != 1 { return Err("Active workflow Profile not found".into()); }
@@ -51,6 +53,10 @@ async fn guard(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, profile_id: &str, o
     for entity in entities {
         let entity_profile=entity.profile_id.as_deref().unwrap_or(profile_id);
         if research_id.is_none() && entity_profile!=profile_id {return Err("Profile scope mismatch".into());}
+        if entity.kind=="research_evaluation" {
+            if entities.len()!=1 || research_id!=Some(entity.id.as_str()) {return Err("Research evaluation scope mismatch".into());}
+            continue;
+        }
         if entity.kind=="research" {
             if research_id!=Some(entity.id.as_str()) {return Err("Research scope mismatch".into());}
             continue;
@@ -108,6 +114,14 @@ pub(crate) async fn execute(pool: &SqlitePool, request: Request) -> Result<Value
         Request::Check { profile_id, owner, version, entities } => {
             let mut tx=pool.begin().await.map_err(|e|e.to_string())?;guard(&mut tx,&profile_id,&owner,version,&entities).await?;tx.commit().await.map_err(|e|e.to_string())?;Ok(json!(true))
         }
+        Request::EvaluationSave { profile_id, owner, version, record, expected_revision } => {
+            let project_id=profile_id.strip_prefix("research:").ok_or("Research ownership is required")?;
+            let entities=vec![Entity{kind:"research_evaluation".into(),id:project_id.into(),profile_id:None,allow_ended:false}];
+            let mut tx=pool.begin().await.map_err(|e|e.to_string())?;
+            guard(&mut tx,&profile_id,&owner,version,&entities).await?;
+            let result=crate::research_evaluation::save(&mut tx,project_id,record,expected_revision).await?;
+            tx.commit().await.map_err(|e|e.to_string())?;Ok(result)
+        }
         Request::EndResearch { profile_id, owner, version, ended_at } => {
             let project_id=profile_id.strip_prefix("research:").ok_or("Research ownership is required for End")?;
             if ended_at.trim().is_empty() || ended_at.len()>100 {return Err("Invalid Research termination time".into());}
@@ -128,6 +142,7 @@ pub(crate) async fn execute(pool: &SqlitePool, request: Request) -> Result<Value
             tx.commit().await.map_err(|e|e.to_string())?;Ok(marker)
         }
         Request::Write { profile_id, owner, version, entities, statements, post_reveal_fence } => {
+            if entities.iter().any(|entity|entity.kind=="research_evaluation") {return Err("Research evaluation cannot change source work".into());}
             if statements.len()>5000 { return Err("Too many workflow statements".into()); }
             let mut tx=pool.begin().await.map_err(|e|e.to_string())?;guard(&mut tx,&profile_id,&owner,version,&entities).await?;
             if let Some(fence)=post_reveal_fence {
@@ -267,4 +282,23 @@ mod tests {
         let request:Request=serde_json::from_value(json!({"action":"endResearch","profileId":"research:r","owner":"o","version":1,"endedAt":"end"})).unwrap();assert!(matches!(request,Request::EndResearch{..}));
     }
 
+}
+
+#[cfg(test)]
+mod evaluation_tests {
+    use super::*;
+    use serde_json::json;
+    #[tokio::test]
+    async fn ended_source_allows_only_isolated_evaluation_writes_and_fences_stale_owners() {
+        let pool=SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::raw_sql("CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT);CREATE TABLE profiles(id TEXT PRIMARY KEY,archived_at TEXT);INSERT INTO profiles VALUES('p',NULL);CREATE TABLE workspaces(id TEXT PRIMARY KEY,profile_id TEXT,archived_at TEXT);INSERT INTO workspaces VALUES('w','p',NULL);CREATE TABLE research_projects(id TEXT PRIMARY KEY,workspace_id TEXT,archived_at TEXT);INSERT INTO research_projects VALUES('r','w',NULL);CREATE TABLE rv_sessions(id TEXT PRIMARY KEY,research_project_id TEXT,pre_reveal_sealed_at TEXT,pre_reveal_hash TEXT,archived_at TEXT);INSERT INTO rv_sessions VALUES('s','r','t','hash',NULL);CREATE TABLE reveals(session_id TEXT PRIMARY KEY);INSERT INTO reveals VALUES('s');INSERT INTO app_settings VALUES('rvh.research.end.v1:r','{\"reason\":\"user_finished\"}','t');").execute(&pool).await.unwrap();
+        let token=execute(&pool,Request::Acquire{profile_id:"research:r".into(),owner:"owner".into()}).await.unwrap();let version=token["version"].as_i64().unwrap();
+        let record=json!({"schemaVersion":1,"id":"panel","projectId":"r","revision":1,"createdAt":"t","language":"en","budgetPolicy":"default","status":"Ready","judges":[{"providerConfig":{"id":"pc"},"model":{"route":"route"}}],"sources":[{"sessionId":"s","anonymousSessionId":"BlindSession_ABCDEF12","sourceSha256":"a".repeat(64)}],"scores":{},"events":[]});
+        let save=|owner:&str,version:i64|Request::EvaluationSave{profile_id:"research:r".into(),owner:owner.into(),version,record:record.clone(),expected_revision:0};
+        assert!(execute(&pool,save("stale",version)).await.is_err());assert!(execute(&pool,save("owner",version)).await.is_ok());
+        let entities=vec![Entity{kind:"research_evaluation".into(),id:"r".into(),profile_id:None,allow_ended:false}];
+        assert!(execute(&pool,Request::Write{profile_id:"research:r".into(),owner:"owner".into(),version,entities,statements:vec![],post_reveal_fence:None}).await.is_err());
+        let marker:String=sqlx::query_scalar("SELECT value FROM app_settings WHERE key='rvh.research.end.v1:r'").fetch_one(&pool).await.unwrap();assert_eq!(marker,"{\"reason\":\"user_finished\"}");
+        let mut tx=pool.begin().await.unwrap();assert!(crate::database::execute_statement(&mut tx,DatabaseWriteStatement{operation:crate::database::DatabaseWriteOperation::SettingsModelsDeleteAppSettings01,values:vec![json!("rvh.research.evaluation.v1:r:panel")]}).await.is_err());
+    }
 }

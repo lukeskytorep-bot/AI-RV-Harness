@@ -1,3 +1,5 @@
+import { assertAbortOwnership, nativeWorkflowBinding } from "../application/abortOwnership";
+import { normalizeResearchJudgeOutput, type JudgeNormalizationTrace } from "./researchNormalization";
 import { withRvWorkflow } from "../application/workflowOwnership";
 import { buildJudgePacket } from "../domain/judgePacket";
 import { aggregateJudgeScores, computeJudgeTotal, validateJudgeScores, type JudgeComponentScores } from "../domain/scoring";
@@ -38,6 +40,7 @@ export type JudgeProviderRequest = { config: ProviderConfig; modelId: string; me
 export interface RunJudgingInput {
   /** A workflow-owned receipt journal; transport retries are owned here, not
    * by an additional executor retry loop. No prompts/settings are changed. */
+  researchPolicy?: { judgeIndex: number; onNormalization?: (trace: JudgeNormalizationTrace & { sourceSha256: string; normalizedSha256: string }) => Promise<void> };
   recoverRequest?: (request: JudgeProviderRequest, send: () => Promise<ProviderChatResponse>) => Promise<ProviderChatResponse>;
   repository: JudgeRepository;
   sessionId: string;
@@ -82,6 +85,18 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
   if (!reveal) throw new Error("Reveal is required before Judge evaluation.");
   if (!evidence.trim()) throw new Error("No pre-reveal Viewer evidence is available for judging.");
   if (existing.length + input.judges.length > 3) throw new RangeError("A session may have at most 3 frozen Judge scores.");
+  if (input.researchPolicy && (input.judges.length !== 1 || !Number.isInteger(input.researchPolicy.judgeIndex)
+    || input.researchPolicy.judgeIndex < 1 || input.researchPolicy.judgeIndex > 3
+    || existing.some(score => score.judgeIndex === input.researchPolicy!.judgeIndex))) throw new Error("Invalid or already frozen Research Judge slot.");
+  const parseResponse = async (content: string): Promise<ParsedJudgeOutput> => {
+    if (!input.researchPolicy) return parseJudgeOutput(content);
+    let normalized;
+    try { normalized = normalizeResearchJudgeOutput(content); }
+    catch (cause) { throw new JudgeResponseValidationError(cause); }
+    const parsed = parseJudgeOutput(normalized.content);
+    if (normalized.trace) await input.researchPolicy.onNormalization?.({ ...normalized.trace, sourceSha256: await sha256Text(content), normalizedSha256: await sha256Text(normalized.content) });
+    return parsed;
+  };
   const imageArtifacts = (reveal.artifactManifest ?? []).filter((artifact) => artifact.mimeType.startsWith("image/"));
   if (!reveal.text?.trim() && !imageArtifacts.length) throw new Error("Judge needs reveal text or at least one supported reveal image.");
   if (imageArtifacts.length && input.judges.some((judge) => !judge.model.capabilities.supportsVision || !judge.model.capabilities.inputModalities.includes("image"))) {
@@ -148,7 +163,7 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
     let response = initial.response;
     let parsed: ParsedJudgeOutput;
     try {
-      parsed = parseJudgeOutput(response.content);
+      parsed = await parseResponse(response.content);
     } catch (cause) {
       if (!(cause instanceof Error) || cause.message !== "Judge returned invalid JSON.") throw cause;
       const repairMessages: ProviderMessage[] = [
@@ -164,7 +179,7 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
         call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: repairMessages, settings }),
       });
       response = repaired.response;
-      parsed = parseJudgeOutput(response.content);
+      parsed = await parseResponse(response.content);
     }
     if (!narrativeMatchesLanguage(parsed.narrative, language)) {
       const originalScores = parsed.scores;
@@ -180,11 +195,11 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
       budgetPolicy: input.budgetPolicy,
         call: (settings) => chat({ config: judge.providerConfig, modelId: judge.model.modelId, messages: correctionMessages, settings }),
       })).response;
-      parsed = parseJudgeOutput(response.content);
+      parsed = await parseResponse(response.content);
       if (JSON.stringify(parsed.scores) !== JSON.stringify(originalScores)) throw new JudgeResponseValidationError("Judge language correction changed frozen score candidates.");
       if (!narrativeMatchesLanguage(parsed.narrative, language)) throw new JudgeResponseValidationError("Judge returned narrative text in the wrong session language.");
     }
-    pending.push({ judge, parsed, judgeIndex: existing.length + index + 1 });
+    pending.push({ judge, parsed, judgeIndex: input.researchPolicy?.judgeIndex ?? existing.length + index + 1 });
     input.onProgress?.(index + 1, input.judges.length);
   }
 
@@ -315,3 +330,12 @@ function narrativeMatchesLanguage(narrative: JudgeNarrative, language: Interface
 export { computeJudgeTotal };
 
 export const runBlindJudging = (input: Parameters<typeof runBlindJudgingOwned>[0]) => withRvWorkflow(input.repository as AppRepository,input.sessionId,input.signal,(repository,signal)=>runBlindJudgingOwned({...input,repository,signal}));
+
+/** Called only by the isolated evaluation workflow; persistence is its panel adapter. */
+export async function runResearchEvaluationJudging(input: RunJudgingInput & { signal: AbortSignal }): Promise<JudgingResult> {
+  if (!input.researchPolicy) throw new Error("Research evaluation requires an explicit slot policy.");
+  const binding=nativeWorkflowBinding(input.signal);
+  if(binding && (binding.entities.length!==1 || binding.entities[0].kind!=="research_evaluation"))throw new Error("Isolated evaluation workflow is required.");
+  await assertAbortOwnership(input.signal);
+  return runBlindJudgingOwned(input);
+}

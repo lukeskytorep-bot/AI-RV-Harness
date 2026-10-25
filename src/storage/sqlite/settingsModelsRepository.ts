@@ -56,7 +56,7 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
   constructor(private readonly dependencies: SqliteSettingsModelsRepositoryDependencies) {}
 
   async loadSettings(): Promise<Partial<AppSettings>> {
-    const rows = await this.dependencies.select<{ key: string; value: string }[]>("SELECT key, value FROM app_settings");
+    const rows = await this.dependencies.select<{ key: string; value: string }[]>("SELECT key, value FROM app_settings WHERE substr(key,1,27) <> 'rvh.research.evaluation.v1:'");
     const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
     return {
       ...(values.interfaceLanguage ? { interfaceLanguage: values.interfaceLanguage as AppSettings["interfaceLanguage"] } : {}),

@@ -1,6 +1,6 @@
 import { sha256Text } from "../application/sha256";
 import { assertAbortOwnership } from "../application/abortOwnership";
-import type { JudgeProviderRequest } from "../judge/engine";
+import { JudgeResponseValidationError, type JudgeProviderRequest } from "../judge/engine";
 import { ProviderExecutionError } from "../providers/requestExecutor";
 import { providerErrorDetails } from "../providers/providerError";
 import { isStandardRetryHttpStatus } from "../providers/retry";
@@ -11,16 +11,43 @@ import type { SessionEventRecord } from "../sessions/types";
 export const RESEARCH_JUDGE_REQUEST = "RESEARCH_JUDGE_REQUEST_V1";
 type Status = "prepared" | "dispatched" | "received" | "failed" | "retry_granted" | "paused";
 interface Receipt {
-  version: 1; maxTransportRetries: 1; ordinal: number; judgeIndex: number; modelRoute: string; hash: string; status: Status;
+  completionId?: string; version: 1; maxTransportRetries: 1; ordinal: number; judgeIndex: number; modelRoute: string; hash: string; status: Status;
   retryUsed: boolean; retryable?: boolean; retryAfterMs?: number; response?: ProviderChatResponse;
 }
+export const RESEARCH_JUDGE_COMPLETION_AUTH = "RESEARCH_JUDGE_COMPLETION_AUTH_V1";
+export function currentJudgeCompletionId(events: SessionEventRecord[], route: string, judgeIndex: number): string | undefined {
+  let previous: string | undefined;
+  const seen = new Set<string>();
+  for (const event of events.filter(e => e.eventType === RESEARCH_JUDGE_COMPLETION_AUTH && e.metadata?.modelRoute === route && e.metadata.judgeIndex === judgeIndex)) {
+    const m = event.metadata!;
+    const failure = events.find(e => e.id === m.previousFailureEventId && e.sequenceNumber < event.sequenceNumber);
+    if (m.version !== 1 || typeof m.completionId !== "string" || !m.completionId || m.previousId !== previous || seen.has(m.completionId)
+      || !failure || failure.metadata?.modelRoute !== route || failure.metadata?.completionId !== previous
+      || Number.isInteger(failure.metadata?.judgeIndex) && failure.metadata?.judgeIndex !== judgeIndex
+      || !(failure.eventType === "RESEARCH_JUDGE_VALIDATION_BLOCK" || failure.eventType === RESEARCH_JUDGE_REQUEST && ["failed", "paused", "dispatched"].includes(String(failure.metadata?.status)))) throw new Error("Invalid Research Judge completion authorization chain.");
+    previous = m.completionId; seen.add(previous);
+  }
+  for (const event of events.filter(e => e.eventType === RESEARCH_JUDGE_REQUEST && e.metadata?.modelRoute === route && e.metadata.judgeIndex === judgeIndex)) {
+    if (event.metadata?.completionId !== undefined && !seen.has(String(event.metadata.completionId))) throw new Error("Research Judge receipt has no completion authorization.");
+  }
+  return previous;
+}
+function activeEvents(events: SessionEventRecord[], route: string, judgeIndex: number): SessionEventRecord[] {
+  const id = currentJudgeCompletionId(events, route, judgeIndex);
+  return events.filter(e => e.metadata?.completionId === id);
+}
+function receiptKey(sessionId: string, route: string, judgeIndex: number, ordinal: number, completionId?: string) {
+  return `${sessionId}:${route}:${judgeIndex}:${ordinal}:${completionId ?? "original"}`;
+}
 const buffers = new WeakMap<object, Map<string, Receipt>>();
+export class ResearchJudgeSlotFailure extends Error {}
 export class ResearchJudgeCheckpointError extends Error {
   constructor(cause: unknown) { super("Research Judge checkpoint failed; no provider retry was started.", { cause }); this.name = "ResearchJudgeCheckpointError"; }
 }
 const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
   ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)])) : value;
 function records(events: SessionEventRecord[], route: string, ordinal: number, judgeIndex = 1): Receipt[] {
+  events = activeEvents(events, route, judgeIndex);
   const all = events.filter(e => e.eventType === RESEARCH_JUDGE_REQUEST && e.metadata?.modelRoute === route);
   if (all.some(e => !Number.isInteger(e.metadata?.judgeIndex) || Number(e.metadata?.judgeIndex) < 1 || Number(e.metadata?.judgeIndex) > 3)) throw new Error("Invalid Research Judge slot identity.");
   const journal = all.filter(e => e.metadata?.judgeIndex === judgeIndex);
@@ -63,7 +90,7 @@ async function wait(signal?: AbortSignal, delay = 250) {
 /** One journal per session/Judge run. Ordinals also cover output escalation,
  * JSON repair and language correction, so a restart cannot repurchase them. */
 export function createResearchJudgeRequestRecovery(input: {
-  repository: AppRepository; owner: object; sessionId: string; modelRoute: string; judgeIndex?: number; allowLegacyResponse?: boolean; signal?: AbortSignal;
+  repository: AppRepository; owner: object; sessionId: string; modelRoute: string; judgeIndex?: number; allowLegacyResponse?: boolean; allowValidationReplay?: boolean; signal?: AbortSignal;
 }) {
   let ordinal = 0;
   return async (request: JudgeProviderRequest, send: () => Promise<ProviderChatResponse>): Promise<ProviderChatResponse> => {
@@ -74,11 +101,13 @@ export function createResearchJudgeRequestRecovery(input: {
       provider: request.config.provider, providerId: request.config.id, credentialId: request.config.credentialId,
       credentialFingerprint: request.config.credentialFingerprint, baseUrl: request.config.baseUrl,
       outputTokenField: request.config.customOutputTokenField, modelId: request.modelId, messages: request.messages, settings: request.settings })));
-    const key = `${input.sessionId}:${input.modelRoute}:${judgeIndex}:${index}`;
+    let events = await inspect(input.repository, input.sessionId);
+    const completionId = currentJudgeCompletionId(events, input.modelRoute, judgeIndex);
+    const key = receiptKey(input.sessionId, input.modelRoute, judgeIndex, index, completionId);
     let ram = buffers.get(input.owner);
     if (!ram) { ram = new Map(); buffers.set(input.owner, ram); }
-    let events = await inspect(input.repository, input.sessionId);
-    if (researchJudgeValidationBlocked(events, input.modelRoute, judgeIndex)) throw new Error("Research Judge response validation exhausted; saved responses were retained.");
+    const validationBlocked = researchJudgeValidationBlocked(events, input.modelRoute, judgeIndex);
+    if (validationBlocked && !input.allowValidationReplay) throw new Error("Research Judge response validation exhausted; saved responses were retained.");
     let saved = records(events, input.modelRoute, index, judgeIndex).at(-1);
     if (saved && saved.hash !== hash) throw new Error("Research Judge frozen request/route/settings changed; no request was sent.");
     const buffered = ram.get(key);
@@ -88,20 +117,24 @@ export function createResearchJudgeRequestRecovery(input: {
       saved = buffered; ram.delete(key);
     }
     if (saved?.status === "received" && saved.response) return structuredClone(saved.response);
-    if (researchJudgeRequestAvailability(events, input.modelRoute, judgeIndex, { owner: input.owner, sessionId: input.sessionId }) === "blocked") throw new Error("Research Judge recovery exhausted or failure is not retryable.");
+    const fullEvents = events;
+    events = activeEvents(events, input.modelRoute, judgeIndex);
     // Historical callbacks durably recorded a response before validation/freeze.
     // Replay it through the unchanged Judge validators, never accept scores here.
     const legacy = index === 0 && !saved && input.allowLegacyResponse !== false && !events.some(e => e.eventType === RESEARCH_JUDGE_REQUEST && e.metadata?.modelRoute === input.modelRoute) ? events.filter(e => e.eventType === "RESEARCH_JUDGE_RESPONSE" && e.metadata?.modelRoute === input.modelRoute).at(-1) : undefined;
     if (legacy?.content) {
       const response = { content: legacy.content, usage: legacy.metadata?.usage, finishReason: legacy.metadata?.finishReason, providerRequestId: legacy.metadata?.providerRequestId } as ProviderChatResponse;
-      const receipt: Receipt = { version: 1, maxTransportRetries: 1, ordinal: index, judgeIndex, modelRoute: input.modelRoute, hash, status: "received", retryUsed: false, response };
+      const receipt: Receipt = { completionId, version: 1, maxTransportRetries: 1, ordinal: index, judgeIndex, modelRoute: input.modelRoute, hash, status: "received", retryUsed: false, response };
       ram.set(key, receipt); await persist(input.repository, input.sessionId, receipt); ram.delete(key); return response;
     }
+    if (validationBlocked) throw new JudgeResponseValidationError("Research Judge response validation exhausted; saved responses were retained.");
+    if (saved?.status === "failed" && !saved.retryable) throw new Error("Research Judge recovery exhausted or failure is not retryable.");
+    if (researchJudgeRequestAvailability(fullEvents, input.modelRoute, judgeIndex, { owner: input.owner, sessionId: input.sessionId }) === "blocked") throw new ResearchJudgeSlotFailure("Research Judge recovery exhausted or failure is not retryable.");
     const legacyUncertain = index === 0 && !saved && events.some(e => e.metadata?.modelRoute === input.modelRoute && (e.eventType === "RESEARCH_JUDGE_LEGACY_UNKNOWN" || e.eventType === "RESEARCH_JUDGE_ATTEMPT" && ["dispatched", "uncertain"].includes(String(e.metadata.status))));
-    let receipt: Receipt = saved ?? { version: 1, maxTransportRetries: 1, ordinal: index, judgeIndex, modelRoute: input.modelRoute, hash, status: "prepared", retryUsed: false };
+    let receipt: Receipt = saved ?? { completionId, version: 1, maxTransportRetries: 1, ordinal: index, judgeIndex, modelRoute: input.modelRoute, hash, status: "prepared", retryUsed: false };
     if (!saved) await persist(input.repository, input.sessionId, receipt);
     if (saved && ["dispatched", "paused", "failed"].includes(saved.status) || legacyUncertain) {
-      if (receipt.retryUsed || saved?.status === "failed" && !saved.retryable) throw new Error("Research Judge recovery exhausted or failure is not retryable.");
+      if (receipt.retryUsed || saved?.status === "failed" && !saved.retryable) throw new ResearchJudgeSlotFailure("Research Judge recovery exhausted or failure is not retryable.");
       receipt = { ...receipt, status: "retry_granted", retryUsed: true };
       await persist(input.repository, input.sessionId, receipt);
     }
@@ -117,7 +150,10 @@ export function createResearchJudgeRequestRecovery(input: {
         const retryable = Boolean(details && (["connect", "timeout", "request_send", "response_body_read"].includes(details.code) || details.code === "http_status" && isStandardRetryHttpStatus(details.httpStatus)));
         receipt = { ...receipt, status: input.signal?.aborted ? "paused" : "failed", retryable, retryAfterMs: details?.retryAfterMs };
         await persist(input.repository, input.sessionId, receipt);
-        if (input.signal?.aborted || !retryable || receipt.retryUsed) throw cause;
+        if (input.signal?.aborted || !retryable || receipt.retryUsed) {
+          if (!input.signal?.aborted && retryable) throw new ResearchJudgeSlotFailure(cause instanceof Error ? cause.message : String(cause), { cause });
+          throw cause;
+        }
         // The operation has settled; inspect the durable record before granting.
         events = await inspect(input.repository, input.sessionId);
         if (JSON.stringify(canonical(records(events, input.modelRoute, index, judgeIndex).at(-1))) !== JSON.stringify(canonical(receipt))) throw new ResearchJudgeCheckpointError(new Error("Research Judge checkpoint changed before recovery."));
@@ -138,7 +174,7 @@ export function createResearchJudgeRequestRecovery(input: {
 
 /** Unindexed historical validation blocks cannot safely be assigned to one slot. */
 export function researchJudgeValidationBlocked(events: SessionEventRecord[], route: string, judgeIndex: number): boolean {
-  return events.some(e => e.eventType === "RESEARCH_JUDGE_VALIDATION_BLOCK" && e.metadata?.modelRoute === route
+  return activeEvents(events, route, judgeIndex).some(e => e.eventType === "RESEARCH_JUDGE_VALIDATION_BLOCK" && e.metadata?.modelRoute === route
     && (!Number.isInteger(e.metadata.judgeIndex) || e.metadata.judgeIndex === judgeIndex));
 }
 
@@ -147,16 +183,16 @@ export function researchJudgeValidationBlocked(events: SessionEventRecord[], rou
 export function researchJudgeRequestAvailability(events: SessionEventRecord[], route: string, judgeIndex: number,
   context?: { owner: object; sessionId: string }): "local" | "transport" | "blocked" {
   if (researchJudgeValidationBlocked(events, route, judgeIndex)) return "blocked";
-  if (events.some(e => e.eventType === RESEARCH_JUDGE_REQUEST && e.metadata?.modelRoute === route
+  if (activeEvents(events, route, judgeIndex).some(e => e.eventType === RESEARCH_JUDGE_REQUEST && e.metadata?.modelRoute === route
     && (!Number.isInteger(e.metadata.judgeIndex) || Number(e.metadata.judgeIndex) < 1 || Number(e.metadata.judgeIndex) > 3))) return "blocked";
-  const ordinals = new Set(events.filter(e => e.eventType === RESEARCH_JUDGE_REQUEST && e.metadata?.modelRoute === route
+  const ordinals = new Set(activeEvents(events, route, judgeIndex).filter(e => e.eventType === RESEARCH_JUDGE_REQUEST && e.metadata?.modelRoute === route
     && (e.metadata.judgeIndex === judgeIndex || !Number.isInteger(e.metadata.judgeIndex))).map(e => Number(e.metadata?.ordinal)));
   let local = false;
   try {
     for (const ordinal of ordinals) {
       const saved = records(events, route, ordinal, judgeIndex).at(-1);
       if (!saved) continue;
-      const buffered = context && buffers.get(context.owner)?.get(`${context.sessionId}:${route}:${judgeIndex}:${ordinal}`);
+      const buffered = context && buffers.get(context.owner)?.get(receiptKey(context.sessionId, route, judgeIndex, ordinal, currentJudgeCompletionId(events, route, judgeIndex)));
       if (buffered && (buffered.hash !== saved.hash || saved.response && JSON.stringify(canonical(saved.response)) !== JSON.stringify(canonical(buffered.response)))) return "blocked";
       if (buffered || saved.status === "received") { local = true; continue; }
       if (saved.status === "failed" && !saved.retryable || ["dispatched", "paused", "failed"].includes(saved.status) && saved.retryUsed) return "blocked";

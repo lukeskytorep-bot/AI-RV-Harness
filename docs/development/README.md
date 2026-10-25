@@ -1,5 +1,9 @@
 # Developer Guide
 
+See [Separate Research evaluation panels](RESEARCH_EVALUATION_PANELS_EN.md) for full new same/new-Judge panels over preserved sessions, including operation after End and isolated native persistence.
+
+See [Research Judge completion](RESEARCH_JUDGE_COMPLETION_EN.md) for Research-only aliases, independent missing slots, partial exports and persisted completion authorization.
+
 See [Automatic Recovery S3](AUTOMATIC_RECOVERY_S3_EN.md) for receipt recovery, Research Judge retry limits and release-version alignment.
 
 Reviewed 23 October 2026 for Automatic Recovery S3. This is the primary English contributor entry point. Package version: **0.7.14**; SQLite schema: **34**. Native database epoch remains v0.7.13 for compatibility. This source version is not a claim of published binaries or Windows/provider acceptance.
