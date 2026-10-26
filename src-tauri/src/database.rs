@@ -1135,18 +1135,35 @@ mod tests {
         sqlx::raw_sql("CREATE TABLE telepathic_series(id TEXT PRIMARY KEY, run_lease_owner TEXT, run_lease_version INTEGER, run_lease_expires_at TEXT); INSERT INTO telepathic_series VALUES('s','owner',1,'2999-01-01T00:00:00.000Z'); CREATE TABLE app_settings(key TEXT PRIMARY KEY NOT NULL, value TEXT, updated_at TEXT);").execute(&pool).await.unwrap();
         let mut native_writer = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
         sqlx::query("UPDATE telepathic_series SET run_lease_version=2").execute(&mut *native_writer).await.unwrap();
-        let pending = execute_telepathic_fenced_batch(&pool, "s", "owner", 1, vec![checkpoint_statement(JsonValue::from("late"))]);
-        tokio::pin!(pending);
-        tokio::select! {
-            result = &mut pending => panic!("checkpoint passed a held write lock: {result:?}"),
-            _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+        {
+            // Drop the pinned future and its connection state before pool teardown.
+            let pending = execute_telepathic_fenced_batch(&pool, "s", "owner", 1, vec![checkpoint_statement(JsonValue::from("late"))]);
+            tokio::pin!(pending);
+            tokio::select! {
+                result = &mut pending => panic!("checkpoint passed a held write lock: {result:?}"),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+            }
+            native_writer.commit().await.unwrap();
+            assert!(pending.await.unwrap_err().contains("lease lost"));
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_settings").fetch_one(&pool).await.unwrap();
+            assert_eq!(count, 0);
         }
-        native_writer.commit().await.unwrap();
-        assert!(pending.await.unwrap_err().contains("lease lost"));
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_settings").fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 0);
         pool.close().await;
-        std::fs::remove_dir_all(directory).unwrap();
+        drop(pool);
+        // SQLx's SQLite worker or a Windows scanner may release the file handle
+        // just after close(). Retry only sharing/lock violations, never hide errors.
+        for attempt in 0..40 {
+            match std::fs::remove_dir_all(&directory) {
+                Ok(()) => break,
+                Err(error) if cfg!(windows)
+                    && matches!(error.raw_os_error(), Some(32 | 33))
+                    && attempt < 39 =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Err(error) => panic!("checkpoint test cleanup failed for {}: {error}", directory.display()),
+            }
+        }
     }
 
     async fn telepathic_purge_pool() -> sqlx::SqlitePool {
