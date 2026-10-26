@@ -201,12 +201,17 @@ export class BrowserWorkspacesConversationsRepository implements WorkspacesConve
     return this.read<ChatMessage[]>(CHAT_MESSAGES_KEY, []).filter((message) => message.threadId === threadId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
-  async appendChatMessage(threadId: string, role: ChatMessage["role"], content: string): Promise<ChatMessage> {
-    const message: ChatMessage = { id: createId("message"), threadId, role, content, createdAt: this.now() };
+  async appendChatMessage(threadId: string, role: ChatMessage["role"], content: string, metadata?: ChatMessage["metadata"]): Promise<ChatMessage> {
+    const message: ChatMessage = { id: createId("message"), threadId, role, content, ...(metadata ? { metadata: structuredClone(metadata) } : {}), createdAt: this.now() };
     this.write(CHAT_MESSAGES_KEY, [...this.read<ChatMessage[]>(CHAT_MESSAGES_KEY, []), message]);
     const timestamp = this.now();
     this.write(CHAT_THREADS_KEY, this.read<ChatThread[]>(CHAT_THREADS_KEY, []).map((thread) => thread.id === threadId ? { ...thread, updatedAt: timestamp } : thread));
     return message;
+  }
+
+  async updateChatMessageMetadata(messageId: string, metadata?: ChatMessage["metadata"]): Promise<void> {
+    this.write(CHAT_MESSAGES_KEY, this.read<ChatMessage[]>(CHAT_MESSAGES_KEY, []).map((message) =>
+      message.id === messageId ? { ...message, ...(metadata ? { metadata: structuredClone(metadata) } : { metadata: undefined }) } : message));
   }
 
   async appendAssistantMessageWithProviderState(threadId: string, content: string, state: ProviderContinuationState): Promise<ChatMessage> {

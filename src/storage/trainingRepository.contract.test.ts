@@ -107,11 +107,27 @@ function sqliteHarness(): ContractHarness & { selects: string[]; writes: string[
         rows.push({ run_number: Number(values[1]), status: String(values[2]), record_json: String(values[3]) });
         return { rowsAffected: 1 };
       }
-      if (query.startsWith("UPDATE training_runs")) {
+      if (query.startsWith("UPDATE training_runs SET status = 'Interrupted', record_json = json_set")) {
+        const idValue = String(values[2]);
+        const index = rows.findIndex((row) => (JSON.parse(row.record_json) as TrainingRunRecord).id === idValue);
+        if (index < 0) return { rowsAffected: 0 };
+        const current = JSON.parse(rows[index].record_json) as TrainingRunRecord;
+        if (current.termination?.reason === "user_finished") return { rowsAffected: 0 };
+        if (!(current.status === "Paused" || current.status === "Interrupted" || current.status === "Running")
+          || current.currentIndex >= current.targetIds.length) return { rowsAffected: 0 };
+        const termination = JSON.parse(String(values[0]));
+        const updated = { ...current, status: "Interrupted", termination, updatedAt: String(values[1]) };
+        rows[index] = { run_number: rows[index].run_number, status: "Interrupted", record_json: JSON.stringify(updated) };
+        return { rowsAffected: 1 };
+      }
+      if (query.startsWith("UPDATE training_runs SET status")) {
         const idValue = String(values[3]);
         const index = rows.findIndex((row) => (JSON.parse(row.record_json) as TrainingRunRecord).id === idValue);
-        if (index >= 0) rows[index] = { run_number: rows[index].run_number, status: String(values[0]), record_json: String(values[1]) };
-        return { rowsAffected: index >= 0 ? 1 : 0 };
+        if (index < 0) return { rowsAffected: 0 };
+        const current = JSON.parse(rows[index].record_json) as TrainingRunRecord;
+        if (query.includes("termination.reason") && current.termination?.reason === "user_finished") return { rowsAffected: 0 };
+        rows[index] = { run_number: rows[index].run_number, status: String(values[0]), record_json: String(values[1]) };
+        return { rowsAffected: 1 };
       }
       throw new Error(`Unexpected write: ${query}`);
     },
@@ -196,6 +212,19 @@ for (const [name, makeHarness] of [["browser", browserHarness], ["sqlite", sqlit
       });
     });
 
+    it("persists user termination and never lets a later active-execution update restore Running", async () => {
+      const harness = makeHarness();
+      harness.seed([record("run-terminal", 1, { status: "Interrupted" })]);
+      const termination = { reason: "user_finished" as const, endedAt: "2026-10-10T12:00:00.000Z" };
+      await harness.repository.updateTrainingRun("run-terminal", { status: "Interrupted", termination });
+      await expect(harness.repository.updateTrainingRun("run-terminal", { status: "Running" })).rejects.toThrow("ended by the user");
+      const stored = (await harness.repository.listTrainingRuns()).find((run) => run.id === "run-terminal");
+      expect(stored?.status).toBe("Interrupted");
+      expect(stored?.termination).toEqual(termination);
+      await expect(harness.repository.updateTrainingRun("run-terminal", { status: "Interrupted", termination: { ...termination, endedAt: "later" } })).resolves.toBeUndefined();
+      expect((await harness.repository.listTrainingRuns()).find((run) => run.id === "run-terminal")?.termination).toEqual(termination);
+    });
+
     it("lists newest run numbers first and normalizes legacy missing sessionIds", async () => {
       const harness = makeHarness();
       const { sessionIds: _legacySessionIds, ...legacy } = record("legacy", 2);
@@ -246,4 +275,153 @@ describe("Training repository adapter details", () => {
     const harness = sqliteHarness();
     await expect(harness.repository.updateTrainingRun("missing", { status: "Paused" })).rejects.toThrow("Active Training run not found.");
   });
+  it("prevents a stale SQLite Running write from overwriting a termination committed after its read", async () => {
+    let row = record("race", 1, { status: "Interrupted" });
+    let staleReached!: () => void;
+    let releaseStale!: () => void;
+    const staleAtWrite = new Promise<void>((resolve) => { staleReached = resolve; });
+    const staleRelease = new Promise<void>((resolve) => { releaseStale = resolve; });
+
+    const repository = new SqliteTrainingRepository({
+      now: sequenceClock(),
+      select: async <T>(query: string, values: unknown[] = []) => {
+        if (query.includes("WHERE id = $1")) {
+          return String(values[0]) === row.id ? [{ record_json: JSON.stringify(row), archived_at: null }] as T : [] as T;
+        }
+        throw new Error(`Unexpected select: ${query}`);
+      },
+      executeWrite: async (query: string, values: unknown[] = []) => {
+        if (query.startsWith("UPDATE training_runs SET status = 'Interrupted', record_json = json_set")) {
+          if (row.termination?.reason === "user_finished") return { rowsAffected: 0 };
+          row = {
+            ...row,
+            status: "Interrupted",
+            termination: JSON.parse(String(values[0])),
+            updatedAt: String(values[1]),
+          };
+          return { rowsAffected: 1 };
+        }
+        if (!query.startsWith("UPDATE training_runs SET status")) throw new Error(`Unexpected write: ${query}`);
+        const incoming = JSON.parse(String(values[1])) as TrainingRunRecord;
+        const isStaleRunning = incoming.status === "Running" && !incoming.termination;
+        if (isStaleRunning) {
+          staleReached();
+          await staleRelease;
+        }
+        if (row.termination?.reason === "user_finished") return { rowsAffected: 0 };
+        row = incoming;
+        return { rowsAffected: 1 };
+      },
+    });
+
+    const staleWrite = repository.updateTrainingRun(row.id, { status: "Running" });
+    await staleAtWrite;
+    const termination = { reason: "user_finished" as const, endedAt: "2026-10-10T12:00:00.000Z" };
+    await repository.updateTrainingRun(row.id, { status: "Interrupted", termination });
+    releaseStale();
+    await expect(staleWrite).rejects.toThrow("ended by the user");
+    expect(row.status).toBe("Interrupted");
+    expect(row.termination).toEqual(termination);
+  });
+
+  it("refuses a stale user-finish write after the run became Completed", async () => {
+    let row = record("completed-race", 1, { status: "Interrupted", currentIndex: 1 });
+    let writeReached!: () => void;
+    let releaseWrite!: () => void;
+    const reached = new Promise<void>((resolve) => { writeReached = resolve; });
+    const released = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const repository = new SqliteTrainingRepository({
+      now: sequenceClock(),
+      select: async <T>(query: string, values: unknown[] = []) => {
+        if (query.includes("WHERE id = $1")) return String(values[0]) === row.id
+          ? [{ record_json: JSON.stringify(row), archived_at: null }] as T
+          : [] as T;
+        throw new Error(`Unexpected select: ${query}`);
+      },
+      executeWrite: async (query: string, values: unknown[] = []) => {
+        if (!query.startsWith("UPDATE training_runs SET status = 'Interrupted', record_json = json_set")) {
+          throw new Error(`Unexpected write: ${query}`);
+        }
+        writeReached();
+        await released;
+        if (row.status === "Completed" || row.currentIndex >= row.targetIds.length || row.termination) return { rowsAffected: 0 };
+        row = {
+          ...row,
+          status: "Interrupted",
+          termination: JSON.parse(String(values[0])),
+          updatedAt: String(values[1]),
+        };
+        return { rowsAffected: 1 };
+      },
+    });
+
+    const ending = repository.updateTrainingRun(row.id, {
+      status: "Interrupted",
+      termination: { reason: "user_finished", endedAt: "2026-10-10T12:00:00.000Z" },
+    });
+    await reached;
+    row = { ...row, status: "Completed", currentIndex: row.targetIds.length, completedTargetIds: [...row.targetIds], completedAt: "completed" };
+    releaseWrite();
+    await expect(ending).rejects.toThrow("cannot be ended in its current state");
+    expect(row.status).toBe("Completed");
+    expect(row.termination).toBeUndefined();
+  });
+
+  it("archives the current JSON atomically so a concurrent termination survives archive and restore", async () => {
+    let row = record("archive-race", 1, { status: "Interrupted", currentIndex: 1 });
+    let archivedAt: string | null = null;
+    let archiveReached!: () => void;
+    let releaseArchive!: () => void;
+    const reached = new Promise<void>((resolve) => { archiveReached = resolve; });
+    const released = new Promise<void>((resolve) => { releaseArchive = resolve; });
+    const repository = new SqliteTrainingRepository({
+      now: sequenceClock(),
+      select: async <T>(query: string, values: unknown[] = []) => {
+        if (query.includes("FROM training_runs WHERE id = $1")) {
+          if (String(values[0]) !== row.id) return [] as T;
+          if (query.includes("archived_at IS NULL") && archivedAt !== null) return [] as T;
+          if (query.includes("archived_at IS NOT NULL") && archivedAt === null) return [] as T;
+          return [{ record_json: JSON.stringify(row), archived_at: archivedAt }] as T;
+        }
+        if (query.includes("FROM workspaces w JOIN profiles p")) return [{ workspace_id: row.workspaceId }] as T;
+        throw new Error(`Unexpected select: ${query}`);
+      },
+      executeWrite: async (query: string, values: unknown[] = []) => {
+        if (query.startsWith("UPDATE training_runs SET record_json = json_set(record_json, '$.archivedAt'")) {
+          archiveReached();
+          await released;
+          if (archivedAt !== null) return { rowsAffected: 0 };
+          archivedAt = String(values[0]);
+          row = { ...row, archivedAt, updatedAt: archivedAt };
+          return { rowsAffected: 1 };
+        }
+        if (query.startsWith("UPDATE training_runs SET status = 'Interrupted', record_json = json_set")) {
+          if (archivedAt !== null || row.termination) return { rowsAffected: 0 };
+          row = { ...row, status: "Interrupted", termination: JSON.parse(String(values[0])), updatedAt: String(values[1]) };
+          return { rowsAffected: 1 };
+        }
+        if (query.startsWith("UPDATE training_runs SET record_json = $1, archived_at = NULL")) {
+          if (archivedAt === null) return { rowsAffected: 0 };
+          row = JSON.parse(String(values[0])) as TrainingRunRecord;
+          archivedAt = null;
+          return { rowsAffected: 1 };
+        }
+        throw new Error(`Unexpected write: ${query}`);
+      },
+    });
+
+    const archive = repository.archiveTrainingRun(row.id);
+    await reached;
+    const termination = { reason: "user_finished" as const, endedAt: "2026-10-10T12:00:00.000Z" };
+    await repository.updateTrainingRun(row.id, { status: "Interrupted", termination });
+    releaseArchive();
+    await archive;
+    expect(row.termination).toEqual(termination);
+    expect(archivedAt).not.toBeNull();
+
+    await repository.restoreTrainingRun(row.id);
+    expect(archivedAt).toBeNull();
+    expect(row.termination).toEqual(termination);
+  });
+
 });

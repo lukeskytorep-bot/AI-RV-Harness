@@ -1,12 +1,15 @@
 # AI Center and Viewer Notes
 
-> **Status:** Implemented and released in v0.7.13
+> **Documentation scope:** `ai-rv-2` development source through Training Continuity T5; reviewed 16 October 2026 against commit `9c92bdbb94d1125406e0094779102458cdeee87c`. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
+
+> **Status:** implemented baseline with accepted subsequent development updates
 > **Design baseline:** AI RV Harness v0.7.11
-> **Reference:** public v0.7.13 Viewer Learning, UX-DATA and Research lifecycle
+> **Reference:** preserved Viewer Learning and subsequent schema-031 development lifecycle
 
 AI Center is a top-level area of AI RV Harness for inspecting and managing AI roles, their histories, and carefully controlled learning features. **Viewer Notes** are private, versioned working guidance created and revised only by the same Viewer identity after qualifying completed Training sessions.
 
-This page describes the released v0.7.13 Viewer Notes and Field Guide architecture. The core Viewer Notes capability was introduced in v0.7.12; source preservation, controlled purge, the versioned trainable Field Guide, and frozen Research controls are part of the public v0.7.13 release.
+This page describes the preserved Viewer Notes and Field Guide architecture with current development recovery; release claims below refer to the recorded v0.7.13 baseline. The core Viewer Notes capability was introduced in v0.7.12; source preservation, controlled purge, the versioned trainable Field Guide, and frozen Research controls are part of the public v0.7.13 release.
 
 ## Why AI Center is a top-level section
 
@@ -82,7 +85,7 @@ The order is an integrity boundary in Training:
 1. the blind Viewer evidence is sealed;
 2. the target is revealed;
 3. the Viewer gives its own post-Reveal assessment;
-4. if Viewer Notes were ON, the same Viewer reviews its notes;
+4. Field Guide Update settles first, then the same Viewer reflects on Viewer Notes if enabled;
 5. AI Monitor, AI Judge, and later operator discussion remain separate and are not supplied to the notes reflection.
 
 The reflection packet contains only:
@@ -111,7 +114,9 @@ The available capacity levels are 1,024, 2,048, 4,096, and 8,192 estimated token
 
 Capacity may be increased. It may be reduced only when the current notes already fit within the lower level. Harness never truncates notes to satisfy a lower limit.
 
-If the Viewer's first valid `UPDATE` exceeds the selected capacity, Harness makes one content retry. The second prompt repeats the current notes, sealed blind evidence, Reveal, and the Viewer's own post-Reveal assessment. It also supplies the rejected complete proposal and exact estimates for the current notes, rejected proposal, and capacity. The Viewer may compress or reorganize its complete notes, replace less useful conclusions, shorten the new material, or return `NO_CHANGE`. A second over-capacity result is recorded as `FAILED_CAPACITY`; Harness does not truncate or silently alter it and does not make a third attempt.
+Classic Training permits at most two dispatched requests for each learning kind/session/packet, shared by transport retry, analytical output recovery and JSON/capacity repair, and persisted across restart. A second invalid proposal is recorded as FAILED_* plus failed_preserved; the previous exact version or absence remains and Training proceeds to later stages with an expandable warning. Harness never truncates a proposal or creates a fake empty first version. NO_CHANGE is a separate model decision. Stop, DB/ownership/hash/identity errors and unknown dispatch are interruptions, not optional learning failures.
+
+The reflection packet also preserves the exact Viewer system prompt used for the Session and the exact Field Guide checkpoint selected after this Training update/preservation. Current generation headroom is C+32,768 → C+49,152 without changing capacity C. The definitive owners are learningExecution.ts, fieldGuideUpdate.ts and viewerNotes.ts; see [current workflows](CURRENT_WORKFLOWS_v0.7.14_EN.md).
 
 ## Canonical post-session reflection prompt
 
@@ -284,3 +289,7 @@ The Viewer Notes core was implemented in AI RV Harness v0.7.12 and its source-pr
 ### Controlled purge integration (UX-DATA-8)
 
 Viewer Notes source preservation is consumed by the permanent-delete lifecycle rather than bypassed by it. Purging a source Session or Workspace detaches nullable live references and leaves `source_snapshot_json`, versions, reflection runs and activation history intact. Purging an entire Profile is different: the Profile's own AI identities and Viewer Notes are part of that Profile subtree and are removed by the explicit controlled-purge use case. Viewer Notes belonging to other identities remain preserved even when their source record is deleted.
+
+## Warning and export presentation
+
+Training and AI Center distinguish a failed preserved update from NO_CHANGE. Details retain the original cause and separate Field Guide/Notes outcomes. If no first notes version exists, the UI says so. Training export merges run/checkpoint/events without duplicate settlements and retains exact version/hash/audit, active interrupted checkpoint and bounded final candidates without private reasoning.

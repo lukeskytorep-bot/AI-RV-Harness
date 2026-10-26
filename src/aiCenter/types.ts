@@ -198,6 +198,7 @@ export interface DetachViewerNoteSourceReferencesInput {
 }
 
 export interface ViewerNoteReflectionResult {
-  status: "UPDATE" | "NO_CHANGE" | "STALE_BASE";
+  status: Exclude<ViewerNoteReflectionStatus, "PENDING"> | "DISABLED";
+  settlement?: import("./learningExecution").LearningSettlement;
   version?: ViewerNoteVersion;
 }

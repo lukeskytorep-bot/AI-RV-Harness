@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderCallError } from "./providerError";
 import { clearOpenRouterEndpointCapabilityCache } from "./openRouterEndpointCapability";
 import { createProviderChatExecutor, executeProviderChat, executeProviderRequest, ProviderExecutionError } from "./requestExecutor";
+import { isStreamingRepetitionRunawayError, runWithStreamingRepetitionGuard } from "../sessions/streamingRepetitionGuard";
 
 const failure = (code: ConstructorParameters<typeof ProviderCallError>[0]["code"], extras: Partial<ConstructorParameters<typeof ProviderCallError>[0]> = {}) =>
   new ProviderCallError({ code, message: code, phase: "reading_body", ...extras });
@@ -56,6 +57,32 @@ describe("provider request executor", () => {
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
+  it("passes Custom manual sampling unchanged without OpenRouter endpoint discovery or routing metadata", async () => {
+    const attempt = vi.fn(async (request) => {
+      expect(request.settings.requested).toMatchObject({ topP: 0.04, topK: 0, seed: 42 });
+      expect(request.settings.effective).toMatchObject({ topP: 0.04, topK: 0, seed: 42 });
+      expect(request.providerRouting).toBeUndefined();
+      return { content: "ok", usage: {}, finishReason: "stop" };
+    });
+    const endpointDiscovery = vi.fn();
+    const response = await executeProviderChat({
+      config: { id: "pc-custom", provider: "custom_openai", label: "Custom", credentialId: "c", baseUrl: "https://example.test/v1", enabled: true, createdAt: "now", updatedAt: "now" },
+      modelId: "custom-model",
+      messages: [{ role: "user", content: "test" }],
+      settings: {
+        requested: { topP: 0.04, topK: 0, seed: 42 },
+        effective: { topP: 0.04, topK: 0, seed: 42 },
+        omitted: [],
+      },
+      configuredRetries: 0,
+      endpointDiscovery,
+      attempt,
+    });
+    expect(response.content).toBe("ok");
+    expect(endpointDiscovery).not.toHaveBeenCalled();
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retry a physical streaming failure after semantic output started", async () => {
     const attempt = vi.fn().mockRejectedValue(failure("timeout", { semanticOutputStarted: true }));
     await expect(executeProviderRequest({
@@ -96,6 +123,34 @@ describe("provider request executor", () => {
       throw new DOMException("Provider request cancelled", "AbortError");
     });
     await expect(executeProviderRequest({ operationId: "test.active-cancel", configuredRetries: 5, signal: controller.signal, executeAttempt: attempt })).rejects.toMatchObject({ name: "AbortError" });
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the active transport when the internal streaming repetition guard fires", async () => {
+    const attempt = vi.fn(async (request) => {
+      request.onStreamEvent?.({ event: "started", data: { providerRequestId: "req-loop" } });
+      for (let index = 0; index < 300 && !request.signal?.aborted; index += 1) {
+        request.onStreamEvent?.({ event: "contentDelta", data: { content: "our " } });
+      }
+      expect(request.signal?.aborted).toBe(true);
+      throw new DOMException("cancelled by local repetition guard", "AbortError");
+    });
+    let caught: unknown;
+    try {
+      await runWithStreamingRepetitionGuard({ execute: (signal, internalOnStreamEvent) => executeProviderChat({
+          config: { id: "pc", provider: "custom_openai", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now", baseUrl: "https://example.invalid" },
+          modelId: "model",
+          messages: [{ role: "user", content: "test" }],
+          settings: { requested: {}, effective: {}, omitted: [] },
+          configuredRetries: 5,
+          attempt,
+          signal,
+          internalOnStreamEvent,
+        }) });
+    } catch (error) {
+      caught = error;
+    }
+    expect(isStreamingRepetitionRunawayError(caught)).toBe(true);
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
@@ -323,6 +378,42 @@ describe("E1 OpenRouter endpoint-capability integration", () => {
     expect(attempt.mock.calls[0][0].providerRouting).toEqual({ only: ["siliconflow"], allowFallbacks: true });
   });
 
+  it("dispatches a small manual-sampling request only after verified parameter-capability routing", async () => {
+    const attempt = vi.fn().mockResolvedValue(response);
+    await executeProviderChat({
+      config,
+      modelId: "sampling/model",
+      messages: [{ role: "user", content: "small manual sampling" }],
+      settings: { requested: { topK: 0, seed: 42, maxOutputTokens: 4096 }, effective: { topK: 0, seed: 42, maxOutputTokens: 4096 }, omitted: [] },
+      endpointDiscovery: async () => ({ data: { endpoints: [
+        { tag: "provider-a/fp8", context_length: 131_072, max_completion_tokens: 16_384, supported_parameters: ["top_k", "seed"] },
+      ] } }),
+      attempt,
+    });
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(attempt.mock.calls[0][0].settings.effective).toMatchObject({ topK: 0, seed: 42 });
+    expect(attempt.mock.calls[0][0].providerRouting).toEqual({
+      only: ["provider-a/fp8"],
+      allowFallbacks: true,
+      requireParameters: true,
+    });
+  });
+
+  it("keeps manual sampling zero-dispatch when endpoint parameter support is not confirmed", async () => {
+    const attempt = vi.fn().mockResolvedValue(response);
+    await expect(executeProviderChat({
+      config,
+      modelId: "sampling/model",
+      messages: [{ role: "user", content: "small manual sampling" }],
+      settings: { requested: { seed: 42, maxOutputTokens: 4096 }, effective: { seed: 42, maxOutputTokens: 4096 }, omitted: [] },
+      endpointDiscovery: async () => ({ data: { endpoints: [
+        { tag: "provider-a/fp8", context_length: 131_072, max_completion_tokens: 16_384 },
+      ] } }),
+      attempt,
+    })).rejects.toMatchObject({ name: "ProviderCallError", details: { code: "configuration", phase: "before_dispatch" } });
+    expect(attempt).not.toHaveBeenCalled();
+  });
+
   it("stops locally when every discovered route is proven too small", async () => {
     const attempt = vi.fn().mockResolvedValue(response);
     await expect(executeProviderChat({
@@ -384,10 +475,12 @@ describe("S2 stream presentation integration", () => {
   const settings = { requested: {}, effective: {}, omitted: [] };
   const response = { content: "ok", usage: {} };
 
-  it("forwards a live stream callback for visible Conversation work", async () => {
+  it("forwards each visible Conversation stream event exactly once through the merged callback", async () => {
     const onStreamEvent = vi.fn();
+    const internalOnStreamEvent = vi.fn();
     const attempt = vi.fn(async (request) => {
-      expect(request.onStreamEvent).toBe(onStreamEvent);
+      expect(request.onStreamEvent).toEqual(expect.any(Function));
+      request.onStreamEvent?.({ event: "contentDelta", data: { content: "hello" } });
       return response;
     });
     await executeProviderChat({
@@ -398,9 +491,13 @@ describe("S2 stream presentation integration", () => {
       operationKind: "conversation",
       streamWorkflowContext: "conversation",
       onStreamEvent,
+      internalOnStreamEvent,
       attempt,
     });
     expect(attempt).toHaveBeenCalledTimes(1);
+    expect(internalOnStreamEvent).toHaveBeenCalledTimes(1);
+    expect(onStreamEvent).toHaveBeenCalledTimes(1);
+    expect(internalOnStreamEvent.mock.invocationCallOrder[0]).toBeLessThan(onStreamEvent.mock.invocationCallOrder[0]);
   });
 
   it("suppresses callbacks for Research Judge even when a caller supplies one", async () => {

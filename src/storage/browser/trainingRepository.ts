@@ -2,6 +2,7 @@ import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput 
 import type { Profile, Workspace } from "../../types";
 import type { TrainingRepository } from "../contracts/trainingRepository";
 import { createId, nowIso } from "../repository";
+import { canResumeOrEndTrainingRun } from "../../training/runLifecycle";
 
 const TRAINING_RUNS_KEY = "rvh.dev.training_runs";
 const PROFILES_KEY = "rvh.dev.profiles";
@@ -67,8 +68,21 @@ export class BrowserTrainingRepository implements TrainingRepository {
     const all = this.read<TrainingRunRecord[]>(TRAINING_RUNS_KEY, []);
     const current = all.find((run) => run.id === id && !run.archivedAt);
     if (!current) throw new Error("Active Training run not found.");
+    if (current.termination?.reason === "user_finished") {
+      if (input.termination?.reason === "user_finished") return;
+      throw new Error("Training run was ended by the user and cannot be modified by active execution.");
+    }
+    if (input.termination?.reason === "user_finished" && !canResumeOrEndTrainingRun(current)) {
+      throw new Error("This Training run cannot be ended in its current state.");
+    }
     this.write(all.map((run) => run.id === id
-      ? { ...run, ...input, errors: input.error ? [...run.errors, input.error] : run.errors, updatedAt: this.now() }
+      ? {
+          ...run,
+          ...input,
+          termination: input.termination ?? run.termination,
+          errors: input.error ? [...run.errors, input.error] : run.errors,
+          updatedAt: this.now(),
+        }
       : run));
   }
 

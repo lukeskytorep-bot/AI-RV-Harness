@@ -1,7 +1,10 @@
 # AI RV Harness code map
 
-**Status:** current released architecture map for v0.7.13
-**Purpose:** identify the current primary owner of each major product capability and the accepted v0.7.13 boundaries.
+> **Documentation scope:** `ai-rv-2` development source through Training Continuity T5; reviewed 16 October 2026 against commit `9c92bdbb94d1125406e0094779102458cdeee87c`. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
+
+**Status:** current architecture map for the accepted AI RV development source
+**Purpose:** identify the current primary owner of each major product capability and the preserved v0.7.13 boundaries and subsequent accepted development additions.
 
 This document maps responsibilities, not every source file. Historical release records remain under `docs/releases/`.
 
@@ -71,7 +74,7 @@ This document maps responsibilities, not every source file. Historical release r
 | Export audit persistence contract | `src/storage/contracts/exportRepository.ts` | Shared cross-domain ledger for exported Training, Session, Monitor and Research artifacts; it is not owned by Research execution. |
 | Desktop SQLite implementation | `src/storage/sqliteRepository.ts`, `src/storage/databaseWriteOperations.ts`, `src-tauri/src/database.rs`, delegating under `src/storage/sqlite/` | SECURITY-IPC-1C-R1 removes plugin-SQL select/execute from production. Reads use a native SQLite connection opened `read_only(true)` with `query_only`; writes cross IPC only as named operations with fixed Rust-owned SQL. Plugin SQL is retained only for load/close lifecycle. Snapshot and controlled purge use dedicated native commands. |
 | Browser preview implementation | `src/storage/browserRepository.ts`, delegating under `src/storage/browser/` | Preserve contracts and local-storage keys; the facade supplies explicit cross-domain callbacks where required. |
-| Database migrations and native transactions | `src-tauri/src/migrations.rs`, `src-tauri/src/database.rs` and `src-tauri/src/storage.rs` | `migrations.rs` is the single ordered 001–027 registry and current-version source. The current epoch retains exact-green v23 → v24 Viewer Learning, v24 → v25 continuation-state, v25 → v26 typed-Workspace, and v26 → v27 factory Training classification gates; older public/legacy schemas are stopped by the compatibility epoch gate before plugin migration. Transactions and database validation remain with their focused native owners. |
+| Database migrations and native transactions | `src-tauri/src/migrations.rs`, `src-tauri/src/database.rs` and `src-tauri/src/storage.rs` | `migrations.rs` is the single ordered 001–031 registry and current-version source. The current epoch retains exact-green v23 → v24 Viewer Learning, v24 → v25 continuation-state, v25 → v26 typed-Workspace, and v26 → v27 factory Training classification gates; older public/legacy schemas are stopped by the compatibility epoch gate before plugin migration. Transactions and database validation remain with their focused native owners. |
 | Credentials and route binding | `src-tauri/src/secrets.rs`, `src-tauri/src/providers.rs`, `src/providers/native.ts`, `src/providers/service.ts` | Secrets remain in the OS credential store. New/rebound credentials are stored as versioned records bound to credential ID, provider kind and normalized provider endpoint; provider calls retrieve a secret only after that native binding matches. SQLite `provider_configs` is metadata, not the authorization source for credential routing. |
 | Profile/credential model-route resolution | `src/modelRoutes.ts` | New/current Viewer/Monitor/Judge choices are scoped through the active Profile credential. Feature modules must not reconstruct `providerConfigId::modelId` or independently widen the scope to the global model cache. |
 | Human-readable and research exports | `src/exports/`, `src/artifacts/` | Preserve evidence-domain separation and existing formats. |
@@ -147,7 +150,7 @@ The v0.7.13 Research integration for Viewer Learning is owned by:
 - `src/storage/contracts/fieldGuideRepository.ts` with Browser/SQLite implementations — explicit read-only `getExistingFieldGuideBundle` path used by Research so reads never bootstrap settings or create versions;
 - `src/exports/research.ts` — exact Field Guide version/hash columns in Research result exports.
 
-Research does not call Field Guide Update or Viewer Notes Reflection. It cannot create new learning versions. The existing Research lifecycle, Judge scoring/frozen scores, target ownership, provider retry, credential routing and controlled purge remain outside Viewer Learning 3 except for storing the necessary immutable snapshot inside the existing frozen Research JSON. That feature introduced no migration; the current application schema later advanced through provider-continuation persistence (025), typed Workspaces (026), and the factory Training classification upgrade (027).
+Research does not call Field Guide Update or Viewer Notes Reflection. It cannot create new learning versions. The existing Research lifecycle, Judge scoring/frozen scores, target ownership, provider retry, credential routing and controlled purge remain outside Viewer Learning 3 except for storing the necessary immutable snapshot inside the existing frozen Research JSON. That feature introduced no migration; that historical stage was followed by provider-continuation persistence (025), typed Workspaces (026), factory Training classification (027) and accepted development migrations through 031.
 
 ## Training targets and typed Workspaces closeout
 
@@ -159,7 +162,7 @@ The accepted stages after the earlier modularization closeout are documented in 
 - Manual RV presented under RV Sessions while reusing the public Conversation chat engine;
 - Workspace kinds `conversation`, `rv`, and `legacy_combined`;
 - separate active Conversation/RV Workspace IDs;
-- SQLite schema 027, including the factory Training classification upgrade after the typed-Workspace schema 026 boundary.
+- SQLite schema 031, retaining the factory classification boundary (027) and later telepathic/lease/attachment/review migrations (028–031).
 
 
 ## Etap 9 — final validation
@@ -171,3 +174,32 @@ The final modularization gate does not introduce a new product subsystem. Its ow
 - `docs/architecture/CODE_MAP.md` and `MODULE_BOUNDARIES.md` — living architecture records synchronized with the accepted Stage 8 baseline.
 
 Stage 9 treats legacy Thread-group metadata, Workspace Sources, Custom Protocol version persistence and explicit cross-domain lifecycle operations as documented compatibility/facade ownership, not temporary architecture exceptions. The architecture allowlist remains empty.
+
+## Current development recovery and UI owners
+
+| Responsibility | Owner | Boundary |
+| --- | --- | --- |
+| Viewer semantic completeness and budget | `src/sessions/viewerOutputRecovery.ts` | operation-specific Viewer preferences (automatic 16K/32K, Manual RV 32K/48K) and accepted/incomplete classification |
+| Durable Viewer attempt replay | `src/sessions/viewerResumeLedger.ts` | exact step/fingerprint, exhaustion and dispatch uncertainty |
+| Training execution and recovery | `src/features/training/trainingExecution.ts`, `trainingResumeRecovery.ts` | same-session checkpoint and separate post-Reveal stage recovery |
+| User-ended Training | `src/training/runLifecycle.ts`, `src/features/training/trainingTermination.ts` | persistent termination and engine/repository/UI protection |
+| Research Resume regression | `src/research/researchResume.integration.test.ts` | frozen policy and linked-session recovery |
+| Isolated blind Markdown records | `src/components/BlindTranscriptRecord.tsx`, `SafeMarkdown.tsx` | response-local formatting; raw evidence retained |
+| Shared Profile/help UI | `src/components/ProfileSelector.tsx`, `ModuleHelp.tsx` | module headers share components; specific Workspace management stays in Profiles |
+
+See [current workflow contract](CURRENT_WORKFLOWS_v0.7.14_EN.md) for budget and lifecycle details.
+
+## Fixed-lead telepathy implementation (reviewed 16 October 2026)
+
+The development source contains a shared fixed-lead runtime, durable `plan_json` extension and role-safe transcript/history/export for both telepathic surfaces. Owners, legacy boundaries and open native/visual acceptance checks are documented in [Fixed-lead telepathy](TELEPATHY_FIXED_LEAD_v0.7.14_EN.md). Implemented development scope is not published-release or desktop acceptance evidence. Schema remains 031 and the architecture allowlist remains empty.
+
+## Training Continuity T1–T5 owners
+
+- `src/aiCenter/learningExecution.ts`: durable two-dispatch allowance, known-result recovery, settlements and actual failure text.
+- `src/providers/responseEvidence.ts`, `finalCandidate.ts`, native provider reasoning/final-candidate modules: transport evidence and bounded final-channel preservation.
+- `src/sessions/viewerResumeDecision.ts`: common decision used by UI/engine and explicit essential-step retry without deleting history.
+- `src-tauri/src/workflow_heartbeat.rs`, `workflow_ownership.rs`: native renewal, exact-token fencing and transport binding; TS `application/abortOwnership.ts` passes binding/reason through composed signals.
+- `src/training/learningSummary.ts`, `export.ts`, shared `LearningWarnings.tsx`: deduplicated run/checkpoint settlement presentation and interrupted-session export.
+- `src/App.tsx`, `features/training/TrainingScreen.tsx`: neutral Training header and saved Profile/model context.
+
+See the English [Developer Guide](../development/README.md) for check commands and relevant SQLite/DOM/native tests. No new migration or architecture exception was added by T1–T5.

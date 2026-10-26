@@ -68,7 +68,7 @@ describe("provider continuation staged-delivery boundary", () => {
     const hydrateAt = engine.indexOf("await hydrateConversationContinuationPersistence({");
     const applyContinuationAt = engine.indexOf("messages = replay.messages");
     const contextBudgetAt = engine.indexOf("const budget = estimateContextBudget(");
-    const providerDispatchAt = engine.indexOf("const response = await executeProviderChat({");
+    const providerDispatchAt = engine.indexOf("response = await executeProviderChat({");
     expect(hydrateAt).toBeGreaterThan(-1);
     expect(applyContinuationAt).toBeGreaterThan(hydrateAt);
     expect(contextBudgetAt).toBeGreaterThan(applyContinuationAt);

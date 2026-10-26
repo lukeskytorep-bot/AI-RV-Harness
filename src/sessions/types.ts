@@ -1,3 +1,5 @@
+import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
+import type { SessionFocusPlan } from "./sessionFocus";
 import type { InterfaceLanguage } from "../types";
 import type { EffectiveGenerationSettings, ProviderKind } from "../providers/types";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
@@ -98,6 +100,15 @@ export type SessionContinuationRouteSnapshot =
       stateFormat: "anthropic-thinking-blocks";
       stateFormatVersion: 1;
       prefixPolicy: "append-only";
+    }
+  | {
+      transport: "mistral-native";
+      normalizedEndpoint: string;
+      providerConfigId: string;
+      credentialId: string;
+      requestedModelId: string;
+      stateFormat: "mistral-assistant-content";
+      stateFormatVersion: 1;
     };
 
 export interface SessionSnapshot {
@@ -120,7 +131,12 @@ export interface SessionSnapshot {
   capabilitySnapshot: Record<string, unknown>;
   capabilityCapturedAt: string;
   generationSettings: EffectiveGenerationSettings;
+  viewerOutputPolicy?: { version: 1; initialTokens: number; recoveryTokens: number; preserveConfiguredBudget: boolean };
+  postRevealOutputPolicy?: FrozenAnalyticalOutputPolicy;
   sessionLanguage: InterfaceLanguage;
+  sessionFocus?: SessionFocusPlan;
+  sessionFocusInstructionVersion?: 1;
+  sessionFocusRoute?: {providerConfigId:string;provider:string;modelId:string;modelRoute:string;baseUrl:string;customOutputTokenField:string};
   protocol: {
     id: string;
     version: string;

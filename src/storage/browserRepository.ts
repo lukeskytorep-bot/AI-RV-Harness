@@ -1,3 +1,7 @@
+import { evaluationKey, evaluationPrefix, validateResearchEvaluation, assertEvaluationUpdate, type ResearchEvaluation } from "../research/evaluationTypes";
+import { validateResearchTermination, researchScope, canEndResearchExecution, researchTermination } from "../research/executionLifecycle";
+import { ownBrowserWorkflow, browserOwnershipState, assertBrowserEvaluationWriter } from "./browser/workflowOwnership";
+import type { WorkflowScope } from "../application/workflowOwnership";
 import type { CreateProfileInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
 import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
 import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
@@ -9,13 +13,14 @@ import { BrowserSettingsModelsRepository } from "./browser/settingsModelsReposit
 import { BrowserWorkspacesConversationsRepository } from "./browser/workspacesConversationsRepository";
 import { BrowserSessionsRepository } from "./browser/sessionsRepository";
 import { BrowserTrainingRepository } from "./browser/trainingRepository";
+import { BrowserTelepathicExchangeRepository } from "./browser/telepathicExchangeRepository";
 import { BrowserAiCenterRepository } from "./browser/aiCenterRepository";
 import { BrowserFieldGuideRepository } from "./browser/fieldGuideRepository";
 import { BrowserMonitorRepository } from "./browser/monitorRepository";
 import { BrowserJudgeRepository } from "./browser/judgeRepository";
 import { BrowserResearchRepository } from "./browser/researchRepository";
 import { BrowserExportRepository } from "./browser/exportRepository";
-import { previewBrowserPermanentDelete, purgeBrowserPermanentDelete } from "./browser/controlledPurge";
+import { previewBrowserPermanentDelete, previewBrowserTelepathicDelete, purgeBrowserPermanentDelete } from "./browser/controlledPurge";
 
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
@@ -38,6 +43,45 @@ function write<T>(key: string, value: T): void {
 }
 
 export class BrowserRepository implements AppRepository {
+  async listResearchEvaluations(projectId:string):Promise<ResearchEvaluation[]> {
+    return Object.keys(localStorage).filter(key=>key.startsWith(`${evaluationPrefix}${projectId}:`)).map(key=>validateResearchEvaluation(JSON.parse(localStorage.getItem(key)!),{projectId})).sort((a,b)=>a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }
+  async getResearchEvaluation(projectId:string,id:string):Promise<ResearchEvaluation|null>{
+    const raw=localStorage.getItem(evaluationKey(projectId,id));return raw?validateResearchEvaluation(JSON.parse(raw),{projectId,id}):null;
+  }
+  async saveResearchEvaluation(record:ResearchEvaluation,expectedRevision:number):Promise<void>{
+    assertBrowserEvaluationWriter(this,record.projectId);
+    assertEvaluationUpdate(await this.getResearchEvaluation(record.projectId,record.id),record,expectedRevision);
+    localStorage.setItem(evaluationKey(record.projectId,record.id),JSON.stringify(record));
+  }
+
+  async getResearchExecutionTermination(projectId:string):Promise<import("../research/executionLifecycle").ResearchExecutionTermination|null>{
+    // Deliberately fail closed for corrupt runtime data; the marker is outside frozen config.
+    const projects=JSON.parse(localStorage.getItem("rvh.dev.research_projects")??"[]") as Array<import("../research/types").ResearchProjectRecord>;
+    const project=projects.find(project=>project.id===projectId);
+    return project && "executionTermination" in project?validateResearchTermination(project.executionTermination):null;
+  }
+  async endResearchExecution(projectId:string,endedAt=new Date().toISOString()):Promise<import("../research/executionLifecycle").ResearchExecutionTermination>{
+    return this.withWorkflowOwnership({...researchScope(projectId),terminal:true,entity:{kind:"research",id:projectId,allowEnded:true}},async owned=>{
+      const current=await owned.getResearchProject(projectId);if(!current)throw new Error("Research project not found");
+      const existing=await owned.getResearchExecutionTermination(projectId);if(existing)return existing;
+      if(!canEndResearchExecution(current))throw new Error("Research execution cannot be ended in this state");
+      const marker=researchTermination(current,endedAt);
+      const projects=JSON.parse(localStorage.getItem("rvh.dev.research_projects")??"[]") as Array<import("../research/types").ResearchProjectRecord>;
+      localStorage.setItem("rvh.dev.research_projects",JSON.stringify(projects.map(project=>project.id===projectId?{...project,executionTermination:marker}:project)));
+      return marker;
+    });
+  }
+  async getWorkflowResearchProjectId(sessionId:string):Promise<string|undefined>{return (await this.getRvSession(sessionId))?.researchProjectId;}
+  async getWorkflowProfileId(sessionId:string):Promise<string> {
+    const session=await this.getRvSession(sessionId);
+    const profileId=session?.profileId ?? (await this.getSessionSnapshot(sessionId))?.profileId;
+    if(!profileId)throw new Error("RV ownership requires the durable Profile identity.");
+    return profileId;
+  }
+  withWorkflowOwnership<T>(scope:WorkflowScope,task:(owned:AppRepository,signal:AbortSignal)=>Promise<T>):Promise<T> {return ownBrowserWorkflow(this,scope,task);}
+  getWorkflowOwnership(profileId:string){return browserOwnershipState(this,profileId);}
+
   private readonly profilesRepository = new BrowserProfilesRepository();
   private readonly workspacesConversationsRepository = new BrowserWorkspacesConversationsRepository();
   private readonly researchRepository = new BrowserResearchRepository();
@@ -45,6 +89,7 @@ export class BrowserRepository implements AppRepository {
     isResearchScoresFrozen: (projectId) => this.researchRepository.isScoresFrozen(projectId),
   });
   private readonly trainingRepository = new BrowserTrainingRepository();
+  private readonly telepathicExchangeRepository = new BrowserTelepathicExchangeRepository();
   private readonly aiCenterRepository = new BrowserAiCenterRepository();
   private readonly fieldGuideRepository = new BrowserFieldGuideRepository();
   private readonly monitorRepository = new BrowserMonitorRepository({
@@ -72,6 +117,8 @@ export class BrowserRepository implements AppRepository {
             defaultViewerModelId: undefined,
             defaultViewerReasoningEffort: undefined,
             defaultViewerTemperature: undefined,
+            defaultViewerCustomTemperatureMode: undefined,
+            defaultViewerCustomReasoningMode: undefined,
           } : {}),
           ...(usesRemovedMonitor ? { defaultMonitorProviderConfigId: undefined, defaultMonitorModelId: undefined } : {}),
           ...(usesRemovedJudge ? { defaultJudgeProviderConfigId: undefined, defaultJudgeModelId: undefined } : {}),
@@ -109,6 +156,16 @@ export class BrowserRepository implements AppRepository {
   updateTrainingRun: AppRepository["updateTrainingRun"] = (id, input) => this.trainingRepository.updateTrainingRun(id, input);
   listTrainingRuns: AppRepository["listTrainingRuns"] = () => this.trainingRepository.listTrainingRuns();
   listArchivedTrainingRuns: AppRepository["listArchivedTrainingRuns"] = () => this.trainingRepository.listArchivedTrainingRuns();
+  getTelepathicSeries: AppRepository["getTelepathicSeries"] = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeries(seriesId);
+  listTelepathicSeries: AppRepository["listTelepathicSeries"] = (seriesWorkspaceId) => this.telepathicExchangeRepository.listTelepathicSeries(seriesWorkspaceId);
+  listTelepathicSeriesSummaries: AppRepository["listTelepathicSeriesSummaries"] = (query) => this.telepathicExchangeRepository.listTelepathicSeriesSummaries(query);
+  saveTelepathicSeries: AppRepository["saveTelepathicSeries"] = (state) => this.telepathicExchangeRepository.saveTelepathicSeries(state);
+  withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T> {
+    return this.telepathicExchangeRepository.withTelepathicSeriesLease(seriesId, task);
+  }
+  assertTelepathicSeriesLease: AppRepository["assertTelepathicSeriesLease"] = (seriesId) => this.telepathicExchangeRepository.assertTelepathicSeriesLease(seriesId);
+  telepathicSeriesLeaseSignal: AppRepository["telepathicSeriesLeaseSignal"] = (seriesId) => this.telepathicExchangeRepository.telepathicSeriesLeaseSignal(seriesId);
+  getTelepathicSeriesLeaseState: NonNullable<AppRepository["getTelepathicSeriesLeaseState"]> = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeriesLeaseState(seriesId);
 
   async archiveTrainingRun(id: string): Promise<void> {
     const run = (await this.trainingRepository.listTrainingRuns()).find((item) => item.id === id);
@@ -215,7 +272,8 @@ export class BrowserRepository implements AppRepository {
   restoreChatThread: AppRepository["restoreChatThread"] = (threadId) => this.workspacesConversationsRepository.restoreChatThread(threadId);
   setChatThreadFormalRvState: AppRepository["setChatThreadFormalRvState"] = (threadId, state) => this.workspacesConversationsRepository.setChatThreadFormalRvState(threadId, state);
   listChatMessages: AppRepository["listChatMessages"] = (threadId) => this.workspacesConversationsRepository.listChatMessages(threadId);
-  appendChatMessage: AppRepository["appendChatMessage"] = (threadId, role, content) => this.workspacesConversationsRepository.appendChatMessage(threadId, role, content);
+  appendChatMessage: AppRepository["appendChatMessage"] = (threadId, role, content, metadata) => this.workspacesConversationsRepository.appendChatMessage(threadId, role, content, metadata);
+  updateChatMessageMetadata: AppRepository["updateChatMessageMetadata"] = (messageId, metadata) => this.workspacesConversationsRepository.updateChatMessageMetadata(messageId, metadata);
   appendAssistantMessageWithProviderState: AppRepository["appendAssistantMessageWithProviderState"] = (threadId, content, state) => this.workspacesConversationsRepository.appendAssistantMessageWithProviderState(threadId, content, state);
   listChatMessageProviderStates: AppRepository["listChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.listChatMessageProviderStates(threadId);
   resetChatMessageProviderStates: AppRepository["resetChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.resetChatMessageProviderStates(threadId);
@@ -254,6 +312,7 @@ export class BrowserRepository implements AppRepository {
   createProviderConfig: AppRepository["createProviderConfig"] = (input) => this.settingsModelsRepository.createProviderConfig(input);
   updateProviderCredentialMetadata: AppRepository["updateProviderCredentialMetadata"] = (id, credentialHint, fingerprint) => this.settingsModelsRepository.updateProviderCredentialMetadata(id, credentialHint, fingerprint);
   updateProviderCustomOutputTokenField: AppRepository["updateProviderCustomOutputTokenField"] = (id, field) => this.settingsModelsRepository.updateProviderCustomOutputTokenField(id, field);
+  updateProviderCustomStreamingEnabled: AppRepository["updateProviderCustomStreamingEnabled"] = (id, enabled) => this.settingsModelsRepository.updateProviderCustomStreamingEnabled(id, enabled);
   deleteProviderConfig: AppRepository["deleteProviderConfig"] = (id) => this.settingsModelsRepository.deleteProviderConfig(id);
   updateProviderConnectionStatus: AppRepository["updateProviderConnectionStatus"] = (id, status, error) => this.settingsModelsRepository.updateProviderConnectionStatus(id, status, error);
   listProviderModels: AppRepository["listProviderModels"] = (providerConfigId) => this.settingsModelsRepository.listProviderModels(providerConfigId);
@@ -268,13 +327,14 @@ export class BrowserRepository implements AppRepository {
   updateTarget: AppRepository["updateTarget"] = (id, input) => this.targetsRepository.updateTarget(id, input);
   archiveTarget: AppRepository["archiveTarget"] = (id) => this.targetsRepository.archiveTarget(id);
   restoreTarget: AppRepository["restoreTarget"] = (id) => this.targetsRepository.restoreTarget(id);
-  previewPermanentDelete: AppRepository["previewPermanentDelete"] = async (kind, id) => previewBrowserPermanentDelete(localStorage, kind, id);
+  previewPermanentDelete: AppRepository["previewPermanentDelete"] = async (kind, id) => kind === "telepathic_series" ? previewBrowserTelepathicDelete(localStorage,id) : previewBrowserPermanentDelete(localStorage, kind, id);
   purgeProfile: AppRepository["purgeProfile"] = async (id) => purgeBrowserPermanentDelete(localStorage, "profile", id);
   purgeWorkspace: AppRepository["purgeWorkspace"] = async (id) => purgeBrowserPermanentDelete(localStorage, "workspace", id);
   purgeChatThread: AppRepository["purgeChatThread"] = async (id) => purgeBrowserPermanentDelete(localStorage, "conversation", id);
   purgeRvSession: AppRepository["purgeRvSession"] = async (id) => purgeBrowserPermanentDelete(localStorage, "rv_session", id);
   purgeTrainingRun: AppRepository["purgeTrainingRun"] = async (id) => purgeBrowserPermanentDelete(localStorage, "training", id);
   purgeResearchProject: AppRepository["purgeResearchProject"] = async (id) => purgeBrowserPermanentDelete(localStorage, "research", id);
+  purgeTelepathicSeries: AppRepository["purgeTelepathicSeries"] = async (id,revision) => purgeBrowserPermanentDelete(localStorage,"telepathic_series",id,revision);
   purgeTarget: AppRepository["purgeTarget"] = async (id) => purgeBrowserPermanentDelete(localStorage, "target", id);
   recordTargetUsage: AppRepository["recordTargetUsage"] = (input) => this.targetsRepository.recordTargetUsage(input);
   listTargetUsage: AppRepository["listTargetUsage"] = () => this.targetsRepository.listTargetUsage();
@@ -296,6 +356,11 @@ export class BrowserRepository implements AppRepository {
   appendSessionEventWithProviderState: AppRepository["appendSessionEventWithProviderState"] = (sessionId, event, state) => this.sessionsRepository.appendSessionEventWithProviderState(sessionId, event, state);
   getSessionEventProviderState: AppRepository["getSessionEventProviderState"] = (sessionEventId) => this.sessionsRepository.getSessionEventProviderState(sessionEventId);
   listSessionEvents: AppRepository["listSessionEvents"] = (sessionId) => this.sessionsRepository.listSessionEvents(sessionId);
+  withPostRevealReviewLease<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+    return this.sessionsRepository.withPostRevealReviewLease(sessionId, task);
+  }
+  assertPostRevealReviewLease: AppRepository["assertPostRevealReviewLease"] = (sessionId) => this.sessionsRepository.assertPostRevealReviewLease(sessionId);
+  postRevealReviewLeaseSignal: AppRepository["postRevealReviewLeaseSignal"] = (sessionId) => this.sessionsRepository.postRevealReviewLeaseSignal(sessionId);
   updatePreRevealTranscript: AppRepository["updatePreRevealTranscript"] = (sessionId, transcript) => this.sessionsRepository.updatePreRevealTranscript(sessionId, transcript);
   appendPostRevealTurn: AppRepository["appendPostRevealTurn"] = (sessionId, role, content, metadata) => this.sessionsRepository.appendPostRevealTurn(sessionId, role, content, metadata);
   appendPostRevealTurnWithProviderState: AppRepository["appendPostRevealTurnWithProviderState"] = (sessionId, content, state) => this.sessionsRepository.appendPostRevealTurnWithProviderState(sessionId, content, state);
@@ -305,6 +370,7 @@ export class BrowserRepository implements AppRepository {
   acceptReveal: AppRepository["acceptReveal"] = (sessionId, reveal) => this.sessionsRepository.acceptReveal(sessionId, reveal);
   getReveal: AppRepository["getReveal"] = (sessionId) => this.sessionsRepository.getReveal(sessionId);
   getViewerEvidence: AppRepository["getViewerEvidence"] = (sessionId) => this.sessionsRepository.getViewerEvidence(sessionId);
+  getRvSession: AppRepository["getRvSession"] = (id) => this.sessionsRepository.getRvSession(id);
   listRvSessions: AppRepository["listRvSessions"] = (workspaceId) => this.sessionsRepository.listRvSessions(workspaceId);
   listArchivedRvSessions: AppRepository["listArchivedRvSessions"] = async () => {
     const trainingSessionIds = new Set([...(await this.trainingRepository.listTrainingRuns()), ...(await this.trainingRepository.listArchivedTrainingRuns())].flatMap((run) => [...(run.sessionIds ?? []), ...(run.activeTargetCheckpoint?.sessionId ? [run.activeTargetCheckpoint.sessionId] : [])]));
@@ -381,6 +447,18 @@ export class BrowserRepository implements AppRepository {
   listResearchAssignments: AppRepository["listResearchAssignments"] = (projectId) => this.researchRepository.listResearchAssignments(projectId);
   listBlindingMappings: AppRepository["listBlindingMappings"] = (projectId) => this.researchRepository.listBlindingMappings(projectId);
   updateResearchAssignment: AppRepository["updateResearchAssignment"] = (id, sessionId, status) => this.researchRepository.updateResearchAssignment(id, sessionId, status);
+  async initializeResearchSession(assignmentId: string, input: Parameters<AppRepository["initializeResearchSession"]>[1]): Promise<Awaited<ReturnType<AppRepository["initializeResearchSession"]>>> {
+    const session = await this.sessionsRepository.createRvSession(input);
+    try {
+      await this.sessionsRepository.appendSessionEvent(session.id, { eventType: "SESSION_CREATED", role: "controller", metadata: { sessionCode: session.sessionCode, researchInitialization: true } });
+      await this.researchRepository.updateResearchAssignment(assignmentId, session.id, "Initializing");
+      return session;
+    } catch (cause) {
+      // BrowserRepository is a development fallback without SQLite FK transactions. Keep the assignment authoritative;
+      // production SQLite uses one atomic transaction in SqliteRepository.initializeResearchSession().
+      throw cause;
+    }
+  }
   saveResearchResults: AppRepository["saveResearchResults"] = (projectId, results, hash) => this.researchRepository.saveResearchResults(projectId, results, hash);
   getResearchResults: AppRepository["getResearchResults"] = (projectId) => this.researchRepository.getResearchResults(projectId);
 

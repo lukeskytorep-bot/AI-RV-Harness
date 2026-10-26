@@ -1,0 +1,26 @@
+{
+  "model": "mistral-direct-fixture",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": [
+              { "type": "text", "text": "reasoning" }
+            ]
+          },
+          { "type": "text", "text": "final" }
+        ]
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 5,
+    "total_tokens": 15
+  }
+}

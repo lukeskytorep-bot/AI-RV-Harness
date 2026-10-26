@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { isSqliteLockError, SqliteWriteCoordinator } from "./sqliteWriteCoordinator";
+import { isSqliteLockError, sqliteWriteCoordinator, SqliteWriteCoordinator } from "./sqliteWriteCoordinator";
 
 describe("SQLite write coordinator", () => {
   it("recognizes SQLite busy and locked errors without swallowing unrelated failures", () => {
@@ -46,4 +46,24 @@ describe("SQLite write coordinator", () => {
     await Promise.all([first, second]);
     expect(order).toEqual(["first:start", "first:end", "second:start", "second:end"]);
   });
+});
+
+it("shares a queue per database across repository instances", async () => {
+  const first = sqliteWriteCoordinator("same-db");
+  const second = sqliteWriteCoordinator("same-db");
+  expect(first).toBe(second);
+  expect(first).not.toBe(sqliteWriteCoordinator("other-db"));
+  const order: string[] = []; let release!: () => void;
+  const blocker = new Promise<void>(resolve => { release = resolve; });
+  const a = first.run(async () => { order.push("a"); await blocker; });
+  const b = second.run(async () => { order.push("b"); });
+  await Promise.resolve(); expect(order).toEqual(["a"]); release();
+  await Promise.all([a, b]); expect(order).toEqual(["a", "b"]);
+});
+it("never retries a failed rollback, ambiguous commit, or lease loss", async () => {
+  for (const message of ["[sqlite-no-retry] commit outcome: SQLITE_BUSY", "[sqlite-no-retry] rollback failed: database is locked", "telepathic series lease lost before fenced checkpoint"]) {
+    const operation = vi.fn(async () => { throw new Error(message); });
+    await expect(new SqliteWriteCoordinator([1], async () => undefined).run(operation)).rejects.toThrow(message);
+    expect(operation).toHaveBeenCalledTimes(1);
+  }
 });

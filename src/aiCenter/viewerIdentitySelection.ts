@@ -1,9 +1,9 @@
 import type { FieldGuideLanguage } from "./fieldGuideTypes";
 import type { AiIdentity } from "./types";
-import { credentialIdentityFingerprint } from "../providers/native";
+import { normalizedViewerBaseUrl as normalizedBaseUrl, prepareProfileViewerRoute, requireViewerRoute, resolveViewerCredential, ViewerRouteError, type ViewerRouteFailureCode } from "./viewerIdentityRoute";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
-import { isTauriRuntime } from "../storage";
 import type { AppRepository } from "../storage/repository";
+import type { Profile, Workspace } from "../types";
 
 export interface EligibleViewerIdentity {
   identity: AiIdentity;
@@ -12,25 +12,6 @@ export interface EligibleViewerIdentity {
   trained: boolean;
   fieldGuideVersionNumber?: number;
   viewerNotesVersionNumber?: number;
-}
-
-function normalizedBaseUrl(baseUrl?: string): string | undefined {
-  const clean = baseUrl?.trim().replace(/\/+$/, "").toLowerCase();
-  return clean || undefined;
-}
-
-function metadataCredentialFingerprint(config: ProviderConfig): string {
-  return config.credentialFingerprint?.trim() || `${config.provider}:${config.credentialId}`;
-}
-
-async function currentIdentityCredentialFingerprint(config: ProviderConfig): Promise<string | null> {
-  if (!isTauriRuntime()) return metadataCredentialFingerprint(config);
-  try {
-    const fingerprint = (await credentialIdentityFingerprint(config.credentialId)).trim();
-    return fingerprint || null;
-  } catch {
-    return null;
-  }
 }
 
 function exactBindingMatches(identity: AiIdentity, config: ProviderConfig, model: ProviderModel, currentCredentialFingerprint: string): boolean {
@@ -43,16 +24,21 @@ function exactBindingMatches(identity: AiIdentity, config: ProviderConfig, model
     && (identity.normalizedBaseUrl ?? undefined) === normalizedBaseUrl(config.baseUrl)
     && identity.modelId === model.modelId
     && identity.modelRoute === model.route
-    && model.providerConfigId === config.id;
+    && model.providerConfigId === config.id
+    && model.provider === config.provider;
 }
 
-export async function listEligibleViewerIdentities(input: {
+export interface ViewerIdentityListing {
+  identities: EligibleViewerIdentity[];
+  issues: { providerConfigId?: string; code: ViewerRouteFailureCode }[];
+}
+export async function inspectViewerIdentities(input: {
   repository: AppRepository;
   profileId: string;
   language: FieldGuideLanguage;
   providerConfigs: ProviderConfig[];
   models: ProviderModel[];
-}): Promise<EligibleViewerIdentity[]> {
+}): Promise<ViewerIdentityListing> {
   const identities = await input.repository.listAiIdentities(input.profileId);
   const [trainingRuns, archivedTrainingRuns] = await Promise.all([
     input.repository.listTrainingRuns(),
@@ -60,15 +46,25 @@ export async function listEligibleViewerIdentities(input: {
   ]);
   const allTrainingRuns = [...trainingRuns, ...archivedTrainingRuns].filter((run) => run.profileId === input.profileId);
 
+  const issues: ViewerIdentityListing["issues"] = [];
+  const credentials = new Map<string, Awaited<ReturnType<typeof resolveViewerCredential>>>();
+  await Promise.all(input.providerConfigs.filter(config => config.enabled).map(async config => {
+    const result = await resolveViewerCredential(config);
+    credentials.set(config.id, result);
+    if (!result.ok) issues.push({ providerConfigId: config.id, code: result.code });
+  }));
   const eligible: EligibleViewerIdentity[] = [];
   for (const identity of identities) {
-    if (identity.role !== "viewer" || identity.routeStatus !== "available") continue;
+    if (identity.role !== "viewer") continue;
+    if (identity.routeStatus !== "available") { issues.push({ providerConfigId: identity.providerConfigId, code: "binding_mismatch" }); continue; }
     const providerConfig = input.providerConfigs.find((config) => config.id === identity.providerConfigId);
-    if (!providerConfig) continue;
+    if (!providerConfig || !providerConfig.enabled) { issues.push({ providerConfigId: identity.providerConfigId, code: "configuration_missing" }); continue; }
     const model = input.models.find((candidate) => candidate.providerConfigId === providerConfig.id && candidate.modelId === identity.modelId && candidate.route === identity.modelRoute);
-    if (!model) continue;
-    const currentCredentialFingerprint = await currentIdentityCredentialFingerprint(providerConfig);
-    if (!currentCredentialFingerprint || !exactBindingMatches(identity, providerConfig, model, currentCredentialFingerprint)) continue;
+    if (!model) { issues.push({ providerConfigId: providerConfig.id, code: "model_missing" }); continue; }
+    const result = credentials.get(providerConfig.id);
+    const currentCredentialFingerprint = result?.ok ? result.value : null;
+    if (!currentCredentialFingerprint) continue;
+    if (!exactBindingMatches(identity, providerConfig, model, currentCredentialFingerprint)) { issues.push({ providerConfigId: providerConfig.id, code: "binding_mismatch" }); continue; }
 
     const otherLanguage: FieldGuideLanguage = input.language === "en" ? "pl" : "en";
     const [fieldGuide, otherLanguageFieldGuide, viewerNotes] = await Promise.all([
@@ -89,10 +85,18 @@ export async function listEligibleViewerIdentities(input: {
     });
   }
 
-  return eligible.sort((left, right) => right.identity.lastUsedAt.localeCompare(left.identity.lastUsedAt));
+  return { identities: eligible.sort((left, right) => right.identity.lastUsedAt.localeCompare(left.identity.lastUsedAt)), issues };
 }
 
-export function preferredViewerIdentityId(items: EligibleViewerIdentity[], profileDefaultModelId?: string): string {
+export async function listEligibleViewerIdentities(input: Parameters<typeof inspectViewerIdentities>[0]): Promise<EligibleViewerIdentity[]> {
+  return (await inspectViewerIdentities(input)).identities;
+}
+
+export function preferredViewerIdentityId(items: EligibleViewerIdentity[], profileDefaultModelId?: string, credentialId?: string): string {
+  if (credentialId) {
+    const matches = items.filter(item => item.providerConfig.credentialId === credentialId && (!profileDefaultModelId || item.model.modelId === profileDefaultModelId));
+    return matches.length === 1 ? matches[0].identity.id : "";
+  }
   if (items.length === 1) return items[0].identity.id;
   if (!profileDefaultModelId) return "";
   const matches = items.filter((item) => item.identity.modelId === profileDefaultModelId);
@@ -117,11 +121,32 @@ export async function requireExistingViewerIdentity(input: {
   model: ProviderModel;
 }): Promise<AiIdentity> {
   const identity = (await input.repository.listAiIdentities(input.profileId)).find((item) => item.id === input.identityId);
-  const currentCredentialFingerprint = await currentIdentityCredentialFingerprint(input.providerConfig);
+  const currentCredentialFingerprint = requireViewerRoute(await resolveViewerCredential(input.providerConfig));
   if (!identity || !currentCredentialFingerprint || !exactBindingMatches(identity, input.providerConfig, input.model, currentCredentialFingerprint)) {
-    throw new Error("The selected Viewer identity is no longer available for this Profile and exact provider route.");
+    throw new ViewerRouteError("binding_mismatch");
   }
   return identity;
+}
+
+
+export async function requireWorkspaceViewerRoute(input: {
+  repository: AppRepository;
+  workspace: Workspace;
+  profile: Profile | null;
+  identityId: string;
+  providerConfig: ProviderConfig;
+  model: ProviderModel;
+}): Promise<AiIdentity> {
+  if (!input.profile || input.workspace.profileId !== input.profile.id) {
+    throw new Error("The selected Workspace no longer belongs to the active Profile.");
+  }
+  return requireExistingViewerIdentity({
+    repository: input.repository,
+    profileId: input.profile.id,
+    identityId: input.identityId,
+    providerConfig: input.providerConfig,
+    model: input.model,
+  });
 }
 
 export async function ensureProfileViewerIdentity(input: {
@@ -129,25 +154,7 @@ export async function ensureProfileViewerIdentity(input: {
   profileId: string;
   credentialId?: string;
   modelId?: string;
-}): Promise<AiIdentity | null> {
-  if (!input.credentialId || !input.modelId) return null;
-  const configs = await input.repository.listProviderConfigs();
-  const config = configs.find((item) => item.credentialId === input.credentialId && item.enabled);
-  if (!config) return null;
-  const model = (await input.repository.listProviderModels(config.id)).find((item) => item.modelId === input.modelId);
-  if (!model) return null;
-  const fingerprint = await currentIdentityCredentialFingerprint(config);
-  if (!fingerprint) return null;
-  return input.repository.ensureAiIdentity({
-    profileId: input.profileId,
-    credentialFingerprint: fingerprint,
-    credentialDisplay: `…${fingerprint.slice(-4).toUpperCase()}`,
-    providerConfigId: config.id,
-    provider: config.provider,
-    ...(normalizedBaseUrl(config.baseUrl) ? { baseUrl: normalizedBaseUrl(config.baseUrl) } : {}),
-    modelId: model.modelId,
-    modelRoute: model.route,
-    modelDisplayName: model.displayName,
-    role: "viewer",
-  });
+}): Promise<AiIdentity> {
+  const prepared = requireViewerRoute(await prepareProfileViewerRoute(input));
+  return input.repository.ensureAiIdentity({ ...prepared, profileId: input.profileId });
 }

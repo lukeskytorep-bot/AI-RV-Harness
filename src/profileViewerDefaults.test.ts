@@ -61,4 +61,55 @@ describe("Profile Viewer defaults", () => {
     expect(customSnapshot?.content).toContain("smells!");
   });
 
+
+  it("applies enabled OpenRouter/Custom/Mistral/Blackbox sampling defaults independently of temperature and omits them when disabled or on unrelated providers", () => {
+    const samplingProfile: Profile = {
+      ...profile,
+      defaultViewerOpenRouterSampling: { enabled: true, topP: 0.04, topK: 0, seed: 42 },
+    };
+    expect(profileGenerationDefaults(samplingProfile, model())).toEqual({
+      reasoningEffort: "high",
+      temperature: 1.1,
+      topP: 0.04,
+      topK: 0,
+      seed: 42,
+    });
+
+    const disabled: Profile = {
+      ...samplingProfile,
+      defaultViewerOpenRouterSampling: { enabled: false, topP: 0.04, topK: 0, seed: 42 },
+    };
+    expect(profileGenerationDefaults(disabled, model())).toEqual({ reasoningEffort: "high", temperature: 1.1 });
+
+    const custom = { ...model(), provider: "custom_openai" as const, route: "custom_openai:viewer" };
+    expect(profileGenerationDefaults(samplingProfile, custom)).toEqual({ reasoningEffort: "high", temperature: 1.1, topP: 0.04, topK: 0, seed: 42 });
+
+    const mistral = { ...model(), provider: "mistral" as const, route: "mistral:viewer" };
+    expect(profileGenerationDefaults(samplingProfile, mistral)).toEqual({
+      reasoningEffort: "high",
+      temperature: 1.1,
+      topP: 0.04,
+      topK: 0,
+      seed: 42,
+    });
+
+    const blackbox = { ...model(), provider: "blackbox" as const, route: "blackbox:viewer" };
+    expect(profileGenerationDefaults(samplingProfile, blackbox)).toEqual({ reasoningEffort: "high", temperature: 1.1, topP: 0.04, topK: 0, seed: 42 });
+
+    const unrelated = { ...model(), provider: "zai" as const, route: "zai:viewer" };
+    expect(profileGenerationDefaults(samplingProfile, unrelated)).toEqual({ reasoningEffort: "high", temperature: 1.1 });
+  });
+
+
+
+  it("keeps Custom temperature legacy semantics but honors explicit provider-default and manual modes", () => {
+    const custom = { ...model(), provider: "custom_openai" as const, capabilities: { ...model().capabilities, temperature: { supported: false, confidence: "unknown" as const } } };
+    const legacy: Profile = { ...profile, credentialProvider: "custom_openai", defaultViewerTemperature: 0.2 };
+    expect(profileGenerationDefaults(legacy, custom)).toEqual({ reasoningEffort: "high" });
+    const providerDefault: Profile = { ...legacy, defaultViewerCustomTemperatureMode: "provider_default" };
+    expect(profileGenerationDefaults(providerDefault, custom)).toEqual({ reasoningEffort: "high", customTemperatureMode: "provider_default" });
+    const manual: Profile = { ...legacy, defaultViewerCustomTemperatureMode: "manual" };
+    expect(profileGenerationDefaults(manual, custom)).toEqual({ reasoningEffort: "high", temperature: 0.2, customTemperatureMode: "manual" });
+  });
+
 });

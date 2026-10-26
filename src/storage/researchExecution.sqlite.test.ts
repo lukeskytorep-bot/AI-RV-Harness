@@ -1,0 +1,237 @@
+import { stableStringify } from "../research/planner";
+import { assertEvaluationUpdate, type ResearchEvaluation } from "../research/evaluationTypes";
+import { createResearchEvaluation, runResearchEvaluation, evaluationScope } from "../research/evaluationEngine";
+import {DatabaseSync,backup} from "node:sqlite";
+import {readFileSync,readdirSync,mkdtempSync,rmSync} from "node:fs";
+import {join} from "node:path";
+import {tmpdir} from "node:os";
+import {beforeEach,afterEach,it,expect,vi} from "vitest";
+// Real file-backed SQLite setup and execution can exceed Vitest defaults on Windows CI.
+// Scope the allowance to these integration tests; application deadlines are unchanged.
+vi.setConfig({hookTimeout:60_000,testTimeout:60_000});
+const bridge=vi.hoisted(()=>({invoke:vi.fn()}));
+vi.mock("@tauri-apps/api/core",()=>({invoke:bridge.invoke,Channel:class {onmessage?:unknown;}}));
+vi.mock("@tauri-apps/plugin-sql",()=>({default:{load:async()=>({close:async()=>undefined})}}));
+import {SqliteRepository} from "./sqliteRepository";
+import {lockedOnlyResearchPrompt} from "../research/fieldGuidePolicy";
+import {runResearchPreflight} from "../research/preflight";
+import {freezeResearchViewerOutputPolicy,executeResearchSessions,judgeResearch,prepareInterruptedResearchRetry,prepareInterruptedResearchRestart,unblindAndComputeResearch,createAndLockResearch} from "../research/engine";
+import {researchScope} from "../research/executionLifecycle";
+import {getUncertainResearchJudges,resolveResearchJudgeAttempt} from "../research/judgeRecovery";
+import {createResearchProtocolSelection} from "../research/protocolPolicy";
+import type {ProviderConfig,ProviderModel} from "../providers/types";
+import type {ResearchConfig} from "../research/types";
+import {endRvSession,isRvSessionEnded} from "../sessions/termination";
+import {runAutomaticRcpSession,submitExternalReveal} from "../sessions/controller";
+import {createSessionReplay} from "../sessions/resumeReplay";
+import {getRvLite} from "../resources/protocolRegistry";
+import {runAutomaticRvLiteSession} from "../sessions/rvLiteController";
+import {runAutomaticCustomSession} from "../sessions/customController";
+import {runAutomaticTelepathicSession,resumeTelepathicManualQuestionStage} from "../sessions/telepathicController";
+import {runAutomaticPostRevealReview,sendPostRevealTurn,sendMonitorPostRevealReview} from "../sessions/postReveal";
+import {resolveUncertainPostRevealReviewStage} from "../sessions/postRevealRecovery";
+import {runBlindJudging} from "../judge/engine";
+import {runFieldGuideUpdate} from "../aiCenter/fieldGuideUpdate";
+import {runViewerNoteReflection} from "../aiCenter/viewerNotes";
+import {endTrainingRun} from "../features/training/trainingTermination";
+import {assertAbortOwnership} from "../application/abortOwnership";
+import type {AppRepository} from "./repository";
+const native=readFileSync(new URL("../../src-tauri/src/workflow_ownership.rs",import.meta.url),"utf8").split("#[cfg(test)]")[0];
+const sqls=[...native.matchAll(/sqlx::query(?:_scalar)?\("((?:\\.|[^"\\])*)"\)/g)].map(match=>JSON.parse('"'+match[1]+'"') as string);
+sqls.push(...[...native.matchAll(/let query="((?:\\.|[^"\\])*)"/g)].map(match=>JSON.parse('"'+match[1]+'"') as string));
+const sql=(prefix:string)=>{const matches=sqls.filter(query=>query.startsWith(prefix));if(!matches.length)throw new Error(prefix);return matches[0];};
+const registry=readFileSync(new URL("./databaseWriteOperations.ts",import.meta.url),"utf8");
+const writes=new Map([...registry.matchAll(/\["((?:\\.|[^"\\])*)", "([a-z0-9_]+)"\]/g)].map(match=>[match[2],JSON.parse('"'+match[1]+'"') as string]));
+let db:DatabaseSync;let directory:string;
+function bind(query:string,values:unknown[]=[]){const bound:unknown[]=[];return{query:query.replace(/\$(\d+)/g,(_all,index)=>{const value=values[Number(index)-1];bound.push(typeof value==="boolean"?Number(value):value && typeof value==="object"?JSON.stringify(value):value??null);return"?";}),bound};}
+function select(query:string,values:unknown[]=[]){const prepared=bind(query,values);return db.prepare(prepared.query).all(...prepared.bound as never[]);}
+function scalar(query:string,values:unknown[]=[]){return Object.values(select(query,values)[0]??{})[0];}
+function write(query:string,values:unknown[]=[]){const prepared=bind(query,values);return Number(db.prepare(prepared.query).run(...prepared.bound as never[]).changes);}
+function statement(input:{operation:string;values:unknown[]},ownedProject?:string){
+ const query=writes.get(input.operation);if(!query)throw new Error(input.operation);
+ if(input.operation.startsWith("settings_models_") && String(input.values[0]).match(/^rvh\.(workflow|research\.end)\.v1:/))throw new Error("Reserved ownership key");
+ const indices:Record<string,number>={sessions_update_rv_sessions_01:2,sessions_update_rv_sessions_02:2,sessions_update_rv_sessions_03:2,sessions_insert_session_events_01:1,sessions_insert_target_clarifications_01:1,judge_insert_judge_runs_01:1,sessions_update_rv_sessions_04:3,sessions_insert_session_snapshots_01:0,sessions_insert_reveals_01:0};
+ if(input.operation in indices && Number(scalar("SELECT COUNT(*) FROM session_events WHERE session_id=$1 AND event_type='RV_USER_FINISHED'",[input.values[indices[input.operation]]])))throw new Error("RV session was ended");
+ const projectIndices:Record<string,number>={research_update_research_projects_01:1,research_update_research_projects_02:1,research_update_research_projects_03:2,research_update_research_projects_04:2,research_insert_research_conditions_01:1,research_insert_research_assignments_01:1,research_insert_blinding_mappings_01:1,research_insert_research_results_01:1,sessions_insert_rv_sessions_01:6,targets_insert_target_usage_01:3};
+ let projectId=input.operation in projectIndices?input.values[projectIndices[input.operation]]:undefined;
+ if(input.operation==="research_update_research_assignments_01")projectId=scalar("SELECT research_project_id FROM research_assignments WHERE id=$1",[input.values[2]]);
+ else if(input.operation in indices)projectId=scalar("SELECT research_project_id FROM rv_sessions WHERE id=$1",[input.values[indices[input.operation]]]);
+ if(input.operation==="judge_insert_judge_scores_01")projectId=scalar("SELECT s.research_project_id FROM judge_runs j JOIN rv_sessions s ON s.id=j.session_id WHERE j.id=$1",[input.values[1]]);
+ if(projectId && Number(scalar("SELECT COUNT(*) FROM app_settings WHERE key='rvh.workflow.v1:research:' || $1 AND json_extract(value,'$.owner') IS NOT NULL AND json_extract(value,'$.expiresAt') > strftime('%Y-%m-%dT%H:%M:%fZ','now')",[projectId])) && ownedProject!==projectId)throw new Error("Research ownership is required");
+ if(projectId && !["research_update_research_projects_01","research_update_research_projects_02"].includes(input.operation) && Number(scalar("SELECT COUNT(*) FROM app_settings WHERE key='rvh.research.end.v1:' || $1",[projectId])))throw new Error("Research execution was ended");
+ return write(query,input.values);
+}
+function transaction<T>(fn:()=>T){db.exec("BEGIN IMMEDIATE");try{const value=fn();db.exec("COMMIT");return value;}catch(error){db.exec("ROLLBACK");throw error;}}
+function guard(request:any){const key=`rvh.workflow.v1:${request.profileId}`;write(sql("UPDATE app_settings SET value=value"),[key]);
+ if(Number(scalar(sql("SELECT COUNT(*) FROM app_settings WHERE key=$1 AND json_extract(value,'$.owner')=$2"),[key,request.owner,request.version]))!==1)throw new Error("Workflow ownership lost");
+ const projectId=request.profileId.startsWith("research:")?request.profileId.slice(9):undefined;
+ if(projectId){if(Number(scalar(sql("SELECT COUNT(*) FROM research_projects r JOIN workspaces"),[projectId]))!==1)throw new Error("Research was archived or removed");if(!request.entities.some((entity:any)=>(entity.kind==="research" && entity.id===projectId && entity.allowEnded || request.entities.length===1 && entity.kind==="research_evaluation" && entity.id===projectId)) && Number(scalar(sql("SELECT COUNT(*) FROM app_settings WHERE key='rvh.research.end.v1:'"),[projectId])))throw new Error("Research execution was ended");}
+ else if(Number(scalar(sql("SELECT COUNT(*) FROM profiles WHERE id=$1 AND archived_at"),[request.profileId]))!==1)throw new Error("Profile unavailable");
+ for(const entity of request.entities){if(entity.kind==="research" || entity.kind==="research_evaluation")continue;const profile=entity.profileId ?? request.profileId;if(projectId && Number(scalar(sql("SELECT COUNT(*) FROM profiles WHERE id=$1 AND archived_at"),[profile]))!==1)throw new Error("Profile archived");if(entity.kind==="rv" && projectId && Number(scalar(sql("SELECT COUNT(*) FROM rv_sessions WHERE id=$1 AND research_project_id=$2"),[entity.id,projectId]))!==1)throw new Error("Research scope mismatch");const prefix=entity.kind==="training"?"SELECT COUNT(*) FROM training_runs WHERE id=$1":entity.kind==="rv"?"SELECT COUNT(*) FROM rv_sessions WHERE id=$1 AND profile_id=$2":"SELECT COUNT(*) FROM profiles WHERE id=$1 AND id=$2";if(Number(scalar(sql(prefix),[entity.id,profile]))!==1)throw new Error("Workflow was ended, archived or removed");}
+}
+async function ownership(request:any){const key=`rvh.workflow.v1:${request.profileId}`;
+ if(request.action==="acquire")return transaction(()=>{write(sql("INSERT OR IGNORE INTO app_settings"),[key]);if(request.profileId.startsWith("research:")){if(Number(scalar(sql("SELECT COUNT(*) FROM research_projects r JOIN workspaces"),[request.profileId.slice(9)]))!==1)throw new Error("Research unavailable");}else if(Number(scalar(sql("SELECT COUNT(*) FROM profiles WHERE id=$1 AND archived_at"),[request.profileId]))!==1)throw new Error("Profile unavailable");const changed=write(sql("UPDATE app_settings SET value=json_set(value,'$.owner',$1"),[request.owner,key]);if(!changed)throw new Error("Work is running in another window");return{profileId:request.profileId,owner:request.owner,version:Number(scalar(sql("SELECT json_extract(value,'$.version')"),[key]))};});
+ if(request.action==="renew")return write(sql("UPDATE app_settings SET value=json_set(value,'$.expiresAt'"),[key,request.owner,request.version])===1;
+ if(request.action==="release")return write(sql("UPDATE app_settings SET value=json_set(value,'$.owner',NULL"),[key,request.owner,request.version])===1;
+ if(request.action==="inspect"){const raw=scalar(sql("SELECT value FROM app_settings WHERE key=$1"),[key]);return{...(raw?JSON.parse(String(raw)):{}),active:Number(scalar(sql("SELECT COUNT(*) FROM app_settings WHERE key=$1 AND json_extract(value,'$.owner') IS NOT NULL"),[key]))===1};}
+ if(request.action==="evaluationSave")return transaction(()=>{
+  const projectId=request.profileId.slice(9);guard({...request,entities:[{kind:"research_evaluation",id:projectId}]});
+  const key=`rvh.research.evaluation.v1:${projectId}:${request.record.id}`;
+  const raw=scalar("SELECT value FROM app_settings WHERE key=$1",[key]);
+  assertEvaluationUpdate(raw?JSON.parse(String(raw)):null,request.record,request.expectedRevision);
+  write("INSERT INTO app_settings(key,value,updated_at) VALUES($1,$2,'t') ON CONFLICT(key) DO UPDATE SET value=excluded.value",[key,stableStringify(JSON.parse(JSON.stringify(request.record)))]);return true;
+ });
+ if(request.action==="endResearch")return transaction(()=>{const id=request.profileId.slice(9);guard({...request,entities:[{kind:"research",id,allowEnded:true}]});const markerKey=`rvh.research.end.v1:${id}`;const existing=scalar(sql("SELECT value FROM app_settings WHERE key=$1"),[markerKey]);if(existing)return JSON.parse(String(existing));const state=String(scalar(sql("SELECT state FROM research_projects WHERE id=$1"),[id]));if(!["Locked","Running","Interrupted","SessionsComplete","Judging","ScoresFrozen","Unblinded"].includes(state))throw new Error("Research cannot be ended");const marker={reason:"user_finished",endedAt:request.endedAt,stateAtEnd:state,phase:["SessionsComplete","Judging"].includes(state)?"judging":["ScoresFrozen","Unblinded"].includes(state)?"finalization":"sessions"};write(sql("INSERT INTO app_settings(key,value,updated_at) VALUES($1,$2"),[markerKey,JSON.stringify(marker)]);return marker;});
+ return transaction(()=>{guard(request);if(request.action==="check")return true;
+ if(request.entities.some((e:any)=>e.kind==="research_evaluation"))throw new Error("Research evaluation cannot change source work");
+ if(request.postRevealFence){const fence=request.postRevealFence;const valid=scalar(sql("SELECT COUNT(*) FROM rv_sessions WHERE id=$1 AND post_reveal_review_lease_owner"),[fence.sessionId,fence.leaseOwner,fence.leaseVersion]);if(Number(valid)!==1)throw new Error("Review fence lost");}
+ return request.statements.map((input:any)=>statement(input,request.profileId.startsWith("research:")?request.profileId.slice(9):undefined));});
+}
+beforeEach(async()=>{
+ directory=mkdtempSync(join(tmpdir(),"rvh-owner-"));db=new DatabaseSync(join(directory,"source.sqlite"));db.exec("PRAGMA foreign_keys=ON");
+ // Keep foreign keys enabled before BEGIN; migration PRAGMAs cannot enable them inside it.
+ db.exec("PRAGMA foreign_keys=ON");
+ const migrations=new URL("../../src-tauri/migrations/",import.meta.url);
+ // A single committed fixture transaction avoids hundreds of durable autocommits on Windows.
+ transaction(()=>{for(const file of readdirSync(migrations).filter(file=>file.endsWith(".sql")).sort())db.exec(readFileSync(new URL(file,migrations),"utf8"));});
+ expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({foreign_keys:1});
+ db.exec("INSERT INTO profiles(id,display_name,created_at,updated_at) VALUES('p','P','t','t'); INSERT INTO workspaces(id,profile_id,name,kind,created_at,updated_at,last_opened_at) VALUES('w','p','W','rv','t','t','t');");
+ bridge.invoke.mockImplementation(async(command:string,args:any)=>{if(command==="database_initialize")return;if(command==="database_select_readonly")return select(args.query,args.values);if(command==="database_workflow_ownership")return ownership(args.request);if(command==="database_execute_write")return{rowsAffected:transaction(()=>statement(args.statement))};if(command==="database_execute_write_batch")return transaction(()=>args.statements.map(statement));throw new Error(command);});
+ const repository=await SqliteRepository.connect();await repository.createRvSession({id:"s",sessionCode:"S",workspaceId:"w",profileId:"p",runType:"automatic"});await repository.updateRvSessionState("s","Interrupted");await repository.appendSessionEvent("s",{eventType:"VIEWER_OUTPUT_ATTEMPT",role:"controller",metadata:{technicalAttempt:2,status:"uncertain",requestSha256:"frozen-hash",usage:{totalTokens:29}}});await repository.updatePreRevealTranscript("s","accepted blind");
+});
+afterEach(()=>{vi.useRealTimers();db.close();rmSync(directory,{recursive:true,force:true});bridge.invoke.mockReset();});
+async function study(){
+ const repository=await SqliteRepository.connect();const second=await repository.createProfile({name:"Second"});const first=(await repository.listProfiles()).find(profile=>profile.id==="p")!;
+ const provider=await repository.createProviderConfig({id:"pc",provider:"custom_openai",label:"Fixture",credentialId:"key"});
+ await repository.updateProviderConnectionStatus(provider.id,"ok");provider.lastStatus="ok";
+ db.exec("UPDATE profiles SET credential_id='key'");first.credentialId="key";second.credentialId="key";
+ const capabilities={inputModalities:["text"],outputModalities:["text"],supportsVision:false,supportsStreaming:true,reasoning:{supported:false,efforts:[],confidence:"unknown"},temperature:{supported:false,confidence:"unknown"},supportedParameters:[],maxOutputTokens:65536,contextTokens:262144,source:"provider",capturedAt:"t"} as ProviderModel["capabilities"];
+ let models=["m1","m2"].map(modelId=>({providerConfigId:provider.id,provider:"custom_openai",modelId,displayName:modelId,route:`custom_openai:${modelId}`,pricing:{},recommended:false,rawMetadata:{},refreshedAt:"t",capabilities})) as ProviderModel[];await repository.replaceProviderModels(provider.id,models);models=await repository.listProviderModels();
+ const target=await repository.createTarget({id:"t",collection:"user",title:"Fixture target",revealText:"A broad stone tower with openings.",tags:[],sourceMetadata:{}});
+ const prompt=await lockedOnlyResearchPrompt("en");
+ const config:ResearchConfig={schemaVersion:1,name:"Study",workspaceId:"w",templateType:"profile",sessionLanguage:"en",protocol:createResearchProtocolSelection("full-rcp","en"),targetIds:[target.id],repetitions:1,requireUnusedTargets:false,conditions:models.map((model,index)=>({key:`c${index}`,label:`Condition ${index}`,profileId:index?second.id:"p",providerConfigId:provider.id,modelId:"m1",systemPrompt:prompt,requestedSettings:{maxOutputTokens:16384}})),judges:models.map(model=>({providerConfigId:provider.id,modelId:model.modelId})),randomization:{matchedTargets:true,randomizedExecution:true,randomizedJudgeOrder:true},sessionPolicy:{maxRetries:0,requestTimeoutMs:30000,defaultMaxOutputTokens:16384,sessionCodePrefix:"RES"}};
+ expect(runResearchPreflight(freezeResearchViewerOutputPolicy(config,models),{profiles:[first,second],providerConfigs:[provider],models,targets:[target],targetUsage:[]}).checks.filter(check=>check.level==="fail")).toEqual([]);
+ const {project,preflight}=await createAndLockResearch(repository,config,{profiles:[first,second],providerConfigs:[provider],models,targets:[target],targetUsage:[]});expect(preflight.ok).toBe(true);return{repository,project,models,provider};
+}
+const judgeJson=JSON.stringify({scores:{gestalt:2,verifiableFeatures:2,activityFunctionEvent:1,confabulationControl:1},strongestMatches:["structure"],majorMissesContradictions:[],confabulationObservations:[],conciseRationale:"Good structural match."});
+async function sessions(repository:AppRepository,id:string,onProgress?:(value:any)=>void,signal?:AbortSignal){let calls=0;await executeResearchSessions({repository,projectId:id,signal,onProgress,sessionRunner:input=>runAutomaticRcpSession({...input,chat:async()=>({content:`Distinct accepted blind evidence ${++calls}`,finishReason:"stop",usage:{totalTokens:11,costUsd:0.01}})})});return calls;}
+const lockedBytes=(id:string)=>select("SELECT config_json,config_hash,locked_at FROM research_projects WHERE id=$1",[id]);
+it("Research real SQLite: End is outside frozen config, idempotent, survives backup, and all execution/recovery APIs fail closed",async()=>{
+ const {repository,project}=await study();const before=await repository.getResearchProject(project.id),method=lockedBytes(project.id),assignments=await repository.listResearchAssignments(project.id);
+ const marker=await repository.endResearchExecution(project.id,"first");expect(await repository.endResearchExecution(project.id,"second")).toEqual(marker);expect(await repository.getResearchProject(project.id)).toEqual(before);expect(lockedBytes(project.id)).toEqual(method);expect(await repository.listResearchAssignments(project.id)).toEqual(assignments);
+ await backup(db,join(directory,"backup.sqlite"));db.close();db=new DatabaseSync(join(directory,"backup.sqlite"));db.exec("PRAGMA foreign_keys=ON");const restored=await SqliteRepository.connect();expect(await restored.getResearchExecutionTermination(project.id)).toEqual(marker);
+ const calls=vi.fn();for(const action of [()=>executeResearchSessions({repository:restored,projectId:project.id,sessionRunner:calls}),()=>judgeResearch({repository:restored,projectId:project.id,judgeRunner:calls}),()=>prepareInterruptedResearchRetry(restored,project.id),()=>prepareInterruptedResearchRestart(restored,project.id,assignments[0].id),()=>unblindAndComputeResearch(restored,project.id),()=>resolveResearchJudgeAttempt(restored,project.id,"s","route"),()=>restored.setResearchProjectState(project.id,"Running"),()=>restored.updateResearchAssignment(assignments[0].id,undefined,"Running")])await expect(action()).rejects.toThrow(/ended/);expect(calls).not.toHaveBeenCalled();
+ await restored.archiveResearchProject(project.id);await restored.restoreResearchProject(project.id);expect(await restored.getResearchExecutionTermination(project.id)).toEqual(marker);expect(lockedBytes(project.id)).toEqual(method);expect(db.prepare("PRAGMA integrity_check").get()).toEqual({integrity_check:"ok"});expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+});
+it("Research real SQLite: another owner cannot End; expired owner cannot change project or linked sessions",async()=>{
+ const {repository,project}=await study();let ready!:()=>void,release!:()=>void;let owned!:AppRepository;let signal!:AbortSignal;const started=new Promise<void>(resolve=>{ready=resolve;});const work=repository.withWorkflowOwnership(researchScope(project.id),async(repo,current)=>{owned=repo;signal=current;ready();await new Promise<void>(resolve=>{release=resolve;});});await started;
+ const other=await SqliteRepository.connect();try{expect(await other.getWorkflowOwnership(`research:${project.id}`)).toBe("other");await expect(other.endResearchExecution(project.id)).rejects.toThrow(/another window/);await expect(other.setResearchProjectState(project.id,"Running")).rejects.toThrow(/ownership is required/);db.exec(`UPDATE app_settings SET value=json_set(value,'$.expiresAt','2000-01-01T00:00:00.000Z') WHERE key='rvh.workflow.v1:research:${project.id}'`);await other.endResearchExecution(project.id);await expect(owned.setResearchProjectState(project.id,"Running")).rejects.toThrow(/ownership lost/);await expect(assertAbortOwnership(signal)).rejects.toThrow(/ownership lost/);}finally{release();await work;}expect(await other.getWorkflowOwnership(`research:${project.id}`)).toBe("idle");
+});
+it("Research real SQLite: Stop after one accepted session keeps it and Resume runs only the other Profile",async()=>{
+ const {repository,project}=await study();const method=lockedBytes(project.id),stop=new AbortController();const firstCalls=await sessions(repository,project.id,value=>{if(value.completed===1)stop.abort();},stop.signal);expect(firstCalls).toBe(6);const assignments=await repository.listResearchAssignments(project.id);expect(assignments.filter(row=>row.status==="SessionComplete")).toHaveLength(1);const accepted=assignments.find(row=>row.status==="SessionComplete")!;const snapshot=await repository.getSessionSnapshot(accepted.sessionId!);expect((await repository.getResearchProject(project.id))?.state).toBe("Interrupted");const nextCalls=await sessions(repository,project.id);expect(nextCalls).toBe(6);expect(await repository.getSessionSnapshot(accepted.sessionId!)).toEqual(snapshot);expect((await repository.getResearchProject(project.id))?.state).toBe("SessionsComplete");expect(lockedBytes(project.id)).toEqual(method);expect(select("SELECT * FROM ai_note_reflection_runs")).toEqual([]);expect(select("SELECT * FROM field_guide_versions")).toEqual([]);await repository.endResearchExecution(project.id);
+ const current=(await repository.getRvSession(accepted.sessionId!))!;const modelCall=vi.fn();
+ for(const action of [()=>runAutomaticRcpSession({repository,profileId:current.profileId,resumeSession:current,chat:modelCall} as never),()=>runBlindJudging({repository,sessionId:current.id,chat:modelCall} as never),()=>runAutomaticPostRevealReview({repository,sessionId:current.id,chat:modelCall} as never),()=>submitExternalReveal(repository,current.id,"late"),()=>runFieldGuideUpdate({repository,sessionId:current.id,chat:modelCall} as never),()=>runViewerNoteReflection({repository,sessionId:current.id,chat:modelCall} as never)])await expect(action()).rejects.toThrow(/ended/);expect(modelCall).not.toHaveBeenCalled();
+});
+it("Research real SQLite: complete Judge response after Stop is frozen once; later Judges wait for manual Resume",async()=>{
+ const {repository,project}=await study();await sessions(repository,project.id);const method=lockedBytes(project.id),stop=new AbortController();let paid=0;const runner:typeof runBlindJudging=input=>runBlindJudging({...input,chat:async()=>{paid++;stop.abort();return{content:judgeJson,finishReason:"stop",usage:{totalTokens:29,costUsd:0.01}};}});
+ await judgeResearch({repository,projectId:project.id,signal:stop.signal,judgeRunner:runner});expect(paid).toBe(1);expect(select("SELECT * FROM judge_scores")).toHaveLength(1);expect((await repository.getResearchProject(project.id))?.state).toBe("Judging");expect(await getUncertainResearchJudges(repository,project.id)).toEqual([]);const first=select("SELECT * FROM judge_scores");
+ await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{totalTokens:30}};}})});expect(paid).toBe(4);expect(select("SELECT * FROM judge_scores")).toHaveLength(4);expect(select("SELECT * FROM judge_scores").find(row=>row.id===first[0].id)).toEqual(first[0]);expect((await repository.getResearchProject(project.id))?.state).toBe("ScoresFrozen");expect(lockedBytes(project.id)).toEqual(method);
+});
+it("Research real SQLite: STOP preserves a partial Judge receipt; normal Resume recovers without operator resolution",async()=>{
+ const {repository,project}=await study();await sessions(repository,project.id);const stop=new AbortController();let paid=0;
+ await expect(judgeResearch({repository,projectId:project.id,signal:stop.signal,judgeRunner:input=>runBlindJudging({...input,chat:async()=>{paid++;stop.abort();return{content:"partial candidate",finishReason:"length",usage:{totalTokens:31}};}})})).rejects.toThrow();
+ expect(paid).toBe(1);expect(select("SELECT * FROM judge_scores")).toEqual([]);expect(await getUncertainResearchJudges(repository,project.id)).toEqual([]);
+ await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{totalTokens:30}};}})});
+ expect(paid).toBe(5);expect(select("SELECT * FROM judge_scores")).toHaveLength(4);
+ expect(select("SELECT * FROM session_events WHERE event_type='RESEARCH_JUDGE_RESPONSE'").some(row=>row.content==="partial candidate")).toBe(true);
+});
+it("Research real SQLite: pre-aborted input does not start work; failed End save permits retry",async()=>{
+ const {repository,project}=await study();const before=await repository.getResearchProject(project.id),stop=new AbortController();stop.abort();const calls=vi.fn();await executeResearchSessions({repository,projectId:project.id,signal:stop.signal,sessionRunner:calls});expect(calls).not.toHaveBeenCalled();expect(await repository.getResearchProject(project.id)).toEqual(before);
+ db.exec("CREATE TRIGGER fail_research_end BEFORE INSERT ON app_settings WHEN NEW.key LIKE 'rvh.research.end.v1:%' BEGIN SELECT RAISE(ABORT,'marker save failed'); END;");await expect(repository.endResearchExecution(project.id)).rejects.toThrow(/marker save failed/);expect(await repository.getResearchExecutionTermination(project.id)).toBeNull();expect(await repository.getResearchProject(project.id)).toEqual(before);db.exec("DROP TRIGGER fail_research_end");await repository.endResearchExecution(project.id);expect(await repository.getResearchExecutionTermination(project.id)).toMatchObject({reason:"user_finished"});
+});
+it("Research real SQLite: judging never reads the blinding key; pre-aborted finalization preserves ScoresFrozen and explicit Resume completes",async()=>{
+ const {repository,project}=await study();await sessions(repository,project.id);const method=lockedBytes(project.id);const callsBefore=bridge.invoke.mock.calls.length;
+ await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>({content:judgeJson,finishReason:"stop",usage:{totalTokens:25}})})});expect(bridge.invoke.mock.calls.slice(callsBefore).some(call=>call[0]==="database_select_readonly" && /blinding_mappings/.test(call[1].query))).toBe(false);
+ const stop=new AbortController();stop.abort();await expect(unblindAndComputeResearch(repository,project.id,stop.signal)).rejects.toThrow();expect((await repository.getResearchProject(project.id))?.state).toBe("ScoresFrozen");const results=await unblindAndComputeResearch(repository,project.id,new AbortController().signal);expect(results.sessions).toHaveLength(2);expect((await repository.getResearchProject(project.id))?.state).toBe("Complete");expect(lockedBytes(project.id)).toEqual(method);await expect(repository.endResearchExecution(project.id)).rejects.toThrow(/cannot be ended/);
+});
+it("Research real SQLite: historical unknown attempts consume the single durable automatic grant",async()=>{
+ const {repository,project}=await study();await sessions(repository,project.id);await repository.setResearchProjectState(project.id,"Judging");
+ expect(await getUncertainResearchJudges(repository,project.id)).toEqual([]);let paid=0;
+ await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{}};}})});
+ expect(paid).toBe(4);expect(select("SELECT * FROM judge_scores")).toHaveLength(4);
+ const grants=select("SELECT * FROM session_events WHERE event_type='RESEARCH_JUDGE_REQUEST_V1'").map(row=>JSON.parse(String(row.metadata_json)));
+ expect(grants.filter(row=>row.status==="retry_granted")).toHaveLength(4);expect(grants.filter(row=>row.status==="received").every(row=>row.retryUsed && row.maxTransportRetries===1)).toBe(true);
+});
+it("Research real SQLite: controlled purge removes only the ended project's reserved marker and lease",async()=>{
+ const {repository,project}=await study();await repository.endResearchExecution(project.id);await repository.archiveResearchProject(project.id);
+ const source=readFileSync(new URL("../../src-tauri/src/database.rs",import.meta.url),"utf8");const branch=source.slice(source.indexOf("            ControlledPurgeKind::Research => {"),source.indexOf("            ControlledPurgeKind::Target => {",source.indexOf("            ControlledPurgeKind::Research => {")));
+ const purgeQueries=[...branch.matchAll(/purge_exec\(&mut tx, "((?:\\.|[^"\\])*)"/g)].map(match=>JSON.parse('"'+match[1]+'"') as string);expect(purgeQueries).toHaveLength(5);
+ // Execute the native branch's exact SQL under its documented controlled-purge context.
+ transaction(()=>{db.exec("DELETE FROM controlled_purge_context;INSERT INTO controlled_purge_context(id,reason,started_at) VALUES(1,'SECURITY-IPC-1C controlled purge',datetime('now'));");for(const query of purgeQueries)write(query,[project.id]);db.exec("DELETE FROM controlled_purge_context");});
+ expect(await repository.getResearchProject(project.id)).toBeNull();expect(await repository.getResearchExecutionTermination(project.id)).toBeNull();expect(select("SELECT * FROM app_settings WHERE key=$1",[`rvh.workflow.v1:research:${project.id}`])).toEqual([]);expect(await repository.getRvSession("s")).not.toBeNull();expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+});
+
+it("Research SQLite: BUSY while saving a received Judge retries only the local write", async () => {
+ const {repository,project}=await study();await sessions(repository,project.id);
+ const invoke=bridge.invoke.getMockImplementation()!;let busy=0,paid=0;
+ bridge.invoke.mockImplementation(async(command:string,args:any)=>{
+  if(command==="database_workflow_ownership" && args.request.statements && JSON.stringify(args.request.statements).includes("RESEARCH_JUDGE_REQUEST_V1") && JSON.stringify(args.request.statements).includes("received") && busy===0){busy++;throw new Error("database is locked (code: 5)");}
+  return invoke(command,args);
+ });
+ await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{totalTokens:20}};}})});
+ expect(busy).toBe(1);expect(paid).toBe(4);expect(select("SELECT * FROM judge_scores")).toHaveLength(4);
+ const reconnected=await SqliteRepository.connect();expect((await reconnected.listSessionEvents((await repository.listResearchAssignments(project.id))[0].sessionId!)).some(event=>event.eventType==="RESEARCH_JUDGE_REQUEST_V1" && event.metadata?.status==="received")).toBe(true);
+});
+
+it("Research SQLite: missing Judge 1 coexists with frozen Judge 2; completion survives reconnect without overwrites", async () => {
+ const {repository,project}=await study();await sessions(repository,project.id);const method=lockedBytes(project.id);let paid=0;
+ const runner:typeof runBlindJudging=input=>runBlindJudging({...input,chat:async()=>{paid++;return{content:paid===1?JSON.stringify({...JSON.parse(judgeJson),strongestMatches:null}):judgeJson,finishReason:"stop",usage:{}};}});
+ await expect(judgeResearch({repository,projectId:project.id,judgeRunner:runner})).rejects.toThrow(/incomplete/);
+ expect(paid).toBe(4);const before=select("SELECT * FROM judge_scores");expect(before).toHaveLength(3);
+ const reconnected=await SqliteRepository.connect();
+ await expect(judgeResearch({repository:reconnected,projectId:project.id,judgeRunner:runner})).rejects.toThrow(/incomplete/);expect(paid).toBe(4);
+ await judgeResearch({repository:reconnected,projectId:project.id,completeMissing:true,judgeRunner:runner});expect(paid).toBe(5);
+ const after=select("SELECT * FROM judge_scores");expect(after).toHaveLength(4);for(const score of before)expect(after.find(row=>row.id===score.id)).toEqual(score);
+ expect(select("SELECT * FROM session_events WHERE event_type='RESEARCH_JUDGE_COMPLETION_AUTH_V1'")).toHaveLength(1);
+ expect((await reconnected.getResearchProject(project.id))?.state).toBe("ScoresFrozen");expect(lockedBytes(project.id)).toEqual(method);
+ expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+});
+
+it("Research SQLite: persisted completion transport allowance is not renewed on reconnect", async () => {
+ const {repository,project}=await study();await sessions(repository,project.id);let paid=0;
+ const {ProviderCallError}=await import("../providers/providerError");
+ const runner:typeof runBlindJudging=input=>runBlindJudging({...input,chat:async()=>{paid++;throw new ProviderCallError({code:"response_body_read",phase:"reading_body",message:"lost"});}});
+ await expect(judgeResearch({repository,projectId:project.id,judgeRunner:runner})).rejects.toThrow(/incomplete/);expect(paid).toBe(8);
+ await expect(judgeResearch({repository,projectId:project.id,completeMissing:true,judgeRunner:runner})).rejects.toThrow(/incomplete/);expect(paid).toBe(16);
+ const reconnected=await SqliteRepository.connect();await expect(judgeResearch({repository:reconnected,projectId:project.id,judgeRunner:runner})).rejects.toThrow(/exhausted/);expect(paid).toBe(16);
+ expect(select("SELECT * FROM session_events WHERE event_type='RESEARCH_JUDGE_COMPLETION_AUTH_V1'")).toHaveLength(4);
+ expect(select("SELECT * FROM judge_scores")).toHaveLength(0);
+});
+
+it("Research evaluation SQLite: two new panels survive End and reconnect without changing original sessions or scores", async () => {
+ const {repository,project}=await study();await sessions(repository,project.id);
+ await judgeResearch({repository,projectId:project.id,judgeRunner:input=>runBlindJudging({...input,chat:async()=>({content:judgeJson,finishReason:"stop",usage:{}})})});
+ await repository.endResearchExecution(project.id);
+ const marker=await repository.getResearchExecutionTermination(project.id),originalScores=select("SELECT * FROM judge_scores"),originalRuns=select("SELECT * FROM judge_runs"),originalSessions=select("SELECT * FROM rv_sessions"),method=lockedBytes(project.id);
+ const a=await createResearchEvaluation({repository,projectId:project.id});let paid=0;
+ await runResearchEvaluation({repository,projectId:project.id,evaluationId:a.id,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{}};}});
+ const reconnected=await SqliteRepository.connect();const b=await createResearchEvaluation({repository:reconnected,projectId:project.id,judges:[project.config.judges[1]]});
+ await runResearchEvaluation({repository:reconnected,projectId:project.id,evaluationId:b.id,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{}};}});
+ expect(paid).toBe(6);expect((await reconnected.listResearchEvaluations(project.id)).map(p=>p.status)).toEqual(["Complete","Complete"]);
+ expect(select("SELECT * FROM judge_scores")).toEqual(originalScores);expect(select("SELECT * FROM judge_runs")).toEqual(originalRuns);expect(select("SELECT * FROM rv_sessions")).toEqual(originalSessions);
+ expect(await reconnected.getResearchExecutionTermination(project.id)).toEqual(marker);expect(lockedBytes(project.id)).toEqual(method);
+ await expect(judgeResearch({repository:reconnected,projectId:project.id})).rejects.toThrow(/ended/);
+ await reconnected.withWorkflowOwnership(evaluationScope(project.id),async owned=>{await expect(owned.updateResearchAssignment("irrelevant",undefined,"Running")).rejects.toThrow(/source work/);});
+ expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+});
+
+it("Research evaluation SQLite: Stop/reconnect resumes only missing panel slots and retains dispatched receipts", async () => {
+ const {repository,project}=await study();await sessions(repository,project.id);await repository.endResearchExecution(project.id);
+ const panel=await createResearchEvaluation({repository,projectId:project.id}),stop=new AbortController();let paid=0;
+ await expect(runResearchEvaluation({repository,projectId:project.id,evaluationId:panel.id,signal:stop.signal,chat:async()=>{paid++;stop.abort();return{content:judgeJson,finishReason:"stop",usage:{}};}})).rejects.toThrow();
+ const before=await repository.getResearchEvaluation(project.id,panel.id);expect(Object.values(before!.scores).flat()).toHaveLength(1);
+ const reconnected=await SqliteRepository.connect();await runResearchEvaluation({repository:reconnected,projectId:project.id,evaluationId:panel.id,chat:async()=>{paid++;return{content:judgeJson,finishReason:"stop",usage:{}};}});
+ expect(paid).toBe(4);const after=await reconnected.getResearchEvaluation(project.id,panel.id);expect(after?.status).toBe("Complete");
+ for(const [id,scores] of Object.entries(before!.scores))expect(after?.scores[id]).toEqual(expect.arrayContaining(scores));
+ expect(await reconnected.getResearchExecutionTermination(project.id)).toMatchObject({reason:"user_finished"});
+});

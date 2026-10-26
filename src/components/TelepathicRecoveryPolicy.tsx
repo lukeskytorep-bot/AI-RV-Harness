@@ -1,0 +1,3 @@
+export function TelepathicRecoveryPolicy({ pl, automatic, disabled, onChange }: { pl: boolean; automatic: boolean; disabled: boolean; onChange(value: boolean): void }) {
+  return <label className="telepathic-check"><input type="checkbox" checked={automatic} disabled={disabled} onChange={event => onChange(event.target.checked)} /><span>{pl ? "Automatycznie kontynuuj po zerwaniu połączenia — maks. jedno ponowienie na krok" : "Continue automatically after a lost connection — at most one retry per step"}<br/><small>{pl ? "Płatny dostawca może rozliczyć dodatkowe wywołanie." : "A paid provider may charge for the additional request."}</small></span></label>;
+}

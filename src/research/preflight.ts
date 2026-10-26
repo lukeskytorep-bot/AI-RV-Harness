@@ -9,6 +9,8 @@ import { modelRouteKey } from "../modelRoutes";
 import { activeViewerNotesControlSignature, sameFrozenViewerNotesVersion, viewerNotesSnapshotSignature } from "./viewerNotesPolicy";
 import { fieldGuideSnapshotSignature } from "./fieldGuidePolicy";
 import { researchProtocolLabel, researchProtocolViewerCalls, resolveResearchProtocol, type ResearchProtocolResource } from "./protocolPolicy";
+import { researchSamplingCapabilityState, researchSamplingSignature } from "./samplingPolicy";
+import { assertSamplingResearchContract, researchSamplingConfigurationCount, researchSamplingSessionCount } from "./samplingDesign";
 
 export interface ResearchPreflightInventory {
   profiles: Profile[];
@@ -36,7 +38,6 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     checks.push(config.sessionPolicy.requestTimeoutMs >= 1_000 && config.sessionPolicy.requestTimeoutMs <= 600_000 ? pass("session_timeout", "Request timeout is within the supported safety range") : fail("session_timeout", "Request timeout must be between 1 and 600 seconds"));
     checks.push(Number.isInteger(config.sessionPolicy.maxRetries) && config.sessionPolicy.maxRetries >= 0 && config.sessionPolicy.maxRetries <= 5 ? pass("session_retries", "Retry policy is valid") : fail("session_retries", "Retry count must be between 0 and 5"));
     checks.push(config.sessionPolicy.defaultMaxOutputTokens > 0 ? pass("session_output", "Default output limit is valid") : fail("session_output", "Default output limit must be positive"));
-    checks.push(config.sessionPolicy.maxSessionCostUsd >= 0 ? pass("session_cost_limit", config.sessionPolicy.maxSessionCostUsd > 0 ? "A hard per-session cost stop is locked into the experiment" : "No hard per-session cost stop is configured") : fail("session_cost_limit", "Session cost limit cannot be negative"));
     checks.push(/^[A-Za-z0-9]{1,12}$/.test(config.sessionPolicy.sessionCodePrefix) ? pass("session_code", "Session code prefix is valid") : fail("session_code", "Session code prefix must contain 1–12 alphanumeric characters"));
   } else {
     checks.push(warn("session_policy", "Legacy Research configuration has no explicit Settings session-policy snapshot"));
@@ -66,6 +67,9 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   const reasoningValues = new Set(config.conditions.map((condition) => condition.requestedSettings.reasoningEffort ?? "__provider_default__"));
   const temperatureValues = new Set(config.conditions.map((condition) => condition.requestedSettings.temperature ?? "__provider_default__"));
   const outputValues = new Set(config.conditions.map((condition) => condition.requestedSettings.maxOutputTokens ?? "__provider_default__"));
+  const topPValues = new Set(config.conditions.map((condition) => condition.requestedSettings.topP ?? "__provider_default__"));
+  const topKValues = new Set(config.conditions.map((condition) => condition.requestedSettings.topK ?? "__provider_default__"));
+  const seedValues = new Set(config.conditions.map((condition) => condition.requestedSettings.seed ?? "__provider_default__"));
   const viewerNotesControls = new Set(config.conditions.map((condition) => activeViewerNotesControlSignature(condition.viewerNotes)));
   const fieldGuideControls = new Set(config.conditions.map((condition) => fieldGuideSnapshotSignature(condition.fieldGuide)));
   const comparedViewerIdentities = new Set(config.conditions.map((condition) => `${condition.profileId}\u0000${condition.providerConfigId}\u0000${condition.modelId}`));
@@ -85,14 +89,16 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
       continue;
     }
     checks.push(pass(`${prefix}:model`, `${condition.label}: model route is cached`));
-    if (config.sessionPolicy?.maxSessionCostUsd && config.sessionPolicy.maxSessionCostUsd > 0) {
-      const hasPricing = model.pricing.promptPerToken !== undefined && model.pricing.completionPerToken !== undefined;
-      checks.push(hasPricing
-        ? pass(`${prefix}:hard_cost`, `${condition.label}: cached pricing supports hard session cost enforcement`)
-        : fail(`${prefix}:hard_cost`, `${condition.label}: hard session cost limit requires cached input/output pricing`));
-    }
-    const effective = resolveGenerationSettings(model.capabilities, condition.requestedSettings);
-    checks.push(effective.omitted.length ? fail(`${prefix}:settings`, `${condition.label}: unsupported setting(s): ${effective.omitted.join(", ")}`) : pass(`${prefix}:settings`, `${condition.label}: requested settings are supported`));
+    const effective = resolveGenerationSettings(model.capabilities, condition.requestedSettings, { provider: model.provider });
+    const samplingIssues = (["topP", "topK", "seed"] as const).flatMap((parameter) => {
+      if (condition.requestedSettings[parameter] === undefined) return [];
+      const state = researchSamplingCapabilityState(model, parameter);
+      const wireName = parameter === "topP" ? "top_p" : parameter === "topK" ? "top_k" : "seed";
+      return state === "supported" ? [] : [`${wireName} ${state} on ${model.route}`];
+    });
+    checks.push(effective.omitted.length || samplingIssues.length
+      ? fail(`${prefix}:settings`, `${condition.label}: unsupported/unconfirmed setting(s): ${[...effective.omitted, ...samplingIssues].join(", ")}`)
+      : pass(`${prefix}:settings`, `${condition.label}: requested settings, including manual sampling, are supported by the selected Viewer route`));
     checks.push(condition.capabilitySnapshot && condition.effectiveSettings ? pass(`${prefix}:snapshot`, `${condition.label}: capability + requested/effective settings snapshot is present`) : fail(`${prefix}:snapshot`, `${condition.label}: Research capability snapshot is missing`));
     const signature = JSON.stringify(effective.effective);
     effectiveSignatures.set(signature, [...(effectiveSignatures.get(signature) ?? []), condition.key]);
@@ -108,7 +114,7 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
       else checks.push(warn(`${prefix}:context`, `${condition.label}: provider did not advertise a context limit`));
     }
   }
-  if ((config.templateType === "reasoning" || config.templateType === "temperature") && [...effectiveSignatures.values()].some((keys) => keys.length > 1)) {
+  if ((config.templateType === "reasoning" || config.templateType === "temperature" || config.templateType === "sampling") && [...effectiveSignatures.values()].some((keys) => keys.length > 1)) {
     checks.push(fail("condition_distinguishability", "Two or more tested conditions resolve to the same effective generation settings"));
   } else {
     checks.push(pass("condition_distinguishability", "Tested conditions remain distinguishable at the known capability layer"));
@@ -120,6 +126,9 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   if (config.templateType !== "reasoning" && reasoningValues.size !== 1) confoundedControls.push("reasoning");
   if (config.templateType !== "temperature" && temperatureValues.size !== 1) confoundedControls.push("temperature");
   if (outputValues.size !== 1) confoundedControls.push("maximum output tokens");
+  if (config.templateType !== "sampling" && topPValues.size !== 1) confoundedControls.push("top_p");
+  if (config.templateType !== "sampling" && topKValues.size !== 1) confoundedControls.push("top_k");
+  if (config.templateType !== "sampling" && seedValues.size !== 1) confoundedControls.push("seed");
   if (config.templateType !== "viewer_notes" && viewerNotesControls.size !== 1) confoundedControls.push("Viewer Notes");
   const fieldGuideIsTestedVariable = config.templateType === "system_prompt" && config.promptResearchSource === "field_guide_history";
   if (!fieldGuideIsTestedVariable && !identityVariesByDesign && fieldGuideControls.size !== 1) confoundedControls.push("Field Guide");
@@ -147,11 +156,24 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     if (config.viewerControl.temperature.mode === "fixed" && (temperatureValues.size !== 1 || !temperatureValues.has(config.viewerControl.temperature.value ?? Number.NaN))) lockIssues.push("fixed temperature");
     if (config.viewerControl.temperature.mode === "provider_default" && !temperatureValues.has("__provider_default__")) lockIssues.push("provider-default temperature");
     if (outputValues.size !== 1 || !outputValues.has(config.viewerControl.maxOutputTokens)) lockIssues.push("maximum output tokens");
+    if (config.templateType === "sampling") {
+      try { assertSamplingResearchContract(config); } catch { lockIssues.push("Sampling configurations control/design"); }
+    } else if (config.viewerControl.sampling) {
+      const samplingControl = {
+        ...(config.viewerControl.sampling.topP !== undefined ? { topP: config.viewerControl.sampling.topP } : {}),
+        ...(config.viewerControl.sampling.topK !== undefined ? { topK: config.viewerControl.sampling.topK } : {}),
+        ...(config.viewerControl.sampling.seed !== undefined ? { seed: config.viewerControl.sampling.seed } : {}),
+      };
+      if (new Set(config.conditions.map((condition) => researchSamplingSignature(condition.requestedSettings))).size !== 1
+        || researchSamplingSignature(samplingControl) !== researchSamplingSignature(config.conditions[0]?.requestedSettings ?? {})) lockIssues.push("OpenRouter sampling");
+    }
     checks.push(lockIssues.length
       ? fail("viewer_control_lock", `Study-wide Viewer control does not match its conditions: ${lockIssues.join(", ")}`)
       : pass("viewer_control_lock", "Study-wide Viewer model, prompt and generation controls are captured in Experiment Lock"));
   } else {
-    checks.push(warn("viewer_control_lock", "Legacy Research configuration has no explicit study-wide Viewer-control record"));
+    checks.push(config.templateType === "sampling"
+      ? fail("viewer_control_lock", "Sampling configurations requires an explicit frozen study-wide Viewer-control record")
+      : warn("viewer_control_lock", "Legacy Research configuration has no explicit study-wide Viewer-control record"));
   }
   if (config.templateType === "system_prompt") {
     const isFieldGuideHistory = config.promptResearchSource === "field_guide_history";
@@ -306,6 +328,19 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   }
 
   checks.push(pass("viewer_notes_feedback", "Research uses Viewer Notes read-only; Research sessions never update Viewer Notes"));
+
+  if (config.templateType === "sampling") {
+    try {
+      assertSamplingResearchContract(config);
+      const configurations = researchSamplingConfigurationCount(config.samplingDesign!);
+      const sessions = researchSamplingSessionCount(config.samplingDesign!, config.targetIds.length, config.repetitions);
+      checks.push(pass("sampling_design", `Sampling design is valid: ${configurations} configuration(s), ${sessions} session(s)`));
+    } catch (cause) {
+      checks.push(fail("sampling_design", cause instanceof Error ? cause.message : String(cause)));
+    }
+  } else if (config.samplingDesign) {
+    checks.push(fail("sampling_design", "samplingDesign metadata is only valid for the Sampling configurations template"));
+  }
 
   if (config.judges.length === 0) {
     checks.push(config.evaluationMode === "save_only"

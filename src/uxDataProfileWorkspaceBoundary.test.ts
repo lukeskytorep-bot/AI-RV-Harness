@@ -36,7 +36,7 @@ const visitProductionDirectory = (directory: string, offenders: string[]) => {
 describe("UX-DATA-4 Profile + Workspace boundaries", () => {
   it("routes product-level Profile creation through the initial-Workspace use case", () => {
     const app = source("src/App.tsx");
-    expect(app).toContain("createProfileWithInitialWorkspaces");
+    expect(app).toContain("saveViewerProfile");
     const offenders: string[] = [];
     inspectProductionFile(path.join(process.cwd(), "src/App.tsx"), offenders);
     visitProductionDirectory(path.join(process.cwd(), "src/features"), offenders);

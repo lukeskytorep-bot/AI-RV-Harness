@@ -18,6 +18,18 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
     if let Some(value) = request.temperature {
         body.insert("temperature".into(), json!(value));
     }
+    if matches!(request.provider, ProviderKind::Openrouter | ProviderKind::CustomOpenai | ProviderKind::Mistral | ProviderKind::Blackbox) {
+        if let Some(value) = request.top_p {
+            body.insert("top_p".into(), json!(value));
+        }
+        if let Some(value) = request.top_k {
+            body.insert("top_k".into(), json!(value));
+        }
+        if let Some(value) = request.seed {
+            let wire_name = if matches!(request.provider, ProviderKind::Mistral) { "random_seed" } else { "seed" };
+            body.insert(wire_name.into(), json!(value));
+        }
+    }
     if let Some(value) = request.max_output_tokens {
         body.insert(openai_compatible_output_token_field(request).into(), json!(value));
     }
@@ -30,6 +42,14 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
                 body.insert("reasoning".into(), json!({ "enabled": value == "true" }));
             } else {
                 body.insert("reasoning".into(), json!({ "effort": value }));
+            }
+        }
+    } else if matches!(request.provider, ProviderKind::CustomOpenai) {
+        if let Some(value) = request.reasoning_transport_value.as_deref().or(request.reasoning_effort.as_deref()) {
+            if request.reasoning_transport_kind.as_deref() == Some("enabled_boolean") {
+                body.insert("reasoning".into(), json!({ "enabled": value == "true" }));
+            } else {
+                body.insert("reasoning_effort".into(), json!(value));
             }
         }
     } else if let Some(value) = request.reasoning_transport_value.as_deref().or(request.reasoning_effort.as_deref()) {
@@ -50,6 +70,9 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
             if let Some(value) = routing.allow_fallbacks {
                 provider.insert("allow_fallbacks".into(), json!(value));
             }
+            if let Some(value) = routing.require_parameters {
+                provider.insert("require_parameters".into(), json!(value));
+            }
             if !provider.is_empty() {
                 body.insert("provider".into(), Value::Object(provider));
             }
@@ -68,7 +91,19 @@ fn openai_compatible_output_token_field(request: &ProviderChatRequest) -> &'stat
 }
 
 fn openai_message(provider: ProviderKind, message: &ProviderMessage) -> Value {
-    let content = if message.images.is_empty() {
+    let content = if matches!(provider, ProviderKind::Mistral) {
+        if let Some(ProviderContinuationState::Mistral(state)) = message.continuation_state.as_ref() {
+            Value::Array(state.content.clone())
+        } else if message.images.is_empty() {
+            Value::String(message.content.clone())
+        } else {
+            let mut parts = vec![json!({ "type": "text", "text": message.content })];
+            for image in &message.images {
+                parts.push(json!({ "type": "image_url", "image_url": { "url": format!("data:{};base64,{}", image.mime_type, image.data_base64) } }));
+            }
+            Value::Array(parts)
+        }
+    } else if message.images.is_empty() {
         Value::String(message.content.clone())
     } else {
         let mut parts = vec![json!({ "type": "text", "text": message.content })];
@@ -197,8 +232,16 @@ pub(super) fn build_anthropic_request(request: &ProviderChatRequest, base: &str)
 }
 
 
-pub(super) fn enable_openrouter_streaming(body: &mut Value) -> Result<(), String> {
-    let object = body.as_object_mut().ok_or_else(|| "OpenRouter chat request body must be an object".to_string())?;
+pub(super) fn enable_chat_streaming(body: &mut Value) -> Result<(), String> {
+    let object = body.as_object_mut().ok_or_else(|| "chat request body must be an object".to_string())?;
     object.insert("stream".into(), Value::Bool(true));
     Ok(())
 }
+
+pub(super) fn enable_mistral_chat_streaming(body: &mut Value) -> Result<(), String> {
+    let object = body.as_object_mut().ok_or_else(|| "chat request body must be an object".to_string())?;
+    object.insert("stream".into(), Value::Bool(true));
+    Ok(())
+}
+
+

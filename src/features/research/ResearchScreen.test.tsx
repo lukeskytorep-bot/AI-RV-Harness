@@ -23,5 +23,8 @@ describe("ResearchScreen", () => {
     expect(html).toContain("Allowlist packets");
     expect(html).toContain("Config → immutable");
     expect(html).toContain("Freeze → unblind");
+    expect(html).toContain("How does Research work?");
+    expect(html).toContain('aria-controls="research-help-panel"');
+    expect(html).toContain('aria-expanded="false"');
   });
 });

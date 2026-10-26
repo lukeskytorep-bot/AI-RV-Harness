@@ -4,13 +4,14 @@ import { exportSessionRecord } from "../exports/session";
 import { JudgeResults } from "./JudgeResults";
 import { getCopy } from "../i18n";
 import type { JudgeScoreRecord } from "../judge/types";
-import type { RevealInput, RvSession, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
+import type { RevealInput, RvSession, SessionEventRecord, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
 import { isTauriRuntime } from "../storage";
 import { chooseDirectory } from "../storage/native";
 import type { AppRepository } from "../storage/repository";
 import type { InterfaceLanguage } from "../types";
 import { SafeMarkdown } from "./SafeMarkdown";
+import { BlindTranscriptRecord } from "./BlindTranscriptRecord";
 
 export function SessionInspection({ repository, workspaceId, sessionId, language }: {
   repository: AppRepository;
@@ -25,6 +26,7 @@ export function SessionInspection({ repository, workspaceId, sessionId, language
   const [scores, setScores] = useState<JudgeScoreRecord[]>([]);
   const [snapshot, setSnapshot] = useState<SessionSnapshot | null>(null);
   const [clarifications, setClarifications] = useState<TargetClarificationRecord[]>([]);
+  const [events, setEvents] = useState<SessionEventRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportPath, setExportPath] = useState<string | null>(null);
@@ -36,6 +38,7 @@ export function SessionInspection({ repository, workspaceId, sessionId, language
     setScores([]);
     setSnapshot(null);
     setClarifications([]);
+    setEvents([]);
     setError(null);
     void Promise.all([
       repository.listRvSessions(workspaceId),
@@ -43,13 +46,15 @@ export function SessionInspection({ repository, workspaceId, sessionId, language
       repository.listJudgeScores(sessionId),
       repository.getSessionSnapshot(sessionId),
       repository.listTargetClarifications(sessionId),
-    ]).then(([sessions, nextReveal, nextScores, nextSnapshot, nextClarifications]) => {
+      repository.listSessionEvents(sessionId),
+    ]).then(([sessions, nextReveal, nextScores, nextSnapshot, nextClarifications, nextEvents]) => {
       if (cancelled) return;
       setSession(sessions.find((item) => item.id === sessionId) ?? null);
       setReveal(nextReveal);
       setScores(nextScores);
       setSnapshot(nextSnapshot);
       setClarifications(nextClarifications);
+      setEvents(nextEvents);
     }).catch((cause) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
     });
@@ -78,7 +83,7 @@ export function SessionInspection({ repository, workspaceId, sessionId, language
     <header><div><small>{session.sessionCode}</small><h3>{pl ? "Pełny zapis sesji" : "Complete session record"}</h3></div><div className="session-inspection-actions"><button className="secondary-button" disabled={!isTauriRuntime() || exporting} onClick={() => void exportSession()}><Download size={14} />{exporting ? (pl ? "Zapisywanie…" : "Saving…") : (pl ? "Zapisz sesję" : "Save session")}</button><span className={`status-chip ${session.state === "Completed" ? "ready" : "next"}`}>{session.state}</span></div></header>
     {exportPath && <div className="storage-success">{pl ? "Sesję zapisano" : "Session saved"}: {exportPath}</div>}
     {snapshot && <dl className="session-inspection-meta"><div><dt>{pl ? "Protokół" : "Protocol"}</dt><dd>{snapshot.protocol.id} · {snapshot.protocol.version}</dd></div><div><dt>{pl ? "Model" : "Model"}</dt><dd>{snapshot.modelRoute}</dd></div><div><dt>{pl ? "Język" : "Language"}</dt><dd>{snapshot.sessionLanguage.toUpperCase()}</dd></div></dl>}
-    <article><h4><LockKeyhole size={15} />{pl ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}</h4><SafeMarkdown content={session.preRevealTranscript || (pl ? "Brak transkryptu." : "No transcript.")} /></article>
+    <article><h4><LockKeyhole size={15} />{pl ? "Zapieczętowana część ślepa — dokładne polecenia i odpowiedzi" : "Sealed blind record — exact instructions and responses"}</h4><BlindTranscriptRecord events={events} fallbackTranscript={session.preRevealTranscript} interfaceLanguage={language} sessionLanguage={snapshot?.sessionLanguage} /></article>
     {reveal && <article className="session-reveal"><h4><FileCheck2 size={15} />Target Reveal</h4>{reveal.text && <SafeMarkdown content={reveal.text} />}{reveal.artifactManifest?.length ? <ul>{reveal.artifactManifest.map((artifact) => <li key={artifact.artifactId}>{artifact.originalFileName} · {artifact.mimeType}</li>)}</ul> : null}</article>}
     {clarifications.length > 0 && <article className="session-reveal"><h4><FileCheck2 size={15} />{pl ? "Późniejsze doprecyzowania celu" : "Later target clarifications"}</h4>{clarifications.map((item) => <SafeMarkdown key={item.id} content={item.content} />)}</article>}
     <article><h4><Sparkles size={15} />{pl ? "Opinia Viewera i rozmowa po Revealu" : "Viewer review and post-Reveal discussion"}</h4>{session.postRevealTranscript ? <SafeMarkdown content={postRevealTranscriptMarkdown(session.postRevealTranscript, language)} /> : <p>{pl ? "Nie zapisano rozmowy po Revealu." : "No post-Reveal discussion was recorded."}</p>}</article>

@@ -107,6 +107,7 @@ export class BrowserResearchRepository implements ResearchRepository {
   }
 
   async setResearchProjectState(id: string, state: ResearchState): Promise<void> {
+    if((await this.getResearchProject(id))?.executionTermination)throw new Error("Research execution was ended by the user");
     const timestamp = this.now();
     this.write(RESEARCH_PROJECTS_KEY, this.read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).map((project) => project.id === id && !project.archivedAt ? {
       ...project, state, updatedAt: timestamp,
@@ -139,10 +140,13 @@ export class BrowserResearchRepository implements ResearchRepository {
   }
 
   async updateResearchAssignment(id: string, sessionId: string | undefined, status: string): Promise<void> {
+    const assignment=this.read<ResearchAssignmentRecord[]>(RESEARCH_ASSIGNMENTS_KEY,[]).find(item=>item.id===id);
+    if(assignment && (await this.getResearchProject(assignment.researchProjectId))?.executionTermination)throw new Error("Research execution was ended by the user");
     this.write(RESEARCH_ASSIGNMENTS_KEY, this.read<ResearchAssignmentRecord[]>(RESEARCH_ASSIGNMENTS_KEY, []).map((item) => item.id === id ? { ...item, sessionId, status } : item));
   }
 
   async saveResearchResults(projectId: string, results: ResearchResults, hash: string): Promise<void> {
+    if((await this.getResearchProject(projectId))?.executionTermination)throw new Error("Research execution was ended by the user");
     const all = this.read<Array<{ id: string; projectId: string; results: ResearchResults; hash: string; createdAt: string }>>(RESEARCH_RESULTS_KEY, []);
     if (all.some((item) => item.projectId === projectId)) throw new Error("Research results are immutable once written.");
     this.write(RESEARCH_RESULTS_KEY, [...all, { id: this.nextId("research_results"), projectId, results: structuredClone(results), hash, createdAt: this.now() }]);

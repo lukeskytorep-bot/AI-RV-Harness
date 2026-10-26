@@ -1,6 +1,9 @@
 # AI RV Harness module boundaries
 
-**Status:** enforceable boundaries for released v0.7.13
+> **Documentation scope:** `ai-rv-2` development source through Training Continuity T5; reviewed 16 October 2026 against commit `9c92bdbb94d1125406e0094779102458cdeee87c`. SQLite schema **031**. This is not a claim that v0.7.14 binaries have been published or desktop smoke completed. Historical release evidence remains unchanged.
+> **Current workflow reference:** [Recovery, presentation and Training history](CURRENT_WORKFLOWS_v0.7.14_EN.md).
+
+**Status:** enforceable boundaries for the accepted AI RV development source
 **Architecture:** modular monolith
 
 ## Dependency direction
@@ -47,7 +50,7 @@ Etap 6 keeps the existing Tauri command names and TypeScript retry ownership whi
 | Native module | Owns | Must not own |
 | --- | --- | --- |
 | `src-tauri/src/providers.rs` | public Tauri command facade, request/response DTOs, debug-payload redaction coordination | provider-specific wire-format implementations, retry loops |
-| `src-tauri/src/providers/adapters.rs` | provider family classification, fixed/custom base URL validation, authentication headers, OpenRouter attribution headers | request payload construction, response parsing |
+| `src-tauri/src/providers/adapters.rs` | provider family classification, fixed/custom base URL validation, authentication headers (no application attribution) | request payload construction, response parsing |
 | `src-tauri/src/providers/request_builders.rs` | OpenAI-compatible, Google and Anthropic request payloads/endpoints | HTTP dispatch, response interpretation |
 | `src-tauri/src/providers/response_parsers.rs` | normalized `ProviderChatResponse` construction and provider response payload interpretation | HTTP transport, retry policy |
 | `src-tauri/src/providers/reasoning.rs` | native/tagged reasoning extraction and final-content normalization | provider authentication, HTTP dispatch |
@@ -57,7 +60,7 @@ Etap 6 keeps the existing Tauri command names and TypeScript retry ownership whi
 
 Google and Anthropic remain explicit special wire-format families. OpenRouter, OpenAI, ZAI, DeepSeek, Mistral, Blackbox and Custom OpenAI share the OpenAI-compatible family instead of duplicating near-identical adapter modules. This is intentional: the architectural boundary follows protocol differences rather than brand count.
 
-`src/providerRustModuleBoundary.test.ts` protects the split structurally. Existing native provider contract tests remain in `src-tauri/src/providers/tests.rs` and continue to verify request payloads, parsing, reasoning separation, error redaction, OpenRouter attribution and local simulator behavior.
+`src/providerRustModuleBoundary.test.ts` protects the split structurally. Existing native provider contract tests remain in `src-tauri/src/providers/tests.rs` and continue to verify request payloads, parsing, reasoning separation, error redaction, absence of application attribution and local simulator behavior.
 
 ## Public entry points
 
@@ -213,3 +216,13 @@ The accepted Stage 9 result closed the modularization after the automated archit
 2. the desktop runtime checklist in `FINAL_RUNTIME_SMOKE_v0.7.13_PL.md` records the required actual-Tauri checks; the final Windows/Linux result is recorded in `docs/releases/v0.7.13/RELEASE_VERIFICATION_v0.7.13.md`.
 
 Static evidence, CI and source inspection do not replace interactive runtime validation. Conversely, documented compatibility surfaces such as legacy `chat_thread_groups/thread_group_id` are not architectural exceptions and did not require removal to close Stage 9.
+
+## Current branch additions
+
+Transport retry remains executor-owned; Viewer semantic recovery and the durable step/fingerprint ledger are Session-domain rules. Training coordinates the same-session checkpoint and termination but does not implement another transport loop. Research uses locked policy and explicit same-session recovery. BlindTranscriptRecord isolates display records and delegates safe Markdown; presentation never changes persisted evidence. Shared ProfileSelector and ModuleHelpButton/Panel own reusable presentation. A specific Workspace selection is managed in Profiles, not an extra header button. Training termination is permanent JSON state checked by engine and repository, not a CSS-only hiding rule. These extensions preserve the existing public feature entry points and schema 031.
+
+## Current native ownership and optional learning boundary
+
+`workflow_heartbeat.rs` owns classic native renewal and request cancellation; `workflow_ownership.rs` owns durable SQL acquisition/renewal/check/write/release. Providers bind exact workflow identity before dispatch. They do not become Training orchestration owners. Telepathic/review leases keep their own boundaries.
+
+`aiCenter/learningExecution.ts` owns the shared per-kind/session/packet allowance and settlement. Feature execution consumes it instead of introducing another retry loop. `training/learningSummary.ts` is presentation aggregation, not permission to advance execution. `LearningWarnings` displays existing failed_preserved records and does not write learning. Export may read an active interrupted checkpoint but cannot classify it as a completed Session. See [Developer Guide](../development/README.md).

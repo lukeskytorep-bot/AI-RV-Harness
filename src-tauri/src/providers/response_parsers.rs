@@ -12,7 +12,21 @@ pub(super) fn parse_chat_response(
     match provider_family(provider) {
         ProviderFamily::Google => parse_google_response(payload, request_id),
         ProviderFamily::Anthropic => parse_anthropic_response(payload, request_id),
-        ProviderFamily::OpenaiCompatible => parse_openai_compatible_response(payload, request_id),
+        ProviderFamily::OpenaiCompatible => {
+            let mistral_content = matches!(provider, ProviderKind::Mistral)
+                .then(|| payload.pointer("/choices/0/message/content").and_then(Value::as_array).cloned())
+                .flatten();
+            let mut parsed = parse_openai_compatible_response(payload, request_id)?;
+            if matches!(provider, ProviderKind::Mistral)
+                && parsed.reasoning_source.as_deref() == Some("openai_reasoning_details")
+            {
+                parsed.reasoning_source = Some("mistral_thinking".to_string());
+                if let Some(content) = mistral_content {
+                    parsed.reasoning_details = Some(content);
+                }
+            }
+            Ok(parsed)
+        },
     }
 }
 
@@ -47,6 +61,8 @@ pub(super) fn parse_openai_compatible_response(payload: Value, request_id: Optio
         .and_then(Value::as_u64)
         .or_else(|| usage.get("reasoning_tokens").and_then(Value::as_u64));
     Ok(ProviderChatResponse {
+        response_evidence: None,
+        final_candidate: None,
         content,
         reasoning_content: normalized.reasoning_content,
         reasoning_details,
@@ -128,6 +144,8 @@ pub(super) fn parse_google_response(payload: Value, request_id: Option<String>) 
     }
     let usage = payload.get("usageMetadata").unwrap_or(&Value::Null);
     Ok(ProviderChatResponse {
+        response_evidence: None,
+        final_candidate: None,
         content,
         reasoning_content: normalized.reasoning_content,
         reasoning_details: (!reasoning_details.is_empty()).then_some(reasoning_details),
@@ -213,6 +231,8 @@ pub(super) fn parse_anthropic_response(payload: Value, request_id: Option<String
     let input = usage.get("input_tokens").and_then(Value::as_u64);
     let output = usage.get("output_tokens").and_then(Value::as_u64);
     Ok(ProviderChatResponse {
+        response_evidence: None,
+        final_candidate: None,
         content,
         reasoning_content: normalized.reasoning_content,
         reasoning_details: (!reasoning_details.is_empty()).then_some(reasoning_details),
@@ -251,4 +271,29 @@ fn provider_payload_error(payload: &Value) -> Option<String> {
         kind.map(|value| format!(" type={value}")).unwrap_or_default(),
         safe_message,
     ))
+}
+
+// Capture only final-channel text before validation/normalization. Native thought
+// channels and recognized leading reasoning envelopes never enter this record.
+pub(super) fn capture_final_candidate(provider: ProviderKind, payload: &Value) -> Option<Box<super::ProviderFinalCandidate>> {
+    use sha2::{Digest, Sha256};
+    let (raw, signed_text) = match provider_family(provider) {
+        ProviderFamily::OpenaiCompatible => (extract_openai_text(payload.pointer("/choices/0/message/content")), false),
+        ProviderFamily::Google => {
+            let parts = payload.pointer("/candidates/0/content/parts")?.as_array()?;
+            (parts.iter().filter(|p| p.get("thought").and_then(Value::as_bool) != Some(true)).filter_map(|p| p.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join(""), false)
+        }
+        ProviderFamily::Anthropic => {
+            let blocks = payload.get("content")?.as_array()?;
+            let signed = blocks.iter().any(|b| matches!(b.get("type").and_then(Value::as_str), Some("thinking") | Some("redacted_thinking")));
+            (blocks.iter().filter(|b| b.get("type").and_then(Value::as_str) == Some("text")).filter_map(|b| b.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join(""), signed)
+        }
+    };
+    let split = if signed_text { None } else { super::reasoning::split_tagged_reasoning(&raw) };
+    let envelope_removed = split.is_some();
+    let content = split.map(|s| s.content).unwrap_or(raw);
+    let byte_length = content.len();
+    let content_sha256 = format!("{:x}", Sha256::digest(content.as_bytes()));
+    let omitted_for_size = byte_length > 2_000_000;
+    Some(Box::new(super::ProviderFinalCandidate { content: (!omitted_for_size).then_some(content), content_sha256, byte_length, omitted_for_size, envelope_removed, native_validation: "not_evaluated" }))
 }
