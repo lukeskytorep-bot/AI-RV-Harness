@@ -1,3 +1,5 @@
+import { authorizeTelepathicStepRetry } from "../../telepathicExchange/engine";
+import { useTelepathicDraft } from "../../components/useTelepathicDraft";
 import { TelepathicRecoveryPolicy } from "../../components/TelepathicRecoveryPolicy";
 import { AUTOMATIC_TELEPATHIC_RECOVERY, blockTelepathicRecoveryForCheckpoint, telepathicRecoveryDecision, telepathicRecoveryMessage } from "../../telepathicExchange/recovery";
 import { setTelepathicRecoveryPolicy, revalidateTelepathicConfiguration, isCheckpointFailure } from "../../telepathicExchange/engine";
@@ -110,7 +112,6 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   const [senderKind, setSenderKind] = useState<"human_only" | "fixed_ai">("human_only");
   const stopController = useRef<AbortController | null>(null);
   const [stopping, setStopping] = useState(false);
-  const [guidanceText,setGuidanceText]=useState("");
   const [fixedAiProfileId, setFixedAiProfileId] = useState("");
   const [roundCount, setRoundCount] = useState(3);
   const [topic, setTopic] = useState<TelepathicTopic>("any");
@@ -142,12 +143,15 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   const [error, setError] = useState<string | null>(null);
   const [checkpointFailure, setCheckpointFailure] = useState(false);
   useEffect(() => { setActiveSeries(null); setViewRoundId(null); }, [repository, workspace.id]);
-  const [targetText, setTargetText] = useState("");
+  const draftScope = activeSeries ? JSON.stringify([workspace.id, activeSeries.config.seriesId, activeSeries.rounds[activeSeries.currentRoundIndex]?.assignment.roundId]) : null;
+  const [targetText, setTargetText] = useTelepathicDraft(draftScope && `${draftScope}:target`);
   const [targetImage, setTargetImage] = useState<File | null>(null);
-  const [targetImageDescription, setTargetImageDescription] = useState("");
-  const [firstBlind, setFirstBlind] = useState("");
-  const [secondBlind, setSecondBlind] = useState("");
-  const [reflection, setReflection] = useState("");
+  useEffect(() => setTargetImage(null), [draftScope]);
+  const [targetImageDescription, setTargetImageDescription] = useTelepathicDraft(draftScope && `${draftScope}:image-description`);
+  const [firstBlind, setFirstBlind] = useTelepathicDraft(draftScope && `${draftScope}:firstBlind`);
+  const [secondBlind, setSecondBlind] = useTelepathicDraft(draftScope && `${draftScope}:secondBlind`);
+  const [reflection, setReflection] = useTelepathicDraft(draftScope && `${draftScope}:reflection`);
+  const [guidanceText, setGuidanceText] = useTelepathicDraft(draftScope && `${draftScope}:${activeSeries?.humanStep.kind}:${"cycle" in (activeSeries?.humanStep ?? {}) ? (activeSeries!.humanStep as { cycle: number }).cycle : ""}`);
   const [viewRoundId, setViewRoundId] = useState<string | null>(null);
   const runGuardRef = useRef(false);
   const executionEpoch = useRef(0);
@@ -410,6 +414,10 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   if (!activeSeries) return;
     await execute(async () => {
       const state = await action();
+      if (activeSeries.humanStep.kind === "blind_first") setFirstBlind("");
+      if (activeSeries.humanStep.kind === "blind_second") setSecondBlind("");
+      if (activeSeries.humanStep.kind === "reflection") setReflection("");
+      if (["receiver_guidance", "sharing_comment"].includes(activeSeries.humanStep.kind)) setGuidanceText("");
       if (!autoAdvance) return state;
       return advanceTelepathicConversationSeries(engineDeps(), state.config.seriesId);
     });
@@ -508,7 +516,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
 
   return <div className="telepathic-with-history"><div className="telepathic-exchange-stack">
     {!activeSeries.archivedAt && activeSeries.status !== "cancelled" && <TelepathicRecoveryPolicy pl={pl} automatic={activeSeries.config.recoveryPolicy?.mode === "automatic"} disabled={busy || unavailable || checkpointFailure} onChange={value => void execute(() => setTelepathicRecoveryPolicy(engineDeps(), activeSeries.config.seriesId, value))}/>}
-    {activeSeries.metrics&&<TelepathicMetrics pl={pl} metrics={activeSeries.metrics} actions={<TelepathicSeriesActions pl={pl} busy={busy} stopping={stopping} unavailable={unavailable} recovery={showRecoveryActions} uncertain={unresolvedCalls.length > 0} resumeBlocked={!recoveryDecision.canResume} resumeReason={telepathicRecoveryMessage(recoveryDecision, pl)} onStop={stopSeries} onResume={resumeSeries} onEnd={endSeries}/>}/>}
+    {activeSeries.metrics&&<TelepathicMetrics pl={pl} metrics={activeSeries.metrics} actions={<TelepathicSeriesActions pl={pl} busy={busy} stopping={stopping} unavailable={unavailable} recovery={showRecoveryActions} uncertain={unresolvedCalls.length > 0} resumeBlocked={!recoveryDecision.canResume} resumeReason={telepathicRecoveryMessage(recoveryDecision, pl)} canRetry={Boolean(activeSeries.manualRetryCallId) && !checkpointFailure} onRetry={() => void execute(async () => { await authorizeTelepathicStepRetry(engineDeps(), activeSeries.config.seriesId, activeSeries.manualRetryCallId!); return advanceTelepathicConversationSeries(engineDeps(), activeSeries.config.seriesId); })} onStop={stopSeries} onResume={resumeSeries} onEnd={endSeries}/>}/>}
     {(presentation === "waiting" || presentation === "working" || presentation === "other" || presentation === "checking") && <div role="status" className="telepathic-action-row"><span>{presentation === "waiting" ? (pl ? "Oczekiwanie na odpowiedź" : "Waiting for response") : presentation === "other" ? (pl ? "Praca trwa w innym oknie" : "Work is running in another window") : presentation === "checking" ? (pl ? "Sprawdzanie stanu wykonania" : "Checking execution state") : (pl ? "Praca trwa…" : "Work is running…")}</span></div>}
     <section className="panel telepathic-exchange-panel">
       <div className="telepathic-run-head"><div><RadioTower size={18} /><span><strong>{pl ? "Wymiana telepatyczna" : "Telepathic exchange"}</strong><small>{telepathicStatusLabel(activeSeries.status, pl)} · {pl ? "runda" : "round"} {Math.min(activeSeries.currentRoundIndex + 1, activeSeries.rounds.length)}/{activeSeries.rounds.length}</small></span></div><div className="telepathic-run-actions"><button className="secondary-button" disabled={busy} onClick={() => void refreshSeries()}><RefreshCw size={14} />{pl ? "Odśwież" : "Refresh"}</button><button className="secondary-button" disabled={busy || unavailable} onClick={() => { detailGeneration.current++; setActiveSeries(null); setViewRoundId(null); setError(null); }}>{pl ? "Nowa wymiana" : "New exchange"}</button></div></div>
@@ -528,7 +536,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
 
     {step.kind === "blind_first" && <section className="panel telepathic-action-box"><h3>{pl ? "Pierwsze wrażenia" : "First impressions"}</h3><p>{pl ? "Cel został przygotowany i zamrożony. Nie widzisz go jeszcze. Opisz prostymi słowami pierwsze wrażenia. Nie musisz zgadywać ani nazywać celu. Możesz pozostawić rundę w tym stanie i wrócić później albo anulować ją bez Revealu." : "The target has been prepared and locked. You cannot see it yet. Describe your first impressions in simple words. You do not need to guess or name it. You may leave the round here and return later, or cancel it without Reveal."}</p><textarea rows={6} value={firstBlind} onChange={(event) => setFirstBlind(event.target.value)} /><div className="telepathic-action-row"><button className="secondary-button danger-action" disabled={busy || unavailable} onClick={() => void afterHumanAction(() => cancelCurrentTelepathicRoundBeforeReveal(engineDeps(), activeSeries.config.seriesId))}><CircleStop size={14} />{pl ? "Anuluj rundę bez Revealu" : "Cancel round without Reveal"}</button><button className="primary-button" disabled={busy || unavailable || !firstBlind.trim()} onClick={() => void afterHumanAction(() => saveHumanTelepathicFirstBlind(engineDeps(), activeSeries.config.seriesId, firstBlind.trim()), true)}>{pl ? "Zapisz pierwszy opis" : "Save first description"}</button></div></section>}
 
-    {step.kind === "lead_guidance" && <HumanLeadGuidanceForm key={JSON.stringify([activeSeries.config.seriesId,currentRound?.assignment.roundId,step.cycle])} cycle={step.cycle} participants={step.activeIds.map(id=>({id,displayName:participantName(id)}))} pl={pl} disabled={busy||unavailable||unresolvedCalls.length>0} onDecision={decision=>void afterHumanAction(()=>saveHumanLeadGuidance(engineDeps(),activeSeries.config.seriesId,decision),true)}/>}
+    {step.kind === "lead_guidance" && <HumanLeadGuidanceForm draftKey={draftScope ?? undefined} key={JSON.stringify([activeSeries.config.seriesId,currentRound?.assignment.roundId,step.cycle])} cycle={step.cycle} participants={step.activeIds.map(id=>({id,displayName:participantName(id)}))} pl={pl} disabled={busy||unavailable||unresolvedCalls.length>0} onDecision={decision=>void afterHumanAction(()=>saveHumanLeadGuidance(engineDeps(),activeSeries.config.seriesId,decision),true)}/>}
     {step.kind === "receiver_guidance" && <section className="panel telepathic-action-box"><h3>{pl?"Pytanie od prowadzącego":"Instruction from lead"} · {step.cycle}/3</h3><p>{step.instruction}</p><textarea value={guidanceText} onChange={e=>setGuidanceText(e.target.value)}/><button type="button" className="primary-button" disabled={busy || unavailable||!guidanceText.trim()} onClick={()=>void afterHumanAction(()=>saveHumanGuidanceResponse(engineDeps(),activeSeries.config.seriesId,guidanceText),true)}>{pl?"Zapisz odpowiedź":"Save response"}</button></section>}
     {step.kind === "blind_second" && <section className="panel telepathic-action-box"><h3>{pl ? "Drugie spojrzenie" : "Second look"}</h3><p>{pl ? "Dopisz tylko nowe lub wyraźniejsze wrażenia. To nie jest lista do wypełnienia. Możesz zostawić pole puste, jeśli nie masz dalszych wrażeń." : "Add only new or clearer impressions. This is not a checklist. You may leave the field empty if you have no further impressions."}</p><blockquote>{step.first}</blockquote><textarea rows={5} value={secondBlind} onChange={(event) => setSecondBlind(event.target.value)} /><div className="telepathic-action-row"><button className="secondary-button danger-action" disabled={busy || unavailable} onClick={() => void afterHumanAction(() => cancelCurrentTelepathicRoundBeforeReveal(engineDeps(), activeSeries.config.seriesId))}><CircleStop size={14} />{pl ? "Anuluj rundę bez Revealu" : "Cancel round without Reveal"}</button><button className="primary-button" disabled={busy || unavailable} onClick={() => void afterHumanAction(() => sealHumanTelepathicBlind(engineDeps(), activeSeries.config.seriesId, secondBlind), true)}><Check size={14} />{pl ? "Zamknij opis i przejdź dalej" : "Seal blind and continue"}</button></div></section>}
 

@@ -30,6 +30,13 @@ export function hasRecoverableTelepathicResponse(call: TelepathicProviderCallRec
 export function validateTelepathicRecoveryLedger(calls: TelepathicProviderCallRecord[]): void {
   if (calls.filter(call => call.recovery?.action === "transport_retry").length > 1) throw new Error("Invalid Telepathic transport recovery ledger: retry budget exceeded.");
   for (const call of calls) {
+    if (call.manualRetryAuthorization && (call.status !== "failed" || !["failed", "uncertain", "dispatched"].includes(call.manualRetryAuthorization.originalStatus) || !call.manualRetryAuthorization.at?.trim())) throw new Error("Invalid manual retry authorization.");
+    if (call.manualRetryOfCallId) {
+      const parent = calls.find(item => item.id === call.manualRetryOfCallId);
+      if (!parent?.manualRetryAuthorization || parent.scopeKey !== call.scopeKey || parent.requestSha256 !== call.requestSha256
+        || parent.technicalAttempt !== call.technicalAttempt || calls.indexOf(parent) >= calls.indexOf(call)
+        || calls.filter(item => item.manualRetryOfCallId === parent.id).length !== 1) throw new Error("Invalid manual retry parent.");
+    }
     const recovery = call.recovery;
     if (recovery && (!["transport_retry", "recovered_response", "rejected_response", "manual_resolution"].includes(recovery.action)
       || !["prepared", "dispatched", "uncertain", "failed", "succeeded"].includes(recovery.originalStatus) || typeof recovery.at !== "string" || !recovery.at.trim()
@@ -42,11 +49,30 @@ export function validateTelepathicRecoveryLedger(calls: TelepathicProviderCallRe
     }
   }
 }
+export function pendingTelepathicManualRetry(calls: TelepathicProviderCallRecord[]): TelepathicProviderCallRecord | undefined {
+  return calls.find(call => call.manualRetryAuthorization && !calls.some(child => child.manualRetryOfCallId === call.id));
+}
+
+/** Candidate only; the run lock/lease is required before granting or consuming it. */
+export function telepathicManualRetryCandidate(state: TelepathicSeriesState): TelepathicProviderCallRecord | undefined {
+  if (state.archivedAt || state.termination || state.status === "cancelled" || state.recoveryBlock) return;
+  const decision = telepathicRecoveryDecision(state);
+  if (decision.canResume) return;
+  const current = state.rounds[state.currentRoundIndex]?.assignment.roundId;
+  const calls = state.providerCalls.filter(c => c.roundId === current || c.callStage === "series_reflection");
+  try { for (const key of new Set(calls.map(c => c.scopeKey))) validateTelepathicRecoveryLedger(calls.filter(c => c.scopeKey === key)); } catch { return; }
+  const last = calls.at(-1);
+  if (!last || !["failed", "uncertain", "dispatched"].includes(last.status) || last.manualRetryAuthorization) return;
+  if (calls.some(c => c.scopeKey !== last.scopeKey && ["uncertain", "dispatched"].includes(c.status))) return;
+  const scope = calls.filter(c => c.scopeKey === last.scopeKey);
+  if (scope.some(c => c.status === "succeeded") || scope.filter(c => ["uncertain", "dispatched"].includes(c.status)).length > 1) return;
+  return last;
+}
 export function pendingTelepathicTransportRetry(calls: TelepathicProviderCallRecord[]): TelepathicProviderCallRecord | undefined {
   return calls.find(call => call.recovery?.action === "transport_retry" && !calls.some(child => child.retryOfCallId === call.id));
 }
 export function canRetryTelepathicTransport(config: TelepathicSeriesConfig, calls: TelepathicProviderCallRecord[], call: TelepathicProviderCallRecord, resuming: boolean): boolean {
-  if (!automaticTelepathicRecovery(config) || calls.filter(item => item.recovery?.action === "transport_retry").length >= 1) return false;
+  if (call.manualRetryOfCallId || !automaticTelepathicRecovery(config) || calls.filter(item => item.recovery?.action === "transport_retry").length >= 1) return false;
   if (call.status === "dispatched" && !call.transportFailure && call.responseText === undefined && !call.finishReason) return true; // settled task/restart only
   // Older ledgers did not persist typed transport details. Opting into the
   // saved policy permits one replay of a wholly missing outcome, not an
@@ -76,6 +102,7 @@ export function telepathicRecoveryDecision(state: TelepathicSeriesState): Telepa
   for (const call of relevant) groups.set(call.scopeKey, [...(groups.get(call.scopeKey) ?? []), call]);
   for (const calls of groups.values()) {
     try { validateTelepathicRecoveryLedger(calls); } catch { return { ...result, canResume: false, reason: "provider_failure" }; }
+    if (pendingTelepathicManualRetry(calls)) continue;
     // Never hide an unresolved earlier physical request behind a later success.
     const unresolved = calls.filter(call => call.status === "uncertain" || call.status === "dispatched");
     if (unresolved.length > 1 || unresolved.length && calls.some(call => call.status === "succeeded")) return { ...result, canResume: false, needsManualResolution: true, reason: "manual" };
@@ -86,6 +113,7 @@ export function telepathicRecoveryDecision(state: TelepathicSeriesState): Telepa
     if (!unresolved.length && calls.some(call => call.status === "succeeded")) continue;
     const last = calls.filter(call => call.recovery?.action !== "transport_retry").reduce<TelepathicProviderCallRecord | undefined>((latest, call) => !latest || call.technicalAttempt >= latest.technicalAttempt ? call : latest, undefined);
     if (last?.status === "failed" && last.recovery?.action !== "transport_retry") {
+      if (last.manualRetryOfCallId) return { ...result, canResume: false, reason: "output_exhausted" };
       if (last.outputBudgetSnapshot && lengthRecoveryUnavailable(last.outputBudgetSnapshot, calls)) return { ...result, canResume: false, reason: "output_exhausted" };
       if (last.transportFailure && last.recovery?.action !== "manual_resolution" && !canRetryTelepathicTransport(state.config, calls, last, true)) return { ...result, canResume: false, reason: last.transportFailure.retryable ? "transport_exhausted" : "provider_failure" };
       if (last.technicalAttempt >= 2 && (!last.transportFailure || last.recovery?.action === "manual_resolution")) return { ...result, canResume: false, reason: "output_exhausted" };

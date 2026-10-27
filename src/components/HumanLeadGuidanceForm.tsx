@@ -1,16 +1,25 @@
 import { useState } from "react";
+import { useTelepathicDraft } from "./useTelepathicDraft";
 import { buildHumanLeadDecision } from "../telepathicExchange/leadGuidance";
 import type { LeadGuidanceDecision } from "../telepathicExchange/types";
 
 /** The parent keys this draft by series, round and cycle, never by checkpoint. */
-export function HumanLeadGuidanceForm({cycle,participants,pl,disabled,onDecision}: {
+export function HumanLeadGuidanceForm({cycle,participants,pl,disabled,onDecision,draftKey}: {
+  draftKey?: string;
   cycle: 1|2|3;
   participants: Array<{id:string;displayName:string}>;
   pl:boolean;
   disabled:boolean;
   onDecision:(decision:LeadGuidanceDecision)=>void;
 }) {
-  const [fields,setFields]=useState<Record<string,string>>({});
+  const [draft,setDraft]=useTelepathicDraft(draftKey ? `${draftKey}:lead:${cycle}` : null);
+  const [fallback,setFallback]=useState("");
+  let fields: Record<string,string> = {};
+  try {
+    const parsed: unknown = JSON.parse(draft || fallback || "{}");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) fields = Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string,string] => typeof entry[1] === "string"));
+  } catch { /* Ignore a damaged local draft. */ }
+  const setFields = (update: (current: Record<string,string>) => Record<string,string>) => (draftKey ? setDraft : setFallback)(JSON.stringify(update(fields)));
   const activeIds=participants.map(p=>p.id);
   return <form className="panel telepathic-action-box telepathic-human-guidance" onSubmit={event=>{event.preventDefault();if(!disabled)onDecision(buildHumanLeadDecision(cycle,activeIds,fields));}}>
     <h3>{pl?"Prowadzenie":"Guidance"} · {cycle}/3</h3>

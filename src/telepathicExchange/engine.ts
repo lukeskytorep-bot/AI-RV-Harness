@@ -1,3 +1,4 @@
+import { pendingTelepathicManualRetry, telepathicManualRetryCandidate } from "./recovery";
 import { AUTOMATIC_TELEPATHIC_RECOVERY, validateTelepathicRecoveryLedger, automaticTelepathicRecovery, canRetryTelepathicTransport, hasRecoverableTelepathicResponse, pendingTelepathicTransportRetry, telepathicRecoveryDecision, telepathicRecoveryMessage } from "./recovery";
 import { parseLeadDecisionResponse } from "./leadDecisionResponse";
 import { TELEPATHIC_OUTPUT_POLICY_VERSION, scopeOutputBudget, outputAttemptBudget, nextDurableTechnicalAttempt, lengthRecoveryUnavailable } from "./outputBudgets";
@@ -134,7 +135,7 @@ export function createTelepathicSeriesState(config: TelepathicSeriesConfig, time
   // Only construction upgrades the contract. Loading/Resume never calls this.
   if (config.protocolVersion === "fixed_lead_v1") config = { ...config, leadInstructionVersion: LEAD_INSTRUCTION_VERSION };
 
-  if (config.outputBudgetPolicyVersion !== undefined && ![2, 3].includes(config.outputBudgetPolicyVersion)) throw new Error("Unsupported Telepathic output policy version.");
+  if (config.outputBudgetPolicyVersion !== undefined && ![2, 3, 4].includes(config.outputBudgetPolicyVersion)) throw new Error("Unsupported Telepathic output policy version.");
   const plan = planTelepathicSeries(config);
   if (config.protocolVersion === "fixed_lead_v1") {
     const areas = assignTargetGeographies(plan.rounds.length);
@@ -148,7 +149,7 @@ export function createTelepathicSeriesState(config: TelepathicSeriesConfig, time
   }));
   return {
     schemaVersion: 1,
-    config: { ...structuredClone(config), ...(config.protocolVersion === "fixed_lead_v1" ? { leadInstruction: leadInstructions(config.language), outputBudgetPolicyVersion: config.outputBudgetPolicyVersion ?? TELEPATHIC_OUTPUT_POLICY_VERSION } : {}) },
+    config: { ...structuredClone(config), outputBudgetPolicyVersion: config.outputBudgetPolicyVersion ?? TELEPATHIC_OUTPUT_POLICY_VERSION, ...(config.protocolVersion === "fixed_lead_v1" ? { leadInstruction: leadInstructions(config.language), outputBudgetPolicyVersion: config.outputBudgetPolicyVersion ?? TELEPATHIC_OUTPUT_POLICY_VERSION } : {}) },
     plan,
     currentRoundIndex: 0,
     status: "ready",
@@ -265,12 +266,13 @@ async function invokeAi(
   let route: ResolvedTelepathicAiRoute;
   try { route = preResolvedRoute ?? await deps.resolveRoute(participantItem); assertResolvedRouteMatchesParticipant(participantItem, route); }
   catch (cause) { throw new TelepathicConfigurationError(cause, configurationValidation); }
-  const outputBudget = state.config.protocolVersion === "fixed_lead_v1" ? scopeOutputBudget(packet.scope.callStage, route.model.capabilities.maxOutputTokens, existing, state.config.outputBudgetPolicyVersion ?? 2) : undefined;
+  const outputBudget = (state.config.protocolVersion === "fixed_lead_v1" || state.config.outputBudgetPolicyVersion === 4) ? scopeOutputBudget(packet.scope.callStage, route.model.capabilities.maxOutputTokens, existing, state.config.outputBudgetPolicyVersion ?? 2) : undefined;
   const requestHash = await telepathicRequestFingerprint(effectivePacket, route, state.config.protocolVersion === "fixed_lead_v1", outputBudget);
   if (state.config.protocolVersion === "fixed_lead_v1" && existing.some(call => call.requestSha256 !== requestHash)) throw new TelepathicConfigurationError(new Error("Telepathic request fingerprint/settings changed after its durable attempt was prepared."), configurationValidation);
   const reconcile = async (resuming: boolean) => {
     if (callsForScope(state, packet.scopeKey).filter(call => ["uncertain", "dispatched"].includes(call.status)).length > 1) throw new Error("Multiple unresolved Telepathic requests require operator review.");
     for (const call of callsForScope(state, packet.scopeKey)) {
+      if (call.manualRetryAuthorization) continue;
       if (call.status !== "uncertain" && call.status !== "dispatched" && !(automaticTelepathicRecovery(state.config) && call.status === "failed" && call.transportFailure && call.recovery?.action !== "transport_retry" && call.recovery?.action !== "manual_resolution")) continue;
       if (call.requestSha256 !== requestHash) throw new TelepathicConfigurationError(new Error("Telepathic request fingerprint changed before recovery."), configurationValidation);
       if (hasRecoverableTelepathicResponse(call, state.config.language)) {
@@ -313,9 +315,10 @@ async function invokeAi(
   await reconcile(true);
   const recovered = callsForScope(state, packet.scopeKey).find(call => call.status === "succeeded" && call.responseText !== undefined);
   if (recovered) return recovered.responseText!.trim();
-  let technicalAttempt = nextDurableTechnicalAttempt(callsForScope(state, packet.scopeKey));
+  const manualRetry = pendingTelepathicManualRetry(callsForScope(state, packet.scopeKey));
+  let technicalAttempt = manualRetry?.technicalAttempt ?? nextDurableTechnicalAttempt(callsForScope(state, packet.scopeKey));
   if (technicalAttempt > 2) {
-    if (state.config.protocolVersion === "fixed_lead_v1" || automaticTelepathicRecovery(state.config)) throw new Error("Telepathic stage attempts exhausted; no complete output was accepted.");
+    if (state.config.protocolVersion === "fixed_lead_v1" || state.config.outputBudgetPolicyVersion === 4 || automaticTelepathicRecovery(state.config)) throw new Error("Telepathic stage attempts exhausted; no complete output was accepted.");
     return null;
   }
   await deps.store.assertTelepathicSeriesLease(packet.scope.seriesId);
@@ -328,7 +331,7 @@ async function invokeAi(
 
   if (state.providerCalls.some(call => call.scopeKey !== packet.scopeKey && ["uncertain", "dispatched"].includes(call.status))) throw new Error("Another Telepathic step has an unresolved provider request; no new step was dispatched.");
   for (; technicalAttempt <= 2; technicalAttempt += 1) {
-    if (outputBudget && technicalAttempt === 2 && lengthRecoveryUnavailable(outputBudget, callsForScope(state, packet.scopeKey))) {
+    if (!manualRetry && outputBudget && technicalAttempt === 2 && lengthRecoveryUnavailable(outputBudget, callsForScope(state, packet.scopeKey))) {
       throw new Error("No larger output recovery budget is available for this model.");
     }
     try {
@@ -336,7 +339,8 @@ async function invokeAi(
         packet: effectivePacket,
         route,
         technicalAttempt,
-        retryOfCallId: pendingTelepathicTransportRetry(callsForScope(state, packet.scopeKey))?.id,
+        manualRetryOfCallId: manualRetry?.id,
+        retryOfCallId: manualRetry ? undefined : pendingTelepathicTransportRetry(callsForScope(state, packet.scopeKey))?.id,
         attempt: deps.providerAttempt,
         signal: combinedSignal(deps, packet.scope.seriesId),
         fixedLead: state.config.protocolVersion === "fixed_lead_v1",
@@ -375,7 +379,8 @@ async function invokeAi(
     } catch (error) {
       if (error instanceof TelepathicCheckpointError) throw error;
       checkStop(deps);
-      if (error instanceof Error && error.message.startsWith("Invalid lead decision")) throw error;
+      if (manualRetry) throw error; // One physical dispatch for each explicit authorization.
+      if (!automaticTelepathicRecovery(state.config) && error instanceof Error && error.message.startsWith("Invalid lead decision")) throw error;
       const call = (error as Error & { telepathicCall?: import("./types").TelepathicProviderCallRecord }).telepathicCall;
       if (automaticTelepathicRecovery(state.config) && !call) throw new TelepathicConfigurationError(error, configurationValidation);
       if (automaticTelepathicRecovery(state.config) && call?.transportFailure) {
@@ -394,7 +399,7 @@ async function invokeAi(
         throw new Error("Telepathic provider result is uncertain after dispatch. Resume must not automatically repeat this call until the operator resolves it.", { cause: error });
       }
       if (technicalAttempt >= 2) {
-        if (state.config.protocolVersion === "fixed_lead_v1" || automaticTelepathicRecovery(state.config)) throw error;
+        if (state.config.protocolVersion === "fixed_lead_v1" || state.config.outputBudgetPolicyVersion === 4 || automaticTelepathicRecovery(state.config)) throw error;
         return null;
       }
     }
@@ -644,6 +649,10 @@ function currentHumanParticipant(state: TelepathicSeriesState): TelepathicPartic
   return state.config.participants.find((item) => item.kind === "human") ?? null;
 }
 
+export function humanBlindReady(round: TelepathicRoundState): boolean {
+  return round.target?.status === "transmission_ready" && !round.revealedAt;
+}
+
 export function telepathicConversationHumanStep(state: TelepathicSeriesState): TelepathicConversationHumanStep {
   if (state.archivedAt || state.status === "completed" || state.status === "cancelled" || state.status === "blocked") return { kind: "none" };
   const round = state.rounds[state.currentRoundIndex];
@@ -666,7 +675,7 @@ export function telepathicConversationHumanStep(state: TelepathicSeriesState): T
   if (isSender) {
     if (!round.target) return { kind: "prepare_target", roundNumber: round.assignment.roundNumber };
     if (round.target.status === "locked") return { kind: "confirm_transmission", roundNumber: round.assignment.roundNumber };
-  } else if (round.assignment.receiverParticipantIds.includes(human.id) && !round.revealedAt) {
+  } else if (round.assignment.receiverParticipantIds.includes(human.id) && humanBlindReady(round)) {
     const blind = round.blindByParticipant[human.id] ?? createBlindSubmission(human.id);
     if (!blind.first) return { kind: "blind_first", roundNumber: round.assignment.roundNumber };
     if (state.config.protocolVersion !== "fixed_lead_v1" && blind.status !== "sealed" && blind.status !== "no_submission") return { kind: "blind_second", roundNumber: round.assignment.roundNumber, first: blind.first };
@@ -730,7 +739,7 @@ export async function confirmHumanTelepathicTransmission(deps: TelepathicExchang
 export async function saveHumanTelepathicFirstBlind(deps: TelepathicExchangeEngineDependencies, seriesId: string, text: string): Promise<TelepathicSeriesState> {
   return mutateTelepathicSeries(deps, seriesId, async (state, round, human) => {
     if (!round.assignment.receiverParticipantIds.includes(human.id)) throw new Error("The human participant is not a receiver in this round.");
-    if (!round.target || round.target.status !== "transmission_ready" || round.revealedAt) throw new Error("Human blind input is only allowed before Reveal after transmission is ready.");
+    if (!humanBlindReady(round)) throw new Error("Human blind input is only allowed before Reveal after transmission is ready.");
     const blind = round.blindByParticipant[human.id] ?? createBlindSubmission(human.id);
     round.blindByParticipant[human.id] = recordFirstBlindResponse(blind, text);
     recordTranscript(state,{id:`${round.assignment.roundId}:human-first`,roundId:round.assignment.roundId,stage:"receiver_first",kind:"response",authorId:human.id,recipientIds:[],text},now(deps));
@@ -845,6 +854,8 @@ export async function advanceTelepathicConversationSeries(deps: TelepathicExchan
   if (state.status === "completed" || state.status === "cancelled") return state;
     if (state.status === "blocked" && !telepathicRecoveryDecision(state).canResume) throw new Error(telepathicRecoveryMessage(telepathicRecoveryDecision(state), false));
     if (state.archivedAt) throw new Error("Telepathic series is archived. Restore it before changing it.");
+    while (true) {
+    checkStop(deps);
     const round = state.rounds[state.currentRoundIndex];
     if (!round) throw new Error("Telepathic series has no current round.");
     if (round.status === "cancelled") return state;
@@ -899,6 +910,7 @@ export async function advanceTelepathicConversationSeries(deps: TelepathicExchan
       state.status = state.currentRoundIndex >= state.rounds.length && state.config.protocolVersion !== "fixed_lead_v1" ? "completed" : "paused";
       await saveCheckpoint(deps, state);
       if (state.config.protocolVersion === "fixed_lead_v1" && state.currentRoundIndex >= state.rounds.length) return await finalizeSeries(deps,state);
+      if (state.currentRoundIndex < state.rounds.length) continue;
       return structuredClone(state);
     } catch (error) {
       if (isCheckpointFailure(error)) { rememberTelepathicResult(deps, error); throw error; }
@@ -907,6 +919,7 @@ export async function advanceTelepathicConversationSeries(deps: TelepathicExchan
       state.status = deps.signal?.aborted ? "paused" : "blocked";
       await saveCheckpoint(deps, state);
       throw error;
+    }
     }
   });
 }
@@ -1038,7 +1051,7 @@ export async function revalidateTelepathicConfiguration(deps: TelepathicExchange
         const validation = state.recoveryBlock.validation;
         if (validation?.participantId === item.id) {
           const calls = callsForScope(state, validation.scopeKey);
-          const budget = state.config.protocolVersion === "fixed_lead_v1" ? scopeOutputBudget(validation.callStage, route.model.capabilities.maxOutputTokens, calls, state.config.outputBudgetPolicyVersion ?? 2) : undefined;
+          const budget = (state.config.protocolVersion === "fixed_lead_v1" || state.config.outputBudgetPolicyVersion === 4) ? scopeOutputBudget(validation.callStage, route.model.capabilities.maxOutputTokens, calls, state.config.outputBudgetPolicyVersion ?? 2) : undefined;
           const attempt = Math.min(2, nextDurableTechnicalAttempt(calls));
           const reservedOutputTokens = validation.callStage === "series_reflection" ? undefined : budget ? outputAttemptBudget(budget, attempt).effective : route.requestedSettings.maxOutputTokens;
           if (preflightTelepathicMessages({ messages: validation.messages, model: route.model, reservedOutputTokens }).budget.exceeded) throw new Error("Telepathic packet still exceeds the model context budget; no request was sent.");
@@ -1077,6 +1090,34 @@ async function waitForTelepathicRecovery(signal?: AbortSignal, retryAfterMs?: nu
     const abort = () => { globalThis.clearTimeout(timer); reject(signal?.reason); };
     const timer = globalThis.setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, Math.max(250, Math.min(30000, Number.isFinite(retryAfterMs) ? retryAfterMs! : 250)));
     signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+/** Explicit extra dispatch, with its original output level and an append-only parent link. */
+export async function authorizeTelepathicStepRetry(deps: TelepathicExchangeEngineDependencies, seriesId: string, callId: string): Promise<TelepathicSeriesState> {
+  return withTelepathicSeriesRunLock(deps, seriesId, async () => {
+    const state = await readTelepathicRunCheckpoint(deps, seriesId);
+    if (!state) throw new Error("Telepathic series not found.");
+    assertSeriesNotEnded(state);
+    await deps.store.assertTelepathicSeriesLease(seriesId);
+    const call = telepathicManualRetryCandidate(state);
+    if (!call || call.id !== callId) throw new Error("This step is not eligible for an extra manual retry.");
+    // Inspect saved evidence before authorizing another paid request.
+    if (["uncertain", "dispatched"].includes(call.status) && hasRecoverableTelepathicResponse(call, state.config.language)) {
+      state.status = "paused";
+    } else {
+      call.manualRetryAuthorization = { at: now(deps), originalStatus: call.status };
+      call.status = "failed";
+      call.updatedAt = now(deps);
+      recordTranscript(state, { id: `${call.id}:manual-retry`, roundId: call.roundId === "series-complete" ? undefined : call.roundId,
+        stage: call.callStage, kind: "notice", authorId: "controller", recipientIds: [],
+        text: "Operator authorized one additional provider call for this missing step; the previous outcome may have been billed.", providerCallId: call.id, providerCallStatus: "failed" }, now(deps));
+      state.status = "paused";
+    }
+    const round = state.rounds.find(r => r.assignment.roundId === call.roundId);
+    if (round) { round.status = inferBlockedRoundStatus(round); round.blockedReason = undefined; }
+    await saveCheckpoint(deps, state);
+    return structuredClone(state);
   });
 }
 

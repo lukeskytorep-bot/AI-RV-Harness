@@ -9,7 +9,7 @@ interface RuntimeExtension {
   termination?: TelepathicSeriesState["termination"];
   version: 1;
   rounds: Record<string, { guidance?: TelepathicSeriesState["rounds"][number]["guidance"]; blind: Record<string, NonNullable<TelepathicSeriesState["rounds"][number]["blindByParticipant"][string]["guidanceResponses"]>> }>;
-  calls: Record<string, Pick<TelepathicSeriesState["providerCalls"][number], "usage" | "elapsedMs" | "physicalAttempts" | "costSource" | "finishReason" | "requestMessages" | "requestSettings" | "outputBudgetSnapshot" | "outputDiagnostics" | "responseEvidence" | "transportFailure" | "recovery" | "retryOfCallId">>;
+  calls: Record<string, Pick<TelepathicSeriesState["providerCalls"][number], "usage" | "elapsedMs" | "physicalAttempts" | "costSource" | "finishReason" | "requestMessages" | "requestSettings" | "outputBudgetSnapshot" | "outputDiagnostics" | "responseEvidence" | "transportFailure" | "recovery" | "retryOfCallId" | "manualRetryAuthorization" | "manualRetryOfCallId">>;
   transcript?: TelepathicSeriesState["transcript"];
   finalization?: TelepathicSeriesState["finalization"];
   activeElapsedMs?: number;
@@ -21,7 +21,7 @@ export function serializeTelepathicPlan(state: TelepathicSeriesState): string {
     version: 1, termination: state.termination, recoveryBlock: state.recoveryBlock,
     rounds: Object.fromEntries(state.rounds.map(round => [round.assignment.roundId, { guidance: round.guidance,
       blind: Object.fromEntries(Object.values(round.blindByParticipant).filter(blind => blind.guidanceResponses).map(blind => [blind.participantId, blind.guidanceResponses!])) }])),
-    calls: Object.fromEntries(state.providerCalls.map(({ id,usage,elapsedMs,physicalAttempts,costSource,finishReason,requestMessages,requestSettings,outputBudgetSnapshot,outputDiagnostics,responseEvidence,transportFailure,recovery,retryOfCallId }) => [id,{usage,elapsedMs,physicalAttempts,costSource,finishReason,requestMessages,requestSettings,outputBudgetSnapshot,outputDiagnostics,responseEvidence,transportFailure,recovery,retryOfCallId}])),
+    calls: Object.fromEntries(state.providerCalls.map(({ id,usage,elapsedMs,physicalAttempts,costSource,finishReason,requestMessages,requestSettings,outputBudgetSnapshot,outputDiagnostics,responseEvidence,transportFailure,recovery,retryOfCallId,manualRetryAuthorization,manualRetryOfCallId }) => [id,{usage,elapsedMs,physicalAttempts,costSource,finishReason,requestMessages,requestSettings,outputBudgetSnapshot,outputDiagnostics,responseEvidence,transportFailure,recovery,retryOfCallId,manualRetryAuthorization,manualRetryOfCallId}])),
     transcript: state.transcript, finalization: state.finalization, activeElapsedMs: state.activeElapsedMs,
     archivedAt: state.archivedAt, archiveRevision: state.archiveRevision,
   };

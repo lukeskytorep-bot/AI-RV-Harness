@@ -146,6 +146,7 @@ export async function executeTelepathicProviderPacket(input: {
   route: ResolvedTelepathicAiRoute;
   technicalAttempt: number;
   retryOfCallId?: string;
+  manualRetryOfCallId?: string;
   hooks: TelepathicProviderCallHooks;
   attempt?: ProviderChatAttempt;
   signal?: AbortSignal;
@@ -158,7 +159,7 @@ export async function executeTelepathicProviderPacket(input: {
   assertExactTelepathicRoute(input.route);
   const messages = composeTelepathicProviderMessages(input.packet);
   if (messages.some((message) => message.continuationState)) throw new Error("Telepathic provider payload cannot contain continuation state.");
-  const outputBudget = input.fixedLead ? input.outputBudgetSnapshot ?? scopeOutputBudget(input.packet.scope.callStage, input.route.model.capabilities.maxOutputTokens) : undefined;
+  const outputBudget = input.outputBudgetSnapshot ?? (input.fixedLead ? scopeOutputBudget(input.packet.scope.callStage, input.route.model.capabilities.maxOutputTokens) : undefined);
   if (outputBudget) validateOutputBudgetSnapshot(outputBudget, input.packet.scope.callStage, input.route.model.capabilities.maxOutputTokens);
   const budget = outputBudget ? outputAttemptBudget(outputBudget, input.technicalAttempt) : undefined;
   if (!Number.isSafeInteger(input.technicalAttempt) || ![1, 2].includes(input.technicalAttempt)) throw new Error("Telepathic stage attempts exhausted; only two attempts are allowed.");
@@ -176,6 +177,7 @@ export async function executeTelepathicProviderPacket(input: {
     callStage: input.packet.scope.callStage,
     technicalAttempt: input.technicalAttempt,
     ...(input.retryOfCallId ? { retryOfCallId: input.retryOfCallId } : {}),
+    ...(input.manualRetryOfCallId ? { manualRetryOfCallId: input.manualRetryOfCallId } : {}),
     status: "prepared",
     scopeKey: input.packet.scopeKey,
     requestSha256,
@@ -233,14 +235,20 @@ export async function executeTelepathicProviderPacket(input: {
     }
     const details = error instanceof ProviderExecutionError ? error.causeError.details : providerErrorDetails(error);
     const responseEvidence = parseProviderResponseEvidence(details?.responseEvidence);
+    const earlierAmbiguous = error instanceof ProviderExecutionError && error.report.ambiguousBillingAttempts > 0
+      || providerAttemptOutcomes(error).slice(0, -1).some(attempt => attempt.outcome === "dispatch_unknown");
+    // A finished body rejected by validation is an output attempt, not an
+    // unknown transport outcome. Neither a finish label nor reasoning is a final answer.
+    const rejectedFinishedResponse = Boolean(responseEvidence && !earlierAmbiguous && ["validating_response", "parsing_body"].includes(details?.phase ?? ""));
     call = {
       ...call,
       ...(responseEvidence ? { responseEvidence, ...(responseEvidence.usage ? { usage: responseEvidence.usage } : {}), ...(responseEvidence.finishReason ? { finishReason: responseEvidence.finishReason } : {}) } : {}),
       ...(details?.providerRequestId ? { providerRequestId: details.providerRequestId } : {}),
-      ...(details ? { transportFailure: { code: details.code, phase: details.phase, ...(details.retryAfterMs !== undefined ? { retryAfterMs: details.retryAfterMs } : {}),
+      ...(rejectedFinishedResponse ? { recovery: { action: "rejected_response" as const, originalStatus: call.status, at: input.hooks.now() }, outputDiagnostics: { ...call.outputDiagnostics!, completion: "partial" as const } } : {}),
+      ...(details && !rejectedFinishedResponse ? { transportFailure: { code: details.code, phase: details.phase, ...(details.retryAfterMs !== undefined ? { retryAfterMs: details.retryAfterMs } : {}),
         retryable: ["connect", "timeout", "request_send", "response_body_read"].includes(details.code) || details.code === "http_status" && isStandardRetryHttpStatus(details.httpStatus),
-        earlierAmbiguousAttempt: providerAttemptOutcomes(error).slice(0, -1).some(attempt => attempt.outcome === "dispatch_unknown") } } : {}),
-      status: isAmbiguousFailure(error) ? "uncertain" : "failed",
+        earlierAmbiguousAttempt: earlierAmbiguous } } : {}),
+      status: rejectedFinishedResponse ? "failed" : isAmbiguousFailure(error) ? "uncertain" : "failed",
       elapsedMs: error instanceof ProviderExecutionError ? error.report.elapsedMs : Math.max(0,Date.parse(input.hooks.now())-Date.parse(timestamp)),
       physicalAttempts: error instanceof ProviderExecutionError ? error.report.physicalAttempts : 1,
       errorMessage: error instanceof Error ? error.message : String(error),
@@ -276,7 +284,7 @@ export async function executeTelepathicProviderPacket(input: {
   call = {
     ...call,
     ...(domainError ? { errorMessage: domainError } : {}),
-    status: domainError || (input.fixedLead || input.requireComplete) && viewerResponseCompletion(response) !== "complete" ? "failed" : "succeeded",
+    status: domainError || (input.fixedLead || input.requireComplete || outputBudget?.version === 4) && viewerResponseCompletion(response) !== "complete" ? "failed" : "succeeded",
     outputDiagnostics: { ...call.outputDiagnostics!, completion: viewerResponseCompletion(response) === "complete" ? "complete" : "partial" },
     ...(response.responseEvidence ? { responseEvidence: response.responseEvidence } : {}),
     usage: response.usage, elapsedMs: response.execution?.elapsedMs ?? Math.max(0, Date.parse(input.hooks.now()) - Date.parse(timestamp)),
