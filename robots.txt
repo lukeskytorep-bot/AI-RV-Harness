@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://lukeskytorep-bot.github.io/AI-RV-Harness/sitemap.xml
