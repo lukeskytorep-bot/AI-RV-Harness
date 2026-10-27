@@ -261,7 +261,14 @@
 .telepathic-setup-step h3 { margin:0; font-size:14px; }
 .telepathic-setup-step > .training-actions { margin-top:12px; }
 
-.telepathic-runtime-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)) auto; }
+/* Wrap against the actual panel width, including a wide recovery message. */
+.telepathic-runtime-metrics { display: flex; flex-wrap: wrap; }
+.telepathic-runtime-metrics > span { flex: 1 0 8rem; min-width: 0; overflow-wrap: normal; word-break: normal; }
+.telepathic-runtime-metrics > span > small,
+.telepathic-runtime-metrics > span > strong { white-space: nowrap; }
+.telepathic-runtime-metrics .session-run-metric-note { overflow-wrap: normal; }
+.telepathic-runtime-metrics > .telepathic-metric-actions { flex: 1 1 22rem; min-width: 0; }
+.telepathic-series-actions > small { flex-basis: 100%; overflow-wrap: normal; word-break: normal; }
 .telepathic-metric-actions { margin-left: auto; display: flex; align-items: center; }
 .telepathic-series-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .telepathic-series-actions .compact-telepathic-button { min-height: 32px; padding: 5px 9px; border-radius: 10px; flex: 0 0 auto; }

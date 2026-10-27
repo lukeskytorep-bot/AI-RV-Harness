@@ -1,3 +1,4 @@
+import { telepathicManualRetryCandidate } from "./recovery";
 import { telepathicRecoveryDecision, type TelepathicRecoveryDecision, type TelepathicRecoveryPolicy } from "./recovery";
 import type { TelepathicHistoryPage, TelepathicHistoryCursor } from "./historySummaries";
 import { visibleTranscript } from "./transcript";
@@ -67,6 +68,7 @@ export interface TelepathicConversationRecoveryCallView {
 }
 
 export interface TelepathicConversationSeriesView {
+  manualRetryCallId?: string;
   recoveryDecision?: TelepathicRecoveryDecision;
   schemaVersion: 1;
   config: {
@@ -195,6 +197,7 @@ export function buildTelepathicConversationView(state: TelepathicSeriesState): T
     humanStep: telepathicConversationHumanStep(state),
     recoveryCalls,
     recoveryDecision: telepathicRecoveryDecision(state),
+    manualRetryCallId: telepathicManualRetryCandidate(state)?.id,
     ...(state.status === "blocked" && state.providerCalls.at(-1)?.finishReason === "repetition_runaway" ? { repetitionStopped: true } : {}),
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,

@@ -153,7 +153,7 @@ it("a transport failure on semantic attempt 2 preserves that budget and remains 
  const f = await setup("ai_ai_training", true), live = f.attempt.getMockImplementation()!; let count = 0;
  f.attempt.mockImplementation(async request => { if (targetRequest(request.messages.map(m => m.content).join("\n"))) { count++; if (count === 1) return { content: "partial", finishReason: "length", usage: {} }; if (count === 2) throw outage(); } return live(request); });
  const result = await f.run(); const calls = result.providerCalls.filter(c => c.callStage === "sender_target");
- expect(calls.map(c => c.technicalAttempt)).toEqual([1, 2, 2]); expect(calls.map(c => c.requestSettings?.effective.maxOutputTokens)).toEqual([16384, 32768, 32768]);
+ expect(calls.map(c => c.technicalAttempt)).toEqual([1, 2, 2]); expect(calls.map(c => c.requestSettings?.effective.maxOutputTokens)).toEqual([32768, 49152, 49152]);
 });
 it("a saved mixed/invalid lead decision is rejected before any new request", async () => {
  const f = await setup("conversation_exchange", true); await f.run();
@@ -363,4 +363,96 @@ it("STOP during automatic configuration inspection persists paused and never dis
  expect(save).toHaveBeenCalledTimes(1);
  const paused = (await f.store.getTelepathicSeries("auto"))!; expect(paused.status).toBe("paused"); expect(paused.recoveryBlock).toBeDefined(); expect(f.attempt).not.toHaveBeenCalled();
  const checked = await revalidateTelepathicConfiguration(f.deps, "auto"); expect(checked.status).toBe("paused"); expect(checked.recoveryBlock).toBeUndefined(); expect(f.attempt).not.toHaveBeenCalled();
+});
+
+describe.each(["ai_ai_training", "conversation_exchange"] as const)("explicit missing-step retry %s", mode => {
+ it("keeps length/cancellation history after restart and authorizes exactly one missing-stage call", async () => {
+  const f = await setup(mode, true), live = f.attempt.getMockImplementation()!;
+  let first = true;
+  f.attempt.mockImplementation(async request => {
+   const current = (await f.store.getTelepathicSeries("auto"))!.providerCalls.at(-1)!;
+   if (current.callStage !== "receiver_first") return live(request);
+   if (first) { first = false; throw new ProviderCallError({code:"empty_assistant_response",phase:"validating_response",message:"provider returned reasoning without a final assistant response [finish-reason=length]",responseEvidence:{version:1,transportOutcome:"response_finished",boundary:"sse_done",finishReason:"length"}}); }
+   throw new ProviderCallError({ code: "cancelled", phase: "reading_body", message: "provider request cancelled" });
+  });
+  await expect(f.run()).rejects.toThrow();
+  // Resume may spend the remaining bounded transport retry; its cause is unknown.
+  await expect(f.run()).rejects.toThrow();
+  let saved = (await f.store.getTelepathicSeries("auto"))!;
+  expect(telepathicRecoveryDecision(saved).canResume).toBe(false);
+  expect(saved.providerCalls.filter(c => c.callStage === "receiver_first").map(c => c.technicalAttempt)).toEqual([1, 2, 2]);
+  const frozenTarget = structuredClone(saved.rounds[0].target);
+  const priorCalls = structuredClone(saved.providerCalls);
+  const { authorizeTelepathicStepRetry } = await import("./engine");
+  const { telepathicManualRetryCandidate } = await import("./recovery");
+  saved = restoreTelepathicRuntime(structuredClone(saved), JSON.parse(serializeTelepathicPlan(saved)));
+  await f.store.saveTelepathicSeries(saved);
+  const last = telepathicManualRetryCandidate(saved)!;
+  expect(last.callStage).toBe("receiver_first");
+  await authorizeTelepathicStepRetry(f.deps, "auto", last.id);
+  await expect(authorizeTelepathicStepRetry(f.deps, "auto", last.id)).rejects.toThrow();
+  expect(f.attempt.mock.calls.length).toBe(priorCalls.length);
+  f.attempt.mockImplementation(live);
+  const result = await f.run();
+  expect(result.status).toBe("completed");
+  expect(result.rounds[0].target).toEqual(frozenTarget);
+  expect(result.providerCalls.filter(c => c.callStage === "sender_target")).toHaveLength(1);
+  const retried = result.providerCalls.filter(c => c.callStage === "receiver_first");
+  expect(retried).toHaveLength(4);
+  expect(retried.at(-1)).toMatchObject({ manualRetryOfCallId: last.id, technicalAttempt: 2, status: "succeeded" });
+  expect(retried.at(-1)!.outputBudgetSnapshot).toEqual(last.outputBudgetSnapshot);
+  expect(result.transcript!.filter(e => e.id === `${last.id}:manual-retry`)).toHaveLength(1);
+  for (const old of priorCalls.slice(0,-1)) expect(result.providerCalls.find(c => c.id === old.id)).toEqual(old);
+ });
+ it("requires another click after a manual call fails and never resets automatic counters", async () => {
+  const f = await setup(mode, true); f.attempt.mockImplementation(async () => { throw outage(); });
+  await expect(f.run()).rejects.toThrow();
+  const { authorizeTelepathicStepRetry } = await import("./engine");
+  let saved = (await f.store.getTelepathicSeries("auto"))!;
+  await authorizeTelepathicStepRetry(f.deps, "auto", saved.providerCalls.at(-1)!.id);
+  await expect(f.run()).rejects.toThrow(); expect(f.attempt).toHaveBeenCalledTimes(3);
+  await expect(f.run()).rejects.toThrow(); expect(f.attempt).toHaveBeenCalledTimes(3);
+  saved = (await f.store.getTelepathicSeries("auto"))!;
+  await authorizeTelepathicStepRetry(f.deps, "auto", saved.providerCalls.at(-1)!.id);
+  await expect(f.run()).rejects.toThrow(); expect(f.attempt).toHaveBeenCalledTimes(4);
+  expect((await f.store.getTelepathicSeries("auto"))!.providerCalls.filter(c => c.recovery?.action === "transport_retry")).toHaveLength(1);
+ });
+});
+
+for (const finishReason of ["length", "stop"]) it(`retries a finished reasoning-only rejection (${finishReason}) as output, never as a successful final answer`, async () => {
+ const f = await setup("conversation_exchange", true), live=f.attempt.getMockImplementation()!;
+ let first=true;
+ f.attempt.mockImplementation(async request => {
+  if (first) { first=false; throw new ProviderCallError({code:"empty_assistant_response",phase:"validating_response",message:`provider returned reasoning without a final assistant response [finish-reason=${finishReason}]`,responseEvidence:{version:1,transportOutcome:"response_finished",boundary:"sse_done",finishReason}}); }
+  return live(request);
+ });
+ const result=await f.run();expect(result.status).toBe("completed");
+ const target=result.providerCalls.filter(c=>c.callStage==="sender_target");
+ expect(target.map(c=>c.technicalAttempt)).toEqual([1,2]);
+ expect(target[0]).toMatchObject({status:"failed",recovery:{action:"rejected_response"}});
+ expect(target[0].responseText).toBeUndefined();
+ expect(result.rounds[0].target!.content).toBe("Distinct complete target or response.");
+});
+it("rejects concurrent manual authorization/Resume while the extra request is active", async () => {
+ const f=await setup("ai_ai_training",true);f.attempt.mockImplementation(async()=>{throw outage();});
+ await expect(f.run()).rejects.toThrow();
+ const {authorizeTelepathicStepRetry}=await import("./engine");
+ const saved=(await f.store.getTelepathicSeries("auto"))!;
+ await authorizeTelepathicStepRetry(f.deps,"auto",saved.providerCalls.at(-1)!.id);
+ let entered!:()=>void, release!:()=>void;
+ const started=new Promise<void>(resolve=>{entered=resolve;}), gate=new Promise<void>(resolve=>{release=resolve;});
+ f.attempt.mockImplementation(async()=>{entered();await gate;throw outage();});
+ const running=f.run();const assertion=expect(running).rejects.toThrow();await started;
+ await expect(authorizeTelepathicStepRetry(f.deps,"auto",saved.providerCalls.at(-1)!.id)).rejects.toThrow("already running");
+ await expect(f.run()).rejects.toThrow("already running");expect(f.attempt).toHaveBeenCalledTimes(3);
+ release();await assertion;
+});
+it("keeps multiple unknown outcomes and an already successful scope behind operator resolution", async()=>{
+ const f=await setup("conversation_exchange",true);f.attempt.mockImplementation(async()=>{throw outage();});await expect(f.run()).rejects.toThrow();
+ const {telepathicManualRetryCandidate}=await import("./recovery");
+ const saved=(await f.store.getTelepathicSeries("auto"))!,last=saved.providerCalls.at(-1)!;
+ const unknown={...structuredClone(last),id:"another-unknown",status:"uncertain" as const};
+ saved.providerCalls.push(unknown);expect(telepathicManualRetryCandidate(saved)).toBeUndefined();
+ saved.providerCalls.pop();saved.providerCalls[0].status="succeeded";saved.providerCalls[0].recovery=undefined;
+ expect(telepathicManualRetryCandidate(saved)).toBeUndefined();
 });

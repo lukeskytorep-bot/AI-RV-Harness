@@ -172,8 +172,8 @@ describe("fixed lead executable engine",()=>{
     await expect(runNextTelepathicAiRound({store,resolveRoute,providerAttempt:attempt},"fixed")).rejects.toThrow(/Invalid lead decision/);
     const state=(await store.getTelepathicSeries("fixed"))!;expect(state.rounds[0].revealedAt).toBeUndefined();expect(state.providerCalls.some(c=>c.callStage.startsWith("receiver_guidance"))).toBe(false);
   });
-  it("keeps length diagnostics and uses 16K then 32K without a third attempt",async()=>{
-    const store=new InMemoryTelepathicExchangeStore();await store.saveTelepathicSeries(createTelepathicSeriesState(config));
+  it("keeps historical v3 length diagnostics and uses 16K then 32K without a third attempt",async()=>{
+    const store=new InMemoryTelepathicExchangeStore();await store.saveTelepathicSeries(createTelepathicSeriesState({...config,outputBudgetPolicyVersion:3}));
     const budgets:number[]=[];
     const attempt:ProviderChatAttempt=async r=>{const first=r.messages.some(m=>m.content.includes("Please give your first description"));if(first)budgets.push(r.settings.effective.maxOutputTokens!);return {content:first?"truncated":answer(r,0),finishReason:first?"length":"stop",usage:{totalTokens:12,costUsd:0.02}};};
     await expect(runNextTelepathicAiRound({store,resolveRoute,providerAttempt:attempt},"fixed")).rejects.toThrow(/Incomplete/);

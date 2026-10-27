@@ -62,7 +62,7 @@ export interface TelepathicSeriesConfig {
   schemaVersion: 1;
   protocolVersion?: "fixed_lead_v1";
   leadInstructionVersion?: string;
-  outputBudgetPolicyVersion?: 2 | 3;
+  outputBudgetPolicyVersion?: 2 | 3 | 4;
   leadInstruction?: string;
   maxGuidanceCycles?: 3;
   seriesId: string;
@@ -199,6 +199,8 @@ export interface TelepathicProviderCallRecord {
   transportFailure?: Pick<ProviderCallErrorDetails, "code" | "phase" | "retryAfterMs"> & { retryable: boolean; earlierAmbiguousAttempt?: boolean };
   recovery?: { action: "transport_retry" | "recovered_response" | "rejected_response" | "manual_resolution"; originalStatus: TelepathicProviderCallStatus; at: string };
   retryOfCallId?: string;
+  manualRetryAuthorization?: { at: string; originalStatus: TelepathicProviderCallStatus };
+  manualRetryOfCallId?: string;
   id: string;
   seriesId: string;
   roundId: string;

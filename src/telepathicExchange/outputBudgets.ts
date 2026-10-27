@@ -1,6 +1,6 @@
 import type { TelepathicProviderCallRecord } from "./types";
 
-export const TELEPATHIC_OUTPUT_POLICY_VERSION = 3 as const;
+export const TELEPATHIC_OUTPUT_POLICY_VERSION = 4 as const;
 export type TelepathicOutputStage = "sender_target" | "sender_transmission_confirmation" | "lead_guidance"
   | "sharing_consent" | "receiver_first" | "receiver_second" | "receiver_guidance" | "receiver_reveal"
   | "sender_reveal" | "shared_answers_comment" | "series_reflection";
@@ -14,27 +14,33 @@ export const TELEPATHIC_OUTPUT_BUDGETS_V2: Readonly<Record<TelepathicOutputStage
 };
 // Keep v1/v2 tables independent of the current policy. Historical snapshots
 // and fingerprints must retain their exact pairs after an application update.
-export const TELEPATHIC_OUTPUT_BUDGETS: Readonly<Record<TelepathicOutputStage, readonly [number, number]>> = {
+export const TELEPATHIC_OUTPUT_BUDGETS_V3: Readonly<Record<TelepathicOutputStage, readonly [number, number]>> = {
   ...TELEPATHIC_OUTPUT_BUDGETS_V2,
   receiver_reveal: [32768, 49152], sender_reveal: [32768, 49152],
+  shared_answers_comment: [32768, 49152], series_reflection: [32768, 49152],
+};
+export const TELEPATHIC_OUTPUT_BUDGETS: Readonly<Record<TelepathicOutputStage, readonly [number, number]>> = {
+  sender_target: [32768, 49152], sender_transmission_confirmation: [32768, 49152], lead_guidance: [32768, 49152],
+  sharing_consent: [32768, 49152], receiver_first: [32768, 49152], receiver_second: [32768, 49152],
+  receiver_guidance: [32768, 49152], receiver_reveal: [32768, 49152], sender_reveal: [32768, 49152],
   shared_answers_comment: [32768, 49152], series_reflection: [32768, 49152],
 };
 const LEGACY_OUTPUT_BUDGETS: Readonly<Record<TelepathicOutputStage, readonly [number, number]>> = {
   ...TELEPATHIC_OUTPUT_BUDGETS_V2, sender_target: [4096, 4096], sender_transmission_confirmation: [4096, 4096],
   lead_guidance: [4096, 4096], sharing_consent: [4096, 4096], receiver_second: [4096, 4096],
 };
-for (const table of [LEGACY_OUTPUT_BUDGETS, TELEPATHIC_OUTPUT_BUDGETS_V2, TELEPATHIC_OUTPUT_BUDGETS]) {
+for (const table of [LEGACY_OUTPUT_BUDGETS, TELEPATHIC_OUTPUT_BUDGETS_V2, TELEPATHIC_OUTPUT_BUDGETS_V3, TELEPATHIC_OUTPUT_BUDGETS]) {
   for (const pair of Object.values(table)) Object.freeze(pair);
   Object.freeze(table);
 }
 export interface TelepathicOutputBudgetSnapshot {
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   stage: TelepathicOutputStage;
   attemptLimits: [number, number];
   modelMaxOutputTokens?: number;
 }
 export interface TelepathicOutputDiagnostics {
-  policyVersion?: 1 | 2 | 3;
+  policyVersion?: 1 | 2 | 3 | 4;
   requestedMaxOutputTokens?: number;
   effectiveMaxOutputTokens?: number;
   modelMaxOutputTokens?: number;
@@ -54,13 +60,13 @@ export function telepathicOutputStage(callStage: string): TelepathicOutputStage 
 function validateCeiling(value?: number): void {
   if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) throw new Error("Invalid model maximum output limit.");
 }
-function limits(version: 1 | 2 | 3, stage: TelepathicOutputStage) {
-  return (version === 1 ? LEGACY_OUTPUT_BUDGETS : version === 2 ? TELEPATHIC_OUTPUT_BUDGETS_V2 : TELEPATHIC_OUTPUT_BUDGETS)[stage];
+function limits(version: 1 | 2 | 3 | 4, stage: TelepathicOutputStage) {
+  return (version === 1 ? LEGACY_OUTPUT_BUDGETS : version === 2 ? TELEPATHIC_OUTPUT_BUDGETS_V2 : version === 3 ? TELEPATHIC_OUTPUT_BUDGETS_V3 : TELEPATHIC_OUTPUT_BUDGETS)[stage];
 }
 export function validateOutputBudgetSnapshot(snapshot: TelepathicOutputBudgetSnapshot, callStage: string, modelMaxOutputTokens?: number): void {
   const stage = telepathicOutputStage(callStage);
   validateCeiling(modelMaxOutputTokens);
-  if (!snapshot || ![1, 2, 3].includes(snapshot.version) || snapshot.stage !== stage || !Array.isArray(snapshot.attemptLimits)
+  if (!snapshot || ![1, 2, 3, 4].includes(snapshot.version) || snapshot.stage !== stage || !Array.isArray(snapshot.attemptLimits)
     || snapshot.attemptLimits.length !== 2 || JSON.stringify(snapshot.attemptLimits) !== JSON.stringify(limits(snapshot.version, stage))
     || snapshot.modelMaxOutputTokens !== modelMaxOutputTokens) {
     throw new Error("Frozen Telepathic output policy/model ceiling changed; dispatch blocked.");
@@ -68,8 +74,8 @@ export function validateOutputBudgetSnapshot(snapshot: TelepathicOutputBudgetSna
 }
 
 /** Freeze per logical scope. Legacy scopes keep their original fingerprint and budget, never a fresh counter. */
-export function scopeOutputBudget(callStage: string, modelMaxOutputTokens: number | undefined, existing: TelepathicProviderCallRecord[] = [], configuredVersion?: 2 | 3): TelepathicOutputBudgetSnapshot {
-  if (configuredVersion !== undefined && ![2, 3].includes(configuredVersion)) throw new Error("Unsupported Telepathic output policy version.");
+export function scopeOutputBudget(callStage: string, modelMaxOutputTokens: number | undefined, existing: TelepathicProviderCallRecord[] = [], configuredVersion?: 2 | 3 | 4): TelepathicOutputBudgetSnapshot {
+  if (configuredVersion !== undefined && ![2, 3, 4].includes(configuredVersion)) throw new Error("Unsupported Telepathic output policy version.");
   const stage = telepathicOutputStage(callStage);
   validateCeiling(modelMaxOutputTokens);
   const snapshots = existing.flatMap(call => call.outputBudgetSnapshot ? [call.outputBudgetSnapshot] : []);
@@ -89,6 +95,7 @@ export function outputAttemptBudget(snapshot: TelepathicOutputBudgetSnapshot, te
 
 export function nextDurableTechnicalAttempt(existing: TelepathicProviderCallRecord[]): number {
   if (existing.some(call => ![1, 2].includes(call.technicalAttempt))) throw new Error("Invalid durable Telepathic attempt level.");
+  if (existing.at(-1)?.manualRetryOfCallId && existing.at(-1)?.status === "failed") return 3;
   return Math.max(1, ...existing.map(call => call.technicalAttempt + (call.status === "failed" && call.recovery?.action !== "transport_retry" ? 1 : 0)));
 }
 

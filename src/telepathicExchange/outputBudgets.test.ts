@@ -29,10 +29,11 @@ function answer(stage: string): string {
 }
 const changedStages = ["sender_target", "sender_transmission_confirmation", "lead_guidance:cycle:1", "sharing_consent"];
 
-async function engineRun(mode: TelepathicMode, incomplete?: string, options: { policy?: 2 | 3; unmarked?: boolean; ceiling?: number; stop?: boolean; human?: boolean; invalidJson?: boolean; failBoth?: boolean } = {}) {
+async function engineRun(mode: TelepathicMode, incomplete?: string, options: { policy?: 2 | 3 | 4; rounds?: number; unmarked?: boolean; ceiling?: number; stop?: boolean; human?: boolean; invalidJson?: boolean; failBoth?: boolean } = {}) {
   const store = new InMemoryTelepathicExchangeStore(), frozen = config(mode);
   if (options.human) frozen.participants.push({ id: "human", kind: "human", displayName: "Human" });
-  if(options.policy) frozen.outputBudgetPolicyVersion=options.policy;
+  frozen.outputBudgetPolicyVersion=options.policy ?? 3; // Historical B3 regression cases stay pinned.
+  if(options.rounds) frozen.roundCount=options.rounds;
   const initial=createTelepathicSeriesState(frozen);
   if(options.unmarked) delete initial.config.outputBudgetPolicyVersion;
   await store.saveTelepathicSeries(initial);
@@ -59,8 +60,8 @@ describe("shared Telepathic output policy", () => {
         expect(request.settings.effective.maxOutputTokens).toBe(limits[technicalAttempt - 1]);
         return { content: "Complete", finishReason: "stop", providerRequestId: "generation-id", usage: { totalTokens: 12, reasoningTokens: 3 } };
       } });
-      expect(saved.find(call => call.id === result.call.id && call.status === "prepared")?.outputBudgetSnapshot?.version).toBe(3);
-      expect(result.call.outputDiagnostics).toMatchObject({ policyVersion: 3, requestedMaxOutputTokens: limits[technicalAttempt - 1], effectiveMaxOutputTokens: limits[technicalAttempt - 1], modelMaxOutputTokens: 65536, completion: "complete" });
+      expect(saved.find(call => call.id === result.call.id && call.status === "prepared")?.outputBudgetSnapshot?.version).toBe(4);
+      expect(result.call.outputDiagnostics).toMatchObject({ policyVersion: 4, requestedMaxOutputTokens: limits[technicalAttempt - 1], effectiveMaxOutputTokens: limits[technicalAttempt - 1], modelMaxOutputTokens: 65536, completion: "complete" });
       expect(result.call).toMatchObject({ providerRequestId: "generation-id", usage: { reasoningTokens: 3 } });
     }
   });
@@ -104,12 +105,12 @@ describe("shared Telepathic output policy", () => {
     } }, "budgets");
     expect(result.status).toBe("completed");expect(budgets).toEqual([32768]);expect(result.providerCalls[0]).toEqual(originalCall);
   });
-  it("preserves legacy scope fingerprint and count while new scopes receive version 3", async () => {
+  it("preserves legacy scope fingerprint and count while new scopes receive version 4", async () => {
     const legacy = scopeOutputBudget("sender_target", 32768, [{ technicalAttempt: 1, status: "failed" } as TelepathicProviderCallRecord]);
     expect(legacy).toMatchObject({ version: 1, attemptLimits: [4096, 4096] });
     expect(await telepathicRequestFingerprint(packet("sender_target"), route(ai("a")), true, legacy)).toBe(await telepathicRequestFingerprint(packet("sender_target"), route(ai("a")), true));
     expect(nextDurableTechnicalAttempt([{ technicalAttempt: 1, status: "failed" } as TelepathicProviderCallRecord])).toBe(2);
-    expect(scopeOutputBudget("sender_transmission_confirmation", 32768).version).toBe(3);
+    expect(scopeOutputBudget("sender_transmission_confirmation", 32768).version).toBe(4);
   });
   it("normalizes provider output-limit finish reasons before testing a clamped recovery", () => {
     const budget = scopeOutputBudget("sharing_consent", 8192);
@@ -234,4 +235,56 @@ it("B3 context preflight blocks a 32K reservation before persistence or paid dis
  const attempt=vi.fn(),persist=vi.fn();
  await expect(executeTelepathicProviderPacket({packet:packet("receiver_reveal"),route:resolved,fixedLead:true,technicalAttempt:1,attempt,hooks:{createCallId:()=>"c",now:()=>"t",persist}})).rejects.toThrow("context budget");
  expect(attempt).not.toHaveBeenCalled();expect(persist).not.toHaveBeenCalled();
+});
+
+for (const mode of ["ai_ai_training", "conversation_exchange"] as const) {
+ it(`v4 ${mode} freezes the new policy for every new run`, () => {
+  expect(createTelepathicSeriesState(config(mode)).config.outputBudgetPolicyVersion).toBe(4);
+ });
+ for (const stage of Object.keys(TELEPATHIC_OUTPUT_BUDGETS)) it(`v4 ${mode} ${stage} requests 32768/49152`, async () => {
+  const concrete = stage === "lead_guidance" ? "lead_guidance:cycle:1" : stage === "receiver_guidance" ? "receiver_guidance:cycle:1:recipient:a" : stage;
+  const saved: TelepathicProviderCallRecord[] = [];
+  for (const level of [1,2]) {
+   const snapshot = scopeOutputBudget(concrete, 40000, [], 4);
+   const result = await executeTelepathicProviderPacket({ packet: packet(concrete), route: route(ai("a"),40000), fixedLead: true,
+    technicalAttempt: level, outputBudgetSnapshot: snapshot,
+    hooks: { createCallId:()=>`${mode}-${stage}-${level}`,now:()=>"t",persist:async call=>{saved.push(structuredClone(call));} },
+    attempt: async request => { expect(request.settings.effective.maxOutputTokens).toBe(level===1?32768:40000); return {content:"Complete",finishReason:"stop",usage:{}}; }
+   });
+   expect(result.call.outputDiagnostics).toMatchObject({policyVersion:4,requestedMaxOutputTokens:level===1?32768:49152,effectiveMaxOutputTokens:level===1?32768:40000});
+  }
+ });
+ it(`v4 ${mode} runs both budget levels through config, snapshot and provider request`, async () => {
+  const run = await engineRun(mode,"sender_target",{policy:4});
+  const state = await run.execute();
+  expect(state.status).toBe("completed");
+  expect(run.requests.filter(r=>r.stage==="sender_target").map(r=>r.budget)).toEqual([32768,49152]);
+  expect(state.providerCalls.every(c=>c.outputBudgetSnapshot?.version===4)).toBe(true);
+  expect(state.providerCalls.every(c=>c.outputBudgetSnapshot?.attemptLimits.join(",")==="32768,49152")).toBe(true);
+ });
+}
+it("prepares two complete AI-lead/human-receiver rounds before exposing each first form", async () => {
+ const run = await engineRun("conversation_exchange",undefined,{human:true,rounds:2,policy:4});
+ const before = (await run.store.getTelepathicSeries("budgets"))!;
+ expect(telepathicConversationHumanStep(before).kind).toBe("none");
+ await expect(saveHumanTelepathicFirstBlind(run.deps,"budgets","Premature")).rejects.toThrow("transmission is ready");
+ let state = await run.execute();
+ for (let round=0;round<2;round++) {
+  expect(state.currentRoundIndex).toBe(round);
+  expect(state.rounds[round].target?.status).toBe("transmission_ready");
+  expect(telepathicConversationHumanStep(state)).toMatchObject({kind:"blind_first",roundNumber:round+1});
+  expect(state.rounds[round].blindByParticipant.human?.first).toBeUndefined();
+  await saveHumanTelepathicFirstBlind(run.deps,"budgets",`Description ${round}`);
+  state=await run.execute();expect(telepathicConversationHumanStep(state).kind).toBe("reflection");
+  await saveHumanTelepathicReflection(run.deps,"budgets",`Reflection ${round}`);
+  state=await run.execute();expect(telepathicConversationHumanStep(state).kind).toBe("sharing_consent");
+  await saveHumanTelepathicSharing(run.deps,"budgets","no");
+  state=await run.execute();
+  // This call completes the old round AND prepares the next target.
+  state=restoreTelepathicRuntime(structuredClone(state),JSON.parse(serializeTelepathicPlan(state)));
+  await run.store.saveTelepathicSeries(state);
+ }
+ expect(state.status).toBe("completed");
+ expect(state.rounds.map(r=>r.blindByParticipant.human.first)).toEqual(["Description 0","Description 1"]);
+ expect(state.providerCalls.filter(c=>c.callStage==="sender_target")).toHaveLength(2);
 });

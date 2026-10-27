@@ -140,7 +140,7 @@ describe("both durable backends use the engine's frozen step contract",()=>{
    const {db,repository}=backend==="sqlite"?database():browser();
    try{
     let route=routeForA();const resolveRoute=async()=>route;
-    await repository.saveTelepathicSeries(createTelepathicSeriesState(config));
+    await repository.saveTelepathicSeries(createTelepathicSeriesState({...config,outputBudgetPolicyVersion:3}));
     await saveHumanTelepathicTarget({store:repository,resolveRoute},"sqlite",{content:"TARGET"});await confirmHumanTelepathicTransmission({store:repository,resolveRoute},"sqlite");
     const controller=new AbortController();let calls=0;
     await expect(advanceTelepathicConversationSeries({store:repository,resolveRoute,signal:controller.signal,providerAttempt:async()=>{calls++;controller.abort();return {content:"partial",finishReason:"length",usage:{}};}},"sqlite")).rejects.toThrow();
@@ -172,12 +172,16 @@ for(const backend of ["sqlite","browser"] as const) it(`${backend}: a completed 
  }finally{db.close();}
 });
 
-for(const version of [1,2,3] as const) it(`backs up and restores Telepathic output v${version} in SQLite and Browser`, async () => {
+for(const version of [1,2,3,4] as const) it(`backs up and restores Telepathic output v${version} in SQLite and Browser`, async () => {
  const {db,repository}=database();const directory=mkdtempSync(join(tmpdir(),"telepathy-budget-backup-"));
  try {
-  const state=createTelepathicSeriesState({...config,outputBudgetPolicyVersion:version===3?3:2});
+  const state=createTelepathicSeriesState({...config,outputBudgetPolicyVersion:version===1?2:version});
   if(version===1)delete state.config.outputBudgetPolicyVersion;
-  state.providerCalls=[{id:"budget-call",seriesId:config.seriesId,roundId:state.rounds[0].assignment.roundId,participantId:"a",callStage:"receiver_reveal",technicalAttempt:2,status:"failed",scopeKey:"frozen-budget-scope",requestSha256:"frozen-request",createdAt:"now",updatedAt:"now",outputBudgetSnapshot:scopeOutputBudget("receiver_reveal",65536,version===1?[{technicalAttempt:1,status:"failed"} as never]:[],version===1?undefined:version),outputDiagnostics:{policyVersion:version,requestedMaxOutputTokens:version===3?49152:32768,effectiveMaxOutputTokens:version===3?49152:32768,modelMaxOutputTokens:65536,completion:"partial"},usage:{totalTokens:11,reasoningTokens:5},finishReason:"length"}];
+  state.providerCalls=[{id:"budget-call",seriesId:config.seriesId,roundId:state.rounds[0].assignment.roundId,participantId:"a",callStage:"receiver_reveal",technicalAttempt:2,status:"failed",scopeKey:"frozen-budget-scope",requestSha256:"frozen-request",createdAt:"now",updatedAt:"now",outputBudgetSnapshot:scopeOutputBudget("receiver_reveal",65536,version===1?[{technicalAttempt:1,status:"failed"} as never]:[],version===1?undefined:version),outputDiagnostics:{policyVersion:version,requestedMaxOutputTokens:version>=3?49152:32768,effectiveMaxOutputTokens:version>=3?49152:32768,modelMaxOutputTokens:65536,completion:"partial"},usage:{totalTokens:11,reasoningTokens:5},finishReason:"length"}];
+  if(version===4) {
+   const parent=state.providerCalls[0];parent.manualRetryAuthorization={at:"authorized",originalStatus:"uncertain"};
+   state.providerCalls.push({...structuredClone(parent),id:"manual-child",manualRetryAuthorization:undefined,manualRetryOfCallId:parent.id});
+  }
   await repository.saveTelepathicSeries(state);await backup(db,join(directory,"budgets.sqlite"));
   const restoredDb=new DatabaseSync(join(directory,"budgets.sqlite"));
   try {

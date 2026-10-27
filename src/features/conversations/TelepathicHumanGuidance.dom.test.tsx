@@ -18,13 +18,15 @@ import {TelepathicExchangePanel} from "./TelepathicExchangePanel";
 
 // Isolate asynchronous writes and lease keys from a previous unmounted fixture.
 let fixtureSequence = 0;
-async function fixture(pl:boolean,prepare=false){
+async function fixture(pl:boolean,prepare=false,receiver=false){
  (globalThis as {IS_REACT_ACT_ENVIRONMENT?:boolean}).IS_REACT_ACT_ENVIRONMENT=true;
  localStorage.clear();mock.dispatch.mockReset();mock.dispatch.mockResolvedValue({content:"New rounded perception",finishReason:"stop",usage:{}});
  const ai=(id:string)=>({id,kind:"ai" as const,displayName:id,ai:{profileId:id,profileName:id,workspaceId:"w",aiIdentityId:id,providerConfigId:"c",credentialId:"k",credentialFingerprint:"f",modelId:"m",route:"m"}});
  const config:TelepathicSeriesConfig={schemaVersion:1,protocolVersion:"fixed_lead_v1",leadInstructionVersion:"v1",maxGuidanceCycles:3,seriesId:`human-form-${++fixtureSequence}`,seriesWorkspaceId:"w",mode:"conversation_exchange",language:pl?"pl":"en",participants:[{id:"human",kind:"human",displayName:"Edward"},ai("a"),ai("b"),ai("c")],roundCount:2,topic:"location",discloseTopicToReceivers:false,senderPolicy:{kind:"human_only",humanParticipantId:"human"}};
+ if(receiver) config.senderPolicy={kind:"fixed_ai",participantId:"a"};
  const store=new BrowserTelepathicExchangeRepository();let state=createTelepathicSeriesState(config);state.status="paused";
  if(!prepare){const round=state.rounds[0];round.status="blind";round.target={schemaVersion:1,roundId:round.assignment.roundId,senderParticipantId:"human",content:"FROZEN TARGET",assets:[],contentSha256:"hash",status:"transmission_ready",lockedAt:"t",transmissionReadyAt:"t"};for(const id of ["a","b","c"])round.blindByParticipant[id]={participantId:id,first:"Initial impression",status:"first_complete",providerAttemptCount:1};}
+ if(receiver) { state.rounds[0].target!.senderParticipantId="a"; }
  await store.saveTelepathicSeries(state);
  const model={displayName:"Test model",recommended:true,rawMetadata:{},refreshedAt:"t",providerConfigId:"c",provider:"custom_openai",modelId:"m",route:"m",capabilities:{supportsVision:false,supportsStreaming:false,contextTokens:64000,maxOutputTokens:32768,inputModalities:["text"],outputModalities:["text"],reasoning:{supported:false,efforts:[],confidence:"unknown"},temperature:{supported:true,min:0,max:2,confidence:"provider_metadata"},supportedParameters:["temperature","max_tokens"],source:"provider",capturedAt:"t"},pricing:{}} as ProviderModel;
  const repository={getTelepathicSeries:store.getTelepathicSeries.bind(store),saveTelepathicSeries:store.saveTelepathicSeries.bind(store),withTelepathicSeriesLease:store.withTelepathicSeriesLease.bind(store),assertTelepathicSeriesLease:store.assertTelepathicSeriesLease.bind(store),telepathicSeriesLeaseSignal:store.telepathicSeriesLeaseSignal.bind(store),getTelepathicSeriesLeaseState:store.getTelepathicSeriesLeaseState.bind(store),listTelepathicSeriesSummaries:store.listTelepathicSeriesSummaries.bind(store),listProviderConfigs:async()=>[],listProviderModels:async()=>[model]} as unknown as AppRepository;
@@ -57,7 +59,7 @@ for(const pl of [false,true])it(`full Conversation ${pl?"PL":"EN"}: one question
   expect(decision).toEqual({cycle:1,finishRound:false,finishParticipantIds:["b","c"],individual:[{participantId:"a",instruction:"Describe the next motion"}]});
   expect(state.providerCalls.filter(c=>c.callStage.startsWith("receiver_guidance:")).map(c=>c.participantId)).toEqual(["a"]);
   expect(mock.dispatch).toHaveBeenCalledTimes(1);expect(f.host.querySelector(".telepathic-guidance-actions")?.querySelectorAll("button")).toHaveLength(2);
-  await f.type(0,"Unsaved next draft");await f.restart();expect(f.fields()[0].value).toBe("");
+  await f.type(0,"Unsaved next draft");await f.restart();expect(f.fields()[0].value).toBe("Unsaved next draft");
  }finally{await f.cleanup();}
 });
 for(const pl of [false,true])it(`full Conversation ${pl?"PL":"EN"}: own target category without assigned area`,async()=>{
@@ -70,7 +72,7 @@ it("history switches series without reusing another series' unsaved guidance dra
   await f.store.saveTelepathicSeries(other);await f.mount();await f.type(0,"Draft belonging to first series");
   const open=()=>f.host.querySelectorAll<HTMLButtonElement>('.telepathic-history-icons button[aria-label="Open exchange"]');
   expect(open()).toHaveLength(2);await act(async()=>open()[1].click());await f.wait(()=>expect(f.fields()[0].value).toBe(""));
-  await f.type(0,"Draft belonging to other series");await act(async()=>open()[0].click());await f.wait(()=>expect(f.fields()[0].value).toBe(""));
+  await f.type(0,"Draft belonging to other series");await act(async()=>open()[0].click());await f.wait(()=>expect(f.fields()[0].value).toBe("Draft belonging to first series"));
   expect(mock.dispatch).not.toHaveBeenCalled();
  }finally{await f.cleanup();}
 });
@@ -101,5 +103,22 @@ it("full Conversation changes round, hides archived actions, and disables fields
   await act(async()=>f.host.querySelector<HTMLFormElement>(".telepathic-human-guidance")!.dispatchEvent(new Event("submit",{bubbles:true,cancelable:true})));
   expect(JSON.stringify(await f.getState())).toBe(before);expect(mock.dispatch).toHaveBeenCalledTimes(calls);
   const archived=(await f.getState())!;archived.archivedAt="t";await f.setState(archived);await f.refresh();expect(f.fields()).toHaveLength(0);
+ }finally{await f.cleanup();}
+});
+for(const pl of [false,true])it(`receiver form ${pl?"PL":"EN"}: draft survives reopen and remains isolated when the next target is not ready`,async()=>{
+ const f=await fixture(pl,false,true);try {
+  await f.mount();
+  const first=()=>f.host.querySelector<HTMLTextAreaElement>(".telepathic-action-box textarea")!;
+  const type=async(text:string)=>act(async()=>{Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(first(),text);first().dispatchEvent(new Event("input",{bubbles:true}));});
+  await type("Current round unsaved perception");await f.refresh();expect(first().value).toBe("Current round unsaved perception");
+  await f.restart();expect(first().value).toBe("Current round unsaved perception");
+  let state=(await f.getState())!;state.currentRoundIndex=1;await f.setState(state);await f.refresh();
+  expect(f.host.textContent).not.toContain(pl?"Pierwsze wrażenia":"First impressions");
+  expect([...f.host.querySelectorAll("button")].some(b=>b.textContent===(pl?"Zapisz pierwszy opis":"Save first description"))).toBe(false);
+  state=(await f.getState())!;const round=state.rounds[1];round.target={...structuredClone(state.rounds[0].target!),roundId:round.assignment.roundId,senderParticipantId:"a"};round.status="blind";
+  await f.setState(state);await f.refresh();await f.wait(()=>expect(first()).not.toBeNull());expect(first().value).toBe("");
+  await type("Second round draft");await f.restart();expect(first().value).toBe("Second round draft");
+  state=(await f.getState())!;state.currentRoundIndex=0;await f.setState(state);await f.refresh();await f.wait(()=>expect(first().value).toBe("Current round unsaved perception"));
+  expect(mock.dispatch).not.toHaveBeenCalled();
  }finally{await f.cleanup();}
 });
