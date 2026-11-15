@@ -232,12 +232,35 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
   }
 
   async saveTelepathicSeries(state: TelepathicSeriesState): Promise<void> {
-    assertArchiveRevision(state, await this.getTelepathicSeries(state.config.seriesId));
-    const existingTargets = await this.dependencies.select<Array<{ round_id: string; content_sha256: string }>>(
-      "SELECT round_id, content_sha256 FROM telepathic_targets WHERE round_id IN (SELECT id FROM telepathic_rounds WHERE series_id = $1)",
+    // Only the archive/termination guard and immutable target hashes are needed
+    // before a save. The series upsert still checks the revision in the batch.
+    const existing = await this.dependencies.select<Array<{
+      archive_revision: number | null;
+      termination_json: string | null;
+      runtime_type: string | null;
+      runtime_version_json: string | null;
+      target_hashes_json: string;
+    }>>(
+      `SELECT json_extract(s.plan_json,'$._runtime.archiveRevision') AS archive_revision,
+              s.plan_json -> '$._runtime.termination' AS termination_json,
+              json_type(s.plan_json,'$._runtime') AS runtime_type,
+              s.plan_json -> '$._runtime.version' AS runtime_version_json,
+              (SELECT json_group_array(json_array(t.round_id,t.content_sha256))
+               FROM telepathic_targets t JOIN telepathic_rounds r ON r.id = t.round_id
+               WHERE r.series_id = s.id) AS target_hashes_json
+       FROM telepathic_series s WHERE s.id = $1`,
       [state.config.seriesId],
     );
-    const targetHashByRound = new Map(existingTargets.map((row) => [row.round_id, row.content_sha256]));
+    const header = existing[0];
+    if (header && header.runtime_type !== null && header.runtime_type !== "null"
+      && (header.runtime_version_json === null || JSON.parse(header.runtime_version_json) !== 1)) {
+      throw new Error("Unsupported telepathic runtime version.");
+    }
+    assertArchiveRevision(state, header ? {
+      archiveRevision: header.archive_revision ?? undefined,
+      termination: header.termination_json === null ? undefined : JSON.parse(header.termination_json),
+    } : null);
+    const targetHashByRound = new Map<string, string>(header ? JSON.parse(header.target_hashes_json) : []);
     for (const round of state.rounds) {
       if (round.target) {
         const existing = targetHashByRound.get(round.assignment.roundId);
@@ -394,6 +417,6 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
       updatedAt: row.updated_at,
     }));
     const finalReflections = Object.fromEntries(participantRows.filter((row) => row.final_reflection_text).map((row) => [row.participant_id, row.final_reflection_text!])) as Record<string, string>;
-    return restoreTelepathicRuntime({ schemaVersion: 1, config, plan, currentRoundIndex: series.current_round_index, status: series.status, rounds, providerCalls, finalReflections, createdAt: series.created_at, updatedAt: series.updated_at }, structuredClone(plan));
+    return restoreTelepathicRuntime({ schemaVersion: 1, config, plan, currentRoundIndex: series.current_round_index, status: series.status, rounds, providerCalls, finalReflections, createdAt: series.created_at, updatedAt: series.updated_at }, plan);
   }
 }

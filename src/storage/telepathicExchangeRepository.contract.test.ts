@@ -62,7 +62,7 @@ describe("telepathic exchange persistence contract", () => {
     const statements: Array<{ query: string; values?: unknown[] }> = [];
     const repository = new SqliteTelepathicExchangeRepository({
       select: async <T,>(query: string): Promise<T> => {
-        if (query.startsWith("SELECT id, status, current_round_index, config_json, plan_json, created_at, updated_at FROM telepathic_series") || query.startsWith("SELECT round_id, content_sha256 FROM telepathic_targets")) return [] as T;
+        if (query.includes("AS archive_revision")) return [] as T;
         throw new Error(`unexpected select: ${query}`);
       },
       executeWrite: async () => ({ rowsAffected: 1 }),
@@ -179,7 +179,7 @@ describe("telepathic exchange persistence contract", () => {
     const state = createTelepathicSeriesState(config, "2026-10-07T21:00:00.000Z");
     const deps = {
       select: async <T,>(query: string): Promise<T> => {
-        if (query.includes("content_sha256 FROM telepathic_targets")) return [] as T;
+        if (query.includes("AS archive_revision")) return [] as T;
         if (query.includes("run_lease_owner")) return [{ run_lease_owner: leaseOwner, run_lease_version: leaseVersion, run_lease_expires_at: leaseExpiresAt }] as T;
         return [] as T;
       },

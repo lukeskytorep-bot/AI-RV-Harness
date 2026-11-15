@@ -45,7 +45,7 @@ export function restoreTelepathicRuntime(state: TelepathicSeriesState, storedPla
   return Object.assign(state, { recoveryBlock: runtime.recoveryBlock, termination: runtime.termination, transcript: runtime.transcript, finalization: runtime.finalization,
     activeElapsedMs: runtime.activeElapsedMs, archivedAt: runtime.archivedAt, archiveRevision: runtime.archiveRevision });
 }
-export function assertArchiveRevision(state: TelepathicSeriesState, previous: TelepathicSeriesState | null): void {
+export function assertArchiveRevision(state: TelepathicSeriesState, previous: Pick<TelepathicSeriesState, "termination" | "archiveRevision"> | null): void {
   if (previous?.termination && (state.status !== "cancelled" || JSON.stringify(state.termination) !== JSON.stringify(previous.termination))) throw new Error("Ended telepathic series cannot be resumed or rewritten.");
   if (previous && (state.archiveRevision ?? 0) < (previous.archiveRevision ?? 0)) throw new Error("Stale telepathic archive revision.");
 }

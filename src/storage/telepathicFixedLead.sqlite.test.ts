@@ -38,7 +38,14 @@ it("UX-TEL-4 SQLite: archive/restore preserves checkpoint and ledger; another na
   expect(db.prepare("PRAGMA integrity_check").get()).toEqual({integrity_check:"ok"});expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
  }finally{db.close();}
 });
-function database(db = new DatabaseSync(":memory:"), initialize = true, beforeTransaction?:()=>void) {
+interface CheckpointMetrics {
+ selectCount: number;
+ selectMs: number;
+ statements: number;
+ transactionMs: number;
+}
+
+function database(db = new DatabaseSync(":memory:"), initialize = true, beforeTransaction?:()=>void, metrics?: CheckpointMetrics) {
  if(initialize) {
  db.exec("CREATE TABLE workspaces(id TEXT PRIMARY KEY); INSERT INTO workspaces VALUES ('w');");
  for(const file of ["028_telepathic_exchange_series.sql","029_telepathic_series_run_lease.sql"]) db.exec(readFileSync(new URL(`../../src-tauri/migrations/${file}`,import.meta.url),"utf8"));
@@ -46,9 +53,21 @@ function database(db = new DatabaseSync(":memory:"), initialize = true, beforeTr
  const bind=(sql:string)=>sql.replace(/\$\d+/g,"?");
  const executeWrite=async(query:string,values:unknown[]=[])=>({rowsAffected:Number(db.prepare(bind(query)).run(...values as never[]).changes)});
  const transaction=async(statements:DatabaseTransactionStatement[])=>{beforeTransaction?.();db.exec("BEGIN IMMEDIATE");try {const result=[];for(const s of statements){const rows=(await executeWrite(s.query,s.values)).rowsAffected;if(s.query.startsWith("INSERT INTO telepathic_series ") && rows!==1)throw new Error("Stale telepathic archive revision conflict");result.push(rows);}db.exec("COMMIT");return result;}catch(error){db.exec("ROLLBACK");throw error;}};
- const repository=new SqliteTelepathicExchangeRepository({select:async<T>(query:string,values:unknown[]=[])=>db.prepare(bind(query)).all(...values as never[]) as T,executeWrite,executeTransaction:transaction,executeFencedTransaction:async({seriesId,leaseOwner,leaseVersion,statements})=>{
+ const select = async <T>(query: string, values: unknown[] = []): Promise<T> => {
+  const start = performance.now();
+  const result = db.prepare(bind(query)).all(...values as never[]) as T;
+  if (metrics) { metrics.selectCount++; metrics.selectMs += performance.now() - start; }
+  return result;
+ };
+ const measuredTransaction = async (statements: DatabaseTransactionStatement[]) => {
+  const start = performance.now();
+  const result = await transaction(statements);
+  if (metrics) { metrics.statements += statements.length; metrics.transactionMs += performance.now() - start; }
+  return result;
+ };
+ const repository=new SqliteTelepathicExchangeRepository({select,executeWrite,executeTransaction:measuredTransaction,executeFencedTransaction:async({seriesId,leaseOwner,leaseVersion,statements})=>{
   const lease=db.prepare("SELECT id FROM telepathic_series WHERE id=? AND run_lease_owner=? AND run_lease_version=? AND run_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')").get(seriesId,leaseOwner,leaseVersion);
-  if(!lease)throw new Error("Lost fence");return transaction(statements);
+  if(!lease)throw new Error("Lost fence");return measuredTransaction(statements);
  }});
  return {db,repository};
 }
@@ -294,4 +313,63 @@ it("publishes after Browser setItem, even if a subscriber throws, and stays sile
   stop();
   stopThrowing();
  }
+});
+
+it("checks locked target hashes without rebuilding the SQLite series", async () => {
+ const { db, repository } = database();
+ try {
+  const state = createTelepathicSeriesState({ ...config, roundCount: 2 });
+  const roundId = state.rounds[1].assignment.roundId;
+  const target = {
+   schemaVersion: 1 as const, roundId, senderParticipantId: "lead", content: "locked",
+   assets: [], contentSha256: "original", lockedAt: "t", status: "locked" as const,
+  };
+  state.rounds[1].target = target;
+  await repository.saveTelepathicSeries(state);
+  const stale = structuredClone(state);
+  stale.rounds[1].target!.contentSha256 = "changed";
+  stale.finalReflections.a = "must not persist";
+  await expect(repository.saveTelepathicSeries(stale)).rejects.toThrow(/target hash/);
+  const loaded = await repository.getTelepathicSeries(config.seriesId);
+  expect(loaded?.rounds[1].target).toEqual(target);
+  expect(loaded?.finalReflections).toEqual({});
+ } finally { db.close(); }
+});
+
+if (process.env.RVH_CHECKPOINT_BENCHMARK === "1") it("measures SQLite checkpoint serialization, reconstruction and save", async () => {
+ const metrics: CheckpointMetrics = { selectCount: 0, selectMs: 0, statements: 0, transactionMs: 0 };
+ const { db, repository } = database(undefined, true, undefined, metrics);
+ try {
+  const state = createTelepathicSeriesState({ ...config, roundCount: 12 }, "2026-11-15T00:00:00.000Z");
+  state.providerCalls = Array.from({ length: 240 }, (_, index) => ({
+   id: `call-${index}`, seriesId: config.seriesId, roundId: state.rounds[index % 12].assignment.roundId,
+   participantId: "a", callStage: "receiver_first", technicalAttempt: 1, status: "succeeded",
+   scopeKey: `scope-${index}`, requestSha256: `hash-${index}`, createdAt: "t", updatedAt: "t",
+   responseText: "response ".repeat(120), requestMessages: [{ role: "user", content: "request ".repeat(350) }],
+  }));
+  await repository.saveTelepathicSeries(state);
+  const samples = 30;
+  let planBytes = 0;
+  let start = performance.now();
+  for (let i = 0; i < samples; i++) planBytes = Buffer.byteLength(serializeTelepathicPlan(state));
+  const serializeMs = (performance.now() - start) / samples;
+  start = performance.now();
+  for (let i = 0; i < samples; i++) await repository.getTelepathicSeries(config.seriesId);
+  const detailMs = (performance.now() - start) / samples;
+  await repository.withTelepathicSeriesLease(config.seriesId, async () => {
+   Object.assign(metrics, { selectCount: 0, selectMs: 0, statements: 0, transactionMs: 0 });
+   start = performance.now();
+   for (let i = 0; i < samples; i++) {
+    state.updatedAt = new Date(i).toISOString();
+    await repository.saveTelepathicSeries(state);
+   }
+   const saveMs = (performance.now() - start) / samples;
+   console.info(JSON.stringify({
+    calls: state.providerCalls.length, samples, planBytes, serializeMs, detailMs, saveMs,
+    saveSelects: metrics.selectCount / samples, saveSelectMs: metrics.selectMs / samples,
+    batchStatements: metrics.statements / samples, batchMs: metrics.transactionMs / samples,
+   }));
+  });
+  expect((await repository.getTelepathicSeries(config.seriesId))?.providerCalls).toHaveLength(240);
+ } finally { db.close(); }
 });
