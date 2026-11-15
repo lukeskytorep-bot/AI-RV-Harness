@@ -1,3 +1,4 @@
+import { createStreamPresentation } from "./streamPreviewBuffer";
 import { classifyProviderAttempt, parseProviderResponseEvidence, type ProviderAttemptOutcome, type ProviderResponseEvidence } from "./responseEvidence";
 import { assertAbortOwnership, providerAbortFromSignal } from "../application/abortOwnership";
 import { discoverOpenRouterModelEndpoints, providerChatAttempt } from "./native";
@@ -221,14 +222,7 @@ export async function executeProviderChat(input: {
       phase: "before_dispatch",
     });
   }
-  const presentLiveStream = transportEnvelope.presentationMode === "live" && Boolean(input.onStreamEvent);
-  const internalStreamHandler = input.internalOnStreamEvent || presentLiveStream
-    ? (event: ProviderStreamEvent) => {
-        if (input.signal?.aborted) return;
-        input.internalOnStreamEvent?.(event);
-        if (presentLiveStream) input.onStreamEvent?.(event);
-      }
-    : undefined;
+  const visibleStream = transportEnvelope.presentationMode === "live" ? input.onStreamEvent : undefined;
   let result: ProviderExecutionResult<ProviderChatResponse>;
   try {
     result = await executeProviderRequest({
@@ -239,22 +233,41 @@ export async function executeProviderChat(input: {
       onAttemptFailure: input.onAttemptFailure,
       onAttemptStart: input.onAttemptStart,
       responseEvidence: response => response.responseEvidence,
-      executeAttempt: () => attempt({
-        config: input.config,
-        modelId: input.modelId,
-        messages: messages.map((message) => ({
-          ...message,
-          ...(message.images ? { images: message.images.map((image) => ({ ...image })) } : {}),
-          ...(message.continuationState ? { continuationState: structuredClone(message.continuationState) } : {}),
-        })),
-        settings: structuredClone(settings),
-        timeoutMs: input.timeoutMs,
-        timeoutPolicy: structuredClone(timeoutPolicy),
-        signal: input.signal,
-        providerRouting: providerRouting ? structuredClone(providerRouting) : undefined,
-        transportEnvelope: structuredClone(transportEnvelope),
-        ...(internalStreamHandler ? { onStreamEvent: internalStreamHandler } : {}),
-      }),
+      executeAttempt: async () => {
+        const presentation = visibleStream ? createStreamPresentation(visibleStream, input.signal) : undefined;
+        let settled = false;
+        const onStreamEvent = input.internalOnStreamEvent || presentation
+          ? (event: ProviderStreamEvent) => {
+              if (settled || input.signal?.aborted) return;
+              input.internalOnStreamEvent?.(event);
+              presentation?.push(event);
+            }
+          : undefined;
+        try {
+          const response = await attempt({
+            config: input.config,
+            modelId: input.modelId,
+            messages: messages.map((message) => ({
+              ...message,
+              ...(message.images ? { images: message.images.map((image) => ({ ...image })) } : {}),
+              ...(message.continuationState ? { continuationState: structuredClone(message.continuationState) } : {}),
+            })),
+            settings: structuredClone(settings),
+            timeoutMs: input.timeoutMs,
+            timeoutPolicy: structuredClone(timeoutPolicy),
+            signal: input.signal,
+            providerRouting: providerRouting ? structuredClone(providerRouting) : undefined,
+            transportEnvelope: structuredClone(transportEnvelope),
+            ...(onStreamEvent ? { onStreamEvent } : {}),
+          });
+          settled = true;
+          presentation?.close(true);
+          return response;
+        } finally {
+          settled = true;
+          presentation?.close();
+        }
+      },
     });
   } catch (cause) {
     if (

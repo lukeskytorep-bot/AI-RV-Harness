@@ -500,6 +500,64 @@ describe("S2 stream presentation integration", () => {
     expect(internalOnStreamEvent.mock.invocationCallOrder[0]).toBeLessThan(onStreamEvent.mock.invocationCallOrder[0]);
   });
 
+  it.each(["started", "timer", "finished", "final flush"] as const)(
+    "preserves accepted response and its evidence when the preview throws during %s",
+    async (phase) => {
+      vi.useFakeTimers();
+      try {
+        const usage = { inputTokens: 3, outputTokens: 5, totalTokens: 8 };
+        const responseEvidence = { version: 1, transportOutcome: "response_finished", boundary: "sse_done", providerRequestId: "receipt", finishReason: "stop", usage } as const;
+        const accepted = { content: "accepted text", usage, finishReason: "stop", providerRequestId: "receipt", responseEvidence };
+        const onStreamEvent = vi.fn((event: import("./types").ProviderStreamEvent) => {
+          const failingEvent = phase === "started" ? "started" : phase === "finished" ? "finished" : "contentDelta";
+          if (event.event === failingEvent) throw new Error("preview unavailable");
+        });
+        const internalOnStreamEvent = vi.fn();
+        const attempt = vi.fn<import("./requestExecutor").ProviderChatAttempt>(async request => {
+          const send = request.onStreamEvent!;
+          send({ event: "started", data: {} });
+          if (phase !== "started") send({ event: "contentDelta", data: { content: "accepted text" } });
+          if (phase === "timer") await vi.advanceTimersByTimeAsync(50);
+          if (phase === "finished") send({ event: "finished", data: { finishReason: "stop" } });
+          return accepted;
+        });
+        const result = await executeProviderChat({
+          config, modelId: "model", messages: [], settings, operationKind: "conversation",
+          streamWorkflowContext: "conversation", configuredRetries: 0, onStreamEvent, internalOnStreamEvent, attempt,
+        });
+        const events = phase === "started" ? ["started"] : phase === "finished"
+          ? ["started", "contentDelta", "finished"] : ["started", "contentDelta"];
+        expect(onStreamEvent.mock.calls.map(([event]) => event.event)).toEqual(events);
+        expect(internalOnStreamEvent.mock.calls.map(([event]) => event.event)).toEqual(events);
+        expect(result).toMatchObject({
+          ...accepted,
+          execution: { physicalAttempts: 1, ambiguousBillingAttempts: 0, attemptOutcomes: [
+            { outcome: "response_finished", validation: "accepted", responseEvidence },
+          ] },
+        });
+        expect(attempt).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("propagates an internal stream consumer failure without invoking preview", async () => {
+    const onStreamEvent = vi.fn();
+    const internalOnStreamEvent = vi.fn(() => { throw new Error("internal consumer failure"); });
+    await expect(executeProviderChat({
+      config, modelId: "model", messages: [], settings, operationKind: "conversation",
+      streamWorkflowContext: "conversation", configuredRetries: 0, onStreamEvent, internalOnStreamEvent,
+      attempt: async request => {
+        request.onStreamEvent?.({ event: "contentDelta", data: { content: "raw text" } });
+        return response;
+      },
+    })).rejects.toMatchObject({ causeError: { message: "internal consumer failure" } });
+    expect(internalOnStreamEvent).toHaveBeenCalledOnce();
+    expect(onStreamEvent).not.toHaveBeenCalled();
+  });
+
   it("suppresses callbacks for Research Judge even when a caller supplies one", async () => {
     const onStreamEvent = vi.fn();
     const attempt = vi.fn(async (request) => {
