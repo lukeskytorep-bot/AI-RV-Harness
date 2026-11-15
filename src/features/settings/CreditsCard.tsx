@@ -42,6 +42,7 @@ const PROJECT_LINKS = [
 
 export function CreditsCard({ copy }: { copy: ReturnType<typeof getCopy> }) {
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [notices, setNotices] = useState<string | null>(null);
   const isEnglish = copy.home === "Home";
 
   const openExternalProjectUrl = async (url: string) => {
@@ -68,6 +69,18 @@ export function CreditsCard({ copy }: { copy: ReturnType<typeof getCopy> }) {
               ? "Open full credits and acknowledgements on GitHub"
               : "Przejdź do pełnych Credits i podziękowań na GitHubie"}
           </button>
+          {import.meta.env.PROD && <button className="secondary-button" onClick={async () => {
+            setLinkError(null);
+            try {
+              const response = await fetch(`${import.meta.env.BASE_URL}THIRD_PARTY_NOTICES.txt`);
+              const text = await response.text();
+              if (!response.ok || !text.startsWith("AI RV Harness — Third-party notices")) throw new Error();
+              setNotices(text);
+            } catch {
+              setLinkError(isEnglish ? "License notices are unavailable in this build." : "Wykaz licencji jest niedostępny w tym buildzie.");
+            }
+          }}>{isEnglish ? "Third-party licenses" : "Licencje bibliotek"}</button>}
+          {notices && <pre tabIndex={0} style={{ maxHeight: "24rem", overflow: "auto", whiteSpace: "pre-wrap" }}>{notices}</pre>}
           {linkError && <div className="provider-error">{linkError}</div>}
         </div>
         <div className="credit-group online-links">

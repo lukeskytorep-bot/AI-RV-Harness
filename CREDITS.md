@@ -153,7 +153,7 @@ Further context and maintenance rules are recorded in [`docs/credits/TECHNICAL_R
 
 ### Third-party software dependencies
 
-Routine software dependencies are identified by the project's package manifests and lockfiles and remain governed by their respective licences. Legal attribution obligations for redistributed third-party code are separate from these project credits and should be recorded in the appropriate licence or third-party-notice files.
+Routine software dependencies are identified by the project's package manifests and lockfiles and remain governed by their respective licences. Legal attribution obligations for redistributed third-party code are separate from these project credits and are tracked separately in the [desktop release notice process](docs/development/THIRD_PARTY_RELEASE_NOTICES.md).
 
 ## AI Collaboration and Identity Convention
 
