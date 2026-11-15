@@ -1,3 +1,4 @@
+import { useTelepathicCheckpointRefresh } from "../../components/useTelepathicCheckpointRefresh";
 import { authorizeTelepathicStepRetry } from "../../telepathicExchange/engine";
 import { useTelepathicDraft } from "../../components/useTelepathicDraft";
 import { TelepathicRecoveryPolicy } from "../../components/TelepathicRecoveryPolicy";
@@ -117,18 +118,20 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   const [topic, setTopic] = useState<TelepathicTopic>("any");
   const [discloseTopic, setDiscloseTopic] = useState(false);
   const [automaticRecovery, setAutomaticRecovery] = useState(true);
-  const [activeSeries, setActiveSeries] = useState<TelepathicConversationSeriesView | null>(null);
+  const [activeSeries, updateActiveSeries] = useState<TelepathicConversationSeriesView | null>(null);
+  const refreshGenerationRef = useRef(0);
+  const setActiveSeries = (state: TelepathicConversationSeriesView | null) => {
+    refreshGenerationRef.current++;
+    updateActiveSeries(state);
+  };
   const history = useTelepathicHistory(repository, "conversation_exchange", workspace.id);
   const detailGeneration = useRef(0);
   useEffect(() => () => { detailGeneration.current++; }, [repository, workspace.id, profiles, language]);
   const [busy, setBusy] = useState(false);
   const [execution, setExecution] = useState<TelepathicLocalExecution | null>(null);
   const configurationChecks = useRef(createTelepathicConfigurationCheckSchedule());
-  const { presentation, callPresentation, unavailable } = useTelepathicExecution(repository, activeSeries, activeSeries?.recoveryCalls ?? [], execution, async (seriesId, isCurrent) => {
-    if (!repository) return;
-    const view = await loadTelepathicConversationView(repository, seriesId);
-    if (isCurrent() && view && currentView.current.activeId === seriesId) setActiveSeries(view);
-  }, async seriesId => {
+  const checkpointRefresh = useRef<(id: string) => Promise<void>>(async () => {});
+  const { presentation, callPresentation, unavailable } = useTelepathicExecution(repository, activeSeries, activeSeries?.recoveryCalls ?? [], execution, seriesId => checkpointRefresh.current(seriesId), async seriesId => {
     if (!activeSeries?.recoveryDecision?.configurationBlocked || !["blocked", "paused"].includes(activeSeries.status) || activeSeries.archivedAt) { configurationChecks.current.reset(); return; }
     if (busy || unavailable || checkpointFailure || activeSeries.config.seriesId !== seriesId || !configurationChecks.current.due(seriesId)) return;
     await execute(async () => {
@@ -184,21 +187,16 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
   const activeId = activeSeries?.config.seriesId;
   const currentView = useRef({ activeId, workspaceId: workspace.id });
   currentView.current = { activeId, workspaceId: workspace.id };
-  useEffect(() => {
-    if (!busy || !repository || !activeId) return;
-    let cancelled = false, reading = false;
-    const workspaceId = workspace.id;
-    const timer = window.setInterval(() => {
-      if (reading) return;
-      reading = true;
-      void loadTelepathicConversationView(repository, activeId).then(view => {
-        if (cancelled || !view || currentView.current.activeId !== activeId || currentView.current.workspaceId !== workspaceId) return;
-        setActiveSeries(view);
-        // Polling never changes the round selected by the reader.
-      }).catch(() => undefined).finally(() => { reading = false; });
-    }, 500);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [busy, repository, activeId, workspace.id]);
+  const refresh = useTelepathicCheckpointRefresh({
+    repository,
+    seriesId: activeId,
+    workspaceId: workspace.id,
+    working: busy || presentation === "other",
+    revision: refreshGenerationRef,
+    read: id => loadTelepathicConversationView(repository!, id),
+    apply: setActiveSeries,
+  });
+  checkpointRefresh.current = id => refresh.current(id);
 
   const compatibleWorkspaces = useMemo(() => workspaces.filter((item) => !item.archivedAt && isWorkspaceCompatible(item, "conversation")), [workspaces]);
 
@@ -379,8 +377,15 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
 
   const refreshSeries = async () => {
     if (!repository || !activeSeries) return;
-    const loaded = await loadTelepathicConversationView(repository, activeSeries.config.seriesId);
-    if (loaded) { setCheckpointFailure(false); setActiveSeries(loaded); }
+    const seriesId = activeSeries.config.seriesId;
+    const revision = refreshGenerationRef.current;
+    const epoch = detailGeneration.current;
+    try {
+      await refresh.current(seriesId);
+      if (detailGeneration.current === epoch && refreshGenerationRef.current !== revision) setCheckpointFailure(false);
+    } catch (cause) {
+      if (detailGeneration.current === epoch) setError(cause instanceof Error ? cause.message : String(cause));
+    }
   };
 
   const step = activeSeries?.archivedAt ? { kind: "none" as const } : activeSeries?.humanStep ?? { kind: "none" as const };

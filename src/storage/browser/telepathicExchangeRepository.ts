@@ -1,3 +1,4 @@
+import { publishTelepathicCheckpoint } from "../telepathicCheckpointChanges";
 import { validateHistoryQuery, validateHistorySummary, compareHistoryText, historyPage, type TelepathicHistoryQuery, type TelepathicHistoryPage, type TelepathicSeriesSummary } from "../../telepathicExchange/historySummaries";
 import { assertArchiveRevision } from "../../telepathicExchange/persistence";
 import type { TelepathicSeriesState } from "../../telepathicExchange/types";
@@ -70,6 +71,7 @@ export class BrowserTelepathicExchangeRepository implements TelepathicExchangeRe
       const next = [structuredClone(state), ...all.filter((item) => item.config.seriesId !== state.config.seriesId)];
       this.storage.setItem(TELEPATHIC_SERIES_KEY, JSON.stringify(next));
     });
+    publishTelepathicCheckpoint(state.config.seriesId, state.config.seriesWorkspaceId);
   }
 
   async withTelepathicSeriesLease<T>(seriesId: string, task: () => Promise<T>): Promise<T> {

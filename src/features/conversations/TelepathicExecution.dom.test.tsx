@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import * as checkpointChanges from "../../storage/telepathicCheckpointChanges";
 import {act} from "react";
 import {createRoot} from "react-dom/client";
 import {it,expect,vi} from "vitest";
@@ -63,7 +64,8 @@ async function fixture(mode: Mode, language: "pl" | "en" = "en", native = false,
  await store.saveTelepathicSeries(state);
  const model = {providerConfigId:"c",provider:"custom_openai",modelId:"m",route:"m",capabilities:{contextTokens:64000,maxOutputTokens:32768,inputModalities:["text"],outputModalities:["text"],reasoning:{supported:true,efforts:["low","high"],confidence:"provider_metadata"},temperature:{supported:true,min:0,max:2,confidence:"provider_metadata"},supportedParameters:["temperature","reasoning","max_tokens"],source:"provider",capturedAt:"t"},pricing:{}} as ProviderModel;
  const profiles = config.participants.filter(p=>p.kind === "ai").map(p=>({id:p.id,name:p.id,defaultViewerModelId:"m",defaultViewerTemperature:0.5,defaultViewerReasoningEffort:"low"} as Profile));
- const facade = (adapter: TelepathicExchangeRepository) => ({getTelepathicSeries:adapter.getTelepathicSeries.bind(adapter),saveTelepathicSeries:(state: Parameters<typeof adapter.saveTelepathicSeries>[0]) => adapter.saveTelepathicSeries(state),withTelepathicSeriesLease:adapter.withTelepathicSeriesLease.bind(adapter),assertTelepathicSeriesLease:adapter.assertTelepathicSeriesLease.bind(adapter),telepathicSeriesLeaseSignal:adapter.telepathicSeriesLeaseSignal.bind(adapter),getTelepathicSeriesLeaseState:adapter.getTelepathicSeriesLeaseState!.bind(adapter),listTelepathicSeries:adapter.listTelepathicSeries.bind(adapter),listTelepathicSeriesSummaries:adapter.listTelepathicSeriesSummaries.bind(adapter),listProviderConfigs:async()=>[],listProviderModels:async()=>[model]}) as unknown as AppRepository;
+ const reads = { detail: 0, history: 0 };
+ const facade = (adapter: TelepathicExchangeRepository) => ({getTelepathicSeries:(id:string)=>{reads.detail++;return adapter.getTelepathicSeries(id);},saveTelepathicSeries:(state: Parameters<typeof adapter.saveTelepathicSeries>[0]) => adapter.saveTelepathicSeries(state),withTelepathicSeriesLease:adapter.withTelepathicSeriesLease.bind(adapter),assertTelepathicSeriesLease:adapter.assertTelepathicSeriesLease.bind(adapter),telepathicSeriesLeaseSignal:adapter.telepathicSeriesLeaseSignal.bind(adapter),getTelepathicSeriesLeaseState:adapter.getTelepathicSeriesLeaseState!.bind(adapter),listTelepathicSeries:adapter.listTelepathicSeries.bind(adapter),listTelepathicSeriesSummaries:(query:Parameters<typeof adapter.listTelepathicSeriesSummaries>[0])=>{reads.history++;return adapter.listTelepathicSeriesSummaries(query);},listProviderConfigs:async()=>[],listProviderModels:async()=>[model]}) as unknown as AppRepository;
  let repository = facade(store);
  const container = document.createElement("div");document.body.append(container);let root = createRoot(container);
  const render = () => act(async()=>root.render(mode === "ai_ai_training" ? <TelepathicTrainingPanel copy={getCopy(language)} settings={{...createDefaultSettings(),interfaceLanguage:language,sessionLanguage:language}} profiles={profiles} workspaces={[]} repository={repository}/> : <TelepathicExchangePanel copy={getCopy(language)} settings={{...createDefaultSettings(),interfaceLanguage:language,sessionLanguage:language}} profiles={profiles} workspaces={[]} profile={{id:"human",name:"Human"} as Profile} workspace={{id:"w",profileId:"human",name:"W",kind:"conversation"} as Workspace} repository={repository}/>));
@@ -83,7 +85,7 @@ async function fixture(mode: Mode, language: "pl" | "en" = "en", native = false,
  const noAlarm = (historicalFailure = false) => {expect(container.textContent).not.toMatch(/Series blocked|Seria zatrzymana|Uncertain provider calls|Niepewne wywołania providera/);if (!historicalFailure) expect(container.textContent).not.toMatch(/delivery unconfirmed|wysłanie niepotwierdzone/);expect(button(language === "pl" ? "Zezwól na ponowienie" : "Allow retry")).toBeUndefined();};
  const waiting = async (historicalFailure = false) => {await wait(()=>expect(container.textContent).toContain(language === "pl" ? "Oczekiwanie na odpowiedź" : "Waiting for response"));noAlarm(historicalFailure);if (historicalFailure && mode === "ai_ai_training") {const headings=[...container.querySelectorAll(".telepathic-transcript-message small")].map(node=>node.textContent);expect(headings[0]).toContain("delivery unconfirmed");expect(headings.at(-1)).toContain("Waiting for response");}expect(button(language === "pl" ? "Zatrzymaj" : "Stop")).toBeTruthy();};
  const stop = async () => {await act(async()=>button(language === "pl" ? "Zatrzymaj" : "Stop")!.click());await wait(()=>expect(button("Stop")?.disabled ?? true).toBe(true));};
- return {store,db,config,container,pending,button,wait,mount,run,runText,waiting,stop,noAlarm,
+ return {reads,store,db,config,container,pending,button,wait,mount,run,runText,waiting,stop,noAlarm,
   async remount(snapshot?: typeof state, adapter: TelepathicExchangeRepository = store) {await act(async()=>root.unmount());await vi.waitFor(async()=>expect(await store.getTelepathicSeriesLeaseState!("execution")).toBe("idle"));if(snapshot) await store.saveTelepathicSeries(snapshot);repository=facade(adapter);root=createRoot(container);await render();},
   async externalRun() {const controller = new AbortController();const deps = {store,signal:controller.signal,resolveRoute:async(p:typeof config.participants[number])=>resolveTelepathicAiRouteFromRepository({repository,participant:p,requestedSettings:profileGenerationDefaults(profiles.find(profile=>profile.id === p.ai!.profileId)!,model)})};const task = (mode === "ai_ai_training" ? runNextTelepathicAiRound : advanceTelepathicConversationSeries)(deps,"execution").catch(()=>undefined);await vi.waitFor(()=>expect(pending.length).toBe(1));return {controller,task};},
   async observeOther() {repository=facade(new BrowserTelepathicExchangeRepository());await render();},
@@ -162,12 +164,14 @@ for (const mode of ["conversation_exchange","ai_ai_training"] as const) {
  });
  it(`${mode}: another window's accepted final response replaces stale dispatched without an alarm`, async()=>{
   const f=await fixture(mode);let external:Awaited<ReturnType<typeof f.externalRun>> | undefined;
+  // The simulated other window shares storage, but never the local event bus.
+  const localEvent = vi.spyOn(checkpointChanges, "publishTelepathicCheckpoint").mockImplementation(() => {});
   try {
    const state=(await f.store.getTelepathicSeries("execution"))!;state.currentRoundIndex=1;state.rounds[0].status="completed";state.rounds[0].revealedAt="t";if(mode === "ai_ai_training") state.finalReflections.a="already accepted";await f.store.saveTelepathicSeries(state);
    external=await f.externalRun();await f.observeOther();await f.wait(()=>expect(f.container.textContent).toContain("Work is running in another window"));
    await act(async()=>{f.pending[0].resolve({content:"Accepted final reflection",finishReason:"stop",usage:{}});await external!.task;});
-   await f.wait(()=>expect(f.container.textContent).toContain("Accepted final reflection"));f.noAlarm();expect(f.container.textContent).not.toContain("Work is running in another window");expect((await f.store.getTelepathicSeries("execution"))!.providerCalls[0].status).toBe("succeeded");expect(mock.dispatch).toHaveBeenCalledTimes(1);
-  }finally {external?.controller.abort();await external?.task;await f.cleanup();}
+   await f.wait(()=>{expect(f.container.textContent).toContain("Accepted final reflection");expect(f.container.textContent).not.toContain("Work is running in another window");});f.noAlarm();expect((await f.store.getTelepathicSeries("execution"))!.providerCalls[0].status).toBe("succeeded");expect(mock.dispatch).toHaveBeenCalledTimes(1);
+  }finally {external?.controller.abort();await external?.task;localEvent.mockRestore();await f.cleanup();}
  });
 
  it(`${mode}: unknown ownership fails closed without inventing an owner or retrying`, async()=>{
@@ -286,3 +290,52 @@ for (const mode of ["conversation_exchange", "ai_ai_training"] as const) it(`${m
   expect(f.button("Check configuration")).toBeUndefined();
  } finally { await f.cleanup(); }
 });
+
+for (const mode of ["conversation_exchange", "ai_ai_training"] as const) {
+ it(`${mode}: counts detail and history reads during provider wait and a checkpoint burst`, async () => {
+  const f = await fixture(mode);
+  try {
+   await f.mount();
+   await f.run();
+   await f.waiting();
+   const measure = async (commits: number) => {
+    const before = { ...f.reads };
+    await act(async () => {
+     if (commits) {
+      const state = (await f.store.getTelepathicSeries("execution"))!;
+      for (let i = 0; i < commits; i++) await f.store.saveTelepathicSeries(state);
+     }
+     await new Promise(resolve => setTimeout(resolve, 3100));
+    });
+    return { detail: f.reads.detail - before.detail, history: f.reads.history - before.history };
+   };
+   const waiting = await measure(0);
+   const burst = await measure(12);
+   console.info(JSON.stringify({ mode, intervalMs: 3100, waiting, burst }));
+   expect(waiting).toEqual({ detail: 0, history: 0 });
+   expect(burst.history).toBe(0);
+   expect(burst.detail).toBeGreaterThanOrEqual(1);
+   expect(burst.detail).toBeLessThanOrEqual(2);
+   await f.stop();
+  } finally {
+   await f.cleanup();
+  }
+ }, 20000);
+}
+
+for (const mode of ["conversation_exchange", "ai_ai_training"] as const) {
+ it(`${mode}: leaves an unchanged idle series open without reading its details`, async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const f = await fixture(mode);
+  try {
+   await f.mount();
+   expect(f.reads.detail).toBeGreaterThan(0);
+   const before = { ...f.reads };
+   await act(async () => { await vi.advanceTimersByTimeAsync(30_100); });
+   expect(f.reads).toEqual(before);
+   expect(mock.dispatch).not.toHaveBeenCalled();
+  } finally {
+   try { await f.cleanup(); } finally { vi.useRealTimers(); }
+  }
+ });
+}

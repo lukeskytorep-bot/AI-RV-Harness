@@ -1,3 +1,4 @@
+import { useTelepathicCheckpointRefresh } from "../../components/useTelepathicCheckpointRefresh";
 import { telepathicManualRetryCandidate } from "../../telepathicExchange/recovery";
 import { authorizeTelepathicStepRetry } from "../../telepathicExchange/engine";
 import { TelepathicRecoveryPolicy } from "../../components/TelepathicRecoveryPolicy";
@@ -95,11 +96,8 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
   const [busy, setBusy] = useState(false);
   const [execution, setExecution] = useState<TelepathicLocalExecution | null>(null);
   const configurationChecks = useRef(createTelepathicConfigurationCheckSchedule());
-  const { presentation, callPresentation, unavailable } = useTelepathicExecution(repository, activeSeries, activeSeries ? unresolvedTelepathicProviderCalls(activeSeries) : [], execution, async (seriesId, isCurrent) => {
-    if (!repository) return;
-    const state = await repository.getTelepathicSeries(seriesId);
-    if (isCurrent() && state && activeSeriesIdRef.current === seriesId) applyActiveSeries(state, viewRoundId);
-  }, async seriesId => {
+  const checkpointRefresh = useRef<(id: string) => Promise<void>>(async () => {});
+  const { presentation, callPresentation, unavailable } = useTelepathicExecution(repository, activeSeries, activeSeries ? unresolvedTelepathicProviderCalls(activeSeries) : [], execution, seriesId => checkpointRefresh.current(seriesId), async seriesId => {
     if (!activeSeries?.recoveryBlock || !["blocked", "paused"].includes(activeSeries.status) || activeSeries.archivedAt) { configurationChecks.current.reset(); return; }
     if (busy || unavailable || checkpointFailure || activeSeries.config.seriesId !== seriesId || !configurationChecks.current.due(seriesId)) return;
     await withBusy(async () => {
@@ -160,20 +158,16 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
     return () => { cancelled = true; };
   }, [repository, profiles, language]);
 
-  useEffect(() => {
-    if (!busy || !repository || !activeSeries) return;
-    const seriesId = activeSeries.config.seriesId;
-    const id = window.setInterval(() => {
-      const generation = refreshGenerationRef.current;
-      void repository.getTelepathicSeries(seriesId).then((state) => {
-        if (!state) return;
-        if (activeSeriesIdRef.current !== seriesId) return;
-        if (refreshGenerationRef.current !== generation) return;
-        applyActiveSeries(state, viewRoundId);
-      }).catch(() => undefined);
-    }, 750);
-    return () => window.clearInterval(id);
-  }, [busy, repository, activeSeries?.config.seriesId, viewRoundId]);
+  const refresh = useTelepathicCheckpointRefresh({
+    repository,
+    seriesId: activeSeries?.config.seriesId,
+    workspaceId: activeSeries?.config.seriesWorkspaceId,
+    working: busy || presentation === "other",
+    revision: refreshGenerationRef,
+    read: id => repository!.getTelepathicSeries(id),
+    apply: setActiveSeries,
+  });
+  checkpointRefresh.current = id => refresh.current(id);
 
   const selected = useMemo(() => selectedProfileIds.map((profileId) => {
     const profile = profiles.find((item) => item.id === profileId);

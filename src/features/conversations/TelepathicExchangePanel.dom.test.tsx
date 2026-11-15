@@ -1,5 +1,6 @@
 import { historyPage, validateHistoryQuery, type TelepathicHistoryQuery } from "../../telepathicExchange/historySummaries";
 // @vitest-environment jsdom
+import { publishTelepathicCheckpoint } from "../../storage/telepathicCheckpointChanges";
 import {act} from "react";
 import {createRoot,type Root} from "react-dom/client";
 import {beforeEach,afterEach,describe,it,expect,vi} from "vitest";
@@ -41,7 +42,8 @@ describe("mounted Conversation audit regressions",()=>{
   await act(async()=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>(b.textContent?.includes("Continue / Resume") || b.textContent?.trim()==="Resume"))!.click());
   state.transcript=[{id:"checkpoint",seriesId:"mounted",roundId:state.rounds[0].assignment.roundId,sequence:1,stage:"reflection",kind:"reflection",authorId:"a",recipientIds:[],text:"FIRST_DURABLE_RESULT",createdAt:"t"}];
   state.providerCalls=[{id:"call",seriesId:"mounted",roundId:"r",participantId:"a",callStage:"receiver_first",technicalAttempt:1,status:"succeeded",scopeKey:"k",requestSha256:"h",usage:{totalTokens:42,costUsd:0.01},createdAt:"t",updatedAt:"t"}];
-  await act(async()=>vi.advanceTimersByTimeAsync(550));
+  publishTelepathicCheckpoint("mounted", "w");
+  await act(async()=>vi.advanceTimersByTimeAsync(25));
   expect(container.textContent).toContain("FIRST_DURABLE_RESULT");expect(container.querySelector(".session-run-metrics > span:nth-child(2) strong")?.textContent).toBe("42");expect(mock.advance).toHaveBeenCalledTimes(1);expect(signal?.aborted).toBe(false);expect(container.querySelector(".telepathic-schedule button.active")?.textContent).toBe(selected);
   await act(async()=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent==="Stop")!.click());expect(signal?.aborted).toBe(true);
  });
@@ -52,13 +54,14 @@ describe("mounted Conversation audit regressions",()=>{
   state.rounds[0].revealedAt="t";await act(async()=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent==="Refresh")!.click());
   expect(container.textContent).toContain("LEGACY_ANSWER");expect(container.textContent).toContain("LEGACY_REFLECTION");expect(container.textContent).toContain("LEGACY_FINAL");
  });
- it("rejects a late polling result after workspace change",async()=>{
+ it("rejects a late checkpoint read after workspace change",async()=>{
   vi.useFakeTimers();const {state,repository,render}=fixture();state.rounds[0].blindByParticipant.human={participantId:"human",first:"own",status:"first_complete",providerAttemptCount:0};
   mock.advance.mockImplementation((deps:{signal:AbortSignal})=>new Promise((_resolve,reject)=>deps.signal.addEventListener("abort",()=>reject(new DOMException("Stopped","AbortError")),{once:true})));
   await render();await act(async()=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>(b.textContent?.includes("Continue / Resume") || b.textContent?.trim()==="Resume"))!.click());
   let release!: (value: typeof state)=>void;
   vi.mocked(repository.getTelepathicSeries).mockImplementationOnce(()=>new Promise(resolve=>{release=resolve as typeof release;}));
-  await act(async()=>vi.advanceTimersByTimeAsync(550));
+  publishTelepathicCheckpoint("mounted", "w");
+  await act(async()=>vi.advanceTimersByTimeAsync(25));
   vi.mocked(repository.listTelepathicSeries).mockResolvedValue([]);
   await render("other-workspace");
   state.finalReflections.a="LATE_PRIVATE_OLD_VIEW";await act(async()=>release(state));

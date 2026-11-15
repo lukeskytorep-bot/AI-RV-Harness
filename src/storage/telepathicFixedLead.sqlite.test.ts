@@ -1,3 +1,4 @@
+import { subscribeToTelepathicCheckpoints } from "./telepathicCheckpointChanges";
 import { legacyLeadState } from "../telepathicExchange/__fixtures__/legacyLeadState";
 import { scopeOutputBudget } from "../telepathicExchange/outputBudgets";
 import { BrowserTelepathicExchangeRepository } from "./browser/telepathicExchangeRepository";
@@ -233,4 +234,64 @@ describe("S2 durable whole-series End",()=>{
    const actual=(await repository.getTelepathicSeries("sqlite"))!;expect(actual.status).toBe("cancelled");expect(actual.termination?.reason).toBe("user_finished");expect(actual.finalReflections).toEqual(state.finalReflections);expect(actual.rounds).toEqual(state.rounds);expect(actual.config).toEqual(state.config);
   }finally{db.close();}
  });
+});
+
+it("publishes after the SQLite commit and stays silent when a statement rolls the transaction back", async () => {
+ const { db, repository } = database();
+ const seen: Array<{ version: number; status: unknown }> = [];
+ const stop = subscribeToTelepathicCheckpoints(change => {
+  if (change.seriesId !== config.seriesId || change.workspaceId !== config.seriesWorkspaceId) return;
+  seen.push({ version: change.version, status: db.prepare("SELECT status FROM telepathic_series WHERE id = ?").get(config.seriesId)?.status });
+ });
+ try {
+  const state = createTelepathicSeriesState(config);
+  await repository.saveTelepathicSeries(state);
+  db.exec("CREATE TRIGGER reject_checkpoint BEFORE INSERT ON telepathic_rounds BEGIN SELECT RAISE(ABORT, 'checkpoint rollback'); END;");
+  state.status = "paused";
+  await repository.withTelepathicSeriesLease(config.seriesId, async () => {
+   await expect(repository.saveTelepathicSeries(state)).rejects.toThrow("checkpoint rollback");
+   expect(seen).toEqual([{ version: expect.any(Number), status: "ready" }]);
+   expect((await repository.getTelepathicSeries(config.seriesId))?.status).toBe("ready");
+   db.exec("DROP TRIGGER reject_checkpoint");
+   await repository.saveTelepathicSeries(state);
+  });
+  expect(seen.map(event => event.status)).toEqual(["ready", "paused"]);
+  expect(seen[1].version).toBeGreaterThan(seen[0].version);
+ } finally {
+  stop();
+  db.close();
+ }
+});
+
+it("publishes after Browser setItem, even if a subscriber throws, and stays silent on storage failure", async () => {
+ let value: string | null = null;
+ let fail = false;
+ const storage = {
+  getItem: () => value,
+  setItem: (_key: string, next: string) => {
+   if (fail) throw new Error("quota exceeded");
+   value = next;
+  },
+ } as unknown as Storage;
+ const repository = new BrowserTelepathicExchangeRepository({ storage });
+ const seen: Array<{ version: number; status: unknown }> = [];
+ const stopThrowing = subscribeToTelepathicCheckpoints(() => { throw new Error("listener failed"); });
+ const stop = subscribeToTelepathicCheckpoints(change => {
+  if (change.seriesId === config.seriesId) seen.push({ version: change.version, status: JSON.parse(value!)[0].status });
+ });
+ try {
+  const state = createTelepathicSeriesState(config);
+  await repository.saveTelepathicSeries(state);
+  state.status = "paused";
+  await repository.saveTelepathicSeries(state);
+  fail = true;
+  state.status = "running";
+  await expect(repository.saveTelepathicSeries(state)).rejects.toThrow("quota exceeded");
+  expect(seen.map(event => event.status)).toEqual(["ready", "paused"]);
+  expect(seen[1].version).toBeGreaterThan(seen[0].version);
+  expect((await repository.getTelepathicSeries(config.seriesId))?.status).toBe("paused");
+ } finally {
+  stop();
+  stopThrowing();
+ }
 });

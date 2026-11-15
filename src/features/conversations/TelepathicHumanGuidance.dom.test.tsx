@@ -95,7 +95,8 @@ it("full Conversation changes round, hides archived actions, and disables fields
   await f.setState(next);await f.refresh();expect(f.fields()[0].value).toBe("");
   await f.type(0,"Pending question");let resolve!: (v:unknown)=>void;mock.dispatch.mockImplementation(()=>new Promise(r=>{resolve=r;}));
   await act(async()=>f.host.querySelector<HTMLButtonElement>(".telepathic-human-guidance button[type=submit]")!.click());await f.wait(()=>expect(mock.dispatch).toHaveBeenCalledTimes(1));
-  expect(f.fields()[0].matches(":disabled")).toBe(true);expect(f.host.querySelector(".telepathic-human-guidance button")!.matches(":disabled")).toBe(true);
+  // The committed decision can already retire the form while its AI response is pending.
+  expect([...f.host.querySelectorAll(".telepathic-human-guidance textarea, .telepathic-human-guidance button")].every(control => control.matches(":disabled"))).toBe(true);
   await act(async()=>resolve({content:"A new movement",finishReason:"stop",usage:{}}));await f.wait(async()=>expect((await f.getState())!.rounds[1].blindByParticipant.a.guidanceResponses).toHaveLength(1));
   const uncertain=(await f.getState())!;uncertain.providerCalls[0].status="uncertain";await f.setState(uncertain);await f.refresh();
   await f.wait(()=>expect(f.fields()[0].matches(":disabled")).toBe(true));

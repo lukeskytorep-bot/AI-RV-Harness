@@ -1,3 +1,4 @@
+import { publishTelepathicCheckpoint } from "../telepathicCheckpointChanges";
 import { validateHistoryQuery, validateHistorySummary, type TelepathicHistoryQuery, type TelepathicHistoryPage, type TelepathicSeriesSummary } from "../../telepathicExchange/historySummaries";
 import { serializeTelepathicPlan, restoreTelepathicRuntime, assertArchiveRevision } from "../../telepathicExchange/persistence";
 import type { DatabaseTransactionStatement, DatabaseWriteResult } from "../databaseNative";
@@ -297,6 +298,7 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
     } else {
       await this.dependencies.executeTransaction(statements);
     }
+    publishTelepathicCheckpoint(state.config.seriesId, state.config.seriesWorkspaceId);
   }
 
   async getTelepathicSeries(seriesId: string): Promise<TelepathicSeriesState | null> {

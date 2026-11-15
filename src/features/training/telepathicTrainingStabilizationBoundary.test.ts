@@ -25,10 +25,11 @@ describe("STEP 4B stabilization boundary", () => {
     expect(panel).toContain("await refreshHistory().catch(() => undefined);");
   });
 
-  it("rejects stale polling results by series id and refresh generation", () => {
-    expect(panel).toContain("const refreshGenerationRef = useRef(0);");
-    expect(panel).toContain("if (activeSeriesIdRef.current !== seriesId) return;");
-    expect(panel).toContain("if (refreshGenerationRef.current !== generation) return;");
+  it("wires the shared checkpoint refresh to Training's series, Workspace and action revision", () => {
+    expect(panel).toContain("const refresh = useTelepathicCheckpointRefresh({");
+    expect(panel).toContain("seriesId: activeSeries?.config.seriesId");
+    expect(panel).toContain("workspaceId: activeSeries?.config.seriesWorkspaceId");
+    expect(panel).toContain("revision: refreshGenerationRef");
     expect(panel).toContain("refreshGenerationRef.current += 1;");
   });
 
