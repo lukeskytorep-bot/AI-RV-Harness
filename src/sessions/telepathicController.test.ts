@@ -270,3 +270,24 @@ describe("automatic Telepathic Protocol controller", () => {
     expect(telepathicManualRecoveryState([...base, { id: "b", sessionId: "s", sequenceNumber: 2, eventType: "PRE_REVEAL_SEALED", createdAt: "now" }])).toBeNull();
   });
 });
+
+it("keeps T2 incomplete when its sketch loops before required observations finish", async () => {
+  const log: string[] = [];
+  let calls = 0;
+  const result = await runAutomaticTelepathicSession({
+    repository: repository(log), workspaceId: "w", profileId: "profile", providerConfig: config, model,
+    protocol: getTelepathicProtocol("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+    step8Questions: { mode: "predefined", questions: ["What is the subject's primary intention?"] },
+    chat: async ({ messages }) => {
+      calls += 1;
+      if (calls === 1) return { content: "Completed T1 observations.", usage: {} };
+      expect(messages.at(-1)?.content).toContain("T2");
+      return { content: "Incomplete T2 observations\n" + "-".repeat(12_000), finishReason: "length", usage: {} };
+    },
+  });
+  expect(calls).toBe(3);
+  expect(result.state).toBe("Interrupted");
+  expect(log.filter(item => item === "event:VIEWER_OUTPUT_INCOMPLETE")).toHaveLength(2);
+  expect(log).not.toContain("sealed");
+  expect(log).not.toContain("reveal");
+});

@@ -3,6 +3,7 @@ import type { InterfaceLanguage } from "../types";
 import type { ProviderStreamEvent } from "../providers/types";
 import {
   analyzeRepetitiveOutput,
+  createAsciiSketchScanner,
   maskRepetitionLine,
   sanitizeRepetitiveOutput,
   type RepetitionFenceState,
@@ -64,6 +65,7 @@ export function createStreamingRepetitionGuard(input: {
   const controller = new AbortController();
   inheritAbortOwnership(controller.signal,input.parentSignal);
   let content = "";
+  let ascii = createAsciiSketchScanner();
   let charsSinceScan = 0;
   let providerRequestId: string | undefined;
   let detected: StreamingRepetitionRunawayError | undefined;
@@ -107,17 +109,17 @@ export function createStreamingRepetitionGuard(input: {
   if (input.parentSignal?.aborted) abortFromParent();
   else input.parentSignal?.addEventListener("abort", abortFromParent, { once: true });
 
-  const inspect = () => {
+  const inspect = (asciiFinding?: RepetitionInspection) => {
     if (detected || parentCancelled || cleaned || !content) return;
-    const tail = currentMaskedTail();
+    const tail = asciiFinding ? "" : currentMaskedTail();
     const scanStart = Math.max(0, content.length - tail.length);
-    const localFinding = analyzeRepetitiveOutput(tail);
+    const localFinding = asciiFinding ?? analyzeRepetitiveOutput(tail);
     if (localFinding.severity !== "stop") return;
     const finding: RepetitionInspection = {
       ...localFinding,
       ...(localFinding.cutAt !== undefined ? { cutAt: scanStart + localFinding.cutAt } : {}),
     };
-    const sanitized = sanitizeRepetitiveOutput(content, input.language ?? "en");
+    const sanitized = sanitizeRepetitiveOutput(content, input.language ?? "en", asciiFinding);
     // The full-content sanitizer is authoritative. If the bounded detector and
     // full classification disagree, do not abort valid evidence.
     if (!sanitized.truncated) return;
@@ -135,9 +137,10 @@ export function createStreamingRepetitionGuard(input: {
   return {
     signal: controller.signal,
     onStreamEvent(event) {
-      if (parentCancelled || cleaned) return;
+      if (parentCancelled || cleaned || detected) return;
       if (event.event === "started") {
         content = "";
+        ascii = createAsciiSketchScanner();
         charsSinceScan = 0;
         providerRequestId = event.data.providerRequestId;
         fence = null;
@@ -147,6 +150,8 @@ export function createStreamingRepetitionGuard(input: {
       }
       if (event.event === "contentDelta") {
         content += event.data.content;
+        const asciiFinding = ascii.push(event.data.content);
+        if (asciiFinding) { inspect(asciiFinding); return; }
         ingestForMasking(event.data.content);
         charsSinceScan += event.data.content.length;
         if (charsSinceScan >= STREAM_SCAN_INTERVAL_CHARS) {
@@ -155,7 +160,7 @@ export function createStreamingRepetitionGuard(input: {
         }
         return;
       }
-      if (event.event === "finished") inspect();
+      if (event.event === "finished") inspect(ascii.finish());
     },
     runawayError: () => detected,
     cleanup() {

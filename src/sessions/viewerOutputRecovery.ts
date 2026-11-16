@@ -4,7 +4,7 @@ import type { OperationKind } from "../providers/operationResourceProfiles";
 import type { EffectiveGenerationSettings, ProviderChatResponse, ProviderMessage, ProviderModel } from "../providers/types";
 import { classifyProviderFailure, providerAttemptOutcomes } from "../providers/responseEvidence";
 import type { InterfaceLanguage } from "../types";
-import { sanitizeRepetitiveOutput } from "./repetitionGuard";
+import { inspectAsciiSketch, sanitizeRepetitiveOutput } from "./repetitionGuard";
 import { isStreamingRepetitionRunawayError } from "./streamingRepetitionGuard";
 import { sha256Text } from "../application/sha256";
 
@@ -216,8 +216,9 @@ export async function callViewerWithOutputRecovery(input: {
   priorEffectiveMaxOutputTokens?: number;
   priorIncompleteReason?: "output_limit" | "repetition_runaway";
   sessionLanguage?: InterfaceLanguage;
+  acceptTruncatedSketch?: boolean;
   abortSignal?: AbortSignal;
-}): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2; attemptId?: string; viewerOutputPolicyVersion?: number; attempts: ViewerOutputAttemptRecord[] }> {
+}): Promise<{ response: ProviderChatResponse; settings: EffectiveGenerationSettings; semanticAttempt: 1 | 2; attemptId?: string; viewerOutputPolicyVersion?: number; attempts: ViewerOutputAttemptRecord[]; sketchTruncation?: Pick<ViewerOutputAttemptRecord, "rawOutputSha256" | "originalLength" | "retainedLength" | "repetitionRule"> & { originalFinishReason?: string } }> {
   const kind = effectiveOperationKind(input.operationKind);
   if (!isViewerOutputRecoveryOperation(kind)) {
     const budget = input.baseSettings.effective.maxOutputTokens ?? input.baseSettings.requested.maxOutputTokens ?? 1;
@@ -270,11 +271,13 @@ export async function callViewerWithOutputRecovery(input: {
     const semanticAttempt = (recoveryLevel + 1) as 1 | 2;
     const dispatchAttempt: ViewerOutputDispatchAttempt = { attemptId: `viewer_attempt_${crypto.randomUUID()}`, semanticAttempt, recoveryLevel, requestedMaxOutputTokens: settings.requested.maxOutputTokens ?? budget, effectiveMaxOutputTokens: budget };
     let response: ProviderChatResponse;
+    let asciiSketch = false;
     let repetitionMetadata: Pick<ViewerOutputAttemptRecord, "rawOutputSha256" | "originalLength" | "retainedLength" | "repetitionRule"> = {};
     try {
       response = await input.call(settings, semanticAttempt, dispatchAttempt);
     } catch (cause) {
       if (!isStreamingRepetitionRunawayError(cause)) throw cause;
+      asciiSketch = cause.finding.kind === "ascii_sketch";
       repetitionMetadata = {
         rawOutputSha256: await sha256Text(cause.rawContent),
         originalLength: cause.originalLength,
@@ -289,9 +292,12 @@ export async function callViewerWithOutputRecovery(input: {
       };
     }
     let completion = viewerResponseCompletion(response);
-    if (completion === "complete") {
-      const sanitized = sanitizeRepetitiveOutput(response.content, input.sessionLanguage ?? "en");
+    const originalFinishReason = response.finishReason;
+    const asciiFinding = completion === "output_limit" ? inspectAsciiSketch(response.content) : undefined;
+    if (completion === "complete" || asciiFinding) {
+      const sanitized = sanitizeRepetitiveOutput(response.content, input.sessionLanguage ?? "en", asciiFinding);
       if (sanitized.truncated) {
+        asciiSketch = sanitized.finding?.kind === "ascii_sketch";
         repetitionMetadata = {
           rawOutputSha256: await sha256Text(response.content),
           originalLength: sanitized.originalLength,
@@ -301,6 +307,18 @@ export async function callViewerWithOutputRecovery(input: {
         response = { ...response, content: sanitized.content, finishReason: "repetition_runaway" };
         completion = "repetition_runaway";
       }
+    }
+    if (asciiSketch && input.acceptTruncatedSketch) {
+      input.abortSignal?.throwIfAborted();
+      // Persist a resolved optional sketch under the normal step identity.
+      // Never reuse opaque continuation state bound to the untrimmed reply.
+      const { finalCandidate: _discarded, ...trimmed } = response;
+      return {
+        response: { ...trimmed, finishReason: "ascii_sketch_truncated" },
+        settings, semanticAttempt, attemptId: dispatchAttempt.attemptId,
+        viewerOutputPolicyVersion: input.budgetProfile?.version ?? VIEWER_OUTPUT_POLICY_VERSION, attempts,
+        sketchTruncation: { ...repetitionMetadata, originalFinishReason },
+      };
     }
     if (completion === "complete") return { response, settings, semanticAttempt, attemptId: dispatchAttempt.attemptId, viewerOutputPolicyVersion: input.budgetProfile?.version ?? VIEWER_OUTPUT_POLICY_VERSION, attempts };
 

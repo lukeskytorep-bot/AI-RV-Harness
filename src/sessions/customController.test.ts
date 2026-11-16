@@ -60,3 +60,20 @@ describe("automatic Custom Protocol controller", () => {
   });
 
 });
+
+it("keeps a custom protocol step incomplete when it returns an ASCII loop", async () => {
+  const log: string[] = [];
+  let calls = 0;
+  const result = await runAutomaticCustomSession({
+    repository: repository(log), workspaceId: "w", profileId: "u", providerConfig: config, model,
+    protocol, sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+    chat: async () => {
+      calls += 1;
+      return { content: "Incomplete observations\n" + "  /---\\  \n".repeat(500), finishReason: "stop", usage: {} };
+    },
+  });
+  expect(calls).toBe(2);
+  expect(result.state).toBe("Interrupted");
+  expect(log.filter(item => item === "VIEWER_OUTPUT_INCOMPLETE")).toHaveLength(2);
+  expect(log).not.toContain("sealed");
+});

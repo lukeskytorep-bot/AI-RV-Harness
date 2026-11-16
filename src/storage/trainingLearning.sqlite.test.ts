@@ -407,3 +407,37 @@ it.each(["field_guide","viewer_notes"] as const)("Automatic restore: historical 
  const chat=vi.fn();expect((await invoke(chat,"preserve_and_continue"))?.settlement?.settlement).toBe("failed_preserved");expect(chat).not.toHaveBeenCalled();
  expect((await invoke(chat,"preserve_and_continue"))?.settlement?.settlement).toBe("failed_preserved");expect(chat).not.toHaveBeenCalled();
 });
+
+it("Training stores the shortened step 4 sketch through the real RV Lite controller", async () => {
+ const h = await setup();
+ const target = await h.repository.createTarget({id:"sketch-target",collection:"user",title:"Sketch",revealText:"Reveal sketch",tags:[],sourceMetadata:{category:"mixed_targets"}});
+ const run = await h.repository.createTrainingRun({
+  name:"Sketch training",status:"Planned",mode:"partial",profileId:h.profile.id,workspaceId:"w",
+  modelRoute:h.model.route,protocolVariant:"extended",targetIds:[target.id],categories:["mixed_targets"],
+  judgeModelRoutes:[],pauseAfterBlock:false,viewerNotesEnabled:false,
+ });
+ const { runAutomaticRvLiteSession } = await import("../sessions/rvLiteController");
+ const stop = new AbortController();
+ let calls = 0;
+ const result = await executeTrainingRun({
+  repository:h.repository,initial:run,profile:h.profile,providerConfig:h.provider,model:h.model,judges:[],
+  targets:[target],language:"en",signal:stop.signal,settings:{maxRetries:0,requestTimeoutMs:30000,sessionCodePrefix:"T"},
+  dependencies:{
+   runAutomaticRvLiteSession: input => runAutomaticRvLiteSession({
+    ...input, chat: async () => ++calls === 4
+      ? { content:"Useful Training sketch\n" + "|--|\n".repeat(500), finishReason:"length", usage:{} }
+      : finished("Useful earlier observation"),
+   }),
+   runAutomaticPostRevealReview: async () => { stop.abort(); return ""; },
+  },
+ });
+ const sessionId = result.run.activeTargetCheckpoint?.sessionId;
+ expect(calls).toBe(4);
+ expect(sessionId).toBeDefined();
+ const events = await h.repository.listSessionEvents(sessionId!);
+ expect(events.find(event => event.eventType === "VIEWER_RESPONSE" && event.metadata?.promptNumber === 4)).toMatchObject({
+  content: expect.stringContaining("[SKETCH TRUNCATED"), metadata:{partial:true,accepted:true,stepId:"lite:prompt:4:viewer"},
+ });
+ expect((await h.repository.getRvSession(sessionId!))?.preRevealTranscript).toContain("[SKETCH TRUNCATED");
+ expect(await h.repository.getReveal(sessionId!)).toBeTruthy();
+});

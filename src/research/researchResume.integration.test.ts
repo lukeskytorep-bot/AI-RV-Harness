@@ -237,3 +237,36 @@ it("T3 Research: completed rejection uses the shared explicit decision and prese
  expect(JSON.stringify(durable.project().config)).toBe(frozen);
  expect(durable.events.filter(event => event.eventType === "VIEWER_RESPONSE" && event.content === "accepted first step")).toHaveLength(1);
 });
+
+it("replays the durable partial sketch after interruption before seal without a second Research dispatch", async () => {
+  const durable = researchDurableRepository({ frozenOutputPolicy: true });
+  vi.mocked(durable.repository.sealPreReveal).mockRejectedValueOnce(new Error("simulated exit after step 4 checkpoint"));
+  let calls = 0;
+  await expect(executeResearchSessions({
+    repository: durable.repository, projectId: "research",
+    rvLiteSessionRunner: async input => (await import("../sessions/rvLiteController")).runAutomaticRvLiteSession({
+      ...input, chat: async () => ++calls === 4
+        ? { content: "Useful Research sketch\n" + "-".repeat(12_000), finishReason: "length", usage: {} }
+        : { content: "Useful earlier evidence", finishReason: "stop", usage: {} },
+    }),
+  })).rejects.toThrow("simulated exit after step 4 checkpoint");
+  expect(calls).toBe(4);
+  expect(durable.repository.acceptReveal).not.toHaveBeenCalled();
+  const sketch = durable.events.find(event => event.eventType === "VIEWER_RESPONSE" && event.metadata?.promptNumber === 4);
+  expect(sketch).toMatchObject({ content: expect.stringContaining("[SKETCH TRUNCATED"), metadata: {
+    stepId: "lite:prompt:4:viewer", partial: true, accepted: true, finishReason: "ascii_sketch_truncated",
+    sketchTruncation: { originalFinishReason: "length" },
+  } });
+  const sessionId = durable.assignment().sessionId;
+  const liveChat = vi.fn(async () => { throw new Error("must not redraw"); });
+  expect(await prepareInterruptedResearchRetry(durable.repository, "research")).toBe(1);
+  await executeResearchSessions({
+    repository: durable.repository, projectId: "research",
+    sessionReplayFactory: input => createSessionReplay({ ...input, liveChat }),
+  });
+  expect(liveChat).not.toHaveBeenCalled();
+  expect(durable.assignment()).toMatchObject({ sessionId, status: "SessionComplete" });
+  expect(durable.events.filter(event => event.eventType === "VIEWER_RESPONSE" && event.metadata?.promptNumber === 4)).toHaveLength(1);
+  expect(durable.session().preRevealTranscript).toContain("[SKETCH TRUNCATED");
+  expect(durable.session().state).toBe("Revealed");
+});

@@ -395,3 +395,68 @@ it("B2 RV Lite freezes the analytical policy independently of actual blind reque
  expect(budgets).toEqual([16384,16384,16384,16384]);
  expect(JSON.parse(JSON.stringify(snapshots[0])).postRevealOutputPolicy).toEqual(policy);
 });
+
+for (const variant of ["core", "extended"] as const) {
+  it(`resolves a partial ${variant} sketch in step 4 with no retry and seals before Reveal`, async () => {
+    const log: string[] = [];
+    const repo = repository(log);
+    const append = vi.spyOn(repo, "appendSessionEvent");
+    let calls = 0;
+    const result = await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getRvLite("en", variant), sessionLanguage: "en", requestedSettings: {},
+      ...(variant === "extended" ? { automaticTarget: target } : {}),
+      chat: async request => {
+        if (++calls < 4) return { content: "earlier observation", finishReason: "stop", usage: {} };
+        const prefix = "Useful sketch\n /\\\n";
+        if (variant === "extended") {
+          request.onStreamEvent?.({ event: "contentDelta", data: { content: prefix } });
+          for (const chunk of "| /\\ |\n".repeat(500).match(/[\s\S]{1,31}/g)!) {
+            request.onStreamEvent?.({ event: "contentDelta", data: { content: chunk } });
+            if (request.signal?.aborted) throw request.signal.reason;
+          }
+          throw new Error("stream should have been cancelled before completion");
+        }
+        return { content: prefix + "-".repeat(12_000), finishReason: "length", usage: { outputTokens: 1200 } };
+      },
+    });
+    expect(calls).toBe(4);
+    expect(result.transcript).toContain("Useful sketch");
+    expect(result.transcript).toContain("[SKETCH TRUNCATED");
+    expect(result.transcript).not.toContain("-".repeat(2048));
+    expect(result.state).toBe(variant === "extended" ? "Revealed" : "AwaitingReveal");
+    // A partial sketch is a durable terminal response for step 4.
+    const sketch = append.mock.calls.map(([, event]) => event).find(event => event.eventType === "VIEWER_RESPONSE" && event.metadata?.promptNumber === 4);
+    expect(sketch?.metadata).toMatchObject({
+      stepId: "lite:prompt:4:viewer", requestSha256: expect.any(String), accepted: true, partial: true,
+      sketchTruncation: { repetitionRule: expect.stringMatching(/^ascii-/), rawOutputSha256: expect.any(String) },
+    });
+    expect(log.lastIndexOf("VIEWER_RESPONSE")).toBeLessThan(log.indexOf("sealed"));
+    if (variant === "extended") expect(log.indexOf("sealed")).toBeLessThan(log.indexOf("reveal"));
+    else expect(log).not.toContain("reveal");
+  });
+}
+
+it.each([3, 4])("does not reveal after an incomplete earlier sketch or STOP racing step %s", async step => {
+  const log: string[] = [];
+  const repo = repository(log);
+  const stop = new AbortController();
+  let calls = 0;
+  const result = await runAutomaticRvLiteSession({
+    repository: repo, workspaceId: "w", profileId: "p", providerConfig: config, model,
+    protocol: getRvLite("en", "extended"), sessionLanguage: "en", requestedSettings: {},
+    automaticTarget: target, signal: stop.signal,
+    chat: async request => {
+      if (++calls < step) return { content: "earlier observation", usage: {} };
+      request.onStreamEvent?.({ event: "contentDelta", data: { content: "-".repeat(12_000) } });
+      expect(request.signal?.aborted).toBe(true);
+      if (step === 4) stop.abort(new DOMException("User stop", "AbortError"));
+      throw request.signal?.reason;
+    },
+  });
+  expect(result.state).toBe("Interrupted");
+  expect(calls).toBe(4);
+  if (step === 4) expect(result.stopReason).toContain("USER STOP");
+  expect(log).not.toContain("sealed");
+  expect(log).not.toContain("reveal");
+});

@@ -145,6 +145,7 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
       priorEffectiveMaxOutputTokens: durable.priorEffectiveMaxOutputTokens,
       priorIncompleteReason: durable.priorIncompleteReason,
       sessionLanguage: input.sessionLanguage,
+      acceptTruncatedSketch: metadata.promptNumber === 4 && metadata.source === undefined,
       abortSignal: input.signal,
       call: async (settings, semanticAttempt, dispatchAttempt) => {
         validateSessionContinuationBudget(requestMessages);
@@ -185,7 +186,7 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
         metadata: { ...durableMetadata, ...viewerOutputAttemptMetadata(attempt) },
       }),
     });
-    return { response: result.response, durationMs, acceptedMetadata: { ...focusMetadata(sessionFocus,currentPassIndex), stepId, ...viewerOutputAcceptedMetadata(result) } };
+    return { response: result.response, durationMs, acceptedMetadata: { ...focusMetadata(sessionFocus,currentPassIndex), stepId, ...viewerOutputAcceptedMetadata(result), ...(result.sketchTruncation ? { requestSha256, partial: true, sketchTruncation: result.sketchTruncation } : {}) } };
   };
 
   if (!input.resumeSession && !input.initializationExistingSession) {
@@ -327,7 +328,7 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
       }
       let continuationState;
       try {
-        ({ state: continuationState } = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...focusMetadata(sessionFocus,currentPassIndex), promptNumber, ...responseAcceptedMetadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", actualProvider: response.actualProvider ?? "unknown", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } }));
+        ({ state: continuationState } = await persistSessionAssistantResponse({ repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn || response.finishReason === "ascii_sketch_truncated" ? undefined : continuationRoute, event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...focusMetadata(sessionFocus,currentPassIndex), promptNumber, ...responseAcceptedMetadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", actualProvider: response.actualProvider ?? "unknown", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } } }));
       } catch (cause) {
         if (cause instanceof SessionContinuationError) return stopRun(`AUTO-STOP: ${cause.message}`);
         throw cause;

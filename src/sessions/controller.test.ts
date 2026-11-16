@@ -429,3 +429,30 @@ it("B2 RCP freezes the analytical policy independently of actual blind requests"
  expect(budgets.length).toBeGreaterThan(0);expect(new Set(budgets)).toEqual(new Set([16384]));
  expect(JSON.parse(JSON.stringify(snapshots[0])).postRevealOutputPolicy).toEqual(policy);
 });
+
+it.each([2, 3, 4, "Monitor command"])("keeps Full RCP incomplete when %s returns a sketch loop", async (stage) => {
+  const log: string[] = [];
+  const monitorCommand = "Move 100 meters above the reported area and sketch the spatial data.";
+  let loopCalls = 0;
+  const result = await runAutomaticRcpSession({
+    repository: fakeRepository(log), workspaceId: "w", profileId: "p", providerConfig: config, model,
+    protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 },
+    ...(stage === "Monitor command" ? { monitor: { providerConfig: config, model } } : {}),
+    chat: async ({ messages }) => {
+      if (messages.some(message => message.role === "system" && message.content.includes("AI Monitor conducting a blind"))) {
+        return { content: monitorCommand, usage: {} };
+      }
+      const prompt = messages.at(-1)?.content ?? "";
+      if (stage === "Monitor command" ? prompt.includes(monitorCommand) : prompt.includes(`Now execute Phase ${stage} only`)) {
+        loopCalls += 1;
+        return { content: "Incomplete observations\n" + "-".repeat(12_000), finishReason: "length", usage: {} };
+      }
+      return { content: "Distinct complete observations.", usage: {} };
+    },
+  });
+  expect(loopCalls).toBe(2);
+  expect(result.state).toBe("Interrupted");
+  expect(log.filter(item => item === "event:VIEWER_OUTPUT_INCOMPLETE")).toHaveLength(2);
+  expect(log).not.toContain("sealed");
+  expect(log).not.toContain("reveal");
+});
