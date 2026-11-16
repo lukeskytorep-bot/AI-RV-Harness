@@ -22,7 +22,7 @@ export async function credentialFingerprint(secret: string): Promise<string> {
 
 export async function addProvider(
   repository: AppRepository,
-  input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string; customOutputTokenField?: CustomOpenAiOutputTokenField },
+  input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string; customOutputTokenField?: CustomOpenAiOutputTokenField; customStreamingEnabled?: boolean },
 ): Promise<ProviderConfig> {
   const apiKey = input.apiKey.trim();
   const label = input.label.trim();
@@ -44,6 +44,7 @@ export async function addProvider(
       credentialHint: credentialHint(apiKey),
       baseUrl: input.baseUrl?.trim() || undefined,
       ...(input.provider === "custom_openai" && input.customOutputTokenField ? { customOutputTokenField: input.customOutputTokenField } : {}),
+      ...(input.provider === "custom_openai" ? { customStreamingEnabled: input.customStreamingEnabled ?? true } : {}),
       fingerprint: await credentialFingerprint(apiKey),
     });
     notifyProviderRoutesChanged();

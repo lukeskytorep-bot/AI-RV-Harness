@@ -107,3 +107,41 @@ describe("streaming repetition guard", () => {
   });
 
 });
+
+const mountain = "   /\\\n  /  \\\n /    \\\n" + "-".repeat(900);
+const frame = "+" + "-".repeat(160) + "+\n" + "|   |\n".repeat(40) + "+" + "-".repeat(160) + "+";
+const hatch = "/\\/\\/\\/\\\n".repeat(96);
+const markedFrame = "+-------+\n" + "|---X---|\n".repeat(96) + "|---o---|\n+-------+";
+
+it.each([mountain, frame, hatch, markedFrame])("preserves a valid drawing, including isolated markers", sketch => {
+  const content = "Sketch:\n```text\n" + sketch + "\n```";
+  expect(analyzeRepetitiveOutput(content).severity).toBe("clear");
+  const guard = createStreamingRepetitionGuard();
+  try {
+    for (const part of content.match(/[\s\S]{1,17}/g)!) guard.onStreamEvent({ event: "contentDelta", data: { content: part } });
+    guard.onStreamEvent({ event: "finished", data: {} });
+    expect(guard.signal.aborted).toBe(false);
+  } finally { guard.cleanup(); }
+});
+
+it.each([
+  ["ascii-long-stroke", "-".repeat(12_000)],
+  ["ascii-identical-rows", "| /\\ |\r\n".repeat(500)],
+  ["ascii-identical-rows", "|---X---|\n".repeat(500)],
+])("detects %s across small deltas inside a fence", (rule, loop) => {
+  const prefix = "Useful observation\n```text\n /\\\n";
+  const content = prefix + loop + "\n```";
+  expect(analyzeRepetitiveOutput(content)).toMatchObject({ kind: "ascii_sketch", rule, cutAt: prefix.length });
+  const guard = createStreamingRepetitionGuard();
+  try {
+    let received = 0;
+    for (const part of content.match(/[\s\S]{1,13}/g)!) {
+      guard.onStreamEvent({ event: "contentDelta", data: { content: part } });
+      received += part.length;
+      if (guard.signal.aborted) break;
+    }
+    expect(received).toBeLessThan(content.length);
+    expect(guard.runawayError()).toMatchObject({ finding: { kind: "ascii_sketch", rule, cutAt: prefix.length } });
+    expect(guard.runawayError()?.sanitizedContent).toContain(" /\\\n```\n\n[SKETCH TRUNCATED");
+  } finally { guard.cleanup(); }
+});

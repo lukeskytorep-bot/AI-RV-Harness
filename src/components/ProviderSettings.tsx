@@ -107,7 +107,7 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
     }
   };
 
-  const add = async (input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string; customOutputTokenField?: CustomOpenAiOutputTokenField }) => {
+  const add = async (input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string; customOutputTokenField?: CustomOpenAiOutputTokenField; customStreamingEnabled?: boolean }) => {
     if (!repository) return;
     setBusyId("new");
     setError(null);
@@ -210,17 +210,18 @@ function ModelRegistry({ copy, repository, providers, models, onChanged }: { cop
   );
 }
 
-function AddProviderDialog({ copy, busy, onClose, onSubmit }: { copy: Copy; busy: boolean; onClose: () => void; onSubmit: (input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string; customOutputTokenField?: CustomOpenAiOutputTokenField }) => Promise<void> }) {
+function AddProviderDialog({ copy, busy, onClose, onSubmit }: { copy: Copy; busy: boolean; onClose: () => void; onSubmit: (input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string; customOutputTokenField?: CustomOpenAiOutputTokenField; customStreamingEnabled?: boolean }) => Promise<void> }) {
   const [provider, setProvider] = useState<ProviderKind>("openrouter");
   const [label, setLabel] = useState(PROVIDER_LABELS.openrouter);
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [customOutputTokenField, setCustomOutputTokenField] = useState<"default" | CustomOpenAiOutputTokenField>("default");
+  const [streamingEnabled, setStreamingEnabled] = useState(true);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const secret = apiKey;
     setApiKey("");
-    void onSubmit({ provider, label, apiKey: secret, ...(baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}), ...(provider === "custom_openai" && customOutputTokenField !== "default" ? { customOutputTokenField } : {}) });
+    void onSubmit({ provider, label, apiKey: secret, ...(provider === "custom_openai" ? { customStreamingEnabled: streamingEnabled } : {}), ...(baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}), ...(provider === "custom_openai" && customOutputTokenField !== "default" ? { customOutputTokenField } : {}) });
   };
   const changeProvider = (next: ProviderKind) => {
     setProvider(next);
@@ -236,6 +237,10 @@ function AddProviderDialog({ copy, busy, onClose, onSubmit }: { copy: Copy; busy
           <label>{copy.provider}<select value={provider} onChange={(event) => changeProvider(event.target.value as ProviderKind)}>{PROVIDER_KINDS.map((kind) => <option key={kind} value={kind}>{PROVIDER_LABELS[kind]}</option>)}</select></label>
           <label>{copy.providerLabel}<input value={label} onChange={(event) => setLabel(event.target.value)} required /></label>
           {(provider === "custom_openai" || provider === "blackbox") && <><label>{copy.baseUrl}<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={provider === "blackbox" ? "https://enterprise.blackbox.ai" : "https://example.com/v1"} required={provider === "custom_openai"} /></label>{provider === "custom_openai" && <label>{copy.customOutputTokenField}<select value={customOutputTokenField} onChange={(event) => setCustomOutputTokenField(event.target.value as "default" | CustomOpenAiOutputTokenField)}><option value="default">{copy.customOutputTokenDefault}</option><option value="max_completion_tokens">{copy.customOutputTokenCompletion}</option></select><small>{copy.customOutputTokenFieldHelp}</small></label>}</>}
+          {provider === "custom_openai" && <>
+            <label className="checkbox-line"><input type="checkbox" checked={streamingEnabled} onChange={(event) => setStreamingEnabled(event.target.checked)} />{copy.customStreamingEnabled}</label>
+            <small>{copy.customStreamingHelp}</small>
+          </>}
           <label>{copy.apiKey}<input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} required /></label>
           <div className="modal-actions"><button className="secondary-button" type="button" disabled={busy} onClick={onClose}>{copy.cancel}</button><button className="primary-button" type="submit" disabled={busy}>{busy ? copy.refreshing : copy.saveAndTest}</button></div>
         </form>

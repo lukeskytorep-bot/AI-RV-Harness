@@ -60,6 +60,7 @@ export interface CreateProviderConfigInput {
   credentialHint?: string;
   baseUrl?: string;
   customOutputTokenField?: CustomOpenAiOutputTokenField;
+  customStreamingEnabled?: boolean;
   fingerprint?: string;
 }
 

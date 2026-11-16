@@ -111,6 +111,7 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
       id: input.id, provider: input.provider, label: input.label.trim(), credentialId: input.credentialId,
       credentialHint: input.credentialHint, credentialFingerprint: input.fingerprint, baseUrl: input.baseUrl?.trim() || undefined,
       ...(input.provider === "custom_openai" && input.customOutputTokenField ? { customOutputTokenField: input.customOutputTokenField } : {}),
+      ...(input.provider === "custom_openai" ? { customStreamingEnabled: input.customStreamingEnabled ?? true } : {}),
       enabled: true, createdAt: timestamp, updatedAt: timestamp,
     };
     const statements: DatabaseTransactionStatement[] = [
@@ -125,6 +126,11 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
       query: `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, $3)
               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
       values: [customOutputTokenFieldSettingKey(config.id), config.customOutputTokenField, timestamp],
+    });
+    if (config.customStreamingEnabled !== undefined) statements.push({
+      query: `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, $3)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      values: [customStreamingEnabledSettingKey(config.id), String(config.customStreamingEnabled), timestamp],
     });
     await this.dependencies.executeTransaction(statements);
     return config;

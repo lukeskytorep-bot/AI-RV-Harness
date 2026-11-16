@@ -5,6 +5,7 @@ export type RepetitionSeverity = "clear" | "warning" | "stop";
 export interface RepetitionInspection {
   severity: RepetitionSeverity;
   rule?: string;
+  kind?: "ascii_sketch";
   fragment?: string;
   cutAt?: number;
 }
@@ -23,6 +24,89 @@ const MIN_PERIOD = 12;
 const MAX_PERIOD = 1_000;
 const TAIL_REPEAT_LIMIT = 20;
 
+const ASCII_STROKE_LIMIT = 2_048;
+const ASCII_ROW_LIMIT = 128;
+const ASCII_ROW_MAX_WIDTH = 4_096;
+const ASCII_STROKES = "-_=+*~|.:/\\#%";
+const ASCII_DRAWING_ROW = /^[\t \-_=+*~|.:/\\<>\[\]{}()^#%]+$/;
+
+function isAsciiDrawingRow(row: string): boolean {
+  if (row.length < 4) return false;
+  if (ASCII_DRAWING_ROW.test(row)) return true;
+  if (!ASCII_DRAWING_ROW.test(row[0])) return false;
+
+  // Count a single letter or digit between drawing glyphs as a marker.
+  // Empty sections reject adjacent markers and labels at either end.
+  const compact = row.replace(/[\t ]/g, "");
+  const sections = compact.split(/[A-Za-z0-9]/);
+  const markers = sections.length - 1;
+  return compact.length - markers >= 4
+    && markers * 10 <= compact.length * 3
+    && sections.every(section => ASCII_DRAWING_ROW.test(section));
+}
+
+/** Shared linear scan. Offsets and the current row survive arbitrary SSE splits. */
+export function createAsciiSketchScanner() {
+  let offset = 0;
+  let rowStart = 0;
+  let row = "";
+  let previousRow = "";
+  let rowCount = 0;
+  let repeatedRowStart = 0;
+  let previousChar = "";
+  let strokeLength = 0;
+  let finding: RepetitionInspection | undefined;
+
+  const finishRow = () => {
+    const drawing = row.length <= ASCII_ROW_MAX_WIDTH ? row.trim() : "";
+    if (!isAsciiDrawingRow(drawing)) {
+      previousRow = "";
+      rowCount = 0;
+      return;
+    }
+    if (drawing === previousRow) rowCount++;
+    else {
+      previousRow = drawing;
+      rowCount = 1;
+      repeatedRowStart = rowStart;
+    }
+    if (rowCount >= ASCII_ROW_LIMIT) finding = {
+      severity: "stop", kind: "ascii_sketch", rule: "ascii-identical-rows",
+      fragment: drawing.slice(0, 120), cutAt: repeatedRowStart,
+    };
+  };
+
+  return {
+    push(chunk: string): RepetitionInspection | undefined {
+      for (let i = 0; i < chunk.length && !finding; i++, offset++) {
+        const char = chunk[i];
+        if (char === "\n") {
+          finishRow();
+          rowStart = offset + 1;
+          row = "";
+        } else if (row.length <= ASCII_ROW_MAX_WIDTH) {
+          row += char;
+        }
+        strokeLength = char === previousChar ? strokeLength + 1 : 1;
+        previousChar = char;
+        if (strokeLength === ASCII_STROKE_LIMIT && ASCII_STROKES.includes(char)) {
+          finding = { severity: "stop", kind: "ascii_sketch", rule: "ascii-long-stroke", fragment: char.repeat(80), cutAt: offset - strokeLength + 1 };
+        }
+      }
+      return finding;
+    },
+    finish(): RepetitionInspection | undefined {
+      if (!finding && row) finishRow();
+      return finding;
+    },
+  };
+}
+
+export function inspectAsciiSketch(content: string): RepetitionInspection | undefined {
+  const scanner = createAsciiSketchScanner();
+  return scanner.push(content) ?? scanner.finish();
+}
+
 /** Compatibility wrapper retained for integrations which construct a guard. */
 export class RepetitionGuard {
   inspect(content: string): RepetitionInspection {
@@ -36,6 +120,8 @@ export class RepetitionGuard {
  * scored. This is a last-resort repetition-runaway detector, not a size limit or semantic classifier.
  */
 export function analyzeRepetitiveOutput(content: string): RepetitionInspection {
+  const ascii = inspectAsciiSketch(content);
+  if (ascii) return ascii;
   const scannable = maskFencedDrawingLines(content);
   return findCharacterRun(scannable)
     ?? findConsecutiveIdenticalLines(scannable)
@@ -55,17 +141,25 @@ export function detectRepetitiveOutput(content: string): boolean {
 export function sanitizeRepetitiveOutput(
   content: string,
   language: InterfaceLanguage = "en",
+  finding = analyzeRepetitiveOutput(content),
 ): SanitizedRepetitiveOutput {
-  const finding = analyzeRepetitiveOutput(content);
   if (finding.severity !== "stop" || finding.cutAt === undefined) {
     return { content, truncated: false, originalLength: content.length, retainedLength: content.length };
   }
 
-  const marker = language === "pl"
+  const marker = finding.kind === "ascii_sketch"
+    ? language === "pl" ? "[SZKIC SKRÓCONY — wykryto pętlę rysowania.]" : "[SKETCH TRUNCATED — a drawing loop was detected.]"
+    : language === "pl"
     ? "[ODPOWIEDŹ SKRÓCONA — wykryto jednoznaczne zapętlenie generowania; prawidłowe dane sprzed tego miejsca zostały zachowane.]"
     : "[OUTPUT TRUNCATED — a clear generation loop was detected; valid material before this point was preserved.]";
   const retained = content.slice(0, Math.max(0, finding.cutAt)).trimEnd();
-  const sanitized = `${retained}${retained ? "\n\n" : ""}${marker}`;
+  let closingFence = "";
+  if (finding.kind === "ascii_sketch") {
+    let fence: RepetitionFenceState | null = null;
+    for (const line of retained.split(/(?<=\n)/)) fence = maskRepetitionLine(line, fence).nextFence;
+    if (fence) closingFence = "\n" + fence.marker.repeat(fence.length);
+  }
+  const sanitized = `${retained}${closingFence}${retained ? "\n\n" : ""}${marker}`;
   return {
     content: sanitized,
     truncated: true,
@@ -101,6 +195,11 @@ export function maskRepetitionLine(
       masked: line.replace(/[^\n\r]/g, " "),
       nextFence: fence ? null : { marker: marker[0] as "`" | "~", length: marker.length },
     };
+  }
+  // Structural ASCII rows use the higher sketch threshold even outside fences.
+  const drawing = line.trim();
+  if (isAsciiDrawingRow(drawing)) {
+    return { masked: line.replace(/[^\n\r]/g, " "), nextFence: fence };
   }
   if (!inside) return { masked: line, nextFence: fence };
 

@@ -192,9 +192,11 @@ describe("SQLite Settings and models repository contract", () => {
       customOutputTokenField: "max_completion_tokens",
     });
     expect(created.customOutputTokenField).toBe("max_completion_tokens");
-    expect(transactions[0]).toHaveLength(3);
+    expect(created.customStreamingEnabled).toBe(true);
+    expect(transactions[0]).toHaveLength(4);
     expect(transactions[0]?.[2].query).toContain("INSERT INTO app_settings");
     expect(transactions[0]?.[2].values).toEqual(["provider.customOutputTokenField.provider-custom", "max_completion_tokens", timestamp]);
+    expect(transactions[0]?.[3].values).toEqual(["provider.customStreamingEnabled.provider-custom", "true", timestamp]);
   });
 
   it("deletes provider metadata and clears profile references in one transaction", async () => {
