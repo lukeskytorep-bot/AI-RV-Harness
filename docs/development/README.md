@@ -1,12 +1,6 @@
 # Developer Guide
 
-See [Separate Research evaluation panels](RESEARCH_EVALUATION_PANELS_EN.md) for full new same/new-Judge panels over preserved sessions, including operation after End and isolated native persistence.
-
-See [Research Judge completion](RESEARCH_JUDGE_COMPLETION_EN.md) for Research-only aliases, independent missing slots, partial exports and persisted completion authorization.
-
-See [Automatic Recovery S3](AUTOMATIC_RECOVERY_S3_EN.md) for receipt recovery, Research Judge retry limits and release-version alignment.
-
-Reviewed 23 October 2026 for Automatic Recovery S3. This is the primary English contributor entry point. Package version: **0.7.14**; SQLite schema: **34**. Native database epoch remains v0.7.13 for compatibility. This source version is not a claim of published binaries or Windows/provider acceptance.
+Reviewed 16 October 2026 against `ai-rv-2` commit `9c92bdbb94d1125406e0094779102458cdeee87c` (Training Continuity T5). This is the primary English contributor entry point. Package version: 0.7.13; SQLite schema: 31. The v0.7.14 name describes development scope, not a published binary.
 
 ## Prerequisites and local start
 
@@ -124,10 +118,6 @@ The pinned local runtime ownership repair and manual diagnostic build are descri
 
 Before changing runtime dependencies, recurring IPC or post-Reveal recovery, read [Engineering Decisions 25 and 26](../architecture/ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md#decision-25--windows-runtime-ownership-and-bounded-ipc-observation). They record the Windows crash investigation/repair, criteria for replacing the local Tauri patch with a verified upstream fix, and the selective restoration of unattended Training. Optional learning rejection must not become a mandatory operator gate. The 17 October user test completed Training in approximately 20 minutes and verified Stop without app closure; it is not a substitute for every Windows acceptance scenario.
 
-## Telepathic checkpoint recovery
+## Direct provider update — 19 October 2026
 
-See [Telepathic Checkpoint Recovery](TELEPATHIC_CHECKPOINT_RECOVERY_EN.md) for local BUSY retries, shared write coordination, native fencing, and the separation of received responses from persistence failures. This stage does not enable automatic transport retries.
-
-## Telepathic automatic recovery
-
-[Automatic Recovery S2](TELEPATHIC_AUTOMATIC_RECOVERY_EN.md) describes saved policy, bounded transport retries, receipt recovery, STOP/restart behavior, and the shared Training/Conversation Resume decision.
+Mistral and Blackbox now include direct additional Viewer sampling and Chat Completions SSE. Mistral also preserves compatible thinking/text continuation. Blackbox supports explicit account endpoints and manual model IDs for non-legacy routes without guessed discovery. See [Mistral and Blackbox configuration and engineering contract](DIRECT_MISTRAL_BLACKBOX.md) for exact scope, code map and acceptance limits. Ollama Native is planned, not implemented. This update does not change the package/release version or claim live/Windows acceptance.

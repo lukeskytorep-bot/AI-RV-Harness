@@ -1,8 +1,9 @@
 // Generate notices for the desktop bundle from the installed, locked dependencies.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, basename, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertComplete, collectPackageNotices, inventoryManifest, loadSupplements, renderPackageNotice, sha256 } from "./third-party-notices-lib.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const read = path => readFileSync(path, "utf8").trimEnd();
@@ -21,18 +22,8 @@ if (new Set(runtime.map(key)).size + 1 !== tree.size || runtime.length !== new S
 }
 
 const entries = [];
-const missing = [];
-const namePattern = /^(?:licen[cs]es?|copying|copyright|notice|unlicense|third[-_ ]party)(?:$|[.\-_ ])/i;
-function add({ name, version, license, path, source, licenseFile, ecosystem, extra = [] }) {
-  const files = readdirSync(path, { withFileTypes: true })
-    .flatMap(item => namePattern.test(item.name) ? item.isFile() ? [item.name] : item.isDirectory()
-      ? readdirSync(resolve(path, item.name), { withFileTypes: true }).filter(p => p.isFile()).map(p => item.name + "/" + p.name)
-      : [] : []);
-  const texts = [...new Set([...files, ...extra, ...(licenseFile && existsSync(resolve(path, licenseFile)) ? [licenseFile] : [])])].sort();
-  if (!texts.some(file => /^(?:licen[cs]es?|copying|unlicense)(?:$|[.\-_ /])/i.test(basename(file)) || file === licenseFile)) missing.push(ecosystem + ": " + name + "@" + version);
-  entries.push([ecosystem + ": " + name + "@" + version, "Declared license: " + (license || "See supplied notices / verify upstream"), "Source: " + source,
-    ...texts.map(file => "--- " + file + " ---\n" + read(resolve(path, file)))].join("\n\n"));
-}
+const supplements = loadSupplements(resolve(root, "third-party/notices"));
+const add = p => entries.push(collectPackageNotices(p, supplements));
 const lock = JSON.parse(read(resolve(root, "package-lock.json")));
 for (const [path, info] of Object.entries(lock.packages)) {
   if (!path || info.dev) continue;
@@ -52,15 +43,22 @@ for (const p of runtime) {
       : "https://crates.io/api/v1/crates/" + p.name + "/" + p.version + "/download",
     extra: vendored ? ["PATCH.md"] : [] });
 }
+assertComplete(entries);
+const manifest = inventoryManifest(entries, target, Object.fromEntries(["package-lock.json", "src-tauri/Cargo.lock"]
+  .map(file => [file, sha256(readFileSync(resolve(root, file)))])));
 const parts = [
   "AI RV Harness — Third-party notices\nTarget: " + target,
   "Inventory: installed production npm packages and Cargo normal dependency tree for this target. This inventory can include unused packages; it does not cover additional system libraries copied by OS packagers.",
   "--- Project LICENSE ---\n" + read(resolve(root, "LICENSE")),
   "--- Project content license ---\n" + read(resolve(root, "CONTENT_LICENSE_CC_BY_4.0.md")),
-  ...(missing.length ? ["Packages without a license text in the installed package; review applicable upstream notices before release:\n" + missing.sort().join("\n")] : []),
-  ...entries.sort()
+  "MPL-2.0 corresponding sources: exact-version source archive URLs are listed with each MPL-covered package below. These notices cover the dependency inventory only; system libraries added by OS packagers require a separate review.",
+  ...entries.map(renderPackageNotice).sort()
 ];
+const notices = parts.join("\n\n============================================================\n\n") + "\n";
+manifest.projectVersion = JSON.parse(read(resolve(root, "package.json"))).version;
+manifest.noticesSha256 = sha256(notices);
+manifest.coverage = "Locked application dependencies only; additional components copied by OS packagers require separate inspection.";
 mkdirSync(resolve(root, "dist"), { recursive: true });
-writeFileSync(resolve(root, "dist/THIRD_PARTY_NOTICES.txt"), parts.join("\n\n============================================================\n\n") + "\n");
+writeFileSync(resolve(root, "dist/THIRD_PARTY_NOTICES.txt"), notices);
+writeFileSync(resolve(root, "dist/THIRD_PARTY_NOTICES.inventory.json"), JSON.stringify(manifest, null, 2) + "\n");
 console.log("Third-party notices: " + entries.length + " entries for " + target + ".");
-if (missing.length) console.warn("Upstream license texts to review before public release:\n" + missing.join("\n"));

@@ -1,0 +1,337 @@
+{
+  "schemaVersion": 1,
+  "packages": [
+    {
+      "ecosystem": "Rust",
+      "name": "alloc-stdlib",
+      "version": "0.2.4",
+      "declaredLicense": "BSD-3-Clause",
+      "upstreamCommit": "ae42d22078b98549e987d2f03d12df7b984fde47",
+      "note": "Original upstream notices from the commit recorded in the locked crate archive.",
+      "files": [
+        {
+          "path": "alloc-stdlib-BSD-3-Clause.txt",
+          "kind": "license",
+          "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae",
+          "sourceUrl": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "crc-catalog",
+      "version": "2.5.0",
+      "declaredLicense": "MIT OR Apache-2.0",
+      "upstreamCommit": "ed4ad631f22b05055c21a3a4127eb7cf6d75bb62",
+      "note": "Original upstream notices from the commit recorded in the locked crate archive.",
+      "files": [
+        {
+          "path": "crc-catalog-Apache-2.0.txt",
+          "kind": "license",
+          "sha256": "d3cdb764b98283ee7c3a3cea8d374e2a2957322374378d1f3263f4d512741fc3",
+          "sourceUrl": "https://raw.githubusercontent.com/akhilles/crc-catalog/ed4ad631f22b05055c21a3a4127eb7cf6d75bb62/LICENSES/Apache-2.0.txt"
+        },
+        {
+          "path": "crc-catalog-MIT.txt",
+          "kind": "license",
+          "sha256": "5ef8fcfb6cccec8fcae043c834099a60c8b7406408db576e026d2b7e67dc5cf5",
+          "sourceUrl": "https://raw.githubusercontent.com/akhilles/crc-catalog/ed4ad631f22b05055c21a3a4127eb7cf6d75bb62/LICENSES/MIT.txt"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "dlopen2",
+      "version": "0.8.2",
+      "declaredLicense": "MIT",
+      "upstreamCommit": "cc80e4a0a90d499b677fdf7743699b4b3a43a989",
+      "note": "Original upstream notices from the commit recorded in the locked crate archive.",
+      "files": [
+        {
+          "path": "dlopen2-MIT.txt",
+          "kind": "license",
+          "sha256": "39fa265207450e77c62e90c5594a06c085b655d8374c7ced4bf7894b6bd95dd2",
+          "sourceUrl": "https://raw.githubusercontent.com/OpenByteDev/dlopen2/cc80e4a0a90d499b677fdf7743699b4b3a43a989/LICENSE"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "dlopen2_derive",
+      "version": "0.4.3",
+      "declaredLicense": "MIT",
+      "upstreamCommit": "cc80e4a0a90d499b677fdf7743699b4b3a43a989",
+      "note": "Original upstream notices from the commit recorded in the locked crate archive.",
+      "files": [
+        {
+          "path": "dlopen2-MIT.txt",
+          "kind": "license",
+          "sha256": "39fa265207450e77c62e90c5594a06c085b655d8374c7ced4bf7894b6bd95dd2",
+          "sourceUrl": "https://raw.githubusercontent.com/OpenByteDev/dlopen2/cc80e4a0a90d499b677fdf7743699b4b3a43a989/LICENSE"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "linux-keyutils",
+      "version": "0.2.5",
+      "declaredLicense": "Apache-2.0 OR MIT",
+      "upstreamCommit": "7b508d396669fd046136e9928283b2eca4bd7bf6",
+      "note": "The exact-version README License section explicitly offers Apache-2.0 or MIT. Apache-2.0 is selected here; its complete text comes from the Apache Software Foundation because this upstream commit omits the referenced license files. The README grant excerpt is retained verbatim; no MIT copyright attribution has been invented.",
+      "files": [
+        {
+          "path": "linux-keyutils-LICENSE-GRANT.txt",
+          "kind": "notice",
+          "sha256": "f6a350039a8a650ea3db69d50dd27c22318a4ed44b118dfd0596381510aec96e",
+          "sourceUrl": "https://raw.githubusercontent.com/landhb/linux-keyutils/7b508d396669fd046136e9928283b2eca4bd7bf6/README.md"
+        },
+        {
+          "path": "Apache-2.0.txt",
+          "kind": "license",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sourceUrl": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "selectors",
+      "version": "0.36.1",
+      "declaredLicense": "MPL-2.0",
+      "upstreamCommit": "635e1a19d02960588a00e189bd4bd5bdb150ec3d",
+      "note": "The exact-version lib.rs header explicitly grants MPL-2.0. Its header is retained verbatim; the complete MPL-2.0 text comes from Mozilla because this upstream commit omits a standalone license text.",
+      "files": [
+        {
+          "path": "selectors-LICENSE-GRANT.txt",
+          "kind": "notice",
+          "sha256": "766674381e88a468d55e07de3596987391cf0e8beebe51baf4fddf11078785b3",
+          "sourceUrl": "https://raw.githubusercontent.com/servo/stylo/635e1a19d02960588a00e189bd4bd5bdb150ec3d/selectors/lib.rs"
+        },
+        {
+          "path": "Mozilla-MPL-2.0.txt",
+          "kind": "license",
+          "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+          "sourceUrl": "https://www.mozilla.org/media/MPL/2.0/index.txt"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "unic-char-property",
+      "version": "0.9.0",
+      "declaredLicense": "MIT/Apache-2.0",
+      "upstreamCommit": "5878605364af97a3358368a6eaef02104af2e016",
+      "note": "Original upstream notices from the commit recorded in the locked crate archive.",
+      "files": [
+        {
+          "path": "unic-MIT.txt",
+          "kind": "license",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT"
+        },
+        {
+          "path": "unic-Apache-2.0.txt",
+          "kind": "license",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-APACHE"
+        },
+        {
+          "path": "unic-COPYRIGHT.md",
+          "kind": "notice",
+          "sha256": "f5c342c49f3ac804f3e8e7bb62a8040a44c50d47bb36902b1abd13f66a1adf8b",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/COPYRIGHT.md"
+        },
+        {
+          "path": "unic-AUTHORS.txt",
+          "kind": "notice",
+          "sha256": "2748c1a1fba7616917c61d455e8d715ab952671ead63f2026ad0124410596b09",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/AUTHORS"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "unic-char-range",
+      "version": "0.9.0",
+      "declaredLicense": "MIT/Apache-2.0",
+      "upstreamCommit": "5878605364af97a3358368a6eaef02104af2e016",
+      "note": "Original upstream notices from the commit recorded in the locked crate archive.",
+      "files": [
+        {
+          "path": "unic-MIT.txt",
+          "kind": "license",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT"
+        },
+        {
+          "path": "unic-Apache-2.0.txt",
+          "kind": "license",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-APACHE"
+        },
+        {
+          "path": "unic-COPYRIGHT.md",
+          "kind": "notice",
+          "sha256": "f5c342c49f3ac804f3e8e7bb62a8040a44c50d47bb36902b1abd13f66a1adf8b",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/COPYRIGHT.md"
+        },
+        {
+          "path": "unic-AUTHORS.txt",
+          "kind": "notice",
+          "sha256": "2748c1a1fba7616917c61d455e8d715ab952671ead63f2026ad0124410596b09",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/AUTHORS"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "unic-common",
+      "version": "0.9.0",
+      "declaredLicense": "MIT/Apache-2.0",
+      "upstreamCommit": "5878605364af97a3358368a6eaef02104af2e016",
+      "note": "Original upstream notices from the commit recorded in the locked crate archive.",
+      "files": [
+        {
+          "path": "unic-MIT.txt",
+          "kind": "license",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT"
+        },
+        {
+          "path": "unic-Apache-2.0.txt",
+          "kind": "license",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-APACHE"
+        },
+        {
+          "path": "unic-COPYRIGHT.md",
+          "kind": "notice",
+          "sha256": "f5c342c49f3ac804f3e8e7bb62a8040a44c50d47bb36902b1abd13f66a1adf8b",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/COPYRIGHT.md"
+        },
+        {
+          "path": "unic-AUTHORS.txt",
+          "kind": "notice",
+          "sha256": "2748c1a1fba7616917c61d455e8d715ab952671ead63f2026ad0124410596b09",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/AUTHORS"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "unic-ucd-ident",
+      "version": "0.9.0",
+      "declaredLicense": "MIT/Apache-2.0",
+      "upstreamCommit": "8a6ce83063d90b91ae2ce59eddb803edd393fca9",
+      "note": "Original upstream notices from the commit recorded in the locked crate archive.",
+      "files": [
+        {
+          "path": "unic-ident-MIT.txt",
+          "kind": "license",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/8a6ce83063d90b91ae2ce59eddb803edd393fca9/LICENSE-MIT"
+        },
+        {
+          "path": "unic-ident-Apache-2.0.txt",
+          "kind": "license",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/8a6ce83063d90b91ae2ce59eddb803edd393fca9/LICENSE-APACHE"
+        },
+        {
+          "path": "unic-ident-COPYRIGHT.md",
+          "kind": "notice",
+          "sha256": "f5c342c49f3ac804f3e8e7bb62a8040a44c50d47bb36902b1abd13f66a1adf8b",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/8a6ce83063d90b91ae2ce59eddb803edd393fca9/COPYRIGHT.md"
+        },
+        {
+          "path": "unic-ident-AUTHORS.txt",
+          "kind": "notice",
+          "sha256": "2748c1a1fba7616917c61d455e8d715ab952671ead63f2026ad0124410596b09",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/8a6ce83063d90b91ae2ce59eddb803edd393fca9/AUTHORS"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "unic-ucd-version",
+      "version": "0.9.0",
+      "declaredLicense": "MIT/Apache-2.0",
+      "upstreamCommit": "5878605364af97a3358368a6eaef02104af2e016",
+      "note": "Original upstream notices from the commit recorded in the locked crate archive.",
+      "files": [
+        {
+          "path": "unic-MIT.txt",
+          "kind": "license",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT"
+        },
+        {
+          "path": "unic-Apache-2.0.txt",
+          "kind": "license",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-APACHE"
+        },
+        {
+          "path": "unic-COPYRIGHT.md",
+          "kind": "notice",
+          "sha256": "f5c342c49f3ac804f3e8e7bb62a8040a44c50d47bb36902b1abd13f66a1adf8b",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/COPYRIGHT.md"
+        },
+        {
+          "path": "unic-AUTHORS.txt",
+          "kind": "notice",
+          "sha256": "2748c1a1fba7616917c61d455e8d715ab952671ead63f2026ad0124410596b09",
+          "sourceUrl": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/AUTHORS"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "webview2-com",
+      "version": "0.38.2",
+      "declaredLicense": "MIT",
+      "upstreamCommit": "b74dc5e2b394044bea5191052868ce7a106c202c",
+      "note": "Original upstream notices from the commit recorded in the locked crate archive.",
+      "files": [
+        {
+          "path": "webview2-MIT.txt",
+          "kind": "license",
+          "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73",
+          "sourceUrl": "https://raw.githubusercontent.com/wravery/webview2-rs/b74dc5e2b394044bea5191052868ce7a106c202c/LICENSE"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "webview2-com-macros",
+      "version": "0.8.1",
+      "declaredLicense": "MIT",
+      "upstreamCommit": "dffa41a8a46d3f5565eefbff2de57d38d399f158",
+      "note": "Original upstream notices from the commit recorded in the locked crate archive.",
+      "files": [
+        {
+          "path": "webview2-macros-MIT.txt",
+          "kind": "license",
+          "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73",
+          "sourceUrl": "https://raw.githubusercontent.com/wravery/webview2-rs/dffa41a8a46d3f5565eefbff2de57d38d399f158/LICENSE"
+        }
+      ]
+    },
+    {
+      "ecosystem": "Rust",
+      "name": "webview2-com-sys",
+      "version": "0.38.2",
+      "declaredLicense": "MIT",
+      "upstreamCommit": "b74dc5e2b394044bea5191052868ce7a106c202c",
+      "note": "Original upstream notices from the commit recorded in the locked crate archive.",
+      "files": [
+        {
+          "path": "webview2-MIT.txt",
+          "kind": "license",
+          "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73",
+          "sourceUrl": "https://raw.githubusercontent.com/wravery/webview2-rs/b74dc5e2b394044bea5191052868ce7a106c202c/LICENSE"
+        }
+      ]
+    }
+  ]
+}

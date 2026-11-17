@@ -32,3 +32,6 @@ src/resources/field-lexicon/*.txt -text
 
 # Pinned runtime: preserve exact reviewed bytes on every checkout, including Windows.
 src-tauri/vendor/tauri-runtime-wry/** -text
+
+# Reviewed upstream license bytes are SHA-256 pinned, including on Windows.
+third-party/notices/** -text
