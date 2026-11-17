@@ -95,6 +95,17 @@ export async function providerBindingEndpoint(config: ProviderConfig): Promise<s
   return invoke<string>("provider_binding_endpoint", { provider: config.provider, baseUrl: config.baseUrl });
 }
 
+export async function changeCustomOpenAiEndpoint(config: ProviderConfig, destination: string, language: "en" | "pl"): Promise<{ missingModelIds: string[] } | null> {
+  requireDesktop();
+  return invoke("change_custom_openai_endpoint", {
+    connectionId: config.id,
+    credentialId: config.credentialId,
+    expectedEndpoint: config.baseUrl,
+    destination,
+    language,
+  });
+}
+
 export async function discoverModels(config: ProviderConfig): Promise<ProviderModel[]> {
   requireDesktop();
   const payload = await invoke<unknown>("provider_discover_models", {

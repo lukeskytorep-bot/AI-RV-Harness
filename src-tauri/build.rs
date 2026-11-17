@@ -1,6 +1,7 @@
 const APP_COMMANDS: &[&str] = &[
     "store_credential",
     "rebind_credential",
+    "change_custom_openai_endpoint",
     "has_credential",
     "delete_credential",
     "credential_identity_fingerprint",

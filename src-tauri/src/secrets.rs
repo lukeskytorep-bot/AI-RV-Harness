@@ -15,6 +15,15 @@ struct CredentialRecord {
     secret: String,
     provider_kind: String,
     normalized_endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    endpoint_transition: Option<EndpointTransition>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct EndpointTransition {
+    connection_id: String,
+    destination: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,8 +63,13 @@ fn encode_bound_credential(
         secret: secret.to_string(),
         provider_kind: provider_kind.trim().to_string(),
         normalized_endpoint: normalized_endpoint.trim().to_string(),
+        endpoint_transition: None,
     };
-    let payload = serde_json::to_string(&record)
+    encode_record(&record)
+}
+
+fn encode_record(record: &CredentialRecord) -> Result<String, String> {
+    let payload = serde_json::to_string(record)
         .map_err(|error| format!("credential binding serialization failed: {error}"))?;
     Ok(format!("{CREDENTIAL_RECORD_PREFIX}{payload}"))
 }
@@ -98,8 +112,12 @@ fn write_bound_credential(
     let credential_id = credential_id.trim();
     let encoded = encode_bound_credential(credential_id, secret, provider_kind, normalized_endpoint)?;
 
+    write_verified(credential_id, &encoded)
+}
+
+fn write_verified(credential_id: &str, encoded: &str) -> Result<(), String> {
     entry_for(credential_id)?
-        .set_password(&encoded)
+        .set_password(encoded)
         .map_err(|error| error.to_string())?;
 
     // Build a fresh entry and read the value back. This verifies that the
@@ -148,6 +166,7 @@ fn credential_for_binding(
     credential_id: &str,
     provider_kind: &str,
     normalized_endpoint: &str,
+    connection_id: Option<&str>,
 ) -> Result<String, String> {
     match stored {
         StoredCredential::LegacySecret(_) => Err(BINDING_REQUIRED_MESSAGE.to_string()),
@@ -158,7 +177,12 @@ fn credential_for_binding(
             if record.provider_kind != provider_kind.trim() {
                 return Err("credential binding mismatch: provider differs from secure record; re-enter the API key to rebind".to_string());
             }
-            if record.normalized_endpoint != normalized_endpoint.trim() {
+            let endpoint_matches = match &record.endpoint_transition {
+                Some(transition) => connection_id == Some(transition.connection_id.as_str())
+                    && (record.normalized_endpoint == normalized_endpoint || transition.destination == normalized_endpoint),
+                None => record.normalized_endpoint == normalized_endpoint.trim(),
+            };
+            if !endpoint_matches {
                 return Err("credential binding mismatch: endpoint differs from secure record; re-enter the API key to rebind".to_string());
             }
             Ok(record.secret)
@@ -172,7 +196,59 @@ pub(crate) fn get_credential_for_binding(
     normalized_endpoint: &str,
 ) -> Result<String, String> {
     let stored = read_stored_credential(credential_id)?;
-    credential_for_binding(stored, credential_id, provider_kind, normalized_endpoint)
+    credential_for_binding(stored, credential_id, provider_kind, normalized_endpoint, None)
+}
+
+// The caller establishes that endpoint is the active SQLite endpoint for connection_id.
+pub(crate) fn custom_credential(
+    credential_id: &str, connection_id: &str, endpoint: &str,
+) -> Result<String, String> {
+    credential_for_binding(read_stored_credential(credential_id)?, credential_id,
+        "custom_openai", endpoint, Some(connection_id))
+}
+
+pub(crate) fn stage_custom_endpoint(
+    credential_id: &str, connection_id: &str, secret: &str, from: &str, to: &str,
+) -> Result<(), String> {
+    let encoded = encode_custom_transition(credential_id, connection_id, secret, from, to)
+        .map_err(|_| "Could not prepare the credential endpoint change".to_string())?;
+    write_verified(credential_id, &encoded)
+        .map_err(|_| "Could not verify the credential endpoint change in secure storage".to_string())
+}
+
+fn encode_custom_transition(
+    credential_id: &str, connection_id: &str, secret: &str, from: &str, to: &str,
+) -> Result<String, String> {
+    encode_record(&CredentialRecord {
+        version: CREDENTIAL_BINDING_VERSION,
+        credential_id: credential_id.to_string(),
+        secret: secret.to_string(),
+        provider_kind: "custom_openai".to_string(),
+        normalized_endpoint: from.to_string(),
+        endpoint_transition: Some(EndpointTransition {
+            connection_id: connection_id.to_string(),
+            destination: to.to_string(),
+        }),
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_custom_transition(connection_id: &str, credential_id: &str, from: &str, to: &str) -> String {
+    encode_custom_transition(credential_id, connection_id, "test-key", from, to).unwrap()
+}
+
+#[cfg(test)]
+pub(crate) fn test_resolve_custom_transition(value: &str, connection_id: &str, credential_id: &str, endpoint: &str) -> Result<String, String> {
+    credential_for_binding(decode_stored_credential(value)?, credential_id, "custom_openai", endpoint, Some(connection_id))
+}
+
+pub(crate) fn settle_custom_endpoint(credential_id: &str, connection_id: &str, endpoint: &str) -> Result<(), String> {
+    let stored = read_stored_credential(credential_id)?;
+    if matches!(&stored, StoredCredential::Bound(record) if record.endpoint_transition.is_some()) {
+        let secret = credential_for_binding(stored, credential_id, "custom_openai", endpoint, Some(connection_id))?;
+        write_bound_credential(credential_id, &secret, "custom_openai", endpoint)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn get_credential(credential_id: &str) -> Result<String, String> {
@@ -196,8 +272,18 @@ pub fn has_credential(credential_id: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn delete_credential(credential_id: String) -> Result<(), String> {
-    validate_non_empty(&credential_id, "credential id")?;
+pub async fn delete_credential(
+    db_instances: tauri::State<'_, tauri_plugin_sql::DbInstances>,
+    credential_id: String,
+) -> Result<(), String> {
+    let pool = crate::database::sqlite_pool(&db_instances).await?;
+    let transaction = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|error| error.to_string())?;
+    delete_stored_credential(&credential_id)?;
+    transaction.rollback().await.map_err(|error| error.to_string())
+}
+
+fn delete_stored_credential(credential_id: &str) -> Result<(), String> {
+    validate_non_empty(credential_id, "credential id")?;
     match entry_for(credential_id.trim())?.delete_credential() {
         Ok(()) | Err(Error::NoEntry) => Ok(()),
         Err(error) => Err(error.to_string()),
@@ -265,6 +351,7 @@ mod tests {
                 "credential-1",
                 "openrouter",
                 "https://openrouter.ai/api/v1",
+                None,
             )
             .unwrap(),
             "sk-test-secret",
@@ -282,6 +369,7 @@ mod tests {
                 "credential-1",
                 "openrouter",
                 "https://openrouter.ai/api/v1",
+                None,
             )
             .unwrap_err(),
             BINDING_REQUIRED_MESSAGE,
@@ -295,6 +383,7 @@ mod tests {
             "credential-1",
             "openai",
             "https://api.openai.com/v1",
+            None,
         )
         .unwrap_err();
         assert!(provider_error.contains("provider differs"));
@@ -304,6 +393,7 @@ mod tests {
             "credential-1",
             "openrouter",
             "https://attacker.example/v1",
+            None,
         )
         .unwrap_err();
         assert!(endpoint_error.contains("endpoint differs"));
@@ -316,6 +406,7 @@ mod tests {
             "credential-2",
             "openrouter",
             "https://openrouter.ai/api/v1",
+            None,
         )
         .unwrap_err();
         assert!(error.contains("credential id differs"));

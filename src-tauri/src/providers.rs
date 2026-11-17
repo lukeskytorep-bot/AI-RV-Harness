@@ -2,11 +2,13 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::ipc::Channel;
+use tauri::{ipc::Channel, State};
+use tauri_plugin_sql::DbInstances;
 
 use crate::secrets;
 
 mod adapters;
+pub(crate) mod custom_endpoint;
 mod endpoint_capabilities;
 mod errors;
 mod reasoning;
@@ -427,7 +429,8 @@ pub fn store_credential(
 }
 
 #[tauri::command]
-pub fn rebind_credential(
+pub async fn rebind_credential(
+    db_instances: State<'_, DbInstances>,
     credential_id: String,
     secret: String,
     provider: String,
@@ -435,6 +438,9 @@ pub fn rebind_credential(
 ) -> Result<(), String> {
     let provider = ProviderKind::parse_binding_kind(&provider)?;
     let endpoint = binding_endpoint(provider, base_url.as_deref())?;
+    if matches!(provider, ProviderKind::CustomOpenai) {
+        return custom_endpoint::replace_key(&db_instances, &credential_id, &endpoint, &secret).await;
+    }
     secrets::rebind_bound_credential(
         &credential_id,
         &secret,
@@ -467,17 +473,13 @@ fn model_discovery_url(provider: ProviderKind, base: &str) -> Result<String, Str
 }
 
 #[tauri::command]
-pub async fn provider_discover_models(request: ProviderRequest) -> Result<Value, String> {
+pub async fn provider_discover_models(db_instances: State<'_, DbInstances>, request: ProviderRequest) -> Result<Value, String> {
     let base = provider_base_url(request.provider, request.base_url.as_deref())?;
     // Resolve the discovery contract before reading the credential. In particular,
     // explicit Blackbox Enterprise/organization routes must never receive a guessed /models request.
     let url = model_discovery_url(request.provider, &base)?;
     let binding = normalized_credential_endpoint(&base)?;
-    let secret = secrets::get_credential_for_binding(
-        &request.credential_id,
-        request.provider.binding_kind(),
-        &binding,
-    )?;
+    let secret = custom_endpoint::get_credential_for_binding(&db_instances, request.provider, &request.credential_id, &binding).await?;
     let response = authenticated(client()?.get(url), request.provider, &secret)
         .timeout(Duration::from_secs(120))
         .send()
@@ -529,6 +531,7 @@ fn parse_finished_chat_response(
 
 #[tauri::command]
 pub async fn provider_chat(
+    db_instances: State<'_, DbInstances>,
     window: tauri::WebviewWindow,
     request: ProviderChatRequest,
     on_stream: Channel<ProviderStreamEvent>,
@@ -546,11 +549,7 @@ pub async fn provider_chat(
     let base = provider_base_url(request.provider, request.base_url.as_deref()).map_err(ProviderCallError::configuration)?;
     let binding = normalized_credential_endpoint(&base).map_err(ProviderCallError::configuration)?;
     validation::validate_continuation_bindings(&request, &binding).map_err(ProviderCallError::configuration)?;
-    let secret = secrets::get_credential_for_binding(
-        &request.credential_id,
-        request.provider.binding_kind(),
-        &binding,
-    )
+    let secret = custom_endpoint::get_credential_for_binding(&db_instances, request.provider, &request.credential_id, &binding).await
     .map_err(ProviderCallError::configuration)?;
     let (url, mut body) = build_chat_request(&request, &base).map_err(ProviderCallError::configuration)?;
     let use_openrouter_streaming = matches!(request.provider, ProviderKind::Openrouter);

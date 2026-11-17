@@ -11,7 +11,7 @@ describe("native credential storage configuration", () => {
   });
 
   it("verifies the complete bound credential record through a fresh operating-system keyring entry", () => {
-    expect(nativeSecrets).toMatch(/set_password\(&encoded\)/);
+    expect(nativeSecrets).toMatch(/set_password\(encoded\)/);
     expect(nativeSecrets).toMatch(/let verified = entry_for\(credential_id\)\?[\s\S]*?get_password\(\)/);
     expect(nativeSecrets).toMatch(/secure storage verification failed/);
     expect(nativeSecrets).toContain("provider_kind");

@@ -72,7 +72,7 @@ export function SettingsScreen({ copy, settings, workspaces, repository, onDataC
       <PageHeader title={copy.settings} subtitle={copy.languageResearchNote} />
       <nav className="settings-tabs" aria-label={copy.settings}>{tabs.map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}</nav>
       <div className="settings-tab-content">
-        {tab === "providers" && <ProviderSettings copy={copy} repository={repository} section="providers" />}
+        {tab === "providers" && <ProviderSettings copy={copy} repository={repository} section="providers" language={settings.interfaceLanguage} />}
         {tab === "models" && <ProviderSettings copy={copy} repository={repository} section="models" />}
         {tab === "storage" && <StorageSettingsCard copy={copy} workspaces={workspaces} repository={repository} onDataChanged={onDataChanged} />}
         {tab === "targets" && <TargetSettingsCard copy={copy} settings={settings} repository={repository} onChange={onChange} />}

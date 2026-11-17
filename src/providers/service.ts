@@ -1,7 +1,7 @@
 import { notifyProviderRoutesChanged } from "./changes";
 import type { AppRepository } from "../storage/repository";
 import { createId } from "../storage/repository";
-import { deleteCredentialSecret, discoverModels, hasCredentialSecret, providerBindingEndpoint, rebindCredentialSecret, storeCredentialSecret } from "./native";
+import { changeCustomOpenAiEndpoint, deleteCredentialSecret, discoverModels, hasCredentialSecret, providerBindingEndpoint, rebindCredentialSecret, storeCredentialSecret } from "./native";
 import type { CustomOpenAiOutputTokenField, ProviderConfig, ProviderKind, ProviderModel } from "./types";
 
 export const PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER = 2000;
@@ -161,6 +161,16 @@ export async function rebindProviderCredential(
   await refreshProviderModels(repository, config);
 }
 
+
+export async function updateCustomOpenAiBaseUrl(config: ProviderConfig, destination: string, language: "en" | "pl"): Promise<string[] | null> {
+  if (config.provider !== "custom_openai" || !config.baseUrl) {
+    throw new Error("Base URL editing is available only for existing Custom OpenAI-compatible connections.");
+  }
+  const result = await changeCustomOpenAiEndpoint(config, destination, language);
+  if (!result) return null;
+  notifyProviderRoutesChanged();
+  return result.missingModelIds;
+}
 
 export async function updateCustomOpenAiOutputTokenField(
   repository: AppRepository,

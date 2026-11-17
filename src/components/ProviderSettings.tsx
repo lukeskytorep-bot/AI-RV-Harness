@@ -2,7 +2,7 @@ import { Check, KeyRound, Plus, RefreshCw, Server, Settings2, ShieldCheck, Spark
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { getCopy } from "../i18n";
 import { useAppDialogs } from "./AppDialogProvider";
-import { addProvider, rebindProviderCredential, refreshProviderModels, removeProvider, updateCustomOpenAiOutputTokenField, updateCustomOpenAiStreamingEnabled } from "../providers/service";
+import { addProvider, rebindProviderCredential, refreshProviderModels, removeProvider, updateCustomOpenAiBaseUrl, updateCustomOpenAiOutputTokenField, updateCustomOpenAiStreamingEnabled } from "../providers/service";
 import { PROVIDER_KINDS, type CustomOpenAiOutputTokenField, type ProviderConfig, type ProviderKind, type ProviderModel } from "../providers/types";
 import { isTauriRuntime } from "../storage";
 import type { AppRepository } from "../storage/repository";
@@ -21,7 +21,7 @@ export const PROVIDER_LABELS: Record<ProviderKind, string> = {
   custom_openai: "Custom OpenAI-compatible",
 };
 
-export function ProviderSettings({ copy, repository, section = "all" }: { copy: Copy; repository: AppRepository | null; section?: "all" | "providers" | "models" }) {
+export function ProviderSettings({ copy, repository, section = "all", language = "en" }: { language?: "en" | "pl"; copy: Copy; repository: AppRepository | null; section?: "all" | "providers" | "models" }) {
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -29,6 +29,8 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
   const [wireConfig, setWireConfig] = useState<ProviderConfig | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [endpointError, setEndpointError] = useState<string | null>(null);
+  const [missingModels, setMissingModels] = useState<string[]>([]);
   const desktop = isTauriRuntime();
   const dialogs = useAppDialogs();
 
@@ -91,6 +93,23 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
     }
   };
 
+  const updateEndpoint = async (config: ProviderConfig, baseUrl: string) => {
+    setBusyId(config.id);
+    setEndpointError(null);
+    setMissingModels([]);
+    try {
+      const missing = await updateCustomOpenAiBaseUrl(config, baseUrl, language);
+      if (!missing) return;
+      setMissingModels(missing);
+      setWireConfig(null);
+    } catch (cause) {
+      setEndpointError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyId(null);
+      await reload();
+    }
+  };
+
   const remove = async (config: ProviderConfig) => {
     if (!repository) return;
     const confirmed = await dialogs.confirm({ title: copy.dialogWarningTitle, description: copy.removeProviderConfirm, confirmLabel: copy.dialogDelete, cancelLabel: copy.cancel, severity: "destructive" });
@@ -138,6 +157,9 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
         </div>
         {!desktop && <div className="runtime-warning"><ShieldCheck size={16} />{copy.desktopProviderOnly}</div>}
         {error && <div className="provider-error" role="alert">{error}</div>}
+        {missingModels.length > 0 && <div className="runtime-warning" role="status">
+          {copy.customEndpointMissingModels} {missingModels.join(", ")}
+        </div>}
         <div className="provider-list">
           {providers.length === 0 ? <p className="provider-empty">{copy.noProviders}</p> : providers.map((config) => (
             <article className="provider-row" key={config.id}>
@@ -152,7 +174,7 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
                 <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => void refresh(config)} title={copy.testRefresh}>
                   <RefreshCw size={14} className={busyId === config.id ? "spin-icon" : ""} />{busyId === config.id ? copy.refreshing : copy.testRefresh}
                 </button>
-                {config.provider === "custom_openai" && <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => setWireConfig(config)} title={copy.customWireSettings}>
+                {config.provider === "custom_openai" && <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => { setEndpointError(null); setWireConfig(config); }} title={copy.customWireSettings}>
                   <Settings2 size={14} />{copy.customWireSettings}
                 </button>}
                 <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => setRebindConfig(config)} title={copy.apiKey}>
@@ -167,7 +189,7 @@ export function ProviderSettings({ copy, repository, section = "all" }: { copy: 
       {section !== "providers" && <ModelRegistry copy={copy} repository={repository} providers={providers} models={models} onChanged={reload} />}
       {dialogOpen && <AddProviderDialog copy={copy} busy={busyId === "new"} onClose={() => setDialogOpen(false)} onSubmit={add} />}
       {rebindConfig && <RebindCredentialDialog copy={copy} config={rebindConfig} busy={busyId === rebindConfig.id} onClose={() => setRebindConfig(null)} onSubmit={(apiKey) => rebind(rebindConfig, apiKey)} />}
-      {wireConfig && <CustomWireSettingsDialog copy={copy} config={wireConfig} busy={busyId === wireConfig.id} onClose={() => setWireConfig(null)} onSubmit={(field, streamingEnabled) => updateWireField(wireConfig, field, streamingEnabled)} />}
+      {wireConfig && <CustomWireSettingsDialog copy={copy} config={wireConfig} endpointError={endpointError} onSaveEndpoint={(baseUrl) => updateEndpoint(wireConfig, baseUrl)} busy={busyId === wireConfig.id} onClose={() => setWireConfig(null)} onSubmit={(field, streamingEnabled) => updateWireField(wireConfig, field, streamingEnabled)} />}
     </>
   );
 }
@@ -249,7 +271,12 @@ function AddProviderDialog({ copy, busy, onClose, onSubmit }: { copy: Copy; busy
   );
 }
 
-function CustomWireSettingsDialog({ copy, config, busy, onClose, onSubmit }: { copy: Copy; config: ProviderConfig; busy: boolean; onClose: () => void; onSubmit: (field: CustomOpenAiOutputTokenField | undefined, streamingEnabled: boolean) => Promise<void> }) {
+function CustomWireSettingsDialog({ copy, config, busy, endpointError, onClose, onSubmit, onSaveEndpoint }: {
+  copy: Copy; config: ProviderConfig; busy: boolean; endpointError: string | null; onClose: () => void;
+  onSubmit: (field: CustomOpenAiOutputTokenField | undefined, streamingEnabled: boolean) => Promise<void>;
+  onSaveEndpoint: (baseUrl: string) => Promise<void>;
+}) {
+  const [baseUrl, setBaseUrl] = useState(config.baseUrl ?? "");
   const [value, setValue] = useState<"default" | CustomOpenAiOutputTokenField>(config.customOutputTokenField ?? "default");
   const [streamingEnabled, setStreamingEnabled] = useState(config.customStreamingEnabled ?? false);
   const submit = (event: FormEvent) => {
@@ -260,8 +287,12 @@ function CustomWireSettingsDialog({ copy, config, busy, onClose, onSubmit }: { c
     <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
       <section className="modal form-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-heading"><div><small>{PROVIDER_LABELS[config.provider]}</small><h2>{copy.customWireSettings}</h2><p>{config.label}</p></div><button className="icon-button" type="button" disabled={busy} onClick={onClose}><X size={19} /></button></div>
+        <form onSubmit={(event) => { event.preventDefault(); void onSaveEndpoint(baseUrl.trim()); }}>
+          <label>{copy.customApiBaseUrl}<input type="url" value={baseUrl} required disabled={busy} onChange={(event) => setBaseUrl(event.target.value)} /></label>
+          {endpointError && <div className="provider-error" role="alert">{endpointError}</div>}
+          <div className="modal-actions"><button className="primary-button" type="submit" disabled={busy || !baseUrl.trim() || baseUrl.trim() === config.baseUrl}>{copy.saveAndTest}</button></div>
+        </form>
         <form onSubmit={submit}>
-          {config.baseUrl && <label>{copy.baseUrl}<input value={config.baseUrl} readOnly /></label>}
           <label>{copy.customOutputTokenField}<select value={value} onChange={(event) => setValue(event.target.value as "default" | CustomOpenAiOutputTokenField)}><option value="default">{copy.customOutputTokenDefault}</option><option value="max_completion_tokens">{copy.customOutputTokenCompletion}</option></select><small>{copy.customOutputTokenFieldHelp}</small></label>
           <label className="checkbox-line"><input type="checkbox" checked={streamingEnabled} onChange={(event) => setStreamingEnabled(event.target.checked)} />{copy.customStreamingEnabled}</label>
           <small>{copy.customStreamingHelp}</small>

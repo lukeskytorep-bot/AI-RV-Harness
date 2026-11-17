@@ -4,6 +4,7 @@ description = "Allows the AI RV Harness main window to invoke the application co
 commands.allow = [
   "store_credential",
   "rebind_credential",
+  "change_custom_openai_endpoint",
   "has_credential",
   "delete_credential",
   "credential_identity_fingerprint",

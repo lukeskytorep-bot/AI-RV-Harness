@@ -33,6 +33,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             providers::store_credential,
             providers::rebind_credential,
+            providers::custom_endpoint::change_custom_openai_endpoint,
             secrets::has_credential,
             secrets::delete_credential,
             secrets::credential_identity_fingerprint,
