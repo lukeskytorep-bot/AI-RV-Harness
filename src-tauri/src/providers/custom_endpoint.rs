@@ -619,7 +619,7 @@ mod tests {
             .connect_with(options.clone())
             .await
             .unwrap();
-        let (id, endpoint) = active_connection(&mut *pool.acquire().await.unwrap(), "cred")
+        let (id, endpoint) = active_connection(&mut pool.acquire().await.unwrap(), "cred")
             .await
             .unwrap();
         assert_eq!(endpoint, A);
@@ -651,7 +651,7 @@ mod tests {
             .connect_with(options)
             .await
             .unwrap();
-        let (id, endpoint) = active_connection(&mut *pool.acquire().await.unwrap(), "cred")
+        let (id, endpoint) = active_connection(&mut pool.acquire().await.unwrap(), "cred")
             .await
             .unwrap();
         assert_eq!(endpoint, B);
