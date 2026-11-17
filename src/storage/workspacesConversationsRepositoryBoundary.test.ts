@@ -38,8 +38,10 @@ describe("Workspaces and Conversations repository boundary", () => {
     expect(sqliteAdapter).toContain("thread_group_id");
   });
 
-  it("keeps Workspace sources outside this focused split", () => {
-    expect(browserFacade).toContain("async listWorkspaceSources(");
-    expect(sqliteFacade).toContain("async listWorkspaceSources(");
+  it("delegates Workspace sources to their persistence boundary", () => {
+    for (const facade of [browserFacade, sqliteFacade]) {
+      expect(facade).toContain('listWorkspaceSources: AppRepository["listWorkspaceSources"]');
+      expect(facade).not.toContain("async listWorkspaceSources(");
+    }
   });
 });

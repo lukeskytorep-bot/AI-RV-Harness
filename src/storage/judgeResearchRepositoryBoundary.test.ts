@@ -46,10 +46,10 @@ describe("Judge + Research repository boundary", () => {
     expect(sqliteFacade).toContain("this.researchRepository.isScoresFrozen(projectId)");
   });
 
-  it("keeps auxiliary Workspace Sources and Custom Protocol persistence outside the final split", () => {
-    expect(browserFacade).toContain("async listWorkspaceSources(");
-    expect(browserFacade).toContain("async listCustomProtocols(");
-    expect(sqliteFacade).toContain("async listWorkspaceSources(");
-    expect(sqliteFacade).toContain("async listCustomProtocols(");
+  it("delegates auxiliary Workspace Sources and Custom Protocol persistence to their adapters", () => {
+    expect(browserFacade).toContain('listWorkspaceSources: AppRepository["listWorkspaceSources"]');
+    expect(browserFacade).toContain('listCustomProtocols: AppRepository["listCustomProtocols"]');
+    expect(sqliteFacade).toContain('listWorkspaceSources: AppRepository["listWorkspaceSources"]');
+    expect(sqliteFacade).toContain('listCustomProtocols: AppRepository["listCustomProtocols"]');
   });
 });

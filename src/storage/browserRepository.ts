@@ -1,10 +1,10 @@
+import { BrowserWorkspaceSourcesRepository } from "./browser/workspaceSourcesRepository";
+import { BrowserCustomProtocolsRepository } from "./browser/customProtocolsRepository";
 import { evaluationKey, evaluationPrefix, validateResearchEvaluation, assertEvaluationUpdate, type ResearchEvaluation } from "../research/evaluationTypes";
 import { validateResearchTermination, researchScope, canEndResearchExecution, researchTermination } from "../research/executionLifecycle";
 import { ownBrowserWorkflow, browserOwnershipState, assertBrowserEvaluationWriter } from "./browser/workflowOwnership";
 import type { WorkflowScope } from "../application/workflowOwnership";
 import type { CreateProfileInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
-import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
-import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
 import { BrowserProfilesRepository } from "./browser/profilesRepository";
@@ -25,9 +25,6 @@ import { previewBrowserPermanentDelete, previewBrowserTelepathicDelete, purgeBro
 const PROFILES_KEY = "rvh.dev.profiles";
 const WORKSPACES_KEY = "rvh.dev.workspaces";
 const TARGET_USAGE_KEY = "rvh.dev.target_usage";
-const CUSTOM_PROTOCOLS_KEY = "rvh.dev.custom_protocols";
-const WORKSPACE_SOURCES_KEY = "rvh.dev.workspace_sources";
-const CHAT_SOURCE_SELECTION_KEY = "rvh.dev.chat_source_selection";
 
 function read<T>(key: string, fallback: T): T {
   try {
@@ -82,6 +79,8 @@ export class BrowserRepository implements AppRepository {
   withWorkflowOwnership<T>(scope:WorkflowScope,task:(owned:AppRepository,signal:AbortSignal)=>Promise<T>):Promise<T> {return ownBrowserWorkflow(this,scope,task);}
   getWorkflowOwnership(profileId:string){return browserOwnershipState(this,profileId);}
 
+  private readonly workspaceSourcesRepository = new BrowserWorkspaceSourcesRepository();
+  private readonly customProtocolsRepository = new BrowserCustomProtocolsRepository();
   private readonly profilesRepository = new BrowserProfilesRepository();
   private readonly workspacesConversationsRepository = new BrowserWorkspacesConversationsRepository();
   private readonly researchRepository = new BrowserResearchRepository();
@@ -278,33 +277,11 @@ export class BrowserRepository implements AppRepository {
   listChatMessageProviderStates: AppRepository["listChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.listChatMessageProviderStates(threadId);
   resetChatMessageProviderStates: AppRepository["resetChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.resetChatMessageProviderStates(threadId);
 
-  async listWorkspaceSources(workspaceId: string): Promise<WorkspaceSource[]> {
-    return read<WorkspaceSource[]>(WORKSPACE_SOURCES_KEY, []).filter((source) => source.workspaceId === workspaceId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }
-
-  async createWorkspaceSource(input: CreateWorkspaceSourceInput): Promise<WorkspaceSource> {
-    const source: WorkspaceSource = { id: input.id, workspaceId: input.workspaceId, sourceType: input.sourceType, displayName: input.displayName.trim(), content: input.content, contentHash: input.contentHash, metadata: input.metadata ?? {}, createdAt: nowIso() };
-    write(WORKSPACE_SOURCES_KEY, [source, ...read<WorkspaceSource[]>(WORKSPACE_SOURCES_KEY, [])]);
-    return source;
-  }
-
-  async deleteWorkspaceSource(id: string): Promise<void> {
-    write(WORKSPACE_SOURCES_KEY, read<WorkspaceSource[]>(WORKSPACE_SOURCES_KEY, []).filter((source) => source.id !== id));
-    const selections = read<Record<string, string[]>>(CHAT_SOURCE_SELECTION_KEY, {});
-    for (const key of Object.keys(selections)) selections[key] = selections[key].filter((sourceId) => sourceId !== id);
-    write(CHAT_SOURCE_SELECTION_KEY, selections);
-  }
-
-  async listActiveChatSourceIds(threadId: string): Promise<string[]> {
-    return read<Record<string, string[]>>(CHAT_SOURCE_SELECTION_KEY, {})[threadId] ?? [];
-  }
-
-  async setChatSourceActive(threadId: string, sourceId: string, active: boolean): Promise<void> {
-    const all = read<Record<string, string[]>>(CHAT_SOURCE_SELECTION_KEY, {});
-    const current = all[threadId] ?? [];
-    all[threadId] = active ? [...new Set([...current, sourceId])] : current.filter((id) => id !== sourceId);
-    write(CHAT_SOURCE_SELECTION_KEY, all);
-  }
+  listWorkspaceSources: AppRepository["listWorkspaceSources"] = (workspaceId) => this.workspaceSourcesRepository.listWorkspaceSources(workspaceId);
+  createWorkspaceSource: AppRepository["createWorkspaceSource"] = (input) => this.workspaceSourcesRepository.createWorkspaceSource(input);
+  deleteWorkspaceSource: AppRepository["deleteWorkspaceSource"] = (id) => this.workspaceSourcesRepository.deleteWorkspaceSource(id);
+  listActiveChatSourceIds: AppRepository["listActiveChatSourceIds"] = (threadId) => this.workspaceSourcesRepository.listActiveChatSourceIds(threadId);
+  setChatSourceActive: AppRepository["setChatSourceActive"] = (threadId, sourceId, active) => this.workspaceSourcesRepository.setChatSourceActive(threadId, sourceId, active);
 
   loadSettings: AppRepository["loadSettings"] = () => this.settingsModelsRepository.loadSettings();
   saveSettings: AppRepository["saveSettings"] = (settings) => this.settingsModelsRepository.saveSettings(settings);
@@ -339,16 +316,8 @@ export class BrowserRepository implements AppRepository {
   recordTargetUsage: AppRepository["recordTargetUsage"] = (input) => this.targetsRepository.recordTargetUsage(input);
   listTargetUsage: AppRepository["listTargetUsage"] = () => this.targetsRepository.listTargetUsage();
 
-  async listCustomProtocols(language?: "pl" | "en"): Promise<CustomProtocolVersion[]> {
-    return read<CustomProtocolVersion[]>(CUSTOM_PROTOCOLS_KEY, []).filter((protocol) => !language || protocol.language === language).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }
-
-  async saveCustomProtocolVersion(input: SaveCustomProtocolVersionInput): Promise<CustomProtocolVersion> {
-    const all = read<CustomProtocolVersion[]>(CUSTOM_PROTOCOLS_KEY, []);
-    const record: CustomProtocolVersion = { ...input, steps: [...input.steps] };
-    write(CUSTOM_PROTOCOLS_KEY, [record, ...all]);
-    return record;
-  }
+  listCustomProtocols: AppRepository["listCustomProtocols"] = (language) => this.customProtocolsRepository.listCustomProtocols(language);
+  saveCustomProtocolVersion: AppRepository["saveCustomProtocolVersion"] = (input) => this.customProtocolsRepository.saveCustomProtocolVersion(input);
 
   createRvSession: AppRepository["createRvSession"] = (input) => this.sessionsRepository.createRvSession(input);
   updateRvSessionState: AppRepository["updateRvSessionState"] = (id, state, stopReason) => this.sessionsRepository.updateRvSessionState(id, state, stopReason);

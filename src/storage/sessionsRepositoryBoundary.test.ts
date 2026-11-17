@@ -32,15 +32,15 @@ describe("Sessions repository boundary", () => {
     expect(sqliteFacade).toContain("this.workspacesConversationsRepository.listWorkspaces()");
   });
 
-  it("keeps Monitor, Judge, Research and custom protocols outside this focused split", () => {
+  it("delegates Monitor, Judge, Research and custom protocol persistence", () => {
     expect(browserFacade).toContain("this.monitorRepository.createMonitorRun");
     expect(sqliteFacade).toContain("this.monitorRepository.createMonitorRun");
     expect(browserFacade).toContain("recordFrozenJudgeResults: AppRepository[\"recordFrozenJudgeResults\"]");
     expect(sqliteFacade).toContain("recordFrozenJudgeResults: AppRepository[\"recordFrozenJudgeResults\"]");
     expect(browserFacade).toContain("createResearchProject: AppRepository[\"createResearchProject\"]");
     expect(sqliteFacade).toContain("createResearchProject: AppRepository[\"createResearchProject\"]");
-    expect(browserFacade).toContain("async listCustomProtocols(");
-    expect(sqliteFacade).toContain("async listCustomProtocols(");
+    expect(browserFacade).toContain('listCustomProtocols: AppRepository["listCustomProtocols"]');
+    expect(sqliteFacade).toContain('listCustomProtocols: AppRepository["listCustomProtocols"]');
   });
 
   it("keeps cross-domain Research frozen-score checks explicit at the facade boundary", () => {

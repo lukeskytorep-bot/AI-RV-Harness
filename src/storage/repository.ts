@@ -1,3 +1,5 @@
+import type { CustomProtocolsRepository } from "./contracts/customProtocolsRepository";
+import type { WorkspaceSourcesRepository } from "./contracts/workspaceSourcesRepository";
 import type { TelepathicHistoryQuery, TelepathicHistoryPage } from "../telepathicExchange/historySummaries";
 import type { ProviderContinuationState } from "../providers/continuationContract";
 import type { ProviderContinuationStateBinding } from "./providerContinuationState";
@@ -7,9 +9,7 @@ import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, Sess
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
 import type { CreateJudgeRunInput, FrozenJudgeResultInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
 import type { CreateTargetInput, TargetRecord, TargetUsageInput, TargetUsageRecord, UpdateTargetInput } from "../targets/types";
-import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
 import type { BlindingMappingRecord, ResearchAssignmentRecord, ResearchConditionRecord, ResearchConfig, ResearchLockPlan, ResearchProjectRecord, ResearchResults, ResearchState } from "../research/types";
-import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../training/types";
 import type { AiIdentity, BeginViewerNoteReflectionInput, CommitViewerNoteReflectionInput, DetachViewerNoteSourceReferencesInput, EnsureAiIdentityInput, ViewerNoteActivationEvent, ViewerNoteBundle, ViewerNoteCapacity, ViewerNoteReflectionResult, ViewerNoteReflectionRun, ViewerNoteVersion } from "../aiCenter/types";
 import type { DeletionPreview, PurgeEntityKind } from "./controlledPurge";
@@ -17,7 +17,7 @@ import type { CreateFieldGuideVersionInput, FieldGuideActivationEvent, FieldGuid
 import type { TelepathicSeriesState } from "../telepathicExchange/types";
 
 
-export interface AppRepository {
+export interface AppRepository extends WorkspaceSourcesRepository, CustomProtocolsRepository {
   listResearchEvaluations(projectId: string): Promise<import("../research/evaluationTypes").ResearchEvaluation[]>;
   getResearchEvaluation(projectId: string, id: string): Promise<import("../research/evaluationTypes").ResearchEvaluation | null>;
   saveResearchEvaluation(record: import("../research/evaluationTypes").ResearchEvaluation, expectedRevision: number): Promise<void>;
@@ -59,11 +59,6 @@ export interface AppRepository {
   appendAssistantMessageWithProviderState(threadId: string, content: string, state: ProviderContinuationState): Promise<ChatMessage>;
   listChatMessageProviderStates(threadId: string): Promise<ProviderContinuationStateBinding[]>;
   resetChatMessageProviderStates(threadId: string): Promise<void>;
-  listWorkspaceSources(workspaceId: string): Promise<WorkspaceSource[]>;
-  createWorkspaceSource(input: CreateWorkspaceSourceInput): Promise<WorkspaceSource>;
-  deleteWorkspaceSource(id: string): Promise<void>;
-  listActiveChatSourceIds(threadId: string): Promise<string[]>;
-  setChatSourceActive(threadId: string, sourceId: string, active: boolean): Promise<void>;
   loadSettings(): Promise<Partial<AppSettings>>;
   saveSettings(settings: AppSettings): Promise<void>;
   listProviderConfigs(): Promise<ProviderConfig[]>;
@@ -133,8 +128,6 @@ export interface AppRepository {
   resolveLegacyFieldGuideBaseline(input: ResolveLegacyFieldGuideBaselineInput): Promise<FieldGuideVersion>;
   setFieldGuideCapacity(aiIdentityId: string, language: "pl" | "en", capacityTokens: FieldGuideCapacity): Promise<void>;
   restoreFieldGuideVersion(aiIdentityId: string, language: "pl" | "en", versionId: string): Promise<FieldGuideVersion>;
-  listCustomProtocols(language?: "pl" | "en"): Promise<CustomProtocolVersion[]>;
-  saveCustomProtocolVersion(input: SaveCustomProtocolVersionInput): Promise<CustomProtocolVersion>;
   createRvSession(input: CreateRvSessionInput): Promise<RvSession>;
   updateRvSessionState(id: string, state: RvSessionState, stopReason?: string): Promise<void>;
   appendSessionEvent(sessionId: string, event: SessionEventInput): Promise<void>;

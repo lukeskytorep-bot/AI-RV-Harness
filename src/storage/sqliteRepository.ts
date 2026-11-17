@@ -1,3 +1,5 @@
+import { SqliteWorkspaceSourcesRepository } from "./sqlite/workspaceSourcesRepository";
+import { SqliteCustomProtocolsRepository } from "./sqlite/customProtocolsRepository";
 import { evaluationKey, evaluationPrefix, validateResearchEvaluation, assertEvaluationUpdate, type ResearchEvaluation } from "../research/evaluationTypes";
 import { validateResearchTermination, researchTerminationKey, researchScope, canEndResearchExecution } from "../research/executionLifecycle";
 import { registerAbortOwnership, WorkflowAbortError } from "../application/abortOwnership";
@@ -6,8 +8,6 @@ import type { WorkflowContext, WorkflowScope } from "../application/workflowOwne
 import { workflowOwnershipNative, executeWorkflowOwnedDatabaseTransaction } from "./databaseNative";
 import Database from "@tauri-apps/plugin-sql";
 import type { CreateProfileInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput } from "../types";
-import type { CustomProtocolVersion, SaveCustomProtocolVersionInput } from "../protocols/types";
-import type { CreateWorkspaceSourceInput, WorkspaceSource } from "../sources/types";
 import type { AppRepository } from "./repository";
 import { createId, nowIso } from "./repository";
 import { createDatabaseSnapshotNative, executeDatabaseTransaction, executeDatabaseWrite, executeTelepathicFencedDatabaseTransaction,
@@ -27,20 +27,6 @@ import { SqliteJudgeRepository } from "./sqlite/judgeRepository";
 import { SqliteResearchRepository } from "./sqlite/researchRepository";
 import { SqliteExportRepository } from "./sqlite/exportRepository";
 import { SqliteControlledPurge } from "./sqlite/controlledPurge";
-
-type WorkspaceSourceRow = { id: string; workspace_id: string; source_type: "text" | "markdown" | "pdf" | "docx"; display_name: string; content_text: string | null; content_hash: string | null; metadata_json: string; created_at: string };
-type CustomProtocolRow = {
-  protocol_id: string;
-  version_id: string;
-  display_name: string;
-  version: string;
-  language: "pl" | "en";
-  content: string;
-  ordered_steps_json: string;
-  content_hash: string;
-  source_metadata_json: string;
-  created_at: string;
-};
 
 export class SqliteRepository implements AppRepository {
   async listResearchEvaluations(projectId: string): Promise<ResearchEvaluation[]> {
@@ -80,6 +66,8 @@ export class SqliteRepository implements AppRepository {
     return profileId;
   }
   private readonly writes = sqliteWriteCoordinator("sqlite:rv_harness.db");
+  private readonly workspaceSourcesRepository: SqliteWorkspaceSourcesRepository;
+  private readonly customProtocolsRepository: SqliteCustomProtocolsRepository;
   private readonly profilesRepository: SqliteProfilesRepository;
   private readonly targetsRepository: SqliteTargetsRepository;
   private readonly settingsModelsRepository: SqliteSettingsModelsRepository;
@@ -98,6 +86,14 @@ export class SqliteRepository implements AppRepository {
   readonly recoveryOwner: object;
   private constructor(private readonly db: Database, private readonly workflowContext?:WorkflowContext, recoveryOwner?: object) {
     this.recoveryOwner = recoveryOwner ?? this;
+    this.workspaceSourcesRepository = new SqliteWorkspaceSourcesRepository({
+      select: <T>(query: string, values?: unknown[]) => selectDatabaseReadonly<T>(query, values ?? []),
+      executeWrite: (query: string, values?: unknown[]) => this.executeWrite(query, values),
+    });
+    this.customProtocolsRepository = new SqliteCustomProtocolsRepository({
+      select: <T>(query: string, values?: unknown[]) => selectDatabaseReadonly<T>(query, values ?? []),
+      executeWrite: (query: string, values?: unknown[]) => this.executeWrite(query, values),
+    });
     this.profilesRepository = new SqliteProfilesRepository({
       select: <T>(query: string, bindValues?: unknown[]) => selectDatabaseReadonly<T>(query, bindValues ?? []),
       executeWrite: (query: string, bindValues?: unknown[]) => this.executeWrite(query, bindValues),
@@ -351,41 +347,11 @@ export class SqliteRepository implements AppRepository {
   listChatMessageProviderStates: AppRepository["listChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.listChatMessageProviderStates(threadId);
   resetChatMessageProviderStates: AppRepository["resetChatMessageProviderStates"] = (threadId) => this.workspacesConversationsRepository.resetChatMessageProviderStates(threadId);
 
-  async listWorkspaceSources(workspaceId: string): Promise<WorkspaceSource[]> {
-    const rows = await selectDatabaseReadonly<WorkspaceSourceRow[]>(
-      `SELECT id, workspace_id, source_type, display_name, content_text, content_hash, metadata_json, created_at
-         FROM workspace_sources WHERE workspace_id = $1 AND content_text IS NOT NULL ORDER BY created_at DESC`, [workspaceId],
-    );
-    return rows.map((row) => ({ id: row.id, workspaceId: row.workspace_id, sourceType: row.source_type, displayName: row.display_name, content: row.content_text ?? "", contentHash: row.content_hash ?? "", metadata: JSON.parse(row.metadata_json) as Record<string, unknown>, createdAt: row.created_at }));
-  }
-
-  async createWorkspaceSource(input: CreateWorkspaceSourceInput): Promise<WorkspaceSource> {
-    const timestamp = nowIso();
-    const source: WorkspaceSource = { id: input.id, workspaceId: input.workspaceId, sourceType: input.sourceType, displayName: input.displayName.trim(), content: input.content, contentHash: input.contentHash, metadata: input.metadata ?? {}, createdAt: timestamp };
-    await this.executeWrite(
-      `INSERT INTO workspace_sources (id, workspace_id, source_type, display_name, content_hash, metadata_json, content_text, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [source.id, source.workspaceId, source.sourceType, source.displayName, source.contentHash, JSON.stringify(source.metadata), source.content, timestamp],
-    );
-    return source;
-  }
-
-  async deleteWorkspaceSource(id: string): Promise<void> {
-    await this.executeWrite("DELETE FROM workspace_sources WHERE id = $1", [id]);
-  }
-
-  async listActiveChatSourceIds(threadId: string): Promise<string[]> {
-    const rows = await selectDatabaseReadonly<{ source_id: string }[]>("SELECT source_id FROM chat_thread_sources WHERE thread_id = $1 AND active = 1", [threadId]);
-    return rows.map((row) => row.source_id);
-  }
-
-  async setChatSourceActive(threadId: string, sourceId: string, active: boolean): Promise<void> {
-    await this.executeWrite(
-      `INSERT INTO chat_thread_sources (thread_id, source_id, active, updated_at) VALUES ($1, $2, $3, $4)
-       ON CONFLICT(thread_id, source_id) DO UPDATE SET active = excluded.active, updated_at = excluded.updated_at`,
-      [threadId, sourceId, active ? 1 : 0, nowIso()],
-    );
-  }
+  listWorkspaceSources: AppRepository["listWorkspaceSources"] = (workspaceId) => this.workspaceSourcesRepository.listWorkspaceSources(workspaceId);
+  createWorkspaceSource: AppRepository["createWorkspaceSource"] = (input) => this.workspaceSourcesRepository.createWorkspaceSource(input);
+  deleteWorkspaceSource: AppRepository["deleteWorkspaceSource"] = (id) => this.workspaceSourcesRepository.deleteWorkspaceSource(id);
+  listActiveChatSourceIds: AppRepository["listActiveChatSourceIds"] = (threadId) => this.workspaceSourcesRepository.listActiveChatSourceIds(threadId);
+  setChatSourceActive: AppRepository["setChatSourceActive"] = (threadId, sourceId, active) => this.workspaceSourcesRepository.setChatSourceActive(threadId, sourceId, active);
 
   loadSettings: AppRepository["loadSettings"] = () => this.settingsModelsRepository.loadSettings();
   saveSettings: AppRepository["saveSettings"] = (settings) => this.settingsModelsRepository.saveSettings(settings);
@@ -424,54 +390,8 @@ export class SqliteRepository implements AppRepository {
   recordTargetUsage: AppRepository["recordTargetUsage"] = (input) => this.targetsRepository.recordTargetUsage(input);
   listTargetUsage: AppRepository["listTargetUsage"] = () => this.targetsRepository.listTargetUsage();
 
-  async listCustomProtocols(language?: "pl" | "en"): Promise<CustomProtocolVersion[]> {
-    const rows = language
-      ? await selectDatabaseReadonly<CustomProtocolRow[]>(
-          `SELECT p.id AS protocol_id, pv.id AS version_id, p.display_name, pv.version, pv.language,
-                  pv.content, pv.ordered_steps_json, pv.content_hash, pv.source_metadata_json, pv.created_at
-             FROM protocols p JOIN protocol_versions pv ON pv.protocol_id = p.id
-            WHERE p.family = 'custom' AND pv.language = $1 ORDER BY p.display_name, pv.created_at DESC`,
-          [language],
-        )
-      : await selectDatabaseReadonly<CustomProtocolRow[]>(
-          `SELECT p.id AS protocol_id, pv.id AS version_id, p.display_name, pv.version, pv.language,
-                  pv.content, pv.ordered_steps_json, pv.content_hash, pv.source_metadata_json, pv.created_at
-             FROM protocols p JOIN protocol_versions pv ON pv.protocol_id = p.id
-            WHERE p.family = 'custom' ORDER BY p.display_name, pv.created_at DESC`,
-        );
-    return rows.map((row) => {
-      const metadata = JSON.parse(row.source_metadata_json) as Record<string, unknown>;
-      return {
-        protocolId: row.protocol_id,
-        versionId: row.version_id,
-        displayName: row.display_name,
-        description: typeof metadata.description === "string" ? metadata.description : undefined,
-        version: row.version,
-        language: row.language,
-        systemPrompt: row.content.trim() || undefined,
-        steps: JSON.parse(row.ordered_steps_json) as string[],
-        contentHash: row.content_hash,
-        createdAt: row.created_at,
-      };
-    });
-  }
-
-  async saveCustomProtocolVersion(input: SaveCustomProtocolVersionInput): Promise<CustomProtocolVersion> {
-    const existing = await selectDatabaseReadonly<{ id: string }[]>("SELECT id FROM protocols WHERE id = $1", [input.protocolId]);
-    if (!existing.length) {
-      await this.executeWrite(
-        `INSERT INTO protocols (id, family, display_name, built_in, created_at) VALUES ($1, 'custom', $2, 0, $3)`,
-        [input.protocolId, input.displayName, input.createdAt],
-      );
-    }
-    await this.executeWrite(
-      `INSERT INTO protocol_versions
-       (id, protocol_id, version, language, content, ordered_steps_json, reveal_policy_json, content_hash, source_metadata_json, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [input.versionId, input.protocolId, input.version, input.language, input.systemPrompt ?? "", JSON.stringify(input.steps), JSON.stringify({ separateRevealStage: true }), input.contentHash, JSON.stringify({ description: input.description ?? "", origin: "user" }), input.createdAt],
-    );
-    return { ...input, steps: [...input.steps] };
-  }
+  listCustomProtocols: AppRepository["listCustomProtocols"] = (language) => this.customProtocolsRepository.listCustomProtocols(language);
+  saveCustomProtocolVersion: AppRepository["saveCustomProtocolVersion"] = (input) => this.customProtocolsRepository.saveCustomProtocolVersion(input);
 
   createRvSession: AppRepository["createRvSession"] = async (input) => { const session=await this.sessionsRepository.createRvSession(input);if(this.workflowContext)this.workflowContext.entities=[...this.workflowContext.entities.filter(entity=>entity.kind!=="rv"),{kind:"rv",id:session.id,profileId:session.profileId}];return session; };
   updateRvSessionState: AppRepository["updateRvSessionState"] = (id, state, stopReason) => this.sessionsRepository.updateRvSessionState(id, state, stopReason);
