@@ -7,22 +7,22 @@ const srcRoot = path.resolve(process.cwd(), "src");
 const read = (relative: string) => fs.readFileSync(path.join(srcRoot, relative), "utf8");
 
 describe("PERF-UI-1 route-level lazy loading", () => {
-  it("loads only the measured low-frequency route candidates lazily", () => {
+  it("loads the measured heavy screens lazily while keeping the home and profile setup available", () => {
     const app = read("App.tsx");
 
-    for (const route of ["research", "settings", "aiCenter"]) {
+    for (const route of ["research", "settings", "aiCenter", "training", "conversations", "rvSessions"]) {
       expect(app).toContain(`import("./features/${route}")`);
     }
 
-    for (const eagerRoute of ["home", "profiles", "conversations", "workspaces", "training", "rvSessions"]) {
+    for (const eagerRoute of ["home", "profiles", "workspaces"]) {
       expect(app).not.toContain(`import("./features/${eagerRoute}")`);
     }
 
     expect(app).toContain('from "./features/home"');
     expect(app).toContain('from "./features/profiles"');
-    expect(app).toContain('from "./features/conversations"');
-    expect(app).toContain('from "./features/training"');
-    expect(app).toContain('from "./features/rvSessions"');
+    expect(app).not.toContain('import { ConversationsScreen }');
+    expect(app).not.toContain('import { TrainingScreen }');
+    expect(app).not.toContain('import { RvSessionsScreen');
   });
 
   it("keeps navigation mounted behind one shared fallback and a visible import-error boundary", () => {

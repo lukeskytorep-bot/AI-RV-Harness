@@ -57,15 +57,13 @@ import type {
   NewWorkspaceKind,
 } from "./types";
 import type { ProviderKind } from "./providers/types";
-import { TrainingScreen } from "./features/training";
 import type { AiCenterView } from "./features/aiCenter";
 import type { RvSession } from "./sessions/types";
 import { APP_VERSION } from "./version";
 import { HomeScreen } from "./features/home";
 import { CreateProfileDialog, NEW_PROFILE_PROVIDER_CHOICE, ProfilesScreen, ProfileViewerControls, useProfileSetupController } from "./features/profiles";
 import { TargetsScreen } from "./features/targets";
-import { ConversationsScreen } from "./features/conversations";
-import { RvSessionsScreen, type RvSessionsView } from "./features/rvSessions";
+import type { RvSessionsView } from "./features/rvSessions";
 import { FormDialog } from "./components/FormDialog";
 import { ensureBundledTrainingTargets } from "./targets/bundled";
 import { applyStoredOutputSettings, createDefaultSettings, storedOutputSettingsNeedUpgrade } from "./startupDefaults";
@@ -77,6 +75,15 @@ import { seedBundledTelepathicTargets, TELEPATHIC_STARTER_PACK_VERSION } from ".
 import { resolveOpenedWorkspaceSelection, resolveProfileWorkspaceSelection } from "./application/profileSelection";
 import { isWorkspaceCompatible, latestCompatibleWorkspace } from "./domain/workspaceKind";
 
+const TrainingScreen = lazy(() =>
+  import("./features/training").then(({ TrainingScreen }) => ({ default: TrainingScreen })),
+);
+const ConversationsScreen = lazy(() =>
+  import("./features/conversations").then(({ ConversationsScreen }) => ({ default: ConversationsScreen })),
+);
+const RvSessionsScreen = lazy(() =>
+  import("./features/rvSessions").then(({ RvSessionsScreen }) => ({ default: RvSessionsScreen })),
+);
 const LazyResearchScreen = lazy(() =>
   import("./features/research").then(({ ResearchScreen }) => ({ default: ResearchScreen })),
 );

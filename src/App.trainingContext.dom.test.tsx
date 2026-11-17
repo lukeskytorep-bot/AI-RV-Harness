@@ -27,6 +27,8 @@ for (const language of ["en", "pl"] as const) it(`T5 ${language}: navigating the
   const nav = host.querySelector(`.side-nav button[aria-label="${getCopy(language).training}"]`) as HTMLButtonElement | null;
   expect(nav).not.toBeNull();
   await act(async () => nav!.click());
+  // Training now loads on entry; wait for the real module before checking its form.
+  await act(async () => { await import("./features/training"); });
   const crumbs = host.querySelector(".topbar .crumbs")!.textContent;
   expect(crumbs).toBe(getCopy(language).training);
   expect(crumbs).not.toContain("Global Conversation Profile"); expect(crumbs).not.toContain("Unrelated Conversation Workspace");

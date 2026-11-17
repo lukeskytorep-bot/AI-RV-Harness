@@ -104,7 +104,7 @@ describe("architecture import boundaries", () => {
       .filter(({ content }) => /from\s+["'][^"']*features\/training\//.test(content))
       .map(({ projectPath }) => projectPath);
 
-    expect(appSource).toContain('from "./features/training"');
+    expect(appSource).toContain('import("./features/training")');
     expect(appSource).not.toContain('from "./components/TrainingScreen"');
     expect(sourceFiles["../components/TrainingScreen.tsx"]).toBeUndefined();
     expect(deepImportOffenders, "Training consumers must import the public feature entry point").toEqual([]);
@@ -136,7 +136,7 @@ describe("architecture import boundaries", () => {
       .filter(({ content }) => /from\s+["'][^"']*features\/conversations\//.test(content))
       .map(({ projectPath }) => projectPath);
 
-    expect(appSource).toContain('from "./features/conversations"');
+    expect(appSource).toContain('import("./features/conversations")');
     expect(appSource).not.toContain("function ChatPanel(");
     expect(deepImportOffenders, "Conversations consumers must import the public feature entry point").toEqual([]);
   });
