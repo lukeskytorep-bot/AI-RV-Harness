@@ -48,3 +48,7 @@ The completed v0.7.13 modularization work adds the following living architecture
 - Historical specifications and checkpoints remain historical records and are not silently rewritten.
 - Material changes to blinding, scoring, AI identity, provider normalization, persistence, or Research controls must update the relevant architecture document in the same change.
 - The code map and module-boundary documents are living records and must be updated whenever ownership or a protected boundary changes.
+
+## Direct provider update — 19 October 2026
+
+Mistral and Blackbox now include direct additional Viewer sampling and Chat Completions SSE. Mistral also preserves compatible thinking/text continuation. Blackbox supports explicit account endpoints and manual model IDs for non-legacy routes without guessed discovery. See [Mistral and Blackbox configuration and engineering contract](../development/DIRECT_MISTRAL_BLACKBOX.md) for exact scope, code map and acceptance limits. Ollama Native is planned, not implemented. This update does not change the package/release version or claim live/Windows acceptance.

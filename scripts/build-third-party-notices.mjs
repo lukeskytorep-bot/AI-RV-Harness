@@ -22,7 +22,7 @@ if (new Set(runtime.map(key)).size + 1 !== tree.size || runtime.length !== new S
 }
 
 const entries = [];
-const supplements = loadSupplements(resolve(root, "third-party/notices"));
+const supplements = loadSupplements(resolve(root, "docs/third-party/notices"));
 const add = p => entries.push(collectPackageNotices(p, supplements));
 const lock = JSON.parse(read(resolve(root, "package-lock.json")));
 for (const [path, info] of Object.entries(lock.packages)) {

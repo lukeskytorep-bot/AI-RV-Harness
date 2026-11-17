@@ -15,7 +15,7 @@ list of additional OS components shipped by the packager.
 
 ## Reviewed application dependency supplements
 
-`third-party/notices/manifest.json` pins supplemental notices to the exact
+`docs/third-party/notices/manifest.json` pins supplemental notices to the exact
 crate name, version, declared license and `.cargo_vcs_info.json` commit. Every
 supplement file has a SHA-256 and its upstream URL. These are local inputs to
 the build; the generator does not fetch license texts from the Internet.

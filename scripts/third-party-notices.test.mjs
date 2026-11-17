@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertComplete, collectPackageNotices, inventoryManifest, loadSupplements, renderPackageNotice, sha256 } from "./third-party-notices-lib.mjs";
 
-const corpus = fileURLToPath(new URL("../third-party/notices", import.meta.url));
+const corpus = fileURLToPath(new URL("../docs/third-party/notices", import.meta.url));
 const dirs = [];
 function directory() { const p = mkdtempSync(resolve(tmpdir(), "rvh-notices-")); dirs.push(p); return p; }
 afterEach(() => { for (const p of dirs.splice(0)) rmSync(p, { recursive: true, force: true }); });

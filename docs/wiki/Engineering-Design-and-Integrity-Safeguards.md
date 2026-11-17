@@ -29,3 +29,7 @@ Later hardening had blocked unattended Training on optional learning and introdu
 Keep detailed learning diagnostics in AI Center / Field Guide / Viewer Notes histories, not repeated beneath Training. Models can fail to shorten notes or count tokens; this must not stop the curriculum. Do not automatically overflow Guide content into Notes or increase capacities. Prompt improvements are deferred.
 
 Edward reported a completed approximately 20-minute Training and verified that Stop did not close the repaired app. Earlier Stop/crash coincidence is not a proven Stop-handler defect. This is user scenario feedback, not a full controlled benchmark or complete Windows soak. See [Troubleshooting](Troubleshooting.md) and the repository engineering record above for future regression requirements.
+
+## Direct provider contracts — 19 October 2026
+
+Mistral and Blackbox now share bounded SSE infrastructure while retaining separate parameter mapping, response/error handling and route identity. Do not copy OpenRouter-only fields into their requests or treat HTTP 200 as proof that a sampler was applied. Blackbox non-legacy models can be registered explicitly without guessed discovery; credentials remain endpoint-bound. Preserve current budgets, unattended Training continuity and bounded IPC. Ollama Native remains planned and needs NDJSON rather than SSE. See [Decision 27](../architecture/ENGINEERING_DESIGN_AND_INTEGRITY_SAFEGUARDS.md#decision-27--direct-provider-contracts-remain-distinct) and the [direct provider guide](../development/DIRECT_MISTRAL_BLACKBOX.md).

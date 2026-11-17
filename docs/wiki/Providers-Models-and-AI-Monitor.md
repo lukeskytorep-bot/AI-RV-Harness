@@ -34,7 +34,7 @@ AI Monitor operates only on supported monitored flows. It cannot rewrite sealed 
 
 OpenRouter Viewer profiles can optionally enable additional sampling controls for `top_p`, `top_k`, and `seed`. They are disabled by default. Auto is represented by omission of the field, not by a numeric substitute; therefore manual zero remains distinct from Auto where the API contract permits zero.
 
-The existing Viewer temperature control remains separate and is never enabled/disabled by the additional-sampling section. Sampling controls are not automatically inherited by separately configured AI Monitor or AI Judge roles and are not sent to non-OpenRouter providers.
+The existing Viewer temperature control remains separate and is never enabled/disabled by the additional-sampling section. Sampling controls are not automatically inherited by separately configured AI Monitor or AI Judge roles and are not automatically shared across provider configurations. Direct Mistral and Blackbox, as well as Custom OpenAI-compatible connections, have their own supported additional-sampling paths described below.
 
 The UI preserves manual values when the selected model changes. If the selected model reports a parameter as unsupported or unknown while the section is enabled, profile save is blocked for that active manual value until the user explicitly returns that parameter to Auto, selects a compatible model, or disables the section. Disabled values may remain stored but are inactive.
 
@@ -47,3 +47,13 @@ A fixed seed can improve within-route repeatability but does not promise identic
 Provider requests do not add `HTTP-Referer`, `X-OpenRouter-Title` or `X-Title` application-attribution headers. The shared native HTTP client does not set an application-specific `User-Agent`. This applies to new requests after installing a build containing this change; it does not alter historical OpenRouter activity.
 
 The API key still authenticates your account. The label displayed for unattributed requests is controlled by OpenRouter; the application does not send a literal `Anonymous` title. Model routing, sampling settings and session behavior are unchanged.
+
+## Direct Mistral and Blackbox — implemented 19 October 2026
+
+Mistral supports optional top_p, top_k and seed (sent as random_seed), plus direct SSE. Thinking and final text stay separate; compatible replay is preserved outside the visible transcript.
+
+Blackbox supports optional top_p, top_k and seed plus direct SSE. The legacy api.blackbox.ai address is unchanged. For Enterprise or Dedicated, enter the matching HTTPS origin and use First Run/Create Profile to enter the exact model ID. Non-legacy discovery is intentionally unavailable; this does not prove a bad API key. Provider Settings refresh is not the manual-model registration path. Manual IDs and capabilities remain unverified until tested on the real server.
+
+Auto omits sampler fields. A successful request does not prove that the selected backend applies every sampler; a seed is not a guarantee of repeatability. No OpenRouter routing object is added. Existing budgets, Training behavior and STOP/Resume remain unchanged.
+
+See the [direct provider guide](../development/DIRECT_MISTRAL_BLACKBOX.md) for details. Ollama Native is planned as the next separate adapter; it is not available through these changes. Copying these wiki source files to the application branch does not publish the separate GitHub Wiki.

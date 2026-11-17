@@ -34,4 +34,4 @@ src/resources/field-lexicon/*.txt -text
 src-tauri/vendor/tauri-runtime-wry/** -text
 
 # Reviewed upstream license bytes are SHA-256 pinned, including on Windows.
-third-party/notices/** -text
+docs/third-party/notices/** -text
