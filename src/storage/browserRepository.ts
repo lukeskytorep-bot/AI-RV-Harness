@@ -1,3 +1,4 @@
+import { changeBrowserTrainingArchive, recoverBrowserTrainingArchive } from "./browser/trainingArchive";
 import { BrowserWorkspaceSourcesRepository } from "./browser/workspaceSourcesRepository";
 import { BrowserCustomProtocolsRepository } from "./browser/customProtocolsRepository";
 import { evaluationKey, evaluationPrefix, validateResearchEvaluation, assertEvaluationUpdate, type ResearchEvaluation } from "../research/evaluationTypes";
@@ -40,6 +41,19 @@ function write<T>(key: string, value: T): void {
 }
 
 export class BrowserRepository implements AppRepository {
+  constructor() {
+    recoverBrowserTrainingArchive(localStorage);
+    return new Proxy(this, {
+      get(target, key, receiver) {
+        const value = Reflect.get(target, key, receiver);
+        if (typeof value !== "function") return value;
+        return (...args: unknown[]) => {
+          recoverBrowserTrainingArchive(localStorage);
+          return Reflect.apply(value, target, args);
+        };
+      },
+    });
+  }
   async listResearchEvaluations(projectId:string):Promise<ResearchEvaluation[]> {
     return Object.keys(localStorage).filter(key=>key.startsWith(`${evaluationPrefix}${projectId}:`)).map(key=>validateResearchEvaluation(JSON.parse(localStorage.getItem(key)!),{projectId})).sort((a,b)=>a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
@@ -167,37 +181,20 @@ export class BrowserRepository implements AppRepository {
   getTelepathicSeriesLeaseState: NonNullable<AppRepository["getTelepathicSeriesLeaseState"]> = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeriesLeaseState(seriesId);
 
   async archiveTrainingRun(id: string): Promise<void> {
-    const run = (await this.trainingRepository.listTrainingRuns()).find((item) => item.id === id);
-    if (!run) throw new Error("Active Training run not found.");
-    const sessionIds = [...new Set([...(run.sessionIds ?? []), ...(run.activeTargetCheckpoint?.sessionId ? [run.activeTargetCheckpoint.sessionId] : [])])];
-    const changed: string[] = [];
-    try {
-      for (const sessionId of sessionIds) {
-        const session = await this.sessionsRepository.getRvSession(sessionId);
-        if (session && !session.archivedAt) { await this.sessionsRepository.archiveRvSession(sessionId); changed.push(sessionId); }
-      }
-      await this.trainingRepository.archiveTrainingRun(id);
-    } catch (cause) {
-      for (const sessionId of changed.reverse()) await this.sessionsRepository.restoreRvSession(sessionId).catch(() => undefined);
-      throw cause;
-    }
+    await this.changeTrainingArchive(id, false);
   }
 
   async restoreTrainingRun(id: string): Promise<void> {
-    const run = (await this.trainingRepository.listArchivedTrainingRuns()).find((item) => item.id === id);
-    if (!run) throw new Error("Archived Training run not found.");
-    const sessionIds = [...new Set([...(run.sessionIds ?? []), ...(run.activeTargetCheckpoint?.sessionId ? [run.activeTargetCheckpoint.sessionId] : [])])];
-    const changed: string[] = [];
-    try {
-      for (const sessionId of sessionIds) {
-        const session = await this.sessionsRepository.getRvSession(sessionId);
-        if (session?.archivedAt) { await this.sessionsRepository.restoreRvSession(sessionId); changed.push(sessionId); }
-      }
-      await this.trainingRepository.restoreTrainingRun(id);
-    } catch (cause) {
-      for (const sessionId of changed.reverse()) await this.sessionsRepository.archiveRvSession(sessionId).catch(() => undefined);
-      throw cause;
+    await this.changeTrainingArchive(id, true);
+  }
+
+  private async changeTrainingArchive(id: string, restore: boolean): Promise<void> {
+    const run = (await (restore ? this.trainingRepository.listArchivedTrainingRuns() : this.trainingRepository.listTrainingRuns())).find(run => run.id === id);
+    if (!run) throw new Error(restore ? "Archived Training run not found." : "Active Training run not found.");
+    if (await this.getWorkflowOwnership(run.profileId) === "other") {
+      throw new Error("Work for this Profile is running in another window");
     }
+    await changeBrowserTrainingArchive(localStorage, id, restore);
   }
 
   async createDatabaseSnapshot(_destinationPath: string): Promise<void> {

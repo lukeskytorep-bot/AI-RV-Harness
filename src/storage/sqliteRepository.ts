@@ -1,3 +1,4 @@
+import { planTrainingArchive } from "../application/trainingArchive";
 import { SqliteWorkspaceSourcesRepository } from "./sqlite/workspaceSourcesRepository";
 import { SqliteCustomProtocolsRepository } from "./sqlite/customProtocolsRepository";
 import { evaluationKey, evaluationPrefix, validateResearchEvaluation, assertEvaluationUpdate, type ResearchEvaluation } from "../research/evaluationTypes";
@@ -241,37 +242,29 @@ export class SqliteRepository implements AppRepository {
   getTelepathicSeriesLeaseState: NonNullable<AppRepository["getTelepathicSeriesLeaseState"]> = (seriesId) => this.telepathicExchangeRepository.getTelepathicSeriesLeaseState(seriesId);
 
   async archiveTrainingRun(id: string): Promise<void> {
-    const run = (await this.trainingRepository.listTrainingRuns()).find((item) => item.id === id);
-    if (!run) throw new Error("Active Training run not found.");
-    const sessionIds = [...new Set([...(run.sessionIds ?? []), ...(run.activeTargetCheckpoint?.sessionId ? [run.activeTargetCheckpoint.sessionId] : [])])];
-    const changed: string[] = [];
-    try {
-      for (const sessionId of sessionIds) {
-        const session = await this.sessionsRepository.getRvSession(sessionId);
-        if (session && !session.archivedAt) { await this.sessionsRepository.archiveRvSession(sessionId); changed.push(sessionId); }
-      }
-      await this.trainingRepository.archiveTrainingRun(id);
-    } catch (cause) {
-      for (const sessionId of changed.reverse()) await this.sessionsRepository.restoreRvSession(sessionId).catch(() => undefined);
-      throw cause;
-    }
+    await this.changeTrainingArchive(id, false);
   }
 
   async restoreTrainingRun(id: string): Promise<void> {
-    const run = (await this.trainingRepository.listArchivedTrainingRuns()).find((item) => item.id === id);
-    if (!run) throw new Error("Archived Training run not found.");
-    const sessionIds = [...new Set([...(run.sessionIds ?? []), ...(run.activeTargetCheckpoint?.sessionId ? [run.activeTargetCheckpoint.sessionId] : [])])];
-    const changed: string[] = [];
-    try {
-      for (const sessionId of sessionIds) {
-        const session = await this.sessionsRepository.getRvSession(sessionId);
-        if (session?.archivedAt) { await this.sessionsRepository.restoreRvSession(sessionId); changed.push(sessionId); }
-      }
-      await this.trainingRepository.restoreTrainingRun(id);
-    } catch (cause) {
-      for (const sessionId of changed.reverse()) await this.sessionsRepository.archiveRvSession(sessionId).catch(() => undefined);
-      throw cause;
+    await this.changeTrainingArchive(id, true);
+  }
+
+  private async changeTrainingArchive(id: string, restore: boolean): Promise<void> {
+    const run = (await (restore ? this.trainingRepository.listArchivedTrainingRuns() : this.trainingRepository.listTrainingRuns())).find(run => run.id === id);
+    if (!run) throw new Error(restore ? "Archived Training run not found." : "Active Training run not found.");
+    if (!this.workflowContext) {
+      return this.withWorkflowOwnership({ profileId: run.profileId, entity: { kind: "profile", id: run.profileId } },
+        owned => restore ? owned.restoreTrainingRun(id) : owned.archiveTrainingRun(id));
     }
+    const sessions = await Promise.all([...new Set([...(run.sessionIds ?? []), ...(run.activeTargetCheckpoint?.sessionId ? [run.activeTargetCheckpoint.sessionId] : [])])]
+      .map(id => this.sessionsRepository.getRvSession(id)));
+    const plan = planTrainingArchive(run, sessions.filter((session): session is NonNullable<typeof session> => Boolean(session)), restore, nowIso());
+    const context = this.workflowContext;
+    if (context.closed) throw new Error("Workflow ownership has settled; late writes are refused.");
+    await this.writes.run(() => workflowOwnershipNative({
+      action: "trainingArchive", profileId: context.profileId, owner: context.owner,
+      version: context.version, entities: context.entities, plan,
+    }));
   }
 
   async listProfiles(): Promise<Profile[]> {

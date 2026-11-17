@@ -32,7 +32,7 @@ describe("UX-DATA-6 soft archive boundary", () => {
       expect(facade).toContain("Training-owned sessions are archived with their Training run.");
       expect(facade).toContain("this.sessionsRepository.archiveRvSession(sessionId)");
       expect(facade).toContain("this.sessionsRepository.restoreRvSession(sessionId)");
-      expect(facade).toContain("this.trainingRepository.archiveTrainingRun(id)");
+      expect(facade).toContain("async archiveTrainingRun(id: string)");
       expect(facade).toContain("this.researchRepository.archiveResearchProject(id)");
     }
   });

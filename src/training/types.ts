@@ -61,6 +61,8 @@ export interface TrainingExecutionSnapshot {
 }
 
 export interface TrainingRunRecord {
+  /** Sessions archived by this run, absent in legacy snapshots. */
+  archivedSessionIds?: string[];
   id: string;
   runNumber: number;
   name: string;

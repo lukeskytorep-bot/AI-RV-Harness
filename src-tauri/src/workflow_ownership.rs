@@ -19,6 +19,7 @@ pub enum Request {
     Release { profile_id: String, owner: String, version: i64 },
     Inspect { profile_id: String },
     Check { profile_id: String, owner: String, version: i64, entities: Vec<Entity> },
+    TrainingArchive { profile_id: String, owner: String, version: i64, entities: Vec<Entity>, plan: crate::training_archive::Plan },
     EvaluationSave { profile_id: String, owner: String, version: i64, record: Value, expected_revision: i64 },
     EndResearch { profile_id: String, owner: String, version: i64, ended_at: String },
     Write { profile_id: String, owner: String, version: i64, entities: Vec<Entity>, statements: Vec<DatabaseWriteStatement>, post_reveal_fence: Option<ReviewFence> },
@@ -113,6 +114,14 @@ pub(crate) async fn execute(pool: &SqlitePool, request: Request) -> Result<Value
         }
         Request::Check { profile_id, owner, version, entities } => {
             let mut tx=pool.begin().await.map_err(|e|e.to_string())?;guard(&mut tx,&profile_id,&owner,version,&entities).await?;tx.commit().await.map_err(|e|e.to_string())?;Ok(json!(true))
+        }
+        Request::TrainingArchive { profile_id, owner, version, entities, plan } => {
+            if entities.iter().any(|entity| entity.kind != "profile") { return Err("Training archive requires Profile ownership".into()); }
+            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| e.to_string())?;
+            guard(&mut tx, &profile_id, &owner, version, &entities).await?;
+            crate::training_archive::apply(&mut tx, &profile_id, plan).await?;
+            tx.commit().await.map_err(|e|e.to_string())?;
+            Ok(Value::Null)
         }
         Request::EvaluationSave { profile_id, owner, version, record, expected_revision } => {
             let project_id=profile_id.strip_prefix("research:").ok_or("Research ownership is required")?;
@@ -300,5 +309,29 @@ mod evaluation_tests {
         assert!(execute(&pool,Request::Write{profile_id:"research:r".into(),owner:"owner".into(),version,entities,statements:vec![],post_reveal_fence:None}).await.is_err());
         let marker:String=sqlx::query_scalar("SELECT value FROM app_settings WHERE key='rvh.research.end.v1:r'").fetch_one(&pool).await.unwrap();assert_eq!(marker,"{\"reason\":\"user_finished\"}");
         let mut tx=pool.begin().await.unwrap();assert!(crate::database::execute_statement(&mut tx,DatabaseWriteStatement{operation:crate::database::DatabaseWriteOperation::SettingsModelsDeleteAppSettings01,values:vec![json!("rvh.research.evaluation.v1:r:panel")]}).await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod training_archive_guard_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn training_archive_checks_owner_version_and_expiry_before_mutation() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::raw_sql("CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT,updated_at TEXT);
+            CREATE TABLE profiles(id TEXT PRIMARY KEY,archived_at TEXT);
+            INSERT INTO profiles VALUES('p',NULL);
+            INSERT INTO app_settings VALUES('rvh.workflow.v1:p','{\"owner\":\"current\",\"version\":2,\"expiresAt\":\"2999-01-01T00:00:00Z\"}','now');")
+            .execute(&pool).await.unwrap();
+        let entities = vec![Entity{kind:"profile".into(),id:"p".into(),profile_id:None,allow_ended:false}];
+        for (owner, version, accepted) in [("stale",2,false),("current",1,false),("current",2,true)] {
+            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+            assert_eq!(guard(&mut tx,"p",owner,version,&entities).await.is_ok(),accepted);
+            tx.rollback().await.unwrap();
+        }
+        sqlx::query("UPDATE app_settings SET value=json_set(value,'$.expiresAt','2000-01-01T00:00:00Z')").execute(&pool).await.unwrap();
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        assert!(guard(&mut tx,"p","current",2,&entities).await.is_err());
     }
 }
