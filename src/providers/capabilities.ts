@@ -252,6 +252,16 @@ export function resolveGenerationSettings(
   const omitted: EffectiveGenerationSettings["omitted"] = [];
   let reasoningResolution: EffectiveGenerationSettings["reasoningResolution"];
 
+  const compatibility = requested.customCompatibilityProfile;
+  if (compatibility !== undefined) {
+    if (context?.provider !== "custom_openai") throw new Error("Custom compatibility profile is only valid for Custom OpenAI-compatible routes.");
+    if (compatibility !== "generic" && compatibility !== "llama_cpp") throw new Error("Invalid Custom OpenAI compatibility profile.");
+    effective.customCompatibilityProfile = compatibility;
+  }
+  if (compatibility === "llama_cpp" && (requested.reasoningEffort !== undefined || requested.reasoningMaxTokens !== undefined)) {
+    throw new Error("llama.cpp supports the Custom reasoning Auto/On/Off switch; reasoning effort and reasoning token budgets are not supported by this dialect.");
+  }
+
   const customReasoningMode = context?.provider === "custom_openai" ? requested.customReasoningMode : undefined;
   if (requested.customReasoningMode !== undefined && context?.provider !== "custom_openai") {
     throw new Error("Custom reasoning override is only valid for Custom OpenAI-compatible routes.");

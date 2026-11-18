@@ -4,7 +4,7 @@ import type { TelepathicHistoryQuery, TelepathicHistoryPage } from "../telepathi
 import type { ProviderContinuationState } from "../providers/continuationContract";
 import type { ProviderContinuationStateBinding } from "./providerContinuationState";
 import type { AppSettings, ChatMessage, ChatMode, ChatThread, CreateProfileInput, CreateWorkspaceInput, Profile, ProfileAiConfigurationInput, UpdateProfileInput, Workspace } from "../types";
-import type { CreateProviderConfigInput, CustomOpenAiOutputTokenField, ProviderConfig, ProviderModel } from "../providers/types";
+import type { CreateProviderConfigInput, CustomOpenAiCompatibilityProfile, CustomOpenAiOutputTokenField, ProviderConfig, ProviderModel } from "../providers/types";
 import type { CreateRvSessionInput, RevealInput, RvSession, RvSessionState, SessionEventInput, SessionEventRecord, SessionSnapshot, TargetClarificationRecord } from "../sessions/types";
 import type { CreateMonitorRunInput, MonitorInterventionInput, MonitorInterventionRecord, MonitorRunRecord } from "../monitor/types";
 import type { CreateJudgeRunInput, FrozenJudgeResultInput, FrozenJudgeScoreInput, JudgeScoreRecord } from "../judge/types";
@@ -65,6 +65,7 @@ export interface AppRepository extends WorkspaceSourcesRepository, CustomProtoco
   createProviderConfig(input: CreateProviderConfigInput): Promise<ProviderConfig>;
   updateProviderCredentialMetadata(id: string, credentialHint: string, fingerprint: string): Promise<void>;
   updateProviderCustomOutputTokenField(id: string, field?: CustomOpenAiOutputTokenField): Promise<void>;
+  updateProviderCustomCompatibilityProfile(id: string, profile: CustomOpenAiCompatibilityProfile): Promise<void>;
   updateProviderCustomStreamingEnabled(id: string, enabled: boolean): Promise<void>;
   deleteProviderConfig(id: string): Promise<void>;
   updateProviderConnectionStatus(id: string, status: "ok" | "error", error?: string): Promise<void>;

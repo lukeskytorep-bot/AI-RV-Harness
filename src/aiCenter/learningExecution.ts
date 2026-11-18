@@ -1,3 +1,4 @@
+import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { parseProviderFinalCandidate } from "../providers/finalCandidate";
 import { assertAbortOwnership } from "../application/abortOwnership";
 import { sha256Text } from "../application/sha256";
@@ -73,6 +74,7 @@ export async function executeLearningProposal<T>(input: {
 }): Promise<{ parsed: T; response: ProviderChatResponse; settings: Awaited<ReturnType<typeof callWithAnalyticalOutputRecovery>>["settings"]; attempts: number }> {
   const { repository, sessionId, packetHash, kind } = input;
   const signal = input.analytical.signal;
+  const requestedSettings = input.analytical.requestedSettings ?? newRunGenerationSettings(input.config, {});
   // Optional Training learning must never require a person to resolve a dispatch.
   // Preserve memory and consume no further paid slot when its result is unknown.
   const unconfirmed = (attempts: number): never => {
@@ -112,7 +114,7 @@ export async function executeLearningProposal<T>(input: {
       let capturedSettings: typeof settings;
       try {
         const outputRecovery = slot === 1 && lastFailure?.outputRecoveryRequired === true;
-        const result = await callWithAnalyticalOutputRecovery({ ...input.analytical,
+        const result = await callWithAnalyticalOutputRecovery({ ...input.analytical, requestedSettings,
           recoveryInstruction: outputRecovery ? input.analytical.recoveryInstruction : undefined,
           recoveryReasoningMaxTokens: outputRecovery ? input.analytical.recoveryReasoningMaxTokens : undefined,
           messages, initialAttempt: slot, maximumAttempts: 1,

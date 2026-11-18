@@ -1,3 +1,4 @@
+import { newRunGenerationSettings } from "../../providers/customCompatibility";
 import { ResearchEvaluationPanels } from "./ResearchEvaluationPanels";
 import { ResearchPartialScores } from "./ResearchPartialScores";
 import { useWorkflowOwnership } from "../../components/useWorkflowOwnership";
@@ -287,7 +288,7 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
     const judges = evaluationMode === "save_only" ? [] : judgeKeys.slice(0, judgeCount).map((key) => {
       const model = findModelByRouteKey(key, models);
       if (!model || !isRouteAllowedForCredential(key, baseProfile.credentialId, providers, models)) throw new Error(copy.judgeRequiresModels);
-      return { providerConfigId: model.providerConfigId, modelId: model.modelId };
+      return { providerConfigId: model.providerConfigId, modelId: model.modelId, generationSettings: newRunGenerationSettings(providers.find(item => item.id === model.providerConfigId)!, {}) };
     });
     const configuredOutputTokens = Number(researchMaxOutputTokens);
     if (!Number.isInteger(configuredOutputTokens) || configuredOutputTokens < 1 || (sharedCapabilities.maxOutputTokens !== undefined && configuredOutputTokens > sharedCapabilities.maxOutputTokens)) throw new Error(copy.researchOutputOutOfRange);
@@ -427,8 +428,8 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
       const conditionModel = models.find((item) => item.providerConfigId === condition.providerConfigId && item.modelId === condition.modelId);
       if (!conditionModel) return condition;
       const requestedSettings = conditionModel.provider === "custom_openai"
-        ? condition.requestedSettings
-        : (() => { const next = { ...condition.requestedSettings }; delete next.customTemperatureMode; delete next.customReasoningMode; return next; })();
+        ? newRunGenerationSettings(providers.find(item => item.id === condition.providerConfigId)!, condition.requestedSettings)
+        : (() => { const next = { ...condition.requestedSettings }; delete next.customTemperatureMode; delete next.customReasoningMode; delete next.customCompatibilityProfile; return next; })();
       return {
         ...condition,
         requestedSettings,

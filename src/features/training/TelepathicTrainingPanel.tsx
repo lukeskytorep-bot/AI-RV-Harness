@@ -1,3 +1,4 @@
+import { newRunGenerationSettings } from "../../providers/customCompatibility";
 import { useTelepathicCheckpointRefresh } from "../../components/useTelepathicCheckpointRefresh";
 import { telepathicManualRetryCandidate } from "../../telepathicExchange/recovery";
 import { authorizeTelepathicStepRetry } from "../../telepathicExchange/engine";
@@ -200,6 +201,7 @@ export function TelepathicTrainingPanel({ settings, profiles, workspaces, reposi
         credentialFingerprint: eligible.identity.credentialFingerprint,
         modelId: eligible.model.modelId,
         route: eligible.model.route,
+          generationSettings: newRunGenerationSettings(eligible.providerConfig, {}),
       },
     }));
     return { schemaVersion: 1, seriesId: "preview", seriesWorkspaceId, mode: "ai_ai_training", recoveryPolicy: { ...AUTOMATIC_TELEPATHIC_RECOVERY, mode: automaticRecovery ? "automatic" : "manual" }, language, participants, roundCount, topic, discloseTopicToReceivers: discloseTopic, protocolVersion:"fixed_lead_v1",leadInstructionVersion:LEAD_INSTRUCTION_VERSION,maxGuidanceCycles:3,senderPolicy: { kind: "fixed_ai",participantId: `ai:${leadProfileId}` } };

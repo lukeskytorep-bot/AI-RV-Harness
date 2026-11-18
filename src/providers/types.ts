@@ -16,6 +16,7 @@ export const PROVIDER_KINDS = [
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 export type CustomOpenAiOutputTokenField = "max_tokens" | "max_completion_tokens";
 export type CustomReasoningMode = "default" | "on" | "off";
+export type CustomOpenAiCompatibilityProfile = "generic" | "llama_cpp";
 
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type CapabilityConfidence = "provider_metadata" | "verified" | "unknown";
@@ -44,6 +45,7 @@ export interface ProviderConfig {
   baseUrl?: string;
   customOutputTokenField?: CustomOpenAiOutputTokenField;
   customStreamingEnabled?: boolean;
+  customCompatibilityProfile?: CustomOpenAiCompatibilityProfile;
   enabled: boolean;
   lastTestedAt?: string;
   lastStatus?: "ok" | "error";
@@ -61,6 +63,7 @@ export interface CreateProviderConfigInput {
   baseUrl?: string;
   customOutputTokenField?: CustomOpenAiOutputTokenField;
   customStreamingEnabled?: boolean;
+  customCompatibilityProfile?: CustomOpenAiCompatibilityProfile;
   fingerprint?: string;
 }
 
@@ -123,6 +126,8 @@ export interface ProviderModel {
 }
 
 export interface GenerationSettings {
+  /** Frozen wire dialect. Missing in legacy snapshots always means generic. */
+  customCompatibilityProfile?: CustomOpenAiCompatibilityProfile;
   /** Custom OpenAI temperature intent. Missing preserves legacy capability-driven behavior. */
   customTemperatureMode?: "provider_default" | "manual";
   /** Optional Custom OpenAI wire override for reasoning.enabled. */

@@ -1,3 +1,4 @@
+import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { withAutomaticWorkflow, withRvWorkflow } from "../application/workflowOwnership";
 import { monitorInterventionId } from "./monitorInterventions";
 import { evaluateMonitor, isIncompleteMonitorResponse, type MonitorDecision } from "../monitor/engine";
@@ -57,7 +58,7 @@ type TelepathicSessionRepository = Pick<
   | "recordTargetUsage"
   | "createMonitorRun"
   | "appendMonitorIntervention"
-> & Partial<Pick<AppRepository, "appendSessionEventWithProviderState">>;
+> & Partial<Pick<AppRepository, "appendSessionEventWithProviderState" | "getSessionSnapshot">>;
 
 type TelepathicResumeRepository = TelepathicSessionRepository & Pick<AppRepository, "getSessionSnapshot" | "listSessionEvents" | "getSessionEventProviderState">;
 
@@ -179,6 +180,9 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
   await input.repository.appendSessionEvent(sessionId, { eventType: "SESSION_CREATED", role: "controller", metadata: { sessionCode, protocolFamily: "telepathic" } });
   await input.repository.updateRvSessionState(sessionId, "Preflight");
 
+  const monitorGenerationSettings = input.monitor ? (input.resumeSession
+    ? (input.repository.getSessionSnapshot ? (await input.repository.getSessionSnapshot(input.resumeSession.id))?.monitor?.generationSettings : undefined) ?? {}
+    : newRunGenerationSettings(input.monitor.providerConfig, {})) : undefined;
   const snapshot: SessionSnapshot = {
     schemaVersion: 4,
     sessionId,
@@ -219,6 +223,7 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
     },
     ...(input.monitor ? {
       monitor: {
+        generationSettings: monitorGenerationSettings,
         providerConfigId: input.monitor.providerConfig.id,
         provider: input.monitor.providerConfig.provider,
         modelId: input.monitor.model.modelId,
@@ -385,6 +390,7 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
         const attempt = 0;
         try {
           decision = await evaluateMonitor({
+              requestedSettings: monitorGenerationSettings,
           providerConfig: input.monitor.providerConfig,
           model: input.monitor.model,
           language: input.sessionLanguage,

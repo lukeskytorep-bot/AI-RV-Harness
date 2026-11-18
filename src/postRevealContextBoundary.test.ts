@@ -1,3 +1,4 @@
+import { normalizeCustomCompatibilityWiring } from "./testing/normalizeCustomCompatibilityWiring";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -118,7 +119,7 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     })));
     expect(createHash("sha256").update(monitorContract).digest("hex")).toBe("40388dc3bc9b21f9105d94c5f77b8db4bf9d3eff8375ec877e92252e441b32c2");
 
-    const telepathic = source("src/sessions/telepathicController.ts");
+    const telepathic = normalizeCustomCompatibilityWiring(source("src/sessions/telepathicController.ts"));
     expect(telepathic).toContain('streamWorkflowContext: input.streamWorkflowContext ?? "rv_session"');
     expect(telepathic).toContain('source: "live_monitor"');
     const telepathicWithoutS2OrFieldGuideWiring = normalizeS2TelepathicStreamingWiring(telepathic

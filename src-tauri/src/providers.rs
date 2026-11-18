@@ -142,6 +142,13 @@ impl CustomOpenAiOutputTokenField {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomOpenAiCompatibilityProfile {
+    Generic,
+    LlamaCpp,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderChatRequest {
@@ -164,6 +171,8 @@ pub struct ProviderChatRequest {
     seed: Option<u64>,
     max_output_tokens: Option<u32>,
     custom_output_token_field: Option<CustomOpenAiOutputTokenField>,
+    #[serde(default)]
+    custom_compatibility_profile: Option<CustomOpenAiCompatibilityProfile>,
     #[serde(default)]
     custom_streaming_enabled: bool,
     timeout_ms: Option<u64>,

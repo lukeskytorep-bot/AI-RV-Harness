@@ -1,3 +1,4 @@
+import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { assertAbortOwnership, nativeWorkflowBinding } from "../application/abortOwnership";
 import { normalizeResearchJudgeOutput, type JudgeNormalizationTrace } from "./researchNormalization";
 import { withRvWorkflow } from "../application/workflowOwnership";
@@ -32,6 +33,7 @@ export type JudgeRepository = Pick<
 > & Partial<Pick<AppRepository, "recordFrozenJudgeResults">>;
 
 export interface JudgeSelection {
+  requestedSettings?: import("../providers/types").GenerationSettings;
   providerConfig: ProviderConfig;
   model: ProviderModel;
 }
@@ -138,6 +140,7 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
 
   for (let index = 0; index < input.judges.length; index += 1) {
     const judge = input.judges[index];
+    const requestedSettings = judge.requestedSettings ?? newRunGenerationSettings(judge.providerConfig, {});
 
     // Each Judge gets a fresh two-message context. No Viewer/Monitor/model/research metadata is added here.
     const languageDirective = language === "pl"
@@ -150,6 +153,7 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
     const initial = await judgeAnalyticalResponse({
       signal:input.signal,preserveCompleteAfterAbort:true,
       model: judge.model,
+      requestedSettings,
       messages,
       operationKind: "judge",
       budgetPolicy: input.budgetPolicy,
@@ -173,6 +177,7 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
       const repaired = await judgeAnalyticalResponse({
         signal:input.signal,preserveCompleteAfterAbort:true,
         model: judge.model,
+      requestedSettings,
         messages: repairMessages,
         operationKind: "judge",
       budgetPolicy: input.budgetPolicy,
@@ -190,6 +195,7 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
       response = (await judgeAnalyticalResponse({
         signal:input.signal,preserveCompleteAfterAbort:true,
         model: judge.model,
+      requestedSettings,
         messages: correctionMessages,
         operationKind: "judge",
       budgetPolicy: input.budgetPolicy,

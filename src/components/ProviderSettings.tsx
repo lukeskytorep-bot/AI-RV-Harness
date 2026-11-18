@@ -2,8 +2,8 @@ import { Check, KeyRound, Plus, RefreshCw, Server, Settings2, ShieldCheck, Spark
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { getCopy } from "../i18n";
 import { useAppDialogs } from "./AppDialogProvider";
-import { addProvider, rebindProviderCredential, refreshProviderModels, removeProvider, updateCustomOpenAiBaseUrl, updateCustomOpenAiOutputTokenField, updateCustomOpenAiStreamingEnabled } from "../providers/service";
-import { PROVIDER_KINDS, type CustomOpenAiOutputTokenField, type ProviderConfig, type ProviderKind, type ProviderModel } from "../providers/types";
+import { addProvider, rebindProviderCredential, refreshProviderModels, removeProvider, updateCustomOpenAiBaseUrl, updateCustomOpenAiOutputTokenField, updateCustomOpenAiStreamingEnabled, updateCustomOpenAiCompatibilityProfile } from "../providers/service";
+import { PROVIDER_KINDS, type CustomOpenAiCompatibilityProfile, type CustomOpenAiOutputTokenField, type ProviderConfig, type ProviderKind, type ProviderModel } from "../providers/types";
 import { isTauriRuntime } from "../storage";
 import type { AppRepository } from "../storage/repository";
 
@@ -77,13 +77,14 @@ export function ProviderSettings({ copy, repository, section = "all", language =
     }
   };
 
-  const updateWireField = async (config: ProviderConfig, field: CustomOpenAiOutputTokenField | undefined, streamingEnabled: boolean) => {
+  const updateWireField = async (config: ProviderConfig, field: CustomOpenAiOutputTokenField | undefined, streamingEnabled: boolean, compatibilityProfile: CustomOpenAiCompatibilityProfile) => {
     if (!repository) return;
     setBusyId(config.id);
     setError(null);
     try {
       await updateCustomOpenAiOutputTokenField(repository, config, field);
       await updateCustomOpenAiStreamingEnabled(repository, config, streamingEnabled);
+      await updateCustomOpenAiCompatibilityProfile(repository, config, compatibilityProfile);
       setWireConfig(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -189,7 +190,7 @@ export function ProviderSettings({ copy, repository, section = "all", language =
       {section !== "providers" && <ModelRegistry copy={copy} repository={repository} providers={providers} models={models} onChanged={reload} />}
       {dialogOpen && <AddProviderDialog copy={copy} busy={busyId === "new"} onClose={() => setDialogOpen(false)} onSubmit={add} />}
       {rebindConfig && <RebindCredentialDialog copy={copy} config={rebindConfig} busy={busyId === rebindConfig.id} onClose={() => setRebindConfig(null)} onSubmit={(apiKey) => rebind(rebindConfig, apiKey)} />}
-      {wireConfig && <CustomWireSettingsDialog copy={copy} config={wireConfig} endpointError={endpointError} onSaveEndpoint={(baseUrl) => updateEndpoint(wireConfig, baseUrl)} busy={busyId === wireConfig.id} onClose={() => setWireConfig(null)} onSubmit={(field, streamingEnabled) => updateWireField(wireConfig, field, streamingEnabled)} />}
+      {wireConfig && <CustomWireSettingsDialog copy={copy} config={wireConfig} endpointError={endpointError} onSaveEndpoint={(baseUrl) => updateEndpoint(wireConfig, baseUrl)} busy={busyId === wireConfig.id} onClose={() => setWireConfig(null)} onSubmit={(field, streamingEnabled, compatibilityProfile) => updateWireField(wireConfig, field, streamingEnabled, compatibilityProfile)} />}
     </>
   );
 }
@@ -273,15 +274,16 @@ function AddProviderDialog({ copy, busy, onClose, onSubmit }: { copy: Copy; busy
 
 function CustomWireSettingsDialog({ copy, config, busy, endpointError, onClose, onSubmit, onSaveEndpoint }: {
   copy: Copy; config: ProviderConfig; busy: boolean; endpointError: string | null; onClose: () => void;
-  onSubmit: (field: CustomOpenAiOutputTokenField | undefined, streamingEnabled: boolean) => Promise<void>;
+  onSubmit: (field: CustomOpenAiOutputTokenField | undefined, streamingEnabled: boolean, compatibilityProfile: CustomOpenAiCompatibilityProfile) => Promise<void>;
   onSaveEndpoint: (baseUrl: string) => Promise<void>;
 }) {
   const [baseUrl, setBaseUrl] = useState(config.baseUrl ?? "");
   const [value, setValue] = useState<"default" | CustomOpenAiOutputTokenField>(config.customOutputTokenField ?? "default");
   const [streamingEnabled, setStreamingEnabled] = useState(config.customStreamingEnabled ?? false);
+  const [compatibilityProfile, setCompatibilityProfile] = useState<CustomOpenAiCompatibilityProfile>(config.customCompatibilityProfile ?? "generic");
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void onSubmit(value === "default" ? undefined : value, streamingEnabled);
+    void onSubmit(value === "default" ? undefined : value, streamingEnabled, compatibilityProfile);
   };
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
@@ -294,6 +296,7 @@ function CustomWireSettingsDialog({ copy, config, busy, endpointError, onClose, 
         </form>
         <form onSubmit={submit}>
           <label>{copy.customOutputTokenField}<select value={value} onChange={(event) => setValue(event.target.value as "default" | CustomOpenAiOutputTokenField)}><option value="default">{copy.customOutputTokenDefault}</option><option value="max_completion_tokens">{copy.customOutputTokenCompletion}</option></select><small>{copy.customOutputTokenFieldHelp}</small></label>
+          <label>{copy.customCompatibilityProfile}<select value={compatibilityProfile} disabled={busy} onChange={event => setCompatibilityProfile(event.target.value as CustomOpenAiCompatibilityProfile)}><option value="generic">Generic (OpenAI-compatible)</option><option value="llama_cpp">llama.cpp</option></select><small>{copy.customCompatibilityHelp}</small></label>
           <label className="checkbox-line"><input type="checkbox" checked={streamingEnabled} onChange={(event) => setStreamingEnabled(event.target.checked)} />{copy.customStreamingEnabled}</label>
           <small>{copy.customStreamingHelp}</small>
           <div className="modal-actions"><button className="secondary-button" type="button" disabled={busy} onClick={onClose}>{copy.cancel}</button><button className="primary-button" type="submit" disabled={busy}>{copy.saveWireSettings}</button></div>

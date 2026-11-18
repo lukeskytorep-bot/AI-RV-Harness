@@ -1,3 +1,4 @@
+import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { withPostRevealReceipt, postRevealReceiptRoute, releasePostRevealReceipt, PostRevealCheckpointError, isPostRevealCheckpointFailure } from "./postRevealReceipt";
 import { classifyProviderFailure, providerAttemptOutcomes } from "../providers/responseEvidence";
 import { withRvWorkflow } from "../application/workflowOwnership";
@@ -539,6 +540,7 @@ async function sendMonitorPostRevealReviewOwned(input: {
     model: input.model,
     messages,
     operationKind: "post_reveal_monitor",
+    requestedSettings: snapshot.monitor ? snapshot.monitor.generationSettings ?? {} : newRunGenerationSettings(input.providerConfig, {}),
     ...(snapshot.researchProjectId ? { budgetPolicy: analyticalBudgetPolicyForSnapshot(snapshot.postRevealOutputPolicy) } : {}),
     call: (settings) => executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "post-reveal.monitor", streamWorkflowContext: input.streamWorkflowContext, attempt: input.chat, ...(input.onProviderAttemptStart ? { onAttemptStart: () => input.onProviderAttemptStart?.() } : {}) }),
   })).response });

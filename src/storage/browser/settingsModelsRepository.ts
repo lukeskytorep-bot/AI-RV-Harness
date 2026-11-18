@@ -1,5 +1,6 @@
-import type { CustomOpenAiOutputTokenField, ProviderConfig, ProviderModel } from "../../providers/types";
+import type { CustomOpenAiCompatibilityProfile, CustomOpenAiOutputTokenField, ProviderConfig, ProviderModel } from "../../providers/types";
 import { applyReasoningRegistryToProviderModel } from "../../providers/modelReasoningRegistry";
+import { customCompatibilityProfile } from "../../providers/customCompatibility";
 import type { AppSettings } from "../../types";
 import type { SettingsModelsRepository } from "../contracts/settingsModelsRepository";
 import { nowIso } from "../repository";
@@ -43,7 +44,7 @@ export class BrowserSettingsModelsRepository implements SettingsModelsRepository
   }
 
   async listProviderConfigs(): Promise<ProviderConfig[]> {
-    return this.read<ProviderConfig[]>(PROVIDERS_KEY, []).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return this.read<ProviderConfig[]>(PROVIDERS_KEY, []).map(p => p.provider === "custom_openai" ? { ...p, customCompatibilityProfile: customCompatibilityProfile(p.customCompatibilityProfile) } : p).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   async createProviderConfig(_input: Parameters<SettingsModelsRepository["createProviderConfig"]>[0]): Promise<ProviderConfig> {
@@ -70,6 +71,15 @@ export class BrowserSettingsModelsRepository implements SettingsModelsRepository
     if (!current) throw new Error("Provider connection not found.");
     if (current.provider !== "custom_openai") throw new Error("Streaming transport setting is available only for Custom OpenAI-compatible providers.");
     this.write(PROVIDERS_KEY, configs.map((item) => item.id === id ? { ...item, customStreamingEnabled: enabled } : item));
+  }
+
+  async updateProviderCustomCompatibilityProfile(id: string, profile: CustomOpenAiCompatibilityProfile): Promise<void> {
+    const value = customCompatibilityProfile(profile);
+    const configs = await this.listProviderConfigs();
+    const current = configs.find(item => item.id === id);
+    if (!current) throw new Error("Provider connection not found.");
+    if (current.provider !== "custom_openai") throw new Error("Compatibility profile is available only for Custom OpenAI-compatible providers.");
+    this.write(PROVIDERS_KEY, configs.map(item => item.id === id ? { ...item, customCompatibilityProfile: value } : item));
   }
 
   async deleteProviderConfig(id: string): Promise<void> {

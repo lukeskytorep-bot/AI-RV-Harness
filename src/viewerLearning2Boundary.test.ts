@@ -1,3 +1,4 @@
+import { normalizeCustomCompatibilityWiring } from "./testing/normalizeCustomCompatibilityWiring";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,7 +9,7 @@ function source(relativePath: string): string {
 }
 
 function normalizeS2MonitorStreamingWiring(value: string): string {
-  return value
+  return normalizeCustomCompatibilityWiring(value)
     // B2 changes only this import to preserve the immutable live pair.
     .replace('import { FROZEN_ANALYTICAL_V1_INITIAL_TOKENS as ANALYTICAL_OUTPUT_INITIAL_TOKENS, FROZEN_ANALYTICAL_V1_RECOVERY_TOKENS as ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";\n', 'import { ANALYTICAL_OUTPUT_INITIAL_TOKENS, ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";\n')
     // BUDGET-0 permits exactly the shared analytical import and 16K/32K selector.

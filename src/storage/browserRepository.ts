@@ -286,6 +286,7 @@ export class BrowserRepository implements AppRepository {
   createProviderConfig: AppRepository["createProviderConfig"] = (input) => this.settingsModelsRepository.createProviderConfig(input);
   updateProviderCredentialMetadata: AppRepository["updateProviderCredentialMetadata"] = (id, credentialHint, fingerprint) => this.settingsModelsRepository.updateProviderCredentialMetadata(id, credentialHint, fingerprint);
   updateProviderCustomOutputTokenField: AppRepository["updateProviderCustomOutputTokenField"] = (id, field) => this.settingsModelsRepository.updateProviderCustomOutputTokenField(id, field);
+  updateProviderCustomCompatibilityProfile: AppRepository["updateProviderCustomCompatibilityProfile"] = (id, profile) => this.settingsModelsRepository.updateProviderCustomCompatibilityProfile(id, profile);
   updateProviderCustomStreamingEnabled: AppRepository["updateProviderCustomStreamingEnabled"] = (id, enabled) => this.settingsModelsRepository.updateProviderCustomStreamingEnabled(id, enabled);
   deleteProviderConfig: AppRepository["deleteProviderConfig"] = (id) => this.settingsModelsRepository.deleteProviderConfig(id);
   updateProviderConnectionStatus: AppRepository["updateProviderConnectionStatus"] = (id, status, error) => this.settingsModelsRepository.updateProviderConnectionStatus(id, status, error);

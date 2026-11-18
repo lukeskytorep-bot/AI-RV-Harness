@@ -1,3 +1,4 @@
+import { normalizeCustomCompatibilityWiring } from "./testing/normalizeCustomCompatibilityWiring";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
@@ -32,7 +33,7 @@ import nativeCompatibility from "../src-tauri/src/ux_data_compatibility.rs?raw";
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
-const normalizeS2MonitorStreamingWiring = (value: string) => value
+const normalizeS2MonitorStreamingWiring = (value: string) => normalizeCustomCompatibilityWiring(value)
     // B2 keeps the live Monitor on the immutable 16K/32K pair.
     .replace('import { FROZEN_ANALYTICAL_V1_INITIAL_TOKENS as ANALYTICAL_OUTPUT_INITIAL_TOKENS, FROZEN_ANALYTICAL_V1_RECOVERY_TOKENS as ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";\n', 'import { ANALYTICAL_OUTPUT_INITIAL_TOKENS, ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";\n')
     // BUDGET-0 permits exactly the shared analytical import and 16K/32K selector.

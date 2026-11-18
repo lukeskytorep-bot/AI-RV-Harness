@@ -1,3 +1,4 @@
+import { newRunGenerationSettings } from "../../providers/customCompatibility";
 import { inspectViewerSessionResume } from "../../sessions/viewerResumeDecision";
 import type { ViewerResumeLedgerDecision } from "../../sessions/viewerResumeLedger";
 import type { InterfaceLanguage } from "../../types";
@@ -244,7 +245,8 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
       viewerNotesEnabled,
       executionSnapshot: {
         language,
-        generationSettings: profileGenerationDefaults(profile, viewerModel),
+        generationSettings: newRunGenerationSettings(provider, profileGenerationDefaults(profile, viewerModel)),
+        judgeGenerationSettings: selectedJudges.map(model => newRunGenerationSettings(providers.find(item => item.id === model!.providerConfigId)!, {})),
         transport: {
           maxRetries: settings.maxRetries,
           requestTimeoutMs: settings.requestTimeoutMs,
@@ -271,11 +273,11 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
     const runProvider = providers.find((item) => item.credentialId === runProfile?.credentialId);
     const runModel = findModelByRouteKey(initial.modelRoute, models);
     if (!runProfile || !runProvider || !runModel) { setError(text.routeMissing); return; }
-    const judges = initial.judgeModelRoutes.map((key) => {
+    const judges = initial.judgeModelRoutes.map((key, index) => {
       const model = findModelByRouteKey(key, models);
       const providerConfig = providers.find((item) => item.id === model?.providerConfigId);
       if (!model || !providerConfig) throw new Error(text.judgeMissing);
-      return { model, providerConfig };
+      return { model, providerConfig, requestedSettings: initial.executionSnapshot?.judgeGenerationSettings?.[index] ?? {} };
     });
     pauseRequested.current = false;
     const controller = new AbortController();

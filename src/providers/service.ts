@@ -2,7 +2,7 @@ import { notifyProviderRoutesChanged } from "./changes";
 import type { AppRepository } from "../storage/repository";
 import { createId } from "../storage/repository";
 import { changeCustomOpenAiEndpoint, deleteCredentialSecret, discoverModels, hasCredentialSecret, providerBindingEndpoint, rebindCredentialSecret, storeCredentialSecret } from "./native";
-import type { CustomOpenAiOutputTokenField, ProviderConfig, ProviderKind, ProviderModel } from "./types";
+import type { CustomOpenAiCompatibilityProfile, CustomOpenAiOutputTokenField, ProviderConfig, ProviderKind, ProviderModel } from "./types";
 
 export const PROVIDER_MODEL_CACHE_LIMIT_PER_PROVIDER = 2000;
 
@@ -195,5 +195,11 @@ export async function updateCustomOpenAiStreamingEnabled(
 export async function removeProvider(repository: AppRepository, config: ProviderConfig): Promise<void> {
   await deleteCredentialSecret(config.credentialId);
   await repository.deleteProviderConfig(config.id);
+  notifyProviderRoutesChanged();
+}
+
+export async function updateCustomOpenAiCompatibilityProfile(repository: AppRepository, config: ProviderConfig, profile: CustomOpenAiCompatibilityProfile): Promise<void> {
+  if (config.provider !== "custom_openai") throw new Error("Compatibility profile is available only for Custom OpenAI-compatible providers.");
+  await repository.updateProviderCustomCompatibilityProfile(config.id, profile);
   notifyProviderRoutesChanged();
 }

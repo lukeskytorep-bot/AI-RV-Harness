@@ -116,6 +116,7 @@ export interface ResearchConditionDefinition {
 }
 
 export interface ResearchJudgeDefinition {
+  generationSettings?: import("../providers/types").GenerationSettings;
   providerConfigId: string;
   modelId: string;
 }

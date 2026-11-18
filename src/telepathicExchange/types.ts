@@ -2,7 +2,7 @@ import type { TelepathicRecoveryPolicy } from "./recovery";
 import type { ProviderCallErrorDetails } from "../providers/providerError";
 import type { ProviderResponseEvidence } from "../providers/responseEvidence";
 import type { TelepathicOutputBudgetSnapshot, TelepathicOutputDiagnostics } from "./outputBudgets";
-import type { ProviderUsage, ProviderMessage, EffectiveGenerationSettings } from "../providers/types";
+import type { GenerationSettings, ProviderUsage, ProviderMessage, EffectiveGenerationSettings } from "../providers/types";
 import type { ProviderContinuationState } from "../providers/continuationContract";
 
 export type TelepathicLanguage = "pl" | "en";
@@ -18,6 +18,7 @@ export type TelepathicTopic =
   | "any";
 
 export interface TelepathicAiRouteSnapshot {
+  generationSettings?: GenerationSettings;
   profileId: string;
   profileName: string;
   workspaceId: string;

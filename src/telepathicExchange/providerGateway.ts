@@ -86,7 +86,7 @@ export async function resolveTelepathicAiRouteFromRepository(input: {
     snapshot: structuredClone(snapshot),
     providerConfig,
     model,
-    requestedSettings: structuredClone(input.requestedSettings),
+    requestedSettings: structuredClone({ ...input.requestedSettings, ...snapshot.generationSettings, customCompatibilityProfile: snapshot.generationSettings?.customCompatibilityProfile }),
     validatedIdentity: {
       profileId: profile.id,
       workspaceId: workspace.id,

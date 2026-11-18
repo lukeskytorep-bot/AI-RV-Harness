@@ -1,3 +1,4 @@
+import { newRunGenerationSettings } from "../../providers/customCompatibility";
 import { useTelepathicCheckpointRefresh } from "../../components/useTelepathicCheckpointRefresh";
 import { authorizeTelepathicStepRetry } from "../../telepathicExchange/engine";
 import { useTelepathicDraft } from "../../components/useTelepathicDraft";
@@ -257,6 +258,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
           credentialFingerprint: eligible.identity.credentialFingerprint,
           modelId: eligible.model.modelId,
           route: eligible.model.route,
+          generationSettings: newRunGenerationSettings(eligible.providerConfig, {}),
         },
       })),
     ];
@@ -356,6 +358,7 @@ export function TelepathicExchangePanel({ copy, settings, profile, workspace, re
           credentialFingerprint: eligible.identity.credentialFingerprint,
           modelId: eligible.model.modelId,
           route: eligible.model.route,
+          generationSettings: newRunGenerationSettings(eligible.providerConfig, {}),
         },
       })),
     ];

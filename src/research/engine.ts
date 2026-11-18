@@ -1,3 +1,4 @@
+import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { selectMissingResearchJudges } from "./judgeSlots";
 import { createResearchJudgeRequestRecovery, ResearchJudgeCheckpointError, ResearchJudgeSlotFailure, researchJudgeRequestAvailability, currentJudgeCompletionId, RESEARCH_JUDGE_COMPLETION_AUTH } from "./judgeRequestRecovery";
 import { prepareViewerSessionResume, type ViewerResumeDecisionCopy } from "../sessions/viewerResumeDecision";
@@ -28,6 +29,25 @@ import { VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_RECOVERY_TOKENS } from "../
 
 type ResearchRepository = AppRepository;
 
+/** New-project boundary only. Existing locked projects never pass through this function. */
+export function freezeResearchCompatibility(config: ResearchConfig, inventory: ResearchPreflightInventory): ResearchConfig {
+  return {
+    ...config,
+    conditions: config.conditions.map(condition => {
+      const provider = inventory.providerConfigs.find(item => item.id === condition.providerConfigId);
+      if (provider?.provider !== "custom_openai") return condition;
+      const requestedSettings = newRunGenerationSettings(provider, condition.requestedSettings);
+      const model = inventory.models.find(item => item.providerConfigId === condition.providerConfigId && item.modelId === condition.modelId);
+      const capabilities = condition.capabilitySnapshot ?? model?.capabilities;
+      return { ...condition, requestedSettings, ...(capabilities ? { effectiveSettings: resolveGenerationSettings(capabilities, requestedSettings, { provider: provider.provider }) } : {}) };
+    }),
+    judges: config.judges.map(judge => {
+      const provider = inventory.providerConfigs.find(item => item.id === judge.providerConfigId);
+      return provider?.provider === "custom_openai" ? { ...judge, generationSettings: newRunGenerationSettings(provider, {}) } : judge;
+    }),
+  };
+}
+
 export async function createAndLockResearch(
   repository: ResearchRepository,
   config: ResearchConfig,
@@ -36,7 +56,7 @@ export async function createAndLockResearch(
   // This API creates a new project, never resumes an existing locked one.
   // Even a draft with an already frozen blind policy needs explicit analysis
   // defaults before its new hash is computed. Existing explicit policies stay.
-  const lockedConfig: ResearchConfig = { ...freezeResearchViewerOutputPolicy(config, inventory.models),
+  const lockedConfig: ResearchConfig = { ...freezeResearchViewerOutputPolicy(freezeResearchCompatibility(config, inventory), inventory.models),
     judgeOutputPolicy: config.judgeOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY),
     postRevealOutputPolicy: config.postRevealOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY) };
   analyticalBudgetPolicyForSnapshot(lockedConfig.judgeOutputPolicy);
@@ -722,7 +742,7 @@ function resolveJudgeSelections(config: ResearchConfig, providers: ProviderConfi
     const providerConfig = providers.find((provider) => provider.id === judge.providerConfigId);
     const model = models.find((item) => item.providerConfigId === judge.providerConfigId && item.modelId === judge.modelId);
     if (!providerConfig || !model) throw new Error("A locked Judge route is no longer available.");
-    return { providerConfig, model };
+    return { providerConfig, model, requestedSettings: judge.generationSettings ?? {} };
   });
 }
 

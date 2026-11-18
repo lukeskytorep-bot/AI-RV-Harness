@@ -265,6 +265,7 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
     input.signal?.throwIfAborted();
   };
   const execution = working.executionSnapshot!;
+  const frozenJudges = input.judges.map((judge, index) => ({ ...judge, requestedSettings: execution.judgeGenerationSettings?.[index] ?? {} }));
   input.onRunChange?.(working);
 
   try {
@@ -581,7 +582,7 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
       await assertCanContinue();
       if (input.judges.length && checkpoint.stage === "viewer_notes_reflection_completed") {
         const existingScores = await input.repository.listJudgeScores(checkpoint.sessionId);
-        const missingJudges = selectMissingJudgeSelections(existingScores, input.judges);
+        const missingJudges = selectMissingJudgeSelections(existingScores, frozenJudges);
         await assertCanContinue();
         if (missingJudges.length) {
           await dependencies.runBlindJudging({

@@ -1,3 +1,4 @@
+import { newRunGenerationSettings } from "../../providers/customCompatibility";
 import { prepareViewerSessionResume } from "../../sessions/viewerResumeDecision";
 import { useViewerRoutes } from "../../components/useViewerRoutes";
 import { ViewerRouteNotice } from "../../components/ViewerRouteNotice";
@@ -493,14 +494,14 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     setBatchProgress(null);
     setManualQuestionHandle(null);
     setManualQuestionText("");
-    const requestedSettings = buildRvSessionRequestedSettings({
+    const requestedSettings = newRunGenerationSettings(activeProvider, buildRvSessionRequestedSettings({
       profile,
       model: selectedModel,
       reasoning,
       customReasoningMode,
       temperature,
       rvSessionMaxOutputTokens: settings.rvSessionMaxOutputTokens,
-    });
+    }));
     const runOne = async (target: TargetRecord | null) => {
       const viewerNotes = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: viewerNotesEnabled, aiIdentityId: selectedIdentity.identity.id });
       if (protocol === "lite") {

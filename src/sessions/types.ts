@@ -1,7 +1,7 @@
 import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
 import type { SessionFocusPlan } from "./sessionFocus";
 import type { InterfaceLanguage } from "../types";
-import type { EffectiveGenerationSettings, ProviderKind } from "../providers/types";
+import type { GenerationSettings, EffectiveGenerationSettings, ProviderKind } from "../providers/types";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import type { FieldGuideSessionSnapshot } from "../aiCenter/fieldGuideTypes";
 
@@ -158,6 +158,7 @@ export interface SessionSnapshot {
     promptVersion: string;
     libraryVersion: string;
     maxInterventions: number;
+    generationSettings?: GenerationSettings;
     effectivePrompt?: string;
     effectivePromptSha256?: string;
     lockedBlocks?: LockedPromptBlockSnapshot[];

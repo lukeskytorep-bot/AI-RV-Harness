@@ -1,9 +1,10 @@
+import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { FROZEN_ANALYTICAL_V1_INITIAL_TOKENS as ANALYTICAL_OUTPUT_INITIAL_TOKENS, FROZEN_ANALYTICAL_V1_RECOVERY_TOKENS as ANALYTICAL_OUTPUT_RECOVERY_TOKENS } from "../providers/outputRecovery";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { executeProviderChat } from "../providers/requestExecutor";
 import type { ProviderAttemptContext } from "../providers/requestExecutor";
 import type { ProviderCallError } from "../providers/providerError";
-import type { ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderStreamEvent } from "../providers/types";
+import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderStreamEvent } from "../providers/types";
 import type { StreamWorkflowContext } from "../providers/streamPresentation";
 import type { InterfaceLanguage } from "../types";
 import { buildMonitorSystemPrompt, buildMonitorUserPacket, type MonitorPacketOptions } from "./prompt";
@@ -14,6 +15,7 @@ export type MonitorDecision =
 
 export async function evaluateMonitor(input: {
   providerConfig: ProviderConfig;
+  requestedSettings?: GenerationSettings;
   model: ProviderModel;
   language: InterfaceLanguage;
   phase: number;
@@ -38,9 +40,10 @@ export async function evaluateMonitor(input: {
     { role: "system", content: input.effectiveSystemPrompt?.trim() || buildMonitorSystemPrompt(input.language, input.editablePrompt) },
     { role: "user", content: buildMonitorUserPacket(input.language, input.phase, input.blindTranscript, input.exchangeNumber, input.specialTask, input.packetOptions) },
   ];
+  const requested = input.requestedSettings ?? newRunGenerationSettings(input.providerConfig, {});
   for (const semanticAttempt of [0, 1] as const) {
     const maxOutputTokens = monitorOutputTokenBudget(input.model, semanticAttempt);
-    const settings = resolveGenerationSettings(input.model.capabilities, { maxOutputTokens });
+    const settings = resolveGenerationSettings(input.model.capabilities, { ...requested, maxOutputTokens }, { provider: input.model.provider });
     const response = await executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages, settings, timeoutMs: input.requestTimeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: semanticAttempt === 0 ? "monitor.evaluate" : "monitor.output-recovery", streamWorkflowContext: input.streamWorkflowContext, onStreamEvent: input.onStreamEvent, attempt: input.chat, onAttemptFailure: input.onTransportAttemptFailure });
     if (!isIncompleteMonitorResponse(response)) return parseMonitorDecision(response.content);
     const incomplete = new Error(`provider returned an incomplete assistant response [finish-reason=${response.finishReason}]`);

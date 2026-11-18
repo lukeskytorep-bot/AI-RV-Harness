@@ -73,6 +73,7 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
         seed: None,
         max_output_tokens: None,
         custom_output_token_field: None,
+        custom_compatibility_profile: None,
         custom_streaming_enabled: false,
         timeout_ms: None,
         timeout_policy: None,
@@ -3169,4 +3170,70 @@ fn direct1b_rejects_mistral_replay_when_visible_text_or_fingerprint_changes() {
         state.replay_fingerprint.credential_id = "other".to_string();
     }
     assert!(validate_continuation_bindings(&request, "https://api.mistral.ai/v1").unwrap_err().contains("fingerprint"));
+}
+
+// LLAMA_CPP_STEP1 regression tests: frozen dialect, not live ProviderConfig.
+#[test]
+fn custom_llama_dialect_maps_only_explicit_thinking_and_preserves_sampling() {
+    for profile in [None, Some(CustomOpenAiCompatibilityProfile::Generic), Some(CustomOpenAiCompatibilityProfile::LlamaCpp)] {
+        for enabled in [false, true] {
+            let mut request = chat_request(ProviderKind::CustomOpenai, "model");
+            request.custom_compatibility_profile = profile;
+            request.reasoning_transport_kind = Some("enabled_boolean".into());
+            request.reasoning_transport_value = Some(enabled.to_string());
+            request.temperature = Some(0.7);
+            request.top_p = Some(0.9);
+            request.top_k = Some(20);
+            request.seed = Some(1234);
+            request.max_output_tokens = Some(32768);
+            let (_, mut body) = super::request_builders::build_chat_request(&request, "https://example.test/v1").unwrap();
+            assert_eq!(body["temperature"], serde_json::json!(0.7));
+            assert_eq!(body["top_p"], serde_json::json!(0.9));
+            assert_eq!(body["top_k"], 20);
+            assert_eq!(body["seed"], 1234);
+            assert_eq!(body["max_tokens"], 32768);
+            if profile == Some(CustomOpenAiCompatibilityProfile::LlamaCpp) {
+                assert_eq!(body["chat_template_kwargs"]["enable_thinking"], enabled);
+                assert!(body.get("reasoning").is_none());
+                assert!(body.get("reasoning_effort").is_none());
+            } else {
+                assert_eq!(body["reasoning"]["enabled"], enabled);
+                assert!(body.get("chat_template_kwargs").is_none());
+            }
+            let non_streaming = body.clone();
+            super::request_builders::enable_chat_streaming(&mut body).unwrap();
+            body.as_object_mut().unwrap().remove("stream");
+            assert_eq!(body, non_streaming);
+        }
+    }
+}
+
+#[test]
+fn custom_llama_auto_omits_thinking_and_legacy_deserialization_stays_generic() {
+    let mut request = chat_request(ProviderKind::CustomOpenai, "model");
+    request.custom_compatibility_profile = Some(CustomOpenAiCompatibilityProfile::LlamaCpp);
+    let (_, body) = super::request_builders::build_chat_request(&request, "https://example.test/v1").unwrap();
+    assert!(body.get("chat_template_kwargs").is_none());
+    assert!(body.get("reasoning").is_none());
+    let legacy: ProviderChatRequest = serde_json::from_value(serde_json::json!({"provider":"custom_openai", "credentialId":"key", "providerConfigId":"p", "modelId":"model", "messages":[]})).unwrap();
+    assert_eq!(legacy.custom_compatibility_profile, None);
+    assert!(serde_json::from_value::<CustomOpenAiCompatibilityProfile>(serde_json::json!("unknown")).is_err());
+}
+
+#[test]
+fn custom_llama_rejects_unsupported_reasoning_before_building_a_dispatch() {
+    for variant in 0..4 {
+        let mut request = chat_request(ProviderKind::CustomOpenai, "model");
+        request.custom_compatibility_profile = Some(CustomOpenAiCompatibilityProfile::LlamaCpp);
+        match variant {
+            0 => request.reasoning_effort = Some("high".into()),
+            1 => request.reasoning_max_tokens = Some(1024),
+            2 => { request.reasoning_transport_kind = Some("effort".into()); request.reasoning_transport_value = Some("high".into()); }
+            _ => { request.reasoning_transport_kind = Some("enabled_boolean".into()); request.reasoning_transport_value = Some("invalid".into()); }
+        }
+        assert!(super::request_builders::build_chat_request(&request, "https://example.test/v1").is_err());
+    }
+    let mut other = chat_request(ProviderKind::Openrouter, "model");
+    other.custom_compatibility_profile = Some(CustomOpenAiCompatibilityProfile::Generic);
+    assert!(super::request_builders::build_chat_request(&other, "https://example.test/v1").is_err());
 }

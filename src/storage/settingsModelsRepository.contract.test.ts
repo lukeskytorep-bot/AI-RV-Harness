@@ -212,6 +212,7 @@ describe("SQLite Settings and models repository contract", () => {
       expect.stringContaining("UPDATE profiles"),
       expect.stringContaining("DELETE FROM app_settings"),
       expect.stringContaining("DELETE FROM app_settings"),
+      expect.stringContaining("DELETE FROM app_settings"),
       expect.stringContaining("DELETE FROM provider_configs"),
       expect.stringContaining("DELETE FROM credentials_metadata"),
     ]);

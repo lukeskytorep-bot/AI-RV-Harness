@@ -703,3 +703,18 @@ describe("S3.1 Stop boundaries",()=>{
   const result=await executeTrainingRun(input(run(),h));expect(result.run.termination?.reason).toBe("user_finished");expect(h.fieldGuideUpdate).not.toHaveBeenCalled();expect(h.reflect).not.toHaveBeenCalled();
  });
 });
+
+it.each([undefined, "generic", "llama_cpp"] as const)("Training Resume uses saved Judge dialect %s without replaying the Viewer", async compatibility => {
+  const h = harness();
+  const frozen = compatibility ? { customCompatibilityProfile: compatibility } : undefined;
+  const initial = run({ targetIds: ["t1"], status: "Interrupted", activeTargetCheckpoint: { targetId: "t1", sessionId: "session_t1", stage: "viewer_notes_reflection_completed" },
+    executionSnapshot: { language: "en", generationSettings: {}, judgeGenerationSettings: frozen ? [frozen] : undefined, transport: { maxRetries: 2, requestTimeoutMs: 30000, sessionCodePrefix: "RV" } },
+  });
+  const changedProvider: ProviderConfig = { ...provider, provider: "custom_openai", customCompatibilityProfile: compatibility === "llama_cpp" ? "generic" : "llama_cpp" };
+  const outcome = await executeTrainingRun(input(initial, h, { judges: [{ providerConfig: changedProvider, model: { ...model, provider: "custom_openai" } }] }));
+  expect(outcome.run.status).toBe("Completed");
+  const judge = h.dependencies.runBlindJudging as ReturnType<typeof vi.fn>;
+  expect(judge).toHaveBeenCalledTimes(1);
+  expect(judge.mock.calls[0][0].judges[0].requestedSettings.customCompatibilityProfile).toBe(compatibility);
+  expect(h.runSession).not.toHaveBeenCalled();
+});

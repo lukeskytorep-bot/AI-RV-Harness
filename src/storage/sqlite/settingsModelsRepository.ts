@@ -1,5 +1,6 @@
-import type { CustomOpenAiOutputTokenField, ProviderConfig, ProviderKind, ProviderModel } from "../../providers/types";
+import type { CustomOpenAiCompatibilityProfile, CustomOpenAiOutputTokenField, ProviderConfig, ProviderKind, ProviderModel } from "../../providers/types";
 import { applyReasoningRegistryToProviderModel } from "../../providers/modelReasoningRegistry";
+import { customCompatibilityProfile } from "../../providers/customCompatibility";
 import type { AppSettings } from "../../types";
 import type { DatabaseTransactionStatement } from "../databaseNative";
 import type { SettingsModelsRepository } from "../contracts/settingsModelsRepository";
@@ -12,7 +13,7 @@ const customStreamingEnabledSettingKey = (providerConfigId: string) => `provider
 
 type ProviderConfigRow = {
   id: string; provider: ProviderKind; label: string; credential_id: string; credential_hint: string | null;
-  credential_fingerprint: string | null; base_url: string | null; custom_output_token_field: string | null; custom_streaming_enabled: string | null; enabled: number; last_tested_at: string | null;
+  credential_fingerprint: string | null; base_url: string | null; custom_output_token_field: string | null; custom_streaming_enabled: string | null; custom_compatibility_profile: string | null; enabled: number; last_tested_at: string | null;
   last_status: "ok" | "error" | null; last_error: string | null; created_at: string; updated_at: string;
 };
 
@@ -38,7 +39,7 @@ function mapProviderConfig(row: ProviderConfigRow): ProviderConfig {
   return {
     id: row.id, provider: row.provider, label: row.label, credentialId: row.credential_id,
     credentialHint: row.credential_hint ?? undefined, credentialFingerprint: row.credential_fingerprint ?? undefined,
-    baseUrl: row.base_url ?? undefined, customOutputTokenField: parseCustomOutputTokenField(row.custom_output_token_field), ...(row.provider === "custom_openai" ? { customStreamingEnabled: row.custom_streaming_enabled === "true" } : {}), enabled: row.enabled === 1, lastTestedAt: row.last_tested_at ?? undefined,
+    baseUrl: row.base_url ?? undefined, customOutputTokenField: parseCustomOutputTokenField(row.custom_output_token_field), ...(row.provider === "custom_openai" ? { customStreamingEnabled: row.custom_streaming_enabled === "true", customCompatibilityProfile: customCompatibilityProfile(row.custom_compatibility_profile) } : {}), enabled: row.enabled === 1, lastTestedAt: row.last_tested_at ?? undefined,
     lastStatus: row.last_status ?? undefined, lastError: row.last_error ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
@@ -92,13 +93,15 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
   async listProviderConfigs(): Promise<ProviderConfig[]> {
     const rows = await this.dependencies.select<ProviderConfigRow[]>(
       `SELECT pc.id, pc.provider, pc.label, pc.credential_id, pc.credential_hint,
-              cm.fingerprint AS credential_fingerprint, pc.base_url, wire.value AS custom_output_token_field, stream.value AS custom_streaming_enabled, pc.enabled, pc.last_tested_at, pc.last_status, pc.last_error,
+              cm.fingerprint AS credential_fingerprint, pc.base_url, wire.value AS custom_output_token_field, stream.value AS custom_streaming_enabled, compat.value AS custom_compatibility_profile, pc.enabled, pc.last_tested_at, pc.last_status, pc.last_error,
               pc.created_at, pc.updated_at FROM provider_configs pc
          LEFT JOIN credentials_metadata cm ON cm.id = pc.credential_id
          LEFT JOIN app_settings wire ON pc.provider = 'custom_openai'
            AND wire.key = 'provider.customOutputTokenField.' || pc.id
          LEFT JOIN app_settings stream ON pc.provider = 'custom_openai'
            AND stream.key = 'provider.customStreamingEnabled.' || pc.id
+         LEFT JOIN app_settings compat ON pc.provider = 'custom_openai'
+           AND compat.key = 'provider.customCompatibilityProfile.' || pc.id
          ORDER BY pc.updated_at DESC`,
     );
     return rows.map(mapProviderConfig);
@@ -111,7 +114,7 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
       id: input.id, provider: input.provider, label: input.label.trim(), credentialId: input.credentialId,
       credentialHint: input.credentialHint, credentialFingerprint: input.fingerprint, baseUrl: input.baseUrl?.trim() || undefined,
       ...(input.provider === "custom_openai" && input.customOutputTokenField ? { customOutputTokenField: input.customOutputTokenField } : {}),
-      ...(input.provider === "custom_openai" ? { customStreamingEnabled: input.customStreamingEnabled ?? true } : {}),
+      ...(input.provider === "custom_openai" ? { customStreamingEnabled: input.customStreamingEnabled ?? true, customCompatibilityProfile: customCompatibilityProfile(input.customCompatibilityProfile) } : {}),
       enabled: true, createdAt: timestamp, updatedAt: timestamp,
     };
     const statements: DatabaseTransactionStatement[] = [
@@ -132,6 +135,11 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
       values: [customStreamingEnabledSettingKey(config.id), String(config.customStreamingEnabled), timestamp],
     });
+    if (input.customCompatibilityProfile !== undefined) {
+      if (input.provider !== "custom_openai") throw new Error("Compatibility profile is available only for Custom OpenAI-compatible providers.");
+      config.customCompatibilityProfile = customCompatibilityProfile(input.customCompatibilityProfile);
+      statements.push({ query: "INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, $3) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", values: [`provider.customCompatibilityProfile.${config.id}`, config.customCompatibilityProfile, timestamp] });
+    }
     await this.dependencies.executeTransaction(statements);
     return config;
   }
@@ -175,6 +183,16 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, values: [customStreamingEnabledSettingKey(id), enabled ? "true" : "false", timestamp] }]);
   }
 
+  async updateProviderCustomCompatibilityProfile(id: string, profile: CustomOpenAiCompatibilityProfile): Promise<void> {
+    const value = customCompatibilityProfile(profile);
+    const rows = await this.dependencies.select<{ provider: ProviderKind }[]>("SELECT provider FROM provider_configs WHERE id = $1 LIMIT 1", [id]);
+    if (!rows[0]) throw new Error("Provider connection not found.");
+    if (rows[0].provider !== "custom_openai") throw new Error("Compatibility profile is available only for Custom OpenAI-compatible providers.");
+    const timestamp = (this.dependencies.now ?? nowIso)();
+    await this.dependencies.executeTransaction([{ query: `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, $3)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, values: [`provider.customCompatibilityProfile.${id}`, value, timestamp] }]);
+  }
+
   async deleteProviderConfig(id: string): Promise<void> {
     const rows = await this.dependencies.select<{ credential_id: string }[]>("SELECT credential_id FROM provider_configs WHERE id = $1", [id]);
     const credentialId = rows[0]?.credential_id;
@@ -199,6 +217,7 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
     }
     statements.push({ query: "DELETE FROM app_settings WHERE key = $1", values: [customOutputTokenFieldSettingKey(id)] });
     statements.push({ query: "DELETE FROM app_settings WHERE key = $1", values: [customStreamingEnabledSettingKey(id)] });
+    statements.push({ query: "DELETE FROM app_settings WHERE key = $1", values: [`provider.customCompatibilityProfile.${id}`] });
     statements.push({ query: "DELETE FROM provider_configs WHERE id = $1", values: [id] });
     if (credentialId) statements.push({ query: "DELETE FROM credentials_metadata WHERE id = $1", values: [credentialId] });
     await this.dependencies.executeTransaction(statements);

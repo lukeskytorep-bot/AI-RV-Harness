@@ -1,3 +1,4 @@
+import { newRunGenerationSettings } from "../../providers/customCompatibility";
 import { useViewerRoutes } from "../../components/useViewerRoutes";
 import { ViewerRouteNotice } from "../../components/ViewerRouteNotice";
 import { approveChatResponseRetry, chatResponseNeedsResolution, chatResponseOperationState, endChatResponse, hasUnfinishedChatResponse } from "../../chat/responseRecovery";
@@ -436,7 +437,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
       ...(frozenViewerLearning ? { viewerLearning: frozenViewerLearning } : {}),
       ...(frozenConversationContextKey ? { conversationContextKey: frozenConversationContextKey } : {}),
       content,
-      requestedSettings: { ...profileGenerationDefaults(profile, selectedModel), maxOutputTokens: effectiveMaxOutputTokens },
+      requestedSettings: newRunGenerationSettings(activeProvider, { ...profileGenerationDefaults(profile, selectedModel), maxOutputTokens: effectiveMaxOutputTokens }),
       ...(effectiveRvSystemPrompt ? { rvSystemPrompt: effectiveRvSystemPrompt } : {}),
       ...(attachedProtocol ? { attachedProtocol } : {}),
       sourceIds: selectedSources.map((source) => source.id),
@@ -461,7 +462,7 @@ export function ChatPanel({ copy, settings, profile, workspace, repository, fixe
         providerConfig: activeProvider,
         model: selectedModel,
         content,
-        requestedSettings: { ...profileGenerationDefaults(profile, selectedModel), maxOutputTokens: effectiveMaxOutputTokens },
+        requestedSettings: newRunGenerationSettings(activeProvider, { ...profileGenerationDefaults(profile, selectedModel), maxOutputTokens: effectiveMaxOutputTokens }),
         ...(effectiveRvSystemPrompt ? { rvSystemPrompt: effectiveRvSystemPrompt } : {}),
         sources: selectedSources,
         images: chatImages,

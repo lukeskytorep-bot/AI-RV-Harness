@@ -4,6 +4,20 @@ use super::{ProviderChatRequest, ProviderContinuationState, ProviderKind, Provid
 use super::adapters::{endpoint, provider_family, ProviderFamily};
 
 pub(super) fn build_chat_request(request: &ProviderChatRequest, base: &str) -> Result<(String, Value), String> {
+    if let Some(profile) = request.custom_compatibility_profile {
+        if !matches!(request.provider, ProviderKind::CustomOpenai) {
+            return Err("Custom compatibility profile is only valid for Custom OpenAI-compatible routes.".into());
+        }
+        if profile == super::CustomOpenAiCompatibilityProfile::LlamaCpp {
+            if request.reasoning_effort.is_some() || request.reasoning_max_tokens.is_some()
+                || (request.reasoning_transport_value.is_some() && request.reasoning_transport_kind.as_deref() != Some("enabled_boolean")) {
+                return Err("llama.cpp requires the Auto/On/Off reasoning switch; effort and reasoning token budgets are unsupported.".into());
+            }
+            if let Some(value) = request.reasoning_transport_value.as_deref() {
+                if value != "true" && value != "false" { return Err("Invalid llama.cpp thinking boolean.".into()); }
+            }
+        }
+    }
     match provider_family(request.provider) {
         ProviderFamily::Google => build_google_request(request, base),
         ProviderFamily::Anthropic => Ok(build_anthropic_request(request, base)),
@@ -46,7 +60,9 @@ pub(super) fn build_openai_compatible_request(request: &ProviderChatRequest, bas
         }
     } else if matches!(request.provider, ProviderKind::CustomOpenai) {
         if let Some(value) = request.reasoning_transport_value.as_deref().or(request.reasoning_effort.as_deref()) {
-            if request.reasoning_transport_kind.as_deref() == Some("enabled_boolean") {
+            if request.custom_compatibility_profile == Some(super::CustomOpenAiCompatibilityProfile::LlamaCpp) {
+                body.insert("chat_template_kwargs".into(), json!({ "enable_thinking": value == "true" }));
+            } else if request.reasoning_transport_kind.as_deref() == Some("enabled_boolean") {
                 body.insert("reasoning".into(), json!({ "enabled": value == "true" }));
             } else {
                 body.insert("reasoning_effort".into(), json!(value));

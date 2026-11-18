@@ -50,6 +50,7 @@ export interface TrainingTargetCheckpoint {
 export interface TrainingExecutionSnapshot {
   language: InterfaceLanguage;
   generationSettings: GenerationSettings;
+  judgeGenerationSettings?: GenerationSettings[];
   transport: {
     maxRetries: number;
     requestTimeoutMs: number;

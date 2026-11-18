@@ -1,3 +1,4 @@
+import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { withAutomaticWorkflow, withRvWorkflow } from "../application/workflowOwnership";
 import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
 import { focusResumeMetrics, prepareSessionFocus, focusSnapshotFields, focusFingerprint, startFocusPass, completeFocusPass } from "./sessionFocusLifecycle";
@@ -252,6 +253,9 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
   const frozenPostRevealOutputPolicy = input.postRevealOutputPolicy
     ?? (input.resumeSession && input.repository.getSessionSnapshot
       ? (await input.repository.getSessionSnapshot(input.resumeSession.id))?.postRevealOutputPolicy : undefined);
+  const monitorGenerationSettings = input.monitor ? (input.resumeSession
+    ? (input.repository.getSessionSnapshot ? (await input.repository.getSessionSnapshot(input.resumeSession.id))?.monitor?.generationSettings : undefined) ?? {}
+    : newRunGenerationSettings(input.monitor.providerConfig, {})) : undefined;
   const snapshot: SessionSnapshot = {
     schemaVersion: 4,
     ...focusSnapshotFields(sessionFocus,input.providerConfig,input.model),
@@ -290,6 +294,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
     },
     ...(input.monitor ? {
       monitor: {
+        generationSettings: monitorGenerationSettings,
         providerConfigId: input.monitor.providerConfig.id,
         provider: input.monitor.providerConfig.provider,
         modelId: input.monitor.model.modelId,
@@ -495,6 +500,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
             const attempt = 0;
             try {
               decision = await evaluateMonitor({
+              requestedSettings: monitorGenerationSettings,
               providerConfig: input.monitor.providerConfig,
               model: input.monitor.model,
               language: input.sessionLanguage,
