@@ -1,3 +1,4 @@
+import { renderResearchTargetCodeSteps, assertTargetCodePolicy, verifyTargetCodeTemplates, type TargetCodePolicy } from "../resources/rvLiteTargetCode";
 import { withAutomaticWorkflow, withRvWorkflow } from "../application/workflowOwnership";
 import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
 import { focusResumeMetrics, prepareSessionFocus, focusSnapshotFields, focusFingerprint, startFocusPass, completeFocusPass } from "./sessionFocusLifecycle";
@@ -7,7 +8,7 @@ import { createProviderChatExecutor } from "../providers/requestExecutor";
 import type { OperationKind } from "../providers/operationResourceProfiles";
 import type { StreamWorkflowContext } from "../providers/streamPresentation";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderStreamEvent } from "../providers/types";
-import { renderRvLiteSteps, type RvLiteProtocolResource } from "../resources/protocolRegistry";
+import { getRvLite, renderRvLiteSteps, type RvLiteProtocolResource } from "../resources/protocolRegistry";
 import {
   lockedViewerIdentity,
   lockedViewerBaseVocabulary,
@@ -51,6 +52,7 @@ type RvLiteSessionRepository = Pick<
 > & Partial<Pick<AppRepository, "appendSessionEventWithProviderState" | "getSessionSnapshot">>;
 
 export interface AutomaticRvLiteRunInput {
+  targetCode?: TargetCodePolicy;
   sessionFocus?: SessionFocusPlan;
   repository: RvLiteSessionRepository;
   workspaceId: string;
@@ -110,7 +112,21 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
 
   const sessionId = input.resumeSession?.id ?? input.sessionIdentity?.id ?? input.initializationExistingSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? input.sessionIdentity?.sessionCode ?? input.initializationExistingSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
-  const steps = renderRvLiteSteps(input.protocol, input.profileName, sessionCode);
+  const storedSnapshot = (input.resumeSession || input.initializationExistingSession) && input.repository.getSessionSnapshot ? await input.repository.getSessionSnapshot(sessionId) : null;
+  const targetCode = input.targetCode ?? storedSnapshot?.researchTargetCode?.policy;
+  const renderProfileName = storedSnapshot?.researchTargetCode ? storedSnapshot.identities?.aiIsBeDisplayName : input.profileName;
+  if (targetCode) {
+    assertTargetCodePolicy(targetCode);
+    await verifyTargetCodeTemplates();
+    if (!input.researchProjectId || input.operationKind !== "research_viewer" || sessionFocus || input.specialTask || input.researchConditionInstruction) throw new Error("Target-code rendering is restricted to one-pass Research RV Lite Extended.");
+    const approved = getRvLite(input.sessionLanguage, "extended");
+    if (input.protocol.variant !== "extended" || input.protocol.version !== approved.version || input.protocol.contentSha256 !== approved.contentSha256 || JSON.stringify(input.protocol.steps) !== JSON.stringify(approved.steps)) throw new Error("Target-code Research protocol drift.");
+    if (input.resumeSession && !storedSnapshot?.researchTargetCode) throw new Error("Target-code Resume requires its saved rendering snapshot.");
+    if (storedSnapshot?.researchTargetCode && JSON.stringify(storedSnapshot.researchTargetCode.policy) !== JSON.stringify(targetCode)) throw new Error("Target-code Resume mode/template mismatch.");
+  }
+  const steps = targetCode ? renderResearchTargetCodeSteps(input.protocol, renderProfileName, sessionCode, targetCode) : renderRvLiteSteps(input.protocol, renderProfileName, sessionCode);
+  const researchTargetCode = targetCode ? { policy: structuredClone(targetCode), renderedPrompts: await Promise.all(steps.map(async content => ({ content, sha256: await sha256Text(content) }))) } : undefined;
+  if (storedSnapshot?.researchTargetCode && JSON.stringify(storedSnapshot.researchTargetCode) !== JSON.stringify(researchTargetCode)) throw new Error("Target-code Resume rendered prompt/hash mismatch.");
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
   let activeViewerAttemptId: string | undefined;
   let activeViewerManualRetry = false;
@@ -130,7 +146,9 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
   const runViewerCall = async (requestMessages: ProviderMessage[], onStreamEvent: ((event: ProviderStreamEvent) => void) | undefined, metadata: Record<string, unknown>) => {
     let durationMs = 0;
     metadata = {...metadata,...focusMetadata(sessionFocus,currentPassIndex)};
-    const requestSha256 = await sha256Text(focusFingerprint(viewerRequestFingerprintInput(requestMessages),sessionFocus,currentPassIndex,effectiveSettings,input.providerConfig,input.model,input.sessionLanguage,input.protocol.contentSha256));
+    if (targetCode?.mode === "without_code" && JSON.stringify(requestMessages).includes(sessionCode)) throw new Error("Target-code Research refused an assigned session code in the Without-code Viewer payload.");
+    const fingerprint = focusFingerprint(viewerRequestFingerprintInput(requestMessages),sessionFocus,currentPassIndex,effectiveSettings,input.providerConfig,input.model,input.sessionLanguage,input.protocol.contentSha256);
+    const requestSha256 = await sha256Text(targetCode ? JSON.stringify({ fingerprint, targetCode }) : fingerprint);
     const stepId = buildViewerStepId("lite", metadata);
     const durable = input.resumeSession ? await resolveViewerResumeStart({ repository: input.repository, sessionId, stepKey: stepId, requestSha256 }) : { startRecoveryLevel: 0 as const };
     const durableMetadata = { ...metadata, stepId, requestSha256, ...(durable.resumeAuthorizationId ? { resumeAuthorizationId: durable.resumeAuthorizationId } : {}) };
@@ -203,18 +221,17 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
   }
   await input.repository.updateRvSessionState(sessionId, "Preflight");
 
-  const frozenPostRevealOutputPolicy = input.postRevealOutputPolicy
-    ?? (input.resumeSession && input.repository.getSessionSnapshot
-      ? (await input.repository.getSessionSnapshot(input.resumeSession.id))?.postRevealOutputPolicy : undefined);
+  const frozenPostRevealOutputPolicy = input.postRevealOutputPolicy ?? storedSnapshot?.postRevealOutputPolicy;
   const snapshot: SessionSnapshot = {
     schemaVersion: 4,
+    ...(researchTargetCode ? { researchTargetCode } : {}),
     ...focusSnapshotFields(sessionFocus,input.providerConfig,input.model),
     sessionId,
     sessionCode,
     profileId: input.profileId,
     workspaceId: input.workspaceId,
     identities: {
-      aiIsBeDisplayName: input.profileName?.trim() || "AI IS-BE",
+      aiIsBeDisplayName: renderProfileName?.trim() || "AI IS-BE",
       humanIsBeDisplayName: input.humanIsBeDisplayName?.trim() || "Human IS-BE",
     },
     providerConfigId: input.providerConfig.id,

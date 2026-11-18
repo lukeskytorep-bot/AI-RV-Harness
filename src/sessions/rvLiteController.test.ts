@@ -460,3 +460,36 @@ it.each([3, 4])("does not reveal after an incomplete earlier sketch or STOP raci
   expect(log).not.toContain("sealed");
   expect(log).not.toContain("reveal");
 });
+
+describe("Research target-code controller payloads",()=>{
+  it.each(["pl","en"] as const)("runs independent A/B histories, frozen rendering and recovery without B code (%s)",async language=>{
+    const {targetCodePolicy,renderResearchTargetCodeSteps}=await import("../resources/rvLiteTargetCode");
+    for(const mode of ["with_code","without_code"] as const){
+      const log:string[]=[], snapshots:SessionSnapshot[]=[], payloads:unknown[]=[];
+      const code=`RV-LOCAL-${mode}`,protocol=getRvLite(language,"extended");let calls=0;
+      const result=await runAutomaticRvLiteSession({repository:repository(log,snapshots),workspaceId:"w",profileId:"profile",profileName:"Leo",providerConfig:config,model,protocol,sessionLanguage:language,requestedSettings:{maxOutputTokens:16384},automaticTarget:target,researchProjectId:"research",operationKind:"research_viewer",viewerOutputPolicy:{version:1,initialTokens:16384,recoveryTokens:32768,preserveConfiguredBudget:false},targetCode:targetCodePolicy(mode),sessionIdentity:{id:`s-${mode}`,sessionCode:code},chat:async({messages})=>{
+        calls++;payloads.push(structuredClone(messages));
+        expect(JSON.stringify(messages)).not.toContain("SECRET REVEAL");
+        if(mode==="without_code")expect(JSON.stringify(messages)).not.toContain(code);
+        if(calls===1){expect(messages.filter(m=>m.role==="assistant")).toHaveLength(0);return {content:"partial",finishReason:"length",usage:{}};}
+        return {content:`EVIDENCE-${mode}-${calls}`,finishReason:"stop",usage:{}};
+      }});
+      if(process.env.TARGET_CODE_EVIDENCE_DIR){
+        const fs=await import("node:fs");fs.mkdirSync(process.env.TARGET_CODE_EVIDENCE_DIR,{recursive:true});
+        fs.writeFileSync(`${process.env.TARGET_CODE_EVIDENCE_DIR}/${language}-${mode}.json`,JSON.stringify({language,mode,sessionCode:code,prompts:snapshots[0].researchTargetCode?.renderedPrompts,payloads},null,2));
+      }
+      expect(calls).toBe(5);expect(payloads[0]).toEqual(payloads[1]);expect(result.sessionCode).toBe(code);expect(log.indexOf("sealed")).toBeLessThan(log.indexOf("reveal"));
+      expect(snapshots[0].researchTargetCode?.policy).toEqual(targetCodePolicy(mode));
+      expect(snapshots[0].researchTargetCode?.renderedPrompts.map(p=>p.content)).toEqual(renderResearchTargetCodeSteps(protocol,"Leo",code,targetCodePolicy(mode)));
+      expect(snapshots[0].researchTargetCode?.renderedPrompts.every(p=>/^[a-f0-9]{64}$/.test(p.sha256))).toBe(true);
+      expect(snapshots[0].protocol.contentSha256).toBe(protocol.contentSha256);
+    }
+  });
+  it("blocks ordinary RV, extra instructions and wrong source before any call",async()=>{
+    const {targetCodePolicy}=await import("../resources/rvLiteTargetCode");const chat=vi.fn();
+    const base={repository:repository([]),workspaceId:"w",profileId:"profile",providerConfig:config,model,protocol:getRvLite("en","extended"),sessionLanguage:"en" as const,requestedSettings:{},targetCode:targetCodePolicy("without_code"),chat};
+    await expect(runAutomaticRvLiteSession(base)).rejects.toThrow(/restricted/);
+    await expect(runAutomaticRvLiteSession({...base,researchProjectId:"r",operationKind:"research_viewer",researchConditionInstruction:{id:"x",version:"1",content:"extra",contentSha256:"x"}})).rejects.toThrow(/restricted/);
+    expect(chat).not.toHaveBeenCalled();
+  });
+});

@@ -1,3 +1,4 @@
+import { computeTargetCodeComparison, targetCodeComparisonCsv } from "../research/targetCodeResults";
 import { buildJudgePacket } from "../domain/judgePacket";
 import { JUDGE_RUBRIC_VERSION } from "../judge/types";
 import { getJudgePrompt } from "../judge/prompt";
@@ -114,6 +115,12 @@ export async function exportResearchPackage(repository: AppRepository, projectId
     const mapping = mappingByAnonymous.get(assignment.anonymousSessionId);
     const condition = mapping ? conditionById.get(mapping.conditionId) : undefined;
     if (mapping && condition) blindingKey.push({ anonymousSessionId: assignment.anonymousSessionId, conditionKey: condition.conditionKey, conditionLabel: condition.config.label, pairKey: mapping.pairKey, pairOrder: mapping.pairOrder ?? null, targetId: assignment.targetId });
+  }
+
+  if (project.templateType === "target_code") {
+    const comparison = results?.targetCodeComparison ?? computeTargetCodeComparison({ assignments, mappings, conditions, sessions:projectSessions, scoresBySession:{}, requiredJudges:0 });
+    files.push({ relativePath:`${privatePrefix}results/target_code_pairs.csv`, content:targetCodeComparisonCsv(comparison) });
+    files.push({ relativePath:`${privatePrefix}results/target_code_comparison.json`, content:pretty(comparison) });
   }
 
   files.push({ relativePath: `${privatePrefix}blinding/blinding_key.json`, content: pretty(blindingKey) });

@@ -1,3 +1,4 @@
+import { assertTargetCodeDesign } from "./targetCodeDesign";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import { buildEffectiveViewerPrompt, LOCKED_BASE_VOCABULARY_VERSION, LOCKED_IDENTITY_VERSION } from "../resources/systemPrompts";
@@ -22,6 +23,7 @@ export interface ResearchPreflightInventory {
 
 export function runResearchPreflight(config: ResearchConfig, inventory: ResearchPreflightInventory): ResearchPreflightResult {
   const checks: PreflightCheck[] = [];
+  try { assertTargetCodeDesign(config); } catch (cause) { checks.push(fail("target_code_design", cause instanceof Error ? cause.message : String(cause))); }
   const targetMap = new Map(inventory.targets.map((target) => [target.id, target]));
   const providerMap = new Map(inventory.providerConfigs.map((provider) => [provider.id, provider]));
   const profileMap = new Map(inventory.profiles.map((profile) => [profile.id, profile]));

@@ -112,6 +112,7 @@ export type SessionContinuationRouteSnapshot =
     };
 
 export interface SessionSnapshot {
+  researchTargetCode?: { policy: import("../resources/rvLiteTargetCode").TargetCodePolicy; renderedPrompts: { content: string; sha256: string }[] };
   schemaVersion: 1 | 2 | 3 | 4;
   sessionId: string;
   sessionCode: string;

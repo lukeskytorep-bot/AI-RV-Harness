@@ -1,3 +1,6 @@
+import { computeTargetCodeComparison } from "./targetCodeResults";
+import { assertTargetCodeDesign } from "./targetCodeDesign";
+import { verifyTargetCodeTemplates } from "../resources/rvLiteTargetCode";
 import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { selectMissingResearchJudges } from "./judgeSlots";
 import { createResearchJudgeRequestRecovery, ResearchJudgeCheckpointError, ResearchJudgeSlotFailure, researchJudgeRequestAvailability, currentJudgeCompletionId, RESEARCH_JUDGE_COMPLETION_AUTH } from "./judgeRequestRecovery";
@@ -53,6 +56,7 @@ export async function createAndLockResearch(
   config: ResearchConfig,
   inventory: ResearchPreflightInventory,
 ): Promise<{ project: ResearchProjectRecord; preflight: ResearchPreflightResult }> {
+  if (config.templateType === "target_code") await verifyTargetCodeTemplates();
   // This API creates a new project, never resumes an existing locked one.
   // Even a draft with an already frozen blind policy needs explicit analysis
   // defaults before its new hash is computed. Existing explicit policies stay.
@@ -119,6 +123,8 @@ async function executeResearchSessionsOwned(input: {
 }): Promise<void> {
   if(input.signal?.aborted)return;
   const project = await requireProject(input.repository, input.projectId);
+  assertTargetCodeDesign(project.config);
+  if (project.templateType === "target_code") await verifyTargetCodeTemplates();
   analyticalBudgetPolicyForSnapshot(project.config.postRevealOutputPolicy);
   if (!["Locked", "Running", "Interrupted"].includes(project.state)) throw new Error(`Research sessions cannot run from state ${project.state}.`);
   let protocol;
@@ -336,6 +342,7 @@ async function executeResearchSessionsOwned(input: {
         })
       : await (input.rvLiteSessionRunner ?? runAutomaticRvLiteSession)({
           ...common,
+          ...(condition.targetCode ? { targetCode: condition.targetCode } : {}),
           profileName: sessionProfile ? aiIsBeDisplayName(sessionProfile) : "AI IS-BE",
           humanIsBeDisplayName: sessionProfile ? humanIsBeDisplayName(sessionProfile) : "Human IS-BE",
           protocol,
@@ -400,6 +407,7 @@ function validateResearchResumeSnapshot(input: {
   snapshot: NonNullable<Awaited<ReturnType<ResearchRepository["getSessionSnapshot"]>>>;
 }): void {
   const { project, assignment, condition, provider, model, protocol, session, snapshot } = input;
+  if (stableStringify(snapshot.researchTargetCode?.policy ?? null) !== stableStringify(condition.targetCode ?? null)) throw new Error("Research Resume refused target-code rendering drift.");
   analyticalBudgetPolicyForSnapshot(project.config.postRevealOutputPolicy);
   if (stableStringify(snapshot.postRevealOutputPolicy ?? null) !== stableStringify(project.config.postRevealOutputPolicy ?? null)) {
     throw new Error("Research Resume refused post-Reveal output policy drift from the frozen Session Snapshot.");
@@ -477,6 +485,8 @@ async function judgeResearchOwned(input: {
 }): Promise<void> {
   if(input.signal?.aborted)return;
   const project = await requireProject(input.repository, input.projectId);
+  assertTargetCodeDesign(project.config);
+  if (project.templateType === "target_code") await verifyTargetCodeTemplates();
   if (await input.repository.getResearchExecutionTermination(project.id)) throw new Error("Research execution was ended by the user; completion requires a separate evaluation operation.");
   if (!["SessionsComplete", "Judging"].includes(project.state)) throw new Error(`Research judging cannot run from state ${project.state}.`);
   if (project.config.judges.length === 0) throw new Error("This Research project is configured for Save only / external evaluation.");
@@ -679,6 +689,7 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
   const mappingByAnonymous = new Map(mappings.map((mapping) => [mapping.anonymousSessionId, mapping]));
   const conditionById = new Map(conditions.map((condition) => [condition.id, condition]));
   const sessions: UnblindedSessionResult[] = [];
+  const targetCodeScores: Record<string, Awaited<ReturnType<ResearchRepository["listJudgeScores"]>>> = {};
   for (const assignment of assignments) {
     await assertAbortOwnership(signal);
     if (!assignment.sessionId) throw new Error("Cannot compute results for an assignment without a session.");
@@ -686,6 +697,7 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
     const condition = mapping ? conditionById.get(mapping.conditionId) : undefined;
     if (!mapping || !condition) throw new Error("Blinding Key is incomplete.");
     const [scores, sessionEvents] = await Promise.all([repository.listJudgeScores(assignment.sessionId), repository.listSessionEvents(assignment.sessionId)]);
+    if (project.templateType === "target_code") targetCodeScores[assignment.sessionId] = scores;
     const aggregate = aggregateJudgeScores(scores);
     const execution = collectResearchViewerExecutionMetadata(sessionEvents, condition.config);
     sessions.push({
@@ -725,6 +737,10 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
     pairwise: computePairwiseStatistics(sessions),
     computedAt: new Date().toISOString(),
   };
+  if (project.templateType === "target_code") {
+    const projectSessions = await repository.listRvSessions(project.workspaceId);
+    results.targetCodeComparison = computeTargetCodeComparison({ assignments, mappings, conditions, sessions:projectSessions, scoresBySession:targetCodeScores, requiredJudges:project.config.judges.length });
+  }
   signal?.throwIfAborted();
   await repository.saveResearchResults(projectId, results, await sha256Text(stableStringify(results)));
   await repository.setResearchProjectState(projectId, "Complete");

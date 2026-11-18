@@ -1,0 +1,15 @@
+{
+  "version": "target-code-presence-v1",
+  "pl": {
+    "waitingWithCode": "Nie rozpoczynaj sesji, dopóki nie otrzymasz kodu sesji.",
+    "waitingWithoutCode": "Nie rozpoczynaj sesji, dopóki nie otrzymasz polecenia rozpoczęcia.",
+    "secondWithCode": "Witaj. Kod celu to: **{{SESSION_CODE}}**.\n\nTraktuj kod wyłącznie jako neutralny wyzwalacz wejścia w pole. Nie szukaj w nim żadnych wzorców, znaczenia językowego ani powiązań merytorycznych.\n\nCelu nie nazywamy — tylko go opisujemy.\n\nWykonaj Krok 1 i Krok 2.",
+    "secondWithoutCode": "Witaj. Cel został wybrany. Rozpocznij sesję.\n\nCelu nie nazywamy — tylko go opisujemy.\n\nWykonaj Krok 1 i Krok 2."
+  },
+  "en": {
+    "waitingWithCode": "Do not begin the session until you receive the session code.",
+    "waitingWithoutCode": "Do not begin the session until you receive the instruction to begin.",
+    "secondWithCode": "Hello. The target code is: **{{SESSION_CODE}}**.\n\nTreat the code only as a neutral trigger for entering the field. Do not search it for patterns, linguistic meaning, or subject-matter associations.\n\nDo not name the target. Describe it only.\n\nPerform Step 1 and Step 2.",
+    "secondWithoutCode": "Hello. The target has been selected. Begin the session.\n\nDo not name the target. Describe it only.\n\nPerform Step 1 and Step 2."
+  }
+}

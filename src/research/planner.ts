@@ -1,3 +1,4 @@
+import { assertTargetCodeDesign } from "./targetCodeDesign";
 import type { ResearchConfig, ResearchLockPlan } from "./types";
 import { assertSamplingResearchContract, researchSamplingSessionCount } from "./samplingDesign";
 
@@ -15,7 +16,7 @@ export async function buildResearchLockPlan(projectId: string, config: ResearchC
 
   for (const targetId of config.targetIds) {
     for (let repetition = 0; repetition < config.repetitions; repetition += 1) {
-      const pairKey = `pair_${randomToken(12)}`;
+      const pairKey = config.templateType === "target_code" ? `pair_tc${repetition + 1}_${randomToken(12)}` : `pair_${randomToken(12)}`;
       for (const condition of config.conditions) {
         const conditionRecord = conditionByKey.get(condition.key)!;
         const anonymousSessionId = `BlindSession_${randomToken(12)}`;
@@ -84,6 +85,7 @@ function practiceRank(value: string | undefined): number {
 }
 
 export function validateConfig(config: ResearchConfig): void {
+  assertTargetCodeDesign(config);
   if (!config.name.trim()) throw new Error("Research name is required.");
   if (config.conditions.length < 2) throw new RangeError("Research requires at least two conditions.");
   if (new Set(config.conditions.map((condition) => condition.key)).size !== config.conditions.length) throw new Error("Research condition keys must be unique.");

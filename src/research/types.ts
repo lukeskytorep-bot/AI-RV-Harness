@@ -16,6 +16,7 @@ export const RESEARCH_TEMPLATE_TYPES = [
   "system_prompt",
   "viewer_notes",
   "sampling",
+  "target_code",
   "custom",
 ] as const;
 
@@ -91,6 +92,7 @@ export interface ResearchViewerOutputPolicy {
 }
 
 export interface ResearchConditionDefinition {
+  targetCode?: import("../resources/rvLiteTargetCode").TargetCodePolicy;
   key: string;
   label: string;
   profileId: string;
@@ -317,6 +319,7 @@ export interface PairwiseStatistics {
 }
 
 export interface ResearchResults {
+  targetCodeComparison?: import("./targetCodeResults").TargetCodeComparison;
   schemaVersion: 1;
   projectId: string;
   templateType: ResearchTemplateType;

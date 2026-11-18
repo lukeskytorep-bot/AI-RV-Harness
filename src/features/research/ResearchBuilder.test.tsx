@@ -23,7 +23,7 @@ const model: ProviderModel = {
 const repository = {} as AppRepository;
 const noop = vi.fn(async () => undefined);
 
-function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "sampling" | "temperature") {
+function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "sampling" | "temperature" | "target_code") {
   return renderToStaticMarkup(<ResearchConfigBuilder
     copy={getCopy("en")}
     settings={createDefaultSettings()}
@@ -65,6 +65,16 @@ describe("Research Builder Training/Research UX step", () => {
     expect(researchCustomReasoningModeForProfile(customProfile, customModel, "reasoning")).toBeUndefined();
     expect(researchCustomReasoningModeForProfile(customProfile, model, "model")).toBeUndefined();
   });
+  it("locks the target-code template to RV Lite and previews both four-prompt variants", () => {
+    const html = renderBuilder("target_code");
+    expect(html).toContain('disabled=""><option value="full-rcp"');
+    expect(html).toContain('<option value="rv-lite" selected="">');
+    expect(html).toContain("Target code: with / without");
+    expect(html).toContain("The target has been selected. Begin the session.");
+    expect(html.match(/Prompt [1-4]/g)).toHaveLength(8);
+    expect(html).not.toContain("Custom variable values");
+  });
+
   it("offers exactly Full RCP and RV Lite as Research-wide protocol choices", () => {
     const html = renderBuilder("model");
     expect(html).toContain("Full RCP · 1.5a");
