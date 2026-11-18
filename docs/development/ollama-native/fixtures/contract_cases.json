@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "status": "synthetic_planning_fixtures_not_adapter_test_results",
+  "baseCommit": "3c061c80eb21d012cd22a091d61c4d7897120c2e",
+  "cases": [
+    {
+      "id": "AUTH-1",
+      "stage": "3B1",
+      "expected": "Resolve trusted saved no-auth connection; do not read/store a key, invent fingerprint, or emit Authorization.",
+      "route": {
+        "provider": "ollama_native",
+        "providerConfigId": "connection-fixture",
+        "authMode": "none",
+        "baseUrl": "http://localhost:11434"
+      }
+    },
+    {
+      "id": "AUTH-2",
+      "stage": "3B1",
+      "expected": "Reject forged None IPC for saved Bearer; no HTTP dispatch.",
+      "savedAuthMode": "bearer",
+      "callerAuthMode": "none"
+    },
+    {
+      "id": "AUTH-3",
+      "stage": "3B2",
+      "expected": "401 leaves previous connection and key binding; never retry without auth.",
+      "httpStatus": 401
+    },
+    {
+      "id": "AUTH-4",
+      "stage": "3B2",
+      "expected": "Reject remote HTTP, userinfo, query/fragment, /v1 and /api/chat as connection base. Preserve existing provider normalization.",
+      "invalidBaseUrls": [
+        "http://ollama.example.invalid",
+        "https://user:password@example.invalid",
+        "https://example.invalid/v1",
+        "https://example.invalid/api/chat",
+        "https://example.invalid?x=1",
+        "https://example.invalid#x"
+      ]
+    },
+    {
+      "id": "DISC-1",
+      "stage": "3B2",
+      "expected": "Correct method/path from explicit base; report metadata context and running allocation separately; no generation.",
+      "fixture": "discovery.json"
+    },
+    {
+      "id": "SET-1",
+      "stage": "3C",
+      "expected": "Preserve manual zeros in final options; positive num_predict is response budget, num_ctx independent. Synthetic sample values, not new defaults.",
+      "fixture": "request-manual.json"
+    },
+    {
+      "id": "SET-2",
+      "stage": "3C",
+      "expected": "Omit temperature/top_p/top_k/seed/think at Auto; retain explicit frozen output/context only.",
+      "fixture": "request-auto.json"
+    },
+    {
+      "id": "CTX-1",
+      "stage": "3C",
+      "expected": "Block automatic generation when fit proof/allocation is unavailable or insufficient; never infer 131072 allocated from model metadata.",
+      "fixture": "discovery.json",
+      "inputEstimate": 6000,
+      "requestedOutput": 32768,
+      "observedAllocation": 4096
+    },
+    {
+      "id": "JSON-1",
+      "stage": "3C",
+      "expected": "Preserve final and thinking separately, done boundary and usage; no reasoning-as-final.",
+      "response": {
+        "model": "fixture-text:latest",
+        "message": {
+          "role": "assistant",
+          "content": "A broad structure.",
+          "thinking": "Considering a shape."
+        },
+        "done": true,
+        "done_reason": "stop",
+        "prompt_eval_count": 17,
+        "eval_count": 9
+      }
+    },
+    {
+      "id": "ND-1",
+      "stage": "3D",
+      "expected": "Assemble A broad structure.; retain final counters exactly once.",
+      "fixture": "complete.ndjson",
+      "expectedFinal": "A broad structure.",
+      "expectedSemanticOutputStarted": true
+    },
+    {
+      "id": "ND-2",
+      "stage": "3D",
+      "expected": "Process content on terminal frame even without final newline.",
+      "fixture": "terminal-content.ndjson",
+      "expectedFinal": "Water below."
+    },
+    {
+      "id": "ND-3",
+      "stage": "3D",
+      "expected": "Incomplete output; existing stage/controller decides recovery; not successful final.",
+      "fixture": "length.ndjson",
+      "expectedSemanticOutputStarted": true
+    },
+    {
+      "id": "ND-4",
+      "stage": "3D",
+      "expected": "Thinking-only is not final success; semantic output already started.",
+      "fixture": "thinking-only.ndjson",
+      "expectedSemanticOutputStarted": true
+    },
+    {
+      "id": "ND-5",
+      "stage": "3D",
+      "expected": "HTTP200 in-stream error; retain prior evidence, no automatic new generating attempt.",
+      "fixture": "error-after-output.ndjson",
+      "httpStatus": 200,
+      "expectedSemanticOutputStarted": true
+    },
+    {
+      "id": "ND-6",
+      "stage": "3D",
+      "expected": "EOF before done is incomplete, not complete transport evidence.",
+      "fixture": "eof-without-done.ndjson",
+      "expectedSemanticOutputStarted": true
+    },
+    {
+      "id": "ND-7",
+      "stage": "3D",
+      "expected": "Decode exact Unicode across split byte/CRLF/final-no-newline; no lossy replacement.",
+      "fixture": "utf8-split.json",
+      "expectedFinal": "Łagodny łuk góry."
+    },
+    {
+      "id": "STOP-1",
+      "stage": "3D",
+      "expected": "User STOP wins; no extra attempt or implicit unload. Requires cancellation-race test, not just fixture parsing.",
+      "events": [
+        "content_delta",
+        "user_stop",
+        "done_true"
+      ]
+    },
+    {
+      "id": "REPLAY-1",
+      "stage": "3E",
+      "expected": "Reject unsupported think names before dispatch; model-default omission remains explicit. Missing metadata is unknown, not unsupported.",
+      "advertisedThinkingValues": [
+        false,
+        true
+      ],
+      "unsupportedRequestValues": [
+        "high",
+        1,
+        "false"
+      ]
+    }
+  ]
+}

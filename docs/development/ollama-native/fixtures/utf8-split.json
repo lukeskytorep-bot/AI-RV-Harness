@@ -1,0 +1,12 @@
+{
+  "kind": "synthetic_byte_fixture",
+  "wireBase64": "eyJtb2RlbCI6ImZpeHR1cmUtdGV4dDpsYXRlc3QiLCJtZXNzYWdlIjp7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjoixYFhZ29kbnkgxYJ1ayAifSwiZG9uZSI6ZmFsc2V9DQp7Im1vZGVsIjoiZml4dHVyZS10ZXh0OmxhdGVzdCIsIm1lc3NhZ2UiOnsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOiJnw7NyeS4ifSwiZG9uZSI6dHJ1ZSwiZG9uZV9yZWFzb24iOiJzdG9wIiwiZXZhbF9jb3VudCI6NX0=",
+  "chunkSizes": [
+    73,
+    1,
+    159
+  ],
+  "lineEnding": "CRLF",
+  "terminalNewline": false,
+  "expectedFinal": "Łagodny łuk góry."
+}

@@ -1,0 +1,2 @@
+{"model":"fixture-text:latest","message":{"role":"assistant","content":"A broad "},"done":false}
+{"model":"fixture-text:latest","message":{"role":"assistant","content":"structure."},"done":true,"done_reason":"stop","prompt_eval_count":17,"eval_count":9,"total_duration":1200000000}

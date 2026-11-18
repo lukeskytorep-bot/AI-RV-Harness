@@ -1,0 +1,2 @@
+{"model":"fixture-text:latest","message":{"role":"assistant","content":"Water "},"done":false}
+{"model":"fixture-text:latest","message":{"role":"assistant","content":"below."},"done":true,"done_reason":"stop","prompt_eval_count":17,"eval_count":4}

@@ -1,0 +1,2 @@
+{"model":"fixture-text:latest","message":{"role":"assistant","content":"Unfinished "},"done":false}
+{"model":"fixture-text:latest","message":{"role":"assistant","content":"description"},"done":true,"done_reason":"length","prompt_eval_count":17,"eval_count":8}

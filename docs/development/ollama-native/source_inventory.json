@@ -1,0 +1,306 @@
+{
+  "baseCommit": "3c061c80eb21d012cd22a091d61c4d7897120c2e",
+  "inspection": "Targeted inspection of auth, identity, schema, native dispatch and stream contracts; path/hash inventory for implementation owners, not a full semantic audit of every listed line.",
+  "files": [
+    {
+      "area": "TS provider configuration",
+      "path": "src/providers/types.ts",
+      "sha256": "c880d79d2324679cb4a883fb23dc987c31413e957e7f124dc59dcb6c9946dcb6"
+    },
+    {
+      "area": "TS provider configuration",
+      "path": "src/providers/service.ts",
+      "sha256": "2eff5efaf63b7db2e35e9345fcfa508591eb792ff4661b00a4b5d6fd3e17716a"
+    },
+    {
+      "area": "TS provider configuration",
+      "path": "src/providers/native.ts",
+      "sha256": "347495ca299006e5f9a63bce0c4f6f10e95dc035e150a9b70ac658911794167d"
+    },
+    {
+      "area": "TS provider configuration",
+      "path": "src/providers/customCompatibility.ts",
+      "sha256": "e0111596a76cfe7993ad79cd1ab0ea0460e072c6f817d39a6c0449fffa9786d1"
+    },
+    {
+      "area": "Settings and profiles",
+      "path": "src/components/ProviderSettings.tsx",
+      "sha256": "45b8d8f6a69aa3d87eab83badfbc1036d19b0b9271dde4b75799b5499fe4555f"
+    },
+    {
+      "area": "Settings and profiles",
+      "path": "src/App.tsx",
+      "sha256": "d93205f4a1b6adefdd66065d3eb3cbab754fccca8876656778a4a62e23ae22c5"
+    },
+    {
+      "area": "Settings and profiles",
+      "path": "src/features/profiles/ProfileDialogs.tsx",
+      "sha256": "9cbc5d2fd0810c48626b71b944177b8c5456923803cd0159c4568d38528cbeb8"
+    },
+    {
+      "area": "Settings and profiles",
+      "path": "src/features/profiles/useProfileSetupController.ts",
+      "sha256": "1a013e3a73059000a4d12fdd445b8be51c92a7ee616c0e8198e9a13391083e6a"
+    },
+    {
+      "area": "Settings and profiles",
+      "path": "src/profileViewerDefaults.ts",
+      "sha256": "7ad0b7e5dda20cbe1de6f5f7ebbee1d930b0ab1b4db1c5c27d928d24d9aa8458"
+    },
+    {
+      "area": "Settings and profiles",
+      "path": "src/modelRoutes.ts",
+      "sha256": "2b755c443ca58f93f4406b8bfe81b0f8a9f4d128204ca6d8be2e500090a77f20"
+    },
+    {
+      "area": "Settings and profiles",
+      "path": "src/types.ts",
+      "sha256": "5353965547a3af15a466349e3f53810a65eaf8e97a6a401b2a8b316cf36c0b43"
+    },
+    {
+      "area": "Capabilities and execution",
+      "path": "src/providers/capabilities.ts",
+      "sha256": "6238eea8a4189df8fe8fb796755b23b97e280d9fd96a19a6877cc0efd51f0373"
+    },
+    {
+      "area": "Capabilities and execution",
+      "path": "src/providers/requestExecutor.ts",
+      "sha256": "bb5ee6b14668332cf487ea9239ad4a3cfb4350a8a15f7efd24ff58288f6ec5a6"
+    },
+    {
+      "area": "Capabilities and execution",
+      "path": "src/providers/streamingPolicy.ts",
+      "sha256": "54037f3bd38bc836c80b74f7612bcf2a395c8efff0268c439b19b3d1461518c3"
+    },
+    {
+      "area": "Capabilities and execution",
+      "path": "src/providers/responseEvidence.ts",
+      "sha256": "ffb3e69a947d704879f6462439320e3cdbe69206a636eaaa6b9bde90c3ee7ff2"
+    },
+    {
+      "area": "Capabilities and execution",
+      "path": "src/providers/continuationContract.ts",
+      "sha256": "fa7438bffdeaa978e36c7e784ce3b3524ff4ce03082204e2b7919f30e22953a6"
+    },
+    {
+      "area": "Capabilities and execution",
+      "path": "src/providers/streamPreviewBuffer.ts",
+      "sha256": "52ddac1d8c4b3d80ee3039e54feb73a3cd8c56267171fffbc4be8a4dbebcddc9"
+    },
+    {
+      "area": "Identity and memory",
+      "path": "src/aiCenter/viewerIdentityRoute.ts",
+      "sha256": "1a213dfaf123adbc66cebecdb08d123670e056b5836ebad95b25bc86a41f4bf5"
+    },
+    {
+      "area": "Identity and memory",
+      "path": "src/aiCenter/viewerIdentitySelection.ts",
+      "sha256": "8db0a53350ec7238947ca5c3238b130158278a39b692dd5c415c09501c1f5690"
+    },
+    {
+      "area": "Identity and memory",
+      "path": "src/aiCenter/types.ts",
+      "sha256": "cf6555fc2650be3fab14799318f052fa1b78f9c735c4f14a5788c4c766527c5d"
+    },
+    {
+      "area": "Identity and memory",
+      "path": "src/storage/providerContinuationState.ts",
+      "sha256": "624036cd1b360edc7bb788c4e9c0292122f450e02bd23b9b658bb9f4794ea438"
+    },
+    {
+      "area": "Identity and memory",
+      "path": "src/sessions/providerContinuation.ts",
+      "sha256": "2c33be80287db458e8e86f83b56d5dadd22094d6c1beaaa17e7a54022ab4bbcb"
+    },
+    {
+      "area": "Persistence",
+      "path": "src/storage/repository.ts",
+      "sha256": "ef1d2125e4202e8929f5bf32ba2117c8eef9e218db197af01237387162e3c692"
+    },
+    {
+      "area": "Persistence",
+      "path": "src/storage/contracts/settingsModelsRepository.ts",
+      "sha256": "af0e397f339f8f0a2384a5afec7b41576baff17c6a035956527849e9c27fa450"
+    },
+    {
+      "area": "Persistence",
+      "path": "src/storage/browser/settingsModelsRepository.ts",
+      "sha256": "d9cef8d99ffe7688eb7f7aeaa14767fc7c6efafa8c65658b081961269e953025"
+    },
+    {
+      "area": "Persistence",
+      "path": "src/storage/sqlite/settingsModelsRepository.ts",
+      "sha256": "17be5aea6f887ba07b7a1250cd0990223f650100bcb0dc12a1c9913ee286ca90"
+    },
+    {
+      "area": "Persistence",
+      "path": "src/storage/databaseWriteOperations.ts",
+      "sha256": "2355a29715d4b375ac5dd7831a1eba4022831034c856e6bb26c62efdfc652517"
+    },
+    {
+      "area": "Research and frozen runs",
+      "path": "src/research/engine.ts",
+      "sha256": "62673fb925cc86ba5534afc0165d46634694b0c82fce8bf50b78082305364c3b"
+    },
+    {
+      "area": "Research and frozen runs",
+      "path": "src/research/preflight.ts",
+      "sha256": "ff1ce98ded1f0504f14f2d8948767efd06858fe95a382a911474cad0811a629d"
+    },
+    {
+      "area": "Research and frozen runs",
+      "path": "src/research/samplingPolicy.ts",
+      "sha256": "4908c5fb19aa64e67f8a7935061b300e7a56d77b488864045ee96c98ee6e878a"
+    },
+    {
+      "area": "Research and frozen runs",
+      "path": "src/research/targetCodeDesign.ts",
+      "sha256": "eb1b836a7f72aff1eadd36d7e05c4b3077f033e1b153521560553eac83143ec9"
+    },
+    {
+      "area": "Research and frozen runs",
+      "path": "src/sessions/types.ts",
+      "sha256": "8d77c79c6b0717e91fdf08118c0d6f41f6cd742a3debe250a2e417bacc89d358"
+    },
+    {
+      "area": "Research and frozen runs",
+      "path": "src/telepathicExchange/types.ts",
+      "sha256": "db72d8153dfee8c6a090e8b4edd6848c53350c480079ddfb316488b7c28c45ce"
+    },
+    {
+      "area": "Research and frozen runs",
+      "path": "src/telepathicExchange/providerGateway.ts",
+      "sha256": "74a43ce8186175d96cfba95c92acd0bdee954f1815e2e6b42e494c29514e5195"
+    },
+    {
+      "area": "Research and frozen runs",
+      "path": "src/sessions/resumeReplay.ts",
+      "sha256": "a20798607c55328c421bada47fcea4322efd3d964ec114a5b0b0ee92873d9a36"
+    },
+    {
+      "area": "Native HTTP",
+      "path": "src-tauri/src/providers.rs",
+      "sha256": "9ae68721ba790d25b9ff4cfa1354b36cc80bef70b1f82386aa9e01e712aea6c2"
+    },
+    {
+      "area": "Native HTTP",
+      "path": "src-tauri/src/providers/adapters.rs",
+      "sha256": "c98a9ebdb600c94dcfc7a950b09dd6f25c86b3ed61f77e3b0e6e5c0600a52bcc"
+    },
+    {
+      "area": "Native HTTP",
+      "path": "src-tauri/src/providers/validation.rs",
+      "sha256": "e87bb76d706382670bca0f03f36f54b82b1342c8add084bc22dffbfcc8c3f9c9"
+    },
+    {
+      "area": "Native HTTP",
+      "path": "src-tauri/src/providers/request_builders.rs",
+      "sha256": "277b6b913c1f5baed17c88c4d5dcdd20e69f7be0ed0f0f4d9922f33422038681"
+    },
+    {
+      "area": "Native HTTP",
+      "path": "src-tauri/src/providers/response_parsers.rs",
+      "sha256": "67d58c0716317ed5610626ce4cb29c157302582d0138f554609309d8e5f725ac"
+    },
+    {
+      "area": "Native HTTP",
+      "path": "src-tauri/src/providers/streaming.rs",
+      "sha256": "220bf050b7de9af243d72b6128a109d06ff4d60be33d00c628b1a271fe1200fe"
+    },
+    {
+      "area": "Native HTTP",
+      "path": "src-tauri/src/providers/transport.rs",
+      "sha256": "f35908b1874c168caccb5554048db28f21a21ef55fe8adb7814494ff6cdae2e8"
+    },
+    {
+      "area": "Native HTTP",
+      "path": "src-tauri/src/providers/response_evidence.rs",
+      "sha256": "9d5a0ec009f8280ead96471eaea996a3af93e50da0d37f666b6e2c1cc9d7eedc"
+    },
+    {
+      "area": "Native HTTP",
+      "path": "src-tauri/src/secrets.rs",
+      "sha256": "b9ae014e1be6db1250800862df426fa56937a68f5e2e37a701dd349033c86b51"
+    },
+    {
+      "area": "Native schema and guards",
+      "path": "src-tauri/src/database.rs",
+      "sha256": "0dbf3a6b6db8bf53a708e32861a25ccb8234298c439ff039699f23e361ec9ef9"
+    },
+    {
+      "area": "Native schema and guards",
+      "path": "src-tauri/src/migrations.rs",
+      "sha256": "85ca2b3923566a74c7ff9db75f314f38d244bc3df96504cf9bad6f71ac56b5ae"
+    },
+    {
+      "area": "Native schema and guards",
+      "path": "src-tauri/src/storage.rs",
+      "sha256": "4cbad1832ab92239fe8d84c6dc37a38d0b991f037ae269d2c421352b06101a68"
+    },
+    {
+      "area": "Native schema and guards",
+      "path": "src-tauri/src/ux_data_compatibility.rs",
+      "sha256": "5cf035a2e1f00053c35aa7984b63d9527508bcc56dbaa375344eba65f95306dd"
+    },
+    {
+      "area": "Native schema and guards",
+      "path": "src-tauri/migrations/001_initial.sql",
+      "sha256": "3bee26a2ef388b18e40c80cc4d785683c845ddf170e7199ab3cb18d01d45da69"
+    },
+    {
+      "area": "Native schema and guards",
+      "path": "src-tauri/migrations/002_provider_registry.sql",
+      "sha256": "fc72c7e9443c79345f11159acf4848945d626de94a28262b10d868eafebc24fe"
+    },
+    {
+      "area": "Native schema and guards",
+      "path": "src-tauri/migrations/019_add_blackbox_provider.sql",
+      "sha256": "3998b5b5c4d20da509211a9aecb6aea5393f888aec19c7e7d2890adeca1b6273"
+    },
+    {
+      "area": "Native schema and guards",
+      "path": "src-tauri/migrations/020_ai_center_viewer_notes.sql",
+      "sha256": "b3ca509d64f626980654bd8c7c8c650a36127f370eac1cb6b3d74dacaff4f4f6"
+    },
+    {
+      "area": "Native schema and guards",
+      "path": "src-tauri/migrations/034_custom_reasoning_mode.sql",
+      "sha256": "69f8a295fa73da7e82f46c069570576bbaad52b68bbaba34f3568ef53e3743e9"
+    },
+    {
+      "area": "Regression and rules",
+      "path": "src/securityIpc1bCredentialBinding.test.ts",
+      "sha256": "88d64faccb47a0a9f7bba32ae5941c6fe07bd9b8f80b7546f7390e6a8d13c766"
+    },
+    {
+      "area": "Regression and rules",
+      "path": "src/profileIdentityRouteSelectionBoundary.test.ts",
+      "sha256": "dcae5220dfa6e8baf95de3d2959bb88154555af77bc0bd362d7507b529aaa84b"
+    },
+    {
+      "area": "Regression and rules",
+      "path": "src/providers/continuationContractBoundary.test.ts",
+      "sha256": "56b6e35d5e17c0c608533356a83035f4ca5c43008a0a53c31b5a4f0f6b4e238f"
+    },
+    {
+      "area": "Regression and rules",
+      "path": "src/storage/researchRepository.contract.test.ts",
+      "sha256": "080547cb6eb9adf95f58423c49156f74a687e16a2747bfa976743fb2e243ae6a"
+    },
+    {
+      "area": "Regression and rules",
+      "path": "src/storage/settingsModelsRepository.contract.test.ts",
+      "sha256": "bd096db8e0c5cd7902bf32dd0722097a6e51fd5867bff20294ddfcba3a62e208"
+    },
+    {
+      "area": "Regression and rules",
+      "path": "docs/development/README.md",
+      "sha256": "a34290bea00ff84111f039bcde8745702e62449f1f87625e7ff85aec99090b8a"
+    },
+    {
+      "area": "Regression and rules",
+      "path": "package.json",
+      "sha256": "d2f905aa54ab7a32ad87d4209ee3fd9cbb5674849006df66bba638aa4e952551"
+    }
+  ]
+}

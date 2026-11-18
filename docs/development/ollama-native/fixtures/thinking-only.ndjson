@@ -1,0 +1,2 @@
+{"model":"fixture-text:latest","message":{"role":"assistant","content":"","thinking":"Comparing several shapes."},"done":false}
+{"model":"fixture-text:latest","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","eval_count":6}

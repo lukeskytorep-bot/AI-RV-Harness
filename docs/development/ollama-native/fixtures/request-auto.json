@@ -1,0 +1,18 @@
+{
+  "model": "fixture-text:latest",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Describe only the given material."
+    },
+    {
+      "role": "user",
+      "content": "Begin the description."
+    }
+  ],
+  "stream": false,
+  "options": {
+    "num_predict": 32768,
+    "num_ctx": 131072
+  }
+}

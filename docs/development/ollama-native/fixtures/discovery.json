@@ -1,0 +1,46 @@
+{
+  "synthetic": true,
+  "serverVersionKnown": false,
+  "versionExample": {
+    "version": "0.0.0-fixture"
+  },
+  "tags": {
+    "models": [
+      {
+        "name": "fixture-text:latest",
+        "model": "fixture-text:latest",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "details": {
+          "family": "fixture",
+          "quantization_level": "Q4_K_M"
+        }
+      }
+    ]
+  },
+  "show": {
+    "capabilities": [
+      "completion",
+      "thinking"
+    ],
+    "thinking": {
+      "values": [
+        false,
+        true
+      ],
+      "default": true
+    },
+    "model_info": {
+      "general.architecture": "fixture",
+      "fixture.context_length": 131072
+    },
+    "parameters": "num_ctx 4096"
+  },
+  "ps": {
+    "models": [
+      {
+        "name": "fixture-text:latest",
+        "context_length": 4096
+      }
+    ]
+  }
+}

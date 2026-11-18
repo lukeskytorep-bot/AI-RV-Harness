@@ -125,3 +125,7 @@ variant; see [Custom OpenAI llama.cpp compatibility](CUSTOM_OPENAI_LLAMA_CPP.md)
 for persistence, legacy Resume and endpoint acceptance rules.
 
 Mistral and Blackbox now include direct additional Viewer sampling and Chat Completions SSE. Mistral also preserves compatible thinking/text continuation. Blackbox supports explicit account endpoints and manual model IDs for non-legacy routes without guessed discovery. See [Mistral and Blackbox configuration and engineering contract](DIRECT_MISTRAL_BLACKBOX.md) for exact scope, code map and acceptance limits. Ollama Native is planned, not implemented. This update does not change the package/release version or claim live/Windows acceptance.
+
+## Reviewed integration plans
+
+- [Ollama Native API — DIRECT-3A](OLLAMA_NATIVE_IMPLEMENTATION_PLAN.md): planning candidate, source inventory and synthetic fixtures; no runtime Ollama support yet.
