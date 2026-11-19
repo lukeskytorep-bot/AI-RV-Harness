@@ -153,3 +153,8 @@ select { min-width: 180px; height: 36px; padding: 0 10px; font-size: 11px; }
 
 .chat-message-attachments { display: grid; gap: 0.2rem; margin-top: 0.35rem; opacity: 0.78; }
 .chat-message-attachments small { font-size: 0.72rem; }
+
+.native-generation-preferences { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); }
+.native-generation-preferences label { display: grid; gap: 5px; min-width: 0; }
+.native-generation-preferences input { width: 100%; min-width: 0; }
+.native-generation-preferences p { grid-column: 1 / -1; }

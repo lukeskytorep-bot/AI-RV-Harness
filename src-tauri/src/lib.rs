@@ -1,3 +1,5 @@
+pub mod native_generation_contract;
+mod native_generation_settings;
 mod native_connection_settings;
 mod native_connection_identity;
 mod native_connections;
@@ -35,6 +37,8 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::Destroyed) { workflow_heartbeat::window_destroyed(window.label()); }
         })
         .invoke_handler(tauri::generate_handler![
+            native_connections::native_connection_generation_settings,
+            native_connections::native_connection_save_generation_settings,
             native_connections::native_connection_binding,
             native_connections::native_connection_list,
             native_connections::native_connection_save,

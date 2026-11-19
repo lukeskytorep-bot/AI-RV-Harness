@@ -39,3 +39,14 @@ pub async fn native_connection_discover(instances:State<'_,DbInstances>,binding:
     let pool=crate::database::sqlite_pool(&instances).await?;
     crate::native_connection_settings::discover(&pool,&NativeOsSecrets,binding,selected_model).await
 }
+
+#[tauri::command]
+pub async fn native_connection_generation_settings(instances:State<'_,DbInstances>,binding:Binding,model:String)->Result<crate::native_generation_settings::State,String>{
+    let pool=crate::database::sqlite_pool(&instances).await?;
+    crate::native_generation_settings::get(&pool,&NativeOsSecrets,binding,model).await
+}
+#[tauri::command]
+pub async fn native_connection_save_generation_settings(instances:State<'_,DbInstances>,draft:crate::native_generation_settings::Draft)->Result<crate::native_generation_settings::State,String>{
+    let pool=crate::database::sqlite_pool(&instances).await?;
+    crate::native_generation_settings::save(&pool,&NativeOsSecrets,draft).await
+}

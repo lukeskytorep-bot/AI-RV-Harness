@@ -17,7 +17,7 @@ async function mount(rows: NativeConnectionView[] = []) {
   cleanup = async () => { await act(async () => root.unmount()); host.remove(); };
   await act(async () => root.render(<NativeConnectionSettings />));
   const click = async (text: string) => { await act(async () => [...host.querySelectorAll("button")].find(b => b.textContent === text)!.click()); };
-  const submit = async () => { await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); };
+  const submit = async () => { await act(async () => host.querySelector("[role=dialog] form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); };
   return { host, click, submit };
 }
 async function field(element: HTMLInputElement | HTMLSelectElement, value: string) { await act(async () => { Object.getOwnPropertyDescriptor(element.tagName === "SELECT" ? HTMLSelectElement.prototype : HTMLInputElement.prototype, "value")!.set!.call(element, value); element.dispatchEvent(new Event(element.tagName === "SELECT" ? "change" : "input", { bubbles: true })); }); }

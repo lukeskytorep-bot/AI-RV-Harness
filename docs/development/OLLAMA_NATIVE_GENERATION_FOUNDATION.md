@@ -1,0 +1,37 @@
+# Ollama Native — DIRECT-3C1 generation contract and preferences
+
+Candidate on `ai-rv-2` base `247617ec8b0e9c1e999bcb68f8424ddd38784827`, 19 November 2026. This is the first part of DIRECT-3C, not activation of Ollama inference. See the [plan](OLLAMA_NATIVE_IMPLEMENTATION_PLAN.md) and [settings/discovery](OLLAMA_NATIVE_SETTINGS_DISCOVERY.md).
+
+## Why activation remains blocked
+
+No deployed Ollama version/model/digest has passed full-input context and multi-turn conformance for this project. Discovery metadata, a larger requested num_ctx, a running allocation observation, a user confirmation or returned prompt counts do not prove that the complete input survived rendering and generation. Every readiness result in this patch is false, with context_unverified, multi_turn_unverified and transport_disabled reasons. Unknown observed allocation stays unknown.
+
+Public chat documentation reviewed on this date does not establish a version-pinned no-truncation guarantee for the deployment. Current upstream main does contain ChatRequest truncate/shift fields and conditional prompt truncation; this updates the earlier plan's source observation, but does not prove that a released or deployed server supports those controls, ignores neither field, and reserves the full output budget. This patch sends neither undocumented/unverified flag. Do not treat the plan's earlier observation as proof those controls can never exist. Validate a pinned implementation and an oversized-input rejection case before choosing a supported contract.
+
+Consequently this delivery implements the reusable contract, pending preferences and readiness display while leaving the B1 enabled=0 CHECK and all nine existing ProviderKind values intact. There is no /api/chat IPC command or HTTP dispatcher, no generation health probe, no automatic session/Research activation and no bypass based on frontend metadata. The pure wire builder is explicitly a draft/verification API, not permission to send. Streaming remains DIRECT-3D, using NDJSON rather than SSE.
+
+## Pending preferences and isolation
+
+The Ollama card exposes numeric context allocation, temperature, top P, top K and seed preferences for the selected exact available model. Blank means Auto and is omitted; explicit sampling zero is retained. Requested context is a positive safe integer; top K and seed are nonnegative safe integers; temperature is finite 0–2 and top P finite 0–1. These are validated candidate wire ranges, not proof that every deployment applies them. Unknown fields, generic reasoning controls, token limit overrides and negative seeds are rejected. The output budget is not editable here.
+
+The dedicated get/save commands use the existing trusted pending connection and safe discovery view, including the B2 secret checks. Model selection must match saved discovery. Numeric drafts are stored in app_settings under a versioned key scoped to config ID, revision and exact-model hash; the value also freezes the full binding and exact model. A new route/auth revision gets independent preferences. Saving takes an immediate SQLite transaction and rechecks route fields and the complete cached discovery to reject a concurrent change. Failure leaves the previous value intact. No secret is written, no provider is enabled, and no schema migration is required.
+
+The component displays English/Polish blocked-state copy, keeps edits on a refused save and ignores stale asynchronous results after connection/model/discovery changes. It does not poll. Forms are scoped independently of the existing connection editor; the B2 DOM helper now selects that dialog's form explicitly.
+
+## Frozen draft and native response contract
+
+The shared fixture [3c1-contract.json](ollama-native/3c1-contract.json) drives TypeScript and Rust tests. A version-1 frozen draft records the full connection binding, server version, exact model/digest, model-metadata SHA-256, numeric intent, role and the existing caller-supplied stage budget. A changed endpoint/auth/revision/identity, server version, digest or metadata invalidates compatibility. TypeScript copies/freezes nested values. These drafts are not yet inserted into real run snapshots or legacy profile identities.
+
+The pure non-stream builder preserves all ordered text messages, ends on a user turn, emits model/messages/stream:false/options, maps the supplied positive output budget to num_predict and optional allocation to num_ctx, and omits Auto fields. It never lowers output to context, truncates/reuses history, carries generic reasoning/route fields, sets think, or imports another provider's continuation. Text-only input and a 16 MiB encoded request bound are explicit. Unsupported roles/message fields are rejected.
+
+The Rust non-stream parser bounds the response at 16 MiB and validates JSON, exact model and assistant role, terminal done field, optional thinking/reason and nonnegative safe counters. Tool responses and HTTP-200 error objects fail. It preserves final content, thinking and raw done reason separately. Stop with nonempty content produces only a final candidate, not domain acceptance. Length, unknown reason and nonterminal content are incomplete; empty and thinking-only results remain distinct and are never replaced with reasoning. Missing counts/timing are unknown rather than zero. Native nanosecond fields remain labelled in nanoseconds; no cost or reasoning token count is invented. This parser has no IPC endpoint and does not yet replace existing controller completeness/recovery logic.
+
+## Tests and follow-up
+
+Tests cover shared final-wire fixtures, Auto/zero, numeric validation, all eight role descriptors across existing stage budget examples, copied frozen settings, provenance drift, fresh history, response status/error/length/thinking/counters/bounds, real SQLite preferences persistence and disk reopening, stale/missing models, rollback and blocked readiness. B2 secret-isolation regressions remain included in the native harness. The portable harness compiles the exact production contract/settings modules and migrations without Tauri or a real keyring.
+
+DIRECT-3C is not complete. After review, 3C2 must establish a pinned deployment's full-input rejection/token accounting and multi-turn contract, integrate explicit None/Bearer profile/AI identity consumers and learning boundaries, route First Run/Profile defaults and every controller/Research lock through frozen settings, then implement dispatch using existing ownership/cancellation/response-evidence rules. Only that reviewed gate may change schema activation and the public provider union. It must exercise Viewer, Monitor, Judge, learning, post-Reveal, Conversation and both telepathy modes through their real controllers; role-descriptor unit tests in C1 are not that runtime evidence. Do not begin NDJSON work as a substitute for completing 3C.
+
+Full native CI/Clippy, Windows OS credential store, actual Ollama/RunPod, context fit, cancellation and both desktop themes remain separate acceptance checks. The synthetic fixture serverVersion is not a supported-version declaration.
+
+Sources reviewed: [chat](https://docs.ollama.com/api/chat), [context](https://docs.ollama.com/context-length), [Modelfile](https://docs.ollama.com/modelfile), upstream [api/types.go](https://github.com/ollama/ollama/blob/main/api/types.go) and [server/prompt.go](https://github.com/ollama/ollama/blob/main/server/prompt.go). Upstream main links are investigation leads, not pinned runtime conformance.

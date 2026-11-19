@@ -6,6 +6,8 @@ const APP_COMMANDS: &[&str] = &[
     "delete_credential",
     "credential_identity_fingerprint",
     "native_connection_binding",
+    "native_connection_generation_settings",
+    "native_connection_save_generation_settings",
     "native_connection_list",
     "native_connection_save",
     "native_connection_discover",

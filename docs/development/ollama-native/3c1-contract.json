@@ -1,0 +1,186 @@
+{
+  "snapshot": {
+    "version": 1,
+    "connection": {
+      "version": 1,
+      "provider": "ollama_native",
+      "providerConfigId": "pending",
+      "connectionIdentityId": "identity",
+      "connectionRevision": 1,
+      "normalizedEndpoint": "http://localhost:11434",
+      "authMode": "none"
+    },
+    "provenance": {
+      "serverVersion": "fixture-only",
+      "model": "exact:tag",
+      "digest": "sha256:fixture",
+      "metadataSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "settings": {
+      "numCtx": 65536,
+      "temperature": 0.0,
+      "topP": 0.0,
+      "topK": 0,
+      "seed": 0
+    },
+    "role": "viewer",
+    "maxOutputTokens": 32768
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "System"
+    },
+    {
+      "role": "user",
+      "content": "First"
+    },
+    {
+      "role": "assistant",
+      "content": "Reply"
+    },
+    {
+      "role": "user",
+      "content": "Second"
+    }
+  ],
+  "wire": {
+    "model": "exact:tag",
+    "messages": [
+      {
+        "role": "system",
+        "content": "System"
+      },
+      {
+        "role": "user",
+        "content": "First"
+      },
+      {
+        "role": "assistant",
+        "content": "Reply"
+      },
+      {
+        "role": "user",
+        "content": "Second"
+      }
+    ],
+    "stream": false,
+    "options": {
+      "num_predict": 32768,
+      "num_ctx": 65536,
+      "temperature": 0.0,
+      "top_p": 0.0,
+      "top_k": 0,
+      "seed": 0
+    }
+  },
+  "responses": [
+    {
+      "name": "final",
+      "body": {
+        "model": "exact:tag",
+        "message": {
+          "role": "assistant",
+          "content": "Final",
+          "thinking": "Reasoning"
+        },
+        "done": true,
+        "done_reason": "stop",
+        "prompt_eval_count": 12,
+        "eval_count": 8,
+        "prompt_eval_cached_count": 5,
+        "total_duration": 123456789
+      },
+      "status": "final_candidate"
+    },
+    {
+      "name": "length",
+      "body": {
+        "model": "exact:tag",
+        "message": {
+          "role": "assistant",
+          "content": "Final",
+          "thinking": "Reasoning"
+        },
+        "done": true,
+        "done_reason": "length",
+        "prompt_eval_count": 12,
+        "eval_count": 8,
+        "prompt_eval_cached_count": 5,
+        "total_duration": 123456789
+      },
+      "status": "incomplete"
+    },
+    {
+      "name": "unknown",
+      "body": {
+        "model": "exact:tag",
+        "message": {
+          "role": "assistant",
+          "content": "Final",
+          "thinking": "Reasoning"
+        },
+        "done": true,
+        "done_reason": "other",
+        "prompt_eval_count": 12,
+        "eval_count": 8,
+        "prompt_eval_cached_count": 5,
+        "total_duration": 123456789
+      },
+      "status": "incomplete"
+    },
+    {
+      "name": "not-done",
+      "body": {
+        "model": "exact:tag",
+        "message": {
+          "role": "assistant",
+          "content": "Final",
+          "thinking": "Reasoning"
+        },
+        "done": false,
+        "done_reason": "stop",
+        "prompt_eval_count": 12,
+        "eval_count": 8,
+        "prompt_eval_cached_count": 5,
+        "total_duration": 123456789
+      },
+      "status": "incomplete"
+    },
+    {
+      "name": "thinking-only",
+      "body": {
+        "model": "exact:tag",
+        "message": {
+          "role": "assistant",
+          "content": "",
+          "thinking": "Reasoning"
+        },
+        "done": true,
+        "done_reason": "stop",
+        "prompt_eval_count": 12,
+        "eval_count": 8,
+        "prompt_eval_cached_count": 5,
+        "total_duration": 123456789
+      },
+      "status": "reasoning_only"
+    },
+    {
+      "name": "empty-stop",
+      "body": {
+        "model": "exact:tag",
+        "message": {
+          "role": "assistant",
+          "content": ""
+        },
+        "done": true,
+        "done_reason": "stop",
+        "prompt_eval_count": 12,
+        "eval_count": 8,
+        "prompt_eval_cached_count": 5,
+        "total_duration": 123456789
+      },
+      "status": "empty"
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import { NativeGenerationPreferences } from "./NativeGenerationPreferences";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { isTauriRuntime } from "../storage";
 import { freezeNativeConnection, normalizeNativeConnectionEndpoint } from "../providers/nativeConnectionIdentity";
@@ -35,6 +36,7 @@ export function NativeConnectionSettings({ language = "en" }: { language?: "en" 
         {selected?.digest && <p style={{ overflowWrap: "anywhere" }}>{t.digest}: {selected.digest}</p>}
         {d.detailsUnavailable && <p>{t.unknown}</p>}
         {d.details?.declaredContextTokens != null && <p>{t.context}: {d.details.declaredContextTokens}</p>}
+        {d.selectedAvailable && d.selectedModel && <NativeGenerationPreferences view={view} language={language} />}
         {d.details && <details><summary>{t.provenance}</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify(d.details, null, 2)}</pre></details>}
       </>}
     </article>; })}
