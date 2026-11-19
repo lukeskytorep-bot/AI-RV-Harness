@@ -52,7 +52,7 @@ fn has_secret(value:&Value, secret:Option<&str>)->bool {
     match value {Value::String(s)=>s.contains(secret),Value::Array(a)=>a.iter().any(|v|has_secret(v,Some(secret))),Value::Object(o)=>o.iter().any(|(k,v)|k.contains(secret)||has_secret(v,Some(secret))),_=>false}
 }
 // Check the complete serialized metadata shape, never a secret-bearing request input.
-fn ensure_metadata_has_no_secret<T:Serialize>(metadata:&T,secret:Option<&str>)->Result<(),String>{
+pub(crate) fn ensure_metadata_has_no_secret<T:Serialize>(metadata:&T,secret:Option<&str>)->Result<(),String>{
     let value=serde_json::to_value(metadata).map_err(|_|"Cannot validate native metadata")?;
     if has_secret(&value,secret){return Err("Native metadata contains sensitive data".into());}
     Ok(())
@@ -76,6 +76,17 @@ async fn request(client:&reqwest::Client, endpoint:&str, suffix:&str, body:Optio
 }
 pub fn discovery_client()->Result<reqwest::Client,String> {
     reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(30)).build().map_err(|_|"Cannot create native discovery client".into())
+}
+pub(crate) async fn cloud_catalog(client:&reqwest::Client,secret:&str)->Result<Value,String>{
+    if secret.trim().is_empty(){return Err("Ollama Cloud requires an API key".into());}
+    let (_,account)=request(client,CLOUD_BASE,"balance",None,Some(secret)).await?;
+    let account=account.ok_or("Cloud access check unavailable")?;
+    if !account.get("included").is_some_and(Value::is_object)||!account.get("purchased").is_some_and(Value::is_object){return Err("Invalid cloud access response".into());}
+    let (_,tags)=request(client,CLOUD_BASE,"tags",None,Some(secret)).await?;let tags=tags.ok_or("Cloud models unavailable")?;
+    let models=tags.get("models").and_then(Value::as_array).ok_or("Invalid cloud models")?;
+    if models.len()>2000{return Err("Cloud model list exceeds 2000 entries".into());}
+    let mut names=std::collections::HashSet::new();for model in models{let name=model.get("name").and_then(Value::as_str).filter(|s|safe_text(s)&&!s.chars().any(char::is_whitespace)).ok_or("Invalid exact cloud model name")?;if !names.insert(name){return Err("Duplicate cloud model name".into());}}
+    Ok(tags)
 }
 pub const CLOUD_BASE:&str="https://ollama.com";
 pub fn is_cloud_endpoint(endpoint:&str)->bool {endpoint==CLOUD_BASE}
@@ -234,6 +245,43 @@ async fn commit_save<S:SecretStore>(pool:&SqlitePool,store:&S,c:&Connection,d:&D
     sqlx::query("INSERT INTO app_settings(key,value,updated_at) VALUES($1,$2,$3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(cache_key(&c.id)).bind(serde_json::to_string(d).map_err(|_|"Cannot serialize discovery")?).bind(now().to_string()).execute(&mut *tx).await.map_err(|_|"Cannot save model cache")?;
     if let Some(key)=journal{sqlx::query("DELETE FROM app_settings WHERE key=$1").bind(key).execute(&mut *tx).await.map_err(|_|"Cannot settle native journal")?;}
     tx.commit().await.map_err(|_|"Cannot commit native settings".into())
+}
+
+/// Explicit promotion of an already verified hosted account. The source record and key are immutable.
+/// `store.read` reads the native source; `store.create` binds a fresh hosted credential.
+pub async fn activate_cloud<S: SecretStore>(pool: &SqlitePool, store: &S, binding: Binding) -> Result<String, String> {
+    recover(pool,store).await?;
+    let old=current(pool,&binding).await?;
+    if old.base_url!=CLOUD_BASE || old.auth_mode!="bearer" {return Err("Only a saved Ollama Cloud Bearer account can be activated".into());}
+    let secret=store.read(old.credential_id.as_deref().ok_or("Missing Cloud key")?,CLOUD_BASE).map_err(|_|"Cannot read the saved Cloud key")?;
+    ensure_metadata_has_no_secret(&old,Some(&secret))?;
+    // Successful authorization/catalog test precedes every new activation. No generation is billed.
+    cloud_catalog(&discovery_client()?,&secret).await?;
+    commit_cloud_activation(pool,store,&old,&secret).await
+}
+async fn commit_cloud_activation<S: SecretStore>(pool:&SqlitePool,store:&S,old:&Connection,secret:&str)->Result<String,String>{
+    let mapping=format!("ollama.cloud.activation.v1.{}.{}",old.id,old.connection_revision);
+    let id=unique(pool,"cloud_provider").await?;let credential=unique(pool,"native_credential").await?;
+    let journal=format!("native.secret.staging.v1.{credential}");
+    sqlx::query("INSERT INTO app_settings(key,value,updated_at) VALUES($1,$2,$3)").bind(&journal).bind(json!({"credentialId":credential,"expiresAtMs":now()+900_000}).to_string()).bind(now().to_string()).execute(pool).await.map_err(|_|"Cannot stage Cloud credential")?;
+    let mut tx=pool.begin_with("BEGIN IMMEDIATE").await.map_err(|_|"Cannot begin Cloud activation")?;
+    let source:Option<(String,i64,String)>=sqlx::query_as("SELECT connection_identity_id,connection_revision,base_url FROM provider_configs WHERE id=$1 AND provider='ollama_native' AND auth_mode='bearer' AND credential_id=$2").bind(&old.id).bind(&old.credential_id).fetch_optional(&mut *tx).await.map_err(|_|"Cannot verify Cloud source")?;
+    if source!=Some((old.connection_identity_id.clone(),old.connection_revision as i64,CLOUD_BASE.into())){return Err("Cloud settings changed; reload before activating".into());}
+    let existing:Option<String>=sqlx::query_scalar("SELECT c.id FROM app_settings a JOIN provider_configs c ON c.id=a.value WHERE a.key=$1 AND c.provider='ollama_cloud' AND c.enabled=1").bind(&mapping).fetch_optional(&mut *tx).await.map_err(|_|"Cannot inspect Cloud activation")?;
+    if let Some(existing)=existing {
+        sqlx::query("DELETE FROM app_settings WHERE key=$1").bind(&journal).execute(&mut *tx).await.map_err(|_|"Cannot settle Cloud activation")?;
+        tx.commit().await.map_err(|_|"Cannot confirm existing Cloud activation")?;return Ok(existing);
+    }
+    let staged:i64=sqlx::query_scalar("SELECT COUNT(*) FROM app_settings WHERE key=$1").bind(&journal).fetch_one(&mut *tx).await.map_err(|_|"Cannot check Cloud staging")?;
+    if staged!=1{return Err("Cloud staging expired; retry activation".into());}
+    store.create(&credential,secret,CLOUD_BASE).map_err(|_|"Cannot save the hosted key in secure storage")?;
+    let stamp:String=sqlx::query_scalar("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')").fetch_one(&mut *tx).await.map_err(|_|"Cannot timestamp Cloud activation")?;let fingerprint=format!("{:x}",Sha256::digest(secret.as_bytes()))[..16].to_owned();
+    sqlx::query("INSERT INTO credentials_metadata(id,provider,label,fingerprint,created_at,updated_at) VALUES($1,'ollama_cloud',$2,$3,$4,$4)").bind(&credential).bind(&old.label).bind(fingerprint).bind(&stamp).execute(&mut *tx).await.map_err(|_|"Cannot save hosted credential metadata")?;
+    sqlx::query("INSERT INTO provider_configs(id,provider,label,credential_id,base_url,enabled,last_status,last_tested_at,created_at,updated_at) VALUES($1,'ollama_cloud',$2,$3,$4,1,'ok',$5,$5,$5)").bind(&id).bind(&old.label).bind(&credential).bind(CLOUD_BASE).bind(&stamp).execute(&mut *tx).await.map_err(|_|"Cannot save hosted connection")?;
+    sqlx::query("INSERT INTO app_settings(key,value,updated_at) VALUES($1,$2,$3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(mapping).bind(&id).bind(&stamp).execute(&mut *tx).await.map_err(|_|"Cannot link hosted account")?;
+    sqlx::query("DELETE FROM app_settings WHERE key=$1").bind(journal).execute(&mut *tx).await.map_err(|_|"Cannot settle hosted key")?;
+    tx.commit().await.map_err(|_|"Cloud activation was not confirmed; reload and retry. The original account is retained.")?;
+    Ok(id)
 }
 
 #[cfg(test)]
@@ -398,6 +446,28 @@ mod tests {
         let absent=probe_contract(&client,cloud_binding(&url),Some("gemma4:cloud".into()),Some("fixture-secret"),true).await.unwrap();assert!(!absent.selected_available);assert_eq!(absent.selected_model.as_deref(),Some("gemma4:cloud"));assert!(absent.details.is_none());
         let error=probe_contract(&client,cloud_binding(&url),Some("fixture-secret".into()),Some("fixture-secret"),true).await.err().unwrap();assert!(!error.contains("fixture-secret"));assert_eq!(seen.lock().unwrap().len(),2);task.abort();
         let(url,_,task)=cloud_server(200,200,true).await;let error=probe_contract(&client,cloud_binding(&url),None,Some("fixture-secret"),true).await.err().unwrap();assert!(!error.contains("fixture-secret"));task.abort();
+    }
+
+    #[tokio::test] async fn cloud_activation_commit_is_idempotent_and_keeps_source_key() {
+        let pool=db().await;let vault=Vault::default();let (url,_,task)=server(200,200).await;
+        let mut i=input(&url);i.auth_mode="bearer".into();i.api_key=Some("fixture-secret".into());
+        let mut old=save(&pool,&vault,i).await.unwrap().connection;
+        sqlx::query("UPDATE provider_configs SET base_url=$1 WHERE id=$2").bind(CLOUD_BASE).bind(&old.id).execute(&pool).await.unwrap();old.base_url=CLOUD_BASE.into();
+        let first=commit_cloud_activation(&pool,&vault,&old,"fixture-secret").await.unwrap();
+        assert_eq!(commit_cloud_activation(&pool,&vault,&old,"fixture-secret").await.unwrap(),first);
+        let target:String=sqlx::query_scalar("SELECT credential_id FROM provider_configs WHERE id=$1 AND provider='ollama_cloud'").bind(&first).fetch_one(&pool).await.unwrap();
+        let stamp:String=sqlx::query_scalar("SELECT last_tested_at FROM provider_configs WHERE id=$1").bind(&first).fetch_one(&pool).await.unwrap();assert!(stamp.contains('T')&&stamp.ends_with('Z'));
+        assert_ne!(Some(target.as_str()),old.credential_id.as_deref());assert_eq!(vault.read(&target,CLOUD_BASE).unwrap(),"fixture-secret");assert_eq!(load(&pool,&old.id).await.unwrap().binding(),old.binding());assert_eq!(vault.0.lock().unwrap().len(),2);
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM app_settings WHERE key LIKE 'native.secret.staging.v1.%'").fetch_one(&pool).await.unwrap(),0);task.abort();
+    }
+    #[tokio::test] async fn failed_cloud_activation_rolls_back_and_recovery_removes_only_orphan_key() {
+        let pool=db().await;let vault=Vault::default();let (url,_,task)=server(200,200).await;
+        let mut i=input(&url);i.auth_mode="bearer".into();i.api_key=Some("fixture-secret".into());let mut old=save(&pool,&vault,i).await.unwrap().connection;
+        sqlx::query("UPDATE provider_configs SET base_url=$1 WHERE id=$2").bind(CLOUD_BASE).bind(&old.id).execute(&pool).await.unwrap();old.base_url=CLOUD_BASE.into();
+        sqlx::raw_sql("CREATE TRIGGER fail_cloud BEFORE INSERT ON provider_configs WHEN NEW.provider='ollama_cloud' BEGIN SELECT RAISE(ABORT,'injected'); END").execute(&pool).await.unwrap();
+        assert!(commit_cloud_activation(&pool,&vault,&old,"fixture-secret").await.is_err());
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM provider_configs WHERE provider='ollama_cloud'").fetch_one(&pool).await.unwrap(),0);
+        sqlx::query("UPDATE app_settings SET value=json_set(value,'$.expiresAtMs',0) WHERE key LIKE 'native.secret.staging.v1.%'").execute(&pool).await.unwrap();recover(&pool,&vault).await.unwrap();assert_eq!(vault.0.lock().unwrap().len(),1);assert_eq!(load(&pool,&old.id).await.unwrap().binding(),old.binding());task.abort();
     }
 
 }

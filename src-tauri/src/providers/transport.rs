@@ -173,6 +173,9 @@ pub(super) async fn json_response(response: reqwest::Response, secret: &str) -> 
 }
 
 async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result<(Value, Option<String>), ProviderCallError> {
+    chat_json_response_with_limit(response,secret,None).await
+}
+async fn chat_json_response_with_limit(mut response:reqwest::Response,secret:&str,limit:Option<usize>)->Result<(Value,Option<String>),ProviderCallError>{
     let status = response.status();
     let retry_after_ms = retry_after_ms(response.headers());
     let request_id = response
@@ -181,11 +184,21 @@ async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result
         .or_else(|| response.headers().get("request-id"))
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    let body = response.text().await.map_err(|error| {
-        let mut failure = request_error(error, "reading_body");
-        failure.metadata.provider_request_id = request_id.clone().map(String::into_boxed_str);
-        failure
-    })?;
+    let body=if let Some(limit)=limit {
+        let mut bytes=Vec::new();
+        while let Some(chunk)=response.chunk().await.map_err(|e|request_error(e,"reading_body"))? {
+            if bytes.len().saturating_add(chunk.len())>limit {return Err(ProviderCallError::new("response_body_too_large","Ollama Cloud response exceeds 16 MiB","reading_body"));}
+            bytes.extend_from_slice(&chunk);
+        }
+        String::from_utf8(bytes).map_err(|_|ProviderCallError::new("invalid_provider_json","Ollama Cloud response is not UTF-8","reading_body"))?
+    }else{response.text().await.map_err(|error| {
+        let mut failure=request_error(error,"reading_body");failure.metadata.provider_request_id=request_id.clone().map(String::into_boxed_str);failure
+    })?};
+    if limit.is_some() && !secret.is_empty() && (request_id.as_ref().is_some_and(|id|id.contains(secret)) || body.contains(secret) || serde_json::from_str::<Value>(&body).is_ok_and(|v|crate::native_connection_settings::ensure_metadata_has_no_secret(&v,Some(secret)).is_err())) {
+        let mut failure=ProviderCallError::new("provider_error","Ollama Cloud response contains credential material","validating_response");
+        failure.metadata.response_evidence=Some(super::response_evidence::finished(None,None,"body_read"));
+        return Err(failure);
+    }
     if !status.is_success() {
         let parsed = serde_json::from_str::<Value>(&body).ok();
         let (provider_error_type, provider_code) = parsed.as_ref().map(provider_error_metadata).unwrap_or_default();
@@ -258,6 +271,13 @@ pub(super) async fn send_chat_request(builder: RequestBuilder, request_id: Optio
     }).await
 }
 
+pub(super) async fn send_cloud_chat_request(builder:RequestBuilder,request_id:Option<&str>,secret:&str)->Result<(Value,Option<String>),ProviderCallError>{
+    run_cancellable_chat_request(request_id,"awaiting_headers",async {
+        let response=builder.send().await.map_err(|e|request_error(e,"awaiting_headers"))?;
+        chat_json_response_with_limit(response,secret,Some(crate::native_generation_contract::MAX_BODY_BYTES)).await
+    }).await
+}
+
 pub(super) fn cancel_request(request_id: String) -> Result<bool, String> {
     validate_request_id(&request_id)?;
     let mut registry = CHAT_CANCELLATIONS
@@ -274,4 +294,28 @@ pub(super) fn cancel_request(request_id: String) -> Result<bool, String> {
         registry.cancelled_before_start.insert(request_id);
         Ok(false)
     }
+}
+
+#[cfg(test)]
+mod cloud_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn fixture(body:Vec<u8>)->(String,tokio::task::JoinHandle<()>) {
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let url=format!("http://{}",listener.local_addr().unwrap());
+        let task=tokio::spawn(async move {let (mut socket,_)=listener.accept().await.unwrap();let mut request=[0;4096];let n=socket.read(&mut request).await.unwrap();assert!(String::from_utf8_lossy(&request[..n]).contains("Bearer fixture-secret"));socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).as_bytes()).await.unwrap();let _=socket.write_all(&body).await;});(url,task)
+    }
+    #[tokio::test] async fn hosted_body_limit_stops_read_without_claiming_finished_response(){
+        let (url,task)=fixture(vec![b' ';crate::native_generation_contract::MAX_BODY_BYTES+1]).await;
+        let error=send_cloud_chat_request(client().unwrap().get(url).bearer_auth("fixture-secret"),Some("cloud-body-limit"),"fixture-secret").await.unwrap_err();assert_eq!(error.code.as_ref(),"response_body_too_large");assert!(error.metadata.response_evidence.is_none());task.abort();
+    }
+    #[tokio::test] async fn hosted_json_uses_cancellation_registry_and_body_finished_boundary(){
+        let (url,task)=fixture(br#"{"done":true,"done_reason":"stop"}"#.to_vec()).await;
+        let (payload,_)=send_cloud_chat_request(client().unwrap().get(url).bearer_auth("fixture-secret"),Some("cloud-success"),"fixture-secret").await.unwrap();assert_eq!(payload["done"],true);task.await.unwrap();
+        assert!(!cancel_request("cloud-before-dispatch".into()).unwrap());let error=send_cloud_chat_request(client().unwrap().get("http://127.0.0.1:1"),Some("cloud-before-dispatch"),"fixture-secret").await.unwrap_err();assert_eq!(error.code.as_ref(),"cancelled");assert_eq!(error.phase.as_ref(),"before_dispatch");
+    }
+    #[tokio::test] async fn hosted_error_cannot_expose_a_secret_through_metadata(){
+        let (url,task)=fixture(br#"{"error":{"type":"fixture-secret","code":"fixture-secret"}}"#.to_vec()).await;
+        let error=send_cloud_chat_request(client().unwrap().get(url).bearer_auth("fixture-secret"),Some("cloud-secret-reflection"),"fixture-secret").await.unwrap_err();assert!(!serde_json::to_string(&error).unwrap().contains("fixture-secret"));assert!(error.metadata.response_evidence.is_some());task.await.unwrap();
+    }
+
 }

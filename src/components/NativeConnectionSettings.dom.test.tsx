@@ -2,6 +2,8 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { activateOllamaCloud } from "../providers/native";
+vi.mock("../providers/native", () => ({activateOllamaCloud: vi.fn()}));
 import { NativeConnectionSettings } from "./NativeConnectionSettings";
 import { freezeNativeConnection } from "../providers/nativeConnectionIdentity";
 import { listNativeConnections, saveNativeConnection, discoverNativeConnection, type NativeConnectionView } from "../providers/nativeDiscovery";
@@ -11,11 +13,11 @@ vi.mock("../providers/nativeDiscovery", () => ({ listNativeConnections: vi.fn(),
 const view: NativeConnectionView = { connection: { id: "native", provider: "ollama_native", label: "Saved native", baseUrl: "https://old.example", authMode: "bearer", credentialId: "bound", connectionIdentityId: "identity", connectionRevision: 1, enabled: false }, discovery: { binding: { version: 1, provider: "ollama_native", providerConfigId: "native", connectionIdentityId: "identity", connectionRevision: 1, normalizedEndpoint: "https://old.example", authMode: "bearer" }, serverVersion: "fixture", capturedAtMs: 100, models: [{ name: "exact:tag", digest: "sha256:fixture" }], selectedModel: "exact:tag", selectedAvailable: true, detailsUnavailable: false, generationAvailable: false } };
 let cleanup: (() => Promise<void>) | undefined;
 afterEach(async () => { await cleanup?.(); cleanup = undefined; vi.resetAllMocks(); });
-async function mount(rows: NativeConnectionView[] = []) {
+async function mount(rows: NativeConnectionView[] = [], onActivated?: (id: string) => Promise<void>) {
   vi.mocked(listNativeConnections).mockResolvedValue(rows);
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
   cleanup = async () => { await act(async () => root.unmount()); host.remove(); };
-  await act(async () => root.render(<NativeConnectionSettings />));
+  await act(async () => root.render(<NativeConnectionSettings onActivated={onActivated} />));
   const click = async (text: string) => { await act(async () => [...host.querySelectorAll("button")].find(b => b.textContent === text)!.click()); };
   const submit = async () => { await act(async () => host.querySelector("[role=dialog] form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); };
   return { host, click, submit };
@@ -25,7 +27,7 @@ it("creates Cloud with fixed official host and required Bearer key, without loca
   const { host, click, submit } = await mount(); await click("Add Ollama Cloud");
   const dialog=host.querySelector("[role=dialog]")!; const key=dialog.querySelector<HTMLInputElement>("input[type=password]")!;
   expect(key.required).toBe(true); expect(dialog.querySelector("select")).toBeNull(); expect(dialog.querySelector<HTMLInputElement>("input[type=url]")!.readOnly).toBe(true);
-  expect(dialog.textContent).toContain("https://ollama.com"); expect(dialog.textContent).toContain("No text is generated"); expect(host.textContent).toContain("Generation is not available");
+  expect(dialog.textContent).toContain("https://ollama.com"); expect(dialog.textContent).toContain("No text is generated"); expect(host.textContent).toContain("Automatic stages await full-context verification");
   await field(key,"fixture-secret");vi.mocked(saveNativeConnection).mockResolvedValue(view);await submit();
   expect(saveNativeConnection).toHaveBeenCalledWith({expected:undefined,label:"Ollama Cloud",baseUrl:"https://ollama.com",authMode:"bearer",apiKey:"fixture-secret",selectedModel:undefined});expect(discoverNativeConnection).not.toHaveBeenCalled();
 });
@@ -51,4 +53,10 @@ it("retains a missing exact model, shows provenance and refreshes only on an exp
 it("shows hosted Cloud with unknown version and no mandatory digest or local version display", async () => {
   const cloud:NativeConnectionView={connection:{...view.connection,baseUrl:"https://ollama.com"},discovery:{...view.discovery!,binding:{...view.discovery!.binding,normalizedEndpoint:"https://ollama.com"},serverVersion:null,models:[{name:"gemma4:31b"}],selectedModel:"gemma4:31b",detailsUnavailable:true}};
   const {host,click,submit}=await mount([cloud]);expect(host.textContent).toContain("Hosted Ollama Cloud API");expect(host.textContent).not.toContain("Server version:");await click("Edit connection");expect(host.querySelector<HTMLInputElement>("input[type=password]")!.required).toBe(false);vi.mocked(saveNativeConnection).mockResolvedValue(cloud);await submit();expect(saveNativeConnection).toHaveBeenCalledWith(expect.objectContaining({baseUrl:"https://ollama.com",authMode:"bearer",apiKey:undefined,selectedModel:"gemma4:31b"}));
+});
+
+it("activates a saved hosted account explicitly without copying its key through the UI", async () => {
+ const cloud = {...view, connection:{...view.connection,baseUrl:"https://ollama.com"}};
+ const onActivated=vi.fn().mockResolvedValue(undefined);vi.mocked(activateOllamaCloud).mockResolvedValue("hosted-provider");
+ const {host,click}=await mount([cloud],onActivated);expect(host.querySelector("input[type=password]")).toBeNull();await click("Activate for profiles");expect(activateOllamaCloud).toHaveBeenCalledWith(freezeNativeConnection(cloud.connection));expect(onActivated).toHaveBeenCalledWith("hosted-provider");
 });

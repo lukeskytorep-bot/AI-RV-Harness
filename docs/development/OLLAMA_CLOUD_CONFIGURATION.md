@@ -1,5 +1,7 @@
 # Ollama Cloud — DIRECT-3C2-CLOUD-1 configuration and discovery
 
+Follow-up candidate: [hosted profiles and interactive generation](OLLAMA_CLOUD_GENERATION.md). The historical description below covers the accepted configuration-only patch; see the follow-up for current activation and automatic-stage restrictions.
+
 Candidate based on `ai-rv-2` at `c344cdbac02b6e0c236c5c5ba6de71b4859ec062`, 19 November 2026. Edward clarified that direct hosted Ollama Cloud is the current target; local Ollama is deferred. This delivery adapts connection setup/discovery, not the complete 3C2 generation/controller integration.
 
 ## Hosted connection

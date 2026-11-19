@@ -9,6 +9,8 @@ type RegistryDocument = { schemaVersion: number; registryVersion: string; verifi
 const registry = registryJson as RegistryDocument;
 
 export function applyModelReasoningRegistry(provider: ProviderKind, modelId: string, discovered: ReasoningCapability): ReasoningCapability {
+  // Native hosted thinking uses the model default; effort controls from other wire dialects do not apply.
+  if (provider === "ollama_cloud") return { supported: false, efforts: [], confidence: "unknown" };
   if (discovered.registryVersion === registry.registryVersion && discovered.options) return discovered;
 
   const providerEfforts = [...(discovered.providerEfforts ?? discovered.efforts)];

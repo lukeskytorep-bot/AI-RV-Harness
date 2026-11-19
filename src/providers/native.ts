@@ -29,6 +29,7 @@ type NativeChatResponse = {
   finish_reason?: string | null;
   actual_model?: string | null;
   usage?: {
+    native_metrics?: import("./types").ProviderUsage["nativeMetrics"];
     input_tokens?: number | null;
     output_tokens?: number | null;
     reasoning_tokens?: number | null;
@@ -159,9 +160,9 @@ export async function providerChatAttempt(input: {
         reasoningTransportKind: input.config.provider === "custom_openai" && input.settings.effective.customReasoningMode && input.settings.effective.customReasoningMode !== "default" ? "enabled_boolean" : input.settings.reasoningResolution?.transport.kind,
         reasoningTransportValue: input.config.provider === "custom_openai" && input.settings.effective.customReasoningMode && input.settings.effective.customReasoningMode !== "default" ? String(input.settings.effective.customReasoningMode === "on") : input.settings.reasoningResolution?.transport.value,
         temperature: input.settings.effective.temperature,
-        ...((input.config.provider === "openrouter" || input.config.provider === "custom_openai" || input.config.provider === "mistral" || input.config.provider === "blackbox") && input.settings.effective.topP !== undefined ? { topP: input.settings.effective.topP } : {}),
-        ...((input.config.provider === "openrouter" || input.config.provider === "custom_openai" || input.config.provider === "mistral" || input.config.provider === "blackbox") && input.settings.effective.topK !== undefined ? { topK: input.settings.effective.topK } : {}),
-        ...((input.config.provider === "openrouter" || input.config.provider === "custom_openai" || input.config.provider === "mistral" || input.config.provider === "blackbox") && input.settings.effective.seed !== undefined ? { seed: input.settings.effective.seed } : {}),
+        ...((input.config.provider === "openrouter" || input.config.provider === "custom_openai" || input.config.provider === "mistral" || input.config.provider === "blackbox" || input.config.provider === "ollama_cloud") && input.settings.effective.topP !== undefined ? { topP: input.settings.effective.topP } : {}),
+        ...((input.config.provider === "openrouter" || input.config.provider === "custom_openai" || input.config.provider === "mistral" || input.config.provider === "blackbox" || input.config.provider === "ollama_cloud") && input.settings.effective.topK !== undefined ? { topK: input.settings.effective.topK } : {}),
+        ...((input.config.provider === "openrouter" || input.config.provider === "custom_openai" || input.config.provider === "mistral" || input.config.provider === "blackbox" || input.config.provider === "ollama_cloud") && input.settings.effective.seed !== undefined ? { seed: input.settings.effective.seed } : {}),
         maxOutputTokens: input.settings.effective.maxOutputTokens,
         ...(input.config.provider === "custom_openai" && input.config.customOutputTokenField ? { customOutputTokenField: input.config.customOutputTokenField } : {}),
         ...(input.config.provider === "custom_openai" ? { customCompatibilityProfile: input.settings.effective.customCompatibilityProfile ?? "generic" } : {}),
@@ -198,6 +199,7 @@ export async function providerChatAttempt(input: {
     request: response.debug_payload?.request,
     response: response.debug_payload?.response,
     usage: {
+      ...(response.usage?.native_metrics ? { nativeMetrics: response.usage.native_metrics } : {}),
       inputTokens: response.usage?.input_tokens ?? undefined,
       outputTokens: response.usage?.output_tokens ?? undefined,
       reasoningTokens: response.usage?.reasoning_tokens ?? undefined,
@@ -229,6 +231,7 @@ export async function providerChatAttempt(input: {
     finishReason: response.finish_reason ?? undefined,
     actualModel: response.actual_model ?? undefined,
     usage: {
+      ...(response.usage?.native_metrics ? { nativeMetrics: response.usage.native_metrics } : {}),
       inputTokens: response.usage?.input_tokens ?? undefined,
       outputTokens: response.usage?.output_tokens ?? undefined,
       reasoningTokens: response.usage?.reasoning_tokens ?? undefined,
@@ -263,4 +266,9 @@ function nativeConfig(config: ProviderConfig): {
 export async function inspectNativeConnectionBinding(binding: import("./nativeConnectionIdentity").NativeConnectionSnapshot): Promise<{binding:import("./nativeConnectionIdentity").NativeConnectionSnapshot;generationAvailable:false}> {
   requireDesktop();
   return invoke("native_connection_binding", { binding });
+}
+
+export async function activateOllamaCloud(binding: import("./nativeConnectionIdentity").NativeConnectionSnapshot): Promise<string> {
+  requireDesktop();
+  return invoke("activate_ollama_cloud", { binding });
 }

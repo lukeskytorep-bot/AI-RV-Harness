@@ -11,6 +11,7 @@ export const PROVIDER_KINDS = [
   "mistral",
   "blackbox",
   "custom_openai",
+  "ollama_cloud",
 ] as const;
 
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
@@ -186,6 +187,7 @@ export interface ProviderChatRequest {
 }
 
 export interface ProviderUsage {
+  nativeMetrics?: { cachedInputTokens?: number | null; totalDurationNs?: number | null; loadDurationNs?: number | null; promptEvalDurationNs?: number | null; evalDurationNs?: number | null };
   inputTokens?: number;
   outputTokens?: number;
   reasoningTokens?: number;

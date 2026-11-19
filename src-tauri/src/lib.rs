@@ -41,6 +41,7 @@ pub fn run() {
             native_connections::native_connection_save_generation_settings,
             native_connections::native_connection_binding,
             native_connections::native_connection_list,
+            native_connections::activate_ollama_cloud,
             native_connections::native_connection_save,
             native_connections::native_connection_discover,
             providers::store_credential,

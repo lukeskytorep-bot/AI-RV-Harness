@@ -183,6 +183,11 @@ pub(crate) const MIGRATION_SPECS: &[MigrationSpec] = &[
         description: "native_connection_identity",
         sql: include_str!("../migrations/035_native_connection_identity.sql"),
     },
+    MigrationSpec {
+        version: 36,
+        description: "ollama_cloud_provider",
+        sql: include_str!("../migrations/036_ollama_cloud_provider.sql"),
+    },
 ];
 
 pub(crate) const CURRENT_MIGRATION_VERSION: i64 =
@@ -205,13 +210,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_is_contiguous_and_current_version_is_035() {
+    fn registry_is_contiguous_and_current_version_is_036() {
         let versions = MIGRATION_SPECS
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>();
-        assert_eq!(versions, (1_i64..=35).collect::<Vec<_>>());
-        assert_eq!(CURRENT_MIGRATION_VERSION, 35);
+        assert_eq!(versions, (1_i64..=36).collect::<Vec<_>>());
+        assert_eq!(CURRENT_MIGRATION_VERSION, 36);
         assert_eq!(registered_migrations().len(), MIGRATION_SPECS.len());
     }
 }

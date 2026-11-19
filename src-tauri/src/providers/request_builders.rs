@@ -19,6 +19,7 @@ pub(super) fn build_chat_request(request: &ProviderChatRequest, base: &str) -> R
         }
     }
     match provider_family(request.provider) {
+        ProviderFamily::OllamaCloud => super::ollama_cloud::build(request,base),
         ProviderFamily::Google => build_google_request(request, base),
         ProviderFamily::Anthropic => Ok(build_anthropic_request(request, base)),
         ProviderFamily::OpenaiCompatible => Ok(build_openai_compatible_request(request, base)),
@@ -102,7 +103,7 @@ fn openai_compatible_output_token_field(request: &ProviderChatRequest) -> &'stat
         ProviderKind::Openrouter | ProviderKind::Openai => "max_completion_tokens",
         ProviderKind::Zai | ProviderKind::Deepseek | ProviderKind::Mistral | ProviderKind::Blackbox => "max_tokens",
         ProviderKind::CustomOpenai => request.custom_output_token_field.unwrap_or(super::CustomOpenAiOutputTokenField::MaxTokens).as_str(),
-        ProviderKind::Google | ProviderKind::Anthropic => unreachable!("native provider routed through OpenAI-compatible request builder"),
+        ProviderKind::Google | ProviderKind::Anthropic | ProviderKind::OllamaCloud => unreachable!("native provider routed through OpenAI-compatible request builder"),
     }
 }
 

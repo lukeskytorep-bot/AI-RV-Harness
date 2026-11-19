@@ -1,3 +1,6 @@
+import { saveNativeConnection } from "./nativeDiscovery";
+import { freezeNativeConnection } from "./nativeConnectionIdentity";
+import { activateOllamaCloud } from "./native";
 import { notifyProviderRoutesChanged } from "./changes";
 import type { AppRepository } from "../storage/repository";
 import { createId } from "../storage/repository";
@@ -32,6 +35,17 @@ export async function addProvider(
   if (input.baseUrl?.trim() && input.provider !== "custom_openai" && input.provider !== "blackbox") throw new Error("Base URL override is available only for Blackbox and Custom OpenAI-compatible providers.");
   if (input.provider !== "custom_openai" && input.customOutputTokenField) throw new Error("Output-token wire override is available only for Custom OpenAI-compatible providers.");
 
+  if (input.provider === "ollama_cloud" && label.includes(apiKey)) throw new Error("Connection metadata must not contain the API key.");
+  if (input.provider === "ollama_cloud") {
+    // Reuse native staged-secret transactions for both creation and activation.
+    // If activation fails, the tested source account remains available to retry.
+    const saved = await saveNativeConnection({ label, baseUrl: "https://ollama.com", authMode: "bearer", apiKey });
+    const id = await activateOllamaCloud(freezeNativeConnection(saved.connection));
+    const config = (await repository.listProviderConfigs()).find(item => item.id === id);
+    if (!config) throw new Error("Cloud activation was not loaded; reopen settings before retrying.");
+    notifyProviderRoutesChanged();
+    return config;
+  }
   const credentialId = createId("credential");
   const providerId = createId("provider");
   await storeCredentialSecret(credentialId, apiKey, input.provider, input.baseUrl?.trim() || undefined);

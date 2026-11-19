@@ -78,3 +78,14 @@ it("persists a genuinely keyless pending route and separate AI identity across c
  }finally{db?.close();rmSync(dir,{recursive:true,force:true});}
 });
 it("registers every new write and never treats nullable legacy credentials as keyless",()=>{for(const query of Object.values(NATIVE_CONNECTION_SQL))expect(operationForWriteQuery(query)).toMatch(/^native_connection_/);const db=new DatabaseSync(":memory:");try{db.exec("PRAGMA foreign_keys=ON");apply(db,1,35);expect(()=>db.exec("INSERT INTO provider_configs(id,provider,label,credential_id,enabled,created_at,updated_at) VALUES('bad','custom_openai','bad',NULL,1,'t','t')")).toThrow();expect(()=>db.exec("INSERT INTO provider_configs(id,provider,label,base_url,enabled,created_at,updated_at,auth_mode) VALUES('bad','ollama_native','bad','http://localhost:11434',0,'t','t','none')")).toThrow();}finally{db.close();}});
+it("036 preserves old data and native routes and rolls back failed hosted migration", () => {
+ const db=new DatabaseSync(":memory:");try {
+  db.exec("PRAGMA foreign_keys=ON");apply(db,1,35);roots(db);seedMemory(db);seededProviders(db);
+  db.exec("INSERT INTO provider_configs(id,provider,label,base_url,enabled,auth_mode,connection_identity_id,connection_revision,created_at,updated_at) VALUES('local','ollama_native','Local','http://localhost:11434',0,'none','local-identity',1,'t','t'); INSERT INTO profile_native_connection_routes(profile_id,provider_config_id,connection_identity_id,connection_revision,normalized_endpoint,created_at) VALUES('p','local','local-identity',1,'http://localhost:11434','t'); UPDATE provider_configs SET connection_revision=2 WHERE id='local';");
+  const before=dump(db);db.exec("BEGIN IMMEDIATE");expect(()=>db.exec(migration(36).replace("CREATE INDEX idx_provider_configs_provider", "SELECT * FROM injected_036_failure; CREATE INDEX idx_provider_configs_provider"))).toThrow();db.exec("ROLLBACK");expect(dump(db)).toEqual(before);
+  apply(db,36,36);equalOldColumns(before,db);expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  db.exec("INSERT INTO credentials_metadata(id,provider,label,created_at,updated_at) VALUES('cloud-key','ollama_cloud','Cloud','t','t'); INSERT INTO provider_configs(id,provider,label,credential_id,created_at,updated_at) VALUES('cloud','ollama_cloud','Cloud','cloud-key','t','t');");
+  expect(db.prepare("SELECT enabled,auth_mode FROM provider_configs WHERE id='cloud'").get()).toEqual({enabled:1,auth_mode:"legacy_credential"});
+  expect(()=>db.exec("DELETE FROM ai_note_versions WHERE id='note-1'")).toThrow(/append-only/);
+ } finally {db.close();}
+});

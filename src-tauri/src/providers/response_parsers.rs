@@ -10,6 +10,7 @@ pub(super) fn parse_chat_response(
     request_id: Option<String>,
 ) -> Result<ProviderChatResponse, String> {
     match provider_family(provider) {
+        ProviderFamily::OllamaCloud => super::ollama_cloud::parse(payload,request_id),
         ProviderFamily::Google => parse_google_response(payload, request_id),
         ProviderFamily::Anthropic => parse_anthropic_response(payload, request_id),
         ProviderFamily::OpenaiCompatible => {
@@ -75,6 +76,7 @@ pub(super) fn parse_openai_compatible_response(payload: Value, request_id: Optio
             reasoning_tokens,
             total_tokens: usage.get("total_tokens").and_then(Value::as_u64),
             cost_usd: usage.get("cost").and_then(Value::as_f64),
+            native_metrics:None,
         },
         provider_request_id: request_id,
         actual_provider,
@@ -158,6 +160,7 @@ pub(super) fn parse_google_response(payload: Value, request_id: Option<String>) 
             reasoning_tokens: usage.get("thoughtsTokenCount").and_then(Value::as_u64),
             total_tokens: usage.get("totalTokenCount").and_then(Value::as_u64),
             cost_usd: None,
+            native_metrics:None,
         },
         provider_request_id: request_id,
         actual_provider: None,
@@ -248,6 +251,7 @@ pub(super) fn parse_anthropic_response(payload: Value, request_id: Option<String
                 _ => None,
             },
             cost_usd: None,
+            native_metrics:None,
         },
         provider_request_id: request_id,
         actual_provider: None,
@@ -278,6 +282,7 @@ fn provider_payload_error(payload: &Value) -> Option<String> {
 pub(super) fn capture_final_candidate(provider: ProviderKind, payload: &Value) -> Option<Box<super::ProviderFinalCandidate>> {
     use sha2::{Digest, Sha256};
     let (raw, signed_text) = match provider_family(provider) {
+        ProviderFamily::OllamaCloud => (payload.pointer("/message/content").and_then(Value::as_str).unwrap_or_default().to_owned(), true),
         ProviderFamily::OpenaiCompatible => (extract_openai_text(payload.pointer("/choices/0/message/content")), false),
         ProviderFamily::Google => {
             let parts = payload.pointer("/candidates/0/content/parts")?.as_array()?;

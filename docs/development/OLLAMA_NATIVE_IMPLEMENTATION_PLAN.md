@@ -6,7 +6,7 @@ Source reviewed: `ai-rv-2` at `3c061c80eb21d012cd22a091d61c4d7897120c2e` (RESEAR
 
 ## Current priority — direct Ollama Cloud (19 November 2026)
 
-Edward clarified the target after 3C1: direct hosted Ollama Cloud API first; local/owned Ollama later. The local defaults and deployment assumptions below are historical design context, not requirements for setting up the hosted service. See [Cloud configuration](OLLAMA_CLOUD_CONFIGURATION.md) for the scoped 3C2-CLOUD-1 implementation and remaining controller/dispatch work. Reuse the existing safety/identity foundation without converting saved local connections or fabricating Cloud daemon version, allocation or capabilities.
+Edward clarified the target after 3C1: direct hosted Ollama Cloud API first; local/owned Ollama later. The local defaults and deployment assumptions below are historical design context, not requirements for setting up the hosted service. See [Cloud configuration](OLLAMA_CLOUD_CONFIGURATION.md) for the scoped 3C2-CLOUD-1 implementation and remaining controller/dispatch work. The next candidate is [Cloud profiles and interactive generation](OLLAMA_CLOUD_GENERATION.md); automatic context conformance remains open. Reuse the existing safety/identity foundation without converting saved local connections or fabricating Cloud daemon version, allocation or capabilities.
 
 ## 1. Deliverable and boundaries
 

@@ -8,6 +8,7 @@ const APP_COMMANDS: &[&str] = &[
     "native_connection_binding",
     "native_connection_generation_settings",
     "native_connection_save_generation_settings",
+    "activate_ollama_cloud",
     "native_connection_list",
     "native_connection_save",
     "native_connection_discover",

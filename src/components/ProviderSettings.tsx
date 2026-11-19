@@ -20,6 +20,7 @@ export const PROVIDER_LABELS: Record<ProviderKind, string> = {
   mistral: "Mistral",
   blackbox: "Blackbox AI",
   custom_openai: "Custom OpenAI-compatible",
+  ollama_cloud: "Ollama Cloud",
 };
 
 export function ProviderSettings({ copy, repository, section = "all", language = "en" }: { language?: "en" | "pl"; copy: Copy; repository: AppRepository | null; section?: "all" | "providers" | "models" }) {
@@ -152,7 +153,7 @@ export function ProviderSettings({ copy, repository, section = "all", language =
 
   return (
     <>
-      {section !== "models" && repository && <NativeConnectionSettings language={language} />}
+      {section !== "models" && repository && <NativeConnectionSettings language={language} onActivated={async id => { const configs = await repository.listProviderConfigs(); const active = configs.find(c => c.id === id); if (active) await refreshProviderModels(repository, active); await reload(); }} />}
       {section !== "models" && <section className="panel provider-settings wide-settings-panel">
         <div className="provider-heading">
           <div><span className="heading-orb"><KeyRound size={19} /></span><div><h2>{copy.providersApi}</h2><p>{copy.providersReady}</p></div></div>
@@ -190,7 +191,7 @@ export function ProviderSettings({ copy, repository, section = "all", language =
         </div>
       </section>}
       {section !== "providers" && <ModelRegistry copy={copy} repository={repository} providers={providers} models={models} onChanged={reload} />}
-      {dialogOpen && <AddProviderDialog copy={copy} busy={busyId === "new"} onClose={() => setDialogOpen(false)} onSubmit={add} />}
+      {dialogOpen && <AddProviderDialog language={language} copy={copy} busy={busyId === "new"} onClose={() => setDialogOpen(false)} onSubmit={add} />}
       {rebindConfig && <RebindCredentialDialog copy={copy} config={rebindConfig} busy={busyId === rebindConfig.id} onClose={() => setRebindConfig(null)} onSubmit={(apiKey) => rebind(rebindConfig, apiKey)} />}
       {wireConfig && <CustomWireSettingsDialog copy={copy} config={wireConfig} endpointError={endpointError} onSaveEndpoint={(baseUrl) => updateEndpoint(wireConfig, baseUrl)} busy={busyId === wireConfig.id} onClose={() => setWireConfig(null)} onSubmit={(field, streamingEnabled, compatibilityProfile) => updateWireField(wireConfig, field, streamingEnabled, compatibilityProfile)} />}
     </>
@@ -235,7 +236,7 @@ function ModelRegistry({ copy, repository, providers, models, onChanged }: { cop
   );
 }
 
-function AddProviderDialog({ copy, busy, onClose, onSubmit }: { copy: Copy; busy: boolean; onClose: () => void; onSubmit: (input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string; customOutputTokenField?: CustomOpenAiOutputTokenField; customStreamingEnabled?: boolean }) => Promise<void> }) {
+function AddProviderDialog({ language, copy, busy, onClose, onSubmit }: { language: "en" | "pl"; copy: Copy; busy: boolean; onClose: () => void; onSubmit: (input: { provider: ProviderKind; label: string; apiKey: string; baseUrl?: string; customOutputTokenField?: CustomOpenAiOutputTokenField; customStreamingEnabled?: boolean }) => Promise<void> }) {
   const [provider, setProvider] = useState<ProviderKind>("openrouter");
   const [label, setLabel] = useState(PROVIDER_LABELS.openrouter);
   const [apiKey, setApiKey] = useState("");
@@ -261,6 +262,7 @@ function AddProviderDialog({ copy, busy, onClose, onSubmit }: { copy: Copy; busy
         <form onSubmit={submit}>
           <label>{copy.provider}<select value={provider} onChange={(event) => changeProvider(event.target.value as ProviderKind)}>{PROVIDER_KINDS.map((kind) => <option key={kind} value={kind}>{PROVIDER_LABELS[kind]}</option>)}</select></label>
           <label>{copy.providerLabel}<input value={label} onChange={(event) => setLabel(event.target.value)} required /></label>
+          {provider === "ollama_cloud" && <p>{language === "pl" ? "Klucz zostanie wysłany do https://ollama.com, aby sprawdzić dostęp i pobrać modele. Conversation i Manual RV bez streamingu. Automatyczne etapy czekają na weryfikację pełnego kontekstu." : "The key will be sent to https://ollama.com to verify access and list models. Conversation and Manual RV without streaming. Automatic stages await full-context verification."}</p>}
           {(provider === "custom_openai" || provider === "blackbox") && <><label>{copy.baseUrl}<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={provider === "blackbox" ? "https://enterprise.blackbox.ai" : "https://example.com/v1"} required={provider === "custom_openai"} /></label>{provider === "custom_openai" && <label>{copy.customOutputTokenField}<select value={customOutputTokenField} onChange={(event) => setCustomOutputTokenField(event.target.value as "default" | CustomOpenAiOutputTokenField)}><option value="default">{copy.customOutputTokenDefault}</option><option value="max_completion_tokens">{copy.customOutputTokenCompletion}</option></select><small>{copy.customOutputTokenFieldHelp}</small></label>}</>}
           {provider === "custom_openai" && <>
             <label className="checkbox-line"><input type="checkbox" checked={streamingEnabled} onChange={(event) => setStreamingEnabled(event.target.checked)} />{copy.customStreamingEnabled}</label>

@@ -192,6 +192,17 @@ function normalizeCompatible(raw: Record<string, unknown>, capturedAt: string): 
   };
 }
 
+function normalizeOllamaCloud(capturedAt: string): { capabilities: ModelCapabilities; pricing: ModelPricing } {
+  return { capabilities: {
+    inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: false,
+    reasoning: { supported: false, efforts: [], confidence: "unknown" },
+    // Wire options are supported; effective application by a hosted model is not verified by /tags.
+    temperature: { supported: true, min: 0, max: 2, confidence: "unknown" },
+    supportedParameters: ["temperature", "top_p", "top_k", "seed", "num_predict"],
+    source: "compatibility", capturedAt,
+  }, pricing: {} };
+}
+
 function extractRawModels(provider: ProviderKind, payload: unknown): Record<string, unknown>[] {
   const root = asRecord(payload);
   if (provider === "google") return asArray(root.models).map(asRecord);
@@ -217,7 +228,9 @@ export function normalizeModelDiscovery(config: ProviderConfig, payload: unknown
           ? normalizeOpenRouter(raw, capturedAt)
           : config.provider === "google"
             ? normalizeGoogle(raw, capturedAt)
-            : normalizeCompatible(raw, capturedAt);
+            : config.provider === "ollama_cloud"
+              ? normalizeOllamaCloud(capturedAt)
+              : normalizeCompatible(raw, capturedAt);
       const displayName =
         (typeof raw.displayName === "string" && raw.displayName) ||
         (typeof raw.display_name === "string" && raw.display_name) ||

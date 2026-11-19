@@ -74,7 +74,7 @@ pub(super) fn validate_chat_request(request: &ProviderChatRequest) -> Result<(),
     const JS_MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
     let has_additional_sampling = request.top_p.is_some() || request.top_k.is_some() || request.seed.is_some();
     if has_additional_sampling {
-        if !matches!(request.provider, super::ProviderKind::Openrouter | super::ProviderKind::CustomOpenai | super::ProviderKind::Mistral | super::ProviderKind::Blackbox) {
+        if !matches!(request.provider, super::ProviderKind::Openrouter | super::ProviderKind::CustomOpenai | super::ProviderKind::Mistral | super::ProviderKind::Blackbox | super::ProviderKind::OllamaCloud) {
             return Err("additional sampling parameters are supported only for OpenRouter, Custom OpenAI-compatible, Mistral direct, or Blackbox requests".to_string());
         }
         if matches!(request.provider, super::ProviderKind::Openrouter) {

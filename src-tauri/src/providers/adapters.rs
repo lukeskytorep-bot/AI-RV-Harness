@@ -7,10 +7,12 @@ pub(super) enum ProviderFamily {
     OpenaiCompatible,
     Google,
     Anthropic,
+    OllamaCloud,
 }
 
 pub(super) fn provider_family(provider: ProviderKind) -> ProviderFamily {
     match provider {
+        ProviderKind::OllamaCloud => ProviderFamily::OllamaCloud,
         ProviderKind::Google => ProviderFamily::Google,
         ProviderKind::Anthropic => ProviderFamily::Anthropic,
         _ => ProviderFamily::OpenaiCompatible,
@@ -28,6 +30,10 @@ pub(super) fn provider_base_url(provider: ProviderKind, custom: Option<&str>) ->
         ProviderKind::Mistral => Some("https://api.mistral.ai/v1"),
         ProviderKind::Blackbox => return blackbox_base_url(custom),
         ProviderKind::CustomOpenai => None,
+        ProviderKind::OllamaCloud => {
+            if custom.is_some_and(|s|s.trim().trim_end_matches('/')!="https://ollama.com"){return Err("Ollama Cloud has a fixed HTTPS endpoint".into());}
+            Some("https://ollama.com")
+        },
     };
     let candidate = fixed.or(custom).ok_or_else(|| "custom provider requires a base URL".to_string())?;
     validate_base_url(candidate)

@@ -268,6 +268,15 @@ export async function resolveEffectiveRequestEnvelope(input: {
   let certainty: EffectiveRouteCertainty = "not_applicable";
   let localStopMessage: string | undefined;
 
+  if (input.config.provider === "ollama_cloud") {
+    // /tags does not prove a hosted full-input/no-truncation contract. Interactive
+    // turns are user-controlled; automatic scientific stages must fail before dispatch.
+    certainty = "unknown";
+    if (resourceProfile.operationKind !== "conversation" && resourceProfile.operationKind !== "manual_rv_viewer") {
+      certainty = "blocked";
+      localStopMessage = "Ollama Cloud: automatic stages require verified full-input and oversized-request rejection evidence. Use Conversation or Manual RV; no request was sent.";
+    }
+  }
   if (input.config.provider === "openrouter") {
     if (!input.endpointDiscovery) {
       throw new Error("OpenRouter endpoint discovery callback is required for effective request resolution.");

@@ -8,6 +8,7 @@ use tauri_plugin_sql::DbInstances;
 use crate::secrets;
 
 mod adapters;
+mod ollama_cloud;
 pub(crate) mod custom_endpoint;
 mod endpoint_capabilities;
 mod errors;
@@ -41,6 +42,7 @@ enum ProviderKind {
     Mistral,
     Blackbox,
     CustomOpenai,
+    OllamaCloud,
 }
 
 impl ProviderKind {
@@ -55,6 +57,7 @@ impl ProviderKind {
             "mistral" => Ok(Self::Mistral),
             "blackbox" => Ok(Self::Blackbox),
             "custom_openai" => Ok(Self::CustomOpenai),
+            "ollama_cloud" => Ok(Self::OllamaCloud),
             _ => Err("unsupported provider kind".to_string()),
         }
     }
@@ -70,6 +73,7 @@ impl ProviderKind {
             Self::Mistral => "mistral",
             Self::Blackbox => "blackbox",
             Self::CustomOpenai => "custom_openai",
+            Self::OllamaCloud => "ollama_cloud",
         }
     }
 }
@@ -283,6 +287,8 @@ struct ProviderUsage {
     reasoning_tokens: Option<u64>,
     total_tokens: Option<u64>,
     cost_usd: Option<f64>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    native_metrics:Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -486,9 +492,10 @@ pub async fn provider_discover_models(db_instances: State<'_, DbInstances>, requ
     let base = provider_base_url(request.provider, request.base_url.as_deref())?;
     // Resolve the discovery contract before reading the credential. In particular,
     // explicit Blackbox Enterprise/organization routes must never receive a guessed /models request.
-    let url = model_discovery_url(request.provider, &base)?;
+    let url = if matches!(request.provider,ProviderKind::OllamaCloud){String::new()}else{model_discovery_url(request.provider, &base)?};
     let binding = normalized_credential_endpoint(&base)?;
     let secret = custom_endpoint::get_credential_for_binding(&db_instances, request.provider, &request.credential_id, &binding).await?;
+    if matches!(request.provider,ProviderKind::OllamaCloud){return crate::native_connection_settings::cloud_catalog(&crate::native_connection_settings::discovery_client()?,&secret).await;}
     let response = authenticated(client()?.get(url), request.provider, &secret)
         .timeout(Duration::from_secs(120))
         .send()
@@ -558,6 +565,10 @@ pub async fn provider_chat(
     let base = provider_base_url(request.provider, request.base_url.as_deref()).map_err(ProviderCallError::configuration)?;
     let binding = normalized_credential_endpoint(&base).map_err(ProviderCallError::configuration)?;
     validation::validate_continuation_bindings(&request, &binding).map_err(ProviderCallError::configuration)?;
+    if matches!(request.provider,ProviderKind::OllamaCloud) {
+        let pool=crate::database::sqlite_pool(&db_instances).await.map_err(ProviderCallError::configuration)?;
+        ollama_cloud::validate_binding(&pool,&request).await.map_err(ProviderCallError::configuration)?;
+    }
     let secret = custom_endpoint::get_credential_for_binding(&db_instances, request.provider, &request.credential_id, &binding).await
     .map_err(ProviderCallError::configuration)?;
     let (url, mut body) = build_chat_request(&request, &base).map_err(ProviderCallError::configuration)?;
@@ -580,7 +591,9 @@ pub async fn provider_chat(
     let legacy_timeout_ms = request.timeout_ms.unwrap_or(120_000);
     let timeout_policy = request.timeout_policy.clone().unwrap_or_else(|| ProviderTimeoutPolicy::from_legacy(legacy_timeout_ms));
     let builder = {
-        let builder = authenticated(client().map_err(ProviderCallError::configuration)?.post(url).json(&body), request.provider, &secret);
+        let cloud_client=matches!(request.provider,ProviderKind::OllamaCloud).then(crate::native_connection_settings::discovery_client).transpose().map_err(ProviderCallError::configuration)?;
+        let http=cloud_client.as_ref().unwrap_or(client().map_err(ProviderCallError::configuration)?);
+        let builder = authenticated(http.post(url).json(&body), request.provider, &secret);
         if matches!(request.provider, ProviderKind::Openrouter) {
             builder.header("X-OpenRouter-Metadata", "enabled")
         } else {
@@ -629,20 +642,21 @@ pub async fn provider_chat(
             streamed.response_evidence,
         )
     } else {
-        let (payload, request_id) = send_chat_request(
-            builder.timeout(Duration::from_millis(timeout_policy.non_streaming_timeout_ms)),
-            request.request_id.as_deref(),
-            &secret,
-        )
-        .await.map_err(ownership_error)?;
+        let builder=builder.timeout(Duration::from_millis(timeout_policy.non_streaming_timeout_ms));
+        let result=if matches!(request.provider,ProviderKind::OllamaCloud){transport::send_cloud_chat_request(builder,request.request_id.as_deref(),&secret).await}else{send_chat_request(builder,request.request_id.as_deref(),&secret).await};
+        let (payload,request_id)=result.map_err(ownership_error)?;
         let evidence = response_evidence::finished(Some(&payload), request_id.as_deref(), "body_read");
         (payload, request_id, false, None, evidence)
     };
+    if matches!(request.provider,ProviderKind::OllamaCloud) && crate::native_connection_settings::ensure_metadata_has_no_secret(&payload,Some(&secret)).is_err() {return Err(ProviderCallError::new("unsafe_metadata","Ollama Cloud response contains credential material","validating_response"));}
     let debug_response = request.detailed_diagnostics.then(|| {
         let mut value = payload.clone();
         scrub_debug_value(&mut value, &secret, None);
         value
     });
+    if matches!(request.provider,ProviderKind::OllamaCloud) && payload.get("model").and_then(Value::as_str)!=Some(request.model_id.as_str()) {
+        let mut failure=ProviderCallError::new("model_mismatch","Ollama Cloud returned a different model","validating_response");failure.metadata.response_evidence=Some(response_evidence);failure.metadata.final_candidate=response_parsers::capture_final_candidate(request.provider,&payload);return Err(failure);
+    }
     let mut parsed = parse_finished_chat_response(request.provider, &payload, request_id, semantic_output_started, response_evidence)?;
     parsed.continuation_diagnostics = continuation_diagnostics;
     parsed.debug_payload = Some(ProviderDebugPayload {

@@ -34,8 +34,8 @@ pub(super) fn finished(payload: Option<&Value>, request_id: Option<&str>, bounda
     let payload = payload.unwrap_or(&empty);
     let number = |paths: &[&str]| paths.iter().find_map(|path| payload.pointer(path).and_then(Value::as_u64));
     let usage = UsageEvidence {
-        input_tokens: number(&["/usage/prompt_tokens", "/usage/input_tokens", "/usageMetadata/promptTokenCount"]),
-        output_tokens: number(&["/usage/completion_tokens", "/usage/output_tokens", "/usageMetadata/candidatesTokenCount"]),
+        input_tokens: number(&["/usage/prompt_tokens", "/usage/input_tokens", "/usageMetadata/promptTokenCount","/prompt_eval_count"]),
+        output_tokens: number(&["/usage/completion_tokens", "/usage/output_tokens", "/usageMetadata/candidatesTokenCount","/eval_count"]),
         reasoning_tokens: number(&["/usage/completion_tokens_details/reasoning_tokens", "/usage/reasoning_tokens", "/usageMetadata/thoughtsTokenCount"]),
         total_tokens: number(&["/usage/total_tokens", "/usageMetadata/totalTokenCount"]),
         cost_usd: payload.pointer("/usage/cost").and_then(Value::as_f64).filter(|cost| cost.is_finite() && *cost >= 0.0),
@@ -45,7 +45,7 @@ pub(super) fn finished(payload: Option<&Value>, request_id: Option<&str>, bounda
         version: 1,
         transport_outcome: "response_finished",
         boundary,
-        finish_reason: payload.pointer("/choices/0/finish_reason").or_else(|| payload.pointer("/candidates/0/finishReason")).or_else(|| payload.get("stop_reason")).and_then(Value::as_str).map(str::to_string),
+        finish_reason: payload.pointer("/choices/0/finish_reason").or_else(|| payload.pointer("/candidates/0/finishReason")).or_else(|| payload.get("stop_reason")).or_else(|| payload.get("done_reason")).and_then(Value::as_str).map(str::to_string),
         provider_request_id: request_id.map(str::to_string),
         generation_id: payload.get("id").and_then(Value::as_str).map(str::to_string),
         usage: has_usage.then_some(usage),

@@ -50,3 +50,15 @@ pub async fn native_connection_save_generation_settings(instances:State<'_,DbIns
     let pool=crate::database::sqlite_pool(&instances).await?;
     crate::native_generation_settings::save(&pool,&NativeOsSecrets,draft).await
 }
+
+struct CloudActivationSecrets;
+impl crate::native_connection_settings::SecretStore for CloudActivationSecrets {
+    fn read(&self,id:&str,endpoint:&str)->Result<String,String>{crate::secrets::get_credential_for_binding(id,"ollama_native",endpoint)}
+    fn create(&self,id:&str,secret:&str,endpoint:&str)->Result<(),String>{crate::secrets::store_new_bound_credential(id,secret,"ollama_cloud",endpoint)}
+    fn remove(&self,id:&str)->Result<(),String>{crate::secrets::remove_staged_native_credential(id)}
+}
+#[tauri::command]
+pub async fn activate_ollama_cloud(instances:State<'_,DbInstances>,binding:Binding)->Result<String,String>{
+    let pool=crate::database::sqlite_pool(&instances).await?;
+    crate::native_connection_settings::activate_cloud(&pool,&CloudActivationSecrets,binding).await
+}

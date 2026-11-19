@@ -332,7 +332,7 @@ fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
 pub(crate) fn remove_staged_native_credential(id: &str) -> Result<(), String> {
     if !id.starts_with("native_credential_") { return Err("Invalid staged native credential id".into()); }
     match read_stored_credential(id) {
-        Ok(StoredCredential::Bound(record)) if record.provider_kind == "ollama_native" => delete_stored_credential(id),
+        Ok(StoredCredential::Bound(record)) if matches!(record.provider_kind.as_str(), "ollama_native" | "ollama_cloud") => delete_stored_credential(id),
         Err(_) => match entry_for(id)?.get_password() { Err(Error::NoEntry) => Ok(()), _ => Err("Cannot verify staged native credential".into()) },
         _ => Err("Staged credential belongs to another provider".into()),
     }
