@@ -1,5 +1,6 @@
 export type OperationKind =
   | "conversation"
+  | "telepathic_exchange"
   | "manual_rv_viewer"
   | "rv_session_viewer"
   | "training_blind_viewer"
@@ -47,6 +48,15 @@ const PROFILE_BY_KIND: Record<OperationKind, OperationResourceProfile> = {
     reasoningPolicy: "preserve_configured",
     timeoutClass: "interactive",
     streamPresentation: "live",
+    retryClass: "configured_transport",
+    capacityRoutingPolicy: "default_auto",
+  },
+  telepathic_exchange: {
+    operationKind: "telepathic_exchange",
+    outputPolicy: "configured_or_frozen",
+    reasoningPolicy: "preserve_configured",
+    timeoutClass: "interactive",
+    streamPresentation: "hidden",
     retryClass: "configured_transport",
     capacityRoutingPolicy: "default_auto",
   },
@@ -164,6 +174,7 @@ export function getOperationResourceProfile(operationKind: OperationKind): Opera
 
 export function inferOperationKind(operationId?: string): OperationKind {
   const id = operationId?.trim().toLowerCase() ?? "";
+  if (id.startsWith("telepathic-series:")) return "telepathic_exchange";
   if (id === "chat.conversation") return "conversation";
   if (id === "chat.manual-rv") return "manual_rv_viewer";
   if (id.startsWith("monitor.")) return "live_monitor";

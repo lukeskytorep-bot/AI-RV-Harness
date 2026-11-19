@@ -2,6 +2,12 @@
 
 Candidate based on `ai-rv-2` `019241c4ea711bb72625cb48e033651cb313267b`, 19 November 2026. Direct hosted API first; local Ollama remains deferred. This patch implements selectable credential-backed profiles and real non-streaming native chat for **Conversation and Manual RV**. It does **not** complete all of DIRECT-3C2.
 
+## CLOUD-2 audit correction
+
+The original CLOUD-2 patch did not pass typecheck/build: a test fixture widened `enabled:false` to boolean. Its earlier PASS report was incorrect. The Cloud gate also missed telepathy because its gateway labelled automatic calls as `conversation`. The audit fix uses the distinct `telepathic_exchange` operation (including inference from telepathic scope IDs), preserves the existing budgets/timeouts/retry limits, and records local before-dispatch refusals with zero physical attempts. Engine-to-real-gateway tests cover Conversation/Training, regular/fixed-lead, no provider dispatch and no Reveal; ordinary interactive Conversation remains enabled.
+
+The fixture now has the actual NativeConnection type. All stale current-schema assertions in storage/UX tests expect 36; historical migration ranges and migration files are unchanged. These twelve exact regression tests are exercised in the portable Rust evidence, including the verbatim extracted storage validator/test. Full Tauri/Windows and hosted-account conformance remain separate checks. Verification must use each command's own exit status; a later successful shell command is not evidence of a successful typecheck or build.
+
 ## Setup and identity
 
 Create an Ollama Cloud connection in the ordinary provider dialog, or explicitly choose **Activate for profiles** on an existing saved hosted account. Both routes verify authenticated access through `/api/balance` and read exact models through `/api/tags`. Account balance metadata is discarded. There is no billed generation during setup. No daemon, `/version`, `/show`, `/ps`, local GPU or local cloud alias is required.

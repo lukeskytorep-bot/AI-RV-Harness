@@ -210,7 +210,7 @@ export async function executeTelepathicProviderPacket(input: {
         settings: resolveGenerationSettings(input.route.model.capabilities, requestedSettings, { provider: input.route.model.provider }),
         configuredRetries: 0,
         operationId: input.packet.scopeKey,
-        operationKind: "conversation",
+        operationKind: "telepathic_exchange",
         attempt: input.attempt,
         signal,
         internalOnStreamEvent,
@@ -250,7 +250,7 @@ export async function executeTelepathicProviderPacket(input: {
         earlierAmbiguousAttempt: earlierAmbiguous } } : {}),
       status: rejectedFinishedResponse ? "failed" : isAmbiguousFailure(error) ? "uncertain" : "failed",
       elapsedMs: error instanceof ProviderExecutionError ? error.report.elapsedMs : Math.max(0,Date.parse(input.hooks.now())-Date.parse(timestamp)),
-      physicalAttempts: error instanceof ProviderExecutionError ? error.report.physicalAttempts : 1,
+      physicalAttempts: error instanceof ProviderExecutionError ? error.report.physicalAttempts : details?.phase === "before_dispatch" ? 0 : 1,
       errorMessage: error instanceof Error ? error.message : String(error),
       updatedAt: input.hooks.now(),
     };

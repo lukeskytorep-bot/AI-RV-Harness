@@ -40,6 +40,7 @@ describe("ORP1 operation resource profiles", () => {
   it("maps every operation to the agreed timeout semantic class before S1 assigns durations", () => {
     const expected: Record<OperationKind, OperationTimeoutClass> = {
       conversation: "interactive",
+      telepathic_exchange: "interactive",
       manual_rv_viewer: "interactive",
       rv_session_viewer: "interactive",
       training_blind_viewer: "interactive",
@@ -77,6 +78,7 @@ describe("ORP1 operation resource profiles", () => {
   });
 
   it("maps provider operation IDs centrally and permits explicit Training/Research overrides", () => {
+    expect(inferOperationKind("telepathic-series:s:round:r:participant:a:stage:target" )).toBe("telepathic_exchange");
     expect(inferOperationKind("chat.conversation")).toBe("conversation");
     expect(inferOperationKind("session.rv-lite")).toBe("rv_session_viewer");
     expect(inferOperationKind("monitor.output-recovery")).toBe("live_monitor");
