@@ -44,6 +44,7 @@ impl Snapshot {
         if self.version!=1 || self.connection.version!=1 || self.connection.provider!="ollama_native" || self.connection.provider_config_id.is_empty() || self.connection.connection_identity_id.is_empty() || self.connection.connection_revision==0 || self.connection.connection_revision>MAX_SAFE_INTEGER
             || !matches!(self.connection.auth_mode.as_str(),"none"|"bearer") || crate::native_connection_identity::normalize_endpoint(&self.connection.normalized_endpoint)?!=self.connection.normalized_endpoint
             || self.max_output_tokens==0 || self.max_output_tokens>MAX_SAFE_INTEGER {return Err("Invalid native generation snapshot".into());}
+        if self.connection.normalized_endpoint=="https://ollama.com" && self.settings.num_ctx.is_some(){return Err("Ollama Cloud context allocation is managed by the service".into());}
         self.settings.validate()?;self.provenance.validate()
     }
     pub fn assert_current(&self,binding:&Binding,provenance:&Provenance)->Result<(),String>{
@@ -143,4 +144,8 @@ mod tests {
         for declared in [None,Some(4096),Some(MAX_SAFE_INTEGER)] {let r=readiness(&s.settings,declared);assert!(!r.generation_available);assert_eq!(r.observed_running_context_tokens,None);assert!(r.reasons.iter().any(|s|s=="context_unverified"));}
         assert!(draft_non_stream_request(&s,&[]).is_err());assert!(draft_non_stream_request(&s,&[Message{role:"tool".into(),content:"unsupported".into()}]).is_err());
     }
+    #[test] fn cloud_draft_refuses_local_context_without_changing_the_stage_budget(){
+        let mut s=snapshot();s.connection.normalized_endpoint="https://ollama.com".into();s.connection.auth_mode="bearer".into();assert!(s.validate().unwrap_err().contains("managed"));s.settings=Settings::default();let wire=draft_non_stream_request(&s,&[Message{role:"user".into(),content:"Fresh".into()}]).unwrap();assert_eq!(wire["options"],json!({"num_predict":32768}));
+    }
+
 }

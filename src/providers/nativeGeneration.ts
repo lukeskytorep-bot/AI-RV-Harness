@@ -18,7 +18,7 @@ export function validateNativeGenerationSettings(value: NativeGenerationSettings
 }
 export function nativeModelProvenance(d: NativeDiscovery): NativeModelProvenance {
   const m = d.models.find(m => m.name === d.selectedModel);
-  const p = { serverVersion: d.serverVersion, model: d.selectedModel ?? "", digest: m?.digest ?? "", metadataSha256: d.details?.sourceSha256 ?? "" };
+  const p = { serverVersion: d.serverVersion ?? "", model: d.selectedModel ?? "", digest: m?.digest ?? "", metadataSha256: d.details?.sourceSha256 ?? "" };
   if (!d.selectedAvailable || !p.model || /\s/.test(p.model) || [p.serverVersion, p.model, p.digest].some(v => !v.trim() || v.length > 512 || /[\u0000-\u001f\u007f]/.test(v)) || !/^[\da-f]{64}$/i.test(p.metadataSha256)) throw new Error("Native model provenance is incomplete.");
   return p;
 }
@@ -39,6 +39,7 @@ export function draftNativeNonStreamRequest(snapshot: NativeGenerationSnapshot, 
   const b = snapshot.connection, p = snapshot.provenance;
   if (!b || b.version !== 1 || b.provider !== "ollama_native" || !b.providerConfigId || !b.connectionIdentityId || !Number.isSafeInteger(b.connectionRevision) || b.connectionRevision < 1 || !["none", "bearer"].includes(b.authMode) || normalizeNativeConnectionEndpoint(b.normalizedEndpoint) !== b.normalizedEndpoint || !p || [p.serverVersion, p.model, p.digest].some(v => typeof v !== "string" || !v.trim() || v.length > 512 || /[\u0000-\u001f\u007f]/.test(v)) || /\s/.test(p.model) || !/^[\da-f]{64}$/i.test(p.metadataSha256)) throw new Error("Invalid native snapshot provenance.");
   if (snapshot.version !== 1 || !roles.includes(snapshot.role) || !Number.isSafeInteger(snapshot.maxOutputTokens) || snapshot.maxOutputTokens < 1 || !messages.length || messages.at(-1)?.role !== "user" || messages.some(m => !["system", "user", "assistant"].includes(m.role) || typeof m.content !== "string" || Object.keys(m).some(k => !["role", "content"].includes(k)))) throw new Error("Invalid native request draft.");
+  if (b.normalizedEndpoint === "https://ollama.com" && snapshot.settings.numCtx !== undefined) throw new Error("Ollama Cloud context allocation is managed by the service.");
   const options: Record<string, number> = { num_predict: snapshot.maxOutputTokens };
   for (const [key, wire] of [["numCtx", "num_ctx"], ["temperature", "temperature"], ["topP", "top_p"], ["topK", "top_k"], ["seed", "seed"]] as const) if (snapshot.settings[key] !== undefined) options[wire] = snapshot.settings[key];
   const request = { model: snapshot.provenance.model, messages: messages.map(m => ({ ...m })), stream: false, options };

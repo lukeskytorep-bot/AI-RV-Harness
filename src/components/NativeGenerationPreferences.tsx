@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { freezeNativeConnection } from "../providers/nativeConnectionIdentity";
+import { freezeNativeConnection, isOllamaCloudEndpoint } from "../providers/nativeConnectionIdentity";
 import { getNativeGenerationSettings, saveNativeGenerationSettings, type NativeGenerationSettings, type NativeGenerationState } from "../providers/nativeGeneration";
 import type { NativeConnectionView } from "../providers/nativeDiscovery";
 const copy = {
@@ -19,9 +19,10 @@ export function NativeGenerationPreferences({ view, language }: { view: NativeCo
     try { const settings: NativeGenerationSettings = {}; for (const k of keys) if (values[k]?.trim()) settings[k] = Number(values[k]); const result = await saveNativeGenerationSettings({ ...state.draft, settings }); if (token === epoch.current) { setState(result); setSaved(true); } }
     catch { if (token === epoch.current) setError(true); } finally { lock.current = false; setBusy(false); }
   };
+  const cloud = isOllamaCloudEndpoint(view.connection.baseUrl);
   const labels = { numCtx: t.context, temperature: t.temperature, topP: t.topP, topK: t.topK, seed: t.seed };
-  return <details><summary>{t.title}</summary><p>{t.blocked}</p><p>{t.hint}</p><form onSubmit={e => void submit(e)} className="native-generation-preferences">
-    {keys.map(k => <label key={k}>{labels[k]}<input type="number" min={k === "numCtx" ? 1 : 0} max={k === "temperature" ? 2 : k === "topP" ? 1 : Number.MAX_SAFE_INTEGER} step={k === "temperature" || k === "topP" ? "any" : 1} placeholder={t.auto} value={values[k] ?? ""} disabled={busy || !state} onChange={e => setValues(previous => ({ ...previous, [k]: e.target.value }))} /></label>)}
+  return <details><summary>{t.title}</summary>{cloud && <p>{language === "pl" ? "Kontekstem zarządza Ollama Cloud. Dawne num_ctx, jeśli zapisano, trzeba wyczyścić; nie zostanie wysłane ani automatycznie pominięte." : "Ollama Cloud manages context. Clear any previously saved num_ctx; it will not be sent or silently ignored."}</p>}<p>{t.blocked}</p><p>{t.hint}</p><form onSubmit={e => void submit(e)} className="native-generation-preferences">
+    {keys.filter(k => k !== "numCtx" || !cloud || Boolean(values.numCtx)).map(k => <label key={k}>{labels[k]}<input type="number" min={k === "numCtx" ? 1 : 0} max={k === "temperature" ? 2 : k === "topP" ? 1 : Number.MAX_SAFE_INTEGER} step={k === "temperature" || k === "topP" ? "any" : 1} placeholder={t.auto} value={values[k] ?? ""} disabled={busy || !state} onChange={e => setValues(previous => ({ ...previous, [k]: e.target.value }))} /></label>)}
     <button type="submit" className="ghost-button" disabled={busy || !state}>{t.save}</button>
     {saved && <p role="status">{t.saved}</p>}{error && <p role="alert">{t.error}</p>}
   </form></details>;

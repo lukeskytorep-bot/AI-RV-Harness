@@ -4,6 +4,10 @@ Date: 18 November 2026. Status: planning/contract candidate for independent revi
 
 Source reviewed: `ai-rv-2` at `3c061c80eb21d012cd22a091d61c4d7897120c2e` (RESEARCH-TARGET-CODE-1). Recheck the current branch before each implementation patch. The primary work queue requires this plan before DIRECT-3B. Mistral, Blackbox, Custom Generic/llama.cpp and Research Target Code are accepted preceding work, not tasks to redo.
 
+## Current priority — direct Ollama Cloud (19 November 2026)
+
+Edward clarified the target after 3C1: direct hosted Ollama Cloud API first; local/owned Ollama later. The local defaults and deployment assumptions below are historical design context, not requirements for setting up the hosted service. See [Cloud configuration](OLLAMA_CLOUD_CONFIGURATION.md) for the scoped 3C2-CLOUD-1 implementation and remaining controller/dispatch work. Reuse the existing safety/identity foundation without converting saved local connections or fabricating Cloud daemon version, allocation or capabilities.
+
 ## 1. Deliverable and boundaries
 
 Add a future, distinct `ollama_native` transport using native chat, discovery and NDJSON. Preserve existing OpenAI-compatible connections and session histories. A llama.cpp server, a Gemma capture server and an Ollama server are different services; do not convert an existing RunPod connection or send native Ollama requests to it automatically.

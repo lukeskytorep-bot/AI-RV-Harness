@@ -27,6 +27,7 @@ pub async fn get<S:SecretStore>(pool:&SqlitePool,store:&S,binding:Binding,model:
 }
 pub async fn save<S:SecretStore>(pool:&SqlitePool,store:&S,draft:Draft)->Result<State,String>{
     if draft.version!=1{return Err("Unsupported native preferences version".into());}draft.settings.validate()?;
+    if connections::is_cloud_endpoint(&draft.binding.normalized_endpoint) && draft.settings.num_ctx.is_some(){return Err("Ollama Cloud context allocation is managed by the service; clear num_ctx".into());}
     let discovery=view(pool,store,&draft.binding,&draft.model).await?;
     let mut tx=pool.begin_with("BEGIN IMMEDIATE").await.map_err(|_|"Cannot begin native preferences save")?;
     let current:Option<(String,i64,String,String)>=sqlx::query_as("SELECT connection_identity_id,connection_revision,base_url,auth_mode FROM provider_configs WHERE id=$1 AND provider='ollama_native' AND enabled=0").bind(&draft.binding.provider_config_id).fetch_optional(&mut *tx).await.map_err(|_|"Cannot verify native preferences binding")?;
@@ -82,6 +83,10 @@ mod tests {
         save(&pool,&NoSecrets,Draft{version:1,binding:binding.clone(),model:"exact:tag".into(),settings:settings.clone()}).await.unwrap();pool.close().await;
         let reopened=sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(options).await.unwrap();
         let restored=get(&reopened,&NoSecrets,binding,"exact:tag".into()).await.unwrap();assert_eq!(restored.draft.settings,settings);assert_eq!(restored.draft.model,"exact:tag");assert!(!restored.readiness.generation_available);reopened.close().await;std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test] async fn cloud_cannot_persist_local_context_even_before_credentials_are_resolved(){
+        let pool=db().await;let mut binding=setup(&pool).await;binding.normalized_endpoint="https://ollama.com".into();binding.auth_mode="bearer".into();let error=save(&pool,&NoSecrets,Draft{version:1,binding,model:"exact:tag".into(),settings:Settings{num_ctx:Some(65536),..Settings::default()}}).await.err().unwrap();assert!(error.contains("managed"));assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM app_settings WHERE key LIKE 'native.generation.draft.%'").fetch_one(&pool).await.unwrap(),0);
     }
 
 }

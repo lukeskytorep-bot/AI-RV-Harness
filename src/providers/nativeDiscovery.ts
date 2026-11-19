@@ -4,12 +4,12 @@ import { isTauriRuntime } from "../storage";
 import type { NativeConnection, NativeConnectionSnapshot } from "./nativeConnectionIdentity";
 export interface NativeDiscovery {
   binding: NativeConnectionSnapshot;
-  serverVersion: string;
+  serverVersion?: string | null;
   capturedAtMs: number;
   models: { name: string; digest?: string }[];
   selectedModel?: string;
   selectedAvailable: boolean;
-  details?: { sourceSha256: string; declaredContextTokens?: number; contextAllocationVerified: false; capabilities?: unknown; thinking?: unknown; details?: unknown; renderer?: unknown; parser?: unknown; template_source?: unknown };
+  details?: { sourceSha256: string; declaredContextTokens?: number; contextAllocationVerified: false; metadataSource?: "cloud_tags"; capabilities?: unknown; thinking?: unknown; details?: unknown; renderer?: unknown; parser?: unknown; template_source?: unknown };
   detailsUnavailable: boolean;
   generationAvailable: false;
 }

@@ -74,3 +74,6 @@ export function validateNativeConnectionAiIdentity(value: NativeConnectionAiIden
     || ["credentialId","credentialFingerprint","credentialDisplay","credentialHint","apiKey","secret"].some(k=>object[k]!=null))throw new Error("Invalid native AI connection identity.");
   return value;
 }
+
+export const OLLAMA_CLOUD_BASE = "https://ollama.com";
+export function isOllamaCloudEndpoint(baseUrl: string): boolean { return baseUrl === OLLAMA_CLOUD_BASE; }

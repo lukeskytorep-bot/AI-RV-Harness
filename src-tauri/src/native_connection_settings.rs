@@ -31,7 +31,7 @@ impl Connection {
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct Discovery {
-    pub binding:Binding, pub server_version:String, pub captured_at_ms:u64,
+    pub binding:Binding, pub server_version:Option<String>, pub captured_at_ms:u64,
     pub models:Vec<Model>, pub selected_model:Option<String>, pub selected_available:bool,
     pub details:Option<Value>, pub details_unavailable:bool, pub generation_available:bool,
 }
@@ -77,11 +77,29 @@ async fn request(client:&reqwest::Client, endpoint:&str, suffix:&str, body:Optio
 pub fn discovery_client()->Result<reqwest::Client,String> {
     reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(30)).build().map_err(|_|"Cannot create native discovery client".into())
 }
-pub async fn probe(client:&reqwest::Client, binding:Binding, selected:Option<String>, secret:Option<&str>)->Result<Discovery,String> {
+pub const CLOUD_BASE:&str="https://ollama.com";
+pub fn is_cloud_endpoint(endpoint:&str)->bool {endpoint==CLOUD_BASE}
+pub async fn probe(client:&reqwest::Client,binding:Binding,selected:Option<String>,secret:Option<&str>)->Result<Discovery,String>{
+    let cloud=is_cloud_endpoint(&binding.normalized_endpoint);
+    probe_contract(client,binding,selected,secret,cloud).await
+}
+// Only the public wrapper derives deployment from the canonical saved endpoint.
+// Tests can exercise the hosted HTTP contract against a controlled loopback server.
+async fn probe_contract(client:&reqwest::Client, binding:Binding, selected:Option<String>, secret:Option<&str>,cloud:bool)->Result<Discovery,String> {
     ensure_metadata_has_no_secret(&json!({"binding":&binding,"selectedModel":&selected}),secret)?;
     if let Some(model)=&selected {if !safe_text(model) || model.chars().any(char::is_whitespace){return Err("Invalid exact native model identifier".into());}}
-    let (_,version)=request(client,&binding.normalized_endpoint,"version",None,secret).await?;
-    let version=version.and_then(|v|v.get("version").and_then(Value::as_str).map(str::to_owned)).filter(|s|safe_text(s)).ok_or("Native server version was not provided")?;
+    if cloud && (binding.auth_mode!="bearer" || secret.is_none_or(|s|s.trim().is_empty())) {return Err("Ollama Cloud requires a bound Bearer API key".into());}
+    if cloud {
+        // tags may be public: verify the key against the documented authenticated endpoint.
+        // Validate and discard account data; never cache or return balances.
+        let (_,account)=request(client,&binding.normalized_endpoint,"balance",None,secret).await?;
+        let account=account.ok_or("Ollama Cloud authentication check is unavailable")?;
+        if !account.get("included").is_some_and(Value::is_object) || !account.get("purchased").is_some_and(Value::is_object){return Err("Invalid Ollama Cloud authentication response".into());}
+    }
+    let version=if cloud {None}else{
+        let (_,version)=request(client,&binding.normalized_endpoint,"version",None,secret).await?;
+        Some(version.and_then(|v|v.get("version").and_then(Value::as_str).map(str::to_owned)).filter(|s|safe_text(s)).ok_or("Native server version was not provided")?)
+    };
     let (_,tags)=request(client,&binding.normalized_endpoint,"tags",None,secret).await?;
     let tags=tags.ok_or("Native model list is unavailable")?;
     let array=tags.get("models").and_then(Value::as_array).ok_or("Invalid native model list")?;
@@ -95,7 +113,7 @@ pub async fn probe(client:&reqwest::Client, binding:Binding, selected:Option<Str
     }
     let available=selected.as_ref().is_some_and(|s|models.iter().any(|m|&m.name==s));
     let mut details=None;let mut unavailable=false;
-    if let Some(model)=selected.as_ref().filter(|_|available){
+    if let Some(model)=selected.as_ref().filter(|_|available && !cloud){
         let (_,show)=request(client,&binding.normalized_endpoint,"show",Some(json!({"model":model,"verbose":false})),secret).await?;
         if let Some(show)=show {
             if !show.is_object(){return Err("Invalid native model details".into());}
@@ -106,6 +124,12 @@ pub async fn probe(client:&reqwest::Client, binding:Binding, selected:Option<Str
             for key in ["capabilities","thinking","details","parameters","renderer","parser","template_source"] {if let Some(v)=show.get(key){summary[key]=v.clone();}}
             details=Some(summary);
         }else{unavailable=true;}
+    }
+    if cloud {
+        unavailable=true;
+        if let Some(item)=array.iter().find(|v|v.get("name").and_then(Value::as_str)==selected.as_deref()) {
+            details=Some(json!({"metadataSource":"cloud_tags","sourceSha256":format!("{:x}",Sha256::digest(serde_json::to_vec(item).map_err(|_|"Cannot hash cloud model metadata")?)),"contextAllocationVerified":false}));
+        }
     }
     let result=Discovery{binding,server_version:version,captured_at_ms:now(),models,selected_model:selected,selected_available:available,details,details_unavailable:unavailable,generation_available:false};
     ensure_metadata_has_no_secret(&result,secret)?;
@@ -162,6 +186,7 @@ pub async fn list<S:SecretStore>(pool:&SqlitePool,store:&S)->Result<Vec<View>,St
 pub async fn save<S:SecretStore>(pool:&SqlitePool,store:&S,input:SaveInput)->Result<View,String>{
     let endpoint=normalize_endpoint(&input.base_url)?;
     if !safe_text(input.label.trim()) || !matches!(input.auth_mode.as_str(),"none"|"bearer"){return Err("Native label and explicit authentication mode are required".into());}
+    if is_cloud_endpoint(&endpoint) && input.auth_mode!="bearer" {return Err("Ollama Cloud requires Bearer authentication".into());}
     if input.auth_mode=="none" && input.api_key.as_ref().is_some_and(|s|!s.is_empty()){return Err("Keyless mode must not carry a key".into());}
     let old=if let Some(binding)=&input.expected{Some(current(pool,binding).await?)}else{None};
     let explicit_key=input.api_key.as_ref().is_some_and(|s|!s.trim().is_empty());
@@ -341,6 +366,38 @@ mod tests {
         sqlx::query("UPDATE provider_configs SET label='fixture-secret' WHERE id=$1").bind(&original.connection.id).execute(&pool).await.unwrap();
         let error=list(&pool,&vault).await.err().unwrap();assert!(!error.contains("fixture-secret"));
         vault.0.lock().unwrap().clear();let error=list(&pool,&vault).await.err().unwrap();assert!(!error.contains("fixture-secret"));task.abort();
+    }
+    async fn cloud_server(balance_status:u16,tags_status:u16,echo:bool)->(String,Traffic,tokio::task::JoinHandle<()>) {
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let endpoint=format!("http://{}",listener.local_addr().unwrap());let seen=Arc::new(Mutex::new(Vec::new()));let traffic=seen.clone();
+        let task=tokio::spawn(async move {loop{let(mut socket,_)=listener.accept().await.unwrap();let mut bytes=Vec::new();let mut block=[0;4096];loop{let n=socket.read(&mut block).await.unwrap();if n==0{break;}bytes.extend_from_slice(&block[..n]);if bytes.windows(4).any(|w|w==b"\r\n\r\n"){break;}}let request=String::from_utf8(bytes).unwrap();let balance=request.starts_with("GET /api/balance ");let code=if balance{balance_status}else{tags_status};
+            let body=if echo{json!({"error":"fixture-secret"})}else if balance{json!({"included":{"balance_usd":12345},"purchased":{"balance_usd":67890}})}else{json!({"models":[{"name":"gemma4:31b"}]})}.to_string();traffic.lock().unwrap().push(request);socket.write_all(format!("HTTP/1.1 {code} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+        }});(endpoint,seen,task)
+    }
+    fn cloud_binding(endpoint:&str)->Binding{Binding{version:1,provider:"ollama_native".into(),provider_config_id:"cloud".into(),connection_identity_id:"identity".into(),connection_revision:1,normalized_endpoint:endpoint.into(),auth_mode:"bearer".into()}}
+    #[tokio::test] async fn cloud_requires_real_bearer_and_never_downgrades_to_none(){
+        let mut binding=cloud_binding(CLOUD_BASE);binding.auth_mode="none".into();assert!(probe(&discovery_client().unwrap(),binding,None,None).await.is_err());
+        assert!(probe(&discovery_client().unwrap(),cloud_binding(CLOUD_BASE),None,None).await.is_err());
+        let pool=db().await;let mut i=input(CLOUD_BASE);i.auth_mode="none".into();assert!(save(&pool,&Vault::default(),i).await.is_err());
+        for endpoint in ["https://ollama.com.evil.invalid","https://evil.invalid/ollama.com","http://ollama.com","https://ollama.com:444","https://ollama.com/proxy"] {assert!(!is_cloud_endpoint(endpoint));}
+        assert!(is_cloud_endpoint(&normalize_endpoint("HTTPS://OLLAMA.COM:443/").unwrap()));
+    }
+    #[tokio::test] async fn cloud_uses_balance_and_tags_without_local_endpoints_version_show_or_digest(){
+        let(url,seen,task)=cloud_server(200,200,false).await;
+        let result=probe_contract(&discovery_client().unwrap(),cloud_binding(&url),Some("gemma4:31b".into()),Some("fixture-secret"),true).await.unwrap();
+        assert_eq!(result.server_version,None);assert!(result.selected_available);assert_eq!(result.models[0].digest,None);assert_eq!(result.selected_model.as_deref(),Some("gemma4:31b"));assert_eq!(result.details.as_ref().unwrap()["metadataSource"],"cloud_tags");assert!(!result.generation_available);
+        let output=serde_json::to_string(&result).unwrap();for private in ["fixture-secret","balance_usd","allowance_usd"]{assert!(!output.contains(private));}
+        let requests=seen.lock().unwrap();assert_eq!(requests.len(),2);assert!(requests[0].starts_with("GET /api/balance "));assert!(requests[1].starts_with("GET /api/tags "));assert!(requests.iter().all(|r|r.contains("authorization: Bearer fixture-secret")));task.abort();
+    }
+    #[tokio::test] async fn cloud_auth_failures_and_catalog_errors_do_not_fallback_or_generate(){
+        for (balance,tags,requests) in [(401,200,1),(403,200,1),(429,200,1),(404,200,1),(200,404,2),(200,405,2),(200,500,2)] {
+            let(url,seen,task)=cloud_server(balance,tags,false).await;let error=probe_contract(&discovery_client().unwrap(),cloud_binding(&url),None,Some("fixture-secret"),true).await.err().unwrap();assert!(!error.contains("fixture-secret"));assert_eq!(seen.lock().unwrap().len(),requests);task.abort();
+        }
+    }
+    #[tokio::test] async fn cloud_preserves_absent_exact_model_and_rejects_secret_metadata(){
+        let(url,seen,task)=cloud_server(200,200,false).await;let client=discovery_client().unwrap();
+        let absent=probe_contract(&client,cloud_binding(&url),Some("gemma4:cloud".into()),Some("fixture-secret"),true).await.unwrap();assert!(!absent.selected_available);assert_eq!(absent.selected_model.as_deref(),Some("gemma4:cloud"));assert!(absent.details.is_none());
+        let error=probe_contract(&client,cloud_binding(&url),Some("fixture-secret".into()),Some("fixture-secret"),true).await.err().unwrap();assert!(!error.contains("fixture-secret"));assert_eq!(seen.lock().unwrap().len(),2);task.abort();
+        let(url,_,task)=cloud_server(200,200,true).await;let error=probe_contract(&client,cloud_binding(&url),None,Some("fixture-secret"),true).await.err().unwrap();assert!(!error.contains("fixture-secret"));task.abort();
     }
 
 }

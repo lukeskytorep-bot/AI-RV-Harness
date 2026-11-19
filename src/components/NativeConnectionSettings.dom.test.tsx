@@ -21,11 +21,15 @@ async function mount(rows: NativeConnectionView[] = []) {
   return { host, click, submit };
 }
 async function field(element: HTMLInputElement | HTMLSelectElement, value: string) { await act(async () => { Object.getOwnPropertyDescriptor(element.tagName === "SELECT" ? HTMLSelectElement.prototype : HTMLInputElement.prototype, "value")!.set!.call(element, value); element.dispatchEvent(new Event(element.tagName === "SELECT" ? "change" : "input", { bubbles: true })); }); }
-it("creates a real keyless local connection without a secret or generation", async () => {
-  const { host, click, submit } = await mount(); await click("Add Ollama Native");
-  expect(host.querySelector("input[type=password]")).toBeNull(); expect(host.textContent).toContain("http://localhost:11434"); expect(host.textContent).toContain("Generation is not available");
-  vi.mocked(saveNativeConnection).mockResolvedValue(view); await submit(); expect(saveNativeConnection).toHaveBeenCalledWith({ expected: undefined, label: "Ollama Native", baseUrl: "http://localhost:11434", authMode: "none", apiKey: undefined, selectedModel: undefined }); expect(discoverNativeConnection).not.toHaveBeenCalled();
+it("creates Cloud with fixed official host and required Bearer key, without local installation", async () => {
+  const { host, click, submit } = await mount(); await click("Add Ollama Cloud");
+  const dialog=host.querySelector("[role=dialog]")!; const key=dialog.querySelector<HTMLInputElement>("input[type=password]")!;
+  expect(key.required).toBe(true); expect(dialog.querySelector("select")).toBeNull(); expect(dialog.querySelector<HTMLInputElement>("input[type=url]")!.readOnly).toBe(true);
+  expect(dialog.textContent).toContain("https://ollama.com"); expect(dialog.textContent).toContain("No text is generated"); expect(host.textContent).toContain("Generation is not available");
+  await field(key,"fixture-secret");vi.mocked(saveNativeConnection).mockResolvedValue(view);await submit();
+  expect(saveNativeConnection).toHaveBeenCalledWith({expected:undefined,label:"Ollama Cloud",baseUrl:"https://ollama.com",authMode:"bearer",apiKey:"fixture-secret",selectedModel:undefined});expect(discoverNativeConnection).not.toHaveBeenCalled();
 });
+
 it("edits the endpoint using the stored key, preserving exact model and expected binding", async () => {
   const { host, click, submit } = await mount([view]); await click("Edit connection"); const dialog = host.querySelector("[role=dialog]")!;
   expect(dialog.querySelector<HTMLInputElement>("input[type=password]")!.value).toBe(""); await field(dialog.querySelector("input[type=url]")!, "https://new.example/Proxy/"); expect(dialog.textContent).toContain("https://new.example/Proxy/"); expect(dialog.textContent).toContain("saved key to this address");
@@ -42,4 +46,9 @@ it("retains a missing exact model, shows provenance and refreshes only on an exp
   const missing = { ...view, discovery: { ...view.discovery!, selectedModel: "missing:tag", selectedAvailable: false, detailsUnavailable: true } };
   const { host, click } = await mount([missing]); expect(host.textContent).toContain("missing:tag"); expect(host.textContent).toContain("identifier is retained"); expect(host.textContent).toContain("capabilities remain unknown"); expect(discoverNativeConnection).not.toHaveBeenCalled();
   vi.mocked(discoverNativeConnection).mockResolvedValue(missing.discovery); await click("Refresh discovery"); expect(discoverNativeConnection).toHaveBeenCalledWith(freezeNativeConnection(view.connection), "missing:tag");
+});
+
+it("shows hosted Cloud with unknown version and no mandatory digest or local version display", async () => {
+  const cloud:NativeConnectionView={connection:{...view.connection,baseUrl:"https://ollama.com"},discovery:{...view.discovery!,binding:{...view.discovery!.binding,normalizedEndpoint:"https://ollama.com"},serverVersion:null,models:[{name:"gemma4:31b"}],selectedModel:"gemma4:31b",detailsUnavailable:true}};
+  const {host,click,submit}=await mount([cloud]);expect(host.textContent).toContain("Hosted Ollama Cloud API");expect(host.textContent).not.toContain("Server version:");await click("Edit connection");expect(host.querySelector<HTMLInputElement>("input[type=password]")!.required).toBe(false);vi.mocked(saveNativeConnection).mockResolvedValue(cloud);await submit();expect(saveNativeConnection).toHaveBeenCalledWith(expect.objectContaining({baseUrl:"https://ollama.com",authMode:"bearer",apiKey:undefined,selectedModel:"gemma4:31b"}));
 });
