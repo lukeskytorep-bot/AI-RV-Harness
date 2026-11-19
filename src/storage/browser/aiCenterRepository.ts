@@ -140,7 +140,7 @@ export class BrowserAiCenterRepository implements AiCenterRepository {
   }
 
   async listAiIdentities(profileId: string): Promise<AiIdentity[]> {
-    return this.read<AiIdentity[]>(AI_IDENTITIES_KEY, []).filter((item) => item.profileId === profileId).sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt));
+    return this.read<AiIdentity[]>(AI_IDENTITIES_KEY, []).filter((item) => item.profileId === profileId && String(item.provider)!=="ollama_native").sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt));
   }
 
   async getViewerNoteBundle(aiIdentityId: string): Promise<ViewerNoteBundle | null> {

@@ -258,3 +258,9 @@ function nativeConfig(config: ProviderConfig): {
     ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
   };
 }
+
+/** Pending identity metadata, never a generation or authentication success response. */
+export async function inspectNativeConnectionBinding(binding: import("./nativeConnectionIdentity").NativeConnectionSnapshot): Promise<{binding:import("./nativeConnectionIdentity").NativeConnectionSnapshot;generationAvailable:false}> {
+  requireDesktop();
+  return invoke("native_connection_binding", { binding });
+}

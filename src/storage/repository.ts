@@ -18,6 +18,7 @@ import type { TelepathicSeriesState } from "../telepathicExchange/types";
 
 
 export interface AppRepository extends WorkspaceSourcesRepository, CustomProtocolsRepository {
+  readonly nativeConnections: import("./contracts/nativeConnectionsRepository").NativeConnectionsRepository;
   listResearchEvaluations(projectId: string): Promise<import("../research/evaluationTypes").ResearchEvaluation[]>;
   getResearchEvaluation(projectId: string, id: string): Promise<import("../research/evaluationTypes").ResearchEvaluation | null>;
   saveResearchEvaluation(record: import("../research/evaluationTypes").ResearchEvaluation, expectedRevision: number): Promise<void>;

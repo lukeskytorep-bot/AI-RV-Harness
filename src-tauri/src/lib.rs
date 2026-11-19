@@ -1,3 +1,5 @@
+mod native_connection_identity;
+mod native_connections;
 mod research_evaluation;
 mod training_archive;
 #[cfg(test)]
@@ -32,6 +34,7 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::Destroyed) { workflow_heartbeat::window_destroyed(window.label()); }
         })
         .invoke_handler(tauri::generate_handler![
+            native_connections::native_connection_binding,
             providers::store_credential,
             providers::rebind_credential,
             providers::custom_endpoint::change_custom_openai_endpoint,

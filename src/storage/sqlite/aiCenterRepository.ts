@@ -129,12 +129,12 @@ export class SqliteAiCenterRepository implements AiCenterRepository {
   }
 
   async listAiIdentities(profileId: string): Promise<AiIdentity[]> {
-    const rows = await this.dependencies.select<AiIdentityRow[]>("SELECT * FROM ai_identities WHERE profile_id = $1 ORDER BY last_used_at DESC", [profileId]);
+    const rows = await this.dependencies.select<AiIdentityRow[]>("SELECT * FROM ai_identities WHERE profile_id = $1 AND provider <> 'ollama_native' ORDER BY last_used_at DESC", [profileId]);
     return rows.map(mapAiIdentity);
   }
 
   async getViewerNoteBundle(aiIdentityId: string): Promise<ViewerNoteBundle | null> {
-    const identities = await this.dependencies.select<AiIdentityRow[]>("SELECT * FROM ai_identities WHERE id = $1 LIMIT 1", [aiIdentityId]);
+    const identities = await this.dependencies.select<AiIdentityRow[]>("SELECT * FROM ai_identities WHERE id = $1 AND provider <> 'ollama_native' LIMIT 1", [aiIdentityId]);
     if (!identities[0]) return null;
     const settingsRows = await this.dependencies.select<ViewerNoteSettingsRow[]>("SELECT * FROM ai_note_settings WHERE ai_identity_id = $1 LIMIT 1", [aiIdentityId]);
     if (!settingsRows[0]) return null;

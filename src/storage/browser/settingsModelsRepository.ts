@@ -44,7 +44,7 @@ export class BrowserSettingsModelsRepository implements SettingsModelsRepository
   }
 
   async listProviderConfigs(): Promise<ProviderConfig[]> {
-    return this.read<ProviderConfig[]>(PROVIDERS_KEY, []).map(p => p.provider === "custom_openai" ? { ...p, customCompatibilityProfile: customCompatibilityProfile(p.customCompatibilityProfile) } : p).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return this.read<ProviderConfig[]>(PROVIDERS_KEY, []).filter(p=>String(p.provider)!=="ollama_native").map(p => p.provider === "custom_openai" ? { ...p, customCompatibilityProfile: customCompatibilityProfile(p.customCompatibilityProfile) } : p).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   async createProviderConfig(_input: Parameters<SettingsModelsRepository["createProviderConfig"]>[0]): Promise<ProviderConfig> {

@@ -129,3 +129,5 @@ Mistral and Blackbox now include direct additional Viewer sampling and Chat Comp
 ## Reviewed integration plans
 
 - [Ollama Native API — DIRECT-3A](OLLAMA_NATIVE_IMPLEMENTATION_PLAN.md): planning candidate, source inventory and synthetic fixtures; no runtime Ollama support yet.
+
+- [Ollama Native identity/storage foundation — DIRECT-3B1](OLLAMA_NATIVE_IDENTITY_FOUNDATION.md): disabled pending connections, migration 035 and explicit connection identities; no native generation yet.

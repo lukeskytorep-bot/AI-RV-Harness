@@ -5,6 +5,7 @@ const APP_COMMANDS: &[&str] = &[
     "has_credential",
     "delete_credential",
     "credential_identity_fingerprint",
+    "native_connection_binding",
     "provider_discover_models",
     "provider_discover_model_endpoints",
     "provider_binding_endpoint",

@@ -112,6 +112,8 @@ export type SessionContinuationRouteSnapshot =
     };
 
 export interface SessionSnapshot {
+  /** Reserved B1 metadata contract; native generation remains unavailable. Legacy absence is unchanged. */
+  nativeConnection?: import("../providers/nativeConnectionIdentity").NativeConnectionSnapshot;
   researchTargetCode?: { policy: import("../resources/rvLiteTargetCode").TargetCodePolicy; renderedPrompts: { content: string; sha256: string }[] };
   schemaVersion: 1 | 2 | 3 | 4;
   sessionId: string;

@@ -102,6 +102,7 @@ export class SqliteSettingsModelsRepository implements SettingsModelsRepository 
            AND stream.key = 'provider.customStreamingEnabled.' || pc.id
          LEFT JOIN app_settings compat ON pc.provider = 'custom_openai'
            AND compat.key = 'provider.customCompatibilityProfile.' || pc.id
+         WHERE pc.provider <> 'ollama_native'
          ORDER BY pc.updated_at DESC`,
     );
     return rows.map(mapProviderConfig);

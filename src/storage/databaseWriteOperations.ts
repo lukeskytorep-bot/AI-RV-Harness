@@ -2,6 +2,10 @@
 // only the operation identifier and bound values cross the WebView -> Rust boundary.
 
 export type DatabaseWriteOperation =
+  | "native_connection_create"
+  | "native_connection_bind"
+  | "native_connection_identity"
+
   | "ai_center_update_ai_identities_01"
   | "ai_center_insert_ai_identities_01"
   | "ai_center_insert_ai_note_settings_01"
@@ -128,6 +132,10 @@ export type DatabaseWriteOperation =
   | "sqlite_insert_protocol_versions_01";
 
 const WRITE_OPERATIONS = new Map<string, DatabaseWriteOperation>([
+  ["INSERT INTO provider_configs(id,provider,label,credential_id,credential_hint,base_url,enabled,created_at,updated_at,auth_mode,connection_identity_id,connection_revision) VALUES($1,'ollama_native',$2,NULL,NULL,$3,0,$4,$4,'none',$5,1)", "native_connection_create"],
+  ["INSERT INTO profile_native_connection_routes(profile_id,provider_config_id,connection_identity_id,connection_revision,normalized_endpoint,created_at) VALUES($1,$2,$3,$4,$5,$6)", "native_connection_bind"],
+  ["INSERT INTO ai_identities(id,profile_id,credential_fingerprint,credential_display,provider_config_id,provider,normalized_base_url,model_id,model_route,model_display_name,role,route_status,first_used_at,last_used_at,created_at,updated_at,identity_kind,connection_identity_id,connection_revision) VALUES($1,$2,NULL,NULL,$3,'ollama_native',$4,$5,$6,$7,'viewer','unavailable',$8,$8,$8,$8,'connection',$9,$10) ON CONFLICT DO NOTHING", "native_connection_identity"],
+
   ["UPDATE ai_identities SET credential_display = $1, provider_config_id = $2, model_id = $3, model_display_name = $4, route_status = 'available', last_used_at = $5, updated_at = $5 WHERE id = $6", "ai_center_update_ai_identities_01"],
   ["INSERT INTO ai_identities (id, profile_id, credential_fingerprint, credential_display, provider_config_id, provider, normalized_base_url, model_id, model_route, model_display_name, role, route_status, first_used_at, last_used_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'available',$12,$12,$12,$12)", "ai_center_insert_ai_identities_01"],
   ["INSERT INTO ai_note_settings (ai_identity_id, note_type, capacity_tokens, default_enabled, experimental_status, updated_at) VALUES ($1,'viewer_self_notes',1024,1,'experimental',$2)", "ai_center_insert_ai_note_settings_01"],

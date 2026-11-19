@@ -1,3 +1,4 @@
+import { BrowserNativeConnectionsRepository } from "./browser/nativeConnectionsRepository";
 import { changeBrowserTrainingArchive, recoverBrowserTrainingArchive } from "./browser/trainingArchive";
 import { BrowserWorkspaceSourcesRepository } from "./browser/workspaceSourcesRepository";
 import { BrowserCustomProtocolsRepository } from "./browser/customProtocolsRepository";
@@ -41,6 +42,8 @@ function write<T>(key: string, value: T): void {
 }
 
 export class BrowserRepository implements AppRepository {
+  get nativeConnections() { return new BrowserNativeConnectionsRepository(); }
+
   constructor() {
     recoverBrowserTrainingArchive(localStorage);
     return new Proxy(this, {

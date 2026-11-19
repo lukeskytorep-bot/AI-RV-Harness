@@ -1,3 +1,4 @@
+import { SqliteNativeConnectionsRepository } from "./sqlite/nativeConnectionsRepository";
 import { planTrainingArchive } from "../application/trainingArchive";
 import { SqliteWorkspaceSourcesRepository } from "./sqlite/workspaceSourcesRepository";
 import { SqliteCustomProtocolsRepository } from "./sqlite/customProtocolsRepository";
@@ -30,6 +31,8 @@ import { SqliteExportRepository } from "./sqlite/exportRepository";
 import { SqliteControlledPurge } from "./sqlite/controlledPurge";
 
 export class SqliteRepository implements AppRepository {
+  get nativeConnections() { return new SqliteNativeConnectionsRepository({select:(q,v)=>selectDatabaseReadonly(q,v??[]),executeTransaction:s=>this.executeTransaction(s)}); }
+
   async listResearchEvaluations(projectId: string): Promise<ResearchEvaluation[]> {
     const prefix = `${evaluationPrefix}${projectId}:`;
     const rows = await selectDatabaseReadonly<Array<{value:string}>>("SELECT value FROM app_settings WHERE substr(key,1,length($1))=$1 ORDER BY key", [prefix]);
