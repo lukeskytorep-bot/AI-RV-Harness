@@ -1,3 +1,4 @@
+mod native_connection_settings;
 mod native_connection_identity;
 mod native_connections;
 mod research_evaluation;
@@ -35,6 +36,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             native_connections::native_connection_binding,
+            native_connections::native_connection_list,
+            native_connections::native_connection_save,
+            native_connections::native_connection_discover,
             providers::store_credential,
             providers::rebind_credential,
             providers::custom_endpoint::change_custom_openai_endpoint,

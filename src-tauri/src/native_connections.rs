@@ -1,4 +1,4 @@
-//! Metadata inspection only: no generation, discovery or credential retrieval in B1.
+//! Pending native connection settings and discovery; generation remains disabled.
 use serde::Serialize;
 use sqlx::Row;
 use tauri::State;
@@ -16,4 +16,26 @@ pub async fn native_connection_binding(instances: State<'_, DbInstances>, bindin
         .bind(&binding.provider_config_id).fetch_optional(&pool).await.map_err(|_|"Cannot inspect saved native connection")?.ok_or("Native connection not found")?;
     let stored=StoredConnection {id:row.try_get("id").map_err(|_|"Invalid connection row")?,provider:row.try_get("provider").map_err(|_|"Invalid connection row")?,endpoint:row.try_get("base_url").map_err(|_|"Invalid connection row")?,auth_mode:row.try_get("auth_mode").map_err(|_|"Invalid connection row")?,credential_id:row.try_get("credential_id").map_err(|_|"Invalid connection row")?,credential_hint:row.try_get("credential_hint").map_err(|_|"Invalid connection row")?,identity_id:row.try_get("connection_identity_id").map_err(|_|"Invalid connection row")?,revision:u64::try_from(row.try_get::<i64,_>("connection_revision").map_err(|_|"Invalid connection revision")?).map_err(|_|"Invalid connection revision")?,enabled:row.try_get::<i64,_>("enabled").map_err(|_|"Invalid connection row")?!=0};
     Ok(PendingBindingMetadata { binding:verify_binding(&stored,&binding)?,generation_available:false })
+}
+
+struct NativeOsSecrets;
+impl crate::native_connection_settings::SecretStore for NativeOsSecrets {
+    fn read(&self,id:&str,endpoint:&str)->Result<String,String>{crate::secrets::get_credential_for_binding(id,"ollama_native",endpoint)}
+    fn create(&self,id:&str,secret:&str,endpoint:&str)->Result<(),String>{crate::secrets::store_new_bound_credential(id,secret,"ollama_native",endpoint)}
+    fn remove(&self,id:&str)->Result<(),String>{crate::secrets::remove_staged_native_credential(id)}
+}
+#[tauri::command]
+pub async fn native_connection_list(instances:State<'_,DbInstances>)->Result<Vec<crate::native_connection_settings::View>,String>{
+    let pool=crate::database::sqlite_pool(&instances).await?;
+    crate::native_connection_settings::list(&pool,&NativeOsSecrets).await
+}
+#[tauri::command]
+pub async fn native_connection_save(instances:State<'_,DbInstances>,input:crate::native_connection_settings::SaveInput)->Result<crate::native_connection_settings::View,String>{
+    let pool=crate::database::sqlite_pool(&instances).await?;
+    crate::native_connection_settings::save(&pool,&NativeOsSecrets,input).await
+}
+#[tauri::command]
+pub async fn native_connection_discover(instances:State<'_,DbInstances>,binding:Binding,selected_model:Option<String>)->Result<crate::native_connection_settings::Discovery,String>{
+    let pool=crate::database::sqlite_pool(&instances).await?;
+    crate::native_connection_settings::discover(&pool,&NativeOsSecrets,binding,selected_model).await
 }

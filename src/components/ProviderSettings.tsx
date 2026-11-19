@@ -1,3 +1,4 @@
+import { NativeConnectionSettings } from "./NativeConnectionSettings";
 import { Check, KeyRound, Plus, RefreshCw, Server, Settings2, ShieldCheck, Sparkles, Star, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { getCopy } from "../i18n";
@@ -151,6 +152,7 @@ export function ProviderSettings({ copy, repository, section = "all", language =
 
   return (
     <>
+      {section !== "models" && repository && <NativeConnectionSettings language={language} />}
       {section !== "models" && <section className="panel provider-settings wide-settings-panel">
         <div className="provider-heading">
           <div><span className="heading-orb"><KeyRound size={19} /></span><div><h2>{copy.providersApi}</h2><p>{copy.providersReady}</p></div></div>

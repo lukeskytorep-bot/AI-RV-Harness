@@ -419,3 +419,13 @@ mod tests {
         assert!(error.contains("version is unsupported"));
     }
 }
+
+/// B2 cleanup is restricted to newly staged native credentials; never delete another provider's key.
+pub(crate) fn remove_staged_native_credential(id: &str) -> Result<(), String> {
+    if !id.starts_with("native_credential_") { return Err("Invalid staged native credential id".into()); }
+    match read_stored_credential(id) {
+        Ok(StoredCredential::Bound(record)) if record.provider_kind == "ollama_native" => delete_stored_credential(id),
+        Err(_) => match entry_for(id)?.get_password() { Err(Error::NoEntry) => Ok(()), _ => Err("Cannot verify staged native credential".into()) },
+        _ => Err("Staged credential belongs to another provider".into()),
+    }
+}
