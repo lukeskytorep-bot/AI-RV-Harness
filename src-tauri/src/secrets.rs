@@ -328,6 +328,16 @@ fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
 // Provider adapters retrieve credentials natively and may only receive a
 // secret after provider kind + normalized endpoint match the keychain binding.
 
+/// B2 cleanup is restricted to newly staged native credentials; never delete another provider's key.
+pub(crate) fn remove_staged_native_credential(id: &str) -> Result<(), String> {
+    if !id.starts_with("native_credential_") { return Err("Invalid staged native credential id".into()); }
+    match read_stored_credential(id) {
+        Ok(StoredCredential::Bound(record)) if record.provider_kind == "ollama_native" => delete_stored_credential(id),
+        Err(_) => match entry_for(id)?.get_password() { Err(Error::NoEntry) => Ok(()), _ => Err("Cannot verify staged native credential".into()) },
+        _ => Err("Staged credential belongs to another provider".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,15 +427,5 @@ mod tests {
         let value = bound_value().replacen("\"version\":1", "\"version\":2", 1);
         let error = decode_stored_credential(&value).unwrap_err();
         assert!(error.contains("version is unsupported"));
-    }
-}
-
-/// B2 cleanup is restricted to newly staged native credentials; never delete another provider's key.
-pub(crate) fn remove_staged_native_credential(id: &str) -> Result<(), String> {
-    if !id.starts_with("native_credential_") { return Err("Invalid staged native credential id".into()); }
-    match read_stored_credential(id) {
-        Ok(StoredCredential::Bound(record)) if record.provider_kind == "ollama_native" => delete_stored_credential(id),
-        Err(_) => match entry_for(id)?.get_password() { Err(Error::NoEntry) => Ok(()), _ => Err("Cannot verify staged native credential".into()) },
-        _ => Err("Staged credential belongs to another provider".into()),
     }
 }
