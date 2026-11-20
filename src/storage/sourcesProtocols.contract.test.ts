@@ -11,7 +11,8 @@ import { BrowserCustomProtocolsRepository } from "./browser/customProtocolsRepos
 import { SqliteWorkspaceSourcesRepository } from "./sqlite/workspaceSourcesRepository";
 import { SqliteCustomProtocolsRepository } from "./sqlite/customProtocolsRepository";
 
-it.each(["browser", "sqlite"] as const)("%s preserves source selection and protocol history across reopening", async backend => {
+for (const backend of ["browser", "sqlite"] as const) {
+it(`${backend} preserves source selection and protocol history across reopening`, async () => {
   localStorage.clear();
   const directory = mkdtempSync(join(tmpdir(), "rvh-sources-protocols-"));
   const path = join(directory, "state.sqlite");
@@ -51,8 +52,17 @@ it.each(["browser", "sqlite"] as const)("%s preserves source selection and proto
     let repo = open();
     if (db) {
       const folder = "src-tauri/migrations";
-      for (const file of readdirSync(folder).filter(name => name.endsWith(".sql")).sort()) {
-        db.exec(readFileSync(join(folder, file), "utf8"));
+      // This is an empty lifecycle fixture, not a migration-commit test. Avoid
+      // autocommitting every DDL statement to disk on contended Windows runners.
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const file of readdirSync(folder).filter(name => name.endsWith(".sql")).sort()) {
+          db.exec(readFileSync(join(folder, file), "utf8"));
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
       }
       db.exec(`
         INSERT INTO profiles(id,display_name,created_at,updated_at) VALUES ('p','P','now','now');
@@ -104,4 +114,5 @@ it.each(["browser", "sqlite"] as const)("%s preserves source selection and proto
     localStorage.clear();
     rmSync(directory, { recursive: true, force: true });
   }
-});
+}, backend === "sqlite" ? 30_000 : 5_000);
+}

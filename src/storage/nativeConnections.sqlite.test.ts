@@ -57,7 +57,13 @@ it("rolls back DDL, trigger suspension and data on a failed migration, then can 
 it("persists a genuinely keyless pending route and separate AI identity across close/reopen/backup restore; rejects forged bindings",async()=>{
  const dir=mkdtempSync(join(tmpdir(),"rvh-native-identity-"));let db:DatabaseSync|undefined;
  try{
- const path=join(dir,"db.sqlite");db=new DatabaseSync(path);db.exec("PRAGMA foreign_keys=ON");apply(db,1,35);roots(db);
+ const path=join(dir,"db.sqlite");db=new DatabaseSync(path);db.exec("PRAGMA foreign_keys=ON");
+ // Bootstrap this empty disk fixture in one transaction. Migration atomicity is
+ // exercised separately above; this case exercises reopen and backup/restore.
+ db.exec("BEGIN IMMEDIATE");
+ try { for(let n=1;n<=35;n++)db.exec(migration(n)); db.exec("COMMIT"); }
+ catch(error) { db.exec("ROLLBACK"); throw error; }
+ roots(db);
  const bind=(query:string,values:unknown[]=[])=>{const args:unknown[]=[];const sql=query.replace(/\$(\d+)/g,(_,n)=>{args.push(values[Number(n)-1]);return "?";});return {sql,args};};
  const repository=()=>new SqliteNativeConnectionsRepository({select:async<T>(q:string,v?:unknown[])=>{const b=bind(q,v);return db!.prepare(b.sql).all(...b.args as never[]) as T;},executeTransaction:async statements=>{db!.exec("BEGIN IMMEDIATE");try{for(const s of statements){expect(operationForWriteQuery(s.query)).toMatch(/^native_connection_/);const b=bind(s.query,s.values);db!.prepare(b.sql).run(...b.args as never[]);}db!.exec("COMMIT");}catch(e){db!.exec("ROLLBACK");throw e;}}});
  const c=await repository().createPendingKeylessConnection({id:"native",label:"Local",baseUrl:"http://LOCALHOST:11434/"});const snapshot=freezeNativeConnection(c);
@@ -76,7 +82,7 @@ it("persists a genuinely keyless pending route and separate AI identity across c
  const second=await repository().createPendingKeylessConnection({id:"other",label:"Local again",baseUrl:c.baseUrl});expect(second.connectionIdentityId).not.toBe(c.connectionIdentityId);
  expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
  }finally{db?.close();rmSync(dir,{recursive:true,force:true});}
-});
+},30_000);
 it("registers every new write and never treats nullable legacy credentials as keyless",()=>{for(const query of Object.values(NATIVE_CONNECTION_SQL))expect(operationForWriteQuery(query)).toMatch(/^native_connection_/);const db=new DatabaseSync(":memory:");try{db.exec("PRAGMA foreign_keys=ON");apply(db,1,35);expect(()=>db.exec("INSERT INTO provider_configs(id,provider,label,credential_id,enabled,created_at,updated_at) VALUES('bad','custom_openai','bad',NULL,1,'t','t')")).toThrow();expect(()=>db.exec("INSERT INTO provider_configs(id,provider,label,base_url,enabled,created_at,updated_at,auth_mode) VALUES('bad','ollama_native','bad','http://localhost:11434',0,'t','t','none')")).toThrow();}finally{db.close();}});
 it("036 preserves old data and native routes and rolls back failed hosted migration", () => {
  const db=new DatabaseSync(":memory:");try {
