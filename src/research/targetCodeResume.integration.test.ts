@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach,it,expect,vi } from "vitest";
+import { executeProviderChat } from "../providers/requestExecutor";
+import { normalizeModelDiscovery } from "../providers/capabilities";
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { BrowserRepository } from "../storage/browserRepository";
-import { targetCodeConfig,provider,model } from "../testing/targetCodeFixture";
+import { targetCodeConfig,provider as fixtureProvider,model as fixtureModel } from "../testing/targetCodeFixture";
 import { buildResearchLockPlan } from "./planner";
 import { executeResearchSessions,freezeResearchViewerOutputPolicy,prepareInterruptedResearchRetry,unblindAndComputeResearch,judgeResearch } from "./engine";
 import { createSessionReplay } from "../sessions/resumeReplay";
@@ -15,7 +17,10 @@ const { writeExportPackage } = vi.hoisted(()=>({writeExportPackage:vi.fn(async()
 vi.mock("../exports/native",()=>({writeExportPackage}));
 const locks=()=>{const held=new Set<string>();return{request:async(name:string,_opts:unknown,cb:(lock:object|null)=>Promise<unknown>)=>{if(held.has(name))return cb(null);held.add(name);try{return await cb({name});}finally{held.delete(name);}}};};
 afterEach(()=>{localStorage.clear();vi.unstubAllGlobals();});
-it("executes the same target in independent sessions, persists B across reconnect and STOP/Resume without resending P1",async()=>{
+it.each(["custom_openai","ollama_cloud"] as const)("%s: independent sessions persist B across reconnect and STOP/Resume without resending P1",async providerKind=>{
+ const provider={...fixtureProvider,provider:providerKind,...(providerKind==="ollama_cloud"?{baseUrl:undefined}:{})};
+ const model=providerKind==="ollama_cloud"?normalizeModelDiscovery(provider,{models:[{name:fixtureModel.modelId}]},"t")[0]:fixtureModel;
+ writeExportPackage.mockClear();
  localStorage.clear();vi.stubGlobal("navigator",{locks:locks()});let repository=new BrowserRepository();
  const profile=await repository.createProfile({name:"Leo"});const workspace=await repository.createWorkspace({profileId:profile.id,name:"Research",kind:"rv"});
  localStorage.setItem("rvh.dev.providers",JSON.stringify([provider]));await repository.replaceProviderModels(provider.id,[model]);
@@ -28,7 +33,7 @@ it("executes the same target in independent sessions, persists B across reconnec
  for(const a of plan.assignments){a.executionOrder=plan.mappings.find(m=>m.anonymousSessionId===a.anonymousSessionId)?.conditionId===plan.conditions.find(c=>c.conditionKey==="without_code")!.id?1:2;}
  await repository.lockResearchProject(project.id,plan);
  const stop=new AbortController();const before:ProviderMessage[][]=[];
- await executeResearchSessions({repository,projectId:project.id,signal:stop.signal,rvLiteSessionRunner:input=>runAutomaticRvLiteSession({...input,chat:async({messages})=>{before.push(structuredClone(messages));stop.abort();return {content:"Accepted B first answer",finishReason:"stop",usage:{}};}})});
+ await executeResearchSessions({repository,projectId:project.id,signal:stop.signal,rvLiteSessionRunner:input=>runAutomaticRvLiteSession({...input,chat:request=>executeProviderChat({...request,operationKind:"research_viewer",configuredRetries:0,attempt:async({messages})=>{before.push(structuredClone(messages));stop.abort();return {content:"Accepted B first answer",finishReason:"stop",usage:{}};}})})});
  const stopped=(await repository.listResearchAssignments(project.id)).find(a=>a.sessionId)!;
  const snapshot=await repository.getSessionSnapshot(stopped.sessionId!);expect(snapshot?.researchTargetCode?.policy.mode).toBe("without_code");
  expect((await repository.getRvSession(stopped.sessionId!))?.state).toBe("Interrupted");
@@ -36,7 +41,7 @@ it("executes the same target in independent sessions, persists B across reconnec
  // STOP during an accepted response leaves only the missing next step to resume.
  await prepareInterruptedResearchRetry(repository,project.id,async()=>true);
  const dispatched:Array<{mode:string;messages:ProviderMessage[];code:string}>=[];
- const liveChat = async (mode:string,code:string,messages:ProviderMessage[]) => {dispatched.push({mode,messages:structuredClone(messages),code});return {content:`Fresh evidence ${dispatched.length}`,finishReason:"stop",usage:{}};};
+ const liveChat = async (mode:string,code:string,messages:ProviderMessage[]) => {dispatched.push({mode,messages:structuredClone(messages),code});return executeProviderChat({config:provider,modelId:model.modelId,messages,settings:resolveGenerationSettings(model.capabilities,{maxOutputTokens:16384},{provider:provider.provider}),operationKind:"research_viewer",configuredRetries:0,attempt:async()=>({content:`Fresh evidence ${dispatched.length}`,finishReason:"stop",usage:{}})});};
  await executeResearchSessions({repository,projectId:project.id,sessionReplayFactory:args=>createSessionReplay({...args,liveChat:({messages})=>liveChat("without_code",args.session.sessionCode,messages)}),rvLiteSessionRunner:input=>runAutomaticRvLiteSession({...input,chat:input.chat??(({messages})=>liveChat(input.targetCode!.mode,input.sessionIdentity!.sessionCode,messages))})});
  const assignments=await repository.listResearchAssignments(project.id);expect(assignments.every(a=>a.status==="SessionComplete")).toBe(true);
  const sessions=await repository.listRvSessions(workspace.id);expect(sessions).toHaveLength(2);expect(new Set(sessions.map(s=>s.sessionCode)).size).toBe(2);expect(new Set(sessions.map(s=>s.id)).size).toBe(2);
@@ -47,7 +52,7 @@ it("executes the same target in independent sessions, persists B across reconnec
  await expect(unblindAndComputeResearch(repository,project.id)).rejects.toThrow(/every Judge score/);
  expect((await repository.getResearchProject(project.id))?.configHash).toBe(plan.configHash);
  const judgePayloads:string[]=[];
- await judgeResearch({repository,projectId:project.id,judgeRunner:args=>runBlindJudging({...args,chat:async({messages})=>{judgePayloads.push(JSON.stringify(messages));return {content:output,finishReason:"stop",usage:{}};}})});
+ await judgeResearch({repository,projectId:project.id,judgeRunner:args=>runBlindJudging({...args,chat:request=>executeProviderChat({...request,operationKind:"judge",configuredRetries:0,attempt:async({messages})=>{judgePayloads.push(JSON.stringify(messages));return {content:output,finishReason:"stop",usage:{}};}})})});
  expect(judgePayloads).toHaveLength(2);
  for(const payload of judgePayloads)expect(payload).not.toMatch(/with_code|without_code|target-code-presence|pair_tc|Target code/);
  expect((await repository.getResearchProject(project.id))?.state).toBe("ScoresFrozen");

@@ -9,6 +9,7 @@ use crate::secrets;
 
 mod adapters;
 mod ollama_cloud;
+mod ollama_stream;
 pub(crate) mod custom_endpoint;
 mod endpoint_capabilities;
 mod errors;
@@ -576,8 +577,11 @@ pub async fn provider_chat(
     let use_custom_streaming = matches!(request.provider, ProviderKind::CustomOpenai) && request.custom_streaming_enabled;
     let use_mistral_streaming = matches!(request.provider, ProviderKind::Mistral);
     let use_blackbox_streaming = matches!(request.provider, ProviderKind::Blackbox);
+    let use_ollama_streaming = matches!(request.provider, ProviderKind::OllamaCloud);
     let use_streaming = use_openrouter_streaming || use_custom_streaming || use_mistral_streaming || use_blackbox_streaming;
-    if use_mistral_streaming {
+    if use_ollama_streaming {
+        body["stream"] = Value::Bool(true);
+    } else if use_mistral_streaming {
         enable_mistral_chat_streaming(&mut body).map_err(ProviderCallError::configuration)?;
     } else if use_streaming {
         enable_chat_streaming(&mut body).map_err(ProviderCallError::configuration)?;
@@ -600,7 +604,19 @@ pub async fn provider_chat(
             builder
         }
     };
-    let (payload, request_id, semantic_output_started, continuation_diagnostics, response_evidence) = if use_streaming {
+    let (payload, request_id, semantic_output_started, continuation_diagnostics, response_evidence) = if use_ollama_streaming {
+        let result = ollama_stream::send(builder, request.request_id.as_deref(), &secret, &request.model_id, &timeout_policy, |event| {
+            if emit_stream_events {
+                let event = match event {
+                    ollama_stream::Event::Started(provider_request_id) => ProviderStreamEvent::Started { provider_request_id },
+                    ollama_stream::Event::Content(content) => ProviderStreamEvent::ContentDelta { content },
+                    ollama_stream::Event::Finished(finish_reason) => ProviderStreamEvent::Finished { finish_reason },
+                };
+                let _ = on_stream.send(event);
+            }
+        }).await.map_err(ownership_error)?;
+        (result.payload, result.request_id, result.semantic_output_started, None, result.response_evidence)
+    } else if use_streaming {
         let streamed = if use_openrouter_streaming {
             send_openrouter_streaming_chat_request(
                 builder,

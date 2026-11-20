@@ -1,4 +1,6 @@
-# Ollama Cloud — CLOUD-3 multi-turn diagnostic
+# Ollama Cloud — retired CLOUD-3 diagnostic (historical)
+
+**Superseded 20 November 2026 by Edward’s explicit decision:** remove the diagnostic screen and special automatic gate; use the ordinary provider workflow. The five diagnostic implementation/test files are deleted by CLOUD-FINAL. The following records the former candidate, not current instructions or a required account test. See [current behavior](OLLAMA_CLOUD_GENERATION.md).
 
 20 November 2026. Candidate following the accepted CLOUD-2 audit fix. This is a remaining part of DIRECT-3C2; it does not start NDJSON/3D or enable automatic scientific workflows.
 

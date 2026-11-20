@@ -3,7 +3,7 @@ import {parseProviderResponseEvidence,classifyProviderAttempt,classifyProviderAt
 import {normalizeProviderCallError,ProviderCallError} from "./providerError";
 import {executeProviderRequest,ProviderExecutionError} from "./requestExecutor";
 const finished:ProviderResponseEvidence={version:1,transportOutcome:"response_finished",boundary:"sse_done",finishReason:"stop",generationId:"gen-1",usage:{totalTokens:31}};
-for(const boundary of ["body_read","sse_done"] as const)it(`${boundary}: structured and JSON IPC normalization retain only safe completion evidence`,()=>{
+for(const boundary of ["body_read","sse_done","ndjson_done"] as const)it(`${boundary}: structured and JSON IPC normalization retain only safe completion evidence`,()=>{
  const input={code:"unknown",message:"reasoning without final response",phase:"validating_response",responseEvidence:{...finished,boundary,reasoning:"PRIVATE",secret:"SECRET",usage:{totalTokens:31,costUsd:0,extra:"SECRET"}}};
  for(const value of [input,JSON.stringify(input),{details:input}]){
   const error=normalizeProviderCallError(value);expect(error.details.responseEvidence).toEqual({...finished,boundary,usage:{totalTokens:31,costUsd:0}});expect(JSON.stringify(error.details)).not.toMatch(/PRIVATE|SECRET/);expect(classifyProviderAttempt(error.details)).toBe("response_finished");

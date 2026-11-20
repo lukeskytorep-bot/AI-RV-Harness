@@ -23,7 +23,7 @@ export function NativeConnectionSettings({ language = "en", onActivated }: { lan
     catch { setError(t.failed); } finally { lock.current = false; setBusy(false); }
   };
   return <section className="panel provider-settings wide-settings-panel">
-    <div className="provider-heading"><div><div><h2>{t.title}</h2><p>{language === "pl" ? "Zapisane konta Cloud można udostępnić w profilach. Conversation i Manual RV: tekst bez streamingu, thinking według modelu. Automatyczne etapy czekają na weryfikację pełnego kontekstu." : "Saved Cloud accounts can be activated for profiles. Conversation and Manual RV: non-streaming text, model-default thinking. Automatic stages await full-context verification."}</p></div></div><button className="primary-button" disabled={!desktop || busy} onClick={() => setEditing("new")}>{t.add}</button></div>
+    <div className="provider-heading"><div><div><h2>{t.title}</h2><p>{language === "pl" ? "Zapisane konta Cloud można udostępnić w profilach. Thinking korzysta z ustawień modelu." : "Saved Cloud accounts can be activated for profiles. Thinking uses the model default."}</p></div></div><button className="primary-button" disabled={!desktop || busy} onClick={() => setEditing("new")}>{t.add}</button></div>
     {!desktop && <p>{t.desktop}</p>}
     {error && <p role="alert" className="provider-error">{error}</p>}
     {views.length === 0 && <p>{t.empty}</p>}

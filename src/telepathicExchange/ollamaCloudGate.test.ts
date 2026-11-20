@@ -14,28 +14,32 @@ function participant(id: string): TelepathicParticipant {
 function route(p: TelepathicParticipant): ResolvedTelepathicAiRoute {
   return { snapshot: p.ai!, providerConfig: provider, model, requestedSettings: { maxOutputTokens: 32768 }, validatedIdentity: { profileId: p.ai!.profileId, workspaceId: p.ai!.workspaceId, aiIdentityId: p.ai!.aiIdentityId, credentialFingerprint: p.ai!.credentialFingerprint } };
 }
-it.each([false, true])("real provider gateway blocks Cloud before dispatch, fixedLead=%s", async fixedLead => {
+it.each([false, true])("real provider gateway dispatches Cloud, fixedLead=%s", async fixedLead => {
   const persisted: TelepathicProviderCallRecord[] = [];
-  const attempt = vi.fn(async () => ({ content: "Final", finishReason: "stop", usage: {} }));
-  await expect(executeTelepathicProviderPacket({ packet: buildSenderTargetPacket({ language: "en", seriesId: "gate", roundId: "round", participantId: "a", name: "A", roundNumber: 1, topicLabel: "any" }), route: route(participant("a")), fixedLead, technicalAttempt: 1, attempt, hooks: { createCallId: () => "call", now: () => "2026-11-19T12:00:00Z", persist: async call => { persisted.push(structuredClone(call)); } } })).rejects.toMatchObject({ details: { code: "configuration", phase: "before_dispatch" }, telepathicCall: { status: "failed", physicalAttempts: 0, transportFailure: { phase: "before_dispatch", retryable: false } } });
-  expect(attempt).not.toHaveBeenCalled();
-  expect(persisted.at(-1)?.status).toBe("failed");
-  expect(persisted.some(call => call.status === "uncertain" || call.status === "succeeded")).toBe(false);
+  const attempt = vi.fn(async () => ({ content: "Frozen target", finishReason: "stop", usage: {} }));
+  await executeTelepathicProviderPacket({ packet: buildSenderTargetPacket({ language: "en", seriesId: "gate", roundId: "round", participantId: "a", name: "A", roundNumber: 1, topicLabel: "any" }), route: route(participant("a")), fixedLead, technicalAttempt: 1, attempt, hooks: { createCallId: () => "call", now: () => "2026-11-19T12:00:00Z", persist: async call => { persisted.push(structuredClone(call)); } } });
+  expect(attempt).toHaveBeenCalledTimes(1);
+  expect(persisted.at(-1)).toMatchObject({status:"succeeded",physicalAttempts:1});
 });
 for (const mode of ["conversation_exchange", "ai_ai_training"] as const) {
-  it.each([false, true])(`${mode}: engine → real gateway blocks Cloud without Reveal, fixedLead=%s`, async fixed => {
+  it.each([false, true])(`${mode}: engine → real gateway completes Cloud round, fixedLead=%s`, async fixed => {
     const store = new InMemoryTelepathicExchangeStore();
     const initial = createTelepathicSeriesState({ schemaVersion: 1, seriesId: "gate", seriesWorkspaceId: "w", mode, language: "en", participants: [participant("a"), participant("b")], roundCount: 1, topic: "any", discloseTopicToReceivers: false, senderPolicy: fixed ? { kind: "fixed_ai", participantId: "a" } : { kind: "rotate" }, ...(fixed ? { protocolVersion: "fixed_lead_v1" as const, maxGuidanceCycles: 3 as const } : {}) });
     await store.saveTelepathicSeries(initial);
-    const providerAttempt = vi.fn(async () => ({ content: "Final", finishReason: "stop", usage: {} }));
-    await expect(runNextTelepathicAiRound({ store, resolveRoute: async p => route(p), providerAttempt }, "gate")).rejects.toThrow(/Ollama Cloud: automatic stages/);
-    expect(providerAttempt).not.toHaveBeenCalled();
+    const providerAttempt = vi.fn(async (request: Parameters<NonNullable<Parameters<typeof runNextTelepathicAiRound>[0]["providerAttempt"]>>[0]) => {
+      const prompt=request.messages.map(m=>m.content).join("\n");
+      const content=prompt.includes("CONTRACT:") ? JSON.stringify({cycle:Number(prompt.match(/"cycle":(\d)/)?.[1]),finishRound:true,finishParticipantIds:[],individual:[]})
+        : prompt.includes("confirm the transmission") ? "READY" : prompt.includes("YES or NO") ? "NO" : "A complete target, description or reflection.";
+      return {content,finishReason:"stop",usage:{}};
+    });
+    await runNextTelepathicAiRound({ store, resolveRoute: async p => route(p), providerAttempt }, "gate");
+    expect(providerAttempt.mock.calls.length).toBeGreaterThan(3);
     const saved = (await store.getTelepathicSeries("gate"))!;
-    expect(saved.status).toBe("blocked");
-    expect(saved.providerCalls.length).toBeGreaterThan(0);
-    for (const call of saved.providerCalls) expect(call).toMatchObject({ status: "failed", physicalAttempts: 0, transportFailure: { phase: "before_dispatch", retryable: false } });
-    expect(saved.rounds[0].revealedAt).toBeUndefined();
-    expect(saved.rounds[0].status).not.toBe("revealed");
+    expect(saved.rounds[0].revealedAt).toBeTruthy();
+    expect(saved.providerCalls.every(call=>call.status==="succeeded")).toBe(true);
+    const before=providerAttempt.mock.calls.length;
+    await runNextTelepathicAiRound({store,resolveRoute:async p=>route(p),providerAttempt},"gate");
+    expect(providerAttempt).toHaveBeenCalledTimes(before);
   });
 }
 it("the distinct telepathic operation still dispatches another provider once", async () => {

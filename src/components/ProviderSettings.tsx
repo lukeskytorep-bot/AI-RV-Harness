@@ -1,4 +1,3 @@
-import { CloudConformanceDialog } from "./CloudConformanceDialog";
 import { NativeConnectionSettings } from "./NativeConnectionSettings";
 import { Check, KeyRound, Plus, RefreshCw, Server, Settings2, ShieldCheck, Sparkles, Star, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
@@ -28,8 +27,8 @@ export function ProviderSettings({ copy, repository, section = "all", language =
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [legacyOpen, setLegacyOpen] = useState(false);
   const [rebindConfig, setRebindConfig] = useState<ProviderConfig | null>(null);
-  const [conformanceConfig, setConformanceConfig] = useState<ProviderConfig | null>(null);
   const [wireConfig, setWireConfig] = useState<ProviderConfig | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -155,7 +154,7 @@ export function ProviderSettings({ copy, repository, section = "all", language =
 
   return (
     <>
-      {section !== "models" && repository && <NativeConnectionSettings language={language} onActivated={async id => { const configs = await repository.listProviderConfigs(); const active = configs.find(c => c.id === id); if (active) await refreshProviderModels(repository, active); await reload(); }} />}
+      {section !== "models" && repository && <details onToggle={event => setLegacyOpen(event.currentTarget.open)}><summary>{language === "pl" ? "Starsze połączenia Ollama" : "Legacy Ollama connections"}</summary>{legacyOpen && <NativeConnectionSettings language={language} onActivated={async id => { const configs = await repository.listProviderConfigs(); const active = configs.find(c => c.id === id); if (active) await refreshProviderModels(repository, active); await reload(); }} />}</details>}
       {section !== "models" && <section className="panel provider-settings wide-settings-panel">
         <div className="provider-heading">
           <div><span className="heading-orb"><KeyRound size={19} /></span><div><h2>{copy.providersApi}</h2><p>{copy.providersReady}</p></div></div>
@@ -180,7 +179,6 @@ export function ProviderSettings({ copy, repository, section = "all", language =
                 <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => void refresh(config)} title={copy.testRefresh}>
                   <RefreshCw size={14} className={busyId === config.id ? "spin-icon" : ""} />{busyId === config.id ? copy.refreshing : copy.testRefresh}
                 </button>
-                {config.provider === "ollama_cloud" && <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => setConformanceConfig(config)}>{language === "pl" ? "Test wieloturowości" : "Multi-turn test"}</button>}
                 {config.provider === "custom_openai" && <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => { setEndpointError(null); setWireConfig(config); }} title={copy.customWireSettings}>
                   <Settings2 size={14} />{copy.customWireSettings}
                 </button>}
@@ -194,7 +192,6 @@ export function ProviderSettings({ copy, repository, section = "all", language =
         </div>
       </section>}
       {section !== "providers" && <ModelRegistry copy={copy} repository={repository} providers={providers} models={models} onChanged={reload} />}
-      {conformanceConfig && repository && <CloudConformanceDialog key={conformanceConfig.id} config={conformanceConfig} models={models} repository={repository} language={language} onClose={() => setConformanceConfig(null)} />}
       {dialogOpen && <AddProviderDialog language={language} copy={copy} busy={busyId === "new"} onClose={() => setDialogOpen(false)} onSubmit={add} />}
       {rebindConfig && <RebindCredentialDialog copy={copy} config={rebindConfig} busy={busyId === rebindConfig.id} onClose={() => setRebindConfig(null)} onSubmit={(apiKey) => rebind(rebindConfig, apiKey)} />}
       {wireConfig && <CustomWireSettingsDialog copy={copy} config={wireConfig} endpointError={endpointError} onSaveEndpoint={(baseUrl) => updateEndpoint(wireConfig, baseUrl)} busy={busyId === wireConfig.id} onClose={() => setWireConfig(null)} onSubmit={(field, streamingEnabled, compatibilityProfile) => updateWireField(wireConfig, field, streamingEnabled, compatibilityProfile)} />}
@@ -266,7 +263,7 @@ function AddProviderDialog({ language, copy, busy, onClose, onSubmit }: { langua
         <form onSubmit={submit}>
           <label>{copy.provider}<select value={provider} onChange={(event) => changeProvider(event.target.value as ProviderKind)}>{PROVIDER_KINDS.map((kind) => <option key={kind} value={kind}>{PROVIDER_LABELS[kind]}</option>)}</select></label>
           <label>{copy.providerLabel}<input value={label} onChange={(event) => setLabel(event.target.value)} required /></label>
-          {provider === "ollama_cloud" && <p>{language === "pl" ? "Klucz zostanie wysłany do https://ollama.com, aby sprawdzić dostęp i pobrać modele. Conversation i Manual RV bez streamingu. Automatyczne etapy czekają na weryfikację pełnego kontekstu." : "The key will be sent to https://ollama.com to verify access and list models. Conversation and Manual RV without streaming. Automatic stages await full-context verification."}</p>}
+          {provider === "ollama_cloud" && <p>{language === "pl" ? "Klucz zostanie wysłany do https://ollama.com, aby sprawdzić dostęp i pobrać modele. Wybierz model z listy i używaj połączenia w dostępnych trybach aplikacji." : "The key will be sent to https://ollama.com to verify access and list models. Choose a listed model and use the connection in the application workflows."}</p>}
           {(provider === "custom_openai" || provider === "blackbox") && <><label>{copy.baseUrl}<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={provider === "blackbox" ? "https://enterprise.blackbox.ai" : "https://example.com/v1"} required={provider === "custom_openai"} /></label>{provider === "custom_openai" && <label>{copy.customOutputTokenField}<select value={customOutputTokenField} onChange={(event) => setCustomOutputTokenField(event.target.value as "default" | CustomOpenAiOutputTokenField)}><option value="default">{copy.customOutputTokenDefault}</option><option value="max_completion_tokens">{copy.customOutputTokenCompletion}</option></select><small>{copy.customOutputTokenFieldHelp}</small></label>}</>}
           {provider === "custom_openai" && <>
             <label className="checkbox-line"><input type="checkbox" checked={streamingEnabled} onChange={(event) => setStreamingEnabled(event.target.checked)} />{copy.customStreamingEnabled}</label>

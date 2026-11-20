@@ -3,7 +3,7 @@ import type { ProviderUsage } from "./types";
 export interface ProviderResponseEvidence {
   version: 1;
   transportOutcome: "response_finished";
-  boundary: "body_read" | "sse_done";
+  boundary: "body_read" | "sse_done" | "ndjson_done";
   finishReason?: string;
   providerRequestId?: string;
   generationId?: string;
@@ -24,7 +24,7 @@ export interface ProviderAttemptOutcome {
 export function parseProviderResponseEvidence(value: unknown): ProviderResponseEvidence | undefined {
   if (!value || typeof value !== "object") return undefined;
   const v = value as Record<string, unknown>;
-  if (v.version !== 1 || v.transportOutcome !== "response_finished" || !["body_read", "sse_done"].includes(String(v.boundary))) return undefined;
+  if (v.version !== 1 || v.transportOutcome !== "response_finished" || !["body_read", "sse_done", "ndjson_done"].includes(String(v.boundary))) return undefined;
   const evidence: ProviderResponseEvidence = { version: 1, transportOutcome: "response_finished", boundary: v.boundary as ProviderResponseEvidence["boundary"] };
   for (const key of ["finishReason", "providerRequestId", "generationId"] as const) {
     if (typeof v[key] === "string" && v[key].length <= 512) evidence[key] = v[key];

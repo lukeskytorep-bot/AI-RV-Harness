@@ -175,7 +175,7 @@ pub(super) async fn json_response(response: reqwest::Response, secret: &str) -> 
 async fn chat_json_response(response: reqwest::Response, secret: &str) -> Result<(Value, Option<String>), ProviderCallError> {
     chat_json_response_with_limit(response,secret,None).await
 }
-async fn chat_json_response_with_limit(mut response:reqwest::Response,secret:&str,limit:Option<usize>)->Result<(Value,Option<String>),ProviderCallError>{
+pub(super) async fn chat_json_response_with_limit(mut response:reqwest::Response,secret:&str,limit:Option<usize>)->Result<(Value,Option<String>),ProviderCallError>{
     let status = response.status();
     let retry_after_ms = retry_after_ms(response.headers());
     let request_id = response

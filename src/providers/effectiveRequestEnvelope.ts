@@ -1,4 +1,3 @@
-import { isCloudConformanceProbe } from "./cloudConformanceContract";
 import { estimateProviderInputTokens } from "./inputTokenEstimate";
 import {
   createOpenRouterCapacityEnvelope,
@@ -225,7 +224,7 @@ function reconcileFinalOpenRouterRouting(
 }
 
 export function streamingTransportMode(config: ProviderConfig): StreamingTransportMode {
-  return config.provider === "openrouter" || (config.provider === "custom_openai" && config.customStreamingEnabled === true) ? "streaming" : "non_streaming";
+  return config.provider === "openrouter" || config.provider === "ollama_cloud" || (config.provider === "custom_openai" && config.customStreamingEnabled === true) ? "streaming" : "non_streaming";
 }
 
 /**
@@ -269,18 +268,9 @@ export async function resolveEffectiveRequestEnvelope(input: {
   let certainty: EffectiveRouteCertainty = "not_applicable";
   let localStopMessage: string | undefined;
 
-  if (input.config.provider === "ollama_cloud") {
-    // /tags does not prove a hosted full-input/no-truncation contract. Interactive
-    // turns are user-controlled; automatic scientific stages must fail before dispatch.
-    certainty = "unknown";
-    const diagnosticProbe = resourceProfile.operationKind === "cloud_conformance"
-      && isCloudConformanceProbe(input.operationId, input.messages, input.settings.effective.maxOutputTokens)
-      && Object.keys(input.settings.effective).every(key => key === "maxOutputTokens");
-    if (resourceProfile.operationKind !== "conversation" && resourceProfile.operationKind !== "manual_rv_viewer" && !diagnosticProbe) {
-      certainty = "blocked";
-      localStopMessage = "Ollama Cloud: automatic stages require verified full-input and oversized-request rejection evidence. Use Conversation or Manual RV; no request was sent.";
-    }
-  }
+  // Hosted capacity is unknown when discovery supplies no trusted limits.
+  // It follows the same unverified-capacity path as other direct providers.
+  if (input.config.provider === "ollama_cloud") certainty = "unknown";
   if (input.config.provider === "openrouter") {
     if (!input.endpointDiscovery) {
       throw new Error("OpenRouter endpoint discovery callback is required for effective request resolution.");

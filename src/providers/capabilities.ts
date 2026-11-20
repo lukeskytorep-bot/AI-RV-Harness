@@ -194,7 +194,7 @@ function normalizeCompatible(raw: Record<string, unknown>, capturedAt: string): 
 
 function normalizeOllamaCloud(capturedAt: string): { capabilities: ModelCapabilities; pricing: ModelPricing } {
   return { capabilities: {
-    inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: false,
+    inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true,
     reasoning: { supported: false, efforts: [], confidence: "unknown" },
     // Wire options are supported; effective application by a hosted model is not verified by /tags.
     temperature: { supported: true, min: 0, max: 2, confidence: "unknown" },

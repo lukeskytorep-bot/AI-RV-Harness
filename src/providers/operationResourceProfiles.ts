@@ -1,6 +1,5 @@
 export type OperationKind =
   | "conversation"
-  | "cloud_conformance"
   | "telepathic_exchange"
   | "manual_rv_viewer"
   | "rv_session_viewer"
@@ -49,15 +48,6 @@ const PROFILE_BY_KIND: Record<OperationKind, OperationResourceProfile> = {
     reasoningPolicy: "preserve_configured",
     timeoutClass: "interactive",
     streamPresentation: "live",
-    retryClass: "configured_transport",
-    capacityRoutingPolicy: "default_auto",
-  },
-  cloud_conformance: {
-    operationKind: "cloud_conformance",
-    outputPolicy: "configured_or_frozen",
-    reasoningPolicy: "preserve_configured",
-    timeoutClass: "interactive",
-    streamPresentation: "hidden",
     retryClass: "configured_transport",
     capacityRoutingPolicy: "default_auto",
   },

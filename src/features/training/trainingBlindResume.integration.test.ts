@@ -2,6 +2,8 @@ import { workflowTestRepository } from "../../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
+import { executeProviderChat } from "../../providers/requestExecutor";
+import { normalizeModelDiscovery } from "../../providers/capabilities";
 import { getRvLite } from "../../resources/protocolRegistry";
 import type { AppRepository } from "../../storage/repository";
 import { createSessionReplay } from "../../sessions/resumeReplay";
@@ -12,12 +14,13 @@ import type { TrainingRunRecord } from "../../training/types";
 import type { Profile } from "../../types";
 import { executeTrainingRun } from "./trainingExecution";
 
-const config: ProviderConfig = { id: "p", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
-const model: ProviderModel = {
+const globalConfig: ProviderConfig = { id: "p", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
+const globalModel: ProviderModel = {
   providerConfigId: "p", provider: "openrouter", modelId: "m", displayName: "M", route: "openrouter:m", pricing: {}, recommended: false, rawMetadata: {}, refreshedAt: "now",
   capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: [], maxOutputTokens: 65536, contextTokens: 131072, source: "provider", capturedAt: "now" },
 };
 
+const config=globalConfig, model=globalModel;
 function durableRepository() {
   let session: RvSession | undefined;
   let snapshot: SessionSnapshot | undefined;
@@ -77,7 +80,9 @@ function durableRepository() {
 }
 
 describe("Training blind real RV Lite replay", () => {
-  it("replays accepted P1 and resumes only P2 at 32K after a crash following durable length", async () => {
+  it.each(["openrouter", "ollama_cloud"] as const)("%s: replays accepted P1 and resumes only P2 at 32K after a crash following durable length", async providerKind => {
+    const config = { ...globalConfig, provider: providerKind };
+    const model = providerKind === "ollama_cloud" ? normalizeModelDiscovery(config,{models:[{name:"m"}]},"now")[0] : globalModel;
     const durable = durableRepository();
     let calls = 0;
     const first = await runAutomaticRvLiteSession({
@@ -90,11 +95,11 @@ describe("Training blind real RV Lite replay", () => {
       sessionLanguage: "en",
       requestedSettings: { maxOutputTokens: 16384 },
       operationKind: "training_blind_viewer",
-      chat: async () => {
+      chat: request => executeProviderChat({...request,operationKind:"training_blind_viewer",configuredRetries:0,attempt:async () => {
         calls += 1;
         if (calls === 1) return { content: "P1 accepted", finishReason: "stop", usage: {} };
         return { content: "P2 partial", finishReason: "length", usage: {} };
-      },
+      }}),
     });
     expect(first.state).toBe("Interrupted");
     expect(calls).toBe(2);
@@ -106,11 +111,11 @@ describe("Training blind real RV Lite replay", () => {
       repository: durable.repository,
       session: durable.session(),
       events: await durable.repository.listSessionEvents(durable.session().id),
-      liveChat: async ({ settings, messages }) => {
+      liveChat: request => executeProviderChat({...request,operationKind:"training_blind_viewer",configuredRetries:0,attempt:async ({settings,messages}) => {
         liveBudgets.push(settings.effective.maxOutputTokens ?? 0);
         livePrompts.push(messages.at(-1)?.content ?? "");
         return { content: `live ${liveBudgets.length}`, finishReason: "stop", usage: {} };
-      },
+      }}),
     });
     const resumed = await runAutomaticRvLiteSession({
       repository: replay.repository,
