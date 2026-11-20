@@ -1,3 +1,4 @@
+import { isCloudConformanceProbe } from "./cloudConformanceContract";
 import { estimateProviderInputTokens } from "./inputTokenEstimate";
 import {
   createOpenRouterCapacityEnvelope,
@@ -272,7 +273,10 @@ export async function resolveEffectiveRequestEnvelope(input: {
     // /tags does not prove a hosted full-input/no-truncation contract. Interactive
     // turns are user-controlled; automatic scientific stages must fail before dispatch.
     certainty = "unknown";
-    if (resourceProfile.operationKind !== "conversation" && resourceProfile.operationKind !== "manual_rv_viewer") {
+    const diagnosticProbe = resourceProfile.operationKind === "cloud_conformance"
+      && isCloudConformanceProbe(input.operationId, input.messages, input.settings.effective.maxOutputTokens)
+      && Object.keys(input.settings.effective).every(key => key === "maxOutputTokens");
+    if (resourceProfile.operationKind !== "conversation" && resourceProfile.operationKind !== "manual_rv_viewer" && !diagnosticProbe) {
       certainty = "blocked";
       localStopMessage = "Ollama Cloud: automatic stages require verified full-input and oversized-request rejection evidence. Use Conversation or Manual RV; no request was sent.";
     }

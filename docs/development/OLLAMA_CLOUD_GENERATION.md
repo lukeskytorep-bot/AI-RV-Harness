@@ -8,6 +8,8 @@ The original CLOUD-2 patch did not pass typecheck/build: a test fixture widened 
 
 The fixture now has the actual NativeConnection type. All stale current-schema assertions in storage/UX tests expect 36; historical migration ranges and migration files are unchanged. These twelve exact regression tests are exercised in the portable Rust evidence, including the verbatim extracted storage validator/test. Full Tauri/Windows and hosted-account conformance remain separate checks. Verification must use each command's own exit status; a later successful shell command is not evidence of a successful typecheck or build.
 
+Follow-up candidate: [CLOUD-3 multi-turn diagnostic](OLLAMA_CLOUD_CONFORMANCE.md). It collects bounded interactive evidence without opening automatic generation.
+
 ## Setup and identity
 
 Create an Ollama Cloud connection in the ordinary provider dialog, or explicitly choose **Activate for profiles** on an existing saved hosted account. Both routes verify authenticated access through `/api/balance` and read exact models through `/api/tags`. Account balance metadata is discarded. There is no billed generation during setup. No daemon, `/version`, `/show`, `/ps`, local GPU or local cloud alias is required.

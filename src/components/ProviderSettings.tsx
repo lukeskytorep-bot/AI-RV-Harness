@@ -1,3 +1,4 @@
+import { CloudConformanceDialog } from "./CloudConformanceDialog";
 import { NativeConnectionSettings } from "./NativeConnectionSettings";
 import { Check, KeyRound, Plus, RefreshCw, Server, Settings2, ShieldCheck, Sparkles, Star, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
@@ -28,6 +29,7 @@ export function ProviderSettings({ copy, repository, section = "all", language =
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [rebindConfig, setRebindConfig] = useState<ProviderConfig | null>(null);
+  const [conformanceConfig, setConformanceConfig] = useState<ProviderConfig | null>(null);
   const [wireConfig, setWireConfig] = useState<ProviderConfig | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -178,6 +180,7 @@ export function ProviderSettings({ copy, repository, section = "all", language =
                 <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => void refresh(config)} title={copy.testRefresh}>
                   <RefreshCw size={14} className={busyId === config.id ? "spin-icon" : ""} />{busyId === config.id ? copy.refreshing : copy.testRefresh}
                 </button>
+                {config.provider === "ollama_cloud" && <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => setConformanceConfig(config)}>{language === "pl" ? "Test wieloturowości" : "Multi-turn test"}</button>}
                 {config.provider === "custom_openai" && <button className="secondary-button" disabled={!desktop || busyId !== null} onClick={() => { setEndpointError(null); setWireConfig(config); }} title={copy.customWireSettings}>
                   <Settings2 size={14} />{copy.customWireSettings}
                 </button>}
@@ -191,6 +194,7 @@ export function ProviderSettings({ copy, repository, section = "all", language =
         </div>
       </section>}
       {section !== "providers" && <ModelRegistry copy={copy} repository={repository} providers={providers} models={models} onChanged={reload} />}
+      {conformanceConfig && repository && <CloudConformanceDialog key={conformanceConfig.id} config={conformanceConfig} models={models} repository={repository} language={language} onClose={() => setConformanceConfig(null)} />}
       {dialogOpen && <AddProviderDialog language={language} copy={copy} busy={busyId === "new"} onClose={() => setDialogOpen(false)} onSubmit={add} />}
       {rebindConfig && <RebindCredentialDialog copy={copy} config={rebindConfig} busy={busyId === rebindConfig.id} onClose={() => setRebindConfig(null)} onSubmit={(apiKey) => rebind(rebindConfig, apiKey)} />}
       {wireConfig && <CustomWireSettingsDialog copy={copy} config={wireConfig} endpointError={endpointError} onSaveEndpoint={(baseUrl) => updateEndpoint(wireConfig, baseUrl)} busy={busyId === wireConfig.id} onClose={() => setWireConfig(null)} onSubmit={(field, streamingEnabled, compatibilityProfile) => updateWireField(wireConfig, field, streamingEnabled, compatibilityProfile)} />}

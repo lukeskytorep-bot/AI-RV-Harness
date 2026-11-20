@@ -40,6 +40,7 @@ describe("ORP1 operation resource profiles", () => {
   it("maps every operation to the agreed timeout semantic class before S1 assigns durations", () => {
     const expected: Record<OperationKind, OperationTimeoutClass> = {
       conversation: "interactive",
+      cloud_conformance: "interactive",
       telepathic_exchange: "interactive",
       manual_rv_viewer: "interactive",
       rv_session_viewer: "interactive",
