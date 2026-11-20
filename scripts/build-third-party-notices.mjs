@@ -3,23 +3,17 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertComplete, collectPackageNotices, inventoryManifest, loadSupplements, renderPackageNotice, sha256 } from "./third-party-notices-lib.mjs";
+import { matchCargoRuntimePackages, assertComplete, collectPackageNotices, inventoryManifest, loadSupplements, renderPackageNotice, sha256 } from "./third-party-notices-lib.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const read = path => readFileSync(path, "utf8").trimEnd();
 const run = (cmd, args) => execFileSync(cmd, args, { cwd: root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
-const cargoArgs = ["--manifest-path", "src-tauri/Cargo.toml", "--locked"];
+const cargoArgs = ["--manifest-path", "src-tauri/Cargo.toml", "--locked", "--color", "never"];
 const target = process.env.TAURI_ENV_TARGET_TRIPLE || /^host: (\S+)$/m.exec(run("rustc", ["-vV"]))?.[1];
 if (!target) throw new Error("Could not determine the desktop target for the license inventory.");
 const cargo = JSON.parse(run("cargo", ["metadata", ...cargoArgs, "--format-version", "1", "--filter-platform", target]));
-const tree = new Set(run("cargo", ["tree", ...cargoArgs, "--target", target, "--edges", "normal", "--prefix", "none", "--format", "{p}"])
-  .split(/\r?\n/).map(line => line.trim().replace(/ \(\*\)$/, "")).filter(Boolean));
-const rootCrate = cargo.packages.find(p => p.id === cargo.resolve.root);
-const key = p => p.name + " v" + p.version;
-const runtime = cargo.packages.filter(p => p.id !== rootCrate.id && [...tree].some(line => line === key(p) || line.startsWith(key(p) + " (")));
-if (new Set(runtime.map(key)).size + 1 !== tree.size || runtime.length !== new Set(runtime.map(key)).size) {
-  throw new Error("Cargo dependency inventory could not be matched unambiguously.");
-}
+const tree = run("cargo", ["tree", ...cargoArgs, "--target", target, "--edges", "normal", "--prefix", "none", "--format", "{p}"]);
+const runtime = matchCargoRuntimePackages(cargo, tree);
 
 const entries = [];
 const supplements = loadSupplements(resolve(root, "docs/third-party/notices"));

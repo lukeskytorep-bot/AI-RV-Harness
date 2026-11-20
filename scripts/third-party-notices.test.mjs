@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertComplete, collectPackageNotices, inventoryManifest, loadSupplements, renderPackageNotice, sha256 } from "./third-party-notices-lib.mjs";
+import { matchCargoRuntimePackages, assertComplete, collectPackageNotices, inventoryManifest, loadSupplements, renderPackageNotice, sha256 } from "./third-party-notices-lib.mjs";
 
 const corpus = fileURLToPath(new URL("../docs/third-party/notices", import.meta.url));
 const dirs = [];
@@ -85,5 +85,22 @@ describe("reviewed third-party notices", () => {
     expect(manifest.packages[0].texts[0]).not.toHaveProperty("text");
     expect(manifest.packages[0].texts[0].sha256).toBe(sha256("MPL license"));
     expect(manifest).toEqual(inventoryManifest([entry], "x86_64-test", { "Cargo.lock": "frozen" }));
+  });
+});
+
+describe("Cargo normal dependency inventory matching", () => {
+  const root = {id:"root",name:"app",version:"1.0.0"};
+  const dependency = {id:"registry+dep",name:"dep",version:"2.0.0"};
+  const metadata = {packages:[root,dependency,{id:"unused",name:"unused",version:"9.0.0"}],resolve:{root:root.id}};
+  it("normalizes ANSI and Windows CRLF without losing packages or accepting unused metadata", () => {
+    expect(matchCargoRuntimePackages(metadata,"app v1.0.0 (D:\\a\\repo)\r\n\x1b[32mdep v2.0.0\x1b[0m (*)\r\n")).toEqual([dependency]);
+  });
+  it("accepts repeated labels and proc-macro annotations for the same unique package", () => {
+    expect(matchCargoRuntimePackages(metadata,"app v1.0.0\ndep v2.0.0\ndep v2.0.0 (proc-macro) (*)\n")).toEqual([dependency]);
+  });
+  it("rejects missing root, unmatched dependencies, and same-name/version source ambiguity", () => {
+    expect(()=>matchCargoRuntimePackages(metadata,"dep v2.0.0")).toThrow(/root/);
+    expect(()=>matchCargoRuntimePackages(metadata,"app v1.0.0\nunknown v3.0.0")).toThrow(/0 candidates/);
+    expect(()=>matchCargoRuntimePackages({...metadata,packages:[...metadata.packages,{...dependency,id:"other-source"}]},"app v1.0.0\ndep v2.0.0")).toThrow(/2 candidates/);
   });
 });

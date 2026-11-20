@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve } from "node:path";
@@ -71,4 +72,23 @@ export function renderPackageNotice(p) {
 export function inventoryManifest(entries, target, lockfiles) {
   return { schemaVersion: 1, target, lockfiles, packages: [...entries].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
     .map(p => ({ ...p, texts: p.texts.map(({ text: _text, ...metadata }) => metadata) })) };
+}
+
+/** Match every rendered normal dependency to one metadata package, fail closed. */
+export function matchCargoRuntimePackages(metadata, output) {
+  const root = metadata.packages.find(p => p.id === metadata.resolve?.root);
+  if (!root) throw new Error("Cargo inventory root package is missing.");
+  const selected = new Map();
+  const lines = new Set(stripVTControlCharacters(output).split(/\r?\n/)
+    .map(line => line.trim().replace(/ \(\*\)$/, "")).filter(Boolean));
+  for (const line of lines) {
+    const matches = metadata.packages.filter(p => {
+      const key = p.name + " v" + p.version;
+      return line === key || line.startsWith(key + " (");
+    });
+    if (matches.length !== 1) throw new Error(`Cargo dependency inventory could not be matched unambiguously: ${line} (${matches.length} candidates).`);
+    selected.set(matches[0].id, matches[0]);
+  }
+  if (!selected.has(root.id)) throw new Error("Cargo inventory tree is missing its root package.");
+  return metadata.packages.filter(p => p.id !== root.id && selected.has(p.id));
 }
