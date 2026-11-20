@@ -12,10 +12,10 @@ beforeEach(() => bridge.invoke.mockReset());
 it("uses exact Cloud names and exposes no invented context, vision or effort control", () => {
   const model = models()[0];
   expect(model.modelId).toBe("qwen3:235b");
-  expect(model.capabilities).toMatchObject({ supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [] } });
+  expect(model.capabilities).toMatchObject({ supportsVision: false, supportsStreaming: true, reasoning: { supported: true, efforts: ["none","high"] } });
   expect(model.capabilities.contextTokens).toBeUndefined(); expect(model.capabilities.maxOutputTokens).toBeUndefined();
   expect(supportsAdditionalSamplingProvider("ollama_cloud")).toBe(true);
-  expect(resolveGenerationSettings(model.capabilities, { reasoningEffort: "high", maxOutputTokens: 49152 }, { provider: "ollama_cloud" })).toMatchObject({ effective: { maxOutputTokens: 49152 }, omitted: ["reasoningEffort"] });
+  expect(resolveGenerationSettings(model.capabilities, { reasoningEffort: "high", maxOutputTokens: 49152 }, { provider: "ollama_cloud" })).toMatchObject({ effective: { maxOutputTokens: 49152,reasoningEffort:"high" }, omitted: [] });
 });
 const operations: OperationKind[] = ["conversation", "manual_rv_viewer", "rv_session_viewer", "training_blind_viewer", "research_viewer", "live_monitor", "judge", "post_reveal_viewer", "post_reveal_monitor", "field_guide_update", "viewer_notes_reflection", "telepathic_exchange"];
 it.each(operations)("%s passes the hosted identity, budget, sampling, thinking and native usage through the common executor", async operationKind => {
@@ -45,4 +45,12 @@ it("Cloud IPC streaming preserves every internal delta and final metadata despit
  expect(internal.mock.calls.filter(([event])=>event.event==="contentDelta")).toHaveLength(103);
  expect(result.content).toBe("x".repeat(103));expect(result.reasoningContent).toBe("private");expect(result.usage.outputTokens).toBe(103);
  expect(result.execution?.attemptOutcomes?.[0]).toMatchObject({outcome:"response_finished",validation:"accepted",responseEvidence:{boundary:"ndjson_done"}});
+});
+it.each(["none","high"] as const)("native IPC carries exact Qwen think selection %s and preserves replay details",async effort=>{
+ const details=[{type:"thinking",thinking:[{type:"text",text:"private"}]},{type:"text",text:"Final"}];
+ bridge.invoke.mockResolvedValueOnce({content:"Final",reasoning_content:"private",reasoning_details:details,finish_reason:"stop",actual_model:"qwen3:235b",usage:{}});
+ const settings=resolveGenerationSettings(models()[0].capabilities,{reasoningEffort:effort,maxOutputTokens:32768,seed:0,topK:0},{provider:"ollama_cloud"});
+ const result=await executeProviderChat({config,modelId:"qwen3:235b",messages:[{role:"user",content:"Q"}],settings,configuredRetries:0});
+ expect(bridge.invoke.mock.calls[0][1].request).toMatchObject({reasoningTransportKind:"enabled_boolean",reasoningTransportValue:effort==="none"?"false":"true",maxOutputTokens:32768,topK:0,seed:0});
+ expect(result.reasoningDetails).toEqual(details);expect(result.content).toBe("Final");
 });

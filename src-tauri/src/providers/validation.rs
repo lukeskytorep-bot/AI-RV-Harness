@@ -40,6 +40,7 @@ pub(super) fn validate_chat_request(request: &ProviderChatRequest) -> Result<(),
                     | (super::ProviderKind::Google, ProviderContinuationState::Google(_))
                     | (super::ProviderKind::Anthropic, ProviderContinuationState::Anthropic(_))
                     | (super::ProviderKind::Mistral, ProviderContinuationState::Mistral(_))
+                    | (super::ProviderKind::OllamaCloud, ProviderContinuationState::Ollama(_))
             );
             if !supported {
                 return Err("continuation state belongs to a different or unsupported provider transport".to_string());
@@ -467,6 +468,50 @@ pub(super) fn validate_continuation_bindings(request: &ProviderChatRequest, norm
                     }
                 }
                 serde_json::to_vec(state).map_err(|_| "invalid Mistral continuation state".to_string())?.len()
+            }
+            ProviderContinuationState::Ollama(state) => {
+                if !matches!(request.provider, super::ProviderKind::OllamaCloud) {
+                    return Err("Ollama continuation state cannot be replayed through this provider".to_string());
+                }
+                if state.schema_version != 1
+                    || state.transport != "ollama-cloud"
+                    || state.format != "ollama-thinking-content"
+                    || state.replay_fingerprint.transport != "ollama-cloud"
+                    || state.replay_fingerprint.state_format != "ollama-thinking-content"
+                    || state.replay_fingerprint.state_format_version != 1
+                {
+                    return Err("unsupported Ollama continuation state".to_string());
+                }
+                if state.replay_fingerprint.normalized_endpoint != normalized_endpoint
+                    || state.replay_fingerprint.provider_config_id != request.provider_config_id
+                    || state.replay_fingerprint.credential_id != request.credential_id
+                    || state.replay_fingerprint.requested_model_id != request.model_id
+                {
+                    return Err("Ollama continuation fingerprint is incompatible with this request".to_string());
+                }
+                if state.content.is_empty() || state.content.len() > MAX_BLOCKS {
+                    return Err("Ollama continuation state has an invalid chunk count".to_string());
+                }
+                if !message.images.is_empty() {
+                    return Err("Ollama continuation state cannot be replayed on an assistant message with images".to_string());
+                }
+                let visible = mistral_visible_content(&state.content)
+                    .ok_or_else(|| "invalid Ollama assistant content chunk".to_string())?;
+                if visible != message.content {
+                    return Err("Ollama continuation chunks do not match the bound assistant message content".to_string());
+                }
+                if !state.content.iter().any(|chunk| chunk.get("type").and_then(Value::as_str) == Some("thinking"))
+                    || !state.content.iter().any(|chunk| chunk.get("type").and_then(Value::as_str) == Some("text"))
+                {
+                    return Err("Ollama continuation state must preserve both thinking and visible text chunks".to_string());
+                }
+                for chunk in &state.content {
+                    let bytes = serde_json::to_vec(chunk).map_err(|_| "invalid Ollama assistant content chunk".to_string())?.len();
+                    if bytes > MAX_BLOCK_BYTES {
+                        return Err("Ollama continuation state contains an oversized chunk".to_string());
+                    }
+                }
+                serde_json::to_vec(state).map_err(|_| "invalid Ollama continuation state".to_string())?.len()
             }
         };
 

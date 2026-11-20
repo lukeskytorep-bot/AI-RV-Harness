@@ -1,3 +1,4 @@
+import {ollamaThinkingCapability} from "./ollamaThinking";
 import type {
   EffectiveGenerationSettings,
   GenerationSettings,
@@ -192,10 +193,10 @@ function normalizeCompatible(raw: Record<string, unknown>, capturedAt: string): 
   };
 }
 
-function normalizeOllamaCloud(capturedAt: string): { capabilities: ModelCapabilities; pricing: ModelPricing } {
+function normalizeOllamaCloud(capturedAt: string, modelId:string, raw:Record<string,unknown>): { capabilities: ModelCapabilities; pricing: ModelPricing } {
   return { capabilities: {
     inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true,
-    reasoning: { supported: false, efforts: [], confidence: "unknown" },
+    reasoning: ollamaThinkingCapability(modelId,raw.thinking),
     // Wire options are supported; effective application by a hosted model is not verified by /tags.
     temperature: { supported: true, min: 0, max: 2, confidence: "unknown" },
     supportedParameters: ["temperature", "top_p", "top_k", "seed", "num_predict"],
@@ -229,7 +230,7 @@ export function normalizeModelDiscovery(config: ProviderConfig, payload: unknown
           : config.provider === "google"
             ? normalizeGoogle(raw, capturedAt)
             : config.provider === "ollama_cloud"
-              ? normalizeOllamaCloud(capturedAt)
+              ? normalizeOllamaCloud(capturedAt,id,raw)
               : normalizeCompatible(raw, capturedAt);
       const displayName =
         (typeof raw.displayName === "string" && raw.displayName) ||

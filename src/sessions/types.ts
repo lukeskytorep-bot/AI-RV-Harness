@@ -109,6 +109,15 @@ export type SessionContinuationRouteSnapshot =
       requestedModelId: string;
       stateFormat: "mistral-assistant-content";
       stateFormatVersion: 1;
+    }
+  | {
+      transport: "ollama-cloud";
+      normalizedEndpoint: string;
+      providerConfigId: string;
+      credentialId: string;
+      requestedModelId: string;
+      stateFormat: "ollama-thinking-content";
+      stateFormatVersion: 1;
     };
 
 export interface SessionSnapshot {

@@ -1,3 +1,4 @@
+import {captureOllamaContinuationState,validateOllamaReplayForRequest} from "../providers/ollamaContinuation";
 import { validateContinuationRequestBudget, type ProviderContinuationState } from "../providers/continuationContract";
 import { captureAnthropicContinuationState, validateAnthropicReplayForRequest } from "../providers/anthropicContinuation";
 import { captureGoogleContinuationState, validateGoogleReplayForRequest } from "../providers/googleContinuation";
@@ -10,6 +11,7 @@ import type { SessionContinuationRouteSnapshot, SessionEventInput, SessionEventR
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1";
 const GOOGLE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1";
+const OLLAMA_ENDPOINT="https://ollama.com";
 const MISTRAL_ENDPOINT = "https://api.mistral.ai/v1";
 
 export const ANTHROPIC_SANITIZED_TURN_AUTO_STOP_REASON = "AUTO-STOP: Anthropic continuation cannot safely replay a signed assistant turn after output sanitization modified its visible text.";
@@ -37,13 +39,13 @@ function requireSupportedSessionContinuationRoute(
   route: SessionContinuationRouteSnapshot,
 ): SessionContinuationRouteSnapshot {
   const runtimeRoute = route as unknown as RuntimeSessionContinuationRouteSnapshot;
-  if (runtimeRoute.transport === "openrouter" || runtimeRoute.transport === "google-native" || runtimeRoute.transport === "anthropic-native" || runtimeRoute.transport === "mistral-native") return route;
+  if (runtimeRoute.transport === "openrouter" || runtimeRoute.transport === "google-native" || runtimeRoute.transport === "anthropic-native" || runtimeRoute.transport === "mistral-native" || runtimeRoute.transport === "ollama-cloud") return route;
   throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
 }
 
 export function captureSessionContinuationRoute(config: ProviderConfig, model: ProviderModel): SessionContinuationRouteSnapshot | undefined {
   if (model.providerConfigId !== config.id || model.provider !== config.provider) {
-    if (config.provider === "openrouter" || config.provider === "google" || config.provider === "anthropic" || config.provider === "mistral") throw new SessionContinuationError("Viewer model/provider route mismatch while freezing continuation state.");
+    if (config.provider === "openrouter" || config.provider === "google" || config.provider === "anthropic" || config.provider === "mistral" || config.provider === "ollama_cloud") throw new SessionContinuationError("Viewer model/provider route mismatch while freezing continuation state.");
     return undefined;
   }
   if (config.provider === "openrouter") {
@@ -91,6 +93,17 @@ export function captureSessionContinuationRoute(config: ProviderConfig, model: P
       stateFormatVersion: 1,
     };
   }
+  if (config.provider === "ollama_cloud") {
+    return {
+      transport: "ollama-cloud",
+      normalizedEndpoint: OLLAMA_ENDPOINT,
+      providerConfigId: config.id,
+      credentialId: config.credentialId,
+      requestedModelId: model.modelId,
+      stateFormat: "ollama-thinking-content",
+      stateFormatVersion: 1,
+    };
+  }
   return undefined;
 }
 
@@ -124,6 +137,10 @@ export function validateFrozenSessionContinuationRequest(
     transportMismatch = config.provider !== "mistral"
       || route.normalizedEndpoint !== MISTRAL_ENDPOINT
       || route.stateFormat !== "mistral-assistant-content";
+  } else if (route.transport === "ollama-cloud") {
+    transportMismatch = config.provider !== "ollama_cloud"
+      || route.normalizedEndpoint !== OLLAMA_ENDPOINT
+      || route.stateFormat !== "ollama-thinking-content";
   } else {
     throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
   }
@@ -149,6 +166,8 @@ export function validateFrozenSessionContinuationRoute(
     expectedProvider = "anthropic";
   } else if (route.transport === "mistral-native") {
     expectedProvider = "mistral";
+  } else if (route.transport === "ollama-cloud") {
+    expectedProvider = "ollama_cloud";
   } else {
     throw new SessionContinuationError("Unsupported frozen provider continuation transport.");
   }
@@ -200,6 +219,15 @@ export function captureSessionContinuationState(input: {
   }
   if (route.transport === "mistral-native") {
     return captureMistralContinuationState({
+      config: input.providerConfig,
+      requestedModelId: input.model.modelId,
+      normalizedEndpoint: route.normalizedEndpoint,
+      content: input.response.reasoningDetails,
+      visibleContent: input.response.content,
+    });
+  }
+  if (route.transport === "ollama-cloud") {
+    return captureOllamaContinuationState({
       config: input.providerConfig,
       requestedModelId: input.model.modelId,
       normalizedEndpoint: route.normalizedEndpoint,
@@ -276,6 +304,11 @@ function replayStateForRoute(input: {
   }
   if (route.transport === "mistral-native") {
     return validateMistralReplayForRequest({
+      state: input.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: route.normalizedEndpoint,
+    });
+  }
+  if (route.transport === "ollama-cloud") {
+    return validateOllamaReplayForRequest({
       state: input.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: route.normalizedEndpoint,
     });
   }

@@ -11,7 +11,7 @@ export const CONTINUATION_LIMITS_V1 = Object.freeze({
   maxTraversalNodes: 10_000,
 });
 
-export type ProviderContinuationTransport = "openrouter" | "google-native" | "anthropic-native" | "mistral-native";
+export type ProviderContinuationTransport = "openrouter" | "google-native" | "anthropic-native" | "mistral-native" | "ollama-cloud";
 
 export type OpenRouterReasoningFormat =
   | "unknown"
@@ -108,6 +108,13 @@ export type ProviderContinuationState =
       schemaVersion: 1;
       transport: "mistral-native";
       format: "mistral-assistant-content";
+      replayFingerprint: ProviderReplayFingerprint;
+      content: MistralAssistantContentChunk[];
+    }
+  | {
+      schemaVersion: 1;
+      transport: "ollama-cloud";
+      format: "ollama-thinking-content";
       replayFingerprint: ProviderReplayFingerprint;
       content: MistralAssistantContentChunk[];
     };
@@ -421,7 +428,7 @@ function validateProviderContinuationStateInternal(input: unknown): Continuation
   if (structureScan === "forbidden") return { ok: false, code: "forbidden_sensitive_field", message: "continuation state contains a forbidden sensitive field" };
   if (structureScan === "invalid") return { ok: false, code: "invalid_payload", message: "continuation state contains a cyclic, excessively deep, or otherwise unsupported structure" };
   if (input.schemaVersion !== 1) return { ok: false, code: "unknown_schema_version", message: "unsupported continuation state schema version" };
-  if (input.transport !== "openrouter" && input.transport !== "google-native" && input.transport !== "anthropic-native" && input.transport !== "mistral-native") {
+  if (input.transport !== "openrouter" && input.transport !== "google-native" && input.transport !== "anthropic-native" && input.transport !== "mistral-native" && input.transport !== "ollama-cloud") {
     return { ok: false, code: "unknown_transport", message: "unsupported continuation transport" };
   }
 
@@ -465,7 +472,7 @@ function validateProviderContinuationStateInternal(input: unknown): Continuation
     const blocks = input.blocks.map(parseAnthropicBlock);
     if (!blocks.length || blocks.some((item) => item === null)) return { ok: false, code: "invalid_payload", message: "invalid Anthropic thinking block" };
     value = { schemaVersion: 1, transport: "anthropic-native", format: "anthropic-thinking-blocks", replayFingerprint: fingerprint, blocks: blocks as AnthropicThinkingBlock[] };
-  } else {
+  } else if (input.transport === "mistral-native") {
     if (input.format !== "mistral-assistant-content") return { ok: false, code: "unknown_format", message: "unsupported Mistral continuation format" };
     if (!exactKeys(input, ["schemaVersion", "transport", "format", "replayFingerprint", "content"])) return { ok: false, code: "invalid_payload", message: "Mistral continuation state contains unapproved fields" };
     const fingerprint = validateFingerprint(input.replayFingerprint, "mistral-native", input.format);
@@ -479,6 +486,20 @@ function validateProviderContinuationStateInternal(input: unknown): Continuation
       return { ok: false, code: "invalid_payload", message: "Mistral continuation state must preserve both thinking and visible text chunks" };
     }
     value = { schemaVersion: 1, transport: "mistral-native", format: "mistral-assistant-content", replayFingerprint: fingerprint, content: mistralContent };
+  } else {
+    if (input.format !== "ollama-thinking-content") return { ok: false, code: "unknown_format", message: "unsupported Ollama continuation format" };
+    if (!exactKeys(input, ["schemaVersion", "transport", "format", "replayFingerprint", "content"])) return { ok: false, code: "invalid_payload", message: "Ollama continuation state contains unapproved fields" };
+    const fingerprint = validateFingerprint(input.replayFingerprint, "ollama-cloud", input.format);
+    if (!fingerprint) return { ok: false, code: "invalid_fingerprint", message: "invalid replay fingerprint" };
+    if (!Array.isArray(input.content)) return { ok: false, code: "invalid_payload", message: "content must be an array" };
+    const limitError = validateBlockCountAndSize(input.content); if (limitError) return limitError;
+    const content = input.content.map(parseMistralChunk);
+    if (!content.length || content.some((item) => item === null)) return { ok: false, code: "invalid_payload", message: "invalid Ollama assistant content chunk" };
+    const mistralContent = content as MistralAssistantContentChunk[];
+    if (!mistralContent.some((chunk) => chunk.type === "thinking") || !mistralContent.some((chunk) => chunk.type === "text")) {
+      return { ok: false, code: "invalid_payload", message: "Ollama continuation state must preserve both thinking and visible text chunks" };
+    }
+    value = { schemaVersion: 1, transport: "ollama-cloud", format: "ollama-thinking-content", replayFingerprint: fingerprint, content: mistralContent };
   }
 
   const sizeBytes = safeUtf8Bytes(value);

@@ -27,7 +27,7 @@ it("creates Cloud with fixed official host and required Bearer key, without loca
   const { host, click, submit } = await mount(); await click("Add Ollama Cloud");
   const dialog=host.querySelector("[role=dialog]")!; const key=dialog.querySelector<HTMLInputElement>("input[type=password]")!;
   expect(key.required).toBe(true); expect(dialog.querySelector("select")).toBeNull(); expect(dialog.querySelector<HTMLInputElement>("input[type=url]")!.readOnly).toBe(true);
-  expect(dialog.textContent).toContain("https://ollama.com"); expect(dialog.textContent).toContain("No text is generated"); expect(host.textContent).toContain("Thinking uses the model default");
+  expect(dialog.textContent).toContain("https://ollama.com"); expect(dialog.textContent).toContain("No text is generated"); expect(host.textContent).toContain("Thinking controls depend on the selected model");
   await field(key,"fixture-secret");vi.mocked(saveNativeConnection).mockResolvedValue(view);await submit();
   expect(saveNativeConnection).toHaveBeenCalledWith({expected:undefined,label:"Ollama Cloud",baseUrl:"https://ollama.com",authMode:"bearer",apiKey:"fixture-secret",selectedModel:undefined});expect(discoverNativeConnection).not.toHaveBeenCalled();
 });

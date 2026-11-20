@@ -1,3 +1,4 @@
+import {ollamaThinkingCapability} from "./ollamaThinking";
 import registryJson from "../resources/modelReasoningRegistry.json";
 import type { ProviderKind, ProviderModel, ReasoningCapability, ReasoningEffort, ReasoningOption, ReasoningTransport } from "./types";
 
@@ -9,8 +10,8 @@ type RegistryDocument = { schemaVersion: number; registryVersion: string; verifi
 const registry = registryJson as RegistryDocument;
 
 export function applyModelReasoningRegistry(provider: ProviderKind, modelId: string, discovered: ReasoningCapability): ReasoningCapability {
-  // Native hosted thinking uses the model default; effort controls from other wire dialects do not apply.
-  if (provider === "ollama_cloud") return { supported: false, efforts: [], confidence: "unknown" };
+  // Hosted thinking has its own model-specific native wire values. Never borrow another dialect.
+  if (provider === "ollama_cloud") return discovered.options ? discovered : ollamaThinkingCapability(modelId);
   if (discovered.registryVersion === registry.registryVersion && discovered.options) return discovered;
 
   const providerEfforts = [...(discovered.providerEfforts ?? discovered.efforts)];

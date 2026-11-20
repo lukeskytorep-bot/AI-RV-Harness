@@ -207,6 +207,7 @@ enum ProviderContinuationState {
     OpenRouter(OpenRouterContinuationState),
     Google(GoogleContinuationState),
     Anthropic(AnthropicContinuationState),
+    Ollama(OllamaContinuationState),
     Mistral(MistralContinuationState),
 }
 
@@ -244,6 +245,17 @@ struct AnthropicContinuationState {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MistralContinuationState {
     schema_version: u8,
+    transport: String,
+    format: String,
+    replay_fingerprint: ProviderReplayFingerprint,
+    content: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OllamaContinuationState {
+    schema_version: u8,
+    #[serde(deserialize_with = "deserialize_ollama_transport")]
     transport: String,
     format: String,
     replay_fingerprint: ProviderReplayFingerprint,
@@ -376,6 +388,12 @@ impl ProviderCallError {
     }
 }
 
+fn deserialize_ollama_transport<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    if value != "ollama-cloud" { return Err(serde::de::Error::custom("not an Ollama Cloud continuation transport")); }
+    Ok(value)
+}
+
 fn scrub_debug_value(value: &mut Value, secret: &str, parent_key: Option<&str>) {
     match value {
         Value::Object(map) => {
@@ -386,7 +404,7 @@ fn scrub_debug_value(value: &mut Value, secret: &str, parent_key: Option<&str>) 
                 let lower = key.to_ascii_lowercase().replace(['-', '_'], "");
                 if matches!(lower.as_str(), "authorization" | "apikey" | "xapikey" | "xgoogapikey") {
                     *child = Value::String("[REDACTED]".to_string());
-                } else if lower == "reasoningdetails"
+                } else if lower == "thinking" || lower == "reasoningcontent" || lower == "reasoningdetails"
                     || lower == "thoughtsignature"
                     || (google_thought_part && lower == "text")
                     || (anthropic_thinking_block && matches!(lower.as_str(), "thinking" | "signature"))

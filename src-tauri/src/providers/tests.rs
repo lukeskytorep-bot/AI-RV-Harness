@@ -3237,3 +3237,13 @@ fn custom_llama_rejects_unsupported_reasoning_before_building_a_dispatch() {
     other.custom_compatibility_profile = Some(CustomOpenAiCompatibilityProfile::Generic);
     assert!(super::request_builders::build_chat_request(&other, "https://example.test/v1").is_err());
 }
+
+#[test]
+fn ollama_thinking_is_redacted_in_request_and_response_diagnostics() {
+    let mut value = serde_json::json!({"messages":[{"role":"assistant","content":"Final","thinking":"private history"}],"message":{"content":"Next","thinking":"private response"},"reasoning_content":"private fallback"});
+    super::scrub_debug_value(&mut value,"fixture-key",None);
+    let encoded=value.to_string();
+    assert!(!encoded.contains("private"));
+    assert_eq!(value["messages"][0]["content"],"Final");
+    assert_eq!(value["message"]["content"],"Next");
+}
