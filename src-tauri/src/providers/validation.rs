@@ -41,6 +41,7 @@ pub(super) fn validate_chat_request(request: &ProviderChatRequest) -> Result<(),
                     | (super::ProviderKind::Anthropic, ProviderContinuationState::Anthropic(_))
                     | (super::ProviderKind::Mistral, ProviderContinuationState::Mistral(_))
                     | (super::ProviderKind::OllamaCloud, ProviderContinuationState::Ollama(_))
+                    | (super::ProviderKind::CustomOpenai, ProviderContinuationState::Custom(_))
             );
             if !supported {
                 return Err("continuation state belongs to a different or unsupported provider transport".to_string());
@@ -468,6 +469,30 @@ pub(super) fn validate_continuation_bindings(request: &ProviderChatRequest, norm
                     }
                 }
                 serde_json::to_vec(state).map_err(|_| "invalid Mistral continuation state".to_string())?.len()
+            }
+            ProviderContinuationState::Custom(state) => {
+                if !matches!(request.provider, super::ProviderKind::CustomOpenai)
+                    || request.custom_compatibility_profile != Some(super::CustomOpenAiCompatibilityProfile::LlamaCpp)
+                    || request.reasoning_transport_value.as_deref() != Some("true")
+                    || request.reasoning_transport_kind.as_deref() != Some("enabled_boolean") {
+                    return Err("Custom thinking replay requires explicit llama.cpp thinking ON".into());
+                }
+                if state.schema_version != 1 || state.transport != "custom-openai" || state.format != "custom-reasoning-content"
+                    || state.replay_fingerprint.transport != "custom-openai" || state.replay_fingerprint.state_format != "custom-reasoning-content"
+                    || state.replay_fingerprint.state_format_version != 1 {
+                    return Err("unsupported Custom thinking continuation format".into());
+                }
+                if state.replay_fingerprint.normalized_endpoint != normalized_endpoint
+                    || state.replay_fingerprint.provider_config_id != request.provider_config_id
+                    || state.replay_fingerprint.credential_id != request.credential_id
+                    || state.replay_fingerprint.requested_model_id != request.model_id {
+                    return Err("Custom thinking fingerprint mismatch".into());
+                }
+                if !message.images.is_empty() || state.visible_content != message.content || state.reasoning_content.trim().is_empty()
+                    || state.reasoning_content.len() > MAX_BLOCK_BYTES {
+                    return Err("Custom thinking is invalid or does not match assistant text".into());
+                }
+                serde_json::to_vec(state).map_err(|_| "invalid Custom thinking state".to_string())?.len()
             }
             ProviderContinuationState::Ollama(state) => {
                 if !matches!(request.provider, super::ProviderKind::OllamaCloud) {

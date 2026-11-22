@@ -1,3 +1,4 @@
+import {validateCustomThinkingReplay} from "../providers/customThinkingContinuation";
 import {validateOllamaReplayForRequest} from "../providers/ollamaContinuation";
 import { CONTINUATION_LIMITS_V1, validateContinuationRequestBudget, validateProviderContinuationState, type ContinuationValidationCode, type ProviderContinuationState } from "../providers/continuationContract";
 import { validateGoogleReplayForRequest } from "../providers/googleContinuation";
@@ -86,6 +87,7 @@ export function applyConversationContinuationMemory(input: {
   requestedModelId: string;
   normalizedEndpoint: string;
   allowTextOnlyContinuation?: boolean;
+  customThinkingEnabled?: boolean;
 }): { messages: ProviderMessage[]; textOnlyFallbackUsed: boolean } {
   const entries = memory.get(input.threadId);
   if (!entries?.size) return { messages: input.messages, textOnlyFallbackUsed: false };
@@ -100,7 +102,11 @@ export function applyConversationContinuationMemory(input: {
       firstBreak ??= { messageId: message.id, issue: entry.issue };
       return message;
     }
-    const compatible = entry.state.transport === "openrouter"
+    const compatible = entry.state.transport === "custom-openai" && !input.customThinkingEnabled
+      ? {ok: false as const, issue: {code: "incompatible_replay" as const, message: "Custom thinking is Off or no longer supported by the selected route; continue without thinking to proceed."}}
+      : entry.state.transport === "custom-openai"
+      ? validateCustomThinkingReplay({state: entry.state, config: input.config, requestedModelId: input.requestedModelId, normalizedEndpoint: input.normalizedEndpoint})
+      : entry.state.transport === "openrouter"
       ? validateOpenRouterReplayForRequest({
           state: entry.state,
           config: input.config,

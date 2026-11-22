@@ -3247,3 +3247,38 @@ fn ollama_thinking_is_redacted_in_request_and_response_diagnostics() {
     assert_eq!(value["messages"][0]["content"],"Final");
     assert_eq!(value["message"]["content"],"Next");
 }
+
+#[test]
+fn custom_llama_thinking_replays_separate_reasoning_only_when_explicitly_enabled() {
+    let mut request = chat_request(ProviderKind::CustomOpenai, "gemma");
+    request.custom_compatibility_profile = Some(CustomOpenAiCompatibilityProfile::LlamaCpp);
+    request.reasoning_transport_kind = Some("enabled_boolean".into());
+    request.reasoning_transport_value = Some("true".into());
+    let endpoint = "https://example.test/v1";
+    let fingerprint = ProviderReplayFingerprint {
+        transport: "custom-openai".into(), normalized_endpoint: endpoint.into(),
+        provider_config_id: request.provider_config_id.clone(), credential_id: request.credential_id.clone(),
+        requested_model_id: request.model_id.clone(), actual_model_id: None,
+        state_format: "custom-reasoning-content".into(), state_format_version: 1,
+    };
+    request.messages.push(ProviderMessage {
+        role: "assistant".into(), content: "Final".into(), images: vec![],
+        continuation_state: Some(ProviderContinuationState::Custom(CustomThinkingContinuationState {
+            schema_version: 1, transport: "custom-openai".into(), format: "custom-reasoning-content".into(),
+            replay_fingerprint: fingerprint, reasoning_content: "PRIVATE".into(), visible_content: "Final".into(),
+        })),
+    });
+    super::validation::validate_continuation_bindings(&request, endpoint).unwrap();
+    let (_, body) = super::request_builders::build_chat_request(&request, endpoint).unwrap();
+    assert_eq!(body["messages"][1]["reasoning_content"], "PRIVATE");
+    assert_eq!(body["messages"][1]["content"], "Final");
+    request.reasoning_transport_value = Some("false".into());
+    assert!(super::validation::validate_continuation_bindings(&request, endpoint).is_err());
+    request.reasoning_transport_value = Some("true".into());
+    request.model_id = "other-model".into();
+    assert!(super::validation::validate_continuation_bindings(&request, endpoint).is_err());
+    request.model_id = "gemma".into();
+    assert!(super::validation::validate_continuation_bindings(&request, "https://other.test/v1").is_err());
+    request.custom_compatibility_profile = Some(CustomOpenAiCompatibilityProfile::Generic);
+    assert!(super::validation::validate_continuation_bindings(&request, endpoint).is_err());
+}

@@ -132,6 +132,11 @@ fn openai_message(provider: ProviderKind, message: &ProviderMessage) -> Value {
     let mut object = Map::new();
     object.insert("role".into(), Value::String(message.role.clone()));
     object.insert("content".into(), content);
+    if matches!(provider, ProviderKind::CustomOpenai) {
+        if let Some(ProviderContinuationState::Custom(state)) = message.continuation_state.as_ref() {
+            object.insert("reasoning_content".into(), Value::String(state.reasoning_content.clone()));
+        }
+    }
     if matches!(provider, ProviderKind::Openrouter) {
         if let Some(ProviderContinuationState::OpenRouter(state)) = message.continuation_state.as_ref() {
             object.insert("reasoning_details".into(), Value::Array(state.reasoning_details.clone()));

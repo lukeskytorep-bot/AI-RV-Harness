@@ -11,7 +11,7 @@ export const CONTINUATION_LIMITS_V1 = Object.freeze({
   maxTraversalNodes: 10_000,
 });
 
-export type ProviderContinuationTransport = "openrouter" | "google-native" | "anthropic-native" | "mistral-native" | "ollama-cloud";
+export type ProviderContinuationTransport = "openrouter" | "google-native" | "anthropic-native" | "mistral-native" | "ollama-cloud" | "custom-openai";
 
 export type OpenRouterReasoningFormat =
   | "unknown"
@@ -110,6 +110,14 @@ export type ProviderContinuationState =
       format: "mistral-assistant-content";
       replayFingerprint: ProviderReplayFingerprint;
       content: MistralAssistantContentChunk[];
+    }
+  | {
+      schemaVersion: 1;
+      transport: "custom-openai";
+      format: "custom-reasoning-content";
+      replayFingerprint: ProviderReplayFingerprint;
+      reasoningContent: string;
+      visibleContent: string;
     }
   | {
       schemaVersion: 1;
@@ -428,7 +436,7 @@ function validateProviderContinuationStateInternal(input: unknown): Continuation
   if (structureScan === "forbidden") return { ok: false, code: "forbidden_sensitive_field", message: "continuation state contains a forbidden sensitive field" };
   if (structureScan === "invalid") return { ok: false, code: "invalid_payload", message: "continuation state contains a cyclic, excessively deep, or otherwise unsupported structure" };
   if (input.schemaVersion !== 1) return { ok: false, code: "unknown_schema_version", message: "unsupported continuation state schema version" };
-  if (input.transport !== "openrouter" && input.transport !== "google-native" && input.transport !== "anthropic-native" && input.transport !== "mistral-native" && input.transport !== "ollama-cloud") {
+  if (input.transport !== "openrouter" && input.transport !== "google-native" && input.transport !== "anthropic-native" && input.transport !== "mistral-native" && input.transport !== "ollama-cloud" && input.transport !== "custom-openai") {
     return { ok: false, code: "unknown_transport", message: "unsupported continuation transport" };
   }
 
@@ -486,6 +494,14 @@ function validateProviderContinuationStateInternal(input: unknown): Continuation
       return { ok: false, code: "invalid_payload", message: "Mistral continuation state must preserve both thinking and visible text chunks" };
     }
     value = { schemaVersion: 1, transport: "mistral-native", format: "mistral-assistant-content", replayFingerprint: fingerprint, content: mistralContent };
+  } else if (input.transport === "custom-openai") {
+    if (input.format !== "custom-reasoning-content") return { ok: false, code: "unknown_format", message: "unsupported Custom thinking format" };
+    if (!exactKeys(input, ["schemaVersion", "transport", "format", "replayFingerprint", "reasoningContent", "visibleContent"])) return { ok: false, code: "invalid_payload", message: "unexpected Custom thinking fields" };
+    const fingerprint = validateFingerprint(input.replayFingerprint, "custom-openai", input.format);
+    if (!fingerprint) return { ok: false, code: "invalid_fingerprint", message: "invalid Custom replay fingerprint" };
+    if (typeof input.reasoningContent !== "string" || !input.reasoningContent.trim() || typeof input.visibleContent !== "string") return { ok: false, code: "invalid_payload", message: "invalid Custom thinking text" };
+    if (safeUtf8Bytes(input.reasoningContent)! > CONTINUATION_LIMITS_V1.maxBlockBytes) return { ok: false, code: "block_too_large", message: "Custom thinking exceeds block limit" };
+    value = { schemaVersion: 1, transport: "custom-openai", format: "custom-reasoning-content", replayFingerprint: fingerprint, reasoningContent: input.reasoningContent, visibleContent: input.visibleContent };
   } else {
     if (input.format !== "ollama-thinking-content") return { ok: false, code: "unknown_format", message: "unsupported Ollama continuation format" };
     if (!exactKeys(input, ["schemaVersion", "transport", "format", "replayFingerprint", "content"])) return { ok: false, code: "invalid_payload", message: "Ollama continuation state contains unapproved fields" };

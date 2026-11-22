@@ -208,6 +208,7 @@ enum ProviderContinuationState {
     Google(GoogleContinuationState),
     Anthropic(AnthropicContinuationState),
     Ollama(OllamaContinuationState),
+    Custom(CustomThinkingContinuationState),
     Mistral(MistralContinuationState),
 }
 
@@ -260,6 +261,17 @@ struct OllamaContinuationState {
     format: String,
     replay_fingerprint: ProviderReplayFingerprint,
     content: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CustomThinkingContinuationState {
+    schema_version: u8,
+    transport: String,
+    format: String,
+    replay_fingerprint: ProviderReplayFingerprint,
+    reasoning_content: String,
+    visible_content: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

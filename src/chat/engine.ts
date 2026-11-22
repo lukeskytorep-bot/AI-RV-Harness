@@ -1,3 +1,4 @@
+import {captureCustomThinkingState} from "../providers/customThinkingContinuation";
 import {captureOllamaContinuationState} from "../providers/ollamaContinuation";
 import { chatResponseNeedsResolution, withChatResponseOperation } from "./responseRecovery";
 import { DEFAULT_CONVERSATION_MAX_OUTPUT_TOKENS } from "../startupDefaults";
@@ -285,18 +286,37 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
   }
   let normalizedEndpoint: string | undefined;
   const hasContinuationMemory = input.mode === "conversation" && hasConversationContinuationMemory(input.threadId);
-  if (input.mode === "conversation" && ["openrouter", "google", "mistral", "ollama_cloud"].includes(input.providerConfig.provider) && (!input.chat || hasContinuationMemory)) {
+  // Custom replay is opt-in per effective generation settings, not merely per endpoint.
+  // This check must run before creating transport messages, including after restart.
+  // Match the exact per-turn compatibility profile used by native.ts. A saved
+  // Generic profile (or an absent legacy profile) must not inherit today's
+  // connection profile when replaying or persisting native thinking state.
+  const customTurnSettings = input.providerConfig.provider === "custom_openai"
+    ? resolveGenerationSettings(input.model.capabilities, input.requestedSettings ?? {}, { provider: input.model.provider })
+    : undefined;
+  const effectiveCustomProfile = customTurnSettings?.effective.customCompatibilityProfile ?? "generic";
+  const customThinkingEnabled = input.providerConfig.provider === "custom_openai"
+    && effectiveCustomProfile === "llama_cpp"
+    && customTurnSettings?.effective.customReasoningMode === "on";
+  const continuationConfig = input.providerConfig.provider === "custom_openai"
+    ? { ...input.providerConfig, customCompatibilityProfile: effectiveCustomProfile }
+    : input.providerConfig;
+  if (input.mode === "conversation" && (["openrouter", "google", "mistral", "ollama_cloud"].includes(input.providerConfig.provider)
+    || (input.providerConfig.provider === "custom_openai" && customThinkingEnabled)) && (!input.chat || hasContinuationMemory)) {
     normalizedEndpoint = await (input.resolveBindingEndpoint ?? providerBindingEndpoint)(input.providerConfig);
   }
   if (hasContinuationMemory) {
     normalizedEndpoint ??= "";
+    // A disabled or changed Custom route must take the established text-only
+    // continuation confirmation path, rather than reaching Rust with stale state.
     const replay = applyConversationContinuationMemory({
       threadId: input.threadId,
       messages,
-      config: input.providerConfig,
+      config: continuationConfig,
       requestedModelId: input.model.modelId,
       normalizedEndpoint,
       allowTextOnlyContinuation: input.allowTextOnlyContinuation,
+      customThinkingEnabled,
     });
     messages = replay.messages;
     if (replay.textOnlyFallbackUsed) {
@@ -437,13 +457,18 @@ async function executeChatTurn(input: Parameters<typeof sendChatTurn>[0], append
     | ReturnType<typeof captureGoogleContinuationState>
     | ReturnType<typeof captureMistralContinuationState>
     | ReturnType<typeof captureOllamaContinuationState>
+    | ReturnType<typeof captureCustomThinkingState>
     | undefined;
-  const continuationDetailsPresent = input.providerConfig.provider === "openrouter"
+  const continuationDetailsPresent = input.providerConfig.provider === "custom_openai"
+    ? customThinkingEnabled && response.reasoningSource === "openai_reasoning_content" && Boolean(response.reasoningContent?.trim())
+    : input.providerConfig.provider === "openrouter"
     ? response.reasoningDetails !== undefined
     : Boolean(response.reasoningDetails?.length);
-  if (input.mode === "conversation" && continuationDetailsPresent && ["openrouter", "google", "mistral", "ollama_cloud"].includes(input.providerConfig.provider)) {
+  if (input.mode === "conversation" && continuationDetailsPresent && ["openrouter", "google", "mistral", "ollama_cloud", "custom_openai"].includes(input.providerConfig.provider)) {
     normalizedEndpoint ??= await (input.resolveBindingEndpoint ?? providerBindingEndpoint)(input.providerConfig);
-    continuationCapture = input.providerConfig.provider === "openrouter"
+    continuationCapture = input.providerConfig.provider === "custom_openai"
+      ? captureCustomThinkingState({config: continuationConfig, requestedModelId: input.model.modelId, normalizedEndpoint, reasoningContent: response.reasoningContent, reasoningSource: response.reasoningSource, visibleContent: response.content})
+      : input.providerConfig.provider === "openrouter"
       ? captureOpenRouterContinuationState({
           config: input.providerConfig,
           requestedModelId: input.model.modelId,
