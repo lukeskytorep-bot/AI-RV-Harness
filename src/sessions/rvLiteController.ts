@@ -33,6 +33,8 @@ import type { SpecialTaskInput } from "./specialTask";
 import { renderSpecialTask } from "./specialTask";
 import { politeRevealTransition } from "./courtesy";
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
+import { researchContextProviderMessages, researchContextSessionEvidence } from "../research/contextRuntime";
+import type { ResearchFrozenContextComposition } from "../research/types";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
 import { isStreamingRepetitionRunawayError, runWithStreamingRepetitionGuard } from "./streamingRepetitionGuard";
@@ -76,6 +78,7 @@ export interface AutomaticRvLiteRunInput {
   capturedAutomaticReveal?: RevealInput;
   researchProjectId?: string;
   researchConditionInstruction?: ViewerSystemPromptSnapshot;
+  researchContext?: ResearchFrozenContextComposition;
   specialTask?: SpecialTaskInput;
   signal?: AbortSignal;
   maxRetries?: number;
@@ -134,11 +137,13 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
   const chat = createProviderChatExecutor({ configuredRetries: () => activeViewerManualRetry ? 0 : maxRetries, operationId: "session.rv-lite", operationKind: input.operationKind, streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: async (cause, context) => {
       if(sessionFocus){focusedPhysicalFailures++;metrics=recordProviderRequest(metrics,undefined,0);}
       return input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, ...(activeViewerAttemptId ? { attemptId: activeViewerAttemptId } : {}), ...viewerFailureMetadata(cause) } }); } });
-  const messages: ProviderMessage[] = [
-    ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
-    ...(viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage)! }] : []),
-    ...(input.researchConditionInstruction?.content.trim() ? [{ role: "system" as const, content: `[LOCKED RESEARCH CONDITION INSTRUCTION]\n${input.researchConditionInstruction.content.trim()}` }] : []),
-  ];
+  const messages: ProviderMessage[] = input.researchContext
+    ? researchContextProviderMessages(input.researchContext)
+    : [
+      ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
+      ...(viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage)! }] : []),
+      ...(input.researchConditionInstruction?.content.trim() ? [{ role: "system" as const, content: `[LOCKED RESEARCH CONDITION INSTRUCTION]\n${input.researchConditionInstruction.content.trim()}` }] : []),
+    ];
   const startedAtMs = Date.now();
   let metrics = await focusResumeMetrics(input.repository,input.resumeSession,sessionFocus);
   let transcript = "";
@@ -256,7 +261,7 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
       variant: input.protocol.variant,
     },
     controllerPrompt: { id: "rv-lite-four-call-controller", version: "1.0.0", language: input.sessionLanguage },
-    ...(input.rvSystemPrompt ? {
+    ...(!input.researchContext && input.rvSystemPrompt ? {
       rvSystemPrompt: {
         id: input.rvSystemPrompt.id,
         version: input.rvSystemPrompt.version,
@@ -270,8 +275,8 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
         ...(input.rvSystemPrompt.fieldGuide ? { fieldGuide: input.rvSystemPrompt.fieldGuide } : {}),
       },
     } : {}),
-    ...(input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),
-    ...(input.researchConditionInstruction ? {
+    ...(!input.researchContext && input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),
+    ...(!input.researchContext && input.researchConditionInstruction ? {
       researchConditionInstruction: {
         id: input.researchConditionInstruction.id,
         version: input.researchConditionInstruction.version,
@@ -280,6 +285,7 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
         fullContent: input.researchConditionInstruction.content,
       },
     } : {}),
+    ...(input.researchContext ? { researchContext: researchContextSessionEvidence(input.researchContext) } : {}),
     ...(renderSpecialTask(input.specialTask, input.sessionLanguage) ? {
       specialTask: {
         selectedOptions: input.specialTask?.selectedOptions ?? [],
@@ -297,7 +303,7 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
   };
   await input.repository.saveSessionSnapshot(sessionId, snapshot, await sha256Text(JSON.stringify(snapshot)));
   await input.onSessionCreated?.(sessionId, sessionCode);
-  await input.repository.appendSessionEvent(sessionId, { eventType: "PREFLIGHT_COMPLETE", role: "controller", metadata: { viewerCalls: 4, mandatoryDeepeningInPrompt: 3 } });
+  await input.repository.appendSessionEvent(sessionId, { eventType: "PREFLIGHT_COMPLETE", role: "controller", metadata: { viewerCalls: 4, mandatoryDeepeningInPrompt: 3, ...(input.researchContext ? { researchContextCompositionSha256: input.researchContext.compositionSha256 } : {}) } });
   notify(input, sessionId, sessionCode, "Preflight", transcript, undefined, undefined, metrics, startedAtMs);
   await input.repository.updateRvSessionState(sessionId, "BlindRunning");
   notify(input, sessionId, sessionCode, "BlindRunning", transcript, undefined, undefined, metrics, startedAtMs);
@@ -450,6 +456,7 @@ function validate(input: AutomaticRvLiteRunInput): void {
   if (input.protocol.id !== "rv-lite" || input.protocol.steps.length !== 4) throw new Error("RV Lite requires the approved four-call bundled resource.");
   if (input.protocol.language !== input.sessionLanguage) throw new Error("RV Lite language must match Session Language.");
   if (input.model.providerConfigId !== input.providerConfig.id || input.model.provider !== input.providerConfig.provider) throw new Error("Model/provider route mismatch.");
+  if (input.researchContext && (!input.researchProjectId || input.operationKind !== "research_viewer")) throw new Error("Frozen Research context is restricted to Research Viewer execution.");
   if (input.automaticTarget && !targetHasSupportedReveal(input.automaticTarget)) throw new Error("Automatic target requires a supported reveal description or image.");
 }
 

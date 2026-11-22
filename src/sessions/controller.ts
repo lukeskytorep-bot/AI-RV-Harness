@@ -38,6 +38,8 @@ import {
   LOCKED_MONITOR_EXECUTION_VERSION,
 } from "../resources/systemPrompts";
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
+import { researchContextProviderMessages, researchContextSessionEvidence } from "../research/contextRuntime";
+import type { ResearchFrozenContextComposition } from "../research/types";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
 import { isStreamingRepetitionRunawayError, runWithStreamingRepetitionGuard } from "./streamingRepetitionGuard";
@@ -88,6 +90,7 @@ export interface AutomaticRcpRunInput {
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
   viewerNotes?: ViewerNotesSessionSnapshot;
   researchConditionInstruction?: ViewerSystemPromptSnapshot;
+  researchContext?: ResearchFrozenContextComposition;
   resumeSession?: RvSession;
   sessionIdentity?: { id: string; sessionCode: string };
   initializationExistingSession?: RvSession;
@@ -183,9 +186,11 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
   let monitorInterventionCount = 0;
   const messages: ProviderMessage[] = [
     { role: "system", content: input.protocol.content },
-    ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
-    ...(viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage)! }] : []),
-    ...(input.researchConditionInstruction?.content.trim() ? [{ role: "system" as const, content: `[LOCKED RESEARCH CONDITION INSTRUCTION]\n${input.researchConditionInstruction.content.trim()}` }] : []),
+    ...(input.researchContext ? researchContextProviderMessages(input.researchContext) : [
+      ...(input.rvSystemPrompt?.content.trim() ? [{ role: "system" as const, content: input.rvSystemPrompt.content.trim() }] : []),
+      ...(viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage) ? [{ role: "system" as const, content: viewerNotesSystemBlock(input.viewerNotes, input.sessionLanguage)! }] : []),
+      ...(input.researchConditionInstruction?.content.trim() ? [{ role: "system" as const, content: `[LOCKED RESEARCH CONDITION INSTRUCTION]\n${input.researchConditionInstruction.content.trim()}` }] : []),
+    ]),
   ];
   const stop = (reason: string) => stopRun(input, sessionId, sessionCode, transcript, reason, metrics, startedAtMs);
   const runViewerCall = async (requestMessages: ProviderMessage[], onStreamEvent: ((event: ProviderStreamEvent) => void) | undefined, metadata: Record<string, unknown>) => {
@@ -317,7 +322,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
         injectAfter: "phase_4" as const,
       },
     } : {}),
-    ...(input.rvSystemPrompt ? {
+    ...(!input.researchContext && input.rvSystemPrompt ? {
       rvSystemPrompt: {
         id: input.rvSystemPrompt.id,
         version: input.rvSystemPrompt.version,
@@ -331,8 +336,8 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
         ...(input.rvSystemPrompt.fieldGuide ? { fieldGuide: input.rvSystemPrompt.fieldGuide } : {}),
       },
     } : {}),
-    ...(input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),
-    ...(input.researchConditionInstruction ? {
+    ...(!input.researchContext && input.viewerNotes ? { viewerNotes: input.viewerNotes } : {}),
+    ...(!input.researchContext && input.researchConditionInstruction ? {
       researchConditionInstruction: {
         id: input.researchConditionInstruction.id,
         version: input.researchConditionInstruction.version,
@@ -341,6 +346,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
         fullContent: input.researchConditionInstruction.content,
       },
     } : {}),
+    ...(input.researchContext ? { researchContext: researchContextSessionEvidence(input.researchContext) } : {}),
     revealSource: input.automaticTarget ? "automatic" : "external",
     ...(input.automaticTarget ? { targetId: input.automaticTarget.id } : {}),
     ...(automaticReveal ? { automaticRevealHash: automaticReveal.hash } : {}),
@@ -356,7 +362,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
   await input.repository.appendSessionEvent(sessionId, {
     eventType: "PREFLIGHT_COMPLETE",
     role: "controller",
-    metadata: { provider: input.providerConfig.provider, modelId: input.model.modelId },
+    metadata: { provider: input.providerConfig.provider, modelId: input.model.modelId, ...(input.researchContext ? { researchContextCompositionSha256: input.researchContext.compositionSha256 } : {}) },
   });
   const monitorRunId = input.monitor
     ? await input.repository.createMonitorRun({
@@ -687,6 +693,7 @@ function validateRunInput(input: AutomaticRcpRunInput): void {
   if (input.protocol.language !== input.sessionLanguage) throw new Error("Protocol language must match Session Language.");
   if (input.model.providerConfigId !== input.providerConfig.id) throw new Error("Selected model does not belong to the selected provider connection.");
   if (input.model.provider !== input.providerConfig.provider) throw new Error("Model/provider route mismatch.");
+  if (input.researchContext && (!input.researchProjectId || input.operationKind !== "research_viewer")) throw new Error("Frozen Research context is restricted to Research Viewer execution.");
   if (input.monitor) {
     if (input.monitor.model.providerConfigId !== input.monitor.providerConfig.id) throw new Error("Monitor model/provider route mismatch.");
     if (input.monitor.model.provider !== input.monitor.providerConfig.provider) throw new Error("Monitor provider mismatch.");

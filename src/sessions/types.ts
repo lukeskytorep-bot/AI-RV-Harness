@@ -192,6 +192,8 @@ export interface SessionSnapshot {
     contentSha256: string;
     fullContent: string;
   };
+  /** Exact additional Viewer context frozen by Context & Instructions Research. */
+  researchContext?: import("../research/contextRuntime").ResearchContextSessionEvidence;
   specialTask?: SpecialTaskSnapshot;
   telepathic?: {
     controllerStepCount: 9;

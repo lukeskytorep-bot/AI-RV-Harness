@@ -179,13 +179,13 @@ describe("Research Builder Training/Research UX step", () => {
 
 
 
-  it("uses the shared Research builder for Context & Instructions while keeping C3 execution gated", () => {
+  it("uses the shared Research builder for Context & Instructions with C3 execution enabled", () => {
     const html = renderBuilder("context_instructions");
     expect(html).toContain("Context conditions");
     expect(html).toContain("Tabula Rasa");
     expect(html).toContain("Experiment Lock");
-    expect(researchBuilderSource).toContain('contextRuntimePending = project.templateType === "context_instructions"');
-    expect(researchBuilderSource).toContain('Session start will be enabled after the audited C3 runtime/Resume integration.');
+    expect(researchBuilderSource).not.toContain('contextRuntimePending = project.templateType === "context_instructions"');
+    expect(researchBuilderSource).toContain('const sessionsReady = !termination');
   });
 
 

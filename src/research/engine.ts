@@ -1,5 +1,6 @@
 import { computeTargetCodeComparison } from "./targetCodeResults";
 import { assertPreparedContextResearchDraft } from "./contextLockPreparation";
+import { assertResearchContextSessionEvidence } from "./contextRuntime";
 import { assertTargetCodeDesign } from "./targetCodeDesign";
 import { verifyTargetCodeTemplates } from "../resources/rvLiteTargetCode";
 import { newRunGenerationSettings } from "../providers/customCompatibility";
@@ -19,7 +20,7 @@ import { runAutomaticRvLiteSession, type AutomaticRvLiteRunInput } from "../sess
 import { createSessionReplay, type SessionReplay } from "../sessions/resumeReplay";
 import type { AppRepository } from "../storage/repository";
 import { createId } from "../storage/repository";
-import { buildResearchLockPlan, stableStringify } from "./planner";
+import { buildResearchLockPlan, stableStringify, validateConfig } from "./planner";
 import { runResearchPreflight, type ResearchPreflightInventory } from "./preflight";
 import { computeConditionStatistics, computePairwiseStatistics } from "./statistics";
 import type { ResearchConfig, ResearchPreflightResult, ResearchProjectRecord, ResearchResults, UnblindedSessionResult, ResearchViewerOutputPolicy } from "./types";
@@ -128,8 +129,12 @@ async function executeResearchSessionsOwned(input: {
 }): Promise<void> {
   if(input.signal?.aborted)return;
   const gateProject = await input.repository.getResearchProject(input.projectId);
-  if (gateProject?.templateType === "context_instructions") throw new Error("Context & Instructions runtime is not enabled until C3.");
   const project = await requireProject(input.repository, input.projectId);
+  if (project.templateType === "context_instructions") {
+    validateConfig(project.config);
+    if (!project.config.contextPreparation) throw new Error("Context & Instructions runtime requires its frozen preparation manifest.");
+    await assertPreparedContextResearchDraft(project.config.contextPreparation);
+  }
   assertTargetCodeDesign(project.config);
   if (project.templateType === "target_code") await verifyTargetCodeTemplates();
   analyticalBudgetPolicyForSnapshot(project.config.postRevealOutputPolicy);
@@ -170,6 +175,10 @@ async function executeResearchSessionsOwned(input: {
     if (stableStringify(stored.config.systemPrompt ?? null) !== stableStringify(locked.systemPrompt ?? null)) {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       throw new Error("Frozen Viewer prompt composition drift detected after Experiment Lock.");
+    }
+    if (stableStringify(stored.config.contextComposition ?? null) !== stableStringify(locked.contextComposition ?? null)) {
+      await input.repository.setResearchProjectState(project.id, "Interrupted");
+      throw new Error("Frozen Research context composition drift detected after Experiment Lock.");
     }
     if (stableStringify(stored.config.viewerOutputPolicy ?? null) !== stableStringify(locked.viewerOutputPolicy ?? null)) {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
@@ -223,6 +232,8 @@ async function executeResearchSessionsOwned(input: {
     let rvSystemPrompt = condition.systemPrompt;
     let researchConditionInstruction = condition.conditionInstruction;
     let viewerNotes = condition.viewerNotes;
+    const researchContext = project.templateType === "context_instructions" ? condition.contextComposition : undefined;
+    if (project.templateType === "context_instructions" && !researchContext) throw new Error("Locked Context & Instructions condition is missing its frozen composition.");
     let capturedAutomaticReveal;
     let sessionIdentity: { id: string; sessionCode: string } | undefined;
     let initializationExistingSession: Awaited<ReturnType<ResearchRepository["getRvSession"]>> | undefined;
@@ -327,9 +338,10 @@ async function executeResearchSessionsOwned(input: {
       automaticTarget: target,
       researchProjectId: project.id,
       ...(capturedAutomaticReveal ? { capturedAutomaticReveal } : {}),
-      ...(rvSystemPrompt ? { rvSystemPrompt } : {}),
-      ...(researchConditionInstruction ? { researchConditionInstruction } : {}),
-      ...(viewerNotes ? { viewerNotes } : {}),
+      ...(!researchContext && rvSystemPrompt ? { rvSystemPrompt } : {}),
+      ...(!researchContext && researchConditionInstruction ? { researchConditionInstruction } : {}),
+      ...(!researchContext && viewerNotes ? { viewerNotes } : {}),
+      ...(researchContext ? { researchContext } : {}),
       ...(resumeSession ? { resumeSession, ...(resumeContinuationRoute ? { resumeContinuationRoute } : {}) } : {}),
       ...(!resumeSession && sessionIdentity ? { sessionIdentity } : {}),
       ...(initializationExistingSession ? { initializationExistingSession } : {}),
@@ -445,13 +457,20 @@ function validateResearchResumeSnapshot(input: {
   } else if (snapshot.viewerOutputPolicy && snapshot.viewerOutputPolicy.preserveConfiguredBudget === false) {
     throw new Error("Legacy Research Resume refused an output policy that was not part of its Experiment Lock.");
   }
-  if (viewerNotesSnapshotSignature(snapshot.viewerNotes) !== viewerNotesSnapshotSignature(condition.viewerNotes)) {
-    throw new Error("Research Resume refused Viewer Notes drift from the locked condition.");
+  if (project.templateType === "context_instructions") {
+    if (!condition.contextComposition) throw new Error("Research Resume refused a Context & Instructions condition without a frozen composition.");
+    assertResearchContextSessionEvidence(condition.contextComposition, snapshot.researchContext);
+    if (snapshot.rvSystemPrompt || snapshot.viewerNotes || snapshot.researchConditionInstruction) throw new Error("Research Resume refused mixed legacy and Context & Instructions prompt state.");
+  } else {
+    if (snapshot.researchContext) throw new Error("Research Resume refused Context & Instructions evidence for a legacy Research template.");
+    if (viewerNotesSnapshotSignature(snapshot.viewerNotes) !== viewerNotesSnapshotSignature(condition.viewerNotes)) {
+      throw new Error("Research Resume refused Viewer Notes drift from the locked condition.");
+    }
+    const promptHash = snapshot.rvSystemPrompt?.contentSha256;
+    if ((condition.systemPrompt?.contentSha256 ?? undefined) !== promptHash) throw new Error("Research Resume refused Viewer prompt drift from the locked condition.");
+    const instructionHash = snapshot.researchConditionInstruction?.contentSha256;
+    if ((condition.conditionInstruction?.contentSha256 ?? undefined) !== instructionHash) throw new Error("Research Resume refused condition-instruction drift from the locked condition.");
   }
-  const promptHash = snapshot.rvSystemPrompt?.contentSha256;
-  if ((condition.systemPrompt?.contentSha256 ?? undefined) !== promptHash) throw new Error("Research Resume refused Viewer prompt drift from the locked condition.");
-  const instructionHash = snapshot.researchConditionInstruction?.contentSha256;
-  if ((condition.conditionInstruction?.contentSha256 ?? undefined) !== instructionHash) throw new Error("Research Resume refused condition-instruction drift from the locked condition.");
 }
 
 async function ensurePersistedResearchReveal(input: {

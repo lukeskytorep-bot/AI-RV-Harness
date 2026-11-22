@@ -6,6 +6,7 @@ import type { AppRepository } from "../storage/repository";
 import { detectRepetitiveOutput, runAutomaticRcpSession } from "./controller";
 import { RCP_CONTROLLER_PROMPT_VERSION, rcpPhasePrompt } from "./controllerPrompts";
 import type { SessionSnapshot } from "./types";
+import { composeResearchContext } from "../research/contextComposition";
 
 const config: ProviderConfig = {
   id: "provider_1",
@@ -120,6 +121,36 @@ describe("automatic RCP controller", () => {
     expect(snapshots[0].rvSystemPrompt).toEqual(expect.objectContaining({ contentSha256: "c".repeat(64), fullContent: "FIXED PROFILE VIEWER PROMPT" }));
     expect(snapshots[0].rvSystemPrompt?.lockedBlocks?.map((block) => block.id)).toEqual(["locked-viewer-identity", "locked-viewer-base-vocabulary"]);
     expect(snapshots[0].researchConditionInstruction).toEqual(expect.objectContaining({ contentSha256: "d".repeat(64), fullContent: "CUSTOM VARIABLE A" }));
+  });
+
+  it("uses only the frozen Context & Instructions messages and snapshots them before the first RCP call", async () => {
+    const snapshots: SessionSnapshot[] = [];
+    const content = "  REPLACE ALL\nexact whitespace  ";
+    const researchContext = await composeResearchContext({ version: 1, mode: "replace_all", content }, {
+      system_prompt: { content: "FIELD", source: "field", availability: "available" },
+      viewer_notes: { content: "NOTES", source: "notes", availability: "available" },
+      viewer_identity: { content: "IDENTITY", source: "identity", availability: "available" },
+      base_vocabulary: { content: "VOCAB", source: "vocab", availability: "available" },
+    });
+    let calls = 0;
+    await runAutomaticRcpSession({
+      repository: fakeRepository([], snapshots), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 16384 }, researchContext,
+      researchProjectId: "research", operationKind: "research_viewer",
+      rvSystemPrompt: { id: "legacy", version: "1", content: "SHOULD NOT LEAK", contentSha256: "f".repeat(64) },
+      chat: async ({ messages }) => {
+        calls += 1;
+        if (calls === 1) {
+          const system = messages.filter((message) => message.role === "system").map((message) => message.content);
+          expect(system).toEqual([getFullRcp("en").content, content]);
+          expect(JSON.stringify(messages)).not.toContain("SHOULD NOT LEAK");
+          expect(snapshots[0].researchContext?.applicationMessages[0].content).toBe(content);
+          expect(snapshots[0].rvSystemPrompt).toBeUndefined();
+        }
+        return { content: `context phase ${calls}`, finishReason: "stop", usage: {} };
+      },
+    });
+    expect(calls).toBe(6);
   });
 
   it("persists the Session Snapshot before publishing Research session linkage", async () => {

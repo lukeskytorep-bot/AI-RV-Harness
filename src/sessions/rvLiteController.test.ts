@@ -4,11 +4,12 @@ import type { ProviderContinuationState } from "../providers/continuationContrac
 import anthropicFixture from "../providers/continuation-fixtures/anthropic-thinking-blocks.json";
 import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
-import { getRvLite } from "../resources/protocolRegistry";
+import { getRvLite, renderRvLiteSteps } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import type { TargetRecord } from "../targets/types";
 import { runAutomaticRvLiteSession } from "./rvLiteController";
 import type { SessionEventInput, SessionSnapshot } from "./types";
+import { composeResearchContext } from "../research/contextComposition";
 
 const config: ProviderConfig = { id: "p", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
 const model: ProviderModel = {
@@ -70,6 +71,36 @@ describe("automatic RV Lite controller", () => {
     expect(snapshots[0].rvSystemPrompt?.fieldGuide).toMatchObject({ versionId: "fg-v1", content: "FIELD GUIDE", capacityTokens: 2048 });
     expect(snapshots[0].automaticRevealHash).toMatch(/^[a-f0-9]{64}$/);
     expect(events.filter((event) => event.eventType === "VIEWER_RESPONSE").every((event) => event.metadata?.actualProvider === "DeepInfra" && event.metadata?.actualModel === "m-runtime")).toBe(true);
+  });
+
+  it("keeps RV Lite protocol steps while Tabula rasa removes all additional Viewer context", async () => {
+    const snapshots: SessionSnapshot[] = [];
+    const researchContext = await composeResearchContext({ version: 1, mode: "replace_all", content: "" }, {
+      system_prompt: { content: "FIELD", source: "field", availability: "available" },
+      viewer_notes: { content: "NOTES", source: "notes", availability: "available" },
+      viewer_identity: { content: "IDENTITY", source: "identity", availability: "available" },
+      base_vocabulary: { content: "VOCAB", source: "vocab", availability: "available" },
+    });
+    const protocol = getRvLite("en", "extended");
+    const sessionIdentity = { id: "session-tabula", sessionCode: "RVH-TABULA" };
+    const expectedSteps = renderRvLiteSteps(protocol, undefined, sessionIdentity.sessionCode);
+    let calls = 0;
+    await runAutomaticRvLiteSession({
+      repository: repository([], snapshots), workspaceId: "w", profileId: "profile", providerConfig: config, model,
+      protocol, sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, sessionIdentity,
+      operationKind: "research_viewer", researchProjectId: "research", researchContext,
+      rvSystemPrompt: { id: "legacy", version: "1", content: "SHOULD NOT LEAK", contentSha256: "e".repeat(64) },
+      chat: async ({ messages }) => {
+        calls += 1;
+        expect(messages.filter((message) => message.role === "system")).toEqual([]);
+        expect(JSON.stringify(messages)).not.toContain("SHOULD NOT LEAK");
+        expect(messages.at(-1)?.content).toBe(expectedSteps[calls - 1]);
+        return { content: `blind ${calls}`, finishReason: "stop", usage: {} };
+      },
+    });
+    expect(calls).toBe(4);
+    expect(snapshots[0].researchContext?.applicationMessages).toEqual([]);
+    expect(snapshots[0].rvSystemPrompt).toBeUndefined();
   });
 
   it("retries the same RV Lite step once at 16K -> 32K after length and accepts only the recovery", async () => {
