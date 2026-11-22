@@ -15,12 +15,59 @@ export const RESEARCH_TEMPLATE_TYPES = [
   "practice",
   "system_prompt",
   "viewer_notes",
+  "context_instructions",
   "sampling",
   "target_code",
   "custom",
 ] as const;
 
 export type ResearchTemplateType = (typeof RESEARCH_TEMPLATE_TYPES)[number];
+
+/** C1 contract only. Runtime, Lock, Preflight and UI integration are intentionally deferred. */
+export const RESEARCH_CONTEXT_BLOCK_KEYS = [
+  "system_prompt", "viewer_notes", "viewer_identity", "base_vocabulary",
+] as const;
+export type ResearchContextBlockKey = (typeof RESEARCH_CONTEXT_BLOCK_KEYS)[number];
+
+export type ResearchContextConditionDesign =
+  | { version: 1; mode: "standard" }
+  | { version: 1; mode: "replace_all"; content: string }
+  | { version: 1; mode: "add_to_selected"; additions: Partial<Record<ResearchContextBlockKey, string>> };
+
+export interface ResearchContextBaseBlock {
+  /** Exact input, no trimming or fallback. Empty means absent, not a factory default. */
+  content: string;
+  source: string;
+  version?: string;
+  /** Must explicitly distinguish unavailable from disabled. */
+  availability: "available" | "unavailable" | "disabled";
+}
+
+export interface ResearchContextFrozenBlock {
+  content: string;
+  sha256: string;
+  enabled: boolean;
+  source: string;
+  version?: string;
+  availability: ResearchContextBaseBlock["availability"];
+}
+
+export interface ResearchContextApplicationMessage {
+  role: "system";
+  origin: ResearchContextBlockKey | "replace_all";
+  content: string;
+  sha256: string;
+}
+
+export interface ResearchFrozenContextComposition {
+  version: 1;
+  design: ResearchContextConditionDesign;
+  baseBlocks: Record<ResearchContextBlockKey, ResearchContextFrozenBlock>;
+  effectiveBlocks: Record<ResearchContextBlockKey, ResearchContextFrozenBlock>;
+  /** Logical messages, NOT the final provider wire payload or protocol messages. */
+  applicationMessages: ResearchContextApplicationMessage[];
+  compositionSha256: string;
+}
 
 export type ResearchSamplingParameter = "topP" | "topK" | "seed";
 
@@ -95,6 +142,9 @@ export interface ResearchConditionDefinition {
   targetCode?: import("../resources/rvLiteTargetCode").TargetCodePolicy;
   key: string;
   label: string;
+  /** C1 reserved metadata. MUST NOT be used by runtime before C2/C3 integration. */
+  contextDesign?: ResearchContextConditionDesign;
+  contextComposition?: ResearchFrozenContextComposition;
   profileId: string;
   providerConfigId: string;
   modelId: string;
