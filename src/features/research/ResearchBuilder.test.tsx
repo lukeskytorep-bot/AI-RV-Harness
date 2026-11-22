@@ -6,8 +6,9 @@ import type { AppRepository } from "../../storage/repository";
 import { getCopy } from "../../i18n";
 import { createDefaultSettings } from "../../startupDefaults";
 import type { Profile, Workspace } from "../../types";
-import { captureCurrentViewerNotes, reconcileResearchBaseModelKey, ResearchConfigBuilder, researchBaseModelInventorySignature, researchCustomReasoningModeForProfile, researchPreflightSignature, researchTemperatureConditionSettings, researchTemperatureExperimentSupportsModel } from "./ResearchBuilder";
+import { captureCurrentViewerNotes, reconcileResearchBaseModelKey, ResearchConfigBuilder, DryRunPanel, researchBaseModelInventorySignature, researchCustomReasoningModeForProfile, researchPreflightSignature, researchTemperatureConditionSettings, researchTemperatureExperimentSupportsModel } from "./ResearchBuilder";
 import type { ResearchConfig } from "../../research/types";
+import { createResearchProtocolSelection } from "../../research/protocolPolicy";
 import researchBuilderSource from "./ResearchBuilder.tsx?raw";
 
 const now = "2026-09-15T12:00:00.000Z";
@@ -23,7 +24,7 @@ const model: ProviderModel = {
 const repository = {} as AppRepository;
 const noop = vi.fn(async () => undefined);
 
-function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "sampling" | "temperature" | "target_code") {
+function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "context_instructions" | "sampling" | "temperature" | "target_code") {
   return renderToStaticMarkup(<ResearchConfigBuilder
     copy={getCopy("en")}
     settings={createDefaultSettings()}
@@ -176,6 +177,37 @@ describe("Research Builder Training/Research UX step", () => {
     expect(reconcileResearchBaseModelKey(profileB, after, "pc-a::model-a")).toBe("pc-a::model-b");
   });
 
+
+
+  it("uses the shared Research builder for Context & Instructions while keeping C3 execution gated", () => {
+    const html = renderBuilder("context_instructions");
+    expect(html).toContain("Context conditions");
+    expect(html).toContain("Tabula Rasa");
+    expect(html).toContain("Experiment Lock");
+    expect(researchBuilderSource).toContain('contextRuntimePending = project.templateType === "context_instructions"');
+    expect(researchBuilderSource).toContain('Session start will be enabled after the audited C3 runtime/Resume integration.');
+  });
+
+
+  it("shows exact non-empty Replace All message content in Dry Run", () => {
+    const content = "  first line\nsecond line  ";
+    const frozen = { content: "", sha256: "0".repeat(64), enabled: false, source: "test", availability: "disabled" as const };
+    const config = {
+      schemaVersion: 1, name: "Context preview", workspaceId: workspace.id, templateType: "context_instructions" as const, sessionLanguage: "en" as const,
+      protocol: createResearchProtocolSelection("rv-lite", "en"), targetIds: ["t"], repetitions: 1, requireUnusedTargets: false,
+      conditions: [{ key: "replace", label: "Replace", profileId: profile.id, providerConfigId: provider.id, modelId: model.modelId, requestedSettings: {}, contextComposition: {
+        version: 1 as const, design: { version: 1 as const, mode: "replace_all" as const, content },
+        baseBlocks: { system_prompt: frozen, viewer_notes: frozen, viewer_identity: frozen, base_vocabulary: frozen },
+        effectiveBlocks: { system_prompt: frozen, viewer_notes: frozen, viewer_identity: frozen, base_vocabulary: frozen },
+        applicationMessages: [{ role: "system" as const, origin: "replace_all" as const, content, sha256: "a".repeat(64) }],
+        compositionSha256: "b".repeat(64),
+      }}],
+      judges: [], randomization: { matchedTargets: true, randomizedExecution: true, randomizedJudgeOrder: true },
+      contextPreparation: {} as ResearchConfig["contextPreparation"],
+    } as ResearchConfig;
+    const html = renderToStaticMarkup(<DryRunPanel copy={getCopy("en")} config={config} />);
+    expect(html).toContain(`<pre>${content}</pre>`);
+  });
 
   it("exposes the Sampling configurations form only through the Research builder contract", () => {
     const html = renderBuilder("sampling");

@@ -23,7 +23,7 @@ export const RESEARCH_TEMPLATE_TYPES = [
 
 export type ResearchTemplateType = (typeof RESEARCH_TEMPLATE_TYPES)[number];
 
-/** C1 contract only. Runtime, Lock, Preflight and UI integration are intentionally deferred. */
+/** Context & Instructions research contract. Runtime message application is enabled only in C3. */
 export const RESEARCH_CONTEXT_BLOCK_KEYS = [
   "system_prompt", "viewer_notes", "viewer_identity", "base_vocabulary",
 ] as const;
@@ -67,6 +67,14 @@ export interface ResearchFrozenContextComposition {
   /** Logical messages, NOT the final provider wire payload or protocol messages. */
   applicationMessages: ResearchContextApplicationMessage[];
   compositionSha256: string;
+}
+
+export interface ResearchPreparedContextDraft {
+  version: 1;
+  kind: "context_instructions_prepared";
+  baseBlocks: Record<ResearchContextBlockKey, ResearchContextBaseBlock>;
+  conditions: Array<{ id: string; label: string; composition: ResearchFrozenContextComposition }>;
+  preparationSha256: string;
 }
 
 export type ResearchSamplingParameter = "topP" | "topK" | "seed";
@@ -222,6 +230,8 @@ export interface ResearchConfig {
   promptResearchSource?: ResearchPromptResearchSource;
   /** Versioned design metadata for the Sampling configurations template. */
   samplingDesign?: ResearchSamplingDesign;
+  /** Frozen C2 design/manifest for Context & Instructions projects. */
+  contextPreparation?: ResearchPreparedContextDraft;
   conditions: ResearchConditionDefinition[];
   evaluationMode?: "save_only" | "ai_judges";
   judges: ResearchJudgeDefinition[];

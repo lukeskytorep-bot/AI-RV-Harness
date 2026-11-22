@@ -12,6 +12,7 @@ import { fieldGuideSnapshotSignature } from "./fieldGuidePolicy";
 import { researchProtocolLabel, researchProtocolViewerCalls, resolveResearchProtocol, type ResearchProtocolResource } from "./protocolPolicy";
 import { researchSamplingCapabilityState, researchSamplingSignature } from "./samplingPolicy";
 import { assertSamplingResearchContract, researchSamplingConfigurationCount, researchSamplingSessionCount } from "./samplingDesign";
+import { stableStringify } from "./planner";
 
 export interface ResearchPreflightInventory {
   profiles: Profile[];
@@ -23,8 +24,31 @@ export interface ResearchPreflightInventory {
 
 export function runResearchPreflight(config: ResearchConfig, inventory: ResearchPreflightInventory): ResearchPreflightResult {
   const checks: PreflightCheck[] = [];
-  if (config.templateType === "context_instructions") {
-    return { ok: false, checks: [{ id: "context_runtime_pending", level: "fail", message: "Context & Instructions cannot be locked or executed until C3 runtime and Resume support are integrated." }], estimatedViewerCalls: 0, estimatedJudgeCalls: 0 };
+  const contextResearch = config.templateType === "context_instructions";
+  if (contextResearch) {
+    const prepared = config.contextPreparation;
+    const ids = new Set(prepared?.conditions.map((condition) => condition.id) ?? []);
+    const conditionsMatch = Boolean(prepared)
+      && prepared!.version === 1
+      && prepared!.kind === "context_instructions_prepared"
+      && prepared!.conditions.length === config.conditions.length
+      && config.conditions.every((condition) => {
+        const frozen = prepared!.conditions.find((item) => item.id === condition.key);
+        return Boolean(condition.contextDesign && condition.contextComposition && frozen
+          && frozen.label === condition.label
+          && frozen.composition.compositionSha256 === condition.contextComposition.compositionSha256
+          && stableStringify(frozen.composition.design) === stableStringify(condition.contextDesign)
+          && stableStringify(frozen.composition) === stableStringify(condition.contextComposition));
+      })
+      && ids.size === config.conditions.length;
+    checks.push(conditionsMatch
+      ? pass("context_preparation", "Every Context & Instructions condition is tied to the frozen C2 preparation manifest")
+      : fail("context_preparation", "Context & Instructions conditions must match one frozen preparation manifest before Experiment Lock"));
+    const hashes = new Set(config.conditions.map((condition) => condition.contextComposition?.compositionSha256).filter(Boolean));
+    checks.push(hashes.size === config.conditions.length
+      ? pass("context_condition_hashes", "Every Context & Instructions condition has a distinct frozen composition hash")
+      : warn("context_condition_hashes", "Two or more context conditions have the same frozen composition hash; verify that the duplicate is intentional"));
+    checks.push(warn("context_runtime_gate", "C2 allows Preflight and Experiment Lock only. Session execution remains blocked until the audited C3 runtime/Resume integration."));
   }
   try { assertTargetCodeDesign(config); } catch (cause) { checks.push(fail("target_code_design", cause instanceof Error ? cause.message : String(cause))); }
   const targetMap = new Map(inventory.targets.map((target) => [target.id, target]));
@@ -113,10 +137,21 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     if (condition.conditionInstruction?.content.trim()) conditionInstructionContents.add(condition.conditionInstruction.content.trim());
 
     if (protocol) {
-      const roughInputTokens = Math.ceil((protocol.content.length + (condition.systemPrompt?.content.length ?? 0) + (condition.viewerNotes?.content.length ?? 0) + (condition.conditionInstruction?.content.length ?? 0)) / 3.5);
-      if (model.capabilities.contextTokens && roughInputTokens >= model.capabilities.contextTokens) checks.push(fail(`${prefix}:context`, `${condition.label}: estimated protocol context exceeds the advertised context window`));
-      else if (model.capabilities.contextTokens) checks.push(pass(`${prefix}:context`, `${condition.label}: advertised context window is sufficient for protocol preflight`));
-      else checks.push(warn(`${prefix}:context`, `${condition.label}: provider did not advertise a context limit`));
+      const contextChars = contextResearch ? (condition.contextComposition?.applicationMessages.reduce((sum, message) => sum + message.content.length, 0) ?? 0) : (condition.systemPrompt?.content.length ?? 0) + (condition.viewerNotes?.content.length ?? 0) + (condition.conditionInstruction?.content.length ?? 0);
+      const roughInputTokens = Math.ceil((protocol.content.length + contextChars) / 3.5);
+      // Character-based token estimation is only approximate. Reserve extra room for
+      // tokenizer variance, chat-template/provider framing, and the requested answer.
+      // Preflight must never call a context window "sufficient" based on input text alone.
+      const inputSafetyReserve = Math.max(256, Math.ceil(roughInputTokens * 0.15));
+      const transportOverheadReserve = 256;
+      const requestedOutputTokens = condition.requestedSettings.maxOutputTokens
+        ?? config.sessionPolicy?.defaultMaxOutputTokens
+        ?? model.capabilities.maxOutputTokens
+        ?? 2048;
+      const requiredContextTokens = roughInputTokens + inputSafetyReserve + transportOverheadReserve + requestedOutputTokens;
+      if (model.capabilities.contextTokens && requiredContextTokens > model.capabilities.contextTokens) checks.push(fail(`${prefix}:context`, `${condition.label}: estimated input plus safety/transport reserves and ${requestedOutputTokens} reserved output tokens exceed the advertised ${model.capabilities.contextTokens}-token context window`));
+      else if (model.capabilities.contextTokens) checks.push(pass(`${prefix}:context`, `${condition.label}: conservative preflight estimate (input + safety/transport reserves + output budget) fits the advertised context window`));
+      else checks.push(warn(`${prefix}:context`, `${condition.label}: provider did not advertise a context limit; total input/output context capacity cannot be verified`));
     }
   }
   if ((config.templateType === "reasoning" || config.templateType === "temperature" || config.templateType === "sampling") && [...effectiveSignatures.values()].some((keys) => keys.length > 1)) {
@@ -144,7 +179,7 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
   if (config.viewerControl) {
     const lockIssues: string[] = [];
     const expectedModelMode = config.templateType === "model" ? "condition_variable" : "fixed";
-    const expectedPromptMode = config.templateType === "system_prompt" ? "condition_variable" : "fixed";
+    const expectedPromptMode = (config.templateType === "system_prompt" || contextResearch) ? "condition_variable" : "fixed";
     const expectedReasoningMode = config.templateType === "reasoning" ? "condition_variable" : config.viewerControl.reasoning.value ? "fixed" : "provider_default";
     const expectedTemperatureMode = config.templateType === "temperature" ? "condition_variable" : config.viewerControl.temperature.value !== undefined ? "fixed" : "provider_default";
     if (config.viewerControl.model.mode !== expectedModelMode) lockIssues.push("model mode");
@@ -191,11 +226,11 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
         : "Manual Prompt Research requires a distinct frozen prompt for every condition"));
   } else {
     const perIdentityFieldGuidePrompt = identityVariesByDesign && config.fieldGuideControl?.mode === "current";
-    const promptControlValid = perIdentityFieldGuidePrompt
+    const promptControlValid = contextResearch ? config.conditions.every((condition) => Boolean(condition.contextComposition)) : perIdentityFieldGuidePrompt
       ? config.conditions.every((condition) => Boolean(condition.systemPrompt?.content.trim()) && Boolean(condition.fieldGuide))
       : systemPromptHashes.size === 1 && systemPromptContents.size === 1 && config.conditions.every((condition) => Boolean(condition.systemPrompt?.content.trim()));
     checks.push(promptControlValid
-      ? pass("system_prompt_constant", perIdentityFieldGuidePrompt ? "Each compared Viewer identity uses its own frozen current Field Guide with the same locked Core Identity and Base Vocabulary versions" : "One identical Viewer prompt composition is frozen across all conditions")
+      ? pass("system_prompt_constant", contextResearch ? "Context & Instructions uses frozen logical context compositions instead of the legacy constant-prompt rule" : perIdentityFieldGuidePrompt ? "Each compared Viewer identity uses its own frozen current Field Guide with the same locked Core Identity and Base Vocabulary versions" : "One identical Viewer prompt composition is frozen across all conditions")
       : fail("system_prompt_constant", "A controlled frozen Viewer prompt composition is required across every Research condition"));
     if (config.templateType === "custom") {
       checks.push(conditionInstructionHashes.size === config.conditions.length && conditionInstructionContents.size === config.conditions.length && config.conditions.every((condition) => Boolean(condition.conditionInstruction?.content.trim()))

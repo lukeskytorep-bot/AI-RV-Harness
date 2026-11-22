@@ -1,4 +1,5 @@
 import { computeTargetCodeComparison } from "./targetCodeResults";
+import { assertPreparedContextResearchDraft } from "./contextLockPreparation";
 import { assertTargetCodeDesign } from "./targetCodeDesign";
 import { verifyTargetCodeTemplates } from "../resources/rvLiteTargetCode";
 import { newRunGenerationSettings } from "../providers/customCompatibility";
@@ -56,7 +57,10 @@ export async function createAndLockResearch(
   config: ResearchConfig,
   inventory: ResearchPreflightInventory,
 ): Promise<{ project: ResearchProjectRecord; preflight: ResearchPreflightResult }> {
-  if (config.templateType === "context_instructions") throw new Error("Context & Instructions requires C3 runtime and Resume integration before Experiment Lock.");
+  if (config.templateType === "context_instructions") {
+    if (!config.contextPreparation) throw new Error("Context & Instructions requires a prepared frozen context design before Experiment Lock.");
+    await assertPreparedContextResearchDraft(config.contextPreparation);
+  }
   if (config.templateType === "target_code") await verifyTargetCodeTemplates();
   // This API creates a new project, never resumes an existing locked one.
   // Even a draft with an already frozen blind policy needs explicit analysis
@@ -123,6 +127,8 @@ async function executeResearchSessionsOwned(input: {
   onProgress?: (progress: { completed: number; total: number; anonymousSessionId: string; session?: SessionProgress }) => void;
 }): Promise<void> {
   if(input.signal?.aborted)return;
+  const gateProject = await input.repository.getResearchProject(input.projectId);
+  if (gateProject?.templateType === "context_instructions") throw new Error("Context & Instructions runtime is not enabled until C3.");
   const project = await requireProject(input.repository, input.projectId);
   assertTargetCodeDesign(project.config);
   if (project.templateType === "target_code") await verifyTargetCodeTemplates();

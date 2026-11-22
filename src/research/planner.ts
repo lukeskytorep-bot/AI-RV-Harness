@@ -95,6 +95,23 @@ export function validateConfig(config: ResearchConfig): void {
   if (config.evaluationMode === "ai_judges" && config.judges.length < 1) throw new RangeError("AI Judge evaluation requires 1–3 Judges.");
   if (config.evaluationMode === "save_only" && config.judges.length !== 0) throw new RangeError("Save-only Research must not contain Judge routes.");
   if (config.evaluationMode === undefined && config.judges.length < 1) throw new RangeError("Legacy Research configuration requires 1–3 Judges.");
+  if (config.templateType === "context_instructions") {
+    const prepared = config.contextPreparation;
+    if (!prepared || prepared.version !== 1 || prepared.kind !== "context_instructions_prepared") throw new Error("Context & Instructions requires a frozen prepared context design.");
+    if (prepared.conditions.length !== config.conditions.length) throw new Error("Context & Instructions condition count does not match the frozen preparation.");
+    for (const condition of config.conditions) {
+      const frozen = prepared.conditions.find((item) => item.id === condition.key);
+      if (!condition.contextDesign || !condition.contextComposition || !frozen) throw new Error(`Context & Instructions condition ${condition.key} is missing its frozen composition.`);
+      if (condition.label !== frozen.label) throw new Error(`Context & Instructions condition ${condition.key} label does not match the frozen preparation.`);
+      if (condition.contextComposition.compositionSha256 !== frozen.composition.compositionSha256
+        || stableStringify(condition.contextDesign) !== stableStringify(frozen.composition.design)
+        || stableStringify(condition.contextComposition) !== stableStringify(frozen.composition)) {
+        throw new Error(`Context & Instructions condition ${condition.key} does not match the frozen preparation.`);
+      }
+    }
+  } else if (config.contextPreparation) {
+    throw new Error("contextPreparation metadata is only valid for Context & Instructions Research.");
+  }
   if (config.templateType === "sampling") {
     assertSamplingResearchContract(config);
     researchSamplingSessionCount(config.samplingDesign!, config.targetIds.length, config.repetitions);

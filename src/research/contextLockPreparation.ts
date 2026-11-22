@@ -5,29 +5,18 @@ import {
   RESEARCH_CONTEXT_BLOCK_KEYS,
   type ResearchContextBaseBlock,
   type ResearchContextBlockKey,
-  type ResearchFrozenContextComposition,
+  type ResearchPreparedContextDraft,
 } from "./types";
 
 type BaseBlocks = Record<ResearchContextBlockKey, ResearchContextBaseBlock>;
 
 /**
- * C2 offline lock preparation only. This is NOT an Experiment Lock, provider
- * payload, runtime Preflight, or permission to execute a Research project.
- * All four baseline blocks must be supplied explicitly by the eventual C3
- * snapshot adapter; no active resources are read and no defaults are invented.
+ * C2 deterministic preparation for Preflight and Experiment Lock. It freezes
+ * the four logical Viewer-context blocks but deliberately does NOT construct
+ * the final provider wire payload or authorize session execution; those remain
+ * C3 responsibilities. No defaults are invented inside this function.
  */
-export interface PreparedContextResearchDraft {
-  version: 1;
-  kind: "context_instructions_prepared";
-  baseBlocks: BaseBlocks;
-  conditions: Array<{
-    id: string;
-    label: string;
-    composition: ResearchFrozenContextComposition;
-  }>;
-  preparationSha256: string;
-}
-
+export type PreparedContextResearchDraft = ResearchPreparedContextDraft;
 function canonicalBase(blocks: BaseBlocks): BaseBlocks {
   return Object.fromEntries(RESEARCH_CONTEXT_BLOCK_KEYS.map((key) => {
     const block = blocks?.[key];
@@ -90,10 +79,7 @@ export async function prepareContextResearchDraft(
   return { ...prepared, preparationSha256: await sha256Text(canonicalPreparedPayload(prepared)) };
 }
 
-/**
- * Detect edits to the prepared snapshot before any future Lock/Resume adapter
- * uses it. A separate repository config hash will still be required in C3.
- */
+/** Detect edits before Experiment Lock and when a locked project is reopened. */
 export async function assertPreparedContextResearchDraft(prepared: PreparedContextResearchDraft): Promise<void> {
   if (prepared?.version !== 1 || prepared.kind !== "context_instructions_prepared" || !Array.isArray(prepared.conditions)) {
     throw new Error("Unsupported prepared context research draft.");
