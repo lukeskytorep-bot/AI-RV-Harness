@@ -1,3 +1,4 @@
+import { ResearchContextDesignBuilder } from "./ResearchContextDesignBuilder";
 import { targetCodePolicy } from "../../resources/rvLiteTargetCode";
 import { TargetCodePreview, TargetCodeResultsView } from "./TargetCodeResearch";
 import { newRunGenerationSettings } from "../../providers/customCompatibility";
@@ -60,7 +61,7 @@ function researchReasoningLabel(copy: Copy, model: ProviderModel | null, effort:
   return option.verification === "unverified" ? `${option.label} · ${copy.unverified}` : option.label;
 }
 
-const TEMPLATE_ORDER: ResearchTemplateType[] = ["reasoning", "temperature", "profile", "model", "practice", "system_prompt", "viewer_notes", "sampling", "target_code"];
+const TEMPLATE_ORDER: ResearchTemplateType[] = ["reasoning", "temperature", "profile", "model", "practice", "system_prompt", "viewer_notes", "context_instructions", "sampling", "target_code"];
 
 export function researchBaseModelInventorySignature(models: ProviderModel[]): string {
   return models.map(modelRouteKeyFor).sort().join("|");
@@ -105,6 +106,7 @@ export function ResearchBuilder({ copy, settings, profiles, workspaces, reposito
   const activeProject = projects.find((project) => project.id === activeProjectId) ?? null;
   if (loading) return <div className="research-builder-loading">…</div>;
   if (activeProject && repository) return <ResearchProjectView copy={copy} repository={repository} project={activeProject} onRefresh={refresh} onBack={() => setActiveProjectId(null)} />;
+  if (template === "context_instructions") return <ResearchContextDesignBuilder onBack={() => setTemplate(null)} />;
   if (template && repository) return <ResearchConfigBuilder copy={copy} settings={settings} repository={repository} profiles={profiles} workspaces={workspaces} providers={providers} models={models} targets={targets} usage={usage} template={template} onBack={() => setTemplate(null)} onLocked={async (project) => { await refresh(); setTemplate(null); setActiveProjectId(project.id); }} />;
 
   return <div className="research-hub">
@@ -814,8 +816,8 @@ export function researchPreflightSignature(config: ResearchConfig): string {
 }
 
 function templateName(copy: Copy, type: ResearchTemplateType): string {
-  return ({ reasoning: copy.reasoningCalibration, temperature: copy.temperatureTest, profile: copy.profileComparison, model: copy.modelComparison, practice: copy.practiceEffect, system_prompt: copy.promptComparison, viewer_notes: copy.viewerNotesImpact, context_instructions: "Context & Instructions (C2/C3 pending)", sampling: copy.samplingConfigurations, target_code: copy.targetCodePresence, custom: copy.customVariable } as const)[type];
+  return ({ reasoning: copy.reasoningCalibration, temperature: copy.temperatureTest, profile: copy.profileComparison, model: copy.modelComparison, practice: copy.practiceEffect, system_prompt: copy.promptComparison, viewer_notes: copy.viewerNotesImpact, context_instructions: "Context & Instructions", sampling: copy.samplingConfigurations, target_code: copy.targetCodePresence, custom: copy.customVariable } as const)[type];
 }
 function templateMeta(copy: Copy, type: ResearchTemplateType): string {
-  return ({ reasoning: "NONE · LOW · MEDIUM · HIGH", temperature: copy.temperature, profile: "Profile A · B", model: "Model A · B", practice: "FIRST ↔ SECOND", system_prompt: "Prompt A · B · C · D", viewer_notes: "NO NOTES ↔ FROZEN NOTES", context_instructions: "STANDARD · REPLACE · ADD (not yet enabled)", sampling: "top_p · top_k · seed", target_code: copy.targetCodeLead, custom: copy.researchConditions } as const)[type];
+  return ({ reasoning: "NONE · LOW · MEDIUM · HIGH", temperature: copy.temperature, profile: "Profile A · B", model: "Model A · B", practice: "FIRST ↔ SECOND", system_prompt: "Prompt A · B · C · D", viewer_notes: "NO NOTES ↔ FROZEN NOTES", context_instructions: "STANDARD · TABULA RASA · REPLACE · ADD", sampling: "top_p · top_k · seed", target_code: copy.targetCodeLead, custom: copy.researchConditions } as const)[type];
 }

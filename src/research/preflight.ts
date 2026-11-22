@@ -23,6 +23,9 @@ export interface ResearchPreflightInventory {
 
 export function runResearchPreflight(config: ResearchConfig, inventory: ResearchPreflightInventory): ResearchPreflightResult {
   const checks: PreflightCheck[] = [];
+  if (config.templateType === "context_instructions") {
+    return { ok: false, checks: [{ id: "context_runtime_pending", level: "fail", message: "Context & Instructions cannot be locked or executed until C3 runtime and Resume support are integrated." }], estimatedViewerCalls: 0, estimatedJudgeCalls: 0 };
+  }
   try { assertTargetCodeDesign(config); } catch (cause) { checks.push(fail("target_code_design", cause instanceof Error ? cause.message : String(cause))); }
   const targetMap = new Map(inventory.targets.map((target) => [target.id, target]));
   const providerMap = new Map(inventory.providerConfigs.map((provider) => [provider.id, provider]));

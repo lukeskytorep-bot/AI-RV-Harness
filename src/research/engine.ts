@@ -56,6 +56,7 @@ export async function createAndLockResearch(
   config: ResearchConfig,
   inventory: ResearchPreflightInventory,
 ): Promise<{ project: ResearchProjectRecord; preflight: ResearchPreflightResult }> {
+  if (config.templateType === "context_instructions") throw new Error("Context & Instructions requires C3 runtime and Resume integration before Experiment Lock.");
   if (config.templateType === "target_code") await verifyTargetCodeTemplates();
   // This API creates a new project, never resumes an existing locked one.
   // Even a draft with an already frozen blind policy needs explicit analysis

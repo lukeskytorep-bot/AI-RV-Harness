@@ -184,7 +184,9 @@ describe("Research Builder Training/Research UX step", () => {
     expect(html).toContain("top_k");
     expect(html).toContain("seed");
     expect(html).toContain("At least one parameter must be compared");
-    expect(researchBuilderSource).toContain('"viewer_notes", "sampling"');
+    expect(researchBuilderSource).toContain('"viewer_notes"');
+    expect(researchBuilderSource).toContain('"context_instructions"');
+    expect(researchBuilderSource).toContain('"sampling"');
     expect(researchBuilderSource).toContain('buildResearchSamplingConditions(base("sampling_base", "Sampling"), samplingDesign!)');
     expect(researchBuilderSource).toContain('source: "research", profileId: baseProfile.id, mode: "condition_variable"');
   });
