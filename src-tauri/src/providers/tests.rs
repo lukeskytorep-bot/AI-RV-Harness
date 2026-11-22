@@ -401,7 +401,7 @@ fn provider_message_deserializes_camel_case_continuation_state() {
         ProviderContinuationState::OpenRouter(state) => {
             assert_eq!(state.replay_fingerprint.actual_model_id.as_deref(), Some("provider-specific-model"));
         }
-        ProviderContinuationState::Google(_) | ProviderContinuationState::Anthropic(_) | ProviderContinuationState::Mistral(_) | ProviderContinuationState::Ollama(_) => {
+        ProviderContinuationState::Google(_) | ProviderContinuationState::Anthropic(_) | ProviderContinuationState::Mistral(_) | ProviderContinuationState::Ollama(_) | ProviderContinuationState::Custom(_) => {
             panic!("expected OpenRouter continuation state")
         }
     }
