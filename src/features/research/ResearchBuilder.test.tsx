@@ -6,8 +6,8 @@ import type { AppRepository } from "../../storage/repository";
 import { getCopy } from "../../i18n";
 import { createDefaultSettings } from "../../startupDefaults";
 import type { Profile, Workspace } from "../../types";
-import { captureCurrentViewerNotes, reconcileResearchBaseModelKey, ResearchConfigBuilder, DryRunPanel, researchBaseModelInventorySignature, researchCustomReasoningModeForProfile, researchPreflightSignature, researchTemperatureConditionSettings, researchTemperatureExperimentSupportsModel } from "./ResearchBuilder";
-import type { ResearchConfig } from "../../research/types";
+import { captureCurrentViewerNotes, reconcileResearchBaseModelKey, ResearchConfigBuilder, ResearchResultsView, DryRunPanel, researchBaseModelInventorySignature, researchCustomReasoningModeForProfile, researchPreflightSignature, researchTemperatureConditionSettings, researchTemperatureExperimentSupportsModel } from "./ResearchBuilder";
+import type { ResearchConfig, ResearchResults } from "../../research/types";
 import { createResearchProtocolSelection } from "../../research/protocolPolicy";
 import researchBuilderSource from "./ResearchBuilder.tsx?raw";
 
@@ -259,4 +259,20 @@ describe("Research Builder Training/Research UX step", () => {
     later.conditions.forEach((condition) => { condition.viewerNotes!.versionId = "v2"; condition.viewerNotes!.versionNumber = 2; });
     expect(researchPreflightSignature(later)).not.toBe(researchPreflightSignature(base));
   });
+});
+
+
+it("renders Context & Instructions result provenance and completeness", () => {
+  const results: ResearchResults = {
+    schemaVersion: 1, projectId: "ctx", templateType: "context_instructions", computedAt: "now", pairwise: [],
+    conditions: [{ conditionKey: "a", label: "Add notes", contextMode: "add_to_selected", contextAdditionTargets: ["viewer_notes"], compositionSha256: "c".repeat(64), logicalContextMessages: 1, logicalContextCharacters: 17, plannedN: 4, completionRate: 75, n: 3, meanTotal: 7, medianTotal: 7, stdDevTotal: 0.5, minTotal: 6, maxTotal: 8, meanComponents: { gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 2, confabulationControl: 1 } }],
+    sessions: [{ anonymousSessionId: "BlindSession_A", sessionId: "s", targetId: "t", pairKey: "p", conditionKey: "a", conditionLabel: "Add notes", total: 7, judgeCount: 1, judgeTotalRange: 0, judgeTotalStdDev: 0, gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 2, confabulationControl: 1, contextAudit: { mode: "add_to_selected", additionTargets: ["viewer_notes"], compositionSha256: "c".repeat(64), logicalContextMessages: 1, logicalContextCharacters: 17, requestEvidence: { physicalAttempts: 5, logicalRequests: 4, transportRetries: 1, recoveryAttempts: 0, requestHashes: ["r".repeat(64)] } } }],
+  };
+  const html = renderToStaticMarkup(<ResearchResultsView copy={getCopy("en")} results={results} repository={repository} />);
+  expect(html).toContain("Context &amp; Instructions — condition comparison");
+  expect(html).toContain("add_to_selected");
+  expect(html).toContain("viewer_notes");
+  expect(html).toContain("3/4 · 75.00%");
+  expect(html).toContain("1 msg · 17 chars");
+  expect(html).toContain("attempts: 5 · retry 1 · recovery 0");
 });

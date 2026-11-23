@@ -8,6 +8,13 @@ export function computeConditionStatistics(sessions: UnblindedSessionResult[]): 
     return {
       conditionKey,
       label: rows[0].conditionLabel,
+      ...(rows[0].contextAudit ? {
+        contextMode: rows[0].contextAudit.mode,
+        contextAdditionTargets: [...rows[0].contextAudit.additionTargets],
+        compositionSha256: rows[0].contextAudit.compositionSha256,
+        logicalContextCharacters: rows[0].contextAudit.logicalContextCharacters,
+        logicalContextMessages: rows[0].contextAudit.logicalContextMessages,
+      } : {}),
       ...(rows[0].samplingValues ? { samplingValues: rows[0].samplingValues } : {}),
       ...(rows[0].requestedSettings ? { requestedSettings: rows[0].requestedSettings } : {}),
       ...(rows[0].effectiveSettings ? { effectiveSettings: rows[0].effectiveSettings } : {}),

@@ -328,6 +328,21 @@ export interface ResearchSessionExecutionMetadata {
   viewerCallCount: number;
 }
 
+export interface ResearchContextSessionAudit {
+  mode: ResearchContextConditionDesign["mode"];
+  additionTargets: ResearchContextBlockKey[];
+  compositionSha256: string;
+  logicalContextCharacters: number;
+  logicalContextMessages: number;
+  requestEvidence: {
+    physicalAttempts: number;
+    logicalRequests: number;
+    transportRetries: number;
+    recoveryAttempts: number;
+    requestHashes: string[];
+  };
+}
+
 export interface UnblindedSessionResult extends JudgeComponentScores {
   anonymousSessionId: string;
   sessionId: string;
@@ -345,6 +360,8 @@ export interface UnblindedSessionResult extends JudgeComponentScores {
   providerConfigId?: string;
   modelId?: string;
   execution?: ResearchSessionExecutionMetadata;
+  /** Context & Instructions provenance and execution evidence, when applicable. */
+  contextAudit?: ResearchContextSessionAudit;
   /** Exact frozen Field Guide provenance used by this session, when enabled. */
   fieldGuideVersionId?: string;
   fieldGuideVersionNumber?: number;
@@ -354,6 +371,13 @@ export interface UnblindedSessionResult extends JudgeComponentScores {
 export interface ConditionStatistics {
   conditionKey: string;
   label: string;
+  contextMode?: ResearchContextConditionDesign["mode"];
+  contextAdditionTargets?: ResearchContextBlockKey[];
+  compositionSha256?: string;
+  logicalContextCharacters?: number;
+  logicalContextMessages?: number;
+  plannedN?: number;
+  completionRate?: number;
   samplingValues?: ResearchSamplingConditionValues;
   requestedSettings?: GenerationSettings;
   effectiveSettings?: GenerationSettings;

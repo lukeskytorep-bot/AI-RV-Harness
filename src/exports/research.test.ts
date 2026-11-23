@@ -1,7 +1,7 @@
 import {workflowTestRepository} from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 import type { AppRepository } from "../storage/repository";
-import type { ResearchConfig, ResearchProjectRecord, ResearchResults } from "../research/types";
+import type { ResearchConfig, ResearchFrozenContextComposition, ResearchProjectRecord, ResearchResults } from "../research/types";
 import { createResearchProtocolSelection } from "../research/protocolPolicy";
 
 const { writeExportPackage } = vi.hoisted(() => ({ writeExportPackage: vi.fn() }));
@@ -216,4 +216,54 @@ it("exports Context & Instructions request evidence privately for save-only Rese
   expect(evidenceFile).toBeDefined();
   expect(JSON.parse(evidenceFile!.content)).toMatchObject({ schemaVersion: 1, requests: [{ eventId: "event-1", metadata: { attemptId: "attempt-1" }, evidence }] });
   expect(files.some((file) => file.relativePath.startsWith("external_evaluation/") && file.content.includes("exact request"))).toBe(false);
+});
+
+it("exports Context & Instructions condition metadata, completeness and request evidence summaries", async () => {
+  const compositionSha256 = "c".repeat(64);
+  const frozenBlock = { content: "", sha256: "b".repeat(64), enabled: false, source: "test", availability: "disabled" as const };
+  const contextComposition: ResearchFrozenContextComposition = {
+    version: 1,
+    design: { version: 1, mode: "add_to_selected", additions: { viewer_notes: "extra" } },
+    baseBlocks: { system_prompt: frozenBlock, viewer_notes: frozenBlock, viewer_identity: frozenBlock, base_vocabulary: frozenBlock },
+    effectiveBlocks: { system_prompt: frozenBlock, viewer_notes: { ...frozenBlock, content: "extra", enabled: true }, viewer_identity: frozenBlock, base_vocabulary: frozenBlock },
+    applicationMessages: [{ role: "system", origin: "viewer_notes", content: "extra", sha256: "d".repeat(64) }],
+    compositionSha256,
+  };
+  const condition = {
+    key: "ctx_add", label: "Add to notes", profileId: "profile", providerConfigId: "provider", modelId: "viewer", requestedSettings: {}, contextComposition,
+  };
+  const config = {
+    schemaVersion: 1, name: "Context results", workspaceId: "workspace", templateType: "context_instructions", sessionLanguage: "en",
+    protocol: createResearchProtocolSelection("rv-lite", "en"), targetIds: ["target"], repetitions: 2, requireUnusedTargets: false,
+    conditions: [condition], judges: [{ providerConfigId: "judge-provider", modelId: "judge" }], randomization: { matchedTargets: true, randomizedExecution: true, randomizedJudgeOrder: true },
+  } as ResearchConfig;
+  const project = { id: "research-context-complete", workspaceId: "workspace", name: "Context results", templateType: "context_instructions", state: "Complete", config, configHash: "hash", lockedAt: "lock", scoresFrozenAt: "scores", unblindedAt: "unblind", createdAt: "now", updatedAt: "now" } as ResearchProjectRecord;
+  const results: ResearchResults = {
+    schemaVersion: 1, projectId: project.id, templateType: "context_instructions", computedAt: "now", pairwise: [],
+    conditions: [{ conditionKey: "ctx_add", label: "Add to notes", contextMode: "add_to_selected", contextAdditionTargets: ["viewer_notes"], compositionSha256, logicalContextMessages: 1, logicalContextCharacters: 5, plannedN: 2, completionRate: 50, n: 1, meanTotal: 7, medianTotal: 7, stdDevTotal: 0, minTotal: 7, maxTotal: 7, meanComponents: { gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 2, confabulationControl: 1 } }],
+    sessions: [{ anonymousSessionId: "BlindSession_CTX", sessionId: "session", targetId: "target", pairKey: "pair", conditionKey: "ctx_add", conditionLabel: "Add to notes", total: 7, judgeCount: 1, judgeTotalRange: 0, judgeTotalStdDev: 0, gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 2, confabulationControl: 1,
+      contextAudit: { mode: "add_to_selected", additionTargets: ["viewer_notes"], compositionSha256, logicalContextMessages: 1, logicalContextCharacters: 5, requestEvidence: { physicalAttempts: 5, logicalRequests: 4, transportRetries: 1, recoveryAttempts: 0, requestHashes: ["e".repeat(64), "f".repeat(64)] } } }],
+  };
+  const repo = workflowTestRepository({
+    getResearchProject: async () => project, getResearchResults: async () => results, getResearchExecutionTermination: async () => undefined,
+    listResearchAssignments: async () => [{ id: "a", researchProjectId: project.id, anonymousSessionId: "BlindSession_CTX", sessionId: "session", targetId: "target", executionOrder: 1, judgeOrder: 1, status: "Judged" }],
+    listBlindingMappings: async () => [{ id: "map", researchProjectId: project.id, anonymousSessionId: "BlindSession_CTX", conditionId: "condition", pairKey: "pair", mappingHash: "h", createdAt: "now" }],
+    listResearchConditions: async () => [{ id: "condition", researchProjectId: project.id, conditionKey: "ctx_add", config: condition }],
+    listRvSessions: async () => [{ id: "session", workspaceId: "workspace", profileId: "profile", sessionCode: "S", state: "Completed", runType: "automatic", preRevealTranscript: "blind", postRevealTranscript: "", targetId: "target", researchProjectId: project.id, createdAt: "now", updatedAt: "now" }],
+    getReveal: async () => ({ source: "automatic_target", text: "Reveal", hash: "h", artifactManifest: [] }), getViewerEvidence: async () => "blind evidence", getSessionSnapshot: async () => null,
+    listJudgeScores: async () => [], listTargetClarifications: async () => [], listSessionEvents: async () => [{ id: "event", sessionId: "session", sequenceNumber: 1, createdAt: "now", eventType: "RESEARCH_CONTEXT_REQUEST_EVIDENCE_V1", role: "controller", content: JSON.stringify({ version: 1, messagesSha256: "e".repeat(64), messages: [] }), metadata: { logicalRequestId: "logical", physicalAttempt: 1 } }], recordExport: vi.fn(),
+  } as unknown as AppRepository);
+  writeExportPackage.mockResolvedValue("/exports/context-complete");
+  await exportResearchPackage(repo, project.id);
+  const files = writeExportPackage.mock.calls.at(-1)![0].files as Array<{ relativePath: string; content: string }>;
+  const resultsCsv = files.find((file) => file.relativePath === "results/results.csv")?.content ?? "";
+  const sessionCsv = files.find((file) => file.relativePath === "results/session_results.csv")?.content ?? "";
+  const parameters = files.find((file) => file.relativePath === "configuration/condition_parameters.json")?.content ?? "";
+  expect(resultsCsv).toContain("context_mode,context_addition_targets,composition_sha256,logical_context_messages,logical_context_characters,planned_n,completion_rate_pct");
+  expect(resultsCsv).toContain(`add_to_selected,viewer_notes,${compositionSha256},1,5,2,50`);
+  expect(sessionCsv).toContain("evidence_physical_attempts,evidence_logical_requests,evidence_transport_retries,evidence_recovery_attempts,request_hashes");
+  expect(sessionCsv).toContain(`5,4,1,0,${"e".repeat(64)}|${"f".repeat(64)}`);
+  expect(parameters).toContain('"mode": "add_to_selected"');
+  expect(parameters).toContain('"additionTargets": [');
+  expect(parameters).toContain('"viewer_notes"');
 });

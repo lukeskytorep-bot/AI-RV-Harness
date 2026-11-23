@@ -23,7 +23,8 @@ import { createId } from "../storage/repository";
 import { buildResearchLockPlan, stableStringify, validateConfig } from "./planner";
 import { runResearchPreflight, type ResearchPreflightInventory } from "./preflight";
 import { computeConditionStatistics, computePairwiseStatistics } from "./statistics";
-import type { ResearchConfig, ResearchPreflightResult, ResearchProjectRecord, ResearchResults, UnblindedSessionResult, ResearchViewerOutputPolicy } from "./types";
+import { parseResearchContextRequestEvidenceEvents, summarizeResearchContextRequestEvidence } from "./contextRequestEvidence";
+import type { ResearchConfig, ResearchContextBlockKey, ResearchPreflightResult, ResearchProjectRecord, ResearchResults, UnblindedSessionResult, ResearchViewerOutputPolicy } from "./types";
 import { aiIsBeDisplayName, humanIsBeDisplayName } from "../domain/isBeIdentity";
 import { modelRouteKey } from "../modelRoutes";
 import { viewerNotesSnapshotSignature } from "./viewerNotesPolicy";
@@ -726,6 +727,25 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
     if (project.templateType === "target_code") targetCodeScores[assignment.sessionId] = scores;
     const aggregate = aggregateJudgeScores(scores);
     const execution = collectResearchViewerExecutionMetadata(sessionEvents, condition.config);
+    const contextAudit = project.templateType === "context_instructions" ? (() => {
+      const composition = condition.config.contextComposition;
+      if (!composition) throw new Error("Context & Instructions result is missing its frozen composition.");
+      const records = parseResearchContextRequestEvidenceEvents(sessionEvents);
+      const evidenceSummary = summarizeResearchContextRequestEvidence(records);
+      const additionTargets: ResearchContextBlockKey[] = [];
+      if (composition.design.mode === "add_to_selected") {
+        const additions = composition.design.additions;
+        for (const key of Object.keys(additions) as ResearchContextBlockKey[]) if (additions[key]) additionTargets.push(key);
+      }
+      return {
+        mode: composition.design.mode,
+        additionTargets,
+        compositionSha256: composition.compositionSha256,
+        logicalContextCharacters: composition.applicationMessages.reduce((sum, message) => sum + message.content.length, 0),
+        logicalContextMessages: composition.applicationMessages.length,
+        requestEvidence: { ...evidenceSummary, requestHashes: records.map((record) => record.evidence.messagesSha256) },
+      };
+    })() : undefined;
     sessions.push({
       anonymousSessionId: assignment.anonymousSessionId,
       sessionId: assignment.sessionId,
@@ -747,6 +767,7 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
       providerConfigId: condition.config.providerConfigId,
       modelId: condition.config.modelId,
       execution,
+      ...(contextAudit ? { contextAudit } : {}),
       ...(condition.config.fieldGuide ? {
         fieldGuideVersionId: condition.config.fieldGuide.versionId,
         fieldGuideVersionNumber: condition.config.fieldGuide.versionNumber,
@@ -754,12 +775,20 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
       } : {}),
     });
   }
+  const conditionStatistics = computeConditionStatistics(sessions);
+  if (project.templateType === "context_instructions") {
+    const plannedPerCondition = project.config.targetIds.length * project.config.repetitions;
+    for (const condition of conditionStatistics) {
+      condition.plannedN = plannedPerCondition;
+      condition.completionRate = plannedPerCondition > 0 ? Math.round((condition.n / plannedPerCondition) * 10000) / 100 : 0;
+    }
+  }
   const results: ResearchResults = {
     schemaVersion: 1,
     projectId,
     templateType: project.templateType,
     sessions,
-    conditions: computeConditionStatistics(sessions),
+    conditions: conditionStatistics,
     pairwise: computePairwiseStatistics(sessions),
     computedAt: new Date().toISOString(),
   };

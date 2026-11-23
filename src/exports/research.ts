@@ -196,8 +196,8 @@ export async function exportResearchPackage(repository: AppRepository, projectId
 }
 
 function resultsCsv(results: ResearchResults): string {
-  const header = ["condition_key", "condition_label", "requested_top_p", "effective_top_p", "requested_top_k", "effective_top_k", "requested_seed", "effective_seed", "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort", "provider_config_id", "model_id", "n", "mean_total", "median_total", "stddev_total", "min_total", "max_total", "gestalt_mean", "features_mean", "activity_mean", "confabulation_mean"];
-  const rows = results.conditions.map((condition) => [condition.conditionKey, condition.label,
+  const header = ["condition_key", "condition_label", "context_mode", "context_addition_targets", "composition_sha256", "logical_context_messages", "logical_context_characters", "planned_n", "completion_rate_pct", "requested_top_p", "effective_top_p", "requested_top_k", "effective_top_k", "requested_seed", "effective_seed", "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort", "provider_config_id", "model_id", "n", "mean_total", "median_total", "stddev_total", "min_total", "max_total", "gestalt_mean", "features_mean", "activity_mean", "confabulation_mean"];
+  const rows = results.conditions.map((condition) => [condition.conditionKey, condition.label, condition.contextMode ?? "", condition.contextAdditionTargets?.join("|") ?? "", condition.compositionSha256 ?? "", condition.logicalContextMessages ?? "", condition.logicalContextCharacters ?? "", condition.plannedN ?? "", condition.completionRate ?? "",
     valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topP")), valueOrAuto(condition.effectiveSettings?.topP),
     valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topK")), valueOrAuto(condition.effectiveSettings?.topK),
     valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "seed")), valueOrAuto(condition.effectiveSettings?.seed),
@@ -209,11 +209,11 @@ function resultsCsv(results: ResearchResults): string {
 }
 
 function sessionResultsCsv(results: ResearchResults): string {
-  const header = ["anonymous_session_id", "session_id", "target_id", "pair_key", "condition_key", "condition_label",
+  const header = ["anonymous_session_id", "session_id", "target_id", "pair_key", "condition_key", "condition_label", "context_mode", "context_addition_targets", "composition_sha256", "logical_context_messages", "logical_context_characters", "evidence_physical_attempts", "evidence_logical_requests", "evidence_transport_retries", "evidence_recovery_attempts", "request_hashes",
     "requested_top_p", "effective_top_p", "requested_top_k", "effective_top_k", "requested_seed", "effective_seed", "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort",
     "provider_config_id", "model_id", "actual_provider", "actual_model", "generation_ids", "provider_request_ids", "viewer_call_count", "input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "cost_usd", "request_duration_ms", "first_viewer_response_at", "last_viewer_response_at",
     "field_guide_version_id", "field_guide_version_number", "field_guide_content_sha256", "mean_total", "judge_count", "judge_total_range", "judge_total_stddev", "gestalt", "verifiable_features", "activity_function_event", "confabulation_control"];
-  const rows = results.sessions.map((session) => [session.anonymousSessionId, session.sessionId, session.targetId, session.pairKey, session.conditionKey, session.conditionLabel,
+  const rows = results.sessions.map((session) => [session.anonymousSessionId, session.sessionId, session.targetId, session.pairKey, session.conditionKey, session.conditionLabel, session.contextAudit?.mode ?? "", session.contextAudit?.additionTargets.join("|") ?? "", session.contextAudit?.compositionSha256 ?? "", session.contextAudit?.logicalContextMessages ?? "", session.contextAudit?.logicalContextCharacters ?? "", session.contextAudit?.requestEvidence.physicalAttempts ?? "", session.contextAudit?.requestEvidence.logicalRequests ?? "", session.contextAudit?.requestEvidence.transportRetries ?? "", session.contextAudit?.requestEvidence.recoveryAttempts ?? "", session.contextAudit?.requestEvidence.requestHashes.join("|") ?? "",
     valueOrAuto(researchRequestedSamplingValue(session.requestedSettings, session.samplingValues, "topP")), valueOrAuto(session.effectiveSettings?.topP),
     valueOrAuto(researchRequestedSamplingValue(session.requestedSettings, session.samplingValues, "topK")), valueOrAuto(session.effectiveSettings?.topK),
     valueOrAuto(researchRequestedSamplingValue(session.requestedSettings, session.samplingValues, "seed")), valueOrAuto(session.effectiveSettings?.seed),
@@ -245,14 +245,19 @@ function researchConditionParameters(config: ResearchConfig): Array<Record<strin
     requestedSettings: condition.requestedSettings,
     effectiveSettings: condition.effectiveSettings?.effective ?? null,
     capabilitySnapshot: condition.capabilitySnapshot ?? null,
+    context: condition.contextComposition ? {
+      mode: condition.contextComposition.design.mode,
+      additionTargets: condition.contextComposition.design.mode === "add_to_selected" ? Object.keys(condition.contextComposition.design.additions) : [],
+      compositionSha256: condition.contextComposition.compositionSha256,
+    } : null,
   }));
 }
 
 function conditionParametersCsv(config: ResearchConfig): string {
-  const header = ["condition_key", "condition_label", "profile_id", "provider_config_id", "model_id",
+  const header = ["condition_key", "condition_label", "context_mode", "context_addition_targets", "composition_sha256", "profile_id", "provider_config_id", "model_id",
     "requested_top_p", "top_p_source", "effective_top_p", "requested_top_k", "top_k_source", "effective_top_k", "requested_seed", "seed_source", "effective_seed",
     "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort"];
-  const rows = config.conditions.map((condition) => [condition.key, condition.label, condition.profileId, condition.providerConfigId, condition.modelId,
+  const rows = config.conditions.map((condition) => [condition.key, condition.label, condition.contextComposition?.design.mode ?? "", condition.contextComposition?.design.mode === "add_to_selected" ? Object.keys(condition.contextComposition.design.additions).join("|") : "", condition.contextComposition?.compositionSha256 ?? "", condition.profileId, condition.providerConfigId, condition.modelId,
     valueOrAuto(condition.requestedSettings.topP), condition.requestedSettings.topP === undefined ? "auto" : "manual", valueOrAuto(condition.effectiveSettings?.effective.topP),
     valueOrAuto(condition.requestedSettings.topK), condition.requestedSettings.topK === undefined ? "auto" : "manual", valueOrAuto(condition.effectiveSettings?.effective.topK),
     valueOrAuto(condition.requestedSettings.seed), condition.requestedSettings.seed === undefined ? "auto" : "manual", valueOrAuto(condition.effectiveSettings?.effective.seed),
