@@ -2,6 +2,7 @@ import {workflowTestRepository} from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 import type { AppRepository } from "../storage/repository";
 import type { ResearchConfig, ResearchProjectRecord, ResearchResults } from "../research/types";
+import { createResearchProtocolSelection } from "../research/protocolPolicy";
 
 const { writeExportPackage } = vi.hoisted(() => ({ writeExportPackage: vi.fn() }));
 vi.mock("./native", () => ({ writeExportPackage }));
@@ -187,4 +188,32 @@ it("exports incomplete judging without final ranking and keeps the frozen design
   expect(read("private_master/blinding/blinding_key.json")).toContain("PRIVATE_CONDITION_123");
   expect(read("private_master/master/sessions/BlindSession_ABCDEF12/session_events.json")).toContain("RESEARCH_JUDGE_REQUEST_V1");
   expect((await f.repo.getResearchProject("r"))?.state).toBe("Judging");
+});
+
+it("exports Context & Instructions request evidence privately for save-only Research", async () => {
+  const condition = { key: "ctx", label: "Replace", profileId: "profile", providerConfigId: "provider", modelId: "viewer", requestedSettings: {} };
+  const config = {
+    schemaVersion: 1, name: "Context audit", workspaceId: "workspace", templateType: "context_instructions", sessionLanguage: "en",
+    protocol: createResearchProtocolSelection("rv-lite", "en"), targetIds: ["target"], repetitions: 1, requireUnusedTargets: false,
+    conditions: [condition], evaluationMode: "save_only", judges: [], randomization: { matchedTargets: true, randomizedExecution: true, randomizedJudgeOrder: true },
+  } as ResearchConfig;
+  const project = { id: "research-context", workspaceId: "workspace", name: "Context audit", templateType: "context_instructions", state: "SessionsComplete", config, configHash: "hash", lockedAt: "lock", createdAt: "now", updatedAt: "now" } as ResearchProjectRecord;
+  const evidence = { version: 1, messagesSha256: "a".repeat(64), messages: [{ index: 0, role: "user", content: "exact request", sha256: "b".repeat(64) }], requestedMaxOutputTokens: 1000, effectiveMaxOutputTokens: 1000 };
+  const repo = workflowTestRepository({
+    getResearchProject: async () => project, getResearchResults: async () => null, getResearchExecutionTermination: async () => undefined,
+    listResearchAssignments: async () => [{ id: "a", researchProjectId: project.id, anonymousSessionId: "BlindSession_CONTEXT", sessionId: "session", targetId: "target", executionOrder: 1, judgeOrder: 1, status: "SessionComplete" }],
+    listBlindingMappings: async () => [{ id: "map", researchProjectId: project.id, anonymousSessionId: "BlindSession_CONTEXT", conditionId: "condition", pairKey: "pair", mappingHash: "h", createdAt: "now" }],
+    listResearchConditions: async () => [{ id: "condition", researchProjectId: project.id, conditionKey: "ctx", config: condition }],
+    listRvSessions: async () => [{ id: "session", workspaceId: "workspace", profileId: "profile", sessionCode: "S", state: "Completed", runType: "automatic", preRevealTranscript: "blind", postRevealTranscript: "", targetId: "target", researchProjectId: project.id, createdAt: "now", updatedAt: "now" }],
+    getReveal: async () => ({ source: "automatic_target", text: "Reveal", hash: "h", artifactManifest: [] }), getViewerEvidence: async () => "blind evidence", getSessionSnapshot: async () => null,
+    listJudgeScores: async () => [], listTargetClarifications: async () => [], listSessionEvents: async () => [{ id: "event-1", sessionId: "session", sequenceNumber: 7, createdAt: "now", eventType: "RESEARCH_CONTEXT_REQUEST_EVIDENCE_V1", role: "controller", content: JSON.stringify(evidence), metadata: { attemptId: "attempt-1" } }],
+    recordExport: vi.fn(),
+  } as unknown as AppRepository);
+  writeExportPackage.mockResolvedValue("/exports/context");
+  await exportResearchPackage(repo, project.id);
+  const files = writeExportPackage.mock.calls.at(-1)![0].files as Array<{ relativePath: string; content: string }>;
+  const evidenceFile = files.find((file) => file.relativePath === "private_master/sessions/BlindSession_CONTEXT/request_evidence.json");
+  expect(evidenceFile).toBeDefined();
+  expect(JSON.parse(evidenceFile!.content)).toMatchObject({ schemaVersion: 1, requests: [{ eventId: "event-1", metadata: { attemptId: "attempt-1" }, evidence }] });
+  expect(files.some((file) => file.relativePath.startsWith("external_evaluation/") && file.content.includes("exact request"))).toBe(false);
 });

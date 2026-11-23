@@ -4,6 +4,7 @@ import type { ProviderContinuationState } from "../providers/continuationContrac
 import anthropicFixture from "../providers/continuation-fixtures/anthropic-thinking-blocks.json";
 import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
+import { ProviderCallError } from "../providers/providerError";
 import { getRvLite, renderRvLiteSteps } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import type { TargetRecord } from "../targets/types";
@@ -73,8 +74,11 @@ describe("automatic RV Lite controller", () => {
     expect(events.filter((event) => event.eventType === "VIEWER_RESPONSE").every((event) => event.metadata?.actualProvider === "DeepInfra" && event.metadata?.actualModel === "m-runtime")).toBe(true);
   });
 
-  it("keeps RV Lite protocol steps while Tabula rasa removes all additional Viewer context", async () => {
+  it("keeps RV Lite protocol steps while Tabula rasa removes all additional Viewer context and records each request", async () => {
     const snapshots: SessionSnapshot[] = [];
+    const events: SessionEventInput[] = [];
+    const repo = repository([], snapshots);
+    repo.appendSessionEvent = vi.fn(async (_sessionId: string, event: SessionEventInput) => { events.push(structuredClone(event)); return { ...event, id: `event-${events.length}`, sessionId: "session-tabula", sequenceNumber: events.length, createdAt: "now" } as never; });
     const researchContext = await composeResearchContext({ version: 1, mode: "replace_all", content: "" }, {
       system_prompt: { content: "FIELD", source: "field", availability: "available" },
       viewer_notes: { content: "NOTES", source: "notes", availability: "available" },
@@ -86,7 +90,7 @@ describe("automatic RV Lite controller", () => {
     const expectedSteps = renderRvLiteSteps(protocol, undefined, sessionIdentity.sessionCode);
     let calls = 0;
     await runAutomaticRvLiteSession({
-      repository: repository([], snapshots), workspaceId: "w", profileId: "profile", providerConfig: config, model,
+      repository: repo, workspaceId: "w", profileId: "profile", providerConfig: config, model,
       protocol, sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, sessionIdentity,
       operationKind: "research_viewer", researchProjectId: "research", researchContext,
       rvSystemPrompt: { id: "legacy", version: "1", content: "SHOULD NOT LEAK", contentSha256: "e".repeat(64) },
@@ -99,8 +103,43 @@ describe("automatic RV Lite controller", () => {
       },
     });
     expect(calls).toBe(4);
+    const requestEvidence = events.filter((event) => event.eventType === "RESEARCH_CONTEXT_REQUEST_EVIDENCE_V1");
+    expect(requestEvidence).toHaveLength(4);
+    const firstEvidence = JSON.parse(requestEvidence[0].content ?? "{}") as { messages: Array<{ role: string; content: string }> };
+    expect(firstEvidence.messages.some((message) => message.role === "system")).toBe(false);
+    expect(firstEvidence.messages.at(-1)?.content).toBe(expectedSteps[0]);
     expect(snapshots[0].researchContext?.applicationMessages).toEqual([]);
     expect(snapshots[0].rvSystemPrompt).toBeUndefined();
+  });
+
+
+  it("records request evidence for every physical RV Lite transport retry", async () => {
+    const events: SessionEventInput[] = [];
+    const repo = repository([]);
+    repo.appendSessionEvent = vi.fn(async (_sessionId: string, event: SessionEventInput) => { events.push(structuredClone(event)); return { ...event, id: `event-${events.length}`, sessionId: "session-retry", sequenceNumber: events.length, createdAt: "now" } as never; });
+    const researchContext = await composeResearchContext({ version: 1, mode: "replace_all", content: "LITE CONTEXT" }, {
+      system_prompt: { content: "FIELD", source: "field", availability: "available" },
+      viewer_notes: { content: "NOTES", source: "notes", availability: "available" },
+      viewer_identity: { content: "IDENTITY", source: "identity", availability: "available" },
+      base_vocabulary: { content: "VOCAB", source: "vocab", availability: "available" },
+    });
+    let transportCalls = 0;
+    await runAutomaticRvLiteSession({
+      repository: repo, workspaceId: "w", profileId: "profile", providerConfig: config, model, protocol: getRvLite("en", "extended"),
+      sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, researchProjectId: "research", operationKind: "research_viewer", researchContext,
+      chat: async () => {
+        transportCalls += 1;
+        if (transportCalls === 1) throw new ProviderCallError({ code: "connect", message: "retry me", phase: "awaiting_headers" });
+        return { content: `physical ${transportCalls}`, finishReason: "stop", usage: {} };
+      },
+    });
+    expect(transportCalls).toBe(5);
+    const evidence = events.filter((event) => event.eventType === "RESEARCH_CONTEXT_REQUEST_EVIDENCE_V1");
+    expect(evidence).toHaveLength(5);
+    expect(evidence[0].metadata?.logicalRequestId).toBe(evidence[1].metadata?.logicalRequestId);
+    expect(evidence.slice(0, 2).map((event) => event.metadata?.physicalAttempt)).toEqual([1, 2]);
+    expect(evidence[0].metadata?.physicalAttemptId).not.toBe(evidence[1].metadata?.physicalAttemptId);
+    expect(evidence[0].metadata?.attemptId).toBe(evidence[1].metadata?.attemptId);
   });
 
   it("retries the same RV Lite step once at 16K -> 32K after length and accepts only the recovery", async () => {

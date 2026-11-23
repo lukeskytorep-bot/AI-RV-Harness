@@ -302,6 +302,7 @@ export function createProviderChatExecutor(options: {
   capacityProtectedRouting?: boolean;
   streamWorkflowContext?: StreamWorkflowContext;
   onAttemptFailure?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptFailure"];
+  onAttemptStart?: ExecuteProviderRequestInput<ProviderChatResponse>["onAttemptStart"];
 }): ProviderChatAttempt {
   const executor: ProviderChatAttempt & { [PROVIDER_EXECUTOR_BRAND]?: boolean } = (request) => executeProviderChat({
     ...request,
@@ -313,6 +314,7 @@ export function createProviderChatExecutor(options: {
     capacityProtectedRouting: options.capacityProtectedRouting,
     streamWorkflowContext: options.streamWorkflowContext,
     onAttemptFailure: options.onAttemptFailure,
+    onAttemptStart: options.onAttemptStart,
   });
   executor[PROVIDER_EXECUTOR_BRAND] = true;
   return executor;

@@ -7,6 +7,7 @@ import type { RevealArtifactRecord } from "../sessions/types";
 import { stableStringify } from "../research/planner";
 import type { ResearchConfig, ResearchResults } from "../research/types";
 import { researchRequestedSamplingValue } from "../research/samplingPolicy";
+import { RESEARCH_CONTEXT_REQUEST_EVIDENCE_EVENT } from "../research/contextRequestEvidence";
 import { postRevealTranscriptMarkdown } from "../sessions/postRevealTranscript";
 import { writeExportPackage, type ExportArtifactCopy, type ExportTextFile } from "./native";
 import { renderCompleteSessionMarkdown } from "./sessionDocument";
@@ -61,13 +62,27 @@ export async function exportResearchPackage(repository: AppRepository, projectId
     if (!assignment.sessionId) continue;
     const session = sessionById.get(assignment.sessionId);
     if (!session) continue;
-    const [reveal, viewerEvidence, snapshot, judgeScores, clarifications] = await Promise.all([
-      repository.getReveal(session.id), repository.getViewerEvidence(session.id), repository.getSessionSnapshot(session.id), repository.listJudgeScores(session.id), repository.listTargetClarifications(session.id),
+    const [reveal, viewerEvidence, snapshot, judgeScores, clarifications, sessionEvents] = await Promise.all([
+      repository.getReveal(session.id), repository.getViewerEvidence(session.id), repository.getSessionSnapshot(session.id), repository.listJudgeScores(session.id), repository.listTargetClarifications(session.id), repository.listSessionEvents(session.id),
     ]);
     const base = `sessions/${assignment.anonymousSessionId}`;
     if(partial)partialScores.push({ anonymousSessionId: assignment.anonymousSessionId, scores: judgeScores });
     if(termination || partial)files.push({relativePath:`${privatePrefix}master/${base}/judge_scores.json`,content:pretty(judgeScores)});
-    if(termination || partial)files.push({relativePath:`${privatePrefix}master/${base}/session_events.json`,content:pretty(await repository.listSessionEvents(session.id))});
+    if(termination || partial)files.push({relativePath:`${privatePrefix}master/${base}/session_events.json`,content:pretty(sessionEvents)});
+    if (project.templateType === "context_instructions") {
+      const requestEvidence = sessionEvents
+        .filter((event) => event.eventType === RESEARCH_CONTEXT_REQUEST_EVIDENCE_EVENT)
+        .map((event) => {
+          if (!event.content) throw new Error(`Context & Instructions request evidence ${event.id} has no payload.`);
+          let evidence: unknown;
+          try { evidence = JSON.parse(event.content); } catch { throw new Error(`Context & Instructions request evidence ${event.id} is not valid JSON.`); }
+          return { eventId: event.id, sequenceNumber: event.sequenceNumber, createdAt: event.createdAt, metadata: event.metadata ?? {}, evidence };
+        });
+      files.push({
+        relativePath: `${saveOnly ? "private_master/" : ""}${base}/request_evidence.json`,
+        content: pretty({ schemaVersion: 1, anonymousSessionId: assignment.anonymousSessionId, sessionId: session.id, requests: requestEvidence }),
+      });
+    }
     if (!saveOnly) {
       files.push({ relativePath: `${base}/pre_reveal.md`, content: session.preRevealTranscript });
       files.push({ relativePath: `${base}/viewer_evidence.md`, content: viewerEvidence });

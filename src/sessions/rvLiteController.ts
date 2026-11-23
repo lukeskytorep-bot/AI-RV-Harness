@@ -6,6 +6,7 @@ import { focusFeedbackIntroduction, focusTranscriptContent, focusPasses, focusMe
 import { resolveGenerationSettings } from "../providers/capabilities";
 import { createProviderChatExecutor } from "../providers/requestExecutor";
 import type { OperationKind } from "../providers/operationResourceProfiles";
+import { ProviderCallError } from "../providers/providerError";
 import type { StreamWorkflowContext } from "../providers/streamPresentation";
 import type { GenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderModel, ProviderStreamEvent } from "../providers/types";
 import { getRvLite, renderRvLiteSteps, type RvLiteProtocolResource } from "../resources/protocolRegistry";
@@ -34,6 +35,7 @@ import { renderSpecialTask } from "./specialTask";
 import { politeRevealTransition } from "./courtesy";
 import { viewerNotesSystemBlock } from "../aiCenter/viewerNotes";
 import { researchContextProviderMessages, researchContextSessionEvidence } from "../research/contextRuntime";
+import { buildResearchContextRequestEvidence, RESEARCH_CONTEXT_REQUEST_EVIDENCE_EVENT } from "../research/contextRequestEvidence";
 import type { ResearchFrozenContextComposition } from "../research/types";
 import type { ViewerNotesSessionSnapshot } from "../aiCenter/types";
 import { createSessionStreamPreviewHandler, type SessionStreamPreview } from "./streamingPreview";
@@ -133,8 +135,21 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
   let activeViewerAttemptId: string | undefined;
   let activeViewerManualRetry = false;
+  let activeResearchEvidence: {
+    messages: ProviderMessage[];
+    settings: Parameters<typeof buildResearchContextRequestEvidence>[1];
+    metadata: Record<string, unknown>;
+  } | undefined;
   let focusedPhysicalFailures=0;
-  const chat = createProviderChatExecutor({ configuredRetries: () => activeViewerManualRetry ? 0 : maxRetries, operationId: "session.rv-lite", operationKind: input.operationKind, streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: async (cause, context) => {
+  const chat = createProviderChatExecutor({ configuredRetries: () => activeViewerManualRetry ? 0 : maxRetries, operationId: "session.rv-lite", operationKind: input.operationKind, streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptStart: async (context) => {
+      if (!input.researchContext || !activeResearchEvidence) return;
+      const requestEvidence = await buildResearchContextRequestEvidence(activeResearchEvidence.messages, activeResearchEvidence.settings);
+      try {
+        await input.repository.appendSessionEvent(sessionId, { eventType: RESEARCH_CONTEXT_REQUEST_EVIDENCE_EVENT, role: "controller", content: JSON.stringify(requestEvidence, null, 2), metadata: { ...activeResearchEvidence.metadata, operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, physicalAttemptId: `${context.logicalRequestId}:${context.physicalAttempt}`, compositionSha256: input.researchContext.compositionSha256, messagesSha256: requestEvidence.messagesSha256 } });
+      } catch (cause) {
+        throw new ProviderCallError({ code: "configuration", message: `Research request evidence persistence failed before provider dispatch: ${cause instanceof Error ? cause.message : String(cause)}`, phase: "before_dispatch" }, { cause });
+      }
+    }, onAttemptFailure: async (cause, context) => {
       if(sessionFocus){focusedPhysicalFailures++;metrics=recordProviderRequest(metrics,undefined,0);}
       return input.repository.appendSessionEvent(sessionId, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, ...(activeViewerAttemptId ? { attemptId: activeViewerAttemptId } : {}), ...viewerFailureMetadata(cause) } }); } });
   const messages: ProviderMessage[] = input.researchContext
@@ -172,6 +187,13 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
       abortSignal: input.signal,
       call: async (settings, semanticAttempt, dispatchAttempt) => {
         validateSessionContinuationBudget(requestMessages);
+        if (input.researchContext) {
+          activeResearchEvidence = {
+            messages: requestMessages.map((message) => ({ ...message })),
+            settings,
+            metadata: { ...durableMetadata, ...dispatchAttempt, semanticAttempt },
+          };
+        }
         await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
         activeViewerAttemptId = dispatchAttempt.attemptId;
         activeViewerManualRetry = Boolean(durable.resumeAuthorizationId);
@@ -186,6 +208,7 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
           metrics = recordProviderRequest(metrics, response.usage, elapsed);
           activeViewerAttemptId = undefined;
           activeViewerManualRetry = false;
+          activeResearchEvidence = undefined;
           return response;
         } catch (cause) {
           input.onStreamPreview?.(null);
@@ -198,6 +221,7 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
           }
           activeViewerAttemptId = undefined;
           activeViewerManualRetry = false;
+          activeResearchEvidence = undefined;
           throw cause;
         }
       },

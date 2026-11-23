@@ -1,6 +1,7 @@
 import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
+import { ProviderCallError } from "../providers/providerError";
 import { getFullRcp } from "../resources/protocolRegistry";
 import type { AppRepository } from "../storage/repository";
 import { detectRepetitiveOutput, runAutomaticRcpSession } from "./controller";
@@ -123,8 +124,11 @@ describe("automatic RCP controller", () => {
     expect(snapshots[0].researchConditionInstruction).toEqual(expect.objectContaining({ contentSha256: "d".repeat(64), fullContent: "CUSTOM VARIABLE A" }));
   });
 
-  it("uses only the frozen Context & Instructions messages and snapshots them before the first RCP call", async () => {
+  it("uses only the frozen Context & Instructions messages, snapshots them, and records request evidence before dispatch", async () => {
     const snapshots: SessionSnapshot[] = [];
+    const events: Array<{ eventType: string; content?: string; metadata?: Record<string, unknown> }> = [];
+    const repo = fakeRepository([], snapshots);
+    repo.appendSessionEvent = async (_id: string, event: { eventType: string; content?: string; metadata?: Record<string, unknown> }) => { events.push(structuredClone(event)); return undefined as never; };
     const content = "  REPLACE ALL\nexact whitespace  ";
     const researchContext = await composeResearchContext({ version: 1, mode: "replace_all", content }, {
       system_prompt: { content: "FIELD", source: "field", availability: "available" },
@@ -134,13 +138,19 @@ describe("automatic RCP controller", () => {
     });
     let calls = 0;
     await runAutomaticRcpSession({
-      repository: fakeRepository([], snapshots), workspaceId: "w", profileId: "p", providerConfig: config, model,
+      repository: repo, workspaceId: "w", profileId: "p", providerConfig: config, model,
       protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 16384 }, researchContext,
       researchProjectId: "research", operationKind: "research_viewer",
       rvSystemPrompt: { id: "legacy", version: "1", content: "SHOULD NOT LEAK", contentSha256: "f".repeat(64) },
       chat: async ({ messages }) => {
         calls += 1;
         if (calls === 1) {
+          const evidenceEvent = events.find((event) => event.eventType === "RESEARCH_CONTEXT_REQUEST_EVIDENCE_V1");
+          expect(evidenceEvent).toBeDefined();
+          const evidence = JSON.parse(evidenceEvent!.content ?? "{}") as { messages: Array<{ role: string; content: string }>; messagesSha256: string };
+          expect(evidence.messages.map((message) => [message.role, message.content])).toEqual(messages.map((message) => [message.role, message.content]));
+          expect(evidence.messagesSha256).toMatch(/^[a-f0-9]{64}$/);
+          expect(evidenceEvent?.metadata?.compositionSha256).toBe(researchContext.compositionSha256);
           const system = messages.filter((message) => message.role === "system").map((message) => message.content);
           expect(system).toEqual([getFullRcp("en").content, content]);
           expect(JSON.stringify(messages)).not.toContain("SHOULD NOT LEAK");
@@ -151,6 +161,37 @@ describe("automatic RCP controller", () => {
       },
     });
     expect(calls).toBe(6);
+  });
+
+
+  it("records request evidence for every physical RCP transport retry", async () => {
+    const events: Array<{ eventType: string; content?: string; metadata?: Record<string, unknown> }> = [];
+    const repo = fakeRepository([]);
+    repo.appendSessionEvent = async (_id: string, event: { eventType: string; content?: string; metadata?: Record<string, unknown> }) => { events.push(structuredClone(event)); return undefined as never; };
+    const researchContext = await composeResearchContext({ version: 1, mode: "replace_all", content: "RCP CONTEXT" }, {
+      system_prompt: { content: "FIELD", source: "field", availability: "available" },
+      viewer_notes: { content: "NOTES", source: "notes", availability: "available" },
+      viewer_identity: { content: "IDENTITY", source: "identity", availability: "available" },
+      base_vocabulary: { content: "VOCAB", source: "vocab", availability: "available" },
+    });
+    let transportCalls = 0;
+    await runAutomaticRcpSession({
+      repository: repo, workspaceId: "w", profileId: "p", providerConfig: config, model,
+      protocol: getFullRcp("en"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 16384 },
+      researchProjectId: "research", operationKind: "research_viewer", researchContext,
+      chat: async () => {
+        transportCalls += 1;
+        if (transportCalls === 1) throw new ProviderCallError({ code: "connect", message: "retry me", phase: "awaiting_headers" });
+        return { content: `physical ${transportCalls}`, finishReason: "stop", usage: {} };
+      },
+    });
+    expect(transportCalls).toBe(7);
+    const evidence = events.filter((event) => event.eventType === "RESEARCH_CONTEXT_REQUEST_EVIDENCE_V1");
+    expect(evidence).toHaveLength(7);
+    expect(evidence[0].metadata?.logicalRequestId).toBe(evidence[1].metadata?.logicalRequestId);
+    expect(evidence.slice(0, 2).map((event) => event.metadata?.physicalAttempt)).toEqual([1, 2]);
+    expect(evidence[0].metadata?.physicalAttemptId).not.toBe(evidence[1].metadata?.physicalAttemptId);
+    expect(evidence[0].metadata?.attemptId).toBe(evidence[1].metadata?.attemptId);
   });
 
   it("persists the Session Snapshot before publishing Research session linkage", async () => {
