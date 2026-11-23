@@ -3,6 +3,7 @@ import { targetCodePolicy } from "../../resources/rvLiteTargetCode";
 import { TargetCodePreview, TargetCodeResultsView } from "./TargetCodeResearch";
 import { newRunGenerationSettings } from "../../providers/customCompatibility";
 import { ResearchEvaluationPanels } from "./ResearchEvaluationPanels";
+import { ResearchContextEvidencePanel } from "./ResearchContextEvidencePanel";
 import { ResearchPartialScores } from "./ResearchPartialScores";
 import { useWorkflowOwnership } from "../../components/useWorkflowOwnership";
 import { researchScope, canEndResearchExecution, type ResearchExecutionTermination } from "../../research/executionLifecycle";
@@ -762,6 +763,7 @@ export function ResearchProjectView({ copy, repository, project, onRefresh, onBa
     {!saveOnly && ["SessionsComplete", "Judging", "ScoresFrozen"].includes(project.state) && <ResearchPartialScores repository={repository} project={project} pl={pl} revision={`${busy}:${progress}:${currentAnonymous}`} />}
     {!busy && !termination && !saveOnly && project.state === "Judging" && <button className="secondary-button" disabled={unavailable || !isTauriRuntime()} onClick={() => void exportPackage()}>{pl ? "Eksportuj wyniki częściowe" : "Export partial results"}</button>}
     {selectedSessionId && <SessionInspection repository={repository} workspaceId={project.workspaceId} sessionId={selectedSessionId} language={project.config.sessionLanguage} />}
+    {selectedSessionId && project.templateType === "context_instructions" && <ResearchContextEvidencePanel repository={repository} sessionId={selectedSessionId} pl={pl} />}
     {completedAssignments.length > 0 && <ResearchEvaluationPanels repository={repository} project={project} pl={pl} sourceBusy={Boolean(busy)} onBusyChange={setEvaluationBusy} />}
     {results && <ResearchResultsView copy={copy} results={results} repository={repository} />}
   </div>;
