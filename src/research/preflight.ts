@@ -48,7 +48,6 @@ export function runResearchPreflight(config: ResearchConfig, inventory: Research
     checks.push(hashes.size === config.conditions.length
       ? pass("context_condition_hashes", "Every Context & Instructions condition has a distinct frozen composition hash")
       : warn("context_condition_hashes", "Two or more context conditions have the same frozen composition hash; verify that the duplicate is intentional"));
-    checks.push(warn("context_runtime_gate", "C2 allows Preflight and Experiment Lock only. Session execution remains blocked until the audited C3 runtime/Resume integration."));
   }
   try { assertTargetCodeDesign(config); } catch (cause) { checks.push(fail("target_code_design", cause instanceof Error ? cause.message : String(cause))); }
   const targetMap = new Map(inventory.targets.map((target) => [target.id, target]));

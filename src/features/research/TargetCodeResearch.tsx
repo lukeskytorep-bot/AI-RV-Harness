@@ -1,3 +1,4 @@
+import { researchAssignmentDisplayStatus } from "../../i18n/researchDisplay";
 import { useState } from "react";
 import { getCopy } from "../../i18n";
 import { getRvLite } from "../../resources/protocolRegistry";
@@ -7,12 +8,12 @@ import type { AppRepository } from "../../storage/repository";
 import type { InterfaceLanguage } from "../../types";
 import { SessionInspection } from "../../components/SessionInspection";
 
-export function TargetCodePreview({ language, name }: { language: InterfaceLanguage; name: string }) {
-  const copy = getCopy(language);
+export function TargetCodePreview({ language, interfaceLanguage = language, name }: { language: InterfaceLanguage; interfaceLanguage?: InterfaceLanguage; name: string }) {
+  const copy = getCopy(interfaceLanguage);
   return <section className="research-form-section"><strong>{copy.targetCodePresence}</strong><p>{copy.targetCodeLead}</p>
     <small>{TARGET_CODE_VERSION} · SHA-256 {TARGET_CODE_TEMPLATES_SHA256}</small>
-    <p>{language === "pl" ? "Podgląd czterech promptów. Kod demonstracyjny A: RV-PREVIEW-0001. Właściwa nazwa profilu i kod zostaną podstawione przy sesji." : "Four-prompt preview. A demonstration code: RV-PREVIEW-0001. The actual profile name and code are rendered for each session."}</p>
-    {(["with_code", "without_code"] as const).map(mode=><details key={mode}><summary>{mode === "with_code" ? copy.targetCodeWith : copy.targetCodeWithout}</summary>{renderResearchTargetCodeSteps(getRvLite(language,"extended"), name,"RV-PREVIEW-0001",targetCodePolicy(mode)).map((text,index)=><details key={index}><summary>Prompt {index+1}</summary><pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{text}</pre></details>)}</details>)}
+    <p>{interfaceLanguage === "pl" ? "Podgląd czterech instrukcji. Kod demonstracyjny A: RV-PREVIEW-0001. Właściwa nazwa profilu i kod zostaną podstawione przy sesji." : "Four-prompt preview. A demonstration code: RV-PREVIEW-0001. The actual profile name and code are rendered for each session."}</p>
+    {(["with_code", "without_code"] as const).map(mode=><details key={mode}><summary>{mode === "with_code" ? copy.targetCodeWith : copy.targetCodeWithout}</summary>{renderResearchTargetCodeSteps(getRvLite(language,"extended"), name,"RV-PREVIEW-0001",targetCodePolicy(mode)).map((text,index)=><details key={index}><summary>{interfaceLanguage === "pl" ? "Instrukcja" : "Prompt"} {index+1}</summary><pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{text}</pre></details>)}</details>)}
   </section>;
 }
 
@@ -26,7 +27,7 @@ export function TargetCodeResultsView({ comparison, repository, language }: { co
   const side = (session:TargetCodeSessionResult|undefined) => session ? <>
     {session.sessionId ? <button className="secondary-button" onClick={()=>void inspect(session.sessionId!)}>{session.sessionCode ?? session.sessionId}</button> : "—"}
     <div>{value(session.aggregate?.total)} / 10</div>
-    {!session.aggregate && <small>{pl?"Brak pełnej oceny":"Not fully scored"} · {session.status}</small>}
+    {!session.aggregate && <small>{pl?"Brak pełnej oceny":"Not fully scored"} · {researchAssignmentDisplayStatus(language, session.status)}</small>}
     {session.scores.length>0 && <details><summary>{pl?"Oceny i składowe":"Scores and components"}</summary>{session.scores.map(score=><p key={score.id}>J{score.judgeIndex}: {score.total}/10 · {score.gestalt}/3 + {score.verifiableFeatures}/3 + {score.activityFunctionEvent}/2 + {score.confabulationControl}/2 · {score.modelRoute}</p>)}<small>{pl?"Gestalt · cechy weryfikowalne · aktywność/funkcja/zdarzenie · kontrola konfabulacji":"Gestalt · verifiable features · activity/function/event · confabulation control"}</small></details>}
   </> : "—";
   return <section className="research-form-section"><h3>{copy.targetCodePresence}</h3>

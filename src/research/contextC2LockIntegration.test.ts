@@ -79,6 +79,6 @@ describe("Context & Instructions C2 lock contract", () => {
     const result = runResearchPreflight(value, { profiles: [], providerConfigs: [], models: [], targets: [], targetUsage: [] });
     expect(result.checks.find((check) => check.id === "context_preparation")?.level).toBe("pass");
     expect(result.checks.find((check) => check.id === "context_runtime_pending")).toBeUndefined();
-    expect(result.checks.find((check) => check.id === "context_runtime_gate")?.level).toBe("warning");
+    expect(result.checks.find((check) => check.id === "context_runtime_gate")).toBeUndefined();
   });
 });

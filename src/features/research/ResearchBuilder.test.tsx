@@ -24,9 +24,9 @@ const model: ProviderModel = {
 const repository = {} as AppRepository;
 const noop = vi.fn(async () => undefined);
 
-function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "context_instructions" | "sampling" | "temperature" | "target_code") {
+function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "context_instructions" | "sampling" | "temperature" | "target_code", uiLanguage: "pl" | "en" = "en") {
   return renderToStaticMarkup(<ResearchConfigBuilder
-    copy={getCopy("en")}
+    copy={getCopy(uiLanguage)}
     settings={createDefaultSettings()}
     repository={repository}
     profiles={[profile]}
@@ -189,6 +189,14 @@ describe("Research Builder Training/Research UX step", () => {
   });
 
 
+  it("localizes context editor independently of session language", () => {
+    const html = renderBuilder("context_instructions", "pl");
+    expect(html).toContain("Warunki kontekstu");
+    expect(html).toContain("Czysta karta");
+    expect(html).not.toContain("Context conditions");
+    expect(html).not.toContain("Replace All");
+  });
+
   it("shows exact non-empty Replace All message content in Dry Run", () => {
     const content = "  first line\nsecond line  ";
     const frozen = { content: "", sha256: "0".repeat(64), enabled: false, source: "test", availability: "disabled" as const };
@@ -207,6 +215,10 @@ describe("Research Builder Training/Research UX step", () => {
     } as ResearchConfig;
     const html = renderToStaticMarkup(<DryRunPanel copy={getCopy("en")} config={config} />);
     expect(html).toContain(`<pre>${content}</pre>`);
+    const polish = renderToStaticMarkup(<DryRunPanel copy={getCopy("pl")} config={config} />);
+    expect(polish).toContain("Podgląd zamrożonego kontekstu");
+    expect(polish).toContain(`<pre>${content}</pre>`);
+    expect(polish).not.toContain("LOGICAL SYSTEM BLOCK");
   });
 
   it("exposes the Sampling configurations form only through the Research builder contract", () => {
@@ -270,9 +282,34 @@ it("renders Context & Instructions result provenance and completeness", () => {
   };
   const html = renderToStaticMarkup(<ResearchResultsView copy={getCopy("en")} results={results} repository={repository} />);
   expect(html).toContain("Context &amp; Instructions — condition comparison");
-  expect(html).toContain("add_to_selected");
-  expect(html).toContain("viewer_notes");
+  expect(html).toContain("Add to Selected");
+  expect(html).toContain("Viewer Notes");
   expect(html).toContain("3/4 · 75.00%");
   expect(html).toContain("1 msg · 17 chars");
   expect(html).toContain("attempts: 5 · retry 1 · recovery 0");
+  const polish = renderToStaticMarkup(<ResearchResultsView copy={getCopy("pl")} results={results} repository={repository} />);
+  expect(polish).toContain("Kontekst i instrukcje: porównanie warunków");
+  expect(polish).toContain("Dodaj do wybranych");
+  expect(polish).toContain("Add notes");
+  expect(polish).not.toContain("Add to Selected");
+});
+
+it.each(["pl", "en"] as const)("localizes stored practice and notes labels in results for %s UI", ui => {
+  for (const templateType of ["practice", "viewer_notes"] as const) {
+    const entries = templateType === "practice"
+      ? [{ key: "first", label: "FIRST" }, { key: "second", label: "SECOND" }]
+      : [{ key: "no_notes", label: "No Notes" }, { key: "frozen_notes", label: "Zamrożone notatki v12" }];
+    const results: ResearchResults = {
+      schemaVersion: 1, projectId: "localized", templateType, computedAt: "now",
+      conditions: entries.map(entry => ({ conditionKey: entry.key, label: entry.label, n: 1, meanTotal: 7, medianTotal: 7, stdDevTotal: 0, minTotal: 7, maxTotal: 7, meanComponents: { gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 2, confabulationControl: 1 } })),
+      sessions: entries.map(entry => ({ anonymousSessionId: `Blind_${entry.key}`, sessionId: entry.key, targetId: "t", pairKey: "p", conditionKey: entry.key, conditionLabel: entry.label, total: 7, judgeCount: 1, judgeTotalRange: 0, judgeTotalStdDev: 0, gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 2, confabulationControl: 1 })),
+      pairwise: [{ conditionA: entries[0].key, conditionB: entries[1].key, pairedN: 1, winsA: 0, ties: 1, winsB: 0, meanPairedDifference: 0 }],
+    };
+    const before = JSON.stringify(results);
+    const html = renderToStaticMarkup(<ResearchResultsView copy={getCopy(ui)} results={results} repository={repository} />);
+    const expected = templateType === "practice" ? (ui === "pl" ? ["PIERWSZA", "DRUGA"] : ["FIRST", "SECOND"]) : (ui === "pl" ? ["Bez notatek", "Zamrożone notatki v12"] : ["No Notes", "Frozen Notes v12"]);
+    for (const label of expected) expect(html).toContain(label);
+    expect(html).toContain(`${expected[0]} ↔ ${expected[1]}`);
+    expect(JSON.stringify(results)).toBe(before);
+  }
 });

@@ -23,12 +23,12 @@ export function ResearchScreen({ copy, settings, profiles, workspaces, repositor
   const pl = settings.interfaceLanguage === "pl";
   return (
     <div className="page">
-      <PageHeader title={copy.research} subtitle={copy.researchLead} action={<ModuleHelpButton label={pl ? "Jak działa Research?" : "How does Research work?"} icon={FlaskConical} expanded={helpOpen} controlsId="research-help-panel" onToggle={() => setHelpOpen((current) => !current)} />} />
-      {helpOpen && <ModuleHelpPanel id="research-help-panel" title={pl ? "Jak działa Research?" : "How does Research work?"} icon={FlaskConical}><ResearchHelpContent language={settings.interfaceLanguage} /></ModuleHelpPanel>}
+      <PageHeader title={copy.research} subtitle={copy.researchLead} action={<ModuleHelpButton label={pl ? "Jak działają badania?" : "How does Research work?"} icon={FlaskConical} expanded={helpOpen} controlsId="research-help-panel" onToggle={() => setHelpOpen((current) => !current)} />} />
+      {helpOpen && <ModuleHelpPanel id="research-help-panel" title={pl ? "Jak działają badania?" : "How does Research work?"} icon={FlaskConical}><ResearchHelpContent language={settings.interfaceLanguage} /></ModuleHelpPanel>}
       <div className="research-guardrails">
-        <ResearchGuardrail icon={LockKeyhole} title={copy.blinded} value="Allowlist packets" />
-        <ResearchGuardrail icon={ShieldCheck} title={copy.locked} value="Config → immutable" />
-        <ResearchGuardrail icon={FileCheck2} title="Scores" value="Freeze → unblind" />
+        <ResearchGuardrail icon={LockKeyhole} title={copy.blinded} value={pl ? "Pakiety anonimowe" : "Allowlist packets"} />
+        <ResearchGuardrail icon={ShieldCheck} title={copy.locked} value={pl ? "Konfiguracja → niezmienna" : "Config → immutable"} />
+        <ResearchGuardrail icon={FileCheck2} title={pl ? "Oceny" : "Scores"} value={pl ? "Zamrożenie → ujawnienie" : "Freeze → unblind"} />
       </div>
       <ResearchBuilder
         copy={copy}

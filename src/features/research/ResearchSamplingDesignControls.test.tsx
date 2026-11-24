@@ -64,7 +64,7 @@ describe("Research Sampling configurations UI", () => {
       initial.topP = { mode: "varied", fixed: "", values: ["0.9", "0.90"] };
       await act(async () => root.render(<Harness initial={initial} language="pl" />));
       expect(host.querySelector('[data-testid="sampling-design-error"]')?.textContent).toMatch(/duplicate/i);
-      expect(host.textContent).toContain("Konfiguracje samplingu");
+      expect(host.textContent).toContain("Konfiguracje próbkowania");
     } finally { await act(async () => root.unmount()); host.remove(); }
   });
 });
