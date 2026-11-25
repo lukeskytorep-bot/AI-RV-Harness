@@ -1,3 +1,5 @@
+import { resolveTargetCodeMode } from "../../domain/targetCodeMode";
+import { targetCodePolicy } from "../../resources/rvLiteTargetCode";
 import { newRunGenerationSettings } from "../../providers/customCompatibility";
 import { inspectViewerSessionResume } from "../../sessions/viewerResumeDecision";
 import type { ViewerResumeLedgerDecision } from "../../sessions/viewerResumeLedger";
@@ -244,6 +246,7 @@ export function TrainingScreen({ copy, settings, profiles, workspaces, repositor
       pauseAfterBlock: mode === "full" && roundCount > 1 ? pauseAfterBlock : false,
       viewerNotesEnabled,
       executionSnapshot: {
+        targetCodePolicy: targetCodePolicy(resolveTargetCodeMode(profile.targetCodeMode)),
         language,
         generationSettings: newRunGenerationSettings(provider, profileGenerationDefaults(profile, viewerModel)),
         judgeGenerationSettings: selectedJudges.map(model => newRunGenerationSettings(providers.find(item => item.id === model!.providerConfigId)!, {})),

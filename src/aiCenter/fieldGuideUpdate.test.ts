@@ -1,3 +1,7 @@
+import { sha256Text } from "../application/sha256";
+import { getRvLite } from "../resources/protocolRegistry";
+import { renderProfileTargetCodeSteps, targetCodePolicy } from "../resources/rvLiteTargetCode";
+import type { SessionSnapshot } from "../sessions/types";
 import { createHash } from "node:crypto";
 import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
@@ -318,4 +322,30 @@ for (const invalid of [undefined, "default", "legacy_analytical"] as const) it(`
 for(const responseKind of ["length","json"] as const)it(`S3.1 Field Guide Stop after ${responseKind} never starts recovery or creates a version`,async()=>{
  const h=integrationHarness();const controller=new AbortController();const chat=vi.fn(async()=>{controller.abort(new DOMException("Stopped by user","AbortError"));return responseKind==="length"?{content:"partial",finishReason:"length",usage:{}}:response("malformed JSON");});
  await expect(runFieldGuideUpdate({repository:h.repository,trainingRun:h.run,sessionId:"session-1",postRevealReview:"Review",providerConfig:provider,model,chat,signal:controller.signal,budgetPolicy:"training_reveal"})).rejects.toThrow("Stopped by user");expect(chat).toHaveBeenCalledTimes(1);expect(h.created).toHaveLength(0);
+});
+
+for (const scenario of ["clean", "initial-code", "repair-code", "clean-repair", "output-recovery"] as const) it(`CODE-5A without-code Field Guide integration: ${scenario}`, async () => {
+  const h = integrationHarness();
+  const snapshot = h.snapshot as SessionSnapshot;
+  const resource = getRvLite("en", "extended");
+  const policy = targetCodePolicy("without_code");
+  snapshot.protocol = { id: resource.id, version: resource.version, language: resource.language, variant: resource.variant, contentSha256: resource.contentSha256, fullContent: resource.content };
+  snapshot.profileTargetCode = { policy, renderProfileName: null, renderedPrompts: await Promise.all(renderProfileTargetCodeSteps(resource, undefined, snapshot.sessionCode, policy).map(async content => ({ content, sha256: await sha256Text(content) }))) };
+  h.run.executionSnapshot = { language: "en", generationSettings: {}, transport: { maxRetries: 0, requestTimeoutMs: 30000, sessionCodePrefix: "RV" }, targetCodePolicy: policy };
+  const payloads: string[] = [];
+  const chat: NonNullable<Parameters<typeof runFieldGuideUpdate>[0]["chat"]> = async request => {
+    payloads.push(JSON.stringify(request.messages));
+    if (scenario === "repair-code" && payloads.length === 1) return response(`invalid JSON ${snapshot.sessionCode}`);
+    if (scenario === "clean-repair" && payloads.length === 1) return response("invalid JSON");
+    if (scenario === "output-recovery" && payloads.length === 1) return { ...response("partial"), finishReason: "length" };
+    return response(JSON.stringify({ decision: "UPDATE", fieldGuide: "Compare rhythmic pressure and geometry.", changeSummary: "Refinement" }));
+  };
+  const result = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: snapshot.sessionId, postRevealReview: scenario === "initial-code" ? snapshot.sessionCode : "Review", providerConfig: provider, model, chat });
+  const blocked = scenario === "initial-code" || scenario === "repair-code";
+  expect(result?.status).toBe(blocked ? "FAILED_OUTPUT_PREFLIGHT" : "UPDATE");
+  expect(payloads).toHaveLength(scenario === "initial-code" ? 0 : scenario === "output-recovery" || scenario === "clean-repair" ? 2 : 1);
+  expect(payloads.every(payload => !payload.includes(snapshot.sessionCode))).toBe(true);
+  expect(h.created).toHaveLength(blocked ? 0 : 1);
+  if (blocked) { expect(h.activeVersion.id).toBe("fg-v1"); expect(h.activeVersion.content).toBe(h.sessionFrozen.content); }
+  else expect(h.created[0].sourceSnapshot.sourceSessionCode).toBe(snapshot.sessionCode);
 });

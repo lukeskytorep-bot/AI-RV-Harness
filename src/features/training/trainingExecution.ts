@@ -1,3 +1,4 @@
+import { validateTrainingSessionTargetCode, validateTrainingTargetCodePolicy } from "../../training/targetCode";
 import { withWorkflow } from "../../application/workflowOwnership";
 import { prepareViewerNotesForSession, runViewerNoteReflection, viewerNoteReflectionCompletesStage } from "../../aiCenter/viewerNotes";
 import { prepareFieldGuideForSession, viewerSystemPromptSnapshotFromFieldGuide } from "../../aiCenter/fieldGuide";
@@ -270,6 +271,7 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
 
   try {
     await assertCanContinue();
+    validateTrainingTargetCodePolicy(execution.targetCodePolicy);
     await input.repository.updateTrainingRun(working.id, { status: "Running", currentIndex: working.currentIndex, executionSnapshot: execution });
     for (let index = working.currentIndex; index < working.targetIds.length; index += 1) {
       await assertCanContinue();
@@ -322,10 +324,14 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
         if (!init) throw new Error("Training Resume cannot recover a blind_initializing checkpoint without its frozen initialization packet.");
         const existingSession = await input.repository.getRvSession(checkpoint.sessionId);
         const existingSnapshot = await input.repository.getSessionSnapshot(checkpoint.sessionId);
+        if (execution.targetCodePolicy && existingSession && (existingSession.id !== checkpoint.sessionId || existingSession.sessionCode !== init.sessionCode || existingSession.profileId !== working.profileId || existingSession.workspaceId !== working.workspaceId || existingSession.targetId !== targetId)) {
+          throw new Error("Training target-code initialization identity mismatch.");
+        }
         if (existingSnapshot && !existingSession) {
           throw new Error("Training Resume found a Session Snapshot without its RV session row.");
         }
         if (existingSnapshot) {
+          await validateTrainingSessionTargetCode(execution.targetCodePolicy, existingSnapshot);
           if (existingSnapshot.targetId !== checkpoint.targetId || existingSnapshot.workspaceId !== working.workspaceId || existingSnapshot.profileId !== input.profile.id) {
             throw new Error("Training Resume refused a blind_initializing checkpoint whose persisted Session Snapshot identity does not match.");
           }
@@ -363,7 +369,8 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
             ...(init.rvSystemPrompt ? { rvSystemPrompt: init.rvSystemPrompt } : {}),
             automaticTarget: target,
             capturedAutomaticReveal: currentReveal,
-            ...(existingSession ? { resumeSession: existingSession } : { sessionIdentity: { id: checkpoint.sessionId, sessionCode: init.sessionCode } }),
+            ...(existingSession ? (execution.targetCodePolicy ? { initializationExistingSession: existingSession } : { resumeSession: existingSession }) : { sessionIdentity: { id: checkpoint.sessionId, sessionCode: init.sessionCode } }),
+            ...(execution.targetCodePolicy ? { targetCodeMode: execution.targetCodePolicy.mode } : {}),
             signal: input.signal,
             maxRetries: execution.transport.maxRetries,
             requestTimeoutMs: execution.transport.requestTimeoutMs,
@@ -386,6 +393,8 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
       if (checkpoint.stage === "blind_running") {
         await assertCanContinue();
         const frozen = await frozenBlindResumeInput(input, checkpoint, target);
+        await validateTrainingSessionTargetCode(execution.targetCodePolicy, frozen.snapshot);
+        if (execution.targetCodePolicy && (frozen.snapshot.sessionId !== frozen.session.id || frozen.snapshot.sessionCode !== frozen.session.sessionCode)) throw new Error("Training target-code Resume identity mismatch.");
         if (frozen.session.state === "Revealed") {
           await ensurePersistedTrainingBlindReveal({ repository: input.repository, sessionId: checkpoint.sessionId, targetId: checkpoint.targetId });
           checkpoint = { ...checkpoint, stage: "session_revealed" };
@@ -431,6 +440,15 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
         }
       }
 
+      {
+        // Legacy checkpoints must also be RV Lite and free of conflicting policies.
+        const snapshot = await input.repository.getSessionSnapshot(checkpoint.sessionId);
+        await validateTrainingSessionTargetCode(execution.targetCodePolicy, snapshot);
+        if (execution.targetCodePolicy !== undefined) {
+          const session = await input.repository.getRvSession(checkpoint.sessionId);
+          if (!snapshot || !session || snapshot.sessionId !== checkpoint.sessionId || snapshot.sessionCode !== session.sessionCode || snapshot.targetId !== targetId || snapshot.profileId !== working.profileId || snapshot.workspaceId !== working.workspaceId) throw new Error("Training target-code checkpoint identity mismatch.");
+        }
+      }
       let viewerReview: string | null = null;
       let viewerReviewRequest: string | null = null;
       const loadStoredViewerReview = async () => {
@@ -550,6 +568,7 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
           providerConfig: input.providerConfig,
           model: input.model,
           fieldGuideAfterTrainingUpdate,
+          ...(execution.targetCodePolicy ? { trainingTargetCodePolicy: execution.targetCodePolicy } : {}),
           timeoutMs: execution.transport.requestTimeoutMs,
           maxRetries: execution.transport.maxRetries,
           signal: input.signal,

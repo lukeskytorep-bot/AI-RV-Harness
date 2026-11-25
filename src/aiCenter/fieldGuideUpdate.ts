@@ -1,3 +1,4 @@
+import { assertTrainingLearningMessages, validateTrainingSessionTargetCode } from "../training/targetCode";
 import { withRvWorkflow } from "../application/workflowOwnership";
 import { assertLearningBudgetPolicy, type LearningBudgetPolicy } from "../providers/operationResourceProfiles";
 import { loadRevealImageForJudge } from "../artifacts/native";
@@ -369,6 +370,7 @@ async function runFieldGuideUpdateOwned(input: {
   ]);
   if (!snapshot || !reveal) throw new Error("Field Guide Update requires the sealed Session Snapshot and Reveal.");
   if (snapshot.researchProjectId) return null;
+  await validateTrainingSessionTargetCode(input.trainingRun.executionSnapshot?.targetCodePolicy, snapshot);
   const frozen = snapshot.rvSystemPrompt?.fieldGuide;
   if (!frozen) throw new Error("Training Field Guide Update requires the Field Guide snapshot frozen at session start.");
   if (snapshot.sessionLanguage !== frozen.language) throw new Error("Frozen Field Guide language does not match the Training session language.");
@@ -515,6 +517,7 @@ async function runFieldGuideUpdateOwned(input: {
     const result = await executeLearningProposal({ repository: input.repository, sessionId: input.sessionId, packetHash: packetSha256, kind: "field_guide", config: input.providerConfig, modelId: input.model.modelId, timeoutMs: input.timeoutMs, chat: input.chat, failurePolicy: input.failurePolicy,
       analytical: { signal: input.signal, model: input.model, operationKind: "field_guide_update", requestedSettings: snapshot.generationSettings.requested, learningObjectCapacityTokens: frozen.capacityTokens, budgetPolicy: input.budgetPolicy,
         recoveryInstruction: fieldGuideOutputRecoveryInstruction(snapshot.sessionLanguage), recoveryReasoningMaxTokens: 10_000, recoveryReasoningMaxTokensSupported: frozenSupportsExactReasoningMaxTokens(snapshot.capabilitySnapshot), allowOpenRouterEndpointRecoveryEscalation: true },
+      assertMessages: messages => assertTrainingLearningMessages(snapshot, messages),
       messages: [{ role: "system", content: system }, { role: "user", content: buildFieldGuideUpdatePrompt(snapshot.sessionLanguage, packet), ...(images.length ? { images } : {}) }],
       parse: response => {
         try { assertCompleteAnalyticalResponse(response); } catch (cause) { throw new LearningProposalFailure("FAILED_PROVIDER", String(cause), 0); }

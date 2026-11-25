@@ -126,8 +126,16 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
   if (input.targetCodeMode !== undefined && (input.researchProjectId || input.operationKind === "research_viewer" || targetCode)) throw new Error("Profile target-code mode cannot override Research.");
   if (storedSnapshot?.profileTargetCode && (targetCode || input.researchProjectId || input.operationKind === "research_viewer")) throw new Error("Conflicting frozen target-code policies.");
   const existingSession = Boolean(input.resumeSession || input.initializationExistingSession);
-  if (existingSession && input.targetCodeMode !== undefined && !storedSnapshot) throw new Error("Profile target-code Resume requires the saved snapshot.");
-  const profilePolicy = storedSnapshot?.profileTargetCode?.policy ?? (!existingSession && input.targetCodeMode !== undefined ? targetCodePolicy(resolveTargetCodeMode(input.targetCodeMode)) : undefined);
+  // A Training checkpoint can be interrupted between creating the row and saving its first snapshot.
+  // Reinitialize only an untouched row, never a session with any possible Viewer dispatch.
+  const trainingInitialization = input.operationKind === "training_blind_viewer" && input.initializationExistingSession && !input.resumeSession && !storedSnapshot;
+  if (trainingInitialization && input.targetCodeMode !== undefined) {
+    const row = input.initializationExistingSession!;
+    const events = await input.repository.listSessionEvents(sessionId);
+    if (row.id !== sessionId || row.sessionCode !== sessionCode || row.profileId !== input.profileId || row.workspaceId !== input.workspaceId || row.targetId !== input.automaticTarget?.id || row.researchProjectId || !["Draft", "Preflight"].includes(row.state) || row.preRevealTranscript || row.postRevealTranscript || row.preRevealSealedAt || events.some(event => event.eventType !== "SESSION_CREATED")) throw new Error("Training target-code initialization cannot prove the existing session has never dispatched.");
+  }
+  if (existingSession && input.targetCodeMode !== undefined && !storedSnapshot && !trainingInitialization) throw new Error("Profile target-code Resume requires the saved snapshot.");
+  const profilePolicy = storedSnapshot?.profileTargetCode?.policy ?? ((!existingSession || trainingInitialization) && input.targetCodeMode !== undefined ? targetCodePolicy(resolveTargetCodeMode(input.targetCodeMode)) : undefined);
   if (profilePolicy) { assertTargetCodePolicy(profilePolicy); await verifyTargetCodeTemplates(); }
   const renderProfileName = storedSnapshot?.profileTargetCode ? storedSnapshot.profileTargetCode.renderProfileName ?? undefined : storedSnapshot?.researchTargetCode ? storedSnapshot.identities?.aiIsBeDisplayName : input.profileName;
   if (targetCode) {

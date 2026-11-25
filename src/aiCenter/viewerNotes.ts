@@ -1,3 +1,4 @@
+import { assertTrainingLearningMessages, validateTrainingSessionTargetCode } from "../training/targetCode";
 import { withRvWorkflow } from "../application/workflowOwnership";
 import { assertLearningBudgetPolicy, type LearningBudgetPolicy } from "../providers/operationResourceProfiles";
 import { resolveGenerationSettings } from "../providers/capabilities";
@@ -400,6 +401,7 @@ async function runViewerNoteReflectionOwned(input: {
   providerConfig: ProviderConfig;
   model: ProviderModel;
   fieldGuideAfterTrainingUpdate: TrainingFieldGuidePostUpdateCheckpoint;
+  trainingTargetCodePolicy?: import("../resources/rvLiteTargetCode").TargetCodePolicy;
   timeoutMs?: number;
   maxRetries?: number;
   signal?: AbortSignal;
@@ -415,6 +417,7 @@ async function runViewerNoteReflectionOwned(input: {
   ]);
   if (!snapshot || !reveal) throw new Error("Viewer Notes Reflection requires the durable snapshot and Reveal.");
   if (snapshot.researchProjectId) return null;
+  await validateTrainingSessionTargetCode(input.trainingTargetCodePolicy, snapshot);
   if (!snapshot.viewerNotes?.enabled) {
     const settlement = await saveLearningSettlement(input.repository, { kind: "viewer_notes", sessionId: input.sessionId, packetHash: await sha256Text(`disabled:${input.sessionId}`), auditId: `disabled:${input.sessionId}`, settlement: "disabled", version: null, attempts: 0, status: "DISABLED" }, input.signal);
     return { status: "DISABLED", settlement };
@@ -548,6 +551,7 @@ async function runViewerNoteReflectionOwned(input: {
     result = await executeLearningProposal({ repository: input.repository, sessionId: input.sessionId, packetHash, kind: "viewer_notes", config: input.providerConfig, modelId: input.model.modelId, timeoutMs: input.timeoutMs, chat: input.chat, failurePolicy: input.failurePolicy,
       analytical: { signal: input.signal, model: input.model, operationKind: "viewer_notes_reflection", requestedSettings: snapshot.generationSettings.requested, learningObjectCapacityTokens: packet.capacityTokens, budgetPolicy: input.budgetPolicy,
         recoveryInstruction: viewerNotesOutputRecoveryInstruction(snapshot.sessionLanguage), recoveryReasoningMaxTokens: 10_000, recoveryReasoningMaxTokensSupported: frozenSupportsExactReasoningMaxTokens(snapshot.capabilitySnapshot), allowOpenRouterEndpointRecoveryEscalation: true },
+      assertMessages: messages => assertTrainingLearningMessages(snapshot, messages),
       messages: [{ role: "system", content: system }, { role: "user", content: buildReflectionPrompt(snapshot.sessionLanguage, packet), ...(images.length ? { images } : {}) }],
       parse: response => {
         try { assertCompleteAnalyticalResponse(response); } catch (cause) { throw new LearningProposalFailure("FAILED_PROVIDER", String(cause), 0); }

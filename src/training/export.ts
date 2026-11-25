@@ -134,6 +134,7 @@ export async function exportTrainingRun(
   const overallMean = mean(resultRows.flatMap((item) => item.scores.map((score) => score.total)));
   const additionalMetadata: ExportMetadataField[] = [
     { label: language === "pl" ? "Numer treningu" : "Training run", value: run.runNumber },
+    ...(run.executionSnapshot?.targetCodePolicy ? [{ label: language === "pl" ? "Tryb kodu celu" : "Target code mode", value: run.executionSnapshot.targetCodePolicy.mode }] : []),
     { label: language === "pl" ? "Postęp" : "Progress", value: `${run.completedTargetIds.length}/${run.targetIds.length}` },
     ...(run.termination?.reason === "user_finished" ? [
       { label: language === "pl" ? "Zakończenie" : "Termination", value: language === "pl" ? "Zakończony przez użytkownika" : "Ended by user" },

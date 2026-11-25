@@ -1,3 +1,5 @@
+import { getRvLite } from "../resources/protocolRegistry";
+import { renderProfileTargetCodeSteps, targetCodePolicy } from "../resources/rvLiteTargetCode";
 import { workflowTestRepository } from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 
@@ -173,7 +175,7 @@ describe("Viewer Notes", () => {
   });
 
 
-  it.each(["training-complete","training-length","training-json","training-capacity","training-capacity-json","stop-length","stop-json","missing-policy","wrong-policy"] as const)("uses the exact prompt snapshot and post-update Field Guide for Reflection: %s", async scenario => {
+  it.each(["training-complete","training-length","training-json","training-capacity","training-capacity-json","stop-length","stop-json","missing-policy","wrong-policy","no-code-clean","no-code-initial","no-code-repair","no-code-clean-repair","no-code-recovery"] as const)("uses the exact prompt snapshot and post-update Field Guide for Reflection: %s", async scenario => {
     const providerConfig: ProviderConfig = { id: "provider", provider: "openrouter", label: "Provider", credentialId: "credential", enabled: true, createdAt: "now", updatedAt: "now" };
     const model: ProviderModel = {
       providerConfigId: providerConfig.id,
@@ -195,6 +197,14 @@ describe("Viewer Notes", () => {
       viewerNotes: { enabled: true, aiIdentityId: "identity", noteType: "viewer_self_notes", content: "Current procedural notes", contentSha256: "notes-sha", estimatedTokens: 5, estimatorVersion: "conservative-char-v1", capacityTokens: 1024, modelRoute: model.route, capturedAt: "now" },
       revealSource: "automatic", applicationVersion: "0.7.13", createdAt: "now",
     } as SessionSnapshot;
+    const withoutCode = scenario.startsWith("no-code-");
+    const targetPolicy = withoutCode ? targetCodePolicy("without_code") : undefined;
+    if (targetPolicy) {
+      const resource = getRvLite("en", "extended");
+      snapshot.viewerNotes = { ...snapshot.viewerNotes!, versionId: "notes-before", contentSha256: await sha256Text(snapshot.viewerNotes!.content) };
+      snapshot.protocol = { id: resource.id, version: resource.version, language: resource.language, variant: resource.variant, contentSha256: resource.contentSha256, fullContent: resource.content };
+      snapshot.profileTargetCode = { policy: targetPolicy, renderProfileName: null, renderedPrompts: await Promise.all(renderProfileTargetCodeSteps(resource, undefined, snapshot.sessionCode, targetPolicy).map(async content => ({ content, sha256: await sha256Text(content) }))) };
+    }
     const afterGuide = { id: "fg-after", aiIdentityId: "identity", language: "en", versionNumber: 5, content: "guide after this exact training", contentSha256: await sha256Text("guide after this exact training"), estimatedTokens: 6, estimatorVersion: "conservative-char-v1", capacityTokensAtCreation: 2048, activationStatus: "active", sourceSessionId: "session_1", sourceSnapshot: { schemaVersion: 1, sourceKind: "training-reflection", profileId: "profile", capturedAt: "now", sourceSessionId: "session_1", fieldGuideUpdatePacketSha256: "field-packet" }, createdAt: "now" };
     const begin = vi.fn(async (input: Parameters<AppRepository["beginViewerNoteReflection"]>[0]) => ({ ...input, noteType: "viewer_self_notes", attemptCount: 0, status: "PENDING", createdAt: "now" }));
     const commit = vi.fn(async () => ({ status: "NO_CHANGE" as const }));
@@ -215,6 +225,11 @@ describe("Viewer Notes", () => {
     const budgets:number[]=[];const stopController=new AbortController();
     const chat = vi.fn(async (request: Parameters<NonNullable<Parameters<typeof runViewerNoteReflection>[0]["chat"]>>[0]) => {
       budgets.push(request.settings.effective.maxOutputTokens!);
+      if (withoutCode) expect(JSON.stringify(request.messages)).not.toContain(snapshot.sessionCode);
+      if (scenario === "no-code-repair" && budgets.length === 1) return { responseEvidence: { version: 1 as const, transportOutcome: "response_finished" as const, boundary: "body_read" as const }, content: `invalid JSON ${snapshot.sessionCode}`, usage: {} };
+      if (scenario === "no-code-clean-repair" && budgets.length === 1) return { responseEvidence: { version: 1 as const, transportOutcome: "response_finished" as const, boundary: "body_read" as const }, content: "invalid JSON", usage: {} };
+      if (scenario === "no-code-recovery" && budgets.length === 1) return { responseEvidence: { version: 1 as const, transportOutcome: "response_finished" as const, boundary: "body_read" as const }, content: "partial", finishReason: "length", usage: {} };
+
       if(scenario==="stop-length" || scenario==="stop-json"){stopController.abort(new DOMException("Stopped by user","AbortError"));return scenario==="stop-length"?{content:"partial",finishReason:"length",usage:{}}:{content:"malformed JSON",usage:{}};}
       if (scenario === "training-capacity-json" && budgets.length === 2) return { responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const}, content: "malformed JSON", usage: {} };
       if (scenario === "training-capacity-json" && budgets.length === 3) return { responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const}, content: "partial", finishReason: "length", usage: {} };
@@ -226,7 +241,7 @@ describe("Viewer Notes", () => {
 
     const budgetPolicy = (scenario === "missing-policy" ? undefined : scenario === "wrong-policy" ? "default" : "training_reveal") as "training_reveal";
     const before = JSON.stringify(snapshot);
-    const operation = runViewerNoteReflection({ budgetPolicy, repository, sessionId: "session_1", viewerReview: "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: await sha256Text("guide after this exact training") }, chat,signal:stopController.signal });
+    const operation = runViewerNoteReflection({ budgetPolicy, repository, sessionId: "session_1", trainingTargetCodePolicy: targetPolicy, viewerReview: scenario === "no-code-initial" ? snapshot.sessionCode : "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: await sha256Text("guide after this exact training") }, chat,signal:stopController.signal });
 
     if (scenario === "missing-policy" || scenario === "wrong-policy") {
       await expect(operation).rejects.toThrow(/explicit training_reveal/);
@@ -239,6 +254,18 @@ describe("Viewer Notes", () => {
     if(scenario==="stop-length" || scenario==="stop-json"){await expect(operation).rejects.toThrow("Stopped by user");expect(chat).toHaveBeenCalledTimes(1);expect(commit).not.toHaveBeenCalled();expect(JSON.stringify(snapshot)).toBe(before);return;}
 
     const result = await operation;
+    if (withoutCode) {
+      const blocked = scenario === "no-code-initial" || scenario === "no-code-repair";
+      expect(result?.status).toBe(blocked ? "FAILED_OUTPUT_PREFLIGHT" : "NO_CHANGE");
+      expect(budgets).toHaveLength(scenario === "no-code-initial" ? 0 : scenario === "no-code-recovery" || scenario === "no-code-clean-repair" ? 2 : 1);
+      expect(begin.mock.calls[0][0].sourceSnapshot.sessionCode).toBe(snapshot.sessionCode);
+      expect(JSON.stringify(snapshot)).toBe(before);
+      expect(result?.settlement?.version?.id).toBe("notes-before");
+      expect(result?.settlement?.version?.contentSha256).toBe(snapshot.viewerNotes?.contentSha256);
+      if (blocked) { expect(commit).not.toHaveBeenCalled(); expect(repository.failViewerNoteReflection).toHaveBeenCalledTimes(1); }
+      else expect(commit).toHaveBeenCalledOnce();
+      return;
+    }
     const failed = ["training-json", "training-capacity", "training-capacity-json"].includes(scenario);
     expect(result?.settlement?.settlement).toBe(failed ? "failed_preserved" : "model_no_change");
     expect(budgets).toEqual(scenario === "training-complete" ? [1024+32768] : [1024+32768,1024+49152]);
@@ -261,7 +288,7 @@ describe("Viewer Notes", () => {
     ["viewer-notes-reflection-v1", "UPDATE"],
     ["viewer-notes-reflection-v2", "NO_CHANGE"],
   ] as const)("does not rerun a completed %s Reflection", async (packetVersion: "viewer-notes-reflection-v1" | "viewer-notes-reflection-v2", status: "UPDATE" | "NO_CHANGE") => {
-    const snapshot = { viewerNotes: { enabled: true, aiIdentityId: "identity" }, researchProjectId: undefined } as unknown as SessionSnapshot;
+    const snapshot = { protocol: { id: "rv-lite" }, viewerNotes: { enabled: true, aiIdentityId: "identity" }, researchProjectId: undefined } as unknown as SessionSnapshot;
     const chat = vi.fn();
     const repository = workflowTestRepository({
       getSessionSnapshot: vi.fn(async () => snapshot),

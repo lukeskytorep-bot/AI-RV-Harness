@@ -69,6 +69,8 @@ export async function executeLearningProposal<T>(input: {
   failurePolicy?: LearningFailurePolicy;
   analytical: Omit<Extract<Parameters<typeof callWithAnalyticalOutputRecovery>[0], { learningObjectCapacityTokens: number }>, "call" | "messages">;
   messages: ProviderMessage[];
+  /** Validate final attempt messages before the transport or durable reservation. */
+  assertMessages?: (messages: ProviderMessage[]) => void;
   parse: (response: ProviderChatResponse) => T;
   repairMessages: (response: ProviderChatResponse, cause: LearningProposalFailure) => ProviderMessage[];
 }): Promise<{ parsed: T; response: ProviderChatResponse; settings: Awaited<ReturnType<typeof callWithAnalyticalOutputRecovery>>["settings"]; attempts: number }> {
@@ -119,6 +121,9 @@ export async function executeLearningProposal<T>(input: {
           recoveryReasoningMaxTokens: outputRecovery ? input.analytical.recoveryReasoningMaxTokens : undefined,
           messages, initialAttempt: slot, maximumAttempts: 1,
           call: async (attemptSettings, _attempt, attemptMessages) => {
+            try { input.assertMessages?.(attemptMessages); } catch (cause) {
+              throw new ProviderCallError({ code: "configuration", phase: "before_dispatch", message: cause instanceof Error ? cause.message : String(cause) }, { cause });
+            }
             capturedSettings = attemptSettings;
             const value = await executeProviderChat({ config: input.config, modelId: input.modelId, messages: attemptMessages, settings: attemptSettings, timeoutMs: input.timeoutMs, signal,
               configuredRetries: 0, operationId: `${kind}.learning`, operationKind: input.analytical.operationKind,

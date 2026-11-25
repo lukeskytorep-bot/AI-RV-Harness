@@ -48,6 +48,8 @@ export interface TrainingTargetCheckpoint {
 }
 
 export interface TrainingExecutionSnapshot {
+  /** Frozen for the entire RV Training series; absent only for legacy runs. */
+  targetCodePolicy?: import("../resources/rvLiteTargetCode").TargetCodePolicy;
   language: InterfaceLanguage;
   generationSettings: GenerationSettings;
   judgeGenerationSettings?: GenerationSettings[];
