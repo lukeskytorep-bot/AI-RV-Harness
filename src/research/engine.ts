@@ -32,8 +32,31 @@ import { fieldGuideSnapshotSignature } from "./fieldGuidePolicy";
 import { resolveResearchProtocol } from "./protocolPolicy";
 import { buildAutomaticTargetReveal } from "../targets/service";
 import { VIEWER_OUTPUT_INITIAL_TOKENS, VIEWER_OUTPUT_RECOVERY_TOKENS } from "../sessions/viewerOutputRecovery";
+import { resolveTargetCodeMode } from "../domain/targetCodeMode";
+import { targetCodePolicy } from "../resources/rvLiteTargetCode";
+import { rcpTargetCodePolicy, verifyRcpTargetCodeTemplates } from "../sessions/rcpTargetCode";
 
 type ResearchRepository = AppRepository;
+
+
+/** New-project boundary only. Freeze the Profile preference into every ordinary Research condition.
+ * Target Code Presence remains an explicit matched experiment and is never overridden here. */
+export function freezeResearchTargetCodePreference(config: ResearchConfig, inventory: ResearchPreflightInventory): ResearchConfig {
+  if (config.templateType === "target_code") return config;
+  const profiles = new Map(inventory.profiles.map(profile => [profile.id, profile]));
+  return {
+    ...config,
+    conditions: config.conditions.map(condition => {
+      if (condition.researchProfileTargetCode !== undefined) throw new Error("Research target-code preference must be frozen exactly once before Experiment Lock.");
+      const profile = profiles.get(condition.profileId);
+      if (!profile || profile.archivedAt) throw new Error("Research target-code preference requires the active Profile selected by the condition.");
+      const mode = resolveTargetCodeMode(profile.targetCodeMode);
+      return { ...condition, researchProfileTargetCode: config.protocol.id === "full-rcp"
+        ? { protocol: "full-rcp" as const, policy: rcpTargetCodePolicy(mode) }
+        : { protocol: "rv-lite" as const, policy: targetCodePolicy(mode) } };
+    }),
+  };
+}
 
 /** New-project boundary only. Existing locked projects never pass through this function. */
 export function freezeResearchCompatibility(config: ResearchConfig, inventory: ResearchPreflightInventory): ResearchConfig {
@@ -63,11 +86,12 @@ export async function createAndLockResearch(
     if (!config.contextPreparation) throw new Error("Context & Instructions requires a prepared frozen context design before Experiment Lock.");
     await assertPreparedContextResearchDraft(config.contextPreparation);
   }
-  if (config.templateType === "target_code") await verifyTargetCodeTemplates();
+  if (config.templateType === "target_code" || config.protocol.id === "rv-lite") await verifyTargetCodeTemplates();
+  if (config.templateType !== "target_code" && config.protocol.id === "full-rcp") await verifyRcpTargetCodeTemplates();
   // This API creates a new project, never resumes an existing locked one.
   // Even a draft with an already frozen blind policy needs explicit analysis
   // defaults before its new hash is computed. Existing explicit policies stay.
-  const lockedConfig: ResearchConfig = { ...freezeResearchViewerOutputPolicy(freezeResearchCompatibility(config, inventory), inventory.models),
+  const lockedConfig: ResearchConfig = { ...freezeResearchViewerOutputPolicy(freezeResearchTargetCodePreference(freezeResearchCompatibility(config, inventory), inventory), inventory.models),
     judgeOutputPolicy: config.judgeOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY),
     postRevealOutputPolicy: config.postRevealOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY) };
   analyticalBudgetPolicyForSnapshot(lockedConfig.judgeOutputPolicy);
@@ -184,6 +208,10 @@ async function executeResearchSessionsOwned(input: {
     if (stableStringify(stored.config.viewerOutputPolicy ?? null) !== stableStringify(locked.viewerOutputPolicy ?? null)) {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       throw new Error("Frozen Viewer output policy drift detected after Experiment Lock.");
+    }
+    if (stableStringify(stored.config.researchProfileTargetCode ?? null) !== stableStringify(locked.researchProfileTargetCode ?? null)) {
+      await input.repository.setResearchProjectState(project.id, "Interrupted");
+      throw new Error("Frozen Research target-code policy drift detected after Experiment Lock.");
     }
   }
   const targetById = new Map(targets.map((target) => [target.id, target]));
@@ -359,10 +387,12 @@ async function executeResearchSessionsOwned(input: {
           aiIsBeDisplayName: sessionProfile ? aiIsBeDisplayName(sessionProfile) : "AI IS-BE",
           humanIsBeDisplayName: sessionProfile ? humanIsBeDisplayName(sessionProfile) : "Human IS-BE",
           protocol,
+          ...(condition.researchProfileTargetCode?.protocol === "full-rcp" ? { researchTargetCodePolicy: condition.researchProfileTargetCode.policy } : {}),
         })
       : await (input.rvLiteSessionRunner ?? runAutomaticRvLiteSession)({
           ...common,
           ...(condition.targetCode ? { targetCode: condition.targetCode } : {}),
+          ...(condition.researchProfileTargetCode?.protocol === "rv-lite" ? { researchTargetCodePolicy: condition.researchProfileTargetCode.policy } : {}),
           profileName: sessionProfile ? aiIsBeDisplayName(sessionProfile) : "AI IS-BE",
           humanIsBeDisplayName: sessionProfile ? humanIsBeDisplayName(sessionProfile) : "Human IS-BE",
           protocol,

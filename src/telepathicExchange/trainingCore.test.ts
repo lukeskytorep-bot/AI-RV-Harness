@@ -378,6 +378,39 @@ describe("CODE-5B frozen profile modes and model-bound round ID protection", () 
     await expect(freezeTelepathicTrainingTargetCode(f.config, [{ ...f.profiles[0], targetCodeMode: "invalid" as never }, f.profiles[1]])).rejects.toThrow();
     expect((await f.reopen().listTelepathicSeries())).toHaveLength(0);
   });
+  it("rejects sender/receiver role drift in either durable plan copy", async () => {
+    const f = await codeTrainingFixture("en", "leo", 2);
+    const frozen = createTelepathicSeriesState(await freezeTelepathicTrainingTargetCode(f.config, f.profiles));
+    const corruptions: Array<(state: typeof frozen) => void> = [
+      state => { state.rounds[0].assignment.senderParticipantId = state.rounds[0].assignment.receiverParticipantIds[0]; },
+      state => { state.plan.rounds[0].senderParticipantId = state.plan.rounds[0].receiverParticipantIds[0]; },
+      state => { state.rounds[0].assignment.receiverParticipantIds = [state.rounds[0].assignment.senderParticipantId]; },
+      state => { state.plan.rounds[0].receiverParticipantIds = [state.plan.rounds[0].senderParticipantId]; },
+    ];
+    for (const corrupt of corruptions) {
+      const bad = structuredClone(frozen); corrupt(bad);
+      await expect(restoreTelepathicTrainingTargetCode(bad)).rejects.toThrow(/Invalid frozen/);
+    }
+  });
+  it("rejects duplicated, unknown and mutually-consistent-but-wrong round roles", async () => {
+    const f = await codeTrainingFixture("en", "leo", 2);
+    const frozen = createTelepathicSeriesState(await freezeTelepathicTrainingTargetCode(f.config, f.profiles));
+    const duplicated = structuredClone(frozen);
+    duplicated.plan.rounds[0].receiverParticipantIds = [duplicated.plan.rounds[0].receiverParticipantIds[0], duplicated.plan.rounds[0].receiverParticipantIds[0]];
+    duplicated.rounds[0].assignment.receiverParticipantIds = [...duplicated.plan.rounds[0].receiverParticipantIds];
+    await expect(restoreTelepathicTrainingTargetCode(duplicated)).rejects.toThrow(/Invalid frozen/);
+    const unknown = structuredClone(frozen);
+    unknown.plan.rounds[0].receiverParticipantIds = ["unknown"];
+    unknown.rounds[0].assignment.receiverParticipantIds = ["unknown"];
+    await expect(restoreTelepathicTrainingTargetCode(unknown)).rejects.toThrow(/Invalid frozen/);
+    const swapped = structuredClone(frozen);
+    const expectedReceiver = swapped.plan.rounds[0].receiverParticipantIds[0];
+    swapped.plan.rounds[0].senderParticipantId = expectedReceiver;
+    swapped.rounds[0].assignment.senderParticipantId = expectedReceiver;
+    swapped.plan.rounds[0].receiverParticipantIds = [frozen.plan.rounds[0].senderParticipantId];
+    swapped.rounds[0].assignment.receiverParticipantIds = [frozen.plan.rounds[0].senderParticipantId];
+    await expect(restoreTelepathicTrainingTargetCode(swapped)).rejects.toThrow(/Invalid frozen/);
+  });
   it("validates all saved identity and mode fields; legacy remains compatible", async () => {
     const f = await codeTrainingFixture("en", "leo", 1);
     const initial = createTelepathicSeriesState(await freezeTelepathicTrainingTargetCode(f.config, f.profiles));

@@ -232,6 +232,9 @@ function researchConditionParameters(config: ResearchConfig): Array<Record<strin
     profileId: condition.profileId,
     providerConfigId: condition.providerConfigId,
     modelId: condition.modelId,
+    targetCodeMode: condition.targetCode?.mode ?? condition.researchProfileTargetCode?.policy.mode ?? null,
+    targetCodePolicyVersion: condition.targetCode?.version ?? condition.researchProfileTargetCode?.policy.version ?? null,
+    targetCodeTemplatesSha256: condition.targetCode?.templatesSha256 ?? condition.researchProfileTargetCode?.policy.templatesSha256 ?? null,
     sampling: {
       topP: condition.requestedSettings.topP ?? null,
       topPSource: condition.requestedSettings.topP === undefined ? "auto" : "manual",
@@ -254,10 +257,11 @@ function researchConditionParameters(config: ResearchConfig): Array<Record<strin
 }
 
 function conditionParametersCsv(config: ResearchConfig): string {
-  const header = ["condition_key", "condition_label", "context_mode", "context_addition_targets", "composition_sha256", "profile_id", "provider_config_id", "model_id",
+  const header = ["condition_key", "condition_label", "context_mode", "context_addition_targets", "composition_sha256", "profile_id", "provider_config_id", "model_id", "target_code_mode", "target_code_policy_version", "target_code_templates_sha256",
     "requested_top_p", "top_p_source", "effective_top_p", "requested_top_k", "top_k_source", "effective_top_k", "requested_seed", "seed_source", "effective_seed",
     "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort"];
   const rows = config.conditions.map((condition) => [condition.key, condition.label, condition.contextComposition?.design.mode ?? "", condition.contextComposition?.design.mode === "add_to_selected" ? Object.keys(condition.contextComposition.design.additions).join("|") : "", condition.contextComposition?.compositionSha256 ?? "", condition.profileId, condition.providerConfigId, condition.modelId,
+    condition.targetCode?.mode ?? condition.researchProfileTargetCode?.policy.mode ?? "", condition.targetCode?.version ?? condition.researchProfileTargetCode?.policy.version ?? "", condition.targetCode?.templatesSha256 ?? condition.researchProfileTargetCode?.policy.templatesSha256 ?? "",
     valueOrAuto(condition.requestedSettings.topP), condition.requestedSettings.topP === undefined ? "auto" : "manual", valueOrAuto(condition.effectiveSettings?.effective.topP),
     valueOrAuto(condition.requestedSettings.topK), condition.requestedSettings.topK === undefined ? "auto" : "manual", valueOrAuto(condition.effectiveSettings?.effective.topK),
     valueOrAuto(condition.requestedSettings.seed), condition.requestedSettings.seed === undefined ? "auto" : "manual", valueOrAuto(condition.effectiveSettings?.effective.seed),

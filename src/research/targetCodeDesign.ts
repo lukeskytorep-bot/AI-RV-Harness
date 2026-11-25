@@ -1,14 +1,24 @@
 import { getRvLite } from "../resources/protocolRegistry";
 import { targetCodeSteps } from "../resources/rvLiteTargetCode";
 import { assertTargetCodePolicy } from "../resources/rvLiteTargetCode";
+import { assertRcpTargetCodePolicy } from "../sessions/rcpTargetCode";
 import type { ResearchConfig } from "./types";
 
 const canonical = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 export function assertTargetCodeDesign(config: ResearchConfig): void {
   if (config.templateType !== "target_code") {
     if (config.conditions.some(c => c.targetCode !== undefined)) throw new Error("Target-code rendering is restricted to the target_code Research template.");
+    const present = config.conditions.filter(c => c.researchProfileTargetCode !== undefined);
+    if (present.length && present.length !== config.conditions.length) throw new Error("Research Profile target-code policy must be frozen for every condition or none (legacy).");
+    for (const condition of present) {
+      const frozen = condition.researchProfileTargetCode!;
+      if (frozen.protocol !== config.protocol.id) throw new Error("Research Profile target-code policy protocol mismatch.");
+      if (frozen.protocol === "rv-lite") assertTargetCodePolicy(frozen.policy);
+      else assertRcpTargetCodePolicy(frozen.policy);
+    }
     return;
   }
+  if (config.conditions.some(c => c.researchProfileTargetCode !== undefined)) throw new Error("Target Code Presence cannot also inherit the Profile target-code policy.");
   if (config.protocol.id !== "rv-lite" || config.protocol.variant !== "extended" || config.protocol.version !== "1.1.0" || !config.protocol.contentSha256) throw new Error("Target-code Research requires frozen RV Lite Extended 1.1.0.");
   if ((config as unknown as Record<string, unknown>).sessionFocus || config.conditions.some(c => (c as unknown as Record<string, unknown>).sessionFocus)) throw new Error("Target-code Research does not support Session Focus or additional passes.");
   if (config.conditions.length !== 2) throw new Error("Target-code Research requires exactly two matched conditions.");

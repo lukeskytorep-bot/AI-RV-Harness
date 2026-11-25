@@ -3,6 +3,7 @@ import { assertTargetCodeAbsent, isTargetCodeMode, resolveTargetCodeMode } from 
 import type { ProviderMessage } from "../providers/types";
 import type { Profile } from "../types";
 import type { TelepathicSeriesConfig, TelepathicSeriesState, TelepathicTrainingTargetCodePolicy } from "./types";
+import { planTelepathicSeries } from "./planner";
 
 const VERSION = "telepathic-training-target-code-v1" as const;
 const EXPOSURE = "no_rv_code_assigned" as const;
@@ -59,11 +60,24 @@ export async function restoreTelepathicTrainingTargetCode(state: TelepathicSerie
   if (!plan || plan.seriesId !== config.seriesId || plan.seriesWorkspaceId !== config.seriesWorkspaceId
     || plan.mode !== config.mode || !Array.isArray(plan.rounds) || !Array.isArray(rounds)
     || plan.rounds.length !== config.roundCount || rounds.length !== config.roundCount) invalidPolicy();
+  const expectedPlan = planTelepathicSeries({ ...config, trainingTargetCodePolicy: undefined });
+  const participantIds = new Set(config.participants.map(item => item.id));
   for (let index = 0; index < config.roundCount; index++) {
     const roundId = `${config.seriesId}:round:${index + 1}`;
     const target = rounds[index]?.target;
-    if (plan.rounds[index]?.roundId !== roundId || rounds[index]?.assignment?.roundId !== roundId
-      || plan.rounds[index]?.roundNumber !== index + 1 || rounds[index]?.assignment?.roundNumber !== index + 1
+    const expected = expectedPlan.rounds[index];
+    const planned = plan.rounds[index];
+    const assigned = rounds[index]?.assignment;
+    const validRoles = (value: typeof planned | undefined) => Boolean(value
+      && participantIds.has(value.senderParticipantId)
+      && value.receiverParticipantIds.length === new Set(value.receiverParticipantIds).size
+      && value.receiverParticipantIds.every(id => participantIds.has(id) && id !== value.senderParticipantId));
+    if (planned?.roundId !== roundId || assigned?.roundId !== roundId
+      || planned?.roundNumber !== index + 1 || assigned?.roundNumber !== index + 1
+      || !validRoles(planned) || !validRoles(assigned)
+      || planned.senderParticipantId !== expected.senderParticipantId || assigned.senderParticipantId !== expected.senderParticipantId
+      || JSON.stringify(planned.receiverParticipantIds) !== JSON.stringify(expected.receiverParticipantIds)
+      || JSON.stringify(assigned.receiverParticipantIds) !== JSON.stringify(expected.receiverParticipantIds)
       || (target && target.roundId !== roundId)) invalidPolicy();
   }
   return policy;

@@ -1,5 +1,5 @@
 import { assertTargetCodeAbsent, resolveTargetCodeMode, type TargetCodeMode } from "../domain/targetCodeMode";
-import { assertRcpTargetCodeSnapshotMatches, freezeRcpTargetCode, rcpTargetCodePolicy } from "./rcpTargetCode";
+import { assertRcpTargetCodePolicy, assertRcpTargetCodeSnapshotMatches, freezeRcpTargetCode, rcpTargetCodePolicy } from "./rcpTargetCode";
 import { getFullRcp } from "../resources/protocolRegistry";
 import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { withAutomaticWorkflow, withRvWorkflow } from "../application/workflowOwnership";
@@ -69,6 +69,8 @@ type SessionRepository = Pick<
 
 export interface AutomaticRcpRunInput {
   targetCodeMode?: TargetCodeMode;
+  /** Frozen ordinary-Research policy from Experiment Lock; never read live from Profile. */
+  researchTargetCodePolicy?: import("./rcpTargetCode").RcpTargetCodePolicy;
   sessionFocus?: SessionFocusPlan;
   repository: SessionRepository;
   workspaceId: string;
@@ -166,10 +168,25 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
   if (input.resumeSession && !storedSnapshot) throw new Error("RCP Resume requires a saved Session Snapshot.");
   const frozenCode = storedSnapshot?.rcpProfileTargetCode;
   const researchRun = Boolean(input.researchProjectId || input.operationKind === "research_viewer" || input.researchContext || input.researchConditionInstruction);
-  if ((input.targetCodeMode !== undefined || frozenCode) && researchRun) throw new Error("Profile target-code mode cannot override Research.");
+  const researchInitialization = input.operationKind === "research_viewer" && input.initializationExistingSession && !input.resumeSession && !storedSnapshot;
+  if (researchInitialization && input.researchTargetCodePolicy !== undefined) {
+    const row = input.initializationExistingSession!;
+    const events = await input.repository.listSessionEvents(sessionId);
+    if (row.id !== sessionId || row.sessionCode !== sessionCode || row.profileId !== input.profileId || row.workspaceId !== input.workspaceId || row.targetId !== input.automaticTarget?.id || row.researchProjectId !== input.researchProjectId || !["Draft", "Preflight"].includes(row.state) || row.preRevealTranscript || row.postRevealTranscript || row.preRevealSealedAt || events.some(event => event.eventType !== "SESSION_CREATED")) throw new Error("Research RCP target-code initialization cannot prove the existing session has never dispatched.");
+  }
+  if (input.targetCodeMode !== undefined && researchRun) throw new Error("Profile target-code mode cannot override Research.");
+  if (input.researchTargetCodePolicy !== undefined && !researchRun) throw new Error("Frozen ordinary-Research target-code policy requires a Research run.");
   if (storedSnapshot?.profileTargetCode || storedSnapshot?.researchTargetCode || storedSnapshot?.telepathicProfileTargetCode) throw new Error("Conflicting frozen target-code policies for RCP.");
-  if (existingSession && input.targetCodeMode !== undefined && !frozenCode) throw new Error("RCP target-code Resume requires its saved policy.");
-  const profilePolicy = frozenCode?.policy ?? (!existingSession && input.targetCodeMode !== undefined ? rcpTargetCodePolicy(resolveTargetCodeMode(input.targetCodeMode)) : undefined);
+  if (existingSession && (input.targetCodeMode !== undefined || input.researchTargetCodePolicy !== undefined) && !frozenCode && !researchInitialization) throw new Error("RCP target-code Resume requires its saved policy.");
+  if (input.researchTargetCodePolicy) assertRcpTargetCodePolicy(input.researchTargetCodePolicy);
+  if (frozenCode && input.researchTargetCodePolicy) {
+    const saved = frozenCode.policy;
+    const locked = input.researchTargetCodePolicy;
+    if (saved.mode !== locked.mode || saved.version !== locked.version || saved.templatesSha256 !== locked.templatesSha256) throw new Error("Research RCP target-code Resume policy drift from Experiment Lock.");
+  }
+  const profilePolicy = frozenCode?.policy ?? (input.researchTargetCodePolicy
+    ? structuredClone(input.researchTargetCodePolicy)
+    : (!existingSession && input.targetCodeMode !== undefined ? rcpTargetCodePolicy(resolveTargetCodeMode(input.targetCodeMode)) : undefined));
   if (profilePolicy) {
     const approved = getFullRcp(input.sessionLanguage);
     if (input.protocol.id !== approved.id || input.protocol.version !== approved.version || input.protocol.language !== approved.language || input.protocol.contentSha256 !== approved.contentSha256 || input.protocol.content !== approved.content) throw new Error("RCP profile target-code protocol drift.");

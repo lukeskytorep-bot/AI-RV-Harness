@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../providers/types";
 import type { AppRepository } from "../storage/repository";
 import type { JudgeScoreRecord } from "../judge/types";
-import { executeResearchSessions, freezeResearchViewerOutputPolicy, judgeResearch, prepareInterruptedResearchRestart, prepareInterruptedResearchRetry, unblindAndComputeResearch } from "./engine";
+import { executeResearchSessions, freezeResearchTargetCodePreference, freezeResearchViewerOutputPolicy, judgeResearch, prepareInterruptedResearchRestart, prepareInterruptedResearchRetry, unblindAndComputeResearch } from "./engine";
 import type { ResearchConfig, ResearchProjectRecord, ResearchResults, ResearchState } from "./types";
 import { createResearchProtocolSelection } from "./protocolPolicy";
 
@@ -19,6 +19,23 @@ const config: ResearchConfig = {
 const provider: ProviderConfig = { id: "pc", provider: "openrouter", label: "P", credentialId: "c", enabled: true, createdAt: "now", updatedAt: "now" };
 const model: ProviderModel = { providerConfigId: "pc", provider: "openrouter", modelId: "m", displayName: "M", route: "openrouter:m", capabilities: { inputModalities: ["text"], outputModalities: ["text"], supportsVision: false, supportsStreaming: true, reasoning: { supported: false, efforts: [], confidence: "unknown" }, temperature: { supported: false, confidence: "unknown" }, supportedParameters: [], source: "provider", capturedAt: "now" }, pricing: {}, recommended: true, rawMetadata: {}, refreshedAt: "now" };
 const score: JudgeScoreRecord = { id: "score", judgeRunId: "jr", judgeIndex: 1, modelRoute: "openrouter:m", gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 1, confabulationControl: 1, total: 6, narrative: { strongestMatches: [], majorMissesContradictions: [], confabulationObservations: [], conciseRationale: "R" }, frozenAt: "now", createdAt: "now" };
+
+describe("Research target-code profile preference", () => {
+  it("freezes each ordinary condition from its selected active Profile and never mutates Target Code Presence", () => {
+    const ordinary = freezeResearchTargetCodePreference(config, { profiles: [
+      { id: "p", name: "P", targetCodeMode: "without_code", createdAt: "now", updatedAt: "now" },
+    ], providerConfigs: [provider], models: [model], targets: [], targetUsage: [] });
+    expect(ordinary.conditions.every(condition => condition.researchProfileTargetCode?.policy.mode === "without_code")).toBe(true);
+    expect(config.conditions.every(condition => condition.researchProfileTargetCode === undefined)).toBe(true);
+    const targetCode = { ...config, templateType: "target_code" as const, protocol: createResearchProtocolSelection("rv-lite", "en"), conditions: [] };
+    expect(freezeResearchTargetCodePreference(targetCode, { profiles: [], providerConfigs: [], models: [], targets: [], targetUsage: [] })).toBe(targetCode);
+  });
+  it("rejects missing/archived Profiles and an already-frozen ordinary draft", () => {
+    const inventory = { profiles: [{ id: "p", name: "P", archivedAt: "now", createdAt: "now", updatedAt: "now" }], providerConfigs: [provider], models: [model], targets: [], targetUsage: [] };
+    expect(() => freezeResearchTargetCodePreference(config, inventory)).toThrow(/active Profile/);
+    expect(() => freezeResearchTargetCodePreference({ ...config, conditions: config.conditions.map(condition => ({ ...condition, researchProfileTargetCode: { protocol: "full-rcp" as const, policy: { mode: "with_code" as const, version: "rcp-target-code-v1" as const, templatesSha256: "x" } } })) }, { ...inventory, profiles: [{ id: "p", name: "P", createdAt: "now", updatedAt: "now" }] })).toThrow(/exactly once/);
+  });
+});
 
 describe("Research evidence boundaries", () => {
   it("freezes the two-level Viewer output policy into new Experiment Lock conditions without rewriting legacy locked configs", () => {
@@ -41,6 +58,7 @@ describe("Research evidence boundaries", () => {
       key: "a", label: "A", profileId: "p", providerConfigId: "pc", modelId: "m", requestedSettings: {},
       capabilitySnapshot: model.capabilities, effectiveSettings: { requested: {}, effective: {}, omitted: [] },
       systemPrompt: fixedPrompt, conditionInstruction,
+      researchProfileTargetCode: { protocol: "full-rcp" as const, policy: { mode: "without_code" as const, version: "rcp-target-code-v1" as const, templatesSha256: "c33b0277a1756ac666e474064d218e3b7ee9534a977f60a0b38c1f8e4a5a4b9e" } },
     };
     const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "custom", state: "Locked", config: { ...config, templateType: "custom", conditions: [condition] }, createdAt: "now", updatedAt: "now" };
     const sessionRunner = vi.fn();
@@ -63,14 +81,14 @@ describe("Research evidence boundaries", () => {
       return { sessionId, sessionCode, state: "Revealed" as const, transcript: "evidence" };
     });
     await executeResearchSessions({ repository: repo, projectId: "r", sessionRunner });
-    expect(sessionRunner).toHaveBeenCalledWith(expect.objectContaining({ rvSystemPrompt: fixedPrompt, researchConditionInstruction: conditionInstruction }));
+    expect(sessionRunner).toHaveBeenCalledWith(expect.objectContaining({ rvSystemPrompt: fixedPrompt, researchConditionInstruction: conditionInstruction, researchTargetCodePolicy: expect.objectContaining({ mode: "without_code", version: "rcp-target-code-v1" }) }));
   });
 
   it("dispatches locked RV Lite Research through four-call controller semantics and keeps assignment ownership", async () => {
     const conditionInstruction = { id: "condition_a", version: "1", content: "VARIABLE A", contentSha256: "b".repeat(64) };
     const condition = {
       key: "a", label: "A", profileId: "p", providerConfigId: "pc", modelId: "m", requestedSettings: {},
-      capabilitySnapshot: model.capabilities, effectiveSettings: { requested: {}, effective: {}, omitted: [] }, conditionInstruction,
+      capabilitySnapshot: model.capabilities, effectiveSettings: { requested: {}, effective: {}, omitted: [] }, conditionInstruction, researchProfileTargetCode: { protocol: "rv-lite" as const, policy: { mode: "without_code" as const, version: "target-code-presence-v1" as const, templatesSha256: "1d59a832e34956dd9743c7d81d81b597449b1c8e6b3f428a2e66517ef9d0e9ff" } },
     };
     const project: ResearchProjectRecord = {
       id: "r", workspaceId: "w", name: "RV Lite Research", templateType: "custom", state: "Locked",
@@ -82,6 +100,7 @@ describe("Research evidence boundaries", () => {
       expect(input.protocol).toMatchObject({ id: "rv-lite", version: "1.1.0", variant: "extended" });
       expect(input.researchProjectId).toBe("r");
       expect(input.researchConditionInstruction).toEqual(conditionInstruction);
+      expect(input.researchTargetCodePolicy?.mode).toBe("without_code");
       const sessionId = input.sessionIdentity?.id ?? "session-lite";
       const sessionCode = input.sessionIdentity?.sessionCode ?? "RV-LITE";
       await input.onSessionCreated?.(sessionId, sessionCode);

@@ -148,6 +148,10 @@ export interface ResearchViewerOutputPolicy {
 
 export interface ResearchConditionDefinition {
   targetCode?: import("../resources/rvLiteTargetCode").TargetCodePolicy;
+  /** Frozen Profile-derived policy for ordinary Research. Target Code Presence keeps using targetCode above. */
+  researchProfileTargetCode?:
+    | { protocol: "rv-lite"; policy: import("../resources/rvLiteTargetCode").TargetCodePolicy }
+    | { protocol: "full-rcp"; policy: import("../sessions/rcpTargetCode").RcpTargetCodePolicy };
   key: string;
   label: string;
   /** Experimental design; runtime uses the validated frozen context composition. */

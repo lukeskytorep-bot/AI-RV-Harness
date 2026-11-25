@@ -60,6 +60,8 @@ export interface AutomaticRvLiteRunInput {
   targetCode?: TargetCodePolicy;
   /** Ordinary RV preference, captured once; Research owns its separate policy. */
   targetCodeMode?: TargetCodeMode;
+  /** Frozen ordinary-Research policy from Experiment Lock; never read live from Profile. */
+  researchTargetCodePolicy?: TargetCodePolicy;
   sessionFocus?: SessionFocusPlan;
   repository: RvLiteSessionRepository;
   workspaceId: string;
@@ -123,9 +125,18 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
   const storedSnapshot = (input.resumeSession || input.initializationExistingSession) && input.repository.getSessionSnapshot ? await input.repository.getSessionSnapshot(sessionId) : null;
   if (storedSnapshot?.rcpProfileTargetCode || storedSnapshot?.telepathicProfileTargetCode) throw new Error("Conflicting frozen target-code policies for RV Lite.");
   const targetCode = input.targetCode ?? storedSnapshot?.researchTargetCode?.policy;
-  if (input.targetCodeMode !== undefined && (input.researchProjectId || input.operationKind === "research_viewer" || targetCode)) throw new Error("Profile target-code mode cannot override Research.");
-  if (storedSnapshot?.profileTargetCode && (targetCode || input.researchProjectId || input.operationKind === "research_viewer")) throw new Error("Conflicting frozen target-code policies.");
+  const researchRun = Boolean(input.researchProjectId || input.operationKind === "research_viewer");
+  if (input.targetCodeMode !== undefined && (researchRun || targetCode)) throw new Error("Profile target-code mode cannot override Research.");
+  if (input.researchTargetCodePolicy !== undefined && (!researchRun || targetCode)) throw new Error("Frozen ordinary-Research target-code policy is invalid for this run.");
+  if (storedSnapshot?.profileTargetCode && targetCode) throw new Error("Conflicting frozen target-code policies.");
   const existingSession = Boolean(input.resumeSession || input.initializationExistingSession);
+  // Research also initializes a durable session row before the controller owns its first Viewer dispatch.
+  const researchInitialization = input.operationKind === "research_viewer" && input.initializationExistingSession && !input.resumeSession && !storedSnapshot;
+  if (researchInitialization && input.researchTargetCodePolicy !== undefined) {
+    const row = input.initializationExistingSession!;
+    const events = await input.repository.listSessionEvents(sessionId);
+    if (row.id !== sessionId || row.sessionCode !== sessionCode || row.profileId !== input.profileId || row.workspaceId !== input.workspaceId || row.targetId !== input.automaticTarget?.id || row.researchProjectId !== input.researchProjectId || !["Draft", "Preflight"].includes(row.state) || row.preRevealTranscript || row.postRevealTranscript || row.preRevealSealedAt || events.some(event => event.eventType !== "SESSION_CREATED")) throw new Error("Research target-code initialization cannot prove the existing session has never dispatched.");
+  }
   // A Training checkpoint can be interrupted between creating the row and saving its first snapshot.
   // Reinitialize only an untouched row, never a session with any possible Viewer dispatch.
   const trainingInitialization = input.operationKind === "training_blind_viewer" && input.initializationExistingSession && !input.resumeSession && !storedSnapshot;
@@ -134,8 +145,16 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
     const events = await input.repository.listSessionEvents(sessionId);
     if (row.id !== sessionId || row.sessionCode !== sessionCode || row.profileId !== input.profileId || row.workspaceId !== input.workspaceId || row.targetId !== input.automaticTarget?.id || row.researchProjectId || !["Draft", "Preflight"].includes(row.state) || row.preRevealTranscript || row.postRevealTranscript || row.preRevealSealedAt || events.some(event => event.eventType !== "SESSION_CREATED")) throw new Error("Training target-code initialization cannot prove the existing session has never dispatched.");
   }
-  if (existingSession && input.targetCodeMode !== undefined && !storedSnapshot && !trainingInitialization) throw new Error("Profile target-code Resume requires the saved snapshot.");
-  const profilePolicy = storedSnapshot?.profileTargetCode?.policy ?? ((!existingSession || trainingInitialization) && input.targetCodeMode !== undefined ? targetCodePolicy(resolveTargetCodeMode(input.targetCodeMode)) : undefined);
+  if (existingSession && (input.targetCodeMode !== undefined || input.researchTargetCodePolicy !== undefined) && !storedSnapshot && !trainingInitialization && !researchInitialization) throw new Error("Profile target-code Resume requires the saved snapshot.");
+  if (input.researchTargetCodePolicy) assertTargetCodePolicy(input.researchTargetCodePolicy);
+  if (storedSnapshot?.profileTargetCode && input.researchTargetCodePolicy) {
+    const saved = storedSnapshot.profileTargetCode.policy;
+    const locked = input.researchTargetCodePolicy;
+    if (saved.mode !== locked.mode || saved.version !== locked.version || saved.templatesSha256 !== locked.templatesSha256) throw new Error("Research target-code Resume policy drift from Experiment Lock.");
+  }
+  const profilePolicy = storedSnapshot?.profileTargetCode?.policy ?? (input.researchTargetCodePolicy
+    ? structuredClone(input.researchTargetCodePolicy)
+    : ((!existingSession || trainingInitialization) && input.targetCodeMode !== undefined ? targetCodePolicy(resolveTargetCodeMode(input.targetCodeMode)) : undefined));
   if (profilePolicy) { assertTargetCodePolicy(profilePolicy); await verifyTargetCodeTemplates(); }
   const renderProfileName = storedSnapshot?.profileTargetCode ? storedSnapshot.profileTargetCode.renderProfileName ?? undefined : storedSnapshot?.researchTargetCode ? storedSnapshot.identities?.aiIsBeDisplayName : input.profileName;
   if (targetCode) {
