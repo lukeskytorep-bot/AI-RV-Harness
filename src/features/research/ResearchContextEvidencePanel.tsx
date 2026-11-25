@@ -8,12 +8,14 @@ import {
 } from "../../research/contextRequestEvidence";
 import type { AppRepository } from "../../storage/repository";
 
-type LoadResult = { repository: AppRepository; sessionId: string; revision: number } & (
+type EvidenceRepository = Pick<AppRepository, "listSessionEvents">;
+
+type LoadResult = { repository: EvidenceRepository; sessionId: string; revision: number } & (
   | { status: "ready"; records: ResearchContextRequestEvidenceRecord[]; ignored: number }
   | { status: "error"; error: string }
 );
 
-export function ResearchContextEvidencePanel({ repository, sessionId, pl }: { repository: AppRepository; sessionId: string; pl: boolean }) {
+export function ResearchContextEvidencePanel({ repository, sessionId, pl }: { repository: EvidenceRepository; sessionId: string; pl: boolean }) {
   const [loaded, setLoaded] = useState<LoadResult | null>(null);
   const [revision, setRevision] = useState(0);
   useEffect(() => {
