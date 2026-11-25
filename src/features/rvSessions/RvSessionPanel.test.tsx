@@ -231,3 +231,19 @@ describe("RV Sessions sampling handoff", () => {
     expect(source.match(/requestedSettings: snapshot\.generationSettings\.requested/g)?.length).toBeGreaterThanOrEqual(4);
   });
 });
+
+it.each(["pl", "en"] as const)("warns that a without-code profile cannot start an unsupported ordinary protocol (%s)", language => {
+  const copy = getCopy(language);
+  const html = renderToStaticMarkup(<RvSessionPanel copy={copy} settings={{ ...createDefaultSettings(), interfaceLanguage: language }} profile={{ ...profile, targetCodeMode: "without_code" }} workspace={workspace} repository={null} />);
+  expect(html).toContain(copy.profileWithoutTargetCodeProtocolUnavailable);
+});
+
+it("applies captured target-code restart options before dispatch, for both Start again buttons", () => {
+  const source = readFileSync(new URL("./RvSessionPanel.tsx", import.meta.url), "utf8");
+  const captured = source.slice(source.indexOf("const runCapturedSession ="), source.indexOf("const archiveStoredSession ="));
+  expect(captured).toContain("capturedSessionTargetCode(snapshot, resume, profile.targetCodeMode)");
+  expect(captured.indexOf("if (capturedCode.blocked)")).toBeLessThan(captured.indexOf("await runAutomaticRvLiteSession("));
+  expect(captured).toContain("protocol: resource, ...capturedCode.restartOptions, sessionLanguage: snapshot.sessionLanguage");
+  expect(source).toContain("runCapturedSession(interruptedSession, false)");
+  expect(source).toContain("runCapturedSession(session, false)");
+});

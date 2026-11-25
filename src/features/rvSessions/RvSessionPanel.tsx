@@ -1,3 +1,4 @@
+import { capturedSessionTargetCode } from "./capturedSessionTargetCode";
 import { newRunGenerationSettings } from "../../providers/customCompatibility";
 import { prepareViewerSessionResume } from "../../sessions/viewerResumeDecision";
 import { useViewerRoutes } from "../../components/useViewerRoutes";
@@ -144,6 +145,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const [temperature, setTemperature] = useState("");
   const [sessionFocus, setSessionFocus] = useState<SessionFocusPlan>();
   const [historyFocusCounts,setHistoryFocusCounts] = useState<Record<string,number>>({});
+  const unsupportedWithoutCode = profile?.targetCodeMode === "without_code" && protocol !== "lite";
   const activeSessionFocus = runType === "automatic" && protocol !== "telepathic" ? sessionFocus : undefined;
   const [progress, setProgress] = useState<SessionProgress | null>(null);
   const [liveBlindEvents, setLiveBlindEvents] = useState<SessionEventRecord[]>([]);
@@ -194,7 +196,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const monitorProvider = monitorModel ? providerConfigs.find((item) => item.id === monitorModel.providerConfigId) ?? null : null;
   const eligibleTargets = targets.filter((target) => targetIsEligibleForProtocol(target, protocol));
   const batchPool = eligibleTargets;
-  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, aiIdentityId: selectedIdentity?.identity.id ?? null, modelId: selectedModel?.modelId ?? null, protocol, liteVariant, sessionFocus: activeSessionFocus, specialTaskOptions, specialTaskText, telepathicQuestionMode, telepathicQuestions, customProtocolVersionId, runType, viewerNotesEnabled, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, customReasoningMode, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens: selectedModel ? Math.min(settings.rvSessionMaxOutputTokens, selectedModel.capabilities.maxOutputTokens ?? settings.rvSessionMaxOutputTokens) : settings.rvSessionMaxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
+  const batchConfigSignature = JSON.stringify({ providerConfigId: activeProvider?.id ?? null, providerStatus: activeProvider?.lastStatus ?? null, providerTestedAt: activeProvider?.lastTestedAt ?? null, aiIdentityId: selectedIdentity?.identity.id ?? null, modelId: selectedModel?.modelId ?? null, protocol, liteVariant, targetCodeMode: profile?.targetCodeMode ?? "with_code", sessionFocus: activeSessionFocus, specialTaskOptions, specialTaskText, telepathicQuestionMode, telepathicQuestions, customProtocolVersionId, runType, viewerNotesEnabled, monitorModelKey, sessionLanguage: resolvedLanguage, reasoning, customReasoningMode, temperature, profileSystemPrompt: profile?.defaultViewerSystemPrompt ?? null, maxOutputTokens: selectedModel ? Math.min(settings.rvSessionMaxOutputTokens, selectedModel.capabilities.maxOutputTokens ?? settings.rvSessionMaxOutputTokens) : settings.rvSessionMaxOutputTokens, requestTimeoutMs: settings.requestTimeoutMs, maxRetries: settings.maxRetries, sessionCodePrefix: settings.sessionCodePrefix, batchCount, targetIds: batchPool.map((target) => target.id).sort() });
   const selectedCustomProtocol = customProtocols.find((item) => item.versionId === customProtocolVersionId) ?? null;
   const activeStepCount = protocol === "custom" ? selectedCustomProtocol?.steps.length ?? 0 : protocol === "lite" ? 4 : protocol === "telepathic" ? 9 : 6;
   const running = sessionRunning || batchRunning || Boolean(postRevealBusy && abortRef.current) || progress?.state === "BlindRunning" || progress?.state === "Preflight";
@@ -360,6 +362,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
 
   const preflightBatch = () => {
     const failures: string[] = [];
+    if (unsupportedWithoutCode) failures.push(copy.profileWithoutTargetCodeProtocolUnavailable);
     if (!activeProvider || activeProvider.lastStatus !== "ok") failures.push(copy.batchProviderPreflight);
     if (!selectedModel) failures.push(copy.selectModel);
     if (protocol === "custom" && !selectedCustomProtocol) failures.push(copy.noCustomProtocols);
@@ -446,6 +449,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
 
   const start = async () => {
     if (!repository || !profile || !selectedIdentity || !activeProvider || !selectedModel || !viewerRouteReady || postRevealBusyGuardRef.current || ownership.unavailable) return;
+    if (unsupportedWithoutCode) { setRunError(copy.profileWithoutTargetCodeProtocolUnavailable); return; }
     try {
       await requireWorkspaceViewerRoute({ repository, workspace, profile, identityId: selectedIdentity.identity.id, providerConfig: activeProvider, model: selectedModel });
     } catch (cause) {
@@ -505,7 +509,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     const runOne = async (target: TargetRecord | null) => {
       const viewerNotes = await prepareViewerNotesForSession({ repository, profileId: profile.id, providerConfig: activeProvider, model: selectedModel, enabled: viewerNotesEnabled, aiIdentityId: selectedIdentity.identity.id });
       if (protocol === "lite") {
-        const result = await runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, sessionLanguage: resolvedLanguage, requestedSettings, sessionFocus: activeSessionFocus, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
+        const result = await runAutomaticRvLiteSession({ repository, workspaceId: workspace.id, profileId: profile.id, profileName: aiIsBeDisplayName(profile), humanIsBeDisplayName: humanIsBeDisplayName(profile), providerConfig: activeProvider, model: selectedModel, protocol: rvLite, targetCodeMode: profile.targetCodeMode ?? "with_code", sessionLanguage: resolvedLanguage, requestedSettings, sessionFocus: activeSessionFocus, viewerNotes, ...(rvSystemPrompt ? { rvSystemPrompt } : {}), ...(specialTask ? { specialTask } : {}), signal: signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress, ...(target ? { automaticTarget: target } : {}) });
         await finishRevealedSession(result,repository,signal);
         return result;
       }
@@ -763,6 +767,23 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     try {
       const snapshot = await repository.getSessionSnapshot(session.id);
       if (!snapshot) throw new Error(settings.interfaceLanguage === "pl" ? "Brak zapisanego snapshota tej sesji." : "The saved session snapshot is unavailable.");
+      const capturedCode = capturedSessionTargetCode(snapshot, resume, profile.targetCodeMode);
+      if (capturedCode.blocked) throw new Error(copy.profileWithoutTargetCodeProtocolUnavailable);
+      if (!resume && snapshot.protocol.id === "rv-lite" &&
+        (capturedCode.restartOptions.targetCodeMode ?? "with_code") !== (profile.targetCodeMode ?? "with_code")) {
+        const pl = settings.interfaceLanguage === "pl";
+        const without = capturedCode.restartOptions.targetCodeMode === "without_code";
+        const confirmed = await dialogs.confirm({
+          title: pl ? "Powtórzyć sesję w zapisanym trybie?" : "Restart using the saved mode?",
+          description: without
+            ? (pl ? "Sesja zostanie uruchomiona bez kodu celu, mimo innego ustawienia profilu." : "The session will restart without the target code, despite the current profile preference.")
+            : (pl ? "Sesja zostanie uruchomiona z kodem celu, mimo innego ustawienia profilu. Kod zostanie wysłany Viewerowi." : "The session will restart with the target code, despite the current profile preference. The code will be sent to the Viewer."),
+          confirmLabel: pl ? "Od początku" : "Start again",
+          cancelLabel: copy.cancel,
+          severity: "warning",
+        });
+        if (!confirmed || controller.signal.aborted) return;
+      }
       const providerConfig = providerConfigs.find((item) => item.id === snapshot.providerConfigId);
       const viewerModel = allModels.find((item) => item.providerConfigId === snapshot.providerConfigId && item.modelId === snapshot.modelId && item.route === snapshot.modelRoute);
       if (!providerConfig || !viewerModel) throw new Error(copy.postRevealRouteUnavailable);
@@ -810,7 +831,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         setLiteVariant(variant);
         const resource = getRvLite(snapshot.sessionLanguage, variant);
         if (resource.contentSha256 !== snapshot.protocol.contentSha256) throw new Error("The captured RV Lite protocol version is unavailable.");
-        result = await runAutomaticRvLiteSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, profileName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, sessionFocus: snapshot.sessionFocus, ...(snapshot.viewerNotes ? { viewerNotes: snapshot.viewerNotes } : {}), ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(capturedAutomaticReveal ? { capturedAutomaticReveal } : {}), ...(resume ? { resumeSession: session, ...(snapshot.continuationRoute ? { resumeContinuationRoute: snapshot.continuationRoute } : {}) } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress });
+        result = await runAutomaticRvLiteSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, profileName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, ...capturedCode.restartOptions, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, sessionFocus: snapshot.sessionFocus, ...(snapshot.viewerNotes ? { viewerNotes: snapshot.viewerNotes } : {}), ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(capturedAutomaticReveal ? { capturedAutomaticReveal } : {}), ...(resume ? { resumeSession: session, ...(snapshot.continuationRoute ? { resumeContinuationRoute: snapshot.continuationRoute } : {}) } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress });
       } else if (snapshot.protocol.id === "telepathic-protocol") {
         setProtocol("telepathic");
         const resource = getTelepathicProtocol(snapshot.sessionLanguage);
@@ -1128,7 +1149,8 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
           {eligibleTargets.length ? <select className="session-language-select" value={selectedTargetId} onChange={(event) => setSelectedTargetId(event.target.value)}><option value="__random__">🎲 {copy.randomTarget}</option>{eligibleTargets.map((target) => <option key={target.id} value={target.id}>{copy.myTargets} · {localizedTargetTitle(target, resolvedLanguage)}</option>)}</select> : <div className="route-summary target-empty-warning"><Crosshair size={16} /><span><strong>{copy.noEligibleTargets}</strong><small>{copy.noEligibleTargetsLead}</small></span></div>}
         </ConfigBlock>}</> : <ConfigBlock label={copy.targetPool}><div className="batch-config"><label><span>{copy.targetPool}</span><strong>{copy.myTargets}</strong></label><label><span>{copy.batchCount}</span><input type="number" min={1} max={Math.max(1, batchPool.length)} value={batchCount} onChange={(event) => setBatchCount(Math.max(1, Number(event.target.value) || 1))} /></label><small>{copy.eligibleTargets}: {batchPool.length}</small>{batchPool.length === 0 && <small className="target-source-error">{copy.noEligibleTargetsLead}</small>}<div className="batch-preflight-actions"><button className="secondary-button" onClick={preflightBatch}>{copy.runPreflight}</button>{batchPreflightSignature === batchConfigSignature && <span className="status-chip ready"><Check size={12} />{copy.preflightPassed}</span>}</div></div></ConfigBlock>}
         <div className="start-block">
-          <button className="primary-button start-button" disabled={ownership.unavailable || endingSession!==null || postRevealBusy || !viewerRouteReady || !isTauriRuntime() || !activeProvider || !selectedModel || settings.rvSessionMaxOutputTokens <= 0 || (runType === "monitor" && (!canSelectMonitor(protocol) || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (protocol === "telepathic" && telepathicQuestionMode === "predefined" && (!telepathicQuestions.length || (runType === "monitor" && telepathicQuestions.length > 5))) || (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
+          {unsupportedWithoutCode && <small className="mode-compatibility-note">{copy.profileWithoutTargetCodeProtocolUnavailable}</small>}
+          <button className="primary-button start-button" disabled={unsupportedWithoutCode || ownership.unavailable || endingSession!==null || postRevealBusy || !viewerRouteReady || !isTauriRuntime() || !activeProvider || !selectedModel || settings.rvSessionMaxOutputTokens <= 0 || (runType === "monitor" && (!canSelectMonitor(protocol) || !monitorModel || !monitorProvider)) || (protocol === "custom" && !selectedCustomProtocol) || (protocol === "telepathic" && telepathicQuestionMode === "predefined" && (!telepathicQuestions.length || (runType === "monitor" && telepathicQuestions.length > 5))) || (protocol === "telepathic" && executionScope === "batch" && telepathicQuestionMode === "manual") || (executionScope === "single" && revealSource === "automatic" && eligibleTargets.length === 0) || (executionScope === "batch" && (batchCount < 1 || batchCount > batchPool.length || batchPreflightSignature !== batchConfigSignature))} onClick={() => void start()}><Waves size={18} />{executionScope === "batch" ? copy.startBatch : copy.startSession}</button>
           {activeProvider && <p>{copy.controllerReady}</p>}
         </div>
         </>}

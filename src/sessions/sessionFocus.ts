@@ -33,10 +33,16 @@ export function focusMetadata(plan: SessionFocusPlan | undefined, passIndex: 1 |
   return plan ? { passIndex, sessionFocus: passIndex === 1 ? plan.first : plan.second, focusInstructionVersion: SESSION_FOCUS_INSTRUCTION_VERSION } : {};
 }
 
-export function focusOpening(prompt: string, plan: SessionFocusPlan | undefined, passIndex: 1 | 2, language: InterfaceLanguage, code: string): string {
+export function focusOpening(prompt: string, plan: SessionFocusPlan | undefined, passIndex: 1 | 2, language: InterfaceLanguage, code: string | undefined): string {
   if (!plan) return prompt;
   const focus = passIndex === 1 ? plan.first : plan.second!;
   const label = sessionFocusLabel(focus, language);
+  if (code === undefined) {
+    const inflected = { location: "lokalizacji", activity: "aktywności", event: "wydarzeniu" }[focus];
+    const instruction = language === "pl" ? `W tej sesji skup się na ${inflected}.` : `In this session, focus on ${label}.`;
+    const sameTarget = language === "pl" ? "Cel pozostaje ten sam. " : "The target remains the same. ";
+    return `${passIndex === 2 ? sameTarget : ""}${instruction}\n${prompt}`;
+  }
   const heading = language === "pl" ? "ŚLEPY KOD CELU" : "BLIND TARGET CODE";
   // Modify only known header lines. Never replace a code inside user protocol prose.
   const lines = prompt.split("\n");

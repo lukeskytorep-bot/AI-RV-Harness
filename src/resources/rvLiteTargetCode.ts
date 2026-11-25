@@ -1,4 +1,4 @@
-import { renderRvLiteSteps, type RvLiteProtocolResource } from "./protocolRegistry";
+import { getRvLite, renderRvLiteSteps, type RvLiteProtocolResource } from "./protocolRegistry";
 import raw from "./research/target-code-presence-v1.json?raw";
 import type { InterfaceLanguage } from "../types";
 
@@ -27,4 +27,12 @@ export function targetCodeSteps(steps: readonly [string, string, string, string]
 export function renderResearchTargetCodeSteps(resource: RvLiteProtocolResource, profileName: string | undefined, sessionCode: string, policy: TargetCodePolicy): readonly [string,string,string,string] {
   if(resource.variant !== "extended") throw new Error("Target-code Research requires RV Lite Extended.");
   return renderRvLiteSteps({...resource,steps:targetCodeSteps(resource.steps,resource.language,policy)},profileName,sessionCode);
+}
+
+/** Ordinary RV Lite uses the same reviewed wording, for both bundled variants. */
+export function renderProfileTargetCodeSteps(resource: RvLiteProtocolResource, profileName: string | undefined, sessionCode: string, policy: TargetCodePolicy): readonly [string,string,string,string] {
+  assertTargetCodePolicy(policy);
+  const approved = getRvLite(resource.language, resource.variant);
+  if (resource.id !== approved.id || resource.variant !== approved.variant || resource.version !== approved.version || resource.contentSha256 !== approved.contentSha256 || JSON.stringify(resource.steps) !== JSON.stringify(approved.steps)) throw new Error("Profile target-code protocol drift.");
+  return renderRvLiteSteps({...resource, steps:targetCodeSteps(resource.steps,resource.language,policy)},profileName,sessionCode);
 }

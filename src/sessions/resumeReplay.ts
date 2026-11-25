@@ -1,3 +1,4 @@
+import { assertTargetCodeAbsent } from "../domain/targetCodeMode";
 import { inspectViewerSessionResume } from "./viewerResumeDecision";
 import { providerChatOnce } from "../providers/requestExecutor";
 import type { EffectiveGenerationSettings, ProviderChatResponse, ProviderConfig, ProviderMessage, ProviderUsage } from "../providers/types";
@@ -134,6 +135,7 @@ export async function createSessionReplay(input: {
     }
     // The resumed controller owns retry. Replay supplies exactly one physical
     // live attempt after all durable responses have been replayed.
+    if (isViewerRequest && snapshot.profileTargetCode) assertTargetCodeAbsent(snapshot.profileTargetCode.policy.mode, snapshot.sessionCode, messages);
     return providerChatOnce({ ...request, messages }, input.liveChat);
   };
 

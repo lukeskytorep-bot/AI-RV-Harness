@@ -1,3 +1,4 @@
+import { assertTargetCodeAbsent } from "../domain/targetCodeMode";
 import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { withPostRevealReceipt, postRevealReceiptRoute, releasePostRevealReceipt, PostRevealCheckpointError, isPostRevealCheckpointFailure } from "./postRevealReceipt";
 import { classifyProviderFailure, providerAttemptOutcomes } from "../providers/responseEvidence";
@@ -125,6 +126,7 @@ async function sendPostRevealTurnOwned(input: {
     throw new Error("Post-Reveal Session events do not match the persisted assistant transcript turns.");
   }
   if (!input.reuseExistingUserTurn) messages.push({ role: "user", content });
+  if (snapshot.profileTargetCode) assertTargetCodeAbsent(snapshot.profileTargetCode.policy.mode, snapshot.sessionCode, messages);
   validateSessionContinuationBudget(messages);
   analyticalOutputBudget({ model: input.model, messages, operationKind: "post_reveal_viewer", attempt: 0, ...(budgetPolicy ? { budgetPolicy } : {}) });
   if (!input.reuseExistingUserTurn) await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
@@ -139,20 +141,23 @@ async function sendPostRevealTurnOwned(input: {
     requestedSettings: snapshot.generationSettings?.requested,
     ...(budgetPolicy ? { budgetPolicy } : {}),
     ...(automaticTrainingReview ? { recoveryInstruction: postRevealOutputRecoveryInstruction(language), recoveryReasoningMaxTokens: 10_000, recoveryReasoningMaxTokensSupported: frozenSupportsExactReasoningMaxTokens(snapshot.capabilitySnapshot), allowOpenRouterEndpointRecoveryEscalation: true } : {}),
-    call: (settings, _attempt, attemptMessages) => executeProviderChat({
-      config: input.providerConfig,
-      modelId: input.model.modelId,
-      messages: attemptMessages,
-      settings,
-      timeoutMs: input.timeoutMs,
-      signal: input.signal,
-      configuredRetries: input.maxRetries,
-      operationId: "post-reveal.viewer",
-      ...(automaticTrainingReview ? { operationKind: "post_reveal_viewer" as const } : {}),
-      streamWorkflowContext: input.streamWorkflowContext,
-      attempt: input.chat,
-      ...(input.onProviderAttemptStart ? { onAttemptStart: () => input.onProviderAttemptStart?.() } : {}),
-    }),
+    call: (settings, _attempt, attemptMessages) => {
+      if (snapshot.profileTargetCode) assertTargetCodeAbsent(snapshot.profileTargetCode.policy.mode, snapshot.sessionCode, attemptMessages);
+      return executeProviderChat({
+        config: input.providerConfig,
+        modelId: input.model.modelId,
+        messages: attemptMessages,
+        settings,
+        timeoutMs: input.timeoutMs,
+        signal: input.signal,
+        configuredRetries: input.maxRetries,
+        operationId: "post-reveal.viewer",
+        ...(automaticTrainingReview ? { operationKind: "post_reveal_viewer" as const } : {}),
+        streamWorkflowContext: input.streamWorkflowContext,
+        attempt: input.chat,
+        ...(input.onProviderAttemptStart ? { onAttemptStart: () => input.onProviderAttemptStart?.() } : {}),
+      });
+    },
   })).response });
   let transcript: string;
   try {

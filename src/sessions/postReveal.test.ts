@@ -464,12 +464,12 @@ it.each(["transcript", "receipt", "ambiguous_receipt"])("post-Reveal %s save fai
  expect((await repository.listSessionEvents("s")).filter(event => event.eventType === "POST_REVEAL_RESPONSE_RECEIPT_V1")).toHaveLength(1);
 });
 
-it("keeps a saved Without-code session number and experiment metadata out of post-Reveal messages and recovery",async()=>{
+it.each(["research", "profile"] as const)("keeps a saved %s Without-code session number and metadata out of post-Reveal messages and recovery",async(source)=>{
  const { targetCodePolicy }=await import("../resources/rvLiteTargetCode");
  let calls=0,transcript="";const payloads:string[]=[];
  const largeModel={...model,capabilities:{...model.capabilities,maxOutputTokens:65536,contextTokens:262144}};
  const repository=workflowTestRepository({
-  getSessionSnapshot:async()=>({providerConfigId:"pc",modelId:"viewer",sessionLanguage:"en",sessionCode:"RV-B-LOCAL-ONLY",researchProjectId:"r",researchTargetCode:{policy:targetCodePolicy("without_code"),renderedPrompts:[]},generationSettings:{requested:{},effective:{},omitted:[]}}),
+  getSessionSnapshot:async()=>({providerConfigId:"pc",modelId:"viewer",sessionLanguage:"en",sessionCode:"RV-B-LOCAL-ONLY",...(source === "research" ? {researchProjectId:"r",researchTargetCode:{policy:targetCodePolicy("without_code"),renderedPrompts:[]}} : {profileTargetCode:{policy:targetCodePolicy("without_code"),renderProfileName:null,renderedPrompts:[]}}),generationSettings:{requested:{},effective:{},omitted:[]}}),
   getReveal:async()=>({source:"external_text",text:"A stone lighthouse",hash:"h"}),getViewerEvidence:async()=>"A tall hard structure",listTargetClarifications:async()=>[],
   appendPostRevealTurn:async(_id:string,role:string,content:string)=>{transcript+=serializePostRevealTurn(role as "user"|"assistant",content);return transcript;},
  } as unknown as AppRepository);

@@ -213,3 +213,15 @@ describe("directed automatic sessions",()=>{
  });
  it.each([null,{version:1,second:"event"},{version:2,first:"location"},{version:1,first:"people"}])("rejects malformed plans %j",value=>{expect(()=>validateSessionFocus(value)).toThrow();});
 });
+
+it.each(["core", "extended"] as const)("without-code %s retains frozen mode through Focus, Special Task, STOP and replay", async kind => {
+ const {repository,storage}=setup(); const code="RVH-PRIVATE-FOCUS"; const stop=new AbortController(); let calls=0;
+ const extra={targetCodeMode:"without_code",sessionIdentity:{id:"private-focus",sessionCode:code},specialTask:{selectedOptions:[],customText:"Describe Subject A."}};
+ const chat=async({messages}:{messages:ProviderMessage[]})=>{expect(JSON.stringify(messages)).not.toContain(code); calls++; if(calls===2)stop.abort(); return response(calls);};
+ const first=await runner(kind,repository,{...extra,signal:stop.signal,chat});expect(first.state).toBe("Interrupted");
+ const restored=setup(storage).repository;const session=(await restored.getRvSession(first.sessionId))!;const snapshot=(await restored.getSessionSnapshot(first.sessionId))!;
+ expect(snapshot.profileTargetCode?.policy.mode).toBe("without_code");
+ const replay=await createSessionReplay({repository:restored,session,events:await restored.listSessionEvents(session.id),liveChat:async({messages})=>{expect(JSON.stringify(messages)).not.toContain(code);calls++;return response(calls);}});
+ const final=await runner(kind,replay.repository,{...extra,targetCodeMode:"with_code",resumeSession:session,resumeContinuationRoute:snapshot.continuationRoute,chat:replay.chat});
+ expect(final.state).toBe("AwaitingReveal");expect(final.sessionCode).toBe(code);expect(final.transcript).not.toContain(code);expect((await restored.getSessionSnapshot(session.id))?.profileTargetCode?.policy.mode).toBe("without_code");
+});

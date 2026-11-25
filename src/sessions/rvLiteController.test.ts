@@ -563,3 +563,34 @@ describe("Research target-code controller payloads",()=>{
     expect(chat).not.toHaveBeenCalled();
   });
 });
+
+describe("ordinary RV profile target-code payloads", () => {
+  for (const language of ["pl", "en"] as const) for (const variant of ["core", "extended"] as const) for (const mode of ["with_code", "without_code"] as const) {
+    it(`freezes ${language}/${variant}/${mode}, keeping the code local in without-code`, async () => {
+      const snapshots: SessionSnapshot[] = [], requests: string[] = [], log: string[] = [];
+      const code = "RVH-ONLY-LOCAL", protocol = getRvLite(language, variant);
+      const result = await runAutomaticRvLiteSession({ repository: repository(log, snapshots), workspaceId: "w", profileId: "p", profileName: "Leo", providerConfig: config, model, protocol, sessionLanguage: language, requestedSettings: {}, targetCodeMode: mode, sessionIdentity: { id: "session", sessionCode: code }, automaticTarget: target, chat: async ({ messages }) => {
+        requests.push(JSON.stringify(messages));
+        return { content: "Observation", finishReason: "stop", usage: {} };
+      } });
+      expect(requests).toHaveLength(4);
+      expect(result.sessionCode).toBe(code);
+      expect(result.state).toBe("Revealed");
+      expect(log.indexOf("sealed")).toBeLessThan(log.indexOf("reveal"));
+      expect(snapshots[0].profileTargetCode?.policy.mode).toBe(mode);
+      expect(snapshots[0].researchTargetCode).toBeUndefined();
+      expect(snapshots[0].profileTargetCode?.renderedPrompts).toHaveLength(4);
+      expect(requests.every(payload => !payload.includes("SECRET REVEAL"))).toBe(true);
+      if (mode === "without_code") {
+        expect(requests.every(payload => !payload.includes(code))).toBe(true);
+        expect(result.transcript).not.toContain(code);
+      } else expect(requests[1]).toContain(code);
+    });
+  }
+  it("fails closed before sending a system prompt containing the assigned code", async () => {
+    const chat = vi.fn(), code = "RVH-LOCAL-LEAK";
+    const result = await runAutomaticRvLiteSession({ repository: repository([]), workspaceId: "w", profileId: "p", providerConfig: config, model, protocol: getRvLite("en", "core"), sessionLanguage: "en", requestedSettings: {}, targetCodeMode: "without_code", sessionIdentity: { id: "session", sessionCode: code }, rvSystemPrompt: { id: "x", version: "1", content: code, contentSha256: "x" }, chat });
+    expect(result.state).toBe("Interrupted");
+    expect(chat).not.toHaveBeenCalled();
+  });
+});

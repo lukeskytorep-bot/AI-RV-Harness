@@ -21,3 +21,18 @@ describe("frozen target-code renderer",()=>{
     for(const patch of [{mode:"unknown"},{version:"v99"},{templatesSha256:"x"}])expect(()=>targetCodeSteps(p.steps,"en",{...policy,...patch} as never)).toThrow(/mismatch/);
   });
 });
+
+describe("ordinary profile target-code renderer", () => {
+  for (const language of ["en", "pl"] as const) for (const variant of ["core", "extended"] as const) {
+    it(`preserves with-code and only changes the approved opening in ${language}/${variant}`, async () => {
+      const { renderProfileTargetCodeSteps } = await import("./rvLiteTargetCode");
+      const protocol = getRvLite(language, variant), code = "RVH-LOCAL-TEST";
+      const legacy = renderRvLiteSteps(protocol, "Leo", code);
+      expect(renderProfileTargetCodeSteps(protocol, "Leo", code, targetCodePolicy("with_code"))).toEqual(legacy);
+      const neutral = renderProfileTargetCodeSteps(protocol, "Leo", code, targetCodePolicy("without_code"));
+      expect(neutral.slice(2)).toEqual(legacy.slice(2));
+      expect(neutral.join("\n")).not.toMatch(/RVH-LOCAL-TEST|\{\{SESSION_CODE\}\}|without_code/);
+      expect(() => renderProfileTargetCodeSteps({ ...protocol, contentSha256: "drift" }, "Leo", code, targetCodePolicy("without_code"))).toThrow(/drift/);
+    });
+  }
+});
