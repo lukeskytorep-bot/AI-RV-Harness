@@ -195,6 +195,8 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
   const [preflight, setPreflight] = useState<ResearchPreflightResult | null>(null);
   const [preflightConfig, setPreflightConfig] = useState<ResearchConfig | null>(null);
   const [dryRun, setDryRun] = useState<ResearchConfig | null>(null);
+  const [reviewStage, setReviewStage] = useState<"configuration" | "preview" | "preflight">("configuration");
+  const activeStage = !dryRun ? "configuration" : reviewStage === "preflight" && !preflight ? "preview" : reviewStage;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const baseProfile = profiles.find((profile) => profile.id === baseProfileId) ?? null;
@@ -500,20 +502,43 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
     }, models);
   };
 
+  const editConfiguration = () => {
+    if (busy) return;
+    setReviewStage("configuration");
+    setDryRun(null); setPreflight(null); setPreflightConfig(null); setError(null);
+  };
   const preview = async () => {
-    setError(null);
-    try { setDryRun(await buildConfig()); } catch (cause) { setError(message(cause)); }
+    if (busy) return;
+    setBusy(true); setError(null); setPreflight(null); setPreflightConfig(null); setDryRun(null);
+    try {
+      setDryRun(await buildConfig());
+      setReviewStage("preview");
+    } catch (cause) { setError(message(cause)); } finally { setBusy(false); }
   };
   const check = async () => {
-    setError(null);
-    try { const config = await buildConfig(); setPreflightConfig(config); setPreflight(runResearchPreflight(config, inventory)); } catch (cause) { setError(message(cause)); }
+    if (busy || !dryRun) return;
+    setBusy(true); setError(null); setPreflight(null); setPreflightConfig(null);
+    try {
+      const config = await buildConfig();
+      setDryRun(config);
+      if (researchPreflightSignature(config) !== researchPreflightSignature(dryRun)) {
+        setReviewStage("preview"); setError(copy.researchReviewChanged); return;
+      }
+      setPreflightConfig(config); setPreflight(runResearchPreflight(config, inventory));
+      setReviewStage("preflight");
+    } catch (cause) { setError(message(cause)); } finally { setBusy(false); }
   };
   const lock = async () => {
-    if (!preflight?.ok || !preflightConfig || busy) return;
+    if (activeStage !== "preflight" || !preflight?.ok || !preflightConfig || busy) return;
     setBusy(true); setError(null);
     try {
       const current = await buildConfig();
-      if (researchPreflightSignature(current) !== researchPreflightSignature(preflightConfig)) { setPreflightConfig(current); setPreflight(runResearchPreflight(current, inventory)); throw new Error(copy.home !== "Home" ? "Konfiguracja zmieniła się po kontroli wstępnej. Przejrzyj ponowioną kontrolę przed zablokowaniem eksperymentu." : "Configuration changed after Preflight. Review the refreshed Preflight before locking."); }
+      if (researchPreflightSignature(current) !== researchPreflightSignature(preflightConfig)) {
+        setDryRun(current); setPreflightConfig(null); setPreflight(null);
+        setReviewStage("preview"); setError(copy.researchReviewChanged); return;
+      }
+      const currentPreflight = runResearchPreflight(current, inventory);
+      if (!currentPreflight.ok) { setPreflight(currentPreflight); return; }
       const { project } = await createAndLockResearch(repository, current, inventory);
       await onLocked(project);
     } catch (cause) { setError(message(cause)); } finally { setBusy(false); }
@@ -524,8 +549,14 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
   const samplingPreviewTargetCount = targetSelectionMode === "random" ? Math.min(randomTargetCount, eligibleTargets.length) : targetIds.length;
 
   return <div className="research-config-builder">
-    <div className="research-builder-toolbar"><button className="secondary-button" onClick={onBack}>← {copy.research}</button><div><strong>{templateName(copy, template)}</strong><small>{copy.lockWarning}</small></div></div>
-    <div className="research-builder-grid"><section className="panel research-form-panel"><FormRow label={copy.researchName}><input value={name} onChange={(event) => setName(event.target.value)} /></FormRow><FormRow label={copy.researchBaseProfile}><select value={baseProfileId} onChange={(event) => { setBaseProfileId(event.target.value); setBaseModelKey(""); setPreflight(null); setPreflightConfig(null); setDryRun(null); setError(null); }}><option value="">—</option>{profiles.map((item) => <option value={item.id} key={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></FormRow>{!workspace && baseProfile && <div className="provider-error">{copy.researchTechnicalWorkspaceMissing}</div>}{template !== "viewer_notes" && <div className="research-form-section research-viewer-notes-setting"><strong>{copy.viewerNotesSetting}</strong><div className="research-check-grid"><label><input type="radio" name="research-viewer-notes" checked={viewerNotesMode === "none"} onChange={() => { setViewerNotesMode("none"); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} /><span>{copy.viewerNotesDoNotUse}</span></label><label><input type="radio" name="research-viewer-notes" checked={viewerNotesMode === "current"} onChange={() => { setViewerNotesMode("current"); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} /><span>{copy.viewerNotesUseCurrent}</span></label></div><small>{copy.viewerNotesCurrentLead}</small></div>}<FormRow label={copy.sessionLanguage}><select value={language} onChange={(event) => { setLanguage(event.target.value as InterfaceLanguage); setPreflight(null); setPreflightConfig(null); setDryRun(null); }}><option value="pl">Polski</option><option value="en">English</option></select></FormRow><FormRow label={copy.protocol}><select disabled={template === "target_code"} value={researchProtocolId} onChange={(event) => { setResearchProtocolId(event.target.value as ResearchProtocolSelection["id"]); setPreflight(null); setPreflightConfig(null); setDryRun(null); }}><option value="full-rcp">{copy.fullRcp} · 1.5a</option><option value="rv-lite">{copy.rvLite} · 1.1.0</option></select></FormRow>
+    <div className="research-builder-toolbar"><button className="secondary-button" disabled={busy} onClick={onBack}>← {copy.research}</button><div><strong>{templateName(copy, template)}</strong><small>{copy.lockWarning}</small></div></div>
+    <nav className="research-builder-steps" aria-label={copy.researchPreparationSteps}>
+      <button type="button" className="secondary-button" aria-current={activeStage === "configuration" ? "step" : undefined} disabled={busy} onClick={editConfiguration}>1. {copy.researchStageConfiguration}</button>
+      <button type="button" className="secondary-button" aria-current={activeStage === "preview" ? "step" : undefined} disabled={busy || !dryRun} onClick={() => { setReviewStage("preview"); setPreflight(null); setPreflightConfig(null); setError(null); }}>2. {copy.researchStagePreview}</button>
+      <button type="button" className="secondary-button" aria-current={activeStage === "preflight" ? "step" : undefined} disabled={busy || !preflight} onClick={() => setReviewStage("preflight")}>3. {copy.researchStagePreflight}</button>
+    </nav>
+    {error && <div className="provider-error" role="alert">{error}</div>}
+    <div className="research-builder-grid" aria-busy={busy}><section className="panel research-form-panel" hidden={activeStage !== "configuration"} inert={busy || activeStage !== "configuration"}><FormRow label={copy.researchName}><input value={name} onChange={(event) => setName(event.target.value)} /></FormRow><FormRow label={copy.researchBaseProfile}><select value={baseProfileId} onChange={(event) => { setBaseProfileId(event.target.value); setBaseModelKey(""); setPreflight(null); setPreflightConfig(null); setDryRun(null); setError(null); }}><option value="">—</option>{profiles.map((item) => <option value={item.id} key={item.id}>{aiIsBeDisplayName(item)}</option>)}</select></FormRow>{!workspace && baseProfile && <div className="provider-error">{copy.researchTechnicalWorkspaceMissing}</div>}{template !== "viewer_notes" && <div className="research-form-section research-viewer-notes-setting"><strong>{copy.viewerNotesSetting}</strong><div className="research-check-grid"><label><input type="radio" name="research-viewer-notes" checked={viewerNotesMode === "none"} onChange={() => { setViewerNotesMode("none"); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} /><span>{copy.viewerNotesDoNotUse}</span></label><label><input type="radio" name="research-viewer-notes" checked={viewerNotesMode === "current"} onChange={() => { setViewerNotesMode("current"); setPreflight(null); setPreflightConfig(null); setDryRun(null); }} /><span>{copy.viewerNotesUseCurrent}</span></label></div><small>{copy.viewerNotesCurrentLead}</small></div>}<FormRow label={copy.sessionLanguage}><select value={language} onChange={(event) => { setLanguage(event.target.value as InterfaceLanguage); setPreflight(null); setPreflightConfig(null); setDryRun(null); }}><option value="pl">Polski</option><option value="en">English</option></select></FormRow><FormRow label={copy.protocol}><select disabled={template === "target_code"} value={researchProtocolId} onChange={(event) => { setResearchProtocolId(event.target.value as ResearchProtocolSelection["id"]); setPreflight(null); setPreflightConfig(null); setDryRun(null); }}><option value="full-rcp">{copy.fullRcp} · 1.5a</option><option value="rv-lite">{copy.rvLite} · 1.1.0</option></select></FormRow>
       <ResearchViewerSettings
         copy={copy}
         template={template}
@@ -549,8 +580,10 @@ export function ResearchConfigBuilder({ copy, settings, repository, profiles, wo
       <div className="research-form-section research-target-selector"><div className="research-section-head"><div><strong>{copy.researchTargets}</strong><small>{targetSelectionMode === "random" ? `${randomTargetCount} · ${copy.randomSelection}` : `${targetIds.length} ${copy.selectedOf} ${eligibleTargets.length}`}</small></div></div><div className="research-target-controls"><label><span>{copy.researchTargetSource}</span><select value={targetSource} onChange={(event) => setTargetSource(event.target.value as ResearchTargetSource)}><option value="training">{copy.trainingTargets}</option><option value="user">{copy.myTargets}</option><option value="all">{copy.bothTargetPools}</option></select></label><label><span>{copy.targetSelectionMethod}</span><select value={targetSelectionMode} onChange={(event) => setTargetSelectionMode(event.target.value as ResearchTargetSelectionMode)}><option value="random">{copy.randomSelection}</option><option value="manual">{copy.manualSelection}</option></select></label></div>{targetSelectionMode === "random" ? <div className="research-random-targets"><label><span>{copy.numberOfTargets}</span><input type="number" min={1} max={Math.max(1, eligibleTargets.length)} value={randomTargetCount} onChange={(event) => setRandomTargetCount(Math.max(1, Math.min(eligibleTargets.length || 1, Number(event.target.value) || 1)))} /></label><small>{copy.randomTargetsAtPreflight}</small></div> : <><div className="research-target-search"><Search size={14} /><input value={targetSearch} onChange={(event) => setTargetSearch(event.target.value)} placeholder={copy.searchTargets} /><button className="secondary-button" type="button" disabled={!visibleManualTargets.length} onClick={() => updateSelectedTargets([...new Set([...targetIds, ...visibleManualTargets.map((target) => target.id)])])}>{copy.selectVisible}</button><button className="secondary-button" type="button" disabled={!targetIds.length} onClick={() => updateSelectedTargets([])}>{copy.clearSelection}</button></div><div className="research-check-grid target-manual-grid">{visibleManualTargets.map((target) => <label key={target.id}><input type="checkbox" checked={targetIds.includes(target.id)} onChange={() => updateSelectedTargets(toggle(targetIds, target.id))} /><span>{target.collection === "training" ? copy.trainingTargets : copy.myTargets} · {localizedTargetTitle(target, settings.interfaceLanguage)}</span></label>)}</div></>}{!eligibleTargets.length && <small>{copy.noEligibleTargets}</small>}</div>
       <FormRow label={copy.repetitions}><input type="number" min={1} max={100} value={repetitions} onChange={(event) => setRepetitions(Math.max(1, Math.min(100, Number(event.target.value) || 1)))} /></FormRow><div className="research-inline-check"><label><input type="checkbox" checked={unusedOnly} onChange={(event) => setUnusedOnly(event.target.checked)} />{copy.unusedOnly}</label></div>
       <div className="research-form-section research-evaluation-section"><div className="research-section-head"><div><strong>{copy.researchEvaluation}</strong><small>{copy.researchEvaluationLead}</small></div><select value={evaluationMode} onChange={(event) => setEvaluationMode(event.target.value as "save_only" | "ai_judges")}><option value="save_only">{copy.saveOnlyExternal}</option><option value="ai_judges">{copy.useAiJudges}</option></select></div>{evaluationMode === "save_only" ? <p className="research-evaluation-note">{copy.saveOnlyResearchLead}</p> : <><div className="research-section-head judge-count-row"><strong>{copy.judgeModels}</strong><select value={judgeCount} onChange={(event) => setJudgeCount(Number(event.target.value))}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></div>{Array.from({ length: judgeCount }, (_, index) => <ModelRouteSelect className="research-judge-select" key={index} role="judge" profile={baseProfile} providers={providers} models={models} value={judgeKeys[index]} onChange={(next) => setJudgeKeys((current) => current.map((value, itemIndex) => itemIndex === index ? next : value))} emptyLabel={`${copy.judgeModel} ${index + 1}`} />)}</>}</div>
-      <div className="research-builder-actions"><button className="secondary-button" onClick={() => void preview()}>{copy.home !== "Home" ? "Podgląd planu" : copy.previewDryRun}</button><button className="secondary-button" onClick={() => void check()}>{copy.runPreflight}</button><button className="primary-button" disabled={!preflight?.ok || busy} onClick={() => void lock()}><LockKeyhole size={15} />{copy.experimentLock}</button></div>{error && <div className="provider-error">{error}</div>}</section>
-      <aside className="research-review-column">{dryRun && <DryRunPanel copy={copy} config={dryRun} />}{preflight && <PreflightPanel copy={copy} preflight={preflight} />}</aside></div>
+      <div className="research-builder-actions"><button type="button" className="primary-button" disabled={busy} onClick={() => void preview()}>{copy.researchStagePreview} <ChevronRight size={15} /></button></div></section>
+      {activeStage === "preview" && dryRun && <div className="research-review-column"><DryRunPanel copy={copy} config={dryRun} /><div className="research-builder-actions"><button type="button" className="secondary-button" disabled={busy} onClick={editConfiguration}>{copy.researchEditConfiguration}</button><button type="button" className="primary-button" disabled={busy} onClick={() => void check()}>{copy.runPreflight} <ChevronRight size={15} /></button></div></div>}
+      {activeStage === "preflight" && preflight && <div className="research-review-column"><PreflightPanel copy={copy} preflight={preflight} /><div className="research-builder-actions"><button type="button" className="secondary-button" disabled={busy} onClick={editConfiguration}>{copy.researchEditConfiguration}</button><button type="button" className="secondary-button" disabled={busy} onClick={() => { setReviewStage("preview"); setPreflight(null); setPreflightConfig(null); setError(null); }}>{copy.researchStagePreview}</button><button type="button" className="primary-button" disabled={!preflight.ok || busy} onClick={() => void lock()}><LockKeyhole size={15} />{copy.experimentLock}</button></div></div>}
+    </div>
   </div>;
 }
 

@@ -1,4 +1,10 @@
 export const en = {
+  researchPreparationSteps: "Research preparation steps",
+  researchStageConfiguration: "Configuration",
+  researchStagePreview: "Plan preview",
+  researchStagePreflight: "Preflight",
+  researchEditConfiguration: "Edit configuration",
+  researchReviewChanged: "The configuration has changed. Review the updated plan and run Preflight again before locking.",
   contextTitle: "Context & Instructions",
   contextBaselineLead: "These settings define the baseline. Each context condition can replace or extend it.",
   contextConditions: "Context conditions",
@@ -193,6 +199,12 @@ export const en = {
 } as const;
 
 export const pl = {
+  researchPreparationSteps: "Etapy przygotowania badania",
+  researchStageConfiguration: "Konfiguracja",
+  researchStagePreview: "Podgląd planu",
+  researchStagePreflight: "Kontrola wstępna",
+  researchEditConfiguration: "Edytuj konfigurację",
+  researchReviewChanged: "Konfiguracja zmieniła się. Przejrzyj zaktualizowany plan i ponownie wykonaj kontrolę wstępną przed zablokowaniem eksperymentu.",
   contextTitle: "Kontekst i instrukcje",
   contextBaselineLead: "Te ustawienia definiują kontekst bazowy. Każdy warunek może go zastąpić lub rozszerzyć.",
   contextConditions: "Warunki kontekstu",

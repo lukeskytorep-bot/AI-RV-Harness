@@ -7,7 +7,7 @@ import { getCopy } from "../../i18n";
 import { createDefaultSettings } from "../../startupDefaults";
 import type { Profile, Workspace } from "../../types";
 import { captureCurrentViewerNotes, reconcileResearchBaseModelKey, ResearchConfigBuilder, ResearchResultsView, DryRunPanel, researchBaseModelInventorySignature, researchCustomReasoningModeForProfile, researchPreflightSignature, researchTemperatureConditionSettings, researchTemperatureExperimentSupportsModel } from "./ResearchBuilder";
-import type { ResearchConfig, ResearchResults } from "../../research/types";
+import type { ResearchConfig, ResearchResults, ResearchTemplateType } from "../../research/types";
 import { createResearchProtocolSelection } from "../../research/protocolPolicy";
 import researchBuilderSource from "./ResearchBuilder.tsx?raw";
 
@@ -24,7 +24,7 @@ const model: ProviderModel = {
 const repository = {} as AppRepository;
 const noop = vi.fn(async () => undefined);
 
-function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "context_instructions" | "sampling" | "temperature" | "target_code", uiLanguage: "pl" | "en" = "en") {
+function renderBuilder(template: ResearchTemplateType, uiLanguage: "pl" | "en" = "en") {
   return renderToStaticMarkup(<ResearchConfigBuilder
     copy={getCopy(uiLanguage)}
     settings={createDefaultSettings()}
@@ -42,6 +42,18 @@ function renderBuilder(template: "model" | "viewer_notes" | "system_prompt" | "c
 }
 
 describe("Research Builder Training/Research UX step", () => {
+  it.each(["reasoning", "temperature", "profile", "model", "practice", "system_prompt", "viewer_notes", "context_instructions", "sampling", "target_code", "custom"] as const)("starts %s on the configuration stage", (template) => {
+    for (const language of ["en", "pl"] as const) {
+      const html = renderBuilder(template, language);
+      const copy = getCopy(language);
+      expect(html).toContain('aria-current="step"');
+      expect(html).toContain(copy.researchPreparationSteps);
+      expect(html).toContain(copy.researchStagePreview);
+      expect(html).not.toContain('class="panel research-review-panel"');
+      expect(html).not.toContain('class="preflight-list"');
+    }
+  });
+
 
   it("allows Temperature Research for Custom OpenAI even when discovery does not advertise temperature", () => {
     const customProvider = { ...provider, provider: "custom_openai" as const };

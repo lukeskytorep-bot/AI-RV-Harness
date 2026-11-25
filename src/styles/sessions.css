@@ -243,7 +243,14 @@
 .research-builder-toolbar > div { display: grid; gap: 2px; }
 .research-builder-toolbar strong { font-size: 12px; }
 .research-builder-toolbar small { color: var(--muted); font-size: 11px; }
-.research-builder-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(310px, .65fr); gap: 13px; align-items: start; }
+.research-config-builder .research-builder-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 13px; align-items: start; }
+.research-config-builder .research-form-panel[hidden] { display: none; }
+.research-builder-steps { display: flex; flex-wrap: wrap; gap: 8px; }
+.research-builder-steps > button[aria-current="step"] { border-color: var(--violet); color: var(--violet); background: var(--violet-soft); }
+.research-config-builder .research-builder-actions { flex-wrap: wrap; }
+.research-config-builder .research-review-column { min-width: 0; }
+.research-config-builder .research-review-panel .condition-pills { display: grid; min-width: 0; }
+.research-config-builder .research-review-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
 .research-form-panel { overflow: hidden; }
 .research-form-row { min-height: 57px; display: grid; grid-template-columns: minmax(180px, .7fr) minmax(220px, 1fr); align-items: center; gap: 16px; padding: 9px 17px; border-bottom: 1px solid var(--border); }
 .research-form-row > span { color: var(--muted-strong); font-size: 11px; font-weight: 700; }
