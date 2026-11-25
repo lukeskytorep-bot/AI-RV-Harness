@@ -298,12 +298,24 @@ it("renders Context & Instructions result provenance and completeness", () => {
   expect(html).toContain("Viewer Notes");
   expect(html).toContain("3/4 · 75.00%");
   expect(html).toContain("1 msg · 17 chars");
-  expect(html).toContain("attempts: 5 · retry 1 · recovery 0");
+  expect(html).toContain("attempts: 5 · retries 1 · recovery 0");
   const polish = renderToStaticMarkup(<ResearchResultsView copy={getCopy("pl")} results={results} repository={repository} />);
   expect(polish).toContain("Kontekst i instrukcje: porównanie warunków");
   expect(polish).toContain("Dodaj do wybranych");
   expect(polish).toContain("Add notes");
   expect(polish).not.toContain("Add to Selected");
+  const legacy = structuredClone(results);
+  delete legacy.conditions[0].logicalContextMessages;
+  delete legacy.conditions[0].logicalContextCharacters;
+  delete legacy.conditions[0].plannedN;
+  delete legacy.conditions[0].completionRate;
+  const legacyHtml = renderToStaticMarkup(<ResearchResultsView copy={getCopy("en")} results={legacy} repository={repository} />);
+  expect(legacyHtml).toContain("— msg · — chars");
+  expect(legacyHtml).toContain("3/—");
+  const empty = structuredClone(legacy);
+  empty.conditions[0].logicalContextMessages = 0;
+  empty.conditions[0].logicalContextCharacters = 0;
+  expect(renderToStaticMarkup(<ResearchResultsView copy={getCopy("en")} results={empty} repository={repository} />)).toContain("0 msg · 0 chars");
 });
 
 it.each(["pl", "en"] as const)("localizes stored practice and notes labels in results for %s UI", ui => {

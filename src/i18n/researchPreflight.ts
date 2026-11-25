@@ -4,7 +4,7 @@ const exactMessages = new Map<string, string>([
   ["Context & Instructions conditions must match one frozen preparation manifest before Experiment Lock", "Warunki badania Kontekst i instrukcje muszą odpowiadać jednemu zamrożonemu manifestowi przed blokowaniem eksperymentu."],
   ["Every Context & Instructions condition has a distinct frozen composition hash", "Każdy warunek kontekstu ma odrębny skrót zamrożonej kompozycji."],
   ["Two or more context conditions have the same frozen composition hash; verify that the duplicate is intentional", "Co najmniej dwa warunki mają ten sam skrót zamrożonej kompozycji; sprawdź, czy powtórzenie jest zamierzone."],
-  ["C2 allows Preflight and Experiment Lock only. Session execution remains blocked until the audited C3 runtime/Resume integration.", "Historyczny komunikat etapu C2 (sprzed integracji wykonywania sesji C3)."],
+  ["C2 allows Preflight and Experiment Lock only. Session execution remains blocked until the audited C3 runtime/Resume integration.", "Historyczny komunikat sprzed integracji wykonywania sesji."],
   ["Request timeout is within the supported safety range", "Limit czasu żądania mieści się w bezpiecznym zakresie."],
   ["Request timeout must be between 1 and 600 seconds", "Limit czasu żądania musi wynosić od 1 do 600 sekund."],
   ["Retry policy is valid", "Zasady ponawiania są poprawne."],
@@ -97,7 +97,11 @@ const messagePatterns: readonly (readonly [RegExp, string])[] = [
 ];
 
 export function formatResearchPreflightMessage(message: string, language: "pl" | "en"): string {
-  if (language === "en") return message;
+  if (language === "en") {
+    if (message === "Every Context & Instructions condition is tied to the frozen C2 preparation manifest") return "Every Context & Instructions condition is tied to the frozen preparation manifest";
+    if (message === "C2 allows Preflight and Experiment Lock only. Session execution remains blocked until the audited C3 runtime/Resume integration.") return "Historical diagnostic from before session execution was integrated.";
+    return message;
+  }
   const exact = exactMessages.get(message);
   if (exact !== undefined) return exact;
   for (const [pattern, translation] of messagePatterns) {

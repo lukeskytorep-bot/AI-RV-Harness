@@ -23,7 +23,7 @@ export const RESEARCH_TEMPLATE_TYPES = [
 
 export type ResearchTemplateType = (typeof RESEARCH_TEMPLATE_TYPES)[number];
 
-/** Context & Instructions research contract. Runtime message application is enabled only in C3. */
+/** Context & Instructions research contract. Runtime applies the frozen composition through the Research context path. */
 export const RESEARCH_CONTEXT_BLOCK_KEYS = [
   "system_prompt", "viewer_notes", "viewer_identity", "base_vocabulary",
 ] as const;
@@ -150,7 +150,7 @@ export interface ResearchConditionDefinition {
   targetCode?: import("../resources/rvLiteTargetCode").TargetCodePolicy;
   key: string;
   label: string;
-  /** C1 reserved metadata. MUST NOT be used by runtime before C2/C3 integration. */
+  /** Experimental design; runtime uses the validated frozen context composition. */
   contextDesign?: ResearchContextConditionDesign;
   contextComposition?: ResearchFrozenContextComposition;
   profileId: string;
@@ -230,7 +230,7 @@ export interface ResearchConfig {
   promptResearchSource?: ResearchPromptResearchSource;
   /** Versioned design metadata for the Sampling configurations template. */
   samplingDesign?: ResearchSamplingDesign;
-  /** Frozen C2 design/manifest for Context & Instructions projects. */
+  /** Frozen design/manifest for Context & Instructions projects. */
   contextPreparation?: ResearchPreparedContextDraft;
   conditions: ResearchConditionDefinition[];
   evaluationMode?: "save_only" | "ai_judges";

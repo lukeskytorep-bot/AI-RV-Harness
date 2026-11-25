@@ -20,3 +20,13 @@ describe("Research Preflight presentation localization", () => {
     expect(formatResearchPreflightMessage(message, "pl")).toBe(message);
   });
 });
+
+
+it("keeps historical implementation-stage diagnostics out of current UI in both languages", () => {
+  const current = "Every Context & Instructions condition is tied to the frozen C2 preparation manifest";
+  const historical = "C2 allows Preflight and Experiment Lock only. Session execution remains blocked until the audited C3 runtime/Resume integration.";
+  for (const language of ["pl", "en"] as const) {
+    expect(formatResearchPreflightMessage(current, language)).not.toMatch(/C2|C3/);
+    expect(formatResearchPreflightMessage(historical, language)).not.toMatch(/C2|C3/);
+  }
+});

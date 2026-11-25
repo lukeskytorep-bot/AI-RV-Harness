@@ -10,9 +10,9 @@ import {
 } from "./types";
 
 /**
- * C1: offline, deterministic logical context composition. It does NOT create the
- * full provider request, does NOT include protocol/task messages, and must not be
- * used for execution until C2/C3 lock, recovery and transport checks exist.
+ * Deterministic logical context composition. It does NOT create the full provider
+ * request or include protocol/task messages. Execution uses the frozen composition
+ * through the separate Research lock and runtime validation paths.
  *
  * The system_prompt base block represents the existing editable/Field Guide
  * portion; identity and vocabulary remain separate *logical* blocks here.
