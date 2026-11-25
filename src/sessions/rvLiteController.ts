@@ -1,3 +1,4 @@
+import { assertTargetCodeAbsent } from "../domain/targetCodeMode";
 import { renderResearchTargetCodeSteps, assertTargetCodePolicy, verifyTargetCodeTemplates, type TargetCodePolicy } from "../resources/rvLiteTargetCode";
 import { withAutomaticWorkflow, withRvWorkflow } from "../application/workflowOwnership";
 import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
@@ -166,7 +167,7 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
   const runViewerCall = async (requestMessages: ProviderMessage[], onStreamEvent: ((event: ProviderStreamEvent) => void) | undefined, metadata: Record<string, unknown>) => {
     let durationMs = 0;
     metadata = {...metadata,...focusMetadata(sessionFocus,currentPassIndex)};
-    if (targetCode?.mode === "without_code" && JSON.stringify(requestMessages).includes(sessionCode)) throw new Error("Target-code Research refused an assigned session code in the Without-code Viewer payload.");
+    if (targetCode) assertTargetCodeAbsent(targetCode.mode, sessionCode, requestMessages);
     const fingerprint = focusFingerprint(viewerRequestFingerprintInput(requestMessages),sessionFocus,currentPassIndex,effectiveSettings,input.providerConfig,input.model,input.sessionLanguage,input.protocol.contentSha256);
     const requestSha256 = await sha256Text(targetCode ? JSON.stringify({ fingerprint, targetCode }) : fingerprint);
     const stepId = buildViewerStepId("lite", metadata);

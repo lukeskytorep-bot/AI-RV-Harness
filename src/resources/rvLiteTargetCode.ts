@@ -2,14 +2,15 @@ import { renderRvLiteSteps, type RvLiteProtocolResource } from "./protocolRegist
 import raw from "./research/target-code-presence-v1.json?raw";
 import type { InterfaceLanguage } from "../types";
 
-export type TargetCodeMode = "with_code" | "without_code";
+import { isTargetCodeMode, type TargetCodeMode } from "../domain/targetCodeMode";
+export type { TargetCodeMode } from "../domain/targetCodeMode";
 export interface TargetCodePolicy { mode: TargetCodeMode; version: "target-code-presence-v1"; templatesSha256: string; }
 export const TARGET_CODE_VERSION = "target-code-presence-v1" as const;
 export const TARGET_CODE_TEMPLATES_SHA256 = "1d59a832e34956dd9743c7d81d81b597449b1c8e6b3f428a2e66517ef9d0e9ff";
 const templates = JSON.parse(raw) as { version: string } & Record<InterfaceLanguage, { waitingWithCode: string; waitingWithoutCode: string; secondWithCode: string; secondWithoutCode: string }>;
 export function targetCodePolicy(mode: TargetCodeMode): TargetCodePolicy { return { mode, version: TARGET_CODE_VERSION, templatesSha256: TARGET_CODE_TEMPLATES_SHA256 }; }
 export function assertTargetCodePolicy(policy: TargetCodePolicy): void {
-  if (!["with_code", "without_code"].includes(policy.mode) || policy.version !== TARGET_CODE_VERSION || policy.templatesSha256 !== TARGET_CODE_TEMPLATES_SHA256) throw new Error("Research target-code mode/version/template hash mismatch.");
+  if (!isTargetCodeMode(policy.mode) || policy.version !== TARGET_CODE_VERSION || policy.templatesSha256 !== TARGET_CODE_TEMPLATES_SHA256) throw new Error("Research target-code mode/version/template hash mismatch.");
 }
 export async function verifyTargetCodeTemplates(): Promise<void> {
   const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw)))].map(b => b.toString(16).padStart(2, "0")).join("");
