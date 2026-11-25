@@ -131,6 +131,27 @@ describe("Viewer profile save integration with repository persistence", () => {
     expect(await repo.listProfiles()).toHaveLength(1);
     expect((await repo.listProfiles())[0].targetCodeMode).toBe("without_code");
   });
+  it("preserves omitted metadata and permits explicit clearing in metadata-only saves", async () => {
+    const repo = new BrowserRepository();
+    const profile = await repo.createProfile({ name: "Legacy", humanName: "Human", note: "Very important" });
+    const save = (values: Parameters<typeof saveViewerProfile>[0]["values"]) => saveViewerProfile({ repository: repo, existingProfileId: profile.id, values });
+    await save({ name: "Legacy", targetCodeMode: "without_code" });
+    expect((await new BrowserRepository().listProfiles())[0]).toMatchObject({ humanName: "Human", note: "Very important", targetCodeMode: "without_code" });
+    await save({ name: "Legacy", humanName: undefined });
+    let stored = (await new BrowserRepository().listProfiles())[0];
+    expect(stored.humanName).toBeUndefined();
+    expect(stored.note).toBe("Very important");
+    await save({ name: "Legacy", note: "" });
+    stored = (await new BrowserRepository().listProfiles())[0];
+    expect(stored.note).toBeUndefined();
+    expect(stored.targetCodeMode).toBe("without_code");
+  });
+  it("preserves omitted metadata during an AI configuration save", async () => {
+    const repo = repository();
+    const saved = await saveViewerProfile({ repository: repo, values: { ...values, humanName: "Human", note: "Very important" } });
+    const updated = await saveViewerProfile({ repository: repo, existingProfileId: saved.profile.id, values: { ...values, targetCodeMode: "without_code" } });
+    expect(updated.profile).toMatchObject({ humanName: "Human", note: "Very important", targetCodeMode: "without_code" });
+  });
   it("Browser save never invokes native IPC", async () => {
     runtime.desktop = false; const repo = repository();
     const saved = await saveViewerProfile({ repository: repo, values });

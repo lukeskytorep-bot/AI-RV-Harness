@@ -1,6 +1,6 @@
 import { prepareProfileViewerRoute, requireViewerRoute, viewerRouteErrorMessage } from "../aiCenter/viewerIdentityRoute";
 import type { AppRepository } from "../storage/repository";
-import type { CreateProfileInput, Profile } from "../types";
+import type { CreateProfileInput, Profile, UpdateProfileInput } from "../types";
 import { createProfileWithInitialWorkspaces, type CreatedProfileWorkspaces } from "./profileWorkspace";
 
 /** Retain for the lifetime of a creation form, including failed attempts. */
@@ -28,6 +28,17 @@ export function profileSaveErrorMessage(error: unknown, language: "en" | "pl"): 
     ? profileSaveErrorMessageFor(error.failure, Boolean(error.profileId), language, error.metadataOnly)
     : viewerRouteErrorMessage(error, language) ?? (error instanceof Error ? error.message : String(error));
 }
+/** An omitted metadata field preserves the stored value. An explicitly
+ * supplied undefined or empty string retains the existing clear semantics.
+ */
+function profileMetadataUpdate(values: CreateProfileInput, existing: Profile): UpdateProfileInput {
+  return {
+    name: values.name,
+    humanName: Object.prototype.hasOwnProperty.call(values, "humanName") ? values.humanName : existing.humanName,
+    note: Object.prototype.hasOwnProperty.call(values, "note") ? values.note : existing.note,
+    ...(values.targetCodeMode === undefined ? {} : { targetCodeMode: values.targetCodeMode }),
+  };
+}
 /** Preflight keychain before writes. Repository APIs span domains and do not
  * expose a shared transaction: retain the created Profile on write failure and
  * retry it, rather than silently succeeding or creating a second Profile.
@@ -51,7 +62,7 @@ export async function saveViewerProfile(input: {
     // A partially created profile must still complete the original preflight.
     if (metadataOnly) {
       if (!existing) throw new Error("Profile is unavailable");
-      await repository.updateProfile(existing.id, { name: values.name, humanName: values.humanName, note: values.note, ...(values.targetCodeMode === undefined ? {} : { targetCodeMode: values.targetCodeMode }) });
+      await repository.updateProfile(existing.id, profileMetadataUpdate(values, existing));
       const profile = (await repository.listProfiles()).find((item) => item.id === existing.id);
       if (!profile) throw new Error("Saved Profile is unavailable");
       return { profile };
@@ -69,7 +80,8 @@ export async function saveViewerProfile(input: {
     writeStarted = true;
     await repository.ensureAiIdentity({ ...prepared, profileId });
     if (!createdNow) {
-      await repository.updateProfile(profileId, { name: values.name, humanName: values.humanName, note: values.note, ...(values.targetCodeMode === undefined ? {} : { targetCodeMode: values.targetCodeMode }) });
+      if (!existing) throw new Error("Profile is unavailable");
+      await repository.updateProfile(profileId, profileMetadataUpdate(values, existing));
       if (ai) await repository.setProfileAiConfiguration(profileId, ai);
     }
     const profile = (await repository.listProfiles()).find((item) => item.id === profileId);
