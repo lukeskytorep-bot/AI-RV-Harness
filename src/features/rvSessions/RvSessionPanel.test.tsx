@@ -232,10 +232,10 @@ describe("RV Sessions sampling handoff", () => {
   });
 });
 
-it.each(["pl", "en"] as const)("warns that a without-code profile cannot start an unsupported ordinary protocol (%s)", language => {
+it.each(["pl", "en"] as const)("does not warn about the default RCP protocol for a without-code profile (%s)", language => {
   const copy = getCopy(language);
   const html = renderToStaticMarkup(<RvSessionPanel copy={copy} settings={{ ...createDefaultSettings(), interfaceLanguage: language }} profile={{ ...profile, targetCodeMode: "without_code" }} workspace={workspace} repository={null} />);
-  expect(html).toContain(copy.profileWithoutTargetCodeProtocolUnavailable);
+  expect(html).not.toContain(copy.profileWithoutTargetCodeProtocolUnavailable);
 });
 
 it("applies captured target-code restart options before dispatch, for both Start again buttons", () => {

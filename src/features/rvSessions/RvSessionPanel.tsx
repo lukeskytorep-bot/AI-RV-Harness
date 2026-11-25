@@ -145,7 +145,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const [temperature, setTemperature] = useState("");
   const [sessionFocus, setSessionFocus] = useState<SessionFocusPlan>();
   const [historyFocusCounts,setHistoryFocusCounts] = useState<Record<string,number>>({});
-  const unsupportedWithoutCode = profile?.targetCodeMode === "without_code" && protocol !== "lite";
+  const unsupportedWithoutCode = profile?.targetCodeMode === "without_code" && protocol !== "lite" && protocol !== "rcp";
   const activeSessionFocus = runType === "automatic" && protocol !== "telepathic" ? sessionFocus : undefined;
   const [progress, setProgress] = useState<SessionProgress | null>(null);
   const [liveBlindEvents, setLiveBlindEvents] = useState<SessionEventRecord[]>([]);
@@ -552,6 +552,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         providerConfig: activeProvider,
         model: selectedModel,
         protocol: rcp,
+        targetCodeMode: profile.targetCodeMode ?? "with_code",
         sessionFocus: activeSessionFocus,
         sessionLanguage: resolvedLanguage,
         requestedSettings,
@@ -769,7 +770,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
       if (!snapshot) throw new Error(settings.interfaceLanguage === "pl" ? "Brak zapisanego snapshota tej sesji." : "The saved session snapshot is unavailable.");
       const capturedCode = capturedSessionTargetCode(snapshot, resume, profile.targetCodeMode);
       if (capturedCode.blocked) throw new Error(copy.profileWithoutTargetCodeProtocolUnavailable);
-      if (!resume && snapshot.protocol.id === "rv-lite" &&
+      if (!resume && (snapshot.protocol.id === "rv-lite" || snapshot.protocol.id === "full-rcp") &&
         (capturedCode.restartOptions.targetCodeMode ?? "with_code") !== (profile.targetCodeMode ?? "with_code")) {
         const pl = settings.interfaceLanguage === "pl";
         const without = capturedCode.restartOptions.targetCodeMode === "without_code";
@@ -843,7 +844,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         setProtocol("rcp");
         const current = getFullRcp(snapshot.sessionLanguage);
         const resource: ProtocolResource = { ...current, content: snapshot.protocol.fullContent, contentSha256: snapshot.protocol.contentSha256 };
-        result = await runAutomaticRcpSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, sessionFocus: snapshot.sessionFocus, viewerNotes: snapshot.viewerNotes, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(capturedAutomaticReveal ? { capturedAutomaticReveal } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session, ...(snapshot.continuationRoute ? { resumeContinuationRoute: snapshot.continuationRoute } : {}) } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress });
+        result = await runAutomaticRcpSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, providerConfig, model: viewerModel, protocol: resource, ...capturedCode.restartOptions, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, sessionFocus: snapshot.sessionFocus, viewerNotes: snapshot.viewerNotes, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedSpecialTask ? { specialTask: capturedSpecialTask } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(capturedAutomaticReveal ? { capturedAutomaticReveal } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session, ...(snapshot.continuationRoute ? { resumeContinuationRoute: snapshot.continuationRoute } : {}) } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress });
       } else {
         setProtocol("custom");
         const saved = JSON.parse(snapshot.protocol.fullContent) as { systemPrompt?: string; steps: string[] };

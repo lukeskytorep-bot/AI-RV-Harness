@@ -123,6 +123,7 @@ export type SessionContinuationRouteSnapshot =
 export interface SessionSnapshot {
   /** Reserved B1 metadata contract; native generation remains unavailable. Legacy absence is unchanged. */
   nativeConnection?: import("../providers/nativeConnectionIdentity").NativeConnectionSnapshot;
+  rcpProfileTargetCode?: import("./rcpTargetCode").RcpTargetCodeSnapshot;
   profileTargetCode?: { policy: import("../resources/rvLiteTargetCode").TargetCodePolicy; renderProfileName: string | null; renderedPrompts: { content: string; sha256: string }[] };
   researchTargetCode?: { policy: import("../resources/rvLiteTargetCode").TargetCodePolicy; renderedPrompts: { content: string; sha256: string }[] };
   schemaVersion: 1 | 2 | 3 | 4;

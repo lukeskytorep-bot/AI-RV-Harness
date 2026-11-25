@@ -1,3 +1,6 @@
+import { assertTargetCodeAbsent, resolveTargetCodeMode, type TargetCodeMode } from "../domain/targetCodeMode";
+import { assertRcpTargetCodeSnapshotMatches, freezeRcpTargetCode, rcpTargetCodePolicy } from "./rcpTargetCode";
+import { getFullRcp } from "../resources/protocolRegistry";
 import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { withAutomaticWorkflow, withRvWorkflow } from "../application/workflowOwnership";
 import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
@@ -65,6 +68,7 @@ type SessionRepository = Pick<
 > & Partial<Pick<AppRepository, "appendSessionEventWithProviderState" | "getSessionSnapshot" | "getRvSession">>;
 
 export interface AutomaticRcpRunInput {
+  targetCodeMode?: TargetCodeMode;
   sessionFocus?: SessionFocusPlan;
   repository: SessionRepository;
   workspaceId: string;
@@ -157,6 +161,23 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
 
   const sessionId = input.resumeSession?.id ?? input.sessionIdentity?.id ?? input.initializationExistingSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? input.sessionIdentity?.sessionCode ?? input.initializationExistingSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
+  const existingSession = input.resumeSession ?? input.initializationExistingSession;
+  const storedSnapshot = existingSession && input.repository.getSessionSnapshot ? await input.repository.getSessionSnapshot(sessionId) : null;
+  if (input.resumeSession && !storedSnapshot) throw new Error("RCP Resume requires a saved Session Snapshot.");
+  const frozenCode = storedSnapshot?.rcpProfileTargetCode;
+  const researchRun = Boolean(input.researchProjectId || input.operationKind === "research_viewer" || input.researchContext || input.researchConditionInstruction);
+  if ((input.targetCodeMode !== undefined || frozenCode) && researchRun) throw new Error("Profile target-code mode cannot override Research.");
+  if (storedSnapshot?.profileTargetCode || storedSnapshot?.researchTargetCode) throw new Error("Conflicting frozen target-code policies for RCP.");
+  if (existingSession && input.targetCodeMode !== undefined && !frozenCode) throw new Error("RCP target-code Resume requires its saved policy.");
+  const profilePolicy = frozenCode?.policy ?? (!existingSession && input.targetCodeMode !== undefined ? rcpTargetCodePolicy(resolveTargetCodeMode(input.targetCodeMode)) : undefined);
+  if (profilePolicy) {
+    const approved = getFullRcp(input.sessionLanguage);
+    if (input.protocol.id !== approved.id || input.protocol.version !== approved.version || input.protocol.language !== approved.language || input.protocol.contentSha256 !== approved.contentSha256 || input.protocol.content !== approved.content) throw new Error("RCP profile target-code protocol drift.");
+    if (frozenCode && (storedSnapshot?.protocol.id !== approved.id || storedSnapshot.protocol.version !== approved.version || storedSnapshot.protocol.contentSha256 !== approved.contentSha256 || storedSnapshot.sessionLanguage !== input.sessionLanguage || storedSnapshot.sessionCode !== sessionCode)) throw new Error("Frozen RCP protocol or session mismatch.");
+  }
+  const rcpProfileTargetCode = profilePolicy ? await freezeRcpTargetCode(input.sessionLanguage, sessionCode, profilePolicy) : undefined;
+  if (frozenCode) assertRcpTargetCodeSnapshotMatches(frozenCode, rcpProfileTargetCode);
+  const viewerCodeMode = profilePolicy?.mode ?? "with_code";
   const createdAt = new Date().toISOString();
   const startedAtMs = Date.now();
   let transcript = "";
@@ -227,9 +248,11 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
   ];
   const stop = (reason: string) => stopRun(input, sessionId, sessionCode, transcript, reason, metrics, startedAtMs);
   const runViewerCall = async (requestMessages: ProviderMessage[], onStreamEvent: ((event: ProviderStreamEvent) => void) | undefined, metadata: Record<string, unknown>) => {
+    assertTargetCodeAbsent(viewerCodeMode, sessionCode, requestMessages);
     let durationMs = 0;
     metadata = {...metadata,...focusMetadata(sessionFocus,currentPassIndex)};
-    const requestSha256 = await sha256Text(focusFingerprint(viewerRequestFingerprintInput(requestMessages),sessionFocus,currentPassIndex,effectiveSettings,input.providerConfig,input.model,input.sessionLanguage,input.protocol.contentSha256));
+    const fingerprint = focusFingerprint(viewerRequestFingerprintInput(requestMessages),sessionFocus,currentPassIndex,effectiveSettings,input.providerConfig,input.model,input.sessionLanguage,input.protocol.contentSha256);
+    const requestSha256 = await sha256Text(profilePolicy ? JSON.stringify({ fingerprint, rcpProfileTargetCode: profilePolicy }) : fingerprint);
     const stepId = buildViewerStepId("rcp", metadata);
     const durable = input.resumeSession ? await resolveViewerResumeStart({ repository: input.repository, sessionId, stepKey: stepId, requestSha256 }) : { startRecoveryLevel: 0 as const };
     const durableMetadata = { ...metadata, stepId, requestSha256, ...(durable.resumeAuthorizationId ? { resumeAuthorizationId: durable.resumeAuthorizationId } : {}) };
@@ -243,6 +266,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
       sessionLanguage: input.sessionLanguage,
       abortSignal: input.signal,
       call: async (settings, semanticAttempt, dispatchAttempt) => {
+        assertTargetCodeAbsent(viewerCodeMode, sessionCode, requestMessages);
         validateSessionContinuationBudget(requestMessages);
         if (input.researchContext) {
           activeResearchEvidence = {
@@ -306,6 +330,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
   const snapshot: SessionSnapshot = {
     schemaVersion: 4,
     ...focusSnapshotFields(sessionFocus,input.providerConfig,input.model),
+    ...(rcpProfileTargetCode ? { rcpProfileTargetCode } : {}),
     sessionId,
     sessionCode,
     profileId: input.profileId,
@@ -427,8 +452,8 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
     transcript=await startFocusPass(input.repository,sessionId,sessionFocus,passIndex,transcript,input.sessionLanguage);
     for (let phase = 1; phase <= 6; phase += 1) {
       if (input.signal?.aborted) return stop("USER STOP");
-      const originalPhasePrompt = rcpPhasePrompt(input.sessionLanguage, phase, sessionCode);
-      const phasePrompt = phase === 1 ? focusOpening(originalPhasePrompt,sessionFocus,currentPassIndex,input.sessionLanguage,sessionCode) : originalPhasePrompt;
+      const originalPhasePrompt = rcpProfileTargetCode?.renderedPrompts[phase - 1].content ?? rcpPhasePrompt(input.sessionLanguage, phase, sessionCode);
+      const phasePrompt = phase === 1 ? focusOpening(originalPhasePrompt,sessionFocus,currentPassIndex,input.sessionLanguage,viewerCodeMode === "without_code" ? undefined : sessionCode) : originalPhasePrompt;
       const controllerPrompt = phase === 1 && !(sessionFocus && currentPassIndex === 2)
         ? `${politeSessionGreeting(input.sessionLanguage, input.aiIsBeDisplayName)}\n\n${phasePrompt}` : phasePrompt;
       messages.push({ role: "user", content: controllerPrompt });
@@ -582,6 +607,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
               chat: async (request) => {
                 const requestStartedAt = Date.now();
                 try {
+                  assertTargetCodeAbsent(viewerCodeMode, sessionCode, request.messages);
                   const rawMonitorResponse = await rawChat({ ...request, signal: input.signal });
                   const monitorResponse = { ...rawMonitorResponse, usage: withEstimatedCost(rawMonitorResponse.usage, input.monitor!.model) };
                   const requestDurationMs = Date.now() - requestStartedAt;

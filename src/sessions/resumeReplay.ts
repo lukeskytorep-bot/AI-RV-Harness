@@ -136,6 +136,7 @@ export async function createSessionReplay(input: {
     // The resumed controller owns retry. Replay supplies exactly one physical
     // live attempt after all durable responses have been replayed.
     if (isViewerRequest && snapshot.profileTargetCode) assertTargetCodeAbsent(snapshot.profileTargetCode.policy.mode, snapshot.sessionCode, messages);
+    if (snapshot.rcpProfileTargetCode) assertTargetCodeAbsent(snapshot.rcpProfileTargetCode.policy.mode, snapshot.sessionCode, messages);
     return providerChatOnce({ ...request, messages }, input.liveChat);
   };
 

@@ -19,7 +19,7 @@ describe("captured session target-code policy", () => {
   it("retains the legacy renderer when no policy was saved", () => {
     expect(capturedSessionTargetCode(snapshot("rv-lite"), false, "without_code")).toEqual({ blocked: false, restartOptions: {} });
   });
-  it.each(["full-rcp", "telepathic-protocol", "custom-example"])("blocks unsupported restart for %s", id => {
+  it.each(["telepathic-protocol", "custom-example"])("blocks unsupported restart for %s", id => {
     expect(capturedSessionTargetCode(snapshot(id), false, "without_code").blocked).toBe(true);
     expect(capturedSessionTargetCode(snapshot(id, "without_code"), false, "with_code").blocked).toBe(true);
     expect(capturedSessionTargetCode(snapshot(id, "without_code"), true, "with_code").blocked).toBe(true);
