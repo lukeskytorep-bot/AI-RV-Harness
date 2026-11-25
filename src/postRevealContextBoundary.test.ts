@@ -138,8 +138,9 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     // STEP 2 links intervention records by logical identity without changing provider messages or recovery.
     // T3 changes Viewer completion evidence, durable manual authorization and its one-physical-attempt allowance.
     // R4 adds additive Viewer actualProvider telemetry; normalization above excludes only that metadata field.
+    // CODE-4 adds frozen target-code policy, neutral prompts and pre-dispatch guards for Viewer and Monitor.
     // Freeze the accepted execution baseline while the Monitor prompt contract above remains separately byte-stable.
-    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("a89d4a57b6115716b4ec52b2ab69c9f3e216b05c10c62a74f5ae0046b2759439");
+    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("1bb4a6b5f10082642fc2e54668e50bc13e71290ff77a041fd733eeb1c42d5edd");
   });
 
   it("keeps AI Judge prompt, rubric, scoring and packet byte-identical while allowing ORP1 resource wiring in the engine", () => {
