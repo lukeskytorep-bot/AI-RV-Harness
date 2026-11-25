@@ -5,26 +5,26 @@ import type { SessionSnapshot } from "../../sessions/types";
 import type { TargetCodeMode } from "../../domain/targetCodeMode";
 import { capturedSessionTargetCode } from "./capturedSessionTargetCode";
 
-function snapshot(id: string, mode?: TargetCodeMode): Pick<SessionSnapshot, "protocol" | "profileTargetCode"> {
-  return { protocol: { id, version: "1", language: "en", fullContent: "", contentSha256: "" },
+function snapshot(id: string, mode?: TargetCodeMode): Pick<SessionSnapshot, "protocol" | "profileTargetCode" | "sessionId" | "sessionCode" | "sessionLanguage"> {
+  return { sessionId: "s", sessionCode: "RVH-TEST", sessionLanguage: "en", protocol: { id, version: "1", language: "en", fullContent: "", contentSha256: "" },
     ...(mode ? { profileTargetCode: { policy: targetCodePolicy(mode), renderProfileName: null, renderedPrompts: [] } } : {}) };
 }
 
 describe("captured session target-code policy", () => {
-  it.each(["with_code", "without_code"] as const)("restarts with frozen %s despite profile changes", mode => {
+  it.each(["with_code", "without_code"] as const)("restarts with frozen %s despite profile changes", async mode => {
     const current = mode === "with_code" ? "without_code" : "with_code";
-    expect(capturedSessionTargetCode(snapshot("rv-lite", mode), false, current)).toEqual({ blocked: false, restartOptions: { targetCodeMode: mode } });
-    expect(capturedSessionTargetCode(snapshot("rv-lite", mode), true, current)).toEqual({ blocked: false, restartOptions: {} });
+    expect(await capturedSessionTargetCode(snapshot("rv-lite", mode), false, current)).toEqual({ blocked: false, restartOptions: { targetCodeMode: mode } });
+    expect(await capturedSessionTargetCode(snapshot("rv-lite", mode), true, current)).toEqual({ blocked: false, restartOptions: {} });
   });
-  it("retains the legacy renderer when no policy was saved", () => {
-    expect(capturedSessionTargetCode(snapshot("rv-lite"), false, "without_code")).toEqual({ blocked: false, restartOptions: {} });
+  it("retains the legacy renderer when no policy was saved", async () => {
+    expect(await capturedSessionTargetCode(snapshot("rv-lite"), false, "without_code")).toEqual({ blocked: false, restartOptions: {} });
   });
-  it.each(["telepathic-protocol", "custom-example"])("blocks unsupported restart for %s", id => {
-    expect(capturedSessionTargetCode(snapshot(id), false, "without_code").blocked).toBe(true);
-    expect(capturedSessionTargetCode(snapshot(id, "without_code"), false, "with_code").blocked).toBe(true);
-    expect(capturedSessionTargetCode(snapshot(id, "without_code"), true, "with_code").blocked).toBe(true);
-    expect(capturedSessionTargetCode(snapshot(id), true, "without_code").blocked).toBe(false);
-    expect(capturedSessionTargetCode(snapshot(id), false, "with_code").blocked).toBe(false);
+  it.each(["custom-example"])("blocks unsupported restart for %s", async id => {
+    expect((await capturedSessionTargetCode(snapshot(id), false, "without_code")).blocked).toBe(true);
+    expect((await capturedSessionTargetCode(snapshot(id, "without_code"), false, "with_code")).blocked).toBe(true);
+    expect((await capturedSessionTargetCode(snapshot(id, "without_code"), true, "with_code")).blocked).toBe(true);
+    expect((await capturedSessionTargetCode(snapshot(id), true, "without_code")).blocked).toBe(false);
+    expect((await capturedSessionTargetCode(snapshot(id), false, "with_code")).blocked).toBe(false);
   });
 });
 
@@ -47,7 +47,7 @@ it.each(["without_code", "with_code", undefined] as const)("dispatches a fresh c
   expect(original.state).toBe("AwaitingReveal");
   const saved = await repository.getSessionSnapshot("original");
   expect(saved).toBeTruthy();
-  const captured = capturedSessionTargetCode(saved!, false, mode === "without_code" ? "with_code" : "without_code");
+  const captured = await capturedSessionTargetCode(saved!, false, mode === "without_code" ? "with_code" : "without_code");
   const result = await runAutomaticRvLiteSession({ repository, workspaceId: "w", profileId: "p", providerConfig: config, model, protocol: getRvLite("en", "core"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, ...captured.restartOptions, sessionIdentity: { id: "fresh", sessionCode: code }, chat: async ({ messages }) => { requests.push(JSON.stringify(messages)); return { content: "Observation", finishReason: "stop", usage: {} }; } });
   expect(result.state).toBe("AwaitingReveal");
   expect(result.sessionCode).toBe(code);
@@ -63,7 +63,7 @@ it.each(["version", "templatesSha256"] as const)("rejects a mismatched frozen %s
   const invalid = { ...saved, profileTargetCode: { ...saved.profileTargetCode!, policy: { ...policy, [field]: "invalid" } } };
   const requests: string[] = [];
   const restart = async () => {
-    const captured = capturedSessionTargetCode(invalid, false, "with_code");
+    const captured = await capturedSessionTargetCode(invalid, false, "with_code");
     requests.push(JSON.stringify(captured.restartOptions));
   };
   let error: unknown;

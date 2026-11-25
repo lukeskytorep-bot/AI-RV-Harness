@@ -145,7 +145,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
   const [temperature, setTemperature] = useState("");
   const [sessionFocus, setSessionFocus] = useState<SessionFocusPlan>();
   const [historyFocusCounts,setHistoryFocusCounts] = useState<Record<string,number>>({});
-  const unsupportedWithoutCode = profile?.targetCodeMode === "without_code" && protocol !== "lite" && protocol !== "rcp";
+  const unsupportedWithoutCode = profile?.targetCodeMode === "without_code" && protocol !== "lite" && protocol !== "rcp" && protocol !== "telepathic";
   const activeSessionFocus = runType === "automatic" && protocol !== "telepathic" ? sessionFocus : undefined;
   const [progress, setProgress] = useState<SessionProgress | null>(null);
   const [liveBlindEvents, setLiveBlindEvents] = useState<SessionEventRecord[]>([]);
@@ -528,6 +528,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
           providerConfig: activeProvider,
           model: selectedModel,
           protocol: telepathic,
+          targetCodeMode: profile.targetCodeMode ?? "with_code",
           sessionLanguage: resolvedLanguage,
           requestedSettings,
           viewerNotes,
@@ -768,9 +769,10 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
     try {
       const snapshot = await repository.getSessionSnapshot(session.id);
       if (!snapshot) throw new Error(settings.interfaceLanguage === "pl" ? "Brak zapisanego snapshota tej sesji." : "The saved session snapshot is unavailable.");
-      const capturedCode = capturedSessionTargetCode(snapshot, resume, profile.targetCodeMode);
+      const capturedCode = await capturedSessionTargetCode(snapshot, resume, profile.targetCodeMode, session);
+      if (controller.signal.aborted) return;
       if (capturedCode.blocked) throw new Error(copy.profileWithoutTargetCodeProtocolUnavailable);
-      if (!resume && (snapshot.protocol.id === "rv-lite" || snapshot.protocol.id === "full-rcp") &&
+      if (!resume && (snapshot.protocol.id === "rv-lite" || snapshot.protocol.id === "full-rcp" || snapshot.protocol.id === "telepathic-protocol") &&
         (capturedCode.restartOptions.targetCodeMode ?? "with_code") !== (profile.targetCodeMode ?? "with_code")) {
         const pl = settings.interfaceLanguage === "pl";
         const without = capturedCode.restartOptions.targetCodeMode === "without_code";
@@ -839,7 +841,7 @@ export function RvSessionPanel({ copy, settings, profile, workspace, repository,
         if (resource.contentSha256 !== snapshot.protocol.contentSha256) throw new Error("The captured Telepathic Protocol version is unavailable.");
         const questionMode = snapshot.telepathic?.step8QuestionMode ?? "predefined";
         setTelepathicQuestionMode(questionMode);
-        result = await runAutomaticTelepathicSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, viewerNotes: snapshot.viewerNotes, step8Questions: { mode: questionMode, questions: snapshot.telepathic?.predefinedQuestions ?? [] }, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session, ...(snapshot.continuationRoute ? { resumeContinuationRoute: snapshot.continuationRoute } : {}) } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress, ...(questionMode === "manual" && !snapshot.monitor ? { onManualQuestionStage: setManualQuestionHandle } : {}) });
+        result = await runAutomaticTelepathicSession({ repository: runRepository, workspaceId: workspace.id, profileId: profile.id, aiIsBeDisplayName: snapshot.identities?.aiIsBeDisplayName, humanIsBeDisplayName: snapshot.identities?.humanIsBeDisplayName, providerConfig, model: viewerModel, protocol: resource, ...capturedCode.restartOptions, sessionLanguage: snapshot.sessionLanguage, requestedSettings: snapshot.generationSettings.requested, viewerNotes: snapshot.viewerNotes, step8Questions: { mode: questionMode, questions: snapshot.telepathic?.predefinedQuestions ?? [] }, ...(viewerPrompt ? { rvSystemPrompt: viewerPrompt } : {}), ...(capturedTarget ? { automaticTarget: capturedTarget } : {}), ...(monitor ? { monitor } : {}), ...(resume ? { resumeSession: session, ...(snapshot.continuationRoute ? { resumeContinuationRoute: snapshot.continuationRoute } : {}) } : {}), ...(runChat ? { chat: runChat } : {}), signal: controller.signal, maxRetries: settings.maxRetries, requestTimeoutMs: settings.requestTimeoutMs, sessionCodePrefix: settings.sessionCodePrefix, streamWorkflowContext: "rv_session", onStreamPreview: setStreamPreview, onProgress: setProgress, ...(questionMode === "manual" && !snapshot.monitor ? { onManualQuestionStage: setManualQuestionHandle } : {}) });
       } else if (snapshot.protocol.id === "full-rcp") {
         setProtocol("rcp");
         const current = getFullRcp(snapshot.sessionLanguage);

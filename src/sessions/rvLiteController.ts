@@ -121,7 +121,7 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
   const sessionId = input.resumeSession?.id ?? input.sessionIdentity?.id ?? input.initializationExistingSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? input.sessionIdentity?.sessionCode ?? input.initializationExistingSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const storedSnapshot = (input.resumeSession || input.initializationExistingSession) && input.repository.getSessionSnapshot ? await input.repository.getSessionSnapshot(sessionId) : null;
-  if (storedSnapshot?.rcpProfileTargetCode) throw new Error("Conflicting frozen target-code policies for RV Lite.");
+  if (storedSnapshot?.rcpProfileTargetCode || storedSnapshot?.telepathicProfileTargetCode) throw new Error("Conflicting frozen target-code policies for RV Lite.");
   const targetCode = input.targetCode ?? storedSnapshot?.researchTargetCode?.policy;
   if (input.targetCodeMode !== undefined && (input.researchProjectId || input.operationKind === "research_viewer" || targetCode)) throw new Error("Profile target-code mode cannot override Research.");
   if (storedSnapshot?.profileTargetCode && (targetCode || input.researchProjectId || input.operationKind === "research_viewer")) throw new Error("Conflicting frozen target-code policies.");

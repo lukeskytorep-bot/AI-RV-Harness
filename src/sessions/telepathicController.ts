@@ -1,3 +1,6 @@
+import { assertTargetCodeAbsent, resolveTargetCodeMode, type TargetCodeMode } from "../domain/targetCodeMode";
+import { freezeTelepathicTargetCode, restoreTelepathicTargetCode, telepathicTargetCodePolicy } from "./telepathicTargetCode";
+import { getTelepathicProtocol } from "../resources/protocolRegistry";
 import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { withAutomaticWorkflow, withRvWorkflow } from "../application/workflowOwnership";
 import { monitorInterventionId } from "./monitorInterventions";
@@ -71,6 +74,7 @@ export interface TelepathicManualQuestionHandle {
 }
 
 export interface AutomaticTelepathicRunInput {
+  targetCodeMode?: TargetCodeMode;
   repository: TelepathicSessionRepository;
   workspaceId: string;
   profileId: string;
@@ -151,6 +155,18 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
 
   const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
+  const storedSnapshot = input.resumeSession && input.repository.getSessionSnapshot ? await input.repository.getSessionSnapshot(sessionId) : null;
+  if (input.resumeSession && !storedSnapshot) throw new Error("Telepathic Resume requires a saved Session Snapshot.");
+  const frozenCode = storedSnapshot && input.resumeSession ? await restoreTelepathicTargetCode(storedSnapshot, input.resumeSession) : undefined;
+  if (input.resumeSession && input.targetCodeMode !== undefined && !frozenCode) throw new Error("Telepathic target-code Resume requires its saved policy.");
+  const profilePolicy = frozenCode?.policy ?? (!input.resumeSession && input.targetCodeMode !== undefined ? telepathicTargetCodePolicy(resolveTargetCodeMode(input.targetCodeMode)) : undefined);
+  if (profilePolicy) {
+    const approved = getTelepathicProtocol(input.sessionLanguage);
+    if (input.protocol.id !== approved.id || input.protocol.version !== approved.version || input.protocol.language !== approved.language || input.protocol.contentSha256 !== approved.contentSha256 || input.protocol.content !== approved.content) throw new Error("Telepathic profile target-code protocol drift.");
+    if (storedSnapshot && (storedSnapshot.protocol.version !== approved.version || storedSnapshot.protocol.contentSha256 !== approved.contentSha256 || storedSnapshot.protocol.fullContent !== approved.content || storedSnapshot.sessionLanguage !== input.sessionLanguage)) throw new Error("Frozen Telepathic protocol or session mismatch.");
+  }
+  const telepathicProfileTargetCode = frozenCode ?? (profilePolicy ? await freezeTelepathicTargetCode(input.sessionLanguage, sessionCode, profilePolicy) : undefined);
+  const viewerCodeMode = profilePolicy?.mode ?? "with_code";
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
   let activeViewerAttemptId: string | undefined;
   let activeViewerManualRetry = false;
@@ -213,6 +229,7 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
       fullContent: input.protocol.content,
     },
     controllerPrompt: { id: TELEPATHIC_CONTROLLER_PROMPT_ID, version: TELEPATHIC_CONTROLLER_PROMPT_VERSION, language: input.sessionLanguage },
+    ...(telepathicProfileTargetCode ? { telepathicProfileTargetCode } : {}),
     telepathic: {
       controllerStepCount: 9,
       step8QuestionMode: input.step8Questions.mode,
@@ -281,8 +298,11 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
   const viewerCall = async (prompt: string, metadata: Record<string, unknown>): Promise<ProviderChatResponse> => {
     if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
     const stepId = buildViewerStepId("telepathic", metadata);
+    try { assertTargetCodeAbsent(viewerCodeMode, sessionCode, [...messages, { role: "user", content: prompt }]); }
+    catch (cause) { throw new TelepathicRunStop(cause instanceof Error ? cause.message : String(cause)); }
     messages.push({ role: "user", content: prompt });
-    const requestSha256 = await sha256Text(viewerRequestFingerprintInput(messages));
+    const fingerprint = viewerRequestFingerprintInput(messages);
+    const requestSha256 = await sha256Text(profilePolicy ? JSON.stringify({ fingerprint, telepathicProfileTargetCode: profilePolicy }) : fingerprint);
     const durable = input.resumeSession ? await resolveViewerResumeStart({ repository: input.repository, sessionId, stepKey: stepId, requestSha256 }) : { startRecoveryLevel: 0 as const };
     const durableMetadata = { ...metadata, stepId, requestSha256, ...(durable.resumeAuthorizationId ? { resumeAuthorizationId: durable.resumeAuthorizationId } : {}) };
     await input.repository.appendSessionEvent(sessionId, { eventType: "CONTROLLER_STEP", role: "controller", content: prompt, metadata: { protocolFamily: "telepathic", ...metadata, stepId } });
@@ -295,6 +315,7 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
         startRecoveryLevel: durable.startRecoveryLevel, priorEffectiveMaxOutputTokens: durable.priorEffectiveMaxOutputTokens, priorIncompleteReason: durable.priorIncompleteReason, sessionLanguage: input.sessionLanguage,
         abortSignal: input.signal,
         call: async (settings, semanticAttempt, dispatchAttempt) => {
+          assertTargetCodeAbsent(viewerCodeMode, sessionCode, messages);
           validateSessionContinuationBudget(messages);
           await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
           activeViewerAttemptId = dispatchAttempt.attemptId;
@@ -414,6 +435,7 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
           chat: async (request) => {
             const requestStartedAt = Date.now();
             try {
+              assertTargetCodeAbsent(viewerCodeMode, sessionCode, request.messages);
               const raw = await rawChat({ ...request, signal: input.signal });
               const response = { ...raw, usage: withEstimatedCost(raw.usage, input.monitor!.model) };
               const requestDurationMs = Date.now() - requestStartedAt;
@@ -454,7 +476,7 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
 
   try {
     for (let step = 1; step <= 9; step += 1) {
-      const stepPrompt = telepathicStepPrompt(input.sessionLanguage, step, sessionCode);
+      const stepPrompt = telepathicProfileTargetCode?.renderedPrompts[step - 1].content ?? telepathicStepPrompt(input.sessionLanguage, step, sessionCode);
       const prompt = step === 1 ? `${politeSessionGreeting(input.sessionLanguage, input.aiIsBeDisplayName)}\n\n${stepPrompt}` : stepPrompt;
       notify(input, sessionId, sessionCode, "BlindRunning", transcript, step, metrics, startedAtMs);
       const response = await viewerCall(prompt, { step, telepathicPhase: step === 1 ? "T0-T1" : step === 2 ? "T2" : step === 9 ? "T10" : `T${step}` });
@@ -491,6 +513,7 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
               if (inFlight) throw new Error("Wait for the current answer before asking another question.");
               inFlight = true;
               try {
+                assertTargetCodeAbsent(viewerCodeMode, sessionCode, [...messages, { role: "user", content: question }]);
                 questionCount += 1;
                 await runQuestion(question, questionCount, "operator");
               } catch (cause) {
@@ -559,6 +582,14 @@ async function resumeTelepathicManualQuestionStageOwned(input: ResumeTelepathicM
   if (!snapshot?.telepathic || snapshot.protocol.id !== "telepathic-protocol" || snapshot.telepathic.step8QuestionMode !== "manual" || snapshot.monitor) {
     throw new Error("This session is not a resumable manual Step 8 Telepathic Protocol session.");
   }
+  const frozenCode = await restoreTelepathicTargetCode(snapshot, input.session);
+  const profilePolicy = frozenCode?.policy;
+  if (profilePolicy) {
+    const approved = getTelepathicProtocol(snapshot.sessionLanguage);
+    if (snapshot.protocol.version !== approved.version || snapshot.protocol.contentSha256 !== approved.contentSha256 || snapshot.protocol.fullContent !== approved.content || snapshot.protocol.language !== approved.language) throw new Error("Frozen Telepathic protocol or session mismatch.");
+  }
+  const viewerCodeMode = profilePolicy?.mode ?? "with_code";
+  const sessionCode = input.session.sessionCode;
   if (input.session.state !== "BlindRunning" && input.session.state !== "Preflight") throw new Error("Only an incomplete blind telepathic session can be resumed.");
   if (snapshot.providerConfigId !== input.providerConfig.id || snapshot.provider !== input.providerConfig.provider) throw new Error("The captured Viewer provider is unavailable or has changed.");
   if (snapshot.modelId !== input.model.modelId || snapshot.modelRoute !== input.model.route) throw new Error("The captured Viewer model route is unavailable or has changed.");
@@ -575,6 +606,7 @@ async function resumeTelepathicManualQuestionStageOwned(input: ResumeTelepathicM
   let activeViewerManualRetry = false;
   const chat = createProviderChatExecutor({ configuredRetries: () => activeViewerManualRetry ? 0 : maxRetries, operationId: "session.telepathic-resume", operationKind: "rv_session_viewer", streamWorkflowContext: input.streamWorkflowContext ?? "rv_session", attempt: input.chat, onAttemptFailure: (cause, context) => input.repository.appendSessionEvent(input.session.id, { eventType: "PROVIDER_ATTEMPT_FAILED", role: "controller", content: cause.message, metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, ...(activeResumeViewerAttemptId ? { attemptId: activeResumeViewerAttemptId } : {}), ...viewerFailureMetadata(cause), resumed: true } }) });
   const messages = await rebuildViewerMessages(input.repository, snapshot, events, input.providerConfig, input.model);
+  assertTargetCodeAbsent(viewerCodeMode, sessionCode, messages);
   const startedAtMs = Date.now();
   let metrics = rebuildViewerMetrics(events);
   let transcript = recoverTelepathicTranscript(input.session.preRevealTranscript, events, snapshot.sessionLanguage);
@@ -617,8 +649,11 @@ async function resumeTelepathicManualQuestionStageOwned(input: ResumeTelepathicM
   const viewerCall = async (prompt: string, metadata: Record<string, unknown>): Promise<ProviderChatResponse> => {
     if (input.signal?.aborted) throw new TelepathicRunStop("USER STOP");
     const stepId = buildViewerStepId("telepathic", metadata);
+    try { assertTargetCodeAbsent(viewerCodeMode, sessionCode, [...messages, { role: "user", content: prompt }]); }
+    catch (cause) { throw new TelepathicRunStop(cause instanceof Error ? cause.message : String(cause)); }
     messages.push({ role: "user", content: prompt });
-    const requestSha256 = await sha256Text(viewerRequestFingerprintInput(messages));
+    const fingerprint = viewerRequestFingerprintInput(messages);
+    const requestSha256 = await sha256Text(profilePolicy ? JSON.stringify({ fingerprint, telepathicProfileTargetCode: profilePolicy }) : fingerprint);
     const durable = await resolveViewerResumeStart({ repository: input.repository, sessionId: input.session.id, stepKey: stepId, requestSha256 });
     const durableMetadata = { ...metadata, stepId, requestSha256, ...(durable.resumeAuthorizationId ? { resumeAuthorizationId: durable.resumeAuthorizationId } : {}) };
     await input.repository.appendSessionEvent(input.session.id, { eventType: "CONTROLLER_STEP", role: "controller", content: prompt, metadata: { protocolFamily: "telepathic", resumed: true, ...metadata } });
@@ -631,6 +666,7 @@ async function resumeTelepathicManualQuestionStageOwned(input: ResumeTelepathicM
         startRecoveryLevel: durable.startRecoveryLevel, priorEffectiveMaxOutputTokens: durable.priorEffectiveMaxOutputTokens, priorIncompleteReason: durable.priorIncompleteReason, sessionLanguage: snapshot.sessionLanguage,
         abortSignal: input.signal,
         call: async (settings, semanticAttempt, dispatchAttempt) => {
+          assertTargetCodeAbsent(viewerCodeMode, sessionCode, messages);
           validateSessionContinuationBudget(messages);
           await input.repository.appendSessionEvent(input.session.id, { eventType: "VIEWER_OUTPUT_ATTEMPT_STARTED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt, resumed: true } });
           activeResumeViewerAttemptId = dispatchAttempt.attemptId;
@@ -690,6 +726,7 @@ async function resumeTelepathicManualQuestionStageOwned(input: ResumeTelepathicM
     return response;
   };
   const runQuestion = async (question: string): Promise<void> => {
+    assertTargetCodeAbsent(viewerCodeMode, sessionCode, [...messages, { role: "user", content: question }]);
     questionCount += 1;
     const prompt = telepathicQuestionPrompt(snapshot.sessionLanguage, question, questionCount);
     const response = await viewerCall(prompt, { step: 8, telepathicPhase: "T9", questionNumber: questionCount, source: "operator" });
@@ -747,7 +784,7 @@ async function resumeTelepathicManualQuestionStageOwned(input: ResumeTelepathicM
     }
 
     if (recoveryState !== "seal") {
-      const step9Prompt = telepathicStepPrompt(snapshot.sessionLanguage, 9, input.session.sessionCode);
+      const step9Prompt = frozenCode?.renderedPrompts[8].content ?? telepathicStepPrompt(snapshot.sessionLanguage, 9, input.session.sessionCode);
       notifyResume("BlindRunning", 9);
       const step9Response = await viewerCall(step9Prompt, { step: 9, telepathicPhase: "T10" });
       await persist(appendTelepathicStepTranscript(transcript, 9, step9Prompt, step9Response.content, snapshot.sessionLanguage), 9);

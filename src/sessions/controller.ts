@@ -167,7 +167,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
   const frozenCode = storedSnapshot?.rcpProfileTargetCode;
   const researchRun = Boolean(input.researchProjectId || input.operationKind === "research_viewer" || input.researchContext || input.researchConditionInstruction);
   if ((input.targetCodeMode !== undefined || frozenCode) && researchRun) throw new Error("Profile target-code mode cannot override Research.");
-  if (storedSnapshot?.profileTargetCode || storedSnapshot?.researchTargetCode) throw new Error("Conflicting frozen target-code policies for RCP.");
+  if (storedSnapshot?.profileTargetCode || storedSnapshot?.researchTargetCode || storedSnapshot?.telepathicProfileTargetCode) throw new Error("Conflicting frozen target-code policies for RCP.");
   if (existingSession && input.targetCodeMode !== undefined && !frozenCode) throw new Error("RCP target-code Resume requires its saved policy.");
   const profilePolicy = frozenCode?.policy ?? (!existingSession && input.targetCodeMode !== undefined ? rcpTargetCodePolicy(resolveTargetCodeMode(input.targetCodeMode)) : undefined);
   if (profilePolicy) {

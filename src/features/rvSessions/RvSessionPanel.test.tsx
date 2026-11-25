@@ -241,7 +241,7 @@ it.each(["pl", "en"] as const)("does not warn about the default RCP protocol for
 it("applies captured target-code restart options before dispatch, for both Start again buttons", () => {
   const source = readFileSync(new URL("./RvSessionPanel.tsx", import.meta.url), "utf8");
   const captured = source.slice(source.indexOf("const runCapturedSession ="), source.indexOf("const archiveStoredSession ="));
-  expect(captured).toContain("capturedSessionTargetCode(snapshot, resume, profile.targetCodeMode)");
+  expect(captured).toContain("await capturedSessionTargetCode(snapshot, resume, profile.targetCodeMode, session)");
   expect(captured.indexOf("if (capturedCode.blocked)")).toBeLessThan(captured.indexOf("await runAutomaticRvLiteSession("));
   expect(captured).toContain("protocol: resource, ...capturedCode.restartOptions, sessionLanguage: snapshot.sessionLanguage");
   expect(source).toContain("runCapturedSession(interruptedSession, false)");

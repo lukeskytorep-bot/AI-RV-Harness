@@ -99,7 +99,7 @@ describe("ordinary RCP target-code mode", () => {
       const original = await runAutomaticRcpSession({ ...input(repository), ...(mode ? { targetCodeMode: mode } : {}), chat: async () => response(1) });
       const snapshot = (await repository.getSessionSnapshot(original.sessionId))!;
       const current = mode === "without_code" ? "with_code" : "without_code";
-      const restart = capturedSessionTargetCode(snapshot, false, current);
+      const restart = await capturedSessionTargetCode(snapshot, false, current);
       const newCode = "RVH-RCP-RESTART-456";
       const payloads: string[] = [];
       const restarted = await runAutomaticRcpSession({ ...input(repository), ...restart.restartOptions, sessionIdentity: { id: "rcp-restarted", sessionCode: newCode }, chat: async ({ messages }) => { payloads.push(JSON.stringify(messages)); return response(payloads.length); } });
@@ -112,13 +112,13 @@ describe("ordinary RCP target-code mode", () => {
     const protocol = { id: "full-rcp", version: "1.5a", language: "en" as const, fullContent: "", contentSha256: "" };
     for (const mode of ["with_code", "without_code"] as const) {
       const frozen = await freezeRcpTargetCode("en", code, rcpTargetCodePolicy(mode));
-      const snapshot = { protocol, rcpProfileTargetCode: frozen };
+      const snapshot = { protocol, sessionId: "s", sessionCode: code, sessionLanguage: "en" as const, rcpProfileTargetCode: frozen };
       const current = mode === "with_code" ? "without_code" : "with_code";
-      expect(capturedSessionTargetCode(snapshot, false, current)).toEqual({ blocked: false, restartOptions: { targetCodeMode: mode } });
-      expect(capturedSessionTargetCode(snapshot, true, current)).toEqual({ blocked: false, restartOptions: {} });
-      for (const field of ["version", "templatesSha256"] as const) expect(() => capturedSessionTargetCode({ ...snapshot, rcpProfileTargetCode: { ...frozen, policy: { ...frozen.policy, [field]: "bad" } } }, false, current)).toThrow(/mismatch/);
+      expect(await capturedSessionTargetCode(snapshot, false, current)).toEqual({ blocked: false, restartOptions: { targetCodeMode: mode } });
+      expect(await capturedSessionTargetCode(snapshot, true, current)).toEqual({ blocked: false, restartOptions: {} });
+      for (const field of ["version", "templatesSha256"] as const) await expect(capturedSessionTargetCode({ ...snapshot, rcpProfileTargetCode: { ...frozen, policy: { ...frozen.policy, [field]: "bad" } } }, false, current)).rejects.toThrow(/mismatch/);
     }
-    expect(capturedSessionTargetCode({ protocol }, false, "without_code")).toEqual({ blocked: false, restartOptions: {} });
+    expect(await capturedSessionTargetCode({ protocol, sessionId: "s", sessionCode: code, sessionLanguage: "en" }, false, "without_code")).toEqual({ blocked: false, restartOptions: {} });
   });
   it("rejects Resume without a saved snapshot, including legacy callers, before dispatch", async () => {
     const repository = setup(); let calls = 0;

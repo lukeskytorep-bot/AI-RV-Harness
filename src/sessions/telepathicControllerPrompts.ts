@@ -1,4 +1,5 @@
 import type { InterfaceLanguage } from "../types";
+import { resolveTargetCodeMode, type TargetCodeMode } from "../domain/targetCodeMode";
 
 export const TELEPATHIC_CONTROLLER_PROMPT_ID = "telepathic-nine-step-controller";
 export const TELEPATHIC_CONTROLLER_PROMPT_VERSION = "1.0.0";
@@ -40,19 +41,23 @@ const stepMappings = {
   ],
 } as const;
 
-export function telepathicStepPrompt(language: InterfaceLanguage, step: number, sessionCode: string): string {
+export function telepathicStepPrompt(language: InterfaceLanguage, step: number, sessionCode: string, targetCodeMode: TargetCodeMode = "with_code"): string {
+  const mode = resolveTargetCodeMode(targetCodeMode);
+  const opening = mode === "with_code"
+    ? (language === "pl" ? `ŚLEPY KOD CELU: ${sessionCode}\n` : `BLIND TARGET CODE: ${sessionCode}\n`)
+    : step === 1 ? (language === "pl" ? "Cel został wybrany.\n" : "The target has been selected.\n") : "";
   if (step < 1 || step > 9) throw new RangeError("Telepathic controller step must be between 1 and 9.");
   const mapping = stepMappings[language][step - 1];
   if (language === "pl") {
     const sketch = step === 1
       ? " Gdy protokół wymaga rysunku lub szkicu, zawsze wykonaj go również jako tekstowy szkic ASCII w bloku kodu, z etykietami bezpośrednio przy elementach."
       : "";
-    return `ŚLEPY KOD CELU: ${sessionCode}\nWykonaj teraz wyłącznie Krok ${step} kontrolera: ${mapping}, dokładnie według dołączonego Protokołu Telepatycznego. Pozostań w Strefie Cienia, zapisuj RAW oddzielnie od D/VF i nie przechodź do kolejnego kroku kontrolera.${sketch}`;
+    return `${opening}Wykonaj teraz wyłącznie Krok ${step} kontrolera: ${mapping}, dokładnie według dołączonego Protokołu Telepatycznego. Pozostań w Strefie Cienia, zapisuj RAW oddzielnie od D/VF i nie przechodź do kolejnego kroku kontrolera.${sketch}`;
   }
   const sketch = step === 1
     ? " Whenever the protocol requires a drawing or sketch, also render it as a text-based ASCII sketch inside a fenced code block, with labels placed directly beside the elements."
     : "";
-  return `BLIND TARGET CODE: ${sessionCode}\nNow execute only Controller Step ${step}: ${mapping}, exactly as defined in the attached Telepathic Protocol. Remain in Shadow Zone, keep RAW separate from D/VF, and do not advance to the next controller step.${sketch}`;
+  return `${opening}Now execute only Controller Step ${step}: ${mapping}, exactly as defined in the attached Telepathic Protocol. Remain in Shadow Zone, keep RAW separate from D/VF, and do not advance to the next controller step.${sketch}`;
 }
 
 export function telepathicFixedDeepeningPrompt(language: InterfaceLanguage, step: 3 | 4 | 5): string {
