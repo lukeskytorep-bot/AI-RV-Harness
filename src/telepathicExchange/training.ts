@@ -1,5 +1,6 @@
 import type { AppRepository } from "../storage/repository";
 import { createTelepathicSeriesState } from "./engine";
+import { freezeTelepathicTrainingTargetCode, restoreTelepathicTrainingTargetCode } from "./trainingTargetCode";
 import { freezeTelepathicTrainingLearning } from "./trainingLearning";
 import type { TelepathicSeriesConfig, TelepathicSeriesState } from "./types";
 
@@ -14,9 +15,11 @@ export async function createTelepathicAiTrainingSeries(input: {
   now?: () => string;
 }): Promise<TelepathicSeriesState> {
   if (input.config.mode !== "ai_ai_training") throw new Error("Telepathic Training requires mode=ai_ai_training.");
-  const frozenConfig = await freezeTelepathicTrainingLearning({ repository: input.repository, config: input.config, now: input.now });
+  const codeConfig = await freezeTelepathicTrainingTargetCode(input.config, await input.repository.listProfiles());
+  const frozenConfig = await freezeTelepathicTrainingLearning({ repository: input.repository, config: codeConfig, now: input.now });
   const timestamp = input.now?.() ?? new Date().toISOString();
   const state = createTelepathicSeriesState(frozenConfig, timestamp);
+  await restoreTelepathicTrainingTargetCode(state);
   await input.repository.saveTelepathicSeries(state);
   return structuredClone(state);
 }

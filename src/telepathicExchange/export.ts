@@ -1,3 +1,4 @@
+import { telepathicTrainingTargetCodeSummary } from "./trainingTargetCode";
 import { readableTelepathicText, telepathicMessageTitle, uniqueTelepathicEvents } from "./displayProjection";
 import { telepathicStageLabel } from "./stageLabels";
 import { visibleTranscript } from "./transcript";
@@ -7,6 +8,9 @@ export function telepathicExportDocument(state: TelepathicSeriesState): string {
   const pl=state.config.language==="pl";
   const events=uniqueTelepathicEvents(visibleTranscript(state));
   const sections=[`# ${pl?"Seria telepatyczna":"Telepathic series"} ${state.config.seriesId}`];
+  if (state.config.mode === "ai_ai_training") {
+    sections.push(`${pl ? "Preferencja kodu celu (zapisy lokalne)" : "Target code preference (local record)"}: ${telepathicTrainingTargetCodeSummary(state.config, pl)}`);
+  }
   for(const round of state.rounds) {
     sections.push(`## ${pl?"Runda":"Round"} ${round.assignment.roundNumber}`);
     const ordered=[...state.config.participants.filter(p=>p.id===round.assignment.senderParticipantId),...state.config.participants.filter(p=>p.id!==round.assignment.senderParticipantId)];

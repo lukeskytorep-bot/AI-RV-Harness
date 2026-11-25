@@ -32,13 +32,14 @@ const step = (n: number) => host.querySelector<HTMLElement>(`[data-setup-step="$
 async function change(element: HTMLSelectElement, value: string) { await act(async () => { element.value = value; element.dispatchEvent(new Event("change", { bubbles: true })); }); }
 async function click(element: HTMLButtonElement | HTMLInputElement) { await act(async () => element.click()); }
 function fixture(mode: TelepathicMode, pl = false) {
-  let profiles = ["a", "b", "c"].map(id => ({ id, name: id.toUpperCase() } as Profile));
+  let profiles = ["a", "b", "c"].map(id => ({ id, name: id.toUpperCase(), ...(id === "a" ? { targetCodeMode: "without_code" as const } : {}) } as Profile));
   const workspace = { id: "human-w", profileId: "human", name: "Human", kind: "conversation", createdAt: "t" } as Workspace;
   let workspaces = profiles.map(p => ({ id: `w-${p.id}`, profileId: p.id, name: `Workspace ${p.id}`, kind: mode === "ai_ai_training" ? "rv" : "conversation", createdAt: "t" } as Workspace));
   const configs = profiles.map(p => ({ id: `provider-${p.id}`, label: p.id, provider: "openrouter", credentialId: `cred-${p.id}`, credentialFingerprint: `fp-${p.id}`, enabled: true } as ProviderConfig));
   const models = configs.map(c => ({ providerConfigId: c.id, provider: c.provider, modelId: "model", route: "route", displayName: "Model" } as ProviderModel));
   const identities = profiles.map((p, index) => ({ id: `identity-${p.id}`, profileId: p.id, providerConfigId: configs[index].id, provider: "openrouter", credentialFingerprint: `fp-${p.id}`, modelId: "model", modelRoute: "route", modelDisplayName: "Model", role: "viewer", routeStatus: "available", lastUsedAt: "t" } as AiIdentity));
   const repository = Object.assign(new BrowserTelepathicExchangeRepository({ storage: localStorage }), {
+    listProfiles: vi.fn(async () => profiles),
     listProviderConfigs: vi.fn(async () => configs), listProviderModels: vi.fn(async () => models),
     listAiIdentities: vi.fn(async (profileId: string) => identities.filter(i => i.profileId === profileId)),
     listTrainingRuns: vi.fn(async () => []), listArchivedTrainingRuns: vi.fn(async () => []),
@@ -90,6 +91,13 @@ for (const pl of [false, true]) for (const mode of ["ai_ai_training", "conversat
     expect(saved.config.senderPolicy).toEqual({ kind: "fixed_ai", participantId: "ai:a" });
     expect(saved.plan.rounds.every(r => r.senderParticipantId === "ai:a")).toBe(true);
     expect(saved.config.participants.some(p => p.id === "ai:b")).toBe(false);
+    if (mode === "ai_ai_training") {
+      expect(saved.config.trainingTargetCodePolicy?.participants).toEqual([
+        { participantId: "ai:a", profileId: "a", mode: "without_code" },
+        { participantId: "ai:c", profileId: "c", mode: "with_code" },
+      ]);
+      expect(host.textContent).toContain(pl ? "bez kodu (ochrona ID rund)" : "without code (round ID guard)");
+    } else expect(saved.config.trainingTargetCodePolicy).toBeUndefined();
   });
   it(`${mode}/${pl ? "PL" : "EN"}: live Profile/Workspace drift clears approval and invalid route blocks reconfirmation`, async () => {
     const f = fixture(mode, pl); await f.render(); await f.pick(0); await f.pick(1);

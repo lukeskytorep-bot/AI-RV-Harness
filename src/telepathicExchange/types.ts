@@ -1,3 +1,4 @@
+import type { TargetCodeMode } from "../domain/targetCodeMode";
 import type { TelepathicRecoveryPolicy } from "./recovery";
 import type { ProviderCallErrorDetails } from "../providers/providerError";
 import type { ProviderResponseEvidence } from "../providers/responseEvidence";
@@ -58,7 +59,17 @@ export type TelepathicSenderPolicy =
   | { kind: "human_only"; humanParticipantId: string }
   | { kind: "fixed_ai"; participantId: string };
 
+/** Training has no traditional RV target code. Preferences are frozen per AI;
+ * explicit without-code protects the internal round identifiers as well. */
+export interface TelepathicTrainingTargetCodePolicy {
+  version: "telepathic-training-target-code-v1";
+  exposure: "no_rv_code_assigned";
+  participants: Array<{ participantId: string; profileId: string; mode: TargetCodeMode }>;
+  policySha256: string;
+}
+
 export interface TelepathicSeriesConfig {
+  trainingTargetCodePolicy?: TelepathicTrainingTargetCodePolicy;
   recoveryPolicy?: TelepathicRecoveryPolicy;
   schemaVersion: 1;
   protocolVersion?: "fixed_lead_v1";

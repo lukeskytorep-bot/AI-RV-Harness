@@ -154,10 +154,12 @@ export async function executeTelepathicProviderPacket(input: {
   requireComplete?: boolean;
   outputBudgetSnapshot?: TelepathicOutputBudgetSnapshot;
   validateResponse?: (text: string) => void;
+  validateMessages?: (messages: ProviderMessage[]) => void;
   repetitionGuardLanguage?: TelepathicLanguage;
 }): Promise<{ response: ProviderChatResponse; call: TelepathicProviderCallRecord }> {
   assertExactTelepathicRoute(input.route);
   const messages = composeTelepathicProviderMessages(input.packet);
+  input.validateMessages?.(messages);
   if (messages.some((message) => message.continuationState)) throw new Error("Telepathic provider payload cannot contain continuation state.");
   const outputBudget = input.outputBudgetSnapshot ?? (input.fixedLead ? scopeOutputBudget(input.packet.scope.callStage, input.route.model.capabilities.maxOutputTokens) : undefined);
   if (outputBudget) validateOutputBudgetSnapshot(outputBudget, input.packet.scope.callStage, input.route.model.capabilities.maxOutputTokens);

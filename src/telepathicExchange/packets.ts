@@ -260,8 +260,18 @@ export function buildFinalSeriesPacket(input: {
   participantId: string;
   name: string;
   seriesPacket: TelepathicSeriesParticipantPacket;
+  omitTargetRoundIds?: boolean;
 }): TelepathicProviderPacket {
-  const serialized = serializeSeriesParticipantPacket(input.seriesPacket);
+  // A protected Training lead may review the same target and feedback, but the
+  // local target reference must not be serialized into model-bound materials.
+  // Only project metadata here; do not redact any of the model's actual words.
+  const serialized = input.omitTargetRoundIds
+    ? JSON.stringify({ ...input.seriesPacket, rounds: input.seriesPacket.rounds.map(round => {
+      if (!round.target) return round;
+      const { roundId: _localRoundId, ...target } = round.target;
+      return { ...round, target };
+    }) }, null, 2)
+    : serializeSeriesParticipantPacket(input.seriesPacket);
   return packet(
     { seriesId: input.seriesId, roundId: "series-complete", participantId: input.participantId, callStage: "series_reflection" },
     buildSeriesReflectionPrompt(input.language, { name: input.name, seriesPacket: serialized }),

@@ -37,6 +37,7 @@ import type {
 import type { TelepathicExchangeStore } from "./store";
 import { lockTelepathicTarget, markTelepathicTargetTransmissionReady } from "./target";
 import { withTelepathicTrainingLearning } from "./trainingLearning";
+import { restoreTelepathicTrainingTargetCode, telepathicTrainingTargetCodeGuard } from "./trainingTargetCode";
 
 
 function assertSeriesNotEnded(state: TelepathicSeriesState): void {
@@ -68,6 +69,10 @@ function rememberTelepathicResult(deps: TelepathicExchangeEngineDependencies, er
 }
 async function readTelepathicRunCheckpoint(deps: TelepathicExchangeEngineDependencies, seriesId: string): Promise<TelepathicSeriesState | null> {
   const state = await deps.store.getTelepathicSeries(seriesId);
+  if (state) {
+    if (state.config.trainingTargetCodePolicy !== undefined && state.config.seriesId !== seriesId) throw new Error("Frozen Telepathic Training series identity does not match the checkpoint.");
+    await restoreTelepathicTrainingTargetCode(state);
+  }
   const results = bufferedTelepathicResults.get(recoveryOwner(deps)), buffered = results?.get(seriesId);
   if (!state || !buffered || state.archivedAt || state.termination || state.status === "cancelled") return state;
   const index = state.providerCalls.findIndex(call => call.id === buffered.id && call.requestSha256 === buffered.requestSha256 && call.scopeKey === buffered.scopeKey && call.technicalAttempt === buffered.technicalAttempt);
@@ -244,6 +249,12 @@ async function invokeAi(
     ? await withTelepathicTrainingLearning({ packet, participant: participantItem, language: state.config.language }) : packet;
   const existing = callsForScope(state, packet.scopeKey);
   const configurationValidation = { participantId: participantItem.id, callStage: packet.scope.callStage, scopeKey: packet.scopeKey, messages: structuredClone(effectivePacket.messages) };
+  let validateMessages: ((messages: import("../providers/types").ProviderMessage[]) => void) | undefined;
+  try {
+    const policy = await restoreTelepathicTrainingTargetCode(state);
+    validateMessages = telepathicTrainingTargetCodeGuard(state, policy, participantItem.id);
+    validateMessages?.(effectivePacket.messages);
+  } catch (cause) { throw new TelepathicConfigurationError(cause, configurationValidation); }
   validateTelepathicRecoveryLedger(existing);
   const succeeded = [...existing].reverse().find((call) => call.status === "succeeded" && call.responseText !== undefined);
   const validateDecisionResponse = packet.scope.callStage.startsWith("lead_guidance:cycle:") ? (text: string) => {
@@ -348,6 +359,7 @@ async function invokeAi(
         outputBudgetSnapshot: outputBudget,
         repetitionGuardLanguage: state.config.language,
         validateResponse: validateDecisionResponse,
+        validateMessages,
         hooks: {
           createCallId: () => nextId(deps, "telepathic-call"),
           now: () => now(deps),
@@ -1040,8 +1052,10 @@ export async function revalidateTelepathicConfiguration(deps: TelepathicExchange
       deps.signal.throwIfAborted();
     };
     try {
+      const targetCodePolicy = await restoreTelepathicTrainingTargetCode(state);
       for (const item of state.config.participants) {
         if (item.kind !== "ai") continue;
+        const validateMessages = telepathicTrainingTargetCodeGuard(state, targetCodePolicy, item.id);
         await checkInspectionStop();
         await deps.store.assertTelepathicSeriesLease(seriesId);
         const route = await deps.resolveRoute(item);
@@ -1050,6 +1064,7 @@ export async function revalidateTelepathicConfiguration(deps: TelepathicExchange
         assertExactTelepathicRoute(route);
         const validation = state.recoveryBlock.validation;
         if (validation?.participantId === item.id) {
+          validateMessages?.(validation.messages);
           const calls = callsForScope(state, validation.scopeKey);
           const budget = (state.config.protocolVersion === "fixed_lead_v1" || state.config.outputBudgetPolicyVersion === 4) ? scopeOutputBudget(validation.callStage, route.model.capabilities.maxOutputTokens, calls, state.config.outputBudgetPolicyVersion ?? 2) : undefined;
           const attempt = Math.min(2, nextDurableTechnicalAttempt(calls));
@@ -1059,6 +1074,7 @@ export async function revalidateTelepathicConfiguration(deps: TelepathicExchange
         for (const call of state.providerCalls.filter(call => call.participantId === item.id)) {
           if (state.config.protocolVersion !== "fixed_lead_v1") continue;
           if (!call.requestMessages) throw new Error("Cannot verify frozen settings: saved request messages are missing.");
+          validateMessages?.(call.requestMessages);
           if (await telepathicStoredRequestFingerprint(call.requestMessages, route, true, call.outputBudgetSnapshot) !== call.requestSha256) {
             throw new Error("Telepathic request fingerprint/settings changed after its durable attempt was prepared.");
           }
@@ -1159,10 +1175,12 @@ async function finalizeSeries(deps: TelepathicExchangeEngineDependencies, state:
   if (state.status !== "completed" && !(state.config.protocolVersion === "fixed_lead_v1" && state.currentRoundIndex >= state.rounds.length)) throw new Error("Final series reflection requires all rounds to be complete.");
   if (state.config.protocolVersion === "fixed_lead_v1") { const changed = state.finalization !== "running" || state.status !== "paused"; state.finalization="running"; state.status="paused"; if (changed) await saveCheckpoint(deps,state); }
   try {
+  const targetCodePolicy = await restoreTelepathicTrainingTargetCode(state);
   for (const item of state.config.participants) {
     checkStop(deps);
     if (item.kind !== "ai" || state.finalReflections[item.id]) continue;
-    const packet = buildFinalSeriesPacket({ language: state.config.language, seriesId, participantId: item.id, name: item.displayName, seriesPacket: participantSeriesPacket(state, item.id) });
+    const packet = buildFinalSeriesPacket({ language: state.config.language, seriesId, participantId: item.id, name: item.displayName, seriesPacket: participantSeriesPacket(state, item.id),
+      omitTargetRoundIds: Boolean(telepathicTrainingTargetCodeGuard(state, targetCodePolicy, item.id)) });
     const persistedSuccess = [...callsForScope(state, packet.scopeKey)].reverse().find((call) => call.status === "succeeded" && call.responseText !== undefined);
     if (persistedSuccess && state.config.protocolVersion !== "fixed_lead_v1") {
       state.finalReflections[item.id] = persistedSuccess.responseText!.trim();
