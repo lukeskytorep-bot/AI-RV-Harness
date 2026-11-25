@@ -193,6 +193,11 @@ pub(crate) const MIGRATION_SPECS: &[MigrationSpec] = &[
         description: "ollama_thinking_continuation",
         sql: include_str!("../migrations/037_ollama_thinking_continuation.sql"),
     },
+    MigrationSpec {
+        version: 38,
+        description: "profile_target_code_mode",
+        sql: include_str!("../migrations/038_profile_target_code_mode.sql"),
+    },
 ];
 
 pub(crate) const CURRENT_MIGRATION_VERSION: i64 =
@@ -215,13 +220,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_is_contiguous_and_current_version_is_037() {
+    fn registry_is_contiguous_and_current_version_is_038() {
         let versions = MIGRATION_SPECS
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>();
-        assert_eq!(versions, (1_i64..=37).collect::<Vec<_>>());
-        assert_eq!(CURRENT_MIGRATION_VERSION, 37);
+        assert_eq!(versions, (1_i64..=38).collect::<Vec<_>>());
+        assert_eq!(CURRENT_MIGRATION_VERSION, 38);
         assert_eq!(registered_migrations().len(), MIGRATION_SPECS.len());
     }
 }

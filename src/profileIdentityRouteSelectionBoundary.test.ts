@@ -43,6 +43,8 @@ describe("PROFILE-IDENTITY-ROUTE-SELECTION-1 boundaries", () => {
     expect(bootstrap).toBeGreaterThanOrEqual(0);
     expect(completion).toBeGreaterThan(bootstrap);
     expect(firstRunSource).toContain("session: profileSaveSession.current");
+    expect(firstRunSource).toContain("aiConfiguration, targetCodeMode");
+    expect(firstRunSource).toContain('checked={targetCodeMode === "without_code"}');
   });
 
   it("keeps RV resume bound to the frozen session route rather than the newly selected identity", () => {

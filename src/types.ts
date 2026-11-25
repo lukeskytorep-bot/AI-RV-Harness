@@ -1,3 +1,4 @@
+import type { TargetCodeMode } from "./domain/targetCodeMode";
 import type { FieldGuideSessionSnapshot } from "./aiCenter/fieldGuideTypes";
 import type { CustomReasoningMode, ReasoningEffort } from "./providers/types";
 import type { OpenRouterAdditionalSamplingSettings } from "./providers/openRouterSamplingSettings";
@@ -77,6 +78,7 @@ export interface AppSettings {
 }
 
 export interface Profile {
+  targetCodeMode?: TargetCodeMode;
   id: string;
   name: string;
   humanName?: string;
@@ -141,6 +143,7 @@ export interface Workspace {
 }
 
 export interface CreateProfileInput {
+  targetCodeMode?: TargetCodeMode;
   name: string;
   humanName?: string;
   note?: string;
@@ -148,6 +151,7 @@ export interface CreateProfileInput {
 }
 
 export interface UpdateProfileInput {
+  targetCodeMode?: TargetCodeMode;
   name: string;
   humanName?: string;
   note?: string;

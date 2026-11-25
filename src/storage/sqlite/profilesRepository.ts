@@ -1,3 +1,4 @@
+import { resolveTargetCodeMode } from "../../domain/targetCodeMode";
 import type { ReasoningEffort } from "../../providers/types";
 import { validateOpenRouterSamplingForProvider } from "../../providers/openRouterSamplingSettings";
 import type {
@@ -12,6 +13,7 @@ import { createId, nowIso } from "../repository";
 type ProfileRow = {
   id: string;
   display_name: string;
+  target_code_mode: string;
   human_display_name: string | null;
   note: string | null;
   credential_id: string | null;
@@ -47,6 +49,7 @@ function mapProfile(row: ProfileRow): Profile {
   return {
     id: row.id,
     name: row.display_name,
+    targetCodeMode: resolveTargetCodeMode(row.target_code_mode),
     humanName: row.human_display_name ?? undefined,
     note: row.note ?? undefined,
     credentialId: row.credential_id ?? undefined,
@@ -98,7 +101,7 @@ export class SqliteProfilesRepository implements ProfilesRepository {
               p.default_monitor_model_id,
               p.default_judge_provider_config_id,
               p.default_judge_model_id,
-              p.created_at, p.updated_at, p.archived_at
+              p.created_at, p.updated_at, p.archived_at, p.target_code_mode
          FROM profiles p
          LEFT JOIN credentials_metadata c ON c.id = p.credential_id
         WHERE p.archived_at IS NULL
@@ -116,7 +119,7 @@ export class SqliteProfilesRepository implements ProfilesRepository {
               p.default_viewer_system_prompt, p.default_monitor_system_prompt,
               p.default_monitor_provider_config_id, p.default_monitor_model_id,
               p.default_judge_provider_config_id, p.default_judge_model_id,
-              p.created_at, p.updated_at, p.archived_at
+              p.created_at, p.updated_at, p.archived_at, p.target_code_mode
          FROM profiles p LEFT JOIN credentials_metadata c ON c.id = p.credential_id
         WHERE p.archived_at IS NOT NULL ORDER BY p.archived_at DESC`,
     );
@@ -129,6 +132,7 @@ export class SqliteProfilesRepository implements ProfilesRepository {
     const profile: Profile = {
       id: (this.dependencies.createId ?? createId)("profile"),
       name: input.name.trim(),
+      targetCodeMode: resolveTargetCodeMode(input.targetCodeMode),
       humanName: input.humanName?.trim() || undefined,
       note: input.note?.trim() || undefined,
       credentialId: ai?.credentialId,
@@ -156,8 +160,8 @@ export class SqliteProfilesRepository implements ProfilesRepository {
          default_viewer_system_prompt, default_monitor_system_prompt,
          default_monitor_provider_config_id, default_monitor_model_id,
          default_judge_provider_config_id, default_judge_model_id,
-         created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
+         created_at, updated_at, target_code_mode
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
       [
         profile.id,
         profile.name,
@@ -181,6 +185,7 @@ export class SqliteProfilesRepository implements ProfilesRepository {
         profile.defaultJudgeModelId ?? null,
         timestamp,
         timestamp,
+        profile.targetCodeMode,
       ],
     );
     return profile;
@@ -188,8 +193,8 @@ export class SqliteProfilesRepository implements ProfilesRepository {
 
   async updateProfile(id: string, input: UpdateProfileInput): Promise<void> {
     await this.dependencies.executeWrite(
-      "UPDATE profiles SET display_name = $1, human_display_name = $2, note = $3, updated_at = $4 WHERE id = $5 AND archived_at IS NULL",
-      [input.name.trim(), input.humanName?.trim() || null, input.note?.trim() || null, (this.dependencies.now ?? nowIso)(), id],
+      "UPDATE profiles SET display_name = $1, human_display_name = $2, note = $3, updated_at = $4, target_code_mode = COALESCE($5, target_code_mode) WHERE id = $6 AND archived_at IS NULL",
+      [input.name.trim(), input.humanName?.trim() || null, input.note?.trim() || null, (this.dependencies.now ?? nowIso)(), input.targetCodeMode === undefined ? null : resolveTargetCodeMode(input.targetCodeMode), id],
     );
   }
 

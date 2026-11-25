@@ -1,3 +1,4 @@
+import type { TargetCodeMode } from "./domain/targetCodeMode";
 import {
   ArrowRight,
   BrainCircuit,
@@ -316,9 +317,9 @@ export default function App() {
   const profileSaveSession = useRef<ViewerProfileSaveSession>({});
   useEffect(() => { if (!profileDialog) profileSaveSession.current = {}; }, [profileDialog]);
 
-  const createProfile = async (name: string, humanName: string | undefined, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput) => {
+  const createProfile = async (name: string, humanName: string | undefined, note: string | undefined, aiConfiguration: ProfileAiConfigurationInput, targetCodeMode?: TargetCodeMode) => {
     if (!repository) return;
-    const saved = await saveViewerProfile({ repository, values: { name, humanName, note, aiConfiguration }, session: profileSaveSession.current });
+    const saved = await saveViewerProfile({ repository, values: { name, humanName, note, aiConfiguration, targetCodeMode }, session: profileSaveSession.current });
     const { profile, conversationWorkspace, rvWorkspace } = saved.created!;
     const [nextProfiles, nextWorkspaces] = await Promise.all([repository.listProfiles(), repository.listWorkspaces()]);
     setProfiles(nextProfiles);
@@ -554,6 +555,7 @@ function FirstRunSetup({
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [profileName, setProfileName] = useState(existingProfile?.name ?? "");
   const [humanName, setHumanName] = useState(existingProfile?.humanName ?? "");
+  const [targetCodeMode, setTargetCodeMode] = useState<TargetCodeMode>(existingProfile?.targetCodeMode ?? "with_code");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const setup = useProfileSetupController({ copy, repository, existingProfile });
@@ -569,7 +571,7 @@ function FirstRunSetup({
       const aiConfiguration = setup.buildAiConfiguration(skipOptional);
       const saved = await saveViewerProfile({
         repository,
-        values: { name: profileName.trim(), humanName: humanName.trim() || undefined, note: existingProfile?.note, aiConfiguration },
+        values: { name: profileName.trim(), humanName: humanName.trim() || undefined, note: existingProfile?.note, aiConfiguration, targetCodeMode },
         existingProfileId: existingProfile?.id,
         session: profileSaveSession.current,
       });
@@ -626,6 +628,7 @@ function FirstRunSetup({
           <ProfileViewerControls copy={copy} model={setup.viewerModel} providerKind={setup.selectedProvider?.provider} reasoning={setup.viewerReasoning} temperature={setup.viewerTemperature} temperatureMode={setup.viewerTemperatureMode} customReasoningMode={setup.viewerCustomReasoningMode} sampling={{ enabled: setup.viewerSamplingEnabled, topP: setup.viewerTopP, topK: setup.viewerTopK, seed: setup.viewerSeed }} systemPrompt={setup.viewerSystemPrompt} onReasoning={setup.setViewerReasoning} onTemperature={setup.setViewerTemperature} onTemperatureMode={setup.setViewerTemperatureMode} onCustomReasoningMode={setup.setViewerCustomReasoningMode} onSamplingEnabled={setup.setViewerSamplingEnabled} onSamplingTopP={setup.setViewerTopP} onSamplingTopK={setup.setViewerTopK} onSamplingSeed={setup.setViewerSeed} />
           <div className="identity-name-grid"><label>{copy.aiIsBeName}<input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="AI IS-BE" /></label><label>{copy.humanIsBeName}<input value={humanName} onChange={(event) => setHumanName(event.target.value)} placeholder="Human IS-BE" /></label></div>
           <small className="setup-security-note"><Users size={13} />{copy.identityNamesLead}</small>
+          <label className="profile-target-code-option"><input type="checkbox" checked={targetCodeMode === "without_code"} onChange={(event) => setTargetCodeMode(event.target.checked ? "without_code" : "with_code")} disabled={busy} /><span>{copy.profileWithoutTargetCode}<small>{copy.profileWithoutTargetCodeLead}</small></span></label>
           <div className="first-run-actions"><button className="secondary-button" onClick={() => setStep(1)} disabled={busy}>{copy.back}</button><button className="primary-button" disabled={!setup.viewerModelId || busy} onClick={() => setStep(3)}>{copy.continue}<ArrowRight size={15} /></button></div>
         </div>}
 

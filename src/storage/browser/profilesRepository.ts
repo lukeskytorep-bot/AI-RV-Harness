@@ -1,3 +1,4 @@
+import { resolveTargetCodeMode } from "../../domain/targetCodeMode";
 import { validateOpenRouterSamplingForProvider } from "../../providers/openRouterSamplingSettings";
 import type {
   CreateProfileInput,
@@ -26,12 +27,14 @@ export class BrowserProfilesRepository implements ProfilesRepository {
   }
 
   private readProfiles(): Profile[] {
+    let profiles: Profile[];
     try {
       const raw = this.storage.getItem(PROFILES_KEY);
-      return raw ? (JSON.parse(raw) as Profile[]) : [];
+      profiles = raw ? (JSON.parse(raw) as Profile[]) : [];
     } catch {
       return [];
     }
+    return profiles.map((profile) => ({ ...profile, targetCodeMode: resolveTargetCodeMode(profile.targetCodeMode) }));
   }
 
   private writeProfiles(profiles: Profile[]): void {
@@ -55,6 +58,7 @@ export class BrowserProfilesRepository implements ProfilesRepository {
     const profile: Profile = {
       id: (this.dependencies.createId ?? createId)("profile"),
       name: input.name.trim(),
+      targetCodeMode: resolveTargetCodeMode(input.targetCodeMode),
       humanName: input.humanName?.trim() || undefined,
       note: input.note?.trim() || undefined,
       credentialId: input.aiConfiguration?.credentialId,
@@ -83,9 +87,11 @@ export class BrowserProfilesRepository implements ProfilesRepository {
 
   async updateProfile(id: string, input: UpdateProfileInput): Promise<void> {
     const timestamp = (this.dependencies.now ?? nowIso)();
+    const mode = input.targetCodeMode === undefined ? undefined : resolveTargetCodeMode(input.targetCodeMode);
     this.writeProfiles(this.readProfiles().map((profile) => profile.id === id
       ? {
           ...profile,
+          ...(mode === undefined ? {} : { targetCodeMode: mode }),
           name: input.name.trim(),
           humanName: input.humanName?.trim() || undefined,
           note: input.note?.trim() || undefined,

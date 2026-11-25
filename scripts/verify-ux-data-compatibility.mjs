@@ -26,9 +26,9 @@ const migrationFiles = readdirSync(migrationDir)
   .filter((name) => /^\d{3}_.+\.sql$/.test(name))
   .sort();
 const migrationNumbers = migrationFiles.map((name) => Number(name.slice(0, 3)));
-const expectedNumbers = Array.from({ length: 37 }, (_, index) => index + 1);
+const expectedNumbers = Array.from({ length: 38 }, (_, index) => index + 1);
 if (JSON.stringify(migrationNumbers) !== JSON.stringify(expectedNumbers)) {
-  failures.push(`SQLite migrations must be contiguous 001-037; found: ${migrationFiles.join(", ")}`);
+  failures.push(`SQLite migrations must be contiguous 001-038; found: ${migrationFiles.join(", ")}`);
 }
 
 const tauriLib = read("src-tauri/src/lib.rs");

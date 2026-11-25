@@ -21,6 +21,7 @@ class MemoryStorage implements Storage {
 type ProfileRow = {
   id: string;
   display_name: string;
+  target_code_mode: string;
   human_display_name: string | null;
   note: string | null;
   credential_id: string | null;
@@ -72,6 +73,7 @@ function toRow(profile: Profile): ProfileRow {
   return {
     id: profile.id,
     display_name: profile.name,
+    target_code_mode: profile.targetCodeMode ?? "with_code",
     human_display_name: profile.humanName ?? null,
     note: profile.note ?? null,
     credential_id: profile.credentialId ?? null,
@@ -117,6 +119,7 @@ function sqliteHarness(): ContractHarness {
         rows.unshift({
           id: String(values[0]),
           display_name: String(values[1]),
+          target_code_mode: String(values[22]),
           human_display_name: values[2] as string | null,
           note: values[3] as string | null,
           credential_id: values[4] as string | null,
@@ -143,8 +146,8 @@ function sqliteHarness(): ContractHarness {
         return;
       }
       if (query.includes("display_name = $1")) {
-        const row = rows.find((item) => item.id === values[4] && item.archived_at === null);
-        if (row) Object.assign(row, { display_name: values[0], human_display_name: values[1], note: values[2], updated_at: values[3] });
+        const row = rows.find((item) => item.id === values[5] && item.archived_at === null);
+        if (row) Object.assign(row, { display_name: values[0], human_display_name: values[1], note: values[2], updated_at: values[3], target_code_mode: values[4] ?? row.target_code_mode });
         return;
       }
       if (query.includes("default_viewer_sampling_enabled = CASE WHEN $7 = 1")) {
@@ -209,6 +212,21 @@ function runProfilesRepositoryContract(name: string, createHarness: () => Contra
 
       await repository.updateProfile(first.id, { name: "  Updated  ", humanName: "  Owner  ", note: "  changed  " });
       expect((await repository.listProfiles())[0]).toMatchObject({ id: first.id, name: "Updated", humanName: "Owner", note: "changed" });
+    });
+
+    it("persists target-code preference independently of AI configuration and legacy edits", async () => {
+      const { repository } = createHarness();
+      const legacy = await repository.createProfile({ name: "Legacy" });
+      expect(legacy.targetCodeMode).toBe("with_code");
+      const profile = await repository.createProfile({ name: "Blind", targetCodeMode: "without_code" });
+      await repository.updateProfile(profile.id, { name: "Renamed" });
+      await repository.setProfileAiConfiguration(profile.id, {});
+      await repository.setProfileCredential(profile.id, undefined);
+      expect((await repository.listProfiles()).find(p => p.id === profile.id)?.targetCodeMode).toBe("without_code");
+      await repository.updateProfile(profile.id, { name: "Renamed", targetCodeMode: "with_code" });
+      expect((await repository.listProfiles()).find(p => p.id === profile.id)?.targetCodeMode).toBe("with_code");
+      await expect(repository.updateProfile(profile.id, { name: "Bad", targetCodeMode: "invalid" as never })).rejects.toThrow("Invalid target-code mode");
+      await expect(repository.createProfile({ name: "Bad", targetCodeMode: "invalid" as never })).rejects.toThrow("Invalid target-code mode");
     });
 
     it("preserves Profile AI fields while applying narrow prompt and credential updates", async () => {

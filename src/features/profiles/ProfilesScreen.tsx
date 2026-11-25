@@ -1,3 +1,4 @@
+import type { TargetCodeMode } from "../../domain/targetCodeMode";
 import { Archive, ChevronRight, EllipsisVertical, KeyRound, Pencil, Plus, RadioTower, Users } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -59,13 +60,13 @@ export function ProfilesScreen({ copy, profiles, workspaces, onCreateProfile, on
     await archiveProfileAndRefresh(repository, profile.id, onProfilesChanged);
   };
 
-  const saveProfile = async (name: string, humanName: string | undefined, note?: string, aiConfiguration?: ProfileAiConfigurationInput) => {
+  const saveProfile = async (name: string, humanName: string | undefined, note?: string, aiConfiguration?: ProfileAiConfigurationInput, targetCodeMode?: TargetCodeMode) => {
     if (!repository || !editingProfile) return;
     if (aiConfiguration && editingProfile.credentialId && editingProfile.credentialId !== aiConfiguration.credentialId) {
       const confirmed = await dialogs.confirm({ title: copy.dialogWarningTitle, description: copy.calibrationBindingWarning, confirmLabel: copy.dialogContinue, cancelLabel: copy.cancel, severity: "warning" });
       if (!confirmed) return;
     }
-    await saveProfileAndRefresh(repository, editingProfile.id, { name, humanName, note, aiConfiguration }, onProfilesChanged, () => setEditingProfile(null));
+    await saveProfileAndRefresh(repository, editingProfile.id, { name, humanName, note, aiConfiguration, targetCodeMode }, onProfilesChanged, () => setEditingProfile(null));
   };
 
   const renameWorkspace = async (profile: Profile, workspace: Workspace) => {

@@ -1,3 +1,4 @@
+import type { TargetCodeMode } from "../../domain/targetCodeMode";
 import type { AppRepository } from "../../storage/repository";
 import type { ProfileAiConfigurationInput } from "../../types";
 import { saveViewerProfile } from "../../application/viewerProfileSave";
@@ -14,7 +15,7 @@ export async function archiveProfileAndRefresh(
 export async function saveProfileAndRefresh(
   repository: AppRepository,
   profileId: string,
-  values: { name: string; humanName: string | undefined; note?: string; aiConfiguration?: ProfileAiConfigurationInput },
+  values: { name: string; humanName: string | undefined; note?: string; targetCodeMode?: TargetCodeMode; aiConfiguration?: ProfileAiConfigurationInput },
   onProfilesChanged: () => Promise<void>,
   onSaved?: () => void,
 ): Promise<void> {

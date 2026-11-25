@@ -82,6 +82,14 @@ describe("Viewer profile save integration with repository persistence", () => {
       sourceSnapshot: { schemaVersion: 1, sessionId: "s", sessionCode: "RV", workspaceId: saved.created!.rvWorkspace.id, profileId: saved.profile.id, protocolId: "rv-lite-core", protocolVersion: "1.0", sessionRunType: "automatic", capturedAt: "now" }, reflectionPacketSha256: "packet", packetJson: "{}" });
     await repo.commitViewerNoteReflection({ runId: "learning", aiIdentityId: identity.id, sourceSessionId: "s", sourceWorkspaceId: saved.created!.rvWorkspace.id, decision: "UPDATE", notes: "Preserve learned sensory procedure", contentSha256: "hash", estimatedTokens: 8, capacityTokens: 1024, protocolId: "rv-lite-core", sessionRunType: "automatic", changeSummary: "learned", reflectionPacketSha256: "packet", modelRouteSnapshot: model.route, generationSettingsSnapshot: { requested: {}, effective: {}, omitted: [] }, rawFinalResponseSha256: "response" });
     const notes = await repo.getExistingViewerNoteBundle(identity.id);
+    const metadataEnsure = vi.spyOn(repo, "ensureAiIdentity");
+    fingerprint.mockClear();
+    await saveViewerProfile({ repository: repo, values: { name: saved.profile.name, targetCodeMode: "without_code" }, existingProfileId: saved.profile.id });
+    expect(metadataEnsure).not.toHaveBeenCalled();
+    expect(fingerprint).not.toHaveBeenCalled();
+    expect(await repo.getExistingFieldGuideBundle(identity.id, "en")).toEqual(guide);
+    expect(await repo.getExistingViewerNoteBundle(identity.id)).toEqual(notes);
+    metadataEnsure.mockRestore();
     await saveViewerProfile({ repository: repo, values, existingProfileId: saved.profile.id });
     expect((await repo.listAiIdentities(saved.profile.id)).map(i => i.id)).toEqual([identity.id]);
     expect(await repo.getExistingFieldGuideBundle(identity.id,"en")).toEqual(guide);
@@ -99,14 +107,29 @@ describe("Viewer profile save integration with repository persistence", () => {
     expect(await repo.listAiIdentities(saved.profile.id)).toHaveLength(2);
     expect(await repo.getExistingFieldGuideBundle(identity.id,"en")).toEqual(guide);
   });
-  it("name-only resave also validates and prepares the stored route", async () => {
-    const repo = repository(); const saved = await saveViewerProfile({ repository: repo, values });
+  it("metadata edits do not prepare the stored route or touch identity, even when the route is missing", async () => {
+    const repo = new BrowserRepository();
+    const profile = await repo.createProfile({ name: "Legacy" });
     const ensure = vi.spyOn(repo, "ensureAiIdentity");
-    await saveViewerProfile({ repository: repo, values: { name: "Renamed" }, existingProfileId: saved.profile.id });
-    expect(ensure).toHaveBeenCalledTimes(1);
+    const configure = vi.spyOn(repo, "setProfileAiConfiguration");
     fingerprint.mockRejectedValue(new Error("keychain"));
-    await expect(saveViewerProfile({ repository: repo, values: { name: "Rejected" }, existingProfileId: saved.profile.id })).rejects.toMatchObject({ profileId: undefined });
-    expect((await repo.listProfiles())[0].name).toBe("Renamed");
+    const listConfigs = vi.spyOn(repo, "listProviderConfigs").mockRejectedValue(new Error("provider unavailable"));
+    await saveViewerProfile({ repository: repo, values: { name: "Legacy", targetCodeMode: "without_code" }, existingProfileId: profile.id });
+    expect((await new BrowserRepository().listProfiles())[0]).toMatchObject({ name: "Legacy", targetCodeMode: "without_code" });
+    expect(ensure).not.toHaveBeenCalled();
+    expect(configure).not.toHaveBeenCalled();
+    expect(fingerprint).not.toHaveBeenCalled();
+    expect(listConfigs).not.toHaveBeenCalled();
+  });
+  it("metadata write failure can be retried without creating another profile", async () => {
+    const repo = repository(); const profile = await repo.createProfile({ name: "Legacy" });
+    vi.spyOn(repo, "updateProfile").mockRejectedValueOnce(new Error("disk failure"));
+    const input = { repository: repo, existingProfileId: profile.id, values: { name: "Legacy", targetCodeMode: "without_code" as const } };
+    await expect(saveViewerProfile(input)).rejects.toBeInstanceOf(Error);
+    expect((await repo.listProfiles())[0].targetCodeMode).toBe("with_code");
+    await saveViewerProfile(input);
+    expect(await repo.listProfiles()).toHaveLength(1);
+    expect((await repo.listProfiles())[0].targetCodeMode).toBe("without_code");
   });
   it("Browser save never invokes native IPC", async () => {
     runtime.desktop = false; const repo = repository();

@@ -320,3 +320,7 @@ html[data-animations="off"] *, html[data-animations="off"] *::before, html[data-
 @media (max-width: 780px) {
   .openrouter-sampling-controls .sampling-parameter-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+.profile-edit-form .profile-target-code-option { display: flex; align-items: flex-start; gap: 9px; }
+.profile-edit-form .profile-target-code-option > input { width: auto; height: auto; margin-top: 2px; }
+.profile-target-code-option > span { display: grid; gap: 3px; }
