@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { webcrypto } from "node:crypto";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { BrowserTelepathicExchangeRepository } from "../storage/browser/telepathicExchangeRepository";
@@ -20,17 +21,42 @@ import { TelepathicExchangePanel } from "../features/conversations/TelepathicExc
 let host: HTMLDivElement, root: Root;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  // jsdom provides Crypto but not SubtleCrypto. Exercise the real policy hash.
+  vi.stubGlobal("crypto", webcrypto);
   localStorage.clear(); host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   execution.advance.mockReset(); execution.next.mockReset();
   execution.advance.mockImplementation(async (deps, id) => deps.store.getTelepathicSeries(id));
   execution.next.mockImplementation(async (deps, id) => ({ ...await deps.store.getTelepathicSeries(id), status: "completed" }));
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); });
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const textButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === label)!;
 const action = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 const step = (n: number) => host.querySelector<HTMLElement>(`[data-setup-step="${n}"]`)!;
 async function change(element: HTMLSelectElement, value: string) { await act(async () => { element.value = value; element.dispatchEvent(new Event("change", { bubbles: true })); }); }
 async function click(element: HTMLButtonElement | HTMLInputElement) { await act(async () => element.click()); }
+// A click does not await the async handler. WebCrypto hashing crosses the
+// microtask boundary, so wait for the actual persisted/visible state, not a fixed sleep.
+async function waitForUi(assertion: () => void | Promise<void>) {
+  await vi.waitFor(async () => {
+    await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 5)); });
+    await assertion();
+  }, { timeout: 2000, interval: 20 });
+}
+// Keep the real jsdom Storage backend, but do not let a late async save from
+// one test populate another test's history (including the no-Start drift tests).
+function isolatedFixtureStorage(): Storage {
+  const prefix = `telepathic-setup:${webcrypto.randomUUID()}:`;
+  const keys = () => Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+    .filter((key): key is string => key !== null && key.startsWith(prefix));
+  return {
+    get length() { return keys().length; },
+    key: index => keys()[index]?.slice(prefix.length) ?? null,
+    getItem: key => localStorage.getItem(prefix + key),
+    setItem: (key, value) => localStorage.setItem(prefix + key, value),
+    removeItem: key => localStorage.removeItem(prefix + key),
+    clear: () => keys().forEach(key => localStorage.removeItem(key)),
+  };
+}
 function fixture(mode: TelepathicMode, pl = false) {
   let profiles = ["a", "b", "c"].map(id => ({ id, name: id.toUpperCase(), ...(id === "a" ? { targetCodeMode: "without_code" as const } : {}) } as Profile));
   const workspace = { id: "human-w", profileId: "human", name: "Human", kind: "conversation", createdAt: "t" } as Workspace;
@@ -38,7 +64,7 @@ function fixture(mode: TelepathicMode, pl = false) {
   const configs = profiles.map(p => ({ id: `provider-${p.id}`, label: p.id, provider: "openrouter", credentialId: `cred-${p.id}`, credentialFingerprint: `fp-${p.id}`, enabled: true } as ProviderConfig));
   const models = configs.map(c => ({ providerConfigId: c.id, provider: c.provider, modelId: "model", route: "route", displayName: "Model" } as ProviderModel));
   const identities = profiles.map((p, index) => ({ id: `identity-${p.id}`, profileId: p.id, providerConfigId: configs[index].id, provider: "openrouter", credentialFingerprint: `fp-${p.id}`, modelId: "model", modelRoute: "route", modelDisplayName: "Model", role: "viewer", routeStatus: "available", lastUsedAt: "t" } as AiIdentity));
-  const repository = Object.assign(new BrowserTelepathicExchangeRepository({ storage: localStorage }), {
+  const repository = Object.assign(new BrowserTelepathicExchangeRepository({ storage: isolatedFixtureStorage() }), {
     listProfiles: vi.fn(async () => profiles),
     listProviderConfigs: vi.fn(async () => configs), listProviderModels: vi.fn(async () => models),
     listAiIdentities: vi.fn(async (profileId: string) => identities.filter(i => i.profileId === profileId)),
@@ -56,7 +82,32 @@ function fixture(mode: TelepathicMode, pl = false) {
     if (mode === "conversation_exchange") await change(step(2).querySelector("select")!, "fixed_ai");
     await change(step(2).querySelectorAll<HTMLSelectElement>("select")[mode === "ai_ai_training" ? 0 : 1], id);
   };
-  return { repository, labels, render, pick, selectLead, identities,
+  const newSeriesLabel = mode === "ai_ai_training" ? (pl ? "Nowy trening" : "New training") : (pl ? "Nowa wymiana" : "New exchange");
+  const waitForSettledStart = async () => {
+    await waitForUi(() => {
+      const button = textButton(newSeriesLabel);
+      expect(button, host.querySelector(".error-banner")?.textContent ?? "Active series is not visible").toBeDefined();
+      expect(button.disabled).toBe(false);
+    });
+  };
+  const start = async (keepRunning = false) => {
+    const runner = mode === "ai_ai_training" ? execution.next : execution.advance;
+    const previousCalls = runner.mock.calls.length;
+    await click(textButton(labels.start));
+    if (mode !== "ai_ai_training") return;
+    await waitForUi(async () => {
+      const saved = await repository.listTelepathicSeries();
+      expect(saved, host.querySelector(".error-banner")?.textContent ?? "Series was not persisted").toHaveLength(1);
+      expect(runner.mock.calls.slice(previousCalls).some(call => call[1] === saved[0].config.seriesId)).toBe(true);
+      expect(host.querySelector('[data-setup-step]')).toBeNull();
+      if (keepRunning) expect(textButton("Stop")?.disabled).toBe(false);
+    });
+    if (!keepRunning) {
+      await waitForSettledStart();
+      expect(host.querySelector(".error-banner")).toBeNull();
+    }
+  };
+  return { repository, labels, render, pick, selectLead, identities, start, waitForSettledStart,
     setProfiles(value: Profile[]) { profiles = value; }, get profiles() { return profiles; },
     setWorkspaces(value: Workspace[]) { workspaces = value; }, get workspaces() { return workspaces; } };
 }
@@ -85,13 +136,14 @@ for (const pl of [false, true]) for (const mode of ["ai_ai_training", "conversat
     expect(textButton(f.labels.start).disabled).toBe(true);
     await f.selectLead("a"); await click(action(f.labels.lead));
     const before = await f.repository.listTelepathicSeries(); expect(before).toHaveLength(0);
-    await click(textButton(f.labels.start));
+    await f.start();
     const [saved] = await f.repository.listTelepathicSeries();
     expect(saved.config.leadInstructionVersion).toBe("fixed_lead_guidance_v2");
     expect(saved.config.senderPolicy).toEqual({ kind: "fixed_ai", participantId: "ai:a" });
     expect(saved.plan.rounds.every(r => r.senderParticipantId === "ai:a")).toBe(true);
     expect(saved.config.participants.some(p => p.id === "ai:b")).toBe(false);
     if (mode === "ai_ai_training") {
+      expect(saved.config.trainingTargetCodePolicy?.policySha256).toMatch(/^[a-f0-9]{64}$/);
       expect(saved.config.trainingTargetCodePolicy?.participants).toEqual([
         { participantId: "ai:a", profileId: "a", mode: "without_code" },
         { participantId: "ai:c", profileId: "c", mode: "with_code" },
@@ -103,6 +155,8 @@ for (const pl of [false, true]) for (const mode of ["ai_ai_training", "conversat
     const f = fixture(mode, pl); await f.render(); await f.pick(0); await f.pick(1);
     await click(action(f.labels.participants)); await f.selectLead(); await click(action(f.labels.lead));
     f.setProfiles(f.profiles.map(p => p.id === "b" ? { ...p, name: "Changed profile" } : p)); await f.render();
+    expect(await f.repository.listTelepathicSeries()).toHaveLength(0);
+    expect(textButton(f.labels.start), "Unstarted setup must remain visible after Profile drift").toBeDefined();
     expect(textButton(f.labels.start).disabled).toBe(true); expect(step(2).querySelector("select")!.matches(":disabled")).toBe(true);
     await click(action(f.labels.participants)); await f.selectLead(); await click(action(f.labels.lead));
     f.setWorkspaces(f.workspaces.filter(w => w.profileId !== "b")); await f.render();
@@ -113,7 +167,7 @@ for (const pl of [false, true]) for (const mode of ["ai_ai_training", "conversat
 for (const pl of [false, true]) it(`Conversation/${pl ? "PL" : "EN"}: human lead needs confirmation but no AI lead Profile`, async () => {
   const f = fixture("conversation_exchange", pl); await f.render(); await f.pick(0);
   await click(action(f.labels.participants)); expect(step(2).querySelectorAll("select")).toHaveLength(1);
-  expect(textButton(f.labels.start).disabled).toBe(true); await click(action(f.labels.lead)); await click(textButton(f.labels.start));
+  expect(textButton(f.labels.start).disabled).toBe(true); await click(action(f.labels.lead)); await f.start();
   const [saved] = await f.repository.listTelepathicSeries();
   expect(saved.config.leadInstructionVersion).toBe("fixed_lead_guidance_v2");
     expect(saved.config.senderPolicy).toEqual({ kind: "human_only", humanParticipantId: `${saved.config.seriesId}:human` });
@@ -145,10 +199,11 @@ for (const mode of ["ai_ai_training", "conversation_exchange"] as const) {
     const f = fixture(mode); await f.render(); await f.pick(0); await f.pick(1); await click(action(f.labels.participants)); await f.selectLead(); await click(action(f.labels.lead));
     const runner = mode === "ai_ai_training" ? execution.next : execution.advance;
     runner.mockImplementation((deps) => new Promise((_resolve, reject) => deps.signal.addEventListener("abort", () => reject(new DOMException("Stop", "AbortError")), { once: true })));
-    await click(textButton(f.labels.start));
+    await f.start(true);
     expect(host.querySelector('[data-setup-step]')).toBeNull();
     expect(textButton(mode === "ai_ai_training" ? "New training" : "New exchange").disabled).toBe(true);
     await click(textButton("Stop"));
+    if (mode === "ai_ai_training") await f.waitForSettledStart();
     expect((await f.repository.listTelepathicSeries())[0].config.senderPolicy).toEqual({ kind: "fixed_ai", participantId: "ai:b" });
     expect(runner).toHaveBeenCalledTimes(1);
   });
@@ -187,7 +242,7 @@ it("Training enforces the existing six-profile maximum before participants can b
 for (const pl of [false, true]) for (const mode of ["ai_ai_training", "conversation_exchange"] as const) {
  it(`${mode}/${pl ? "PL" : "EN"}: one saved policy controls Resume and transport exhaustion`, async () => {
   const f = fixture(mode, pl); await f.render(); await f.pick(0); await f.pick(1);
-  await click(action(f.labels.participants)); await f.selectLead("a"); await click(action(f.labels.lead)); await click(textButton(f.labels.start));
+  await click(action(f.labels.participants)); await f.selectLead("a"); await click(action(f.labels.lead)); await f.start();
   const [series] = await f.repository.listTelepathicSeries();
   expect(series.config.recoveryPolicy).toEqual({ version: 1, mode: "automatic", maxTransportRetriesPerScope: 1 });
   series.status = "blocked";
@@ -224,7 +279,7 @@ for (const pl of [false, true]) for (const mode of ["ai_ai_training", "conversat
 for (const pl of [false, true]) for (const mode of ["ai_ai_training", "conversation_exchange"] as const) {
  it(`${mode}/${pl ? "PL" : "EN"}: checkpoint errors block Resume until an explicit checkpoint read`, async () => {
   const f = fixture(mode, pl); await f.render(); await f.pick(0); await f.pick(1);
-  await click(action(f.labels.participants)); await f.selectLead("a"); await click(action(f.labels.lead)); await click(textButton(f.labels.start));
+  await click(action(f.labels.participants)); await f.selectLead("a"); await click(action(f.labels.lead)); await f.start();
   const [series] = await f.repository.listTelepathicSeries(); series.status = "paused";
   await f.repository.saveTelepathicSeries(series);
   const openLabel = mode === "ai_ai_training" ? (pl ? "Otwórz trening" : "Open training") : (pl ? "Otwórz wymianę" : "Open exchange");
@@ -246,7 +301,7 @@ for (const mode of ["ai_ai_training", "conversation_exchange"] as const) {
   const f = fixture(mode); await f.render(); await f.pick(0); await f.pick(1);
   await click(action(f.labels.participants)); await f.selectLead("a"); await click(action(f.labels.lead));
   const checkbox = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(input => input.closest("label")?.textContent?.includes("Continue automatically"))!;
-  expect(checkbox.checked).toBe(true); await click(checkbox); await click(textButton(f.labels.start));
+  expect(checkbox.checked).toBe(true); await click(checkbox); await f.start();
   expect((await f.repository.listTelepathicSeries())[0].config.recoveryPolicy?.mode).toBe("manual");
  });
 }
