@@ -22,7 +22,7 @@ function repo() {
   let transcript = "";
   const scores: unknown[] = [];
   return workflowTestRepository({
-    getSessionSnapshot: vi.fn(async () => ({ sessionLanguage: "en", workspaceId: "w", providerConfigId: "pc", modelId: "m", generationSettings: { requested: {}, effective: {}, omitted: [] }, monitor: { providerConfigId: "pc", modelId: "m", effectivePrompt: "Monitor" } })),
+    getSessionSnapshot: vi.fn(async () => ({ schemaVersion: 1, sessionLanguage: "en", workspaceId: "w", providerConfigId: "pc", modelId: "m", generationSettings: { requested: {}, effective: {}, omitted: [] }, monitor: { providerConfigId: "pc", modelId: "m", effectivePrompt: "Monitor" } })),
     getReveal: vi.fn(async () => ({ source: "external_text", text: "Tower", hash: "h" })), getViewerEvidence: vi.fn(async () => "Tall structure"),
     listTargetClarifications: vi.fn(async () => []), listMonitorRuns: vi.fn(async () => []), listMonitorInterventions: vi.fn(async () => []),
     appendPostRevealTurn: vi.fn(async (_id, role, content) => transcript += JSON.stringify({ role, content }) + "\n"),

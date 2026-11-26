@@ -38,7 +38,7 @@ function makeRepository(input?: { transcript?: string; monitor?: boolean; checkp
       if (!leaseHeld) throw new Error("Post-Reveal review lease was lost or is not active.");
     }),
     postRevealReviewLeaseSignal: vi.fn(() => undefined),
-    getSessionSnapshot: vi.fn().mockResolvedValue({
+    getSessionSnapshot: vi.fn().mockResolvedValue({ schemaVersion: 1,
       providerConfigId: "viewer-pc",
       modelId: "viewer",
       provider: "openrouter",

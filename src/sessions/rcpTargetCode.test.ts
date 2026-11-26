@@ -99,7 +99,7 @@ describe("ordinary RCP target-code mode", () => {
       const original = await runAutomaticRcpSession({ ...input(repository), ...(mode ? { targetCodeMode: mode } : {}), chat: async () => response(1) });
       const snapshot = (await repository.getSessionSnapshot(original.sessionId))!;
       const current = mode === "without_code" ? "with_code" : "without_code";
-      const restart = await capturedSessionTargetCode(snapshot, false, current);
+      const restart = await capturedSessionTargetCode(snapshot, false, current, (await repository.getRvSession(original.sessionId))!);
       const newCode = "RVH-RCP-RESTART-456";
       const payloads: string[] = [];
       const restarted = await runAutomaticRcpSession({ ...input(repository), ...restart.restartOptions, sessionIdentity: { id: "rcp-restarted", sessionCode: newCode }, chat: async ({ messages }) => { payloads.push(JSON.stringify(messages)); return response(payloads.length); } });

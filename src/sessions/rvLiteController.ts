@@ -1,3 +1,4 @@
+import { assertSessionTargetCodeBinding, captureSessionTargetCodeContract, validateSessionTargetCodeContract } from "./targetCodeContract";
 import { assertTargetCodeAbsent, resolveTargetCodeMode, type TargetCodeMode } from "../domain/targetCodeMode";
 import { renderResearchTargetCodeSteps, renderProfileTargetCodeSteps, targetCodePolicy, assertTargetCodePolicy, verifyTargetCodeTemplates, type TargetCodePolicy } from "../resources/rvLiteTargetCode";
 import { withAutomaticWorkflow, withRvWorkflow } from "../application/workflowOwnership";
@@ -123,6 +124,11 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
   const sessionId = input.resumeSession?.id ?? input.sessionIdentity?.id ?? input.initializationExistingSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? input.sessionIdentity?.sessionCode ?? input.initializationExistingSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const storedSnapshot = (input.resumeSession || input.initializationExistingSession) && input.repository.getSessionSnapshot ? await input.repository.getSessionSnapshot(sessionId) : null;
+  if (input.resumeSession && !storedSnapshot) throw new Error("RV Lite Resume requires a saved Session Snapshot.");
+  if (storedSnapshot) {
+    await validateSessionTargetCodeContract(storedSnapshot);
+    assertSessionTargetCodeBinding(storedSnapshot, { id: sessionId, sessionCode });
+  }
   if (storedSnapshot?.rcpProfileTargetCode || storedSnapshot?.telepathicProfileTargetCode) throw new Error("Conflicting frozen target-code policies for RV Lite.");
   const targetCode = input.targetCode ?? storedSnapshot?.researchTargetCode?.policy;
   const researchRun = Boolean(input.researchProjectId || input.operationKind === "research_viewer");
@@ -367,6 +373,12 @@ async function runAutomaticRvLiteSessionOwned(input: AutomaticRvLiteRunInput): P
     applicationVersion: APP_VERSION,
     createdAt: new Date().toISOString(),
   };
+  if (!storedSnapshot) await captureSessionTargetCodeContract(snapshot);
+  else if (storedSnapshot.targetCodeContract) {
+    snapshot.schemaVersion = storedSnapshot.schemaVersion;
+    snapshot.targetCodeContract = structuredClone(storedSnapshot.targetCodeContract);
+    await validateSessionTargetCodeContract(snapshot);
+  }
   await input.repository.saveSessionSnapshot(sessionId, snapshot, await sha256Text(JSON.stringify(snapshot)));
   await input.onSessionCreated?.(sessionId, sessionCode);
   await input.repository.appendSessionEvent(sessionId, { eventType: "PREFLIGHT_COMPLETE", role: "controller", metadata: { viewerCalls: 4, mandatoryDeepeningInPrompt: 3, ...(input.researchContext ? { researchContextCompositionSha256: input.researchContext.compositionSha256 } : {}) } });

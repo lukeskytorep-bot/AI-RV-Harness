@@ -1,3 +1,4 @@
+import { assertSessionTargetCodeBinding, captureSessionTargetCodeContract, validateSessionTargetCodeContract } from "./targetCodeContract";
 import { assertTargetCodeAbsent, resolveTargetCodeMode, type TargetCodeMode } from "../domain/targetCodeMode";
 import { assertRcpTargetCodePolicy, assertRcpTargetCodeSnapshotMatches, freezeRcpTargetCode, rcpTargetCodePolicy } from "./rcpTargetCode";
 import { getFullRcp } from "../resources/protocolRegistry";
@@ -165,6 +166,10 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
   const sessionCode = input.resumeSession?.sessionCode ?? input.sessionIdentity?.sessionCode ?? input.initializationExistingSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const existingSession = input.resumeSession ?? input.initializationExistingSession;
   const storedSnapshot = existingSession && input.repository.getSessionSnapshot ? await input.repository.getSessionSnapshot(sessionId) : null;
+  if (storedSnapshot) {
+    await validateSessionTargetCodeContract(storedSnapshot);
+    assertSessionTargetCodeBinding(storedSnapshot, { id: sessionId, sessionCode });
+  }
   if (input.resumeSession && !storedSnapshot) throw new Error("RCP Resume requires a saved Session Snapshot.");
   const frozenCode = storedSnapshot?.rcpProfileTargetCode;
   const researchRun = Boolean(input.researchProjectId || input.operationKind === "research_viewer" || input.researchContext || input.researchConditionInstruction);
@@ -441,6 +446,12 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
 
   currentState = "Preflight";
   await input.repository.updateRvSessionState(sessionId, currentState);
+  if (!storedSnapshot) await captureSessionTargetCodeContract(snapshot);
+  else if (storedSnapshot.targetCodeContract) {
+    snapshot.schemaVersion = storedSnapshot.schemaVersion;
+    snapshot.targetCodeContract = structuredClone(storedSnapshot.targetCodeContract);
+    await validateSessionTargetCodeContract(snapshot);
+  }
   await input.repository.saveSessionSnapshot(sessionId, snapshot, await sha256Text(JSON.stringify(snapshot)));
   if (!input.resumeSession) await input.onSessionCreated?.(sessionId, sessionCode);
   await input.repository.appendSessionEvent(sessionId, {

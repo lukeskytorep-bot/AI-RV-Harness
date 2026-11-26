@@ -1,3 +1,4 @@
+import { validateSessionTargetCodeFragment, type SessionTargetCodeContractSource } from "./targetCodeContract";
 import { sha256Text } from "../application/sha256";
 import { isTargetCodeMode, resolveTargetCodeMode, type TargetCodeMode } from "../domain/targetCodeMode";
 import { telepathicStepPrompt, telepathicFixedDeepeningPrompt, telepathicQuestionPrompt } from "./telepathicControllerPrompts";
@@ -50,11 +51,12 @@ export function assertTelepathicTargetCodeSnapshotMatches(saved: TelepathicTarge
   }
 }
 
-export async function restoreTelepathicTargetCode(snapshot: Pick<import("./types").SessionSnapshot, "protocol" | "sessionId" | "sessionCode" | "sessionLanguage" | "profileTargetCode" | "rcpProfileTargetCode" | "researchTargetCode" | "telepathicProfileTargetCode">, session: Pick<import("./types").RvSession, "id" | "sessionCode">): Promise<TelepathicTargetCodeSnapshot | undefined> {
+export async function restoreTelepathicTargetCode(snapshot: SessionTargetCodeContractSource, session: Pick<import("./types").RvSession, "id" | "sessionCode">): Promise<TelepathicTargetCodeSnapshot | undefined> {
   if (snapshot.protocol?.id !== "telepathic-protocol" || snapshot.sessionId !== session.id || snapshot.sessionCode !== session.sessionCode ||
       !session.id || !session.sessionCode?.trim() || (snapshot.sessionLanguage !== "pl" && snapshot.sessionLanguage !== "en") || snapshot.profileTargetCode !== undefined || snapshot.rcpProfileTargetCode !== undefined || snapshot.researchTargetCode !== undefined) {
     throw new Error("Conflicting frozen Telepathic target-code policy or Session Snapshot.");
   }
+  await validateSessionTargetCodeFragment(snapshot);
   const saved = snapshot.telepathicProfileTargetCode;
   if (saved === undefined) return undefined;
   if (!saved || typeof saved !== "object") throw new Error("Invalid frozen Telepathic target-code snapshot.");

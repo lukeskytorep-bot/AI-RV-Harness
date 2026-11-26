@@ -13,7 +13,7 @@ const v1:FrozenAnalyticalOutputPolicy={version:1,initialTokens:16384,recoveryTok
 const v2:FrozenAnalyticalOutputPolicy={version:2,initialTokens:32768,recoveryTokens:49152};
 for(const policy of [undefined,v1,v2]) for(const role of ["viewer","monitor"] as const)it(`B2 actual Research post-Reveal ${role} honors frozen ${policy?.version??"absent"}`,async()=>{
  let transcript="";
- const snapshot={researchProjectId:"r",providerConfigId:"p",modelId:"m",sessionLanguage:"en",generationSettings:{requested:{reasoningEffort:"high",temperature:0.5},effective:{},omitted:[]},monitor:{providerConfigId:"p",modelId:"m",effectivePrompt:"Monitor"},...(policy?{postRevealOutputPolicy:policy}:{})} as unknown as SessionSnapshot;
+ const snapshot={schemaVersion:1,researchProjectId:"r",providerConfigId:"p",modelId:"m",sessionLanguage:"en",generationSettings:{requested:{reasoningEffort:"high",temperature:0.5},effective:{},omitted:[]},monitor:{providerConfigId:"p",modelId:"m",effectivePrompt:"Monitor"},...(policy?{postRevealOutputPolicy:policy}:{})} as unknown as SessionSnapshot;
  const before=stableStringify(snapshot);
  const repository=workflowTestRepository({getSessionSnapshot:async()=>snapshot,getReveal:async()=>({source:"external_text" as const,text:"Tower",hash:"h"}),getViewerEvidence:async()=>"tall",listTargetClarifications:async()=>[],listMonitorRuns:async()=>[],listMonitorInterventions:async()=>[],appendPostRevealTurn:async(_id:string,turnRole:string,content:string)=>transcript+=JSON.stringify({role:turnRole,content})+"\n"});
  const budgets:number[]=[];

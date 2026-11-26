@@ -1,3 +1,4 @@
+import { assertSessionTargetCodeBinding, validateSessionTargetCodeFragment } from "../../sessions/targetCodeContract";
 import { isTargetCodeMode, type TargetCodeMode } from "../../domain/targetCodeMode";
 import { assertTargetCodePolicy } from "../../resources/rvLiteTargetCode";
 import { assertRcpTargetCodePolicy } from "../../sessions/rcpTargetCode";
@@ -6,11 +7,18 @@ import type { RvSession, SessionSnapshot } from "../../sessions/types";
 
 /** A restart is a new session, but inherits the original RV Lite, RCP or Telepathic experimental condition. */
 export async function capturedSessionTargetCode(
-  snapshot: Pick<SessionSnapshot, "protocol" | "profileTargetCode" | "rcpProfileTargetCode" | "telepathicProfileTargetCode" | "researchTargetCode" | "sessionId" | "sessionCode" | "sessionLanguage">,
+  snapshot: Pick<SessionSnapshot, "protocol" | "profileTargetCode" | "rcpProfileTargetCode" | "telepathicProfileTargetCode" | "researchTargetCode" | "sessionId" | "sessionCode" | "sessionLanguage"> & Partial<Pick<SessionSnapshot, "schemaVersion" | "targetCodeContract">>,
   resume: boolean,
   currentProfileMode: TargetCodeMode | undefined,
   session?: Pick<RvSession, "id" | "sessionCode">,
 ): Promise<{ blocked: boolean; restartOptions: { targetCodeMode?: TargetCodeMode } }> {
+  await validateSessionTargetCodeFragment(snapshot);
+  if (snapshot.schemaVersion === 5) {
+    if (!session) throw new Error(snapshot.protocol.id === "telepathic-protocol"
+      ? "The saved Telepathic session is required for target-code validation."
+      : "The saved session is required for target-code validation.");
+    assertSessionTargetCodeBinding(snapshot, session);
+  }
   const frozen = snapshot.profileTargetCode;
   const rcp = snapshot.rcpProfileTargetCode;
   const isTelepathic = snapshot.protocol.id === "telepathic-protocol" || snapshot.telepathicProfileTargetCode !== undefined;

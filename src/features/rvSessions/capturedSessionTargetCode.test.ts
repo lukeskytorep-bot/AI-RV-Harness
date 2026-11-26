@@ -47,7 +47,7 @@ it.each(["without_code", "with_code", undefined] as const)("dispatches a fresh c
   expect(original.state).toBe("AwaitingReveal");
   const saved = await repository.getSessionSnapshot("original");
   expect(saved).toBeTruthy();
-  const captured = await capturedSessionTargetCode(saved!, false, mode === "without_code" ? "with_code" : "without_code");
+  const captured = await capturedSessionTargetCode(saved!, false, mode === "without_code" ? "with_code" : "without_code", (await repository.getRvSession("original"))!);
   const result = await runAutomaticRvLiteSession({ repository, workspaceId: "w", profileId: "p", providerConfig: config, model, protocol: getRvLite("en", "core"), sessionLanguage: "en", requestedSettings: { maxOutputTokens: 1024 }, ...captured.restartOptions, sessionIdentity: { id: "fresh", sessionCode: code }, chat: async ({ messages }) => { requests.push(JSON.stringify(messages)); return { content: "Observation", finishReason: "stop", usage: {} }; } });
   expect(result.state).toBe("AwaitingReveal");
   expect(result.sessionCode).toBe(code);

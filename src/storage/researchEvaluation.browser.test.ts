@@ -17,7 +17,7 @@ it("Browser evaluation after End persists independently and refuses source write
  const project=await repository.createResearchProject({schemaVersion:1,name:"Study",workspaceId:workspace.id,templateType:"model",sessionLanguage:"en",protocol:createResearchProtocolSelection("full-rcp","en"),targetIds:["t"],repetitions:1,requireUnusedTargets:false,conditions:[{key:"a",label:"A",profileId:profile.id,providerConfigId:provider.id,modelId:"m",requestedSettings:{}}],judges:[{providerConfigId:"pc",modelId:"m"}],randomization:{matchedTargets:true,randomizedExecution:true,randomizedJudgeOrder:true}});
  await repository.lockResearchProject(project.id,{configHash:"frozen",conditions:[],mappings:[],assignments:[{id:"a",researchProjectId:project.id,sessionId:"s",targetId:"t",anonymousSessionId:"BlindSession_ABCDEF12",executionOrder:1,judgeOrder:1,status:"SessionComplete"}]});
  await repository.createRvSession({id:"s",workspaceId:workspace.id,profileId:profile.id,sessionCode:"S",runType:"automatic",researchProjectId:project.id});
- await repository.saveSessionSnapshot("s",{sessionLanguage:"en"} as SessionSnapshot,"hash");
+ await repository.saveSessionSnapshot("s",{schemaVersion:1,sessionLanguage:"en"} as SessionSnapshot,"hash");
  await repository.sealPreReveal("s","A broad structure.",await sha256Text("A broad structure."));await repository.acceptReveal("s",{source:"automatic_target",text:"A broad tower",artifactManifest:[],hash:"reveal-hash"});
  await repository.setResearchProjectState(project.id,"Judging");await repository.endResearchExecution(project.id);
  const source=await repository.getRvSession("s"),marker=await repository.getResearchExecutionTermination(project.id);

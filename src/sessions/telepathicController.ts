@@ -1,3 +1,4 @@
+import { assertSessionTargetCodeBinding, captureSessionTargetCodeContract, validateSessionTargetCodeContract } from "./targetCodeContract";
 import { assertTargetCodeAbsent, resolveTargetCodeMode, type TargetCodeMode } from "../domain/targetCodeMode";
 import { freezeTelepathicTargetCode, restoreTelepathicTargetCode, telepathicTargetCodePolicy } from "./telepathicTargetCode";
 import { getTelepathicProtocol } from "../resources/protocolRegistry";
@@ -156,6 +157,10 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
   const sessionId = input.resumeSession?.id ?? `session_${crypto.randomUUID()}`;
   const sessionCode = input.resumeSession?.sessionCode ?? createSessionCode(input.sessionCodePrefix);
   const storedSnapshot = input.resumeSession && input.repository.getSessionSnapshot ? await input.repository.getSessionSnapshot(sessionId) : null;
+  if (storedSnapshot) {
+    await validateSessionTargetCodeContract(storedSnapshot);
+    assertSessionTargetCodeBinding(storedSnapshot, { id: sessionId, sessionCode });
+  }
   if (input.resumeSession && !storedSnapshot) throw new Error("Telepathic Resume requires a saved Session Snapshot.");
   const frozenCode = storedSnapshot && input.resumeSession ? await restoreTelepathicTargetCode(storedSnapshot, input.resumeSession) : undefined;
   if (input.resumeSession && input.targetCodeMode !== undefined && !frozenCode) throw new Error("Telepathic target-code Resume requires its saved policy.");
@@ -275,6 +280,12 @@ async function runAutomaticTelepathicSessionOwned(input: AutomaticTelepathicRunI
     applicationVersion: APP_VERSION,
     createdAt: new Date().toISOString(),
   };
+  if (!storedSnapshot) await captureSessionTargetCodeContract(snapshot);
+  else if (storedSnapshot.targetCodeContract) {
+    snapshot.schemaVersion = storedSnapshot.schemaVersion;
+    snapshot.targetCodeContract = structuredClone(storedSnapshot.targetCodeContract);
+    await validateSessionTargetCodeContract(snapshot);
+  }
   await input.repository.saveSessionSnapshot(sessionId, snapshot, await sha256Text(JSON.stringify(snapshot)));
   await input.repository.appendSessionEvent(sessionId, { eventType: "PREFLIGHT_COMPLETE", role: "controller", metadata: { controllerSteps: 9, fixedDeepeningAfterSteps: [3, 4, 5], monitorAfterSteps: input.monitor ? [2, 3, 4, 5, 6, 7, 8] : [] } });
   notify(input, sessionId, sessionCode, "Preflight", transcript, undefined, metrics, startedAtMs);

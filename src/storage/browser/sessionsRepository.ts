@@ -1,3 +1,4 @@
+import { validateSessionTargetCodeContract } from "../../sessions/targetCodeContract";
 import { verifyFocusEvidence } from "../../sessions/sessionFocusLifecycle";
 import { assertFocusPassesComplete } from "../../sessions/sessionFocus";
 import type {
@@ -247,13 +248,16 @@ export class BrowserSessionsRepository implements SessionsRepository {
   }
 
   async saveSessionSnapshot(sessionId: string, snapshot: SessionSnapshot, hash: string): Promise<void> {
+    await validateSessionTargetCodeContract(snapshot, sessionId);
     const all = this.read<Array<{ sessionId: string; snapshot: SessionSnapshot; hash: string }>>(SESSION_SNAPSHOTS_KEY, []);
     if (all.some((item) => item.sessionId === sessionId)) throw new Error("session snapshots are immutable");
     this.write(SESSION_SNAPSHOTS_KEY, [...all, { sessionId, snapshot, hash }]);
   }
 
   async getSessionSnapshot(sessionId: string): Promise<SessionSnapshot | null> {
-    return this.read<Array<{ sessionId: string; snapshot: SessionSnapshot; hash: string }>>(SESSION_SNAPSHOTS_KEY, []).find((item) => item.sessionId === sessionId)?.snapshot ?? null;
+    const snapshot = this.read<Array<{ sessionId: string; snapshot: SessionSnapshot; hash: string }>>(SESSION_SNAPSHOTS_KEY, []).find((item) => item.sessionId === sessionId)?.snapshot ?? null;
+    if (snapshot) await validateSessionTargetCodeContract(snapshot, sessionId);
+    return snapshot;
   }
 
   async sealPreReveal(sessionId: string, transcript: string, hash: string): Promise<void> {

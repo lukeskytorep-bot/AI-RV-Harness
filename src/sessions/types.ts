@@ -127,7 +127,8 @@ export interface SessionSnapshot {
   rcpProfileTargetCode?: import("./rcpTargetCode").RcpTargetCodeSnapshot;
   profileTargetCode?: { policy: import("../resources/rvLiteTargetCode").TargetCodePolicy; renderProfileName: string | null; renderedPrompts: { content: string; sha256: string }[] };
   researchTargetCode?: { policy: import("../resources/rvLiteTargetCode").TargetCodePolicy; renderedPrompts: { content: string; sha256: string }[] };
-  schemaVersion: 1 | 2 | 3 | 4;
+  schemaVersion: 1 | 2 | 3 | 4 | 5;
+  targetCodeContract?: import("./targetCodeContract").SessionTargetCodeContract;
   sessionId: string;
   sessionCode: string;
   profileId: string;

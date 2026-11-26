@@ -1,3 +1,4 @@
+import { validateSessionTargetCodeContract } from "../../sessions/targetCodeContract";
 import { verifyFocusEvidence } from "../../sessions/sessionFocusLifecycle";
 import { assertFocusPassesComplete } from "../../sessions/sessionFocus";
 import type {
@@ -311,6 +312,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
   }
 
   async saveSessionSnapshot(sessionId: string, snapshot: SessionSnapshot, hash: string): Promise<void> {
+    await validateSessionTargetCodeContract(snapshot, sessionId);
     await this.dependencies.executeWrite(
       `INSERT INTO session_snapshots (id, session_id, snapshot_json, snapshot_hash, created_at)
        VALUES ($1, $2, $3, $4, $5)`,
@@ -320,7 +322,9 @@ export class SqliteSessionsRepository implements SessionsRepository {
 
   async getSessionSnapshot(sessionId: string): Promise<SessionSnapshot | null> {
     const rows = await this.dependencies.select<{ snapshot_json: string }[]>("SELECT snapshot_json FROM session_snapshots WHERE session_id = $1 LIMIT 1", [sessionId]);
-    return rows[0] ? JSON.parse(rows[0].snapshot_json) as SessionSnapshot : null;
+    const snapshot = rows[0] ? JSON.parse(rows[0].snapshot_json) as SessionSnapshot : null;
+    if (snapshot) await validateSessionTargetCodeContract(snapshot, sessionId);
+    return snapshot;
   }
 
   async sealPreReveal(sessionId: string, transcript: string, hash: string): Promise<void> {

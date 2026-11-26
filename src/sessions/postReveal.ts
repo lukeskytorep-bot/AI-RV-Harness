@@ -1,3 +1,4 @@
+import { assertSessionTargetCodeBinding, validateSessionTargetCodeContract } from "./targetCodeContract";
 import { assertTargetCodeAbsent } from "../domain/targetCodeMode";
 import { restoreTelepathicTargetCode } from "./telepathicTargetCode";
 import type { SessionSnapshot } from "./types";
@@ -75,6 +76,12 @@ async function sendPostRevealTurnOwned(input: {
     input.repository.listTargetClarifications(input.sessionId),
   ]);
   if (!snapshot || !reveal) throw new Error("Sealed session snapshot and Reveal are required for post-reveal discussion.");
+  await validateSessionTargetCodeContract(snapshot, input.sessionId);
+  if (snapshot.schemaVersion === 5) {
+    const session = await input.repository.getRvSession?.(input.sessionId);
+    if (!session) throw new Error("Saved session is required for target-code validation.");
+    assertSessionTargetCodeBinding(snapshot, session);
+  }
   const telepathicTargetCode = await restorePostRevealTelepathicTargetCode(input.repository, input.sessionId, snapshot);
   const budgetPolicy = snapshot.researchProjectId ? analyticalBudgetPolicyForSnapshot(snapshot.postRevealOutputPolicy) : input.budgetPolicy;
   if (snapshot.providerConfigId !== input.providerConfig.id || snapshot.modelId !== input.model.modelId) {
@@ -529,6 +536,12 @@ async function sendMonitorPostRevealReviewOwned(input: {
     input.repository.listTargetClarifications(input.sessionId),
   ]);
   if (!snapshot?.monitor || !reveal) throw new Error("A captured Monitor route and accepted Reveal are required for the Monitor post-reveal review.");
+  await validateSessionTargetCodeContract(snapshot, input.sessionId);
+  if (snapshot.schemaVersion === 5) {
+    const session = await input.repository.getRvSession?.(input.sessionId);
+    if (!session) throw new Error("Saved session is required for target-code validation.");
+    assertSessionTargetCodeBinding(snapshot, session);
+  }
   const telepathicTargetCode = await restorePostRevealTelepathicTargetCode(input.repository, input.sessionId, snapshot);
   if (snapshot.monitor.providerConfigId !== input.providerConfig.id || snapshot.monitor.modelId !== input.model.modelId) {
     throw new Error("The post-reveal Monitor review must use the Monitor route captured in the Session Snapshot.");

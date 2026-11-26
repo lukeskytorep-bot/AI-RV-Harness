@@ -1,3 +1,4 @@
+import { captureSessionTargetCodeContract } from "../sessions/targetCodeContract";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync,rmSync,copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,7 +26,15 @@ it("SQLite close/reopen and database copy preserve B's frozen prompts/policy and
   const legacy={schemaVersion:1,sessionCode:"RV-OLD",protocol:{contentSha256:p.contentSha256}} as SessionSnapshot;
   await repository().saveSessionSnapshot("b",snapshot,await sha256Text(JSON.stringify(snapshot)));
   await repository().saveSessionSnapshot("old",legacy,"legacy-immutable-hash");
+  const current = structuredClone(snapshot);
+  current.sessionId = "current";
+  await captureSessionTargetCodeContract(current);
+  await repository().saveSessionSnapshot("current",current,await sha256Text(JSON.stringify(current)));
   db.close();db=undefined;copyFileSync(path,join(directory,"restored.sqlite"));db=new DatabaseSync(join(directory,"restored.sqlite"));
+  expect(await repository().getSessionSnapshot("current")).toEqual(current);
+  const damaged = structuredClone(current); delete damaged.researchTargetCode;
+  db.prepare("UPDATE session_snapshots SET snapshot_json=? WHERE session_id='current'").run(JSON.stringify(damaged));
+  await expect(repository().getSessionSnapshot("current")).rejects.toThrow("contract");
   expect(await repository().getSessionSnapshot("b")).toEqual(snapshot);expect(await repository().getSessionSnapshot("old")).toEqual(legacy);
   expect((await repository().getSessionSnapshot("old"))?.researchTargetCode).toBeUndefined();
   expect(renderRvLiteSteps(p,"Leo","RV-OLD")[1]).toContain("RV-OLD");

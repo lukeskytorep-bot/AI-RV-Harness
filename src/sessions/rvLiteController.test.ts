@@ -594,3 +594,47 @@ describe("ordinary RV profile target-code payloads", () => {
     expect(chat).not.toHaveBeenCalled();
   });
 });
+
+it("refuses Resume before dispatch when a new snapshot loses its target-code policy", async () => {
+  const snapshots: SessionSnapshot[] = [];
+  const repo = repository([], snapshots);
+  const chat = vi.fn(async () => ({ content: "Observation", finishReason: "stop", usage: {} }));
+  const input = { repository: repo, workspaceId: "w", profileId: "profile", providerConfig: config, model,
+    protocol: getRvLite("en"), sessionLanguage: "en" as const, targetCodeMode: "without_code" as const,
+    requestedSettings: { maxOutputTokens: 1024 }, chat };
+  const result = await runAutomaticRvLiteSession(input);
+  const saved = structuredClone(snapshots[0]);
+  expect(saved.schemaVersion).toBe(5);
+  delete saved.profileTargetCode;
+  const resumeRepo = Object.assign(repo, { getSessionSnapshot: async () => saved });
+  chat.mockClear();
+  await expect(runAutomaticRvLiteSession({ ...input, repository: resumeRepo, resumeSession: { id: result.sessionId, sessionCode: result.sessionCode } as never }))
+    .rejects.toThrow("contract");
+  expect(chat).not.toHaveBeenCalled();
+});
+
+it.each([undefined, "without_code"] as const)("refuses missing RV Lite Resume snapshot with mode %s, without saving or dispatch", async mode => {
+  const repo = Object.assign(repository([]), { getSessionSnapshot: async () => null });
+  const save = vi.spyOn(repo, "saveSessionSnapshot");
+  const chat = vi.fn();
+  await expect(runAutomaticRvLiteSession({ repository: repo, workspaceId: "w", profileId: "p", providerConfig: config, model,
+    protocol: getRvLite("en"), sessionLanguage: "en", requestedSettings: {}, targetCodeMode: mode,
+    resumeSession: { id: "lost", sessionCode: "RV-LOST" } as never, chat })).rejects.toThrow(/Session Snapshot/);
+  expect(chat).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled();
+});
+
+it("refuses a self-consistent v5 snapshot with the wrong code for the actual resumed session", async () => {
+  const { captureSessionTargetCodeContract } = await import("./targetCodeContract");
+  const snapshots: SessionSnapshot[] = []; const repo = repository([], snapshots);
+  const chat = vi.fn(async () => ({ content: "Observation", finishReason: "stop", usage: {} }));
+  const input = { repository: repo, workspaceId: "w", profileId: "profile", providerConfig: config, model,
+    protocol: getRvLite("en"), sessionLanguage: "en" as const, requestedSettings: { maxOutputTokens: 1024 }, chat };
+  const result = await runAutomaticRvLiteSession(input);
+  const other = structuredClone(snapshots[0]); other.sessionCode = "RV-OTHER";
+  await captureSessionTargetCodeContract(other);
+  const resumeRepo = Object.assign(repo, { getSessionSnapshot: async () => other });
+  const save = vi.spyOn(resumeRepo, "saveSessionSnapshot"); chat.mockClear();
+  await expect(runAutomaticRvLiteSession({ ...input, repository: resumeRepo,
+    resumeSession: { id: result.sessionId, sessionCode: result.sessionCode } as never })).rejects.toThrow(/contract mismatch/);
+  expect(chat).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled();
+});

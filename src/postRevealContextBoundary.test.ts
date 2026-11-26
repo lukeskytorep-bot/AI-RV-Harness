@@ -139,8 +139,9 @@ describe("POST-REVEAL-CONTEXT-1 boundaries", () => {
     // T3 changes Viewer completion evidence, durable manual authorization and its one-physical-attempt allowance.
     // R4 adds additive Viewer actualProvider telemetry; normalization above excludes only that metadata field.
     // CODE-4 adds frozen target-code policy, neutral prompts and pre-dispatch guards for Viewer and Monitor.
+    // CODE-6A adds durable Session target-code integrity checks, without changing Monitor prompts.
     // Freeze the accepted execution baseline while the Monitor prompt contract above remains separately byte-stable.
-    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("1bb4a6b5f10082642fc2e54668e50bc13e71290ff77a041fd733eeb1c42d5edd");
+    expect(createHash("sha256").update(telepathicWithoutS2OrFieldGuideWiring).digest("hex")).toBe("be8959ec3644756b48a883096fc55a3cf67e0312c87901b84ef6d677e496027a");
   });
 
   it("keeps AI Judge prompt, rubric, scoring and packet byte-identical while allowing ORP1 resource wiring in the engine", () => {
