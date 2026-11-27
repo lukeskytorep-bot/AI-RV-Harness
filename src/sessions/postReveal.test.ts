@@ -1,14 +1,20 @@
 import type { AppRepository } from "../storage/repository";
 import { parsePostRevealTranscript } from "./postRevealTranscript";
 import { workflowTestRepository } from "../testing/workflowRepository";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../providers/native", () => ({
+const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke, Channel: class {} }));
+vi.mock("../providers/native", async importOriginal => ({
+  ...await importOriginal<typeof import("../providers/native")>(),
   discoverOpenRouterModelEndpoints: vi.fn(async () => ({ data: { endpoints: [
     { tag: "test/large", context_length: 262_144, max_completion_tokens: 65_536 },
   ] } })),
-  providerChatAttempt: vi.fn(),
 }));
+afterEach(() => {
+  invoke.mockReset();
+  vi.unstubAllGlobals();
+});
 import { automaticPostRevealReviewRequest, findCompletedAutomaticViewerReview, findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview, sendMonitorPostRevealReview, sendPostRevealTurn, supportedAutomaticPostRevealReviewRequests } from "./postReveal";
 import type { ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import { ProviderCallError } from "../providers/providerError";
@@ -477,19 +483,38 @@ it.each(["research", "profile"] as const)("keeps a saved %s Without-code session
  expect(calls).toBe(2);for(const payload of payloads)expect(payload).not.toMatch(/RV-B-LOCAL-ONLY|without_code|target-code-presence/);
 });
 
-it.each(["viewer", "monitor"] as const)("blocks the explicit Without-code Research ID in %s post-Reveal evidence before dispatch", async role => {
+it.each([
+  ["viewer", false], ["monitor", false],
+  ["viewer", true], ["monitor", true],
+] as const)("%s post-Reveal keeps the protected Research code out of IPC (injected code: %s)", async (role, injected) => {
   const { targetCodePolicy } = await import("../resources/rvLiteTargetCode");
-  const chat = vi.fn(), appendPostRevealTurn = vi.fn();
+  vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+  invoke.mockResolvedValue({ content: "Completed review", finish_reason: "stop" });
+  const appendPostRevealTurn = vi.fn(async () => "Saved review");
   const code = "RV-PROTECTED-TEST";
   const repository = workflowTestRepository({
     getSessionSnapshot: async () => ({ schemaVersion: 1, sessionLanguage: "en", sessionCode: code,
       providerConfigId: config.id, modelId: model.modelId, monitor: { providerConfigId: config.id, modelId: model.modelId },
       researchTargetCode: { policy: targetCodePolicy("without_code"), renderedPrompts: [] } }),
-    getReveal: async () => ({ text: "A bridge" }), getViewerEvidence: async () => `An observation at ${code}`,
+    getReveal: async () => ({ text: "A bridge" }), getViewerEvidence: async () => injected ? `An observation at ${code}` : "A tall rectangular shape",
     listTargetClarifications: async () => [], listMonitorRuns: async () => [], appendPostRevealTurn,
   } as unknown as AppRepository);
-  const input = { repository, sessionId: "s", existingTranscript: "", providerConfig: config, model, chat };
-  await expect(role === "viewer" ? sendPostRevealTurn({ ...input, content: "Compare evidence." }) : sendMonitorPostRevealReview(input)).rejects.toThrow(/Target-code policy refused/);
-  expect(chat).not.toHaveBeenCalled();
-  expect(appendPostRevealTurn).not.toHaveBeenCalled();
+  const input = { repository, sessionId: "s", existingTranscript: "", providerConfig: config, model, maxRetries: 0 };
+  const review = role === "viewer"
+    ? sendPostRevealTurn({ ...input, content: "Compare evidence." })
+    : sendMonitorPostRevealReview(input);
+  if (injected) {
+    await expect(review).rejects.toThrow(/Target-code policy refused/);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(appendPostRevealTurn).not.toHaveBeenCalled();
+    return;
+  }
+  await expect(review).resolves.toMatchObject({ response: { content: "Completed review" } });
+  expect(invoke).toHaveBeenCalledExactlyOnceWith("provider_chat", expect.objectContaining({
+    request: expect.objectContaining({ modelId: model.modelId }),
+  }));
+  const payload = JSON.stringify(invoke.mock.calls[0][1].request);
+  expect(payload).toContain("A tall rectangular shape");
+  expect(payload).toContain("A bridge");
+  expect(payload).not.toMatch(/RV-PROTECTED-TEST|without_code|target-code-presence/);
 });

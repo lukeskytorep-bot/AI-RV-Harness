@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach,it,expect,vi } from "vitest";
 import { executeProviderChat } from "../providers/requestExecutor";
-import { normalizeModelDiscovery } from "../providers/capabilities";
-import { resolveGenerationSettings } from "../providers/capabilities";
+import { normalizeModelDiscovery, resolveGenerationSettings } from "../providers/capabilities";
 import { BrowserRepository } from "../storage/browserRepository";
 import { targetCodeConfig,provider as fixtureProvider,model as fixtureModel } from "../testing/targetCodeFixture";
 import { buildResearchLockPlan } from "./planner";
@@ -15,8 +14,25 @@ import { output } from "../testing/researchJudgeRecoveryFixture";
 import { exportResearchPackage } from "../exports/research";
 const { writeExportPackage } = vi.hoisted(()=>({writeExportPackage:vi.fn(async()=>({directory:"test",manifestHash:"hash"}))}));
 vi.mock("../exports/native",()=>({writeExportPackage}));
+
+const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke, Channel: class {} }));
+vi.mock("../storage", async importOriginal => ({
+  ...await importOriginal<typeof import("../storage")>(),
+  isTauriRuntime: () => true,
+}));
+
+type ChatIpcRequest = { provider: string; modelId: string; messages: ProviderMessage[] };
+function mockChatResponse(respond: (request: ChatIpcRequest) => { content: string; finish_reason: string }) {
+  invoke.mockImplementation((command: string, args: { request: ChatIpcRequest }) => {
+    // The STOP test also sends a cancellation command.
+    if (command === "cancel_provider_request") return Promise.resolve();
+    expect(command).toBe("provider_chat");
+    return Promise.resolve(respond(structuredClone(args.request)));
+  });
+}
 const locks=()=>{const held=new Set<string>();return{request:async(name:string,_opts:unknown,cb:(lock:object|null)=>Promise<unknown>)=>{if(held.has(name))return cb(null);held.add(name);try{return await cb({name});}finally{held.delete(name);}}};};
-afterEach(()=>{localStorage.clear();vi.unstubAllGlobals();});
+afterEach(()=>{localStorage.clear();vi.unstubAllGlobals();invoke.mockReset();});
 it.each(["custom_openai","ollama_cloud"] as const)("%s: independent sessions persist B across reconnect and STOP/Resume without resending P1",async providerKind=>{
  const provider={...fixtureProvider,provider:providerKind,...(providerKind==="ollama_cloud"?{baseUrl:undefined}:{})};
  const model=providerKind==="ollama_cloud"?normalizeModelDiscovery(provider,{models:[{name:fixtureModel.modelId}]},"t")[0]:fixtureModel;
@@ -49,29 +65,58 @@ it.each(["custom_openai","ollama_cloud"] as const)("%s: independent sessions per
  initialize.mockRestore();
  localStorage.setItem(mappingKey, originalMappings);
 
- const stop=new AbortController();const before:ProviderMessage[][]=[];
- await executeResearchSessions({repository,projectId:project.id,signal:stop.signal,rvLiteSessionRunner:input=>runAutomaticRvLiteSession({...input,chat:request=>executeProviderChat({...request,operationKind:"research_viewer",configuredRetries:0,attempt:async({messages})=>{before.push(structuredClone(messages));stop.abort();return {content:"Accepted B first answer",finishReason:"stop",usage:{}};}})})});
+ const stop = new AbortController();
+ const before: ChatIpcRequest[] = [];
+ mockChatResponse(request => {
+   expect(request.provider).toBe(providerKind);
+   expect(request.modelId).toBe(model.modelId);
+   before.push(request);
+   stop.abort();
+   return { content: "Accepted B first answer", finish_reason: "stop" };
+ });
+ await executeResearchSessions({repository,projectId:project.id,signal:stop.signal,rvLiteSessionRunner:input=>runAutomaticRvLiteSession({...input,chat:request=>executeProviderChat({...request,operationKind:"research_viewer",configuredRetries:0})})});
  const stopped=(await repository.listResearchAssignments(project.id)).find(a=>a.sessionId)!;
  const snapshot=await repository.getSessionSnapshot(stopped.sessionId!);expect(snapshot?.researchTargetCode?.policy.mode).toBe("without_code");
+ expect(before).toHaveLength(1);
+ expect(JSON.stringify(before[0])).not.toContain(snapshot!.sessionCode);
  expect((await repository.getRvSession(stopped.sessionId!))?.state).toBe("Interrupted");
  repository=new BrowserRepository();expect(await repository.getSessionSnapshot(stopped.sessionId!)).toEqual(snapshot);
  // STOP during an accepted response leaves only the missing next step to resume.
  await prepareInterruptedResearchRetry(repository,project.id,async()=>true);
- const dispatched:Array<{mode:string;messages:ProviderMessage[];code:string}>=[];
- const liveChat = async (mode:string,code:string,messages:ProviderMessage[]) => {dispatched.push({mode,messages:structuredClone(messages),code});return executeProviderChat({config:provider,modelId:model.modelId,messages,settings:resolveGenerationSettings(model.capabilities,{maxOutputTokens:16384},{provider:provider.provider}),operationKind:"research_viewer",configuredRetries:0,attempt:async()=>({content:`Fresh evidence ${dispatched.length}`,finishReason:"stop",usage:{}})});};
+ const dispatched: Array<{ mode: string; request: ChatIpcRequest; code: string }> = [];
+ const liveChat = async (mode: string, code: string, messages: ProviderMessage[]) => {
+   mockChatResponse(request => {
+     dispatched.push({ mode, request, code });
+     return { content: `Fresh evidence ${dispatched.length}`, finish_reason: "stop" };
+   });
+   return executeProviderChat({
+     config: provider, modelId: model.modelId, messages,
+     settings: resolveGenerationSettings(model.capabilities, { maxOutputTokens: 16384 }, { provider: provider.provider }),
+     operationKind: "research_viewer", configuredRetries: 0,
+   });
+ };
  await executeResearchSessions({repository,projectId:project.id,sessionReplayFactory:args=>createSessionReplay({...args,liveChat:({messages})=>liveChat("without_code",args.session.sessionCode,messages)}),rvLiteSessionRunner:input=>runAutomaticRvLiteSession({...input,chat:input.chat??(({messages})=>liveChat(input.targetCode!.mode,input.sessionIdentity!.sessionCode,messages))})});
  const assignments=await repository.listResearchAssignments(project.id);expect(assignments.every(a=>a.status==="SessionComplete")).toBe(true);
  const sessions=await repository.listRvSessions(workspace.id);expect(sessions).toHaveLength(2);expect(new Set(sessions.map(s=>s.sessionCode)).size).toBe(2);expect(new Set(sessions.map(s=>s.id)).size).toBe(2);
  expect(sessions.every(s=>s.targetId===target.id && s.state==="Revealed")).toBe(true);
  expect(dispatched.filter(d=>d.mode==="without_code")).toHaveLength(3);expect(dispatched.filter(d=>d.mode==="with_code")).toHaveLength(4);
- for(const d of dispatched.filter(d=>d.mode==="without_code"))expect(JSON.stringify(d.messages)).not.toContain(d.code);
- const firstA=dispatched.find(d=>d.mode==="with_code")!;expect(JSON.stringify(firstA.messages)).not.toContain("Accepted B first answer");expect(firstA.messages.filter(m=>m.role==="assistant")).toHaveLength(0);
+ for(const d of dispatched.filter(d=>d.mode==="without_code"))expect(JSON.stringify(d.request)).not.toContain(d.code);
+ const firstA=dispatched.find(d=>d.mode==="with_code")!;expect(dispatched.some(d=>d.mode==="with_code" && JSON.stringify(d.request).includes(d.code))).toBe(true);expect(JSON.stringify(firstA.request.messages)).not.toContain("Accepted B first answer");expect(firstA.request.messages.filter(m=>m.role==="assistant")).toHaveLength(0);
  await expect(unblindAndComputeResearch(repository,project.id)).rejects.toThrow(/every Judge score/);
  expect((await repository.getResearchProject(project.id))?.configHash).toBe(plan.configHash);
  const judgePayloads:string[]=[];
- await judgeResearch({repository,projectId:project.id,judgeRunner:args=>runBlindJudging({...args,chat:request=>executeProviderChat({...request,operationKind:"judge",configuredRetries:0,attempt:async({messages})=>{judgePayloads.push(JSON.stringify(messages));return {content:output,finishReason:"stop",usage:{}};}})})});
- expect(judgePayloads).toHaveLength(2);
- for(const payload of judgePayloads)expect(payload).not.toMatch(/with_code|without_code|target-code-presence|pair_tc|Target code/);
+ mockChatResponse(request => {
+   judgePayloads.push(JSON.stringify(request));
+   // Produce one malformed reply so the actual Judge JSON repair also reaches the IPC boundary.
+   return { content: judgePayloads.length === 1 ? "Malformed scores" : output, finish_reason: "stop" };
+ });
+ await judgeResearch({repository,projectId:project.id,judgeRunner:args=>runBlindJudging({...args,chat:request=>executeProviderChat({...request,operationKind:"judge",configuredRetries:0})})});
+ expect(judgePayloads).toHaveLength(3);
+ expect(judgePayloads[1]).toContain("Malformed scores");
+ for (const payload of judgePayloads) {
+   expect(payload).not.toMatch(/with_code|without_code|target-code-presence|pair_tc|Target code/);
+   expect(payload).not.toContain(snapshot!.sessionCode);
+ }
  expect((await repository.getResearchProject(project.id))?.state).toBe("ScoresFrozen");
  corruptMappings();
  await expect(unblindAndComputeResearch(repository, project.id)).rejects.toThrow(/mapping hash/);

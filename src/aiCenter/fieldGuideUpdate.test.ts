@@ -4,15 +4,21 @@ import { renderProfileTargetCodeSteps, targetCodePolicy } from "../resources/rvL
 import type { SessionSnapshot } from "../sessions/types";
 import { createHash } from "node:crypto";
 import { workflowTestRepository } from "../testing/workflowRepository";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../providers/native", () => ({
+const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke, Channel: class {} }));
+vi.mock("../providers/native", async importOriginal => ({
+  ...await importOriginal<typeof import("../providers/native")>(),
   discoverOpenRouterModelEndpoints: vi.fn(async () => ({ data: { endpoints: [
     { tag: "test/large", context_length: 262_144, max_completion_tokens: 65_536 },
   ] } })),
-  providerChatAttempt: vi.fn(),
 }));
-import type { ProviderConfig, ProviderModel } from "../providers/types";
+afterEach(() => {
+  invoke.mockReset();
+  vi.unstubAllGlobals();
+});
+import type { ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import type { ProviderChatAttempt } from "../providers/requestExecutor";
 import type { AppRepository } from "../storage/repository";
 import type { TrainingRunRecord } from "../training/types";
@@ -333,14 +339,19 @@ for (const scenario of ["clean", "initial-code", "repair-code", "clean-repair", 
   snapshot.profileTargetCode = { policy, renderProfileName: null, renderedPrompts: await Promise.all(renderProfileTargetCodeSteps(resource, undefined, snapshot.sessionCode, policy).map(async content => ({ content, sha256: await sha256Text(content) }))) };
   h.run.executionSnapshot = { language: "en", generationSettings: {}, transport: { maxRetries: 0, requestTimeoutMs: 30000, sessionCodePrefix: "RV" }, targetCodePolicy: policy };
   const payloads: string[] = [];
-  const chat: NonNullable<Parameters<typeof runFieldGuideUpdate>[0]["chat"]> = async request => {
-    payloads.push(JSON.stringify(request.messages));
-    if (scenario === "repair-code" && payloads.length === 1) return response(`invalid JSON ${snapshot.sessionCode}`);
-    if (scenario === "clean-repair" && payloads.length === 1) return response("invalid JSON");
-    if (scenario === "output-recovery" && payloads.length === 1) return { ...response("partial"), finishReason: "length" };
-    return response(JSON.stringify({ decision: "UPDATE", fieldGuide: "Compare rhythmic pressure and geometry.", changeSummary: "Refinement" }));
-  };
-  const result = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: snapshot.sessionId, postRevealReview: scenario === "initial-code" ? snapshot.sessionCode : "Review", providerConfig: provider, model, chat });
+  vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+  invoke.mockImplementation(async (command: string, { request }: { request: { messages: ProviderMessage[] } }) => {
+    expect(command).toBe("provider_chat");
+    payloads.push(JSON.stringify(request));
+    const first = payloads.length === 1;
+    const content = first && scenario === "repair-code" ? `invalid JSON ${snapshot.sessionCode}`
+      : first && scenario === "clean-repair" ? "invalid JSON"
+      : first && scenario === "output-recovery" ? "partial"
+      : JSON.stringify({ decision: "UPDATE", fieldGuide: "Compare rhythmic pressure and geometry.", changeSummary: "Refinement" });
+    const finish_reason = first && scenario === "output-recovery" ? "length" : "stop";
+    return { content, finish_reason, response_evidence: { version: 1, transportOutcome: "response_finished", boundary: "body_read" } };
+  });
+  const result = await runFieldGuideUpdate({ budgetPolicy: "training_reveal", repository: h.repository, trainingRun: h.run, sessionId: snapshot.sessionId, postRevealReview: scenario === "initial-code" ? snapshot.sessionCode : "Review", providerConfig: provider, model });
   const blocked = scenario === "initial-code" || scenario === "repair-code";
   expect(result?.status).toBe(blocked ? "FAILED_OUTPUT_PREFLIGHT" : "UPDATE");
   expect(payloads).toHaveLength(scenario === "initial-code" ? 0 : scenario === "output-recovery" || scenario === "clean-repair" ? 2 : 1);

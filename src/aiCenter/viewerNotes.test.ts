@@ -1,17 +1,23 @@
 import { getRvLite } from "../resources/protocolRegistry";
 import { renderProfileTargetCodeSteps, targetCodePolicy } from "../resources/rvLiteTargetCode";
 import { workflowTestRepository } from "../testing/workflowRepository";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../providers/native", () => ({
+const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke, Channel: class {} }));
+vi.mock("../providers/native", async importOriginal => ({
+  ...await importOriginal<typeof import("../providers/native")>(),
   discoverOpenRouterModelEndpoints: vi.fn(async () => ({ data: { endpoints: [
     { tag: "test/large", context_length: 262_144, max_completion_tokens: 65_536 },
   ] } })),
-  providerChatAttempt: vi.fn(),
 }));
+afterEach(() => {
+  invoke.mockReset();
+  vi.unstubAllGlobals();
+});
 import type { SessionSnapshot } from "../sessions/types";
 import type { AppRepository } from "../storage/repository";
-import type { ProviderConfig, ProviderModel } from "../providers/types";
+import type { ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import { sha256Text } from "../application/sha256";
 import { buildCapacityRetryPrompt, buildReflectionPrompt, buildViewerNoteSourceSnapshot, buildReflectionRepairPrompt, estimateViewerNoteTokens, parseViewerNoteReflection, runViewerNoteReflection, stableViewerNotePacket, validateViewerNoteContent, viewerNoteReflectionCompletesStage, viewerNotesSystemBlock, viewerNotesOutputRecoveryInstruction, type ViewerNoteReflectionPacket } from "./viewerNotes";
 
@@ -223,13 +229,23 @@ describe("Viewer Notes", () => {
       failViewerNoteReflection: vi.fn(async () => undefined),
     } as unknown as AppRepository);
     const budgets:number[]=[];const stopController=new AbortController();
+    if (withoutCode) {
+      vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+      invoke.mockImplementation(async (command: string, { request }: { request: { messages: ProviderMessage[]; maxOutputTokens: number } }) => {
+        expect(command).toBe("provider_chat");
+        expect(JSON.stringify(request)).not.toContain(snapshot.sessionCode);
+        budgets.push(request.maxOutputTokens);
+        const first = budgets.length === 1;
+        const content = first && scenario === "no-code-repair" ? `invalid JSON ${snapshot.sessionCode}`
+          : first && scenario === "no-code-clean-repair" ? "invalid JSON"
+          : first && scenario === "no-code-recovery" ? "partial"
+          : '{"decision":"NO_CHANGE","notes":null,"changeSummary":"Distinct procedural notes remain sufficient"}';
+        const finish_reason = first && scenario === "no-code-recovery" ? "length" : "stop";
+        return { content, finish_reason, response_evidence: { version: 1, transportOutcome: "response_finished", boundary: "body_read" } };
+      });
+    }
     const chat = vi.fn(async (request: Parameters<NonNullable<Parameters<typeof runViewerNoteReflection>[0]["chat"]>>[0]) => {
       budgets.push(request.settings.effective.maxOutputTokens!);
-      if (withoutCode) expect(JSON.stringify(request.messages)).not.toContain(snapshot.sessionCode);
-      if (scenario === "no-code-repair" && budgets.length === 1) return { responseEvidence: { version: 1 as const, transportOutcome: "response_finished" as const, boundary: "body_read" as const }, content: `invalid JSON ${snapshot.sessionCode}`, usage: {} };
-      if (scenario === "no-code-clean-repair" && budgets.length === 1) return { responseEvidence: { version: 1 as const, transportOutcome: "response_finished" as const, boundary: "body_read" as const }, content: "invalid JSON", usage: {} };
-      if (scenario === "no-code-recovery" && budgets.length === 1) return { responseEvidence: { version: 1 as const, transportOutcome: "response_finished" as const, boundary: "body_read" as const }, content: "partial", finishReason: "length", usage: {} };
-
       if(scenario==="stop-length" || scenario==="stop-json"){stopController.abort(new DOMException("Stopped by user","AbortError"));return scenario==="stop-length"?{content:"partial",finishReason:"length",usage:{}}:{content:"malformed JSON",usage:{}};}
       if (scenario === "training-capacity-json" && budgets.length === 2) return { responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const}, content: "malformed JSON", usage: {} };
       if (scenario === "training-capacity-json" && budgets.length === 3) return { responseEvidence:{version:1 as const,transportOutcome:"response_finished" as const,boundary:"body_read" as const}, content: "partial", finishReason: "length", usage: {} };
@@ -241,7 +257,7 @@ describe("Viewer Notes", () => {
 
     const budgetPolicy = (scenario === "missing-policy" ? undefined : scenario === "wrong-policy" ? "default" : "training_reveal") as "training_reveal";
     const before = JSON.stringify(snapshot);
-    const operation = runViewerNoteReflection({ budgetPolicy, repository, sessionId: "session_1", trainingTargetCodePolicy: targetPolicy, viewerReview: scenario === "no-code-initial" ? snapshot.sessionCode : "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: await sha256Text("guide after this exact training") }, chat,signal:stopController.signal });
+    const operation = runViewerNoteReflection({ budgetPolicy, repository, sessionId: "session_1", trainingTargetCodePolicy: targetPolicy, viewerReview: scenario === "no-code-initial" ? snapshot.sessionCode : "review", providerConfig, model, fieldGuideAfterTrainingUpdate: { updateStatus: "UPDATE", versionId: "fg-after", versionNumber: 5, contentSha256: await sha256Text("guide after this exact training") }, chat: withoutCode ? undefined : chat, signal: stopController.signal });
 
     if (scenario === "missing-policy" || scenario === "wrong-policy") {
       await expect(operation).rejects.toThrow(/explicit training_reveal/);

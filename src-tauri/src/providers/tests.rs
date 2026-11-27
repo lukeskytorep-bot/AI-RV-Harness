@@ -83,6 +83,95 @@ fn chat_request(provider: ProviderKind, model_id: &str) -> ProviderChatRequest {
 }
 
 
+#[tokio::test]
+async fn target_code_visibility_survives_native_request_serialization() {
+    const CODE: &str = "RES-AUDIT-30417";
+    const SYSTEM: &str = "Compare the sealed observations.";
+    const EVIDENCE: &str = "A tall angular structure.";
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let local_origin = format!("http://{address}");
+
+    for (provider, kind, base, path, streaming) in [
+        (ProviderKind::Openrouter, "openrouter", "https://openrouter.ai", "/api/v1/chat/completions", true),
+        (ProviderKind::Openai, "openai", "https://api.openai.com", "/v1/chat/completions", false),
+        (ProviderKind::Zai, "zai", "https://api.z.ai", "/api/paas/v4/chat/completions", false),
+        (ProviderKind::Deepseek, "deepseek", "https://api.deepseek.com", "/chat/completions", false),
+        (ProviderKind::Mistral, "mistral", "https://api.mistral.ai", "/v1/chat/completions", true),
+        (ProviderKind::Blackbox, "blackbox", "https://api.blackbox.ai", "/chat/completions", true),
+        (ProviderKind::CustomOpenai, "custom_openai", local_origin.as_str(), "/chat/completions", false),
+        (ProviderKind::CustomOpenai, "custom_openai", local_origin.as_str(), "/chat/completions", true),
+        (ProviderKind::Google, "google", "https://generativelanguage.googleapis.com", "/v1beta/models/test-model:generateContent", false),
+        (ProviderKind::Anthropic, "anthropic", "https://api.anthropic.com", "/v1/messages", false),
+        (ProviderKind::OllamaCloud, "ollama_cloud", "https://ollama.com", "/api/chat", true),
+    ] {
+        for with_code in [false, true] {
+            let user = if with_code { format!("{EVIDENCE} Reference: {CODE}") } else { EVIDENCE.into() };
+            // Same camelCase command input used by the frontend's provider_chat invoke.
+            let ipc = json!({
+                "provider": kind,
+                "providerConfigId": "audit-config",
+                "credentialId": "audit-credential",
+                "baseUrl": matches!(provider, ProviderKind::CustomOpenai).then_some(base),
+                "customStreamingEnabled": matches!(provider, ProviderKind::CustomOpenai) && streaming,
+                "modelId": "test-model",
+                "maxOutputTokens": 1024,
+                "messages": [
+                    { "role": "system", "content": SYSTEM },
+                    { "role": "assistant", "content": "Received." },
+                    { "role": "user", "content": user },
+                ],
+            });
+            let request: ProviderChatRequest = serde_json::from_value(ipc).unwrap();
+            validate_chat_request(&request).unwrap();
+            let resolved_base = provider_base_url(request.provider, request.base_url.as_deref()).unwrap();
+            validate_continuation_bindings(&request, &normalized_credential_endpoint(&resolved_base).unwrap()).unwrap();
+            let (url, mut body) = build_chat_request(&request, &resolved_base).unwrap();
+            assert_eq!(url, format!("{base}{path}"));
+            if matches!(provider, ProviderKind::Mistral) {
+                enable_mistral_chat_streaming(&mut body).unwrap();
+            } else if streaming {
+                enable_chat_streaming(&mut body).unwrap();
+            }
+
+            let receive = async {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_simulator_request(&mut socket).await;
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                request
+            };
+            // Redirect the destination only after checking the native builder's URL.
+            let send = authenticated(
+                client().unwrap().post(format!("{local_origin}{path}")).json(&body),
+                provider,
+                "simulator-secret",
+            ).send();
+            let (wire, response) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(receive, send)
+            }).await.unwrap();
+            assert!(response.unwrap().status().is_success());
+            let (headers, raw_body) = wire.split_once("\r\n\r\n").unwrap();
+            assert!(headers.starts_with(&format!("POST {path} HTTP/1.1")));
+            assert_eq!(raw_body.contains(CODE), with_code, "{kind}");
+            let wire_body: Value = serde_json::from_str(raw_body).unwrap();
+            let (system, assistant, evidence) = match provider {
+                ProviderKind::Google => (
+                    "/systemInstruction/parts/0/text", "/contents/0/parts/0/text", "/contents/1/parts/0/text",
+                ),
+                ProviderKind::Anthropic => ("/system", "/messages/0/content", "/messages/1/content"),
+                _ => ("/messages/0/content", "/messages/1/content", "/messages/2/content"),
+            };
+            assert_eq!(wire_body.pointer(system).and_then(Value::as_str), Some(SYSTEM));
+            assert_eq!(wire_body.pointer(assistant).and_then(Value::as_str), Some("Received."));
+            assert_eq!(wire_body.pointer(evidence).and_then(Value::as_str), Some(user.as_str()));
+            assert_eq!(wire_body.get("stream").and_then(Value::as_bool), streaming.then_some(true));
+            for internal in ["providerConfigId", "credentialId", "sessionCode", "without_code", "with_code"] {
+                assert!(!raw_body.contains(internal), "{kind} serialized {internal}");
+            }
+        }
+    }
+}
+
 #[test]
 fn enables_openrouter_sse_and_usage_frames_without_changing_other_request_fields() {
     let request = chat_request(ProviderKind::Openrouter, "qwen/qwen3-32b");
