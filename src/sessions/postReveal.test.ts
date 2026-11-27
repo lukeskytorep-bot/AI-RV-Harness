@@ -9,7 +9,7 @@ vi.mock("../providers/native", () => ({
   ] } })),
   providerChatAttempt: vi.fn(),
 }));
-import { automaticPostRevealReviewRequest, findCompletedAutomaticViewerReview, findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview, sendPostRevealTurn, supportedAutomaticPostRevealReviewRequests } from "./postReveal";
+import { automaticPostRevealReviewRequest, findCompletedAutomaticViewerReview, findCompletedAutomaticViewerReviewRecord, runAutomaticPostRevealReview, sendMonitorPostRevealReview, sendPostRevealTurn, supportedAutomaticPostRevealReviewRequests } from "./postReveal";
 import type { ProviderConfig, ProviderMessage, ProviderModel } from "../providers/types";
 import { ProviderCallError } from "../providers/providerError";
 import googleFixture from "../providers/continuation-fixtures/google-thought-signature.json";
@@ -475,4 +475,21 @@ it.each(["research", "profile"] as const)("keeps a saved %s Without-code session
  } as unknown as AppRepository);
  await sendPostRevealTurn({repository,sessionId:"s",existingTranscript:"",providerConfig:config,model:largeModel,content:automaticPostRevealReviewRequest("en"),chat:async({messages})=>{calls++;payloads.push(JSON.stringify(messages));return {content:calls===1?"partial":"complete after-Reveal analysis",finishReason:calls===1?"length":"stop",usage:{}};}});
  expect(calls).toBe(2);for(const payload of payloads)expect(payload).not.toMatch(/RV-B-LOCAL-ONLY|without_code|target-code-presence/);
+});
+
+it.each(["viewer", "monitor"] as const)("blocks the explicit Without-code Research ID in %s post-Reveal evidence before dispatch", async role => {
+  const { targetCodePolicy } = await import("../resources/rvLiteTargetCode");
+  const chat = vi.fn(), appendPostRevealTurn = vi.fn();
+  const code = "RV-PROTECTED-TEST";
+  const repository = workflowTestRepository({
+    getSessionSnapshot: async () => ({ schemaVersion: 1, sessionLanguage: "en", sessionCode: code,
+      providerConfigId: config.id, modelId: model.modelId, monitor: { providerConfigId: config.id, modelId: model.modelId },
+      researchTargetCode: { policy: targetCodePolicy("without_code"), renderedPrompts: [] } }),
+    getReveal: async () => ({ text: "A bridge" }), getViewerEvidence: async () => `An observation at ${code}`,
+    listTargetClarifications: async () => [], listMonitorRuns: async () => [], appendPostRevealTurn,
+  } as unknown as AppRepository);
+  const input = { repository, sessionId: "s", existingTranscript: "", providerConfig: config, model, chat };
+  await expect(role === "viewer" ? sendPostRevealTurn({ ...input, content: "Compare evidence." }) : sendMonitorPostRevealReview(input)).rejects.toThrow(/Target-code policy refused/);
+  expect(chat).not.toHaveBeenCalled();
+  expect(appendPostRevealTurn).not.toHaveBeenCalled();
 });

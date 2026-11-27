@@ -55,3 +55,26 @@ it.each(["removed", "changed", "profileId", "providerConfigId", "modelId"])("ref
   await expect(executeResearchSessions({ repository, projectId: "r", sessionRunner: runner, rvLiteSessionRunner: runner })).rejects.toThrow(/target-code policy drift|condition route drift/);
   expect(runner).not.toHaveBeenCalled(); expect(initializeResearchSession).not.toHaveBeenCalled();
 });
+
+it.each(["duplicate key", "embedded key", "duplicate id", "foreign project", "unknown key"] as const)(
+  "refuses a locked Research condition set with %s before initialization",
+  async damage => {
+    const config = targetCodeConfig(); captureResearchTargetCodeContract(config);
+    const conditions = config.conditions.map(c => ({ id: `condition-${c.key}`, researchProjectId: "r", conditionKey: c.key, config: structuredClone(c) }));
+    if (damage === "duplicate key") conditions[1] = { ...structuredClone(conditions[0]), id: conditions[1].id };
+    if (damage === "embedded key") conditions[1].config.key = conditions[0].conditionKey;
+    if (damage === "duplicate id") conditions[1].id = conditions[0].id;
+    if (damage === "foreign project") conditions[1].researchProjectId = "other";
+    if (damage === "unknown key") conditions[1].config.key = conditions[1].conditionKey = "unknown";
+    const project = { id: "r", workspaceId: "w", state: "Interrupted", config, templateType: "target_code" } as ResearchProjectRecord;
+    const runner = vi.fn(), initializeResearchSession = vi.fn(), setResearchProjectState = vi.fn();
+    const repository = workflowTestRepository({ getResearchProject: async () => project, listResearchAssignments: async () => [],
+      listBlindingMappings: async () => [], listResearchConditions: async () => conditions, listTargets: async () => [],
+      listProviderConfigs: async () => [], listProviderModels: async () => [], listProfiles: async () => [],
+      setResearchProjectState, initializeResearchSession } as unknown as AppRepository);
+    await expect(executeResearchSessions({ repository, projectId: "r", sessionRunner: runner, rvLiteSessionRunner: runner })).rejects.toThrow(/condition set/);
+    expect(setResearchProjectState).toHaveBeenCalledWith("r", "Interrupted");
+    expect(initializeResearchSession).not.toHaveBeenCalled();
+    expect(runner).not.toHaveBeenCalled();
+  },
+);

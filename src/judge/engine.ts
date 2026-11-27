@@ -1,3 +1,4 @@
+import { assertTargetCodeAbsent } from "../domain/targetCodeMode";
 import { newRunGenerationSettings } from "../providers/customCompatibility";
 import { assertAbortOwnership, nativeWorkflowBinding } from "../application/abortOwnership";
 import { normalizeResearchJudgeOutput, type JudgeNormalizationTrace } from "./researchNormalization";
@@ -121,6 +122,9 @@ async function runBlindJudgingOwned(input: RunJudgingInput): Promise<JudgingResu
   const packetWire = JSON.stringify(packet);
   const packetHash = await sha256Text(packetWire);
   const chat = async (request: Parameters<NonNullable<RunJudgingInput["chat"]>>[0]) => {
+    for (const captured of [snapshot.profileTargetCode, snapshot.researchTargetCode, snapshot.rcpProfileTargetCode, snapshot.telepathicProfileTargetCode]) {
+      if (captured) assertTargetCodeAbsent(captured.policy.mode, snapshot.sessionCode, request.messages);
+    }
     const send = () => executeProviderChat({
     ...request,
     timeoutMs: input.timeoutMs,

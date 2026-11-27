@@ -201,11 +201,13 @@ describe("durable session replay", () => {
     expect(viewerConfig.id).not.toBe(monitorConfig.id);
   });
 
-  it("rehydrates exact OpenRouter continuation state before the first live resumed call", async () => {
+  it.each([false, true])("checks the hydrated OpenRouter continuation before the first live resumed call (protected code: %s)", async protectedCode => {
+    const { targetCodePolicy } = await import("../resources/rvLiteTargetCode");
+    const code = "RV-PRIVATE-RESUME";
     const config: ProviderConfig = { id: "pc", provider: "openrouter", label: "OpenRouter", credentialId: "cred", enabled: true, createdAt: "now", updatedAt: "now" };
     const captured = captureOpenRouterContinuationState({
       config, requestedModelId: "m", normalizedEndpoint: "https://openrouter.ai/api/v1",
-      reasoningDetails: [{ type: "reasoning.summary", summary: "saved", id: "s1", format: "openai-responses-v1", index: 0 }],
+      reasoningDetails: [{ type: "reasoning.summary", summary: protectedCode ? code : "saved", id: "s1", format: "openai-responses-v1", index: 0 }],
     });
     expect(captured.state).toBeDefined();
     if (!captured.state) return;
@@ -213,6 +215,7 @@ describe("durable session replay", () => {
     const liveChat = vi.fn().mockResolvedValue({ content: "live", usage: {} });
     const snapshot = {
       schemaVersion: 4, providerConfigId: "pc", credentialId: "cred", provider: "openrouter", modelId: "m", modelRoute: "openrouter:m",
+      sessionCode: code, researchTargetCode: { policy: targetCodePolicy("without_code"), renderedPrompts: [] },
       continuationRoute: { transport: "openrouter", normalizedEndpoint: "https://openrouter.ai/api/v1", providerConfigId: "pc", credentialId: "cred", requestedModelId: "m", stateFormat: "openrouter-reasoning-details", stateFormatVersion: 1 },
     } as unknown as SessionSnapshot;
     const repository = {
@@ -224,6 +227,11 @@ describe("durable session replay", () => {
     const replay = await createSessionReplay({ repository, session, events: [viewerEvent], liveChat });
     const request = { config, modelId: "m", messages: [{ role: "user" as const, content: "step 1" }, { role: "assistant" as const, content: "saved viewer" }, { role: "user" as const, content: "step 2" }], settings: { requested: {}, effective: {}, omitted: [] } };
     expect((await replay.chat(request)).content).toBe("saved viewer");
+    if (protectedCode) {
+      await expect(replay.chat(request)).rejects.toThrow(/Target-code policy refused/);
+      expect(liveChat).not.toHaveBeenCalled();
+      return;
+    }
     expect((await replay.chat(request)).content).toBe("live");
     expect(liveChat).toHaveBeenCalledTimes(1);
     const sent = liveChat.mock.calls[0][0];

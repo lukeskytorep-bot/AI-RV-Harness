@@ -35,6 +35,13 @@ async function restorePostRevealTelepathicTargetCode(repository: PostRevealRepos
   return restoreTelepathicTargetCode(snapshot, session);
 }
 
+function assertPostRevealTargetCode(snapshot: SessionSnapshot, telepathic: Awaited<ReturnType<typeof restorePostRevealTelepathicTargetCode>>, messages: ProviderMessage[]): void {
+  for (const captured of [snapshot.profileTargetCode, snapshot.researchTargetCode, snapshot.rcpProfileTargetCode, telepathic]) {
+    if (captured) assertTargetCodeAbsent(captured.policy.mode, snapshot.sessionCode, messages);
+  }
+}
+
+
 /** A provider failure in optional Training Review, not a storage/ownership failure. */
 export class OptionalTrainingReviewUnavailable extends Error {}
 
@@ -144,9 +151,7 @@ async function sendPostRevealTurnOwned(input: {
     throw new Error("Post-Reveal Session events do not match the persisted assistant transcript turns.");
   }
   if (!input.reuseExistingUserTurn) messages.push({ role: "user", content });
-  if (snapshot.profileTargetCode) assertTargetCodeAbsent(snapshot.profileTargetCode.policy.mode, snapshot.sessionCode, messages);
-  if (snapshot.rcpProfileTargetCode) assertTargetCodeAbsent(snapshot.rcpProfileTargetCode.policy.mode, snapshot.sessionCode, messages);
-  if (telepathicTargetCode) assertTargetCodeAbsent(telepathicTargetCode.policy.mode, snapshot.sessionCode, messages);
+  assertPostRevealTargetCode(snapshot, telepathicTargetCode, messages);
   validateSessionContinuationBudget(messages);
   analyticalOutputBudget({ model: input.model, messages, operationKind: "post_reveal_viewer", attempt: 0, ...(budgetPolicy ? { budgetPolicy } : {}) });
   if (!input.reuseExistingUserTurn) await input.repository.appendPostRevealTurn(input.sessionId, "user", content);
@@ -162,9 +167,7 @@ async function sendPostRevealTurnOwned(input: {
     ...(budgetPolicy ? { budgetPolicy } : {}),
     ...(automaticTrainingReview ? { recoveryInstruction: postRevealOutputRecoveryInstruction(language), recoveryReasoningMaxTokens: 10_000, recoveryReasoningMaxTokensSupported: frozenSupportsExactReasoningMaxTokens(snapshot.capabilitySnapshot), allowOpenRouterEndpointRecoveryEscalation: true } : {}),
     call: (settings, _attempt, attemptMessages) => {
-      if (snapshot.profileTargetCode) assertTargetCodeAbsent(snapshot.profileTargetCode.policy.mode, snapshot.sessionCode, attemptMessages);
-      if (snapshot.rcpProfileTargetCode) assertTargetCodeAbsent(snapshot.rcpProfileTargetCode.policy.mode, snapshot.sessionCode, attemptMessages);
-      if (telepathicTargetCode) assertTargetCodeAbsent(telepathicTargetCode.policy.mode, snapshot.sessionCode, attemptMessages);
+      assertPostRevealTargetCode(snapshot, telepathicTargetCode, attemptMessages);
       return executeProviderChat({
         config: input.providerConfig,
         modelId: input.model.modelId,
@@ -567,8 +570,7 @@ async function sendMonitorPostRevealReviewOwned(input: {
     clarifications.length ? `[SUPPLEMENTARY TARGET CLARIFICATIONS — POST-REVEAL ONLY]\n${clarifications.map((item) => item.content).join("\n\n")}` : "",
   ].filter(Boolean).join("\n\n");
   const messages: ProviderMessage[] = [{ role: "system", content: system }, { role: "user", content: packet, ...(images.length ? { images } : {}) }];
-  if (snapshot.rcpProfileTargetCode) assertTargetCodeAbsent(snapshot.rcpProfileTargetCode.policy.mode, snapshot.sessionCode, messages);
-  if (telepathicTargetCode) assertTargetCodeAbsent(telepathicTargetCode.policy.mode, snapshot.sessionCode, messages);
+  assertPostRevealTargetCode(snapshot, telepathicTargetCode, messages);
   const response = await withPostRevealReceipt({ repository: input.repository, sessionId: input.sessionId, stage: "monitor", automatic: true,
     signature: { messages, route: postRevealReceiptRoute(input.providerConfig, input.model), budgetPolicy: snapshot.postRevealOutputPolicy },
     send: async () => (await callWithAnalyticalOutputRecovery({
@@ -579,8 +581,7 @@ async function sendMonitorPostRevealReviewOwned(input: {
     requestedSettings: snapshot.monitor ? snapshot.monitor.generationSettings ?? {} : newRunGenerationSettings(input.providerConfig, {}),
     ...(snapshot.researchProjectId ? { budgetPolicy: analyticalBudgetPolicyForSnapshot(snapshot.postRevealOutputPolicy) } : {}),
     call: (settings, _attempt, attemptMessages) => {
-      if (snapshot.rcpProfileTargetCode) assertTargetCodeAbsent(snapshot.rcpProfileTargetCode.policy.mode, snapshot.sessionCode, attemptMessages);
-      if (telepathicTargetCode) assertTargetCodeAbsent(telepathicTargetCode.policy.mode, snapshot.sessionCode, attemptMessages);
+      assertPostRevealTargetCode(snapshot, telepathicTargetCode, attemptMessages);
       return executeProviderChat({ config: input.providerConfig, modelId: input.model.modelId, messages: attemptMessages, settings, timeoutMs: input.timeoutMs, signal: input.signal, configuredRetries: input.maxRetries, operationId: "post-reveal.monitor", streamWorkflowContext: input.streamWorkflowContext, attempt: input.chat, ...(input.onProviderAttemptStart ? { onAttemptStart: () => input.onProviderAttemptStart?.() } : {}) });
     },
   })).response });

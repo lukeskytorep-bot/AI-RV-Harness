@@ -183,15 +183,21 @@ async function executeResearchSessionsOwned(input: {
     typeof input.repository.listProfiles === "function" ? input.repository.listProfiles() : Promise.resolve([]),
   ]);
   const mappingByAnonymous = new Map(mappings.map((mapping) => [mapping.anonymousSessionId, mapping]));
-  const conditionById = new Map(conditions.map((condition) => [condition.id, condition]));
   const lockedConditionByKey = new Map(project.config.conditions.map((condition) => [condition.key, condition]));
-  if (conditions.length !== project.config.conditions.length) {
+  const conditionById = new Map(conditions.map((condition) => [condition.id, condition]));
+  const storedConditionKeys = new Set(conditions.map((condition) => condition.conditionKey));
+  if (lockedConditionByKey.size !== project.config.conditions.length
+    || conditions.length !== lockedConditionByKey.size
+    || storedConditionKeys.size !== conditions.length
+    || conditionById.size !== conditions.length
+    || conditions.some(stored => !stored.id?.trim() || stored.researchProjectId !== project.id
+      || stored.config?.key !== stored.conditionKey || !lockedConditionByKey.has(stored.conditionKey))) {
     await input.repository.setResearchProjectState(project.id, "Interrupted");
-    throw new Error("Locked Research condition set is incomplete; Research stopped before Resume could continue.");
+    throw new Error("Locked Research condition set is incomplete or inconsistent.");
   }
   for (const stored of conditions) {
-    const locked = lockedConditionByKey.get(stored.conditionKey);
-    if (!locked || viewerNotesSnapshotSignature(stored.config.viewerNotes) !== viewerNotesSnapshotSignature(locked.viewerNotes)) {
+    const locked = lockedConditionByKey.get(stored.conditionKey)!;
+    if (viewerNotesSnapshotSignature(stored.config.viewerNotes) !== viewerNotesSnapshotSignature(locked.viewerNotes)) {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       throw new Error("Viewer Notes snapshot drift detected after Experiment Lock; Research stopped instead of loading current notes.");
     }

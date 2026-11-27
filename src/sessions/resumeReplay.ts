@@ -135,6 +135,7 @@ export async function createSessionReplay(input: {
     }
     // The resumed controller owns retry. Replay supplies exactly one physical
     // live attempt after all durable responses have been replayed.
+    if (isViewerRequest && snapshot.researchTargetCode) assertTargetCodeAbsent(snapshot.researchTargetCode.policy.mode, snapshot.sessionCode, messages);
     if (isViewerRequest && snapshot.profileTargetCode) assertTargetCodeAbsent(snapshot.profileTargetCode.policy.mode, snapshot.sessionCode, messages);
     if (snapshot.rcpProfileTargetCode) assertTargetCodeAbsent(snapshot.rcpProfileTargetCode.policy.mode, snapshot.sessionCode, messages);
     if (snapshot.telepathicProfileTargetCode) assertTargetCodeAbsent(snapshot.telepathicProfileTargetCode.policy.mode, snapshot.sessionCode, messages);

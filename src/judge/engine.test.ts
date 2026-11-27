@@ -221,3 +221,19 @@ function scoreRecord(): JudgeScoreRecord {
     createdAt: "now",
   };
 }
+
+it.each(["initial", "repair"] as const)("refuses a protected session code in the Judge %s request", async stage => {
+  const { targetCodePolicy } = await import("../resources/rvLiteTargetCode");
+  const code = "RV-PROTECTED-JUDGE";
+  const repository = workflowTestRepository({
+    getSessionSnapshot: vi.fn().mockResolvedValue({ sessionLanguage: "en", sessionCode: code,
+      researchTargetCode: { policy: targetCodePolicy("without_code"), renderedPrompts: [] } }),
+    getReveal: vi.fn().mockResolvedValue({ text: "A bridge" }),
+    getViewerEvidence: vi.fn().mockResolvedValue(stage === "initial" ? `Observation ${code}` : "Tall angular form"),
+    recordFrozenJudgeResult: vi.fn(),
+    listJudgeScores: vi.fn().mockResolvedValue([]),
+  });
+  const chat = vi.fn().mockResolvedValue({ content: `Invalid JSON containing ${code}`, usage: {} });
+  await expect(runBlindJudging({ repository, sessionId: "s", language: "en", judges: [{ providerConfig: provider, model }], chat })).rejects.toThrow(/Target-code policy refused/);
+  expect(chat).toHaveBeenCalledTimes(stage === "initial" ? 0 : 1);
+});
