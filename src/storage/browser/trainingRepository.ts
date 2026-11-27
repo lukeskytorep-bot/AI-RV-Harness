@@ -1,3 +1,4 @@
+import { assertTrainingTargetCodeContract, captureTrainingTargetCodeContract } from "../../training/targetCode";
 import type { CreateTrainingRunInput, TrainingRunRecord, UpdateTrainingRunInput } from "../../training/types";
 import type { Profile, Workspace } from "../../types";
 import type { TrainingRepository } from "../contracts/trainingRepository";
@@ -43,6 +44,7 @@ export class BrowserTrainingRepository implements TrainingRepository {
   }
 
   private normalize(run: TrainingRunRecord): TrainingRunRecord {
+    assertTrainingTargetCodeContract(run);
     return { ...run, sessionIds: run.sessionIds ?? [] };
   }
 
@@ -60,6 +62,7 @@ export class BrowserTrainingRepository implements TrainingRepository {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
+    captureTrainingTargetCodeContract(run);
     this.write([run, ...all]);
     return run;
   }
@@ -75,6 +78,8 @@ export class BrowserTrainingRepository implements TrainingRepository {
     if (input.termination?.reason === "user_finished" && !canResumeOrEndTrainingRun(current)) {
       throw new Error("This Training run cannot be ended in its current state.");
     }
+    assertTrainingTargetCodeContract(current);
+    assertTrainingTargetCodeContract({ ...current, ...input });
     this.write(all.map((run) => run.id === id
       ? {
           ...run,

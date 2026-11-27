@@ -1,3 +1,5 @@
+import { assertTargetCodeContract, captureTargetCodeContract } from "../domain/targetCodeContract";
+import type { TrainingRunRecord } from "./types";
 import { sha256Text } from "../application/sha256";
 import { assertTargetCodeAbsent } from "../domain/targetCodeMode";
 import { getRvLite } from "../resources/protocolRegistry";
@@ -41,4 +43,17 @@ export function assertTrainingLearningMessages(snapshot: SessionSnapshot, messag
   if (!policy) throw new Error("Invalid frozen Training learning target-code policy.");
   assertTargetCodePolicy(policy);
   assertTargetCodeAbsent(policy.mode, snapshot.sessionCode, messages);
+}
+
+function trainingContractOwner(run: TrainingRunRecord) {
+  return { id: run.id, profileId: run.profileId, workspaceId: run.workspaceId, modelRoute: run.modelRoute, mode: run.mode, protocolVariant: run.protocolVariant };
+}
+export function captureTrainingTargetCodeContract(run: TrainingRunRecord): void {
+  const policy = run.executionSnapshot?.targetCodePolicy;
+  validateTrainingTargetCodePolicy(policy);
+  if (policy !== undefined) captureTargetCodeContract(run, trainingContractOwner(run), policy);
+}
+export function assertTrainingTargetCodeContract(run: TrainingRunRecord): void {
+  assertTargetCodeContract(run, trainingContractOwner(run), run.executionSnapshot?.targetCodePolicy);
+  validateTrainingTargetCodePolicy(run.executionSnapshot?.targetCodePolicy);
 }

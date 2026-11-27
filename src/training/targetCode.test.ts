@@ -168,3 +168,20 @@ describe("RV Training target-code policy", () => {
     });
   }
 });
+
+for (const mode of ["full", "partial"] as const) it.each(["policy", "marker", "version"])(`CODE-6B ${mode}: refuses %s loss before any Training stage`, async field => {
+  const h = setup();
+  const run = await h.repository.createTrainingRun({ name: "Frozen", status: "Interrupted", mode, profileId: profile.id, workspaceId: "w", modelRoute: model.route,
+    protocolVariant: "extended", targetIds: [targets[0].id], categories: ["mixed_targets"], judgeModelRoutes: [], pauseAfterBlock: false, viewerNotesEnabled: false,
+    executionSnapshot: { language: "en", generationSettings: {}, transport: settings, targetCodePolicy: policy } });
+  const damaged = structuredClone(run);
+  if (field === "policy") delete damaged.executionSnapshot!.targetCodePolicy;
+  if (field === "marker") delete damaged.targetCodeContract;
+  if (field === "version") delete damaged.targetCodeContractVersion;
+  h.store.setItem("rvh.dev.training_runs", JSON.stringify([damaged]));
+  const before = h.store.getItem("rvh.dev.training_runs"); let calls = 0;
+  await expect(executeTrainingRun({ repository: setup(h.store).repository, initial: run, profile, providerConfig: config, model, judges: [], targets, language: "en", settings,
+    dependencies: { runAutomaticRvLiteSession: async () => { calls++; throw new Error("unexpected dispatch"); },
+      runAutomaticPostRevealReview: async () => { calls++; throw new Error("unexpected dispatch"); } } })).rejects.toThrow(/contract/);
+  expect(calls).toBe(0); expect(h.store.getItem("rvh.dev.training_runs")).toBe(before);
+});

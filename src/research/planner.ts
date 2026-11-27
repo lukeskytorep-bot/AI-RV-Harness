@@ -1,3 +1,4 @@
+import { assertResearchTargetCodeContract } from "./targetCodeContract";
 import { assertTargetCodeDesign } from "./targetCodeDesign";
 import type { ResearchConfig, ResearchLockPlan } from "./types";
 import { assertSamplingResearchContract, researchSamplingSessionCount } from "./samplingDesign";
@@ -85,6 +86,7 @@ function practiceRank(value: string | undefined): number {
 }
 
 export function validateConfig(config: ResearchConfig): void {
+  assertResearchTargetCodeContract(config);
   assertTargetCodeDesign(config);
   if (!config.name.trim()) throw new Error("Research name is required.");
   if (config.conditions.length < 2) throw new RangeError("Research requires at least two conditions.");

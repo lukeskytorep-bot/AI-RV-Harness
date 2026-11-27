@@ -156,3 +156,51 @@ it("limits 1/100, parameterized filters and invalid archive JSON keep a controll
     for (const archive of ["all", "active", "archived"] as const) await expect(browser.listTelepathicSeriesSummaries({ mode: "ai_ai_training", archive })).rejects.toThrow("Invalid telepathic archive");
   } finally { native.db.close(); }
 });
+
+it("CODE-6B preserves Telepathic Training policy through SQLite repository reopen and refuses its removal", async () => {
+  const { freezeTelepathicTrainingTargetCode } = await import("../telepathicExchange/trainingTargetCode");
+  const h = database();
+  try {
+    const state = fixture(1);
+    state.config = await freezeTelepathicTrainingTargetCode(state.config, state.config.participants.map(p => ({ id: p.ai!.profileId, name: p.displayName,
+      targetCodeMode: p.id === "z-lead" ? "without_code" as const : "with_code" as const, createdAt: "t", updatedAt: "t" })));
+    await h.repository.saveTelepathicSeries(state);
+    const stored = await h.repository.getTelepathicSeries(state.config.seriesId);
+    expect(stored?.config.targetCodeContract).toEqual(state.config.targetCodeContract);
+    expect(stored?.config.trainingTargetCodePolicy).toEqual(state.config.trainingTargetCodePolicy);
+    const damaged = structuredClone(state); delete damaged.config.trainingTargetCodePolicy;
+    await expect(h.repository.saveTelepathicSeries(damaged)).rejects.toThrow(/contract/);
+    expect((await h.repository.getTelepathicSeries(state.config.seriesId))?.config.trainingTargetCodePolicy).toEqual(state.config.trainingTargetCodePolicy);
+    h.db.prepare("UPDATE telepathic_series SET config_json=? WHERE id=?").run(JSON.stringify(damaged.config), state.config.seriesId);
+    await expect(h.repository.getTelepathicSeries(state.config.seriesId)).rejects.toThrow(/contract/);
+  } finally { h.db.close(); }
+});
+
+it("AUDIT FIX: Browser and SQLite refuse a second valid policy and the parent UPSERT itself preserves the first", async () => {
+  const { freezeTelepathicTrainingTargetCode } = await import("../telepathicExchange/trainingTargetCode");
+  const h = database(), browser = new BrowserTelepathicExchangeRepository({ storage: new MemoryStorage() });
+  try {
+    const freeze = async (mode: "with_code" | "without_code") => {
+      const state = fixture(1);
+      state.config = await freezeTelepathicTrainingTargetCode(state.config, state.config.participants.map(p => ({ id: p.ai!.profileId, name: p.displayName,
+        targetCodeMode: mode, createdAt: "t", updatedAt: "t" })));
+      return state;
+    };
+    const first = await freeze("without_code"), replacement = await freeze("with_code");
+    for (const repo of [browser, h.repository]) {
+      await repo.saveTelepathicSeries(first);
+      await expect(repo.saveTelepathicSeries(replacement)).rejects.toThrow(/cannot change/);
+      expect((await repo.getTelepathicSeries(first.config.seriesId))?.config.trainingTargetCodePolicy).toEqual(first.config.trainingTargetCodePolicy);
+      const checkpoint = structuredClone(first); checkpoint.updatedAt = "later";
+      await repo.saveTelepathicSeries(checkpoint);
+    }
+    // Exercise the exact registered production parent SQL, bypassing its TS precheck.
+    const source = readFileSync(new URL("./sqlite/telepathicExchangeRepository.ts", import.meta.url), "utf8");
+    const sql = JSON.parse(source.match(/const UPSERT_SERIES = ("[^\n]+");/)![1]) as string;
+    const old = h.db.prepare("SELECT config_json,plan_json FROM telepathic_series WHERE id=?").get(first.config.seriesId)!;
+    const result = h.db.prepare(sql.replace(/\$\d+/g, "?")).run(replacement.config.seriesId, replacement.config.seriesWorkspaceId, replacement.config.mode,
+      replacement.config.language, replacement.status, replacement.currentRoundIndex, JSON.stringify(replacement.config), old.plan_json as string, replacement.createdAt, replacement.updatedAt);
+    expect(Number(result.changes)).toBe(0);
+    expect(h.db.prepare("SELECT config_json FROM telepathic_series WHERE id=?").get(first.config.seriesId)?.config_json).toBe(old.config_json);
+  } finally { h.db.close(); }
+});

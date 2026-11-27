@@ -1,3 +1,4 @@
+import { assertResearchTargetCodeProject, assertResearchTargetCodeContract, captureResearchTargetCodeContract } from "./targetCodeContract";
 import { computeTargetCodeComparison } from "./targetCodeResults";
 import { assertPreparedContextResearchDraft } from "./contextLockPreparation";
 import { assertResearchContextSessionEvidence } from "./contextRuntime";
@@ -94,13 +95,14 @@ export async function createAndLockResearch(
   const lockedConfig: ResearchConfig = { ...freezeResearchViewerOutputPolicy(freezeResearchTargetCodePreference(freezeResearchCompatibility(config, inventory), inventory), inventory.models),
     judgeOutputPolicy: config.judgeOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY),
     postRevealOutputPolicy: config.postRevealOutputPolicy ?? structuredClone(CURRENT_ANALYTICAL_OUTPUT_POLICY) };
+  captureResearchTargetCodeContract(lockedConfig);
   analyticalBudgetPolicyForSnapshot(lockedConfig.judgeOutputPolicy);
   analyticalBudgetPolicyForSnapshot(lockedConfig.postRevealOutputPolicy);
   const preflight = runResearchPreflight(lockedConfig, inventory);
   if (!preflight.ok) throw new Error("Research Preflight contains blocking failures.");
   const project = await repository.createResearchProject(lockedConfig);
   await repository.setResearchProjectState(project.id, "Preflight");
-  const plan = await buildResearchLockPlan(project.id, lockedConfig);
+  const plan = await buildResearchLockPlan(project.id, project.config);
   await repository.lockResearchProject(project.id, plan);
   const locked = await repository.getResearchProject(project.id);
   if (!locked || locked.state !== "Locked") throw new Error("Experiment Lock did not persist correctly.");
@@ -209,7 +211,12 @@ async function executeResearchSessionsOwned(input: {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       throw new Error("Frozen Viewer output policy drift detected after Experiment Lock.");
     }
-    if (stableStringify(stored.config.researchProfileTargetCode ?? null) !== stableStringify(locked.researchProfileTargetCode ?? null)) {
+    if (stored.config.profileId !== locked.profileId || stored.config.providerConfigId !== locked.providerConfigId || stored.config.modelId !== locked.modelId) {
+      await input.repository.setResearchProjectState(project.id, "Interrupted");
+      throw new Error("Frozen Research condition route drift detected after Experiment Lock.");
+    }
+    if (stableStringify(stored.config.researchProfileTargetCode ?? null) !== stableStringify(locked.researchProfileTargetCode ?? null)
+      || stableStringify(stored.config.targetCode ?? null) !== stableStringify(locked.targetCode ?? null)) {
       await input.repository.setResearchProjectState(project.id, "Interrupted");
       throw new Error("Frozen Research target-code policy drift detected after Experiment Lock.");
     }
@@ -457,6 +464,12 @@ function validateResearchResumeSnapshot(input: {
   snapshot: NonNullable<Awaited<ReturnType<ResearchRepository["getSessionSnapshot"]>>>;
 }): void {
   const { project, assignment, condition, provider, model, protocol, session, snapshot } = input;
+  const expectedProfile = condition.researchProfileTargetCode;
+  const litePolicy = snapshot.profileTargetCode?.policy;
+  const rcpPolicy = snapshot.rcpProfileTargetCode?.policy;
+  if (stableStringify(litePolicy ?? null) !== stableStringify(expectedProfile?.protocol === "rv-lite" ? expectedProfile.policy : null)
+    || stableStringify(rcpPolicy ?? null) !== stableStringify(expectedProfile?.protocol === "full-rcp" ? expectedProfile.policy : null)
+    || snapshot.telepathicProfileTargetCode !== undefined) throw new Error("Research Resume refused Profile target-code policy drift from Experiment Lock.");
   if (stableStringify(snapshot.researchTargetCode?.policy ?? null) !== stableStringify(condition.targetCode ?? null)) throw new Error("Research Resume refused target-code rendering drift.");
   analyticalBudgetPolicyForSnapshot(project.config.postRevealOutputPolicy);
   if (stableStringify(snapshot.postRevealOutputPolicy ?? null) !== stableStringify(project.config.postRevealOutputPolicy ?? null)) {
@@ -835,6 +848,8 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
 async function requireProject(repository: ResearchRepository, projectId: string): Promise<ResearchProjectRecord> {
   const project = await repository.getResearchProject(projectId);
   if (!project) throw new Error("Research project not found.");
+  if (project.id !== projectId) throw new Error("Research project identity mismatch.");
+  assertResearchTargetCodeProject(project);
   return project;
 }
 

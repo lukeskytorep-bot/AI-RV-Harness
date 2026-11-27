@@ -293,7 +293,7 @@ async function codeTrainingFixture(language: "pl" | "en", protectedId: "leo" | "
       }),
     };
   }
-  return { config, profiles, reopen, requests, deps, setGuide: (value: string) => { guide = value; }, profileReads: () => profileReads };
+  return { config, profiles, reopen, requests, deps, corrupt: (state: import("./types").TelepathicSeriesState) => storage.setItem("rvh.dev.telepathic_series_v1", JSON.stringify([state])), setGuide: (value: string) => { guide = value; }, profileReads: () => profileReads };
 }
 
 describe("CODE-5B frozen profile modes and model-bound round ID protection", () => {
@@ -367,7 +367,8 @@ describe("CODE-5B frozen profile modes and model-bound round ID protection", () 
     const repository = f.reopen();
     const state = await createTelepathicAiTrainingSeries({ repository, config: f.config });
     state.config.trainingTargetCodePolicy!.participants[0].mode = "with_code";
-    await repository.saveTelepathicSeries(state);
+    await expect(repository.saveTelepathicSeries(state)).rejects.toThrow(/Invalid frozen/);
+    f.corrupt(state);
     await expect(runNextTelepathicAiRound(f.deps(f.reopen()), f.config.seriesId)).rejects.toThrow(/Invalid frozen/);
     expect(f.requests).toHaveLength(0);
   });
@@ -436,4 +437,16 @@ describe("CODE-5B frozen profile modes and model-bound round ID protection", () 
     const legacy = createTelepathicSeriesState(f.config);
     expect(await restoreTelepathicTrainingTargetCode(legacy)).toBe(undefined);
   });
+});
+
+it.each(["policy", "marker", "version", "unknown"])("CODE-6B refuses Telepathic Training %s loss before any call after reopen", async field => {
+  const f = await codeTrainingFixture("en", "leo", 1);
+  const state = await createTelepathicAiTrainingSeries({ repository: f.reopen(), config: f.config });
+  if (field === "policy") delete state.config.trainingTargetCodePolicy;
+  if (field === "marker") delete state.config.targetCodeContract;
+  if (field === "version") delete state.config.targetCodeContractVersion;
+  if (field === "unknown") state.config.targetCodeContractVersion = 99 as never;
+  f.corrupt(state);
+  await expect(runNextTelepathicAiRound(f.deps(f.reopen()), f.config.seriesId)).rejects.toThrow(/contract/);
+  expect(f.requests).toHaveLength(0);
 });

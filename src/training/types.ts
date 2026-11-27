@@ -1,3 +1,4 @@
+import type { TargetCodeContractCarrier } from "../domain/targetCodeContract";
 import type { TrainingCategory } from "../targets/bundled";
 import type { TrainingTargetRepeatPolicy } from "./curriculum";
 import type { GenerationSettings } from "../providers/types";
@@ -63,7 +64,7 @@ export interface TrainingExecutionSnapshot {
   rvSystemPrompt?: ViewerSystemPromptSnapshot;
 }
 
-export interface TrainingRunRecord {
+export interface TrainingRunRecord extends TargetCodeContractCarrier {
   /** Sessions archived by this run, absent in legacy snapshots. */
   archivedSessionIds?: string[];
   id: string;

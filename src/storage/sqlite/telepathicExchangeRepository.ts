@@ -1,3 +1,5 @@
+import { assertUnchangedTargetCodeContract } from "../../domain/targetCodeContract";
+import { assertTelepathicTrainingTargetCodeContract } from "../../telepathicExchange/trainingTargetCode";
 import { publishTelepathicCheckpoint } from "../telepathicCheckpointChanges";
 import { validateHistoryQuery, validateHistorySummary, type TelepathicHistoryQuery, type TelepathicHistoryPage, type TelepathicSeriesSummary } from "../../telepathicExchange/historySummaries";
 import { serializeTelepathicPlan, restoreTelepathicRuntime, assertArchiveRevision } from "../../telepathicExchange/persistence";
@@ -94,7 +96,7 @@ type CallRow = {
   updated_at: string;
 };
 
-const UPSERT_SERIES = "INSERT INTO telepathic_series (id, series_workspace_id, mode, language, status, current_round_index, config_json, plan_json, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_round_index=excluded.current_round_index, config_json=excluded.config_json, plan_json=excluded.plan_json, updated_at=excluded.updated_at WHERE COALESCE(json_extract(telepathic_series.plan_json,'$._runtime.archiveRevision'),0) <= COALESCE(json_extract(excluded.plan_json,'$._runtime.archiveRevision'),0) AND (json_extract(telepathic_series.plan_json,'$._runtime.termination.reason') IS NULL OR (excluded.status='cancelled' AND json_extract(excluded.plan_json,'$._runtime.termination')=json_extract(telepathic_series.plan_json,'$._runtime.termination')))";
+const UPSERT_SERIES = "INSERT INTO telepathic_series (id, series_workspace_id, mode, language, status, current_round_index, config_json, plan_json, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_round_index=excluded.current_round_index, config_json=excluded.config_json, plan_json=excluded.plan_json, updated_at=excluded.updated_at WHERE json_extract(telepathic_series.config_json,'$.targetCodeContractVersion') IS json_extract(excluded.config_json,'$.targetCodeContractVersion') AND json_extract(telepathic_series.config_json,'$.targetCodeContract.version') IS json_extract(excluded.config_json,'$.targetCodeContract.version') AND json_extract(telepathic_series.config_json,'$.targetCodeContract.canonicalPolicy') IS json_extract(excluded.config_json,'$.targetCodeContract.canonicalPolicy') AND COALESCE(json_extract(telepathic_series.plan_json,'$._runtime.archiveRevision'),0) <= COALESCE(json_extract(excluded.plan_json,'$._runtime.archiveRevision'),0) AND (json_extract(telepathic_series.plan_json,'$._runtime.termination.reason') IS NULL OR (excluded.status='cancelled' AND json_extract(excluded.plan_json,'$._runtime.termination')=json_extract(telepathic_series.plan_json,'$._runtime.termination')))";
 const UPSERT_PARTICIPANT = "INSERT INTO telepathic_participants (series_id, participant_id, kind, display_name, profile_id, workspace_id, ai_identity_id, provider_config_id, credential_id, model_id, model_route, route_snapshot_json, field_guide_snapshot_json, viewer_notes_snapshot_json, final_reflection_text) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(series_id, participant_id) DO UPDATE SET display_name=excluded.display_name, field_guide_snapshot_json=excluded.field_guide_snapshot_json, viewer_notes_snapshot_json=excluded.viewer_notes_snapshot_json, final_reflection_text=excluded.final_reflection_text";
 const UPSERT_ROUND = "INSERT INTO telepathic_rounds (id, series_id, round_number, sender_participant_id, status, revealed_at, completed_at, blocked_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET status=excluded.status, revealed_at=excluded.revealed_at, completed_at=excluded.completed_at, blocked_reason=excluded.blocked_reason";
 const INSERT_TARGET = "INSERT OR IGNORE INTO telepathic_targets (round_id, sender_participant_id, content, assets_manifest_json, content_sha256, status, locked_at, transmission_ready_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)";
@@ -232,16 +234,18 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
   }
 
   async saveTelepathicSeries(state: TelepathicSeriesState): Promise<void> {
+    assertTelepathicTrainingTargetCodeContract(state.config);
     // Only the archive/termination guard and immutable target hashes are needed
     // before a save. The series upsert still checks the revision in the batch.
     const existing = await this.dependencies.select<Array<{
+      config_json: string;
       archive_revision: number | null;
       termination_json: string | null;
       runtime_type: string | null;
       runtime_version_json: string | null;
       target_hashes_json: string;
     }>>(
-      `SELECT json_extract(s.plan_json,'$._runtime.archiveRevision') AS archive_revision,
+      `SELECT s.config_json, json_extract(s.plan_json,'$._runtime.archiveRevision') AS archive_revision,
               s.plan_json -> '$._runtime.termination' AS termination_json,
               json_type(s.plan_json,'$._runtime') AS runtime_type,
               s.plan_json -> '$._runtime.version' AS runtime_version_json,
@@ -252,6 +256,10 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
       [state.config.seriesId],
     );
     const header = existing[0];
+    if (header?.config_json) {
+      const previous = JSON.parse(header.config_json) as TelepathicSeriesConfig;
+      assertUnchangedTargetCodeContract(previous, state.config, previous.trainingTargetCodePolicy, state.config.trainingTargetCodePolicy);
+    }
     if (header && header.runtime_type !== null && header.runtime_type !== "null"
       && (header.runtime_version_json === null || JSON.parse(header.runtime_version_json) !== 1)) {
       throw new Error("Unsupported telepathic runtime version.");
@@ -417,6 +425,8 @@ export class SqliteTelepathicExchangeRepository implements TelepathicExchangeRep
       updatedAt: row.updated_at,
     }));
     const finalReflections = Object.fromEntries(participantRows.filter((row) => row.final_reflection_text).map((row) => [row.participant_id, row.final_reflection_text!])) as Record<string, string>;
+    assertTelepathicTrainingTargetCodeContract(config);
+    if (config.targetCodeContract && config.seriesId !== seriesId) throw new Error("Telepathic target-code contract record identity mismatch.");
     return restoreTelepathicRuntime({ schemaVersion: 1, config, plan, currentRoundIndex: series.current_round_index, status: series.status, rounds, providerCalls, finalReflections, createdAt: series.created_at, updatedAt: series.updated_at }, plan);
   }
 }

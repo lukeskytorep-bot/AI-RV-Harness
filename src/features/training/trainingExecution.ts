@@ -1,3 +1,4 @@
+import { assertTrainingTargetCodeContract } from "../../training/targetCode";
 import { validateTrainingSessionTargetCode, validateTrainingTargetCodePolicy } from "../../training/targetCode";
 import { withWorkflow } from "../../application/workflowOwnership";
 import { prepareViewerNotesForSession, runViewerNoteReflection, viewerNoteReflectionCompletesStage } from "../../aiCenter/viewerNotes";
@@ -261,6 +262,7 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
     input.signal?.throwIfAborted();
     const latest = (await input.repository.listTrainingRuns()).find(run => run.id === working.id);
     if (!latest) throw new Error("Training run is no longer available.");
+    assertTrainingTargetCodeContract(latest);
     if (isTrainingRunUserFinished(latest)) throw userFinishedTrainingError();
     if (latest.archivedAt) throw new Error("Restore the archived Training run before execution.");
     input.signal?.throwIfAborted();
@@ -271,6 +273,7 @@ async function executeTrainingRunOwned(input: ExecuteTrainingRunInput): Promise<
 
   try {
     await assertCanContinue();
+    assertTrainingTargetCodeContract(working);
     validateTrainingTargetCodePolicy(execution.targetCodePolicy);
     await input.repository.updateTrainingRun(working.id, { status: "Running", currentIndex: working.currentIndex, executionSnapshot: execution });
     for (let index = working.currentIndex; index < working.targetIds.length; index += 1) {

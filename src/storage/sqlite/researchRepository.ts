@@ -1,3 +1,4 @@
+import { assertResearchTargetCodeProject, bindNewResearchTargetCodeProject, assertResearchTargetCodeContract } from "../../research/targetCodeContract";
 import type {
   BlindingMappingRecord,
   ResearchAssignmentRecord,
@@ -39,13 +40,15 @@ export interface SqliteResearchRepositoryDependencies {
 }
 
 function mapResearchProject(row: ResearchProjectRow): ResearchProjectRecord {
+  const config = JSON.parse(row.config_json) as ResearchConfig;
+  assertResearchTargetCodeProject({ id: row.id, workspaceId: row.workspace_id, templateType: row.template_type, config });
   return {
     id: row.id,
     workspaceId: row.workspace_id,
     name: row.name,
     templateType: row.template_type,
     state: row.state,
-    config: JSON.parse(row.config_json) as ResearchConfig,
+    config,
     configHash: row.config_hash ?? undefined,
     lockedAt: row.locked_at ?? undefined,
     scoresFrozenAt: row.scores_frozen_at ?? undefined,
@@ -75,11 +78,13 @@ export class SqliteResearchRepository implements ResearchRepository {
   }
 
   async createResearchProject(config: ResearchConfig): Promise<ResearchProjectRecord> {
+    assertResearchTargetCodeContract(config);
     const timestamp = this.now();
     const project: ResearchProjectRecord = {
       id: this.nextId("research"), workspaceId: config.workspaceId, name: config.name.trim(), templateType: config.templateType,
       state: "Draft", config: structuredClone(config), createdAt: timestamp, updatedAt: timestamp,
     };
+    project.config = bindNewResearchTargetCodeProject(config, project.id);
     await this.dependencies.executeWrite(
       `INSERT INTO research_projects (id, workspace_id, name, template_type, state, config_json, created_at, updated_at, archived_at)
        VALUES ($1, $2, $3, $4, 'Draft', $5, $6, $6, NULL)`,

@@ -1,3 +1,4 @@
+import type { TargetCodeContractCarrier } from "../domain/targetCodeContract";
 import type { FrozenAnalyticalOutputPolicy } from "../providers/outputRecovery";
 import type { JudgeComponentScores } from "../domain/scoring";
 import type { EffectiveGenerationSettings, GenerationSettings, ModelCapabilities } from "../providers/types";
@@ -209,7 +210,8 @@ export type ResearchProtocolSelection =
   | { id: "full-rcp"; version: "1.5a"; contentSha256?: string }
   | { id: "rv-lite"; version: "1.1.0"; variant: "extended"; contentSha256: string };
 
-export interface ResearchConfig {
+export interface ResearchConfig extends TargetCodeContractCarrier {
+  targetCodeProjectId?: string;
   schemaVersion: 1;
   name: string;
   workspaceId: string;

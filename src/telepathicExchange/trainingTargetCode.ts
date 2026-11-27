@@ -1,3 +1,4 @@
+import { assertTargetCodeContract, captureTargetCodeContract } from "../domain/targetCodeContract";
 import { sha256Text } from "../application/sha256";
 import { assertTargetCodeAbsent, isTargetCodeMode, resolveTargetCodeMode } from "../domain/targetCodeMode";
 import type { ProviderMessage } from "../providers/types";
@@ -34,12 +35,14 @@ export async function freezeTelepathicTrainingTargetCode(config: TelepathicSerie
   });
   const frozen = structuredClone(config);
   frozen.trainingTargetCodePolicy = { version: VERSION, exposure: EXPOSURE, participants: entries, policySha256: await policyHash(frozen, entries) };
+  captureTargetCodeContract(frozen, trainingContractOwner(frozen), frozen.trainingTargetCodePolicy);
   return frozen;
 }
 
 /** Missing policy is legacy; present-but-invalid policy is never a default. */
 export async function restoreTelepathicTrainingTargetCode(state: TelepathicSeriesState): Promise<TelepathicTrainingTargetCodePolicy | undefined> {
   const { config, plan, rounds } = state;
+  assertTelepathicTrainingTargetCodeContract(config);
   const policy = config.trainingTargetCodePolicy;
   if (policy === undefined) return undefined;
   if (config.mode !== "ai_ai_training" || !policy || policy.version !== VERSION || policy.exposure !== EXPOSURE
@@ -111,4 +114,12 @@ export function telepathicTrainingTargetCodeSummary(config: TelepathicSeriesConf
   return policy.participants.map((entry, index) => `${config.participants[index].displayName}: ${entry.mode === "without_code"
     ? (pl ? "bez kodu (ochrona ID rund)" : "without code (round ID guard)")
     : (pl ? "standardowy (bez kodu RV)" : "standard (no RV code)")}`).join(" · ");
+}
+
+function trainingContractOwner(config: TelepathicSeriesConfig) {
+  return { seriesId: config.seriesId, workspaceId: config.seriesWorkspaceId, mode: config.mode, language: config.language,
+    roundCount: config.roundCount, participants: config.participants.map(p => ({ id: p.id, profileId: p.ai?.profileId })) };
+}
+export function assertTelepathicTrainingTargetCodeContract(config: TelepathicSeriesConfig): void {
+  assertTargetCodeContract(config, trainingContractOwner(config), config.trainingTargetCodePolicy);
 }

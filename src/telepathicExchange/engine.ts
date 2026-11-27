@@ -37,7 +37,7 @@ import type {
 import type { TelepathicExchangeStore } from "./store";
 import { lockTelepathicTarget, markTelepathicTargetTransmissionReady } from "./target";
 import { withTelepathicTrainingLearning } from "./trainingLearning";
-import { restoreTelepathicTrainingTargetCode, telepathicTrainingTargetCodeGuard } from "./trainingTargetCode";
+import { assertTelepathicTrainingTargetCodeContract, restoreTelepathicTrainingTargetCode, telepathicTrainingTargetCodeGuard } from "./trainingTargetCode";
 
 
 function assertSeriesNotEnded(state: TelepathicSeriesState): void {
@@ -137,6 +137,7 @@ function topicLabel(config: TelepathicSeriesConfig): string {
 }
 
 export function createTelepathicSeriesState(config: TelepathicSeriesConfig, timestamp = new Date().toISOString()): TelepathicSeriesState {
+  assertTelepathicTrainingTargetCodeContract(config);
   // Only construction upgrades the contract. Loading/Resume never calls this.
   if (config.protocolVersion === "fixed_lead_v1") config = { ...config, leadInstructionVersion: LEAD_INSTRUCTION_VERSION };
 

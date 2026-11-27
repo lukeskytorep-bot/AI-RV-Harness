@@ -1,3 +1,4 @@
+import type { TargetCodeContractCarrier } from "../domain/targetCodeContract";
 import type { TargetCodeMode } from "../domain/targetCodeMode";
 import type { TelepathicRecoveryPolicy } from "./recovery";
 import type { ProviderCallErrorDetails } from "../providers/providerError";
@@ -68,7 +69,7 @@ export interface TelepathicTrainingTargetCodePolicy {
   policySha256: string;
 }
 
-export interface TelepathicSeriesConfig {
+export interface TelepathicSeriesConfig extends TargetCodeContractCarrier {
   trainingTargetCodePolicy?: TelepathicTrainingTargetCodePolicy;
   recoveryPolicy?: TelepathicRecoveryPolicy;
   schemaVersion: 1;

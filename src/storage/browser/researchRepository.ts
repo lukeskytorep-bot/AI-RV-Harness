@@ -1,3 +1,4 @@
+import { assertResearchTargetCodeProject, bindNewResearchTargetCodeProject, assertResearchTargetCodeContract } from "../../research/targetCodeContract";
 import type {
   BlindingMappingRecord,
   ResearchAssignmentRecord,
@@ -65,14 +66,18 @@ export class BrowserResearchRepository implements ResearchRepository {
   }
 
   async createResearchProject(config: ResearchConfig): Promise<ResearchProjectRecord> {
+    assertResearchTargetCodeContract(config);
     const timestamp = this.now();
     const project: ResearchProjectRecord = { id: this.nextId("research"), workspaceId: config.workspaceId, name: config.name.trim(), templateType: config.templateType, state: "Draft", config: structuredClone(config), createdAt: timestamp, updatedAt: timestamp };
+    project.config = bindNewResearchTargetCodeProject(config, project.id);
     this.write(RESEARCH_PROJECTS_KEY, [project, ...this.read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, [])]);
     return project;
   }
 
   async getResearchProject(id: string): Promise<ResearchProjectRecord | null> {
-    return this.read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).find((project) => project.id === id) ?? null;
+    const project = this.read<ResearchProjectRecord[]>(RESEARCH_PROJECTS_KEY, []).find((project) => project.id === id) ?? null;
+    if (project) assertResearchTargetCodeProject(project);
+    return project;
   }
 
   async listResearchProjects(workspaceId?: string): Promise<ResearchProjectRecord[]> {

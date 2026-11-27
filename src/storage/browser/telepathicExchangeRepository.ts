@@ -1,3 +1,5 @@
+import { assertUnchangedTargetCodeContract } from "../../domain/targetCodeContract";
+import { assertTelepathicTrainingTargetCodeContract } from "../../telepathicExchange/trainingTargetCode";
 import { publishTelepathicCheckpoint } from "../telepathicCheckpointChanges";
 import { validateHistoryQuery, validateHistorySummary, compareHistoryText, historyPage, type TelepathicHistoryQuery, type TelepathicHistoryPage, type TelepathicSeriesSummary } from "../../telepathicExchange/historySummaries";
 import { assertArchiveRevision } from "../../telepathicExchange/persistence";
@@ -30,6 +32,7 @@ export class BrowserTelepathicExchangeRepository implements TelepathicExchangeRe
 
   async getTelepathicSeries(seriesId: string): Promise<TelepathicSeriesState | null> {
     const state = this.readAll().find((item) => item.config.seriesId === seriesId);
+    if (state) assertTelepathicTrainingTargetCodeContract(state.config);
     return state ? structuredClone(state) : null;
   }
 
@@ -65,9 +68,12 @@ export class BrowserTelepathicExchangeRepository implements TelepathicExchangeRe
   }
 
   async saveTelepathicSeries(state: TelepathicSeriesState): Promise<void> {
+    assertTelepathicTrainingTargetCodeContract(state.config);
     await withTelepathicCollectionWrite(() => {
       const all = readTelepathicCollection(this.storage);
-      assertArchiveRevision(state, all.find(item => item.config.seriesId === state.config.seriesId) ?? null);
+      const previous = all.find(item => item.config.seriesId === state.config.seriesId);
+      if (previous) assertUnchangedTargetCodeContract(previous.config, state.config, previous.config.trainingTargetCodePolicy, state.config.trainingTargetCodePolicy);
+      assertArchiveRevision(state, previous ?? null);
       const next = [structuredClone(state), ...all.filter((item) => item.config.seriesId !== state.config.seriesId)];
       this.storage.setItem(TELEPATHIC_SERIES_KEY, JSON.stringify(next));
     });
