@@ -6,7 +6,7 @@ AI RV Harness is a local-first desktop application for AI conversations, blind R
 
 ## Development branch: ai-rv-2
 
-This is the working source branch, using application version **0.7.14** and SQLite schema **34**. It includes the Research Judge Completion 1–2 source changes. Native CI, desktop acceptance and publication are separate checks; this README does not certify a release. The retained v0.7.13 internal data epoch is a compatibility identifier.
+This is the working source branch, using application version **0.7.14** and SQLite schema **38**. It includes Target Code Mode for supported workflows and frozen Research conditions. Native CI, desktop acceptance and publication are separate checks; this README does not certify a release. The retained v0.7.13 internal data epoch is a compatibility identifier.
 
 Use the Wiki links for user guides. Wiki publication is independent of this branch and may lag newer source changes. When merging into `main`, retain the public-facing README supplied for `main`; do not replace it with this branch-status introduction or with the `docs/README.md` documentation index.
 
@@ -14,7 +14,7 @@ Use the Wiki links for user guides. Wiki publication is independent of this bran
 ## What you can do
 
 - Keep ordinary Conversations separate from Manual and Automatic RV Sessions.
-- Use Profiles, typed Workspaces, bundled protocols and your own targets.
+- Use Profiles, typed Workspaces, bundled protocols and your own targets. For supported protocols, choose whether models receive the target code in [Sessions and Protocols](docs/wiki/Sessions-and-Protocols.md#target-code-mode).
 - Run classic Training with versioned Field Guides and Viewer Notes. If an optional learning update fails after its bounded attempts, previous learning is retained and Training continues; diagnostics remain available in the learning records.
 - Run AI–AI exchanges with a fixed lead and separate participants.
 - Design frozen Research studies, including sampling comparisons, with blind session assignments and optional independent AI Judges.

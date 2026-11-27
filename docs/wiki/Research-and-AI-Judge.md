@@ -11,6 +11,10 @@ New Research normally freezes Viewer 16,384 → 32,768 and current Judge analyti
 
 Stop retains completed work and requires explicit continuation. End records a protected terminal marker outside frozen Research config; it refuses later execution without rewriting the study. Uncertain paid dispatch requires resolution, not automatic resend. Export retains configuration, provenance, hashes and frozen inputs/results.
 
+## Target Code Mode in Research
+
+In supported RV Lite Extended and Full RCP studies, Experiment Lock freezes each condition's mode. Later changes to the Profile do not change the study. In a Target Code Presence experiment, the explicitly configured With-code and Without-code conditions determine the mode. The condition and mode remain available in local Research records and exports. Blind Judge requests omit condition metadata and are checked for the protected identifier in Without-code sessions.
+
 ## Sampling configurations Research
 
 The `Sampling configurations` template compares OpenRouter Viewer sampling settings without introducing a second execution engine. `top_p`, `top_k`, and `seed` can each be fixed or varied; at least one axis must be varied. The design expands deterministically to the full Cartesian product, so 3 top-p values × 2 top-k values × 2 seeds creates 12 ordinary Research conditions. The existing planner then creates condition × target × repetition assignments and preserves the same matched `pairKey` semantics.

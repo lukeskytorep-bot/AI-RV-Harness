@@ -6,6 +6,14 @@ Conversations is ordinary chat. RV Sessions contains Manual RV and controlled Au
 
 Supported automatic paths include Full RCP, RV Lite Core/Extended and compatible versioned custom protocols. RV Lite uses four Viewer calls; its bundled Prompt 3 includes Deepening and Prompt 4 covers Functional Sketches. Supported Monitor work remains separate from Viewer evidence.
 
+## Target Code Mode
+
+In Profile settings, enable **Run sessions without target code** to omit the assigned identifier from protected model requests. Existing profiles default to sending the code. The identifier remains in local records and still links the session to its Reveal.
+
+This setting applies to supported automatic RV Lite Core and Extended, Full RCP, and Telepathic Protocol sessions. Supported Training runs freeze the setting when created. In AI–AI Telepathic Training it applies per participant to round identifiers. Custom Protocols do not support new sessions in this mode.
+
+Resuming uses the saved mode. If a protected request contains the assigned identifier, Harness stops that request before sending it. See [Research and AI Judge](Research-and-AI-Judge.md) for the separate Experiment Lock rules.
+
 ## Evidence and Reveal
 
 The blind record is sealed before Reveal. Viewer Review, Monitor Review, Judge and later operator discussion cannot rewrite it. Sessions freeze identity, prompt, learning, route and allowed generation policy. Partial stream text is provisional; it cannot advance a phase just because it is visible.

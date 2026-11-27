@@ -1,6 +1,6 @@
 # Current development status
 
-Reviewed 17 October 2026 against the OR-SAMPLING implementation line derived from `ai-rv-2` Training Continuity T5. Package version remains 0.7.13 and the current development schema is 32. This is development documentation, not a new public-release announcement.
+Reviewed 27 November 2026 against `ai-rv-2` at `30c44ff` (CODE-7 WIRE 1). The development package is **0.7.14** and the SQLite registry runs through migration **038**.
 
 The source includes separate Conversations/RV Sessions, typed Workspaces, 94 factory targets/eight categories, fixed-lead telepathic exchange/Training, durable Stop/Resume/End, frozen Research, paged telepathic history, native classic workflow heartbeat and Training Continuity T1–T5.
 
@@ -10,8 +10,12 @@ Training now shows neutral module context, the saved run Profile/model and an ex
 
 Implementation, automated checks, interactive Windows acceptance and paid-model tests are separate evidence. Final runtime acceptance is recorded on an exact candidate; green patch CI alone does not publish v0.7.14. See the repository [runtime checklist](../architecture/FINAL_RUNTIME_SMOKE_v0.7.14_EN.md).
 
-The historical [public v0.7.13 status](Development-Status-v0.7.13.md) retains its original schema-27 release scope. Current registry is 001–032; migration 032 adds persisted OpenRouter Viewer sampling settings. Legacy database classification remains mandatory.
+The historical [public v0.7.13 status](Development-Status-v0.7.13.md) retains its original schema-27 release scope. Legacy database classification remains mandatory.
 
+
+## Target Code Mode acceptance
+
+[Target Code Mode](Sessions-and-Protocols.md#target-code-mode) is implemented. CODE-7 WIRE 1 added tests at the frontend invocation boundary and separate Rust request serialization tests against a loopback HTTP server. The independent audit accepted the test patch. End-to-end acceptance still requires current CI, repeatable DOM STOP/Resume, native Windows IPC and credential storage, and a live provider run. The cause of the earlier isolated DOM assertion failure remains unconfirmed.
 
 ## OpenRouter additional sampling parameters
 
