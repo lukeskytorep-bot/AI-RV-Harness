@@ -15,7 +15,11 @@ export interface RcpTargetCodeSnapshot {
   renderedPrompts: { content: string; sha256: string }[];
 }
 export function rcpTargetCodePolicy(mode: TargetCodeMode): RcpTargetCodePolicy {
-  return { mode: resolveTargetCodeMode(mode), version: RCP_TARGET_CODE_VERSION, templatesSha256: RCP_TARGET_CODE_TEMPLATES_SHA256 };
+  return {
+    mode: resolveTargetCodeMode(mode),
+    version: RCP_TARGET_CODE_VERSION,
+    templatesSha256: RCP_TARGET_CODE_TEMPLATES_SHA256,
+  };
 }
 export function assertRcpTargetCodePolicy(policy: RcpTargetCodePolicy): void {
   if (!policy || !isTargetCodeMode(policy.mode) || policy.version !== RCP_TARGET_CODE_VERSION || policy.templatesSha256 !== RCP_TARGET_CODE_TEMPLATES_SHA256) {
@@ -24,16 +28,33 @@ export function assertRcpTargetCodePolicy(policy: RcpTargetCodePolicy): void {
 }
 // Canonical render matrix includes both modes and both languages with an inert code placeholder.
 export function rcpTargetCodeTemplateMatrix(): string {
-  return JSON.stringify({ version: RCP_TARGET_CODE_VERSION, prompts: (["pl", "en"] as const).flatMap(language => (["with_code", "without_code"] as const).map(mode => ({ language, mode, phases: Array.from({ length: 6 }, (_, i) => rcpPhasePrompt(language, i + 1, "{{SESSION_CODE}}", mode)) }))) });
+  return JSON.stringify({
+    version: RCP_TARGET_CODE_VERSION,
+    prompts: (["pl", "en"] as const).flatMap((language) =>
+      (["with_code", "without_code"] as const).map((mode) => ({
+        language,
+        mode,
+        phases: Array.from({ length: 6 }, (_, i) =>
+          rcpPhasePrompt(language, i + 1, "{{SESSION_CODE}}", mode)),
+      }))),
+  });
 }
 export async function verifyRcpTargetCodeTemplates(): Promise<void> {
-  if (await sha256Text(rcpTargetCodeTemplateMatrix()) !== RCP_TARGET_CODE_TEMPLATES_SHA256) throw new Error("RCP target-code template changed; a reviewed version is required.");
+  if (await sha256Text(rcpTargetCodeTemplateMatrix()) !== RCP_TARGET_CODE_TEMPLATES_SHA256) {
+    throw new Error("RCP target-code template changed; a reviewed version is required.");
+  }
 }
 export async function freezeRcpTargetCode(language: InterfaceLanguage, code: string, policy: RcpTargetCodePolicy): Promise<RcpTargetCodeSnapshot> {
   assertRcpTargetCodePolicy(policy);
   await verifyRcpTargetCodeTemplates();
   const prompts = Array.from({ length: 6 }, (_, i) => rcpPhasePrompt(language, i + 1, code, policy.mode));
-  return { policy: structuredClone(policy), renderedPrompts: await Promise.all(prompts.map(async content => ({ content, sha256: await sha256Text(content) }))) };
+  return {
+    policy: structuredClone(policy),
+    renderedPrompts: await Promise.all(prompts.map(async (content) => ({
+      content,
+      sha256: await sha256Text(content),
+    }))),
+  };
 }
 
 // Compare the defined fields, not JSON property insertion order. Prompt order remains significant.

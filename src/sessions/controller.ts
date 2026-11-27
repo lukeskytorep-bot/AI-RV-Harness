@@ -148,10 +148,20 @@ export interface AutomaticRcpRunResult {
 }
 
 async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise<AutomaticRcpRunResult> {
-  const sessionFocus=await prepareSessionFocus(input);
-  let currentPassIndex:1|2=1;
-  const originalProgress=input.onProgress;
-  if(sessionFocus)input={...input,onProgress:p=>originalProgress?.({...p,passIndex:currentPassIndex,passCount:sessionFocus.second?2:1,stepCount:6})};
+  const sessionFocus = await prepareSessionFocus(input);
+  let currentPassIndex: 1 | 2 = 1;
+  const originalProgress = input.onProgress;
+  if (sessionFocus) {
+    input = {
+      ...input,
+      onProgress: (p) => originalProgress?.({
+        ...p,
+        passIndex: currentPassIndex,
+        passCount: sessionFocus.second ? 2 : 1,
+        stepCount: 6,
+      }),
+    };
+  }
   validateRunInput(input);
   const effectiveSettings = resolveGenerationSettings(input.model.capabilities, input.requestedSettings, { provider: input.model.provider });
   if (effectiveSettings.omitted.length) {
@@ -203,7 +213,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
   const createdAt = new Date().toISOString();
   const startedAtMs = Date.now();
   let transcript = "";
-  let metrics = await focusResumeMetrics(input.repository,input.resumeSession,sessionFocus);
+  let metrics = await focusResumeMetrics(input.repository, input.resumeSession, sessionFocus);
   let currentState: RvSessionState = "Draft";
   const maxRetries = Math.max(0, Math.min(input.maxRetries ?? 2, 5));
   let activeViewerAttemptId: string | undefined;
@@ -247,13 +257,26 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
       }
     },
     onAttemptFailure: async (cause, context) => {
-      if(sessionFocus){focusedPhysicalFailures++;metrics=recordProviderRequest(metrics,undefined,0);}
+      if (sessionFocus) {
+        focusedPhysicalFailures++;
+        metrics = recordProviderRequest(metrics, undefined, 0);
+      }
       return input.repository.appendSessionEvent(sessionId, {
-      eventType: "PROVIDER_ATTEMPT_FAILED",
-      role: "controller",
-      content: cause.message,
-      metadata: { operationId: context.operationId, logicalRequestId: context.logicalRequestId, physicalAttempt: context.physicalAttempt, errorCode: cause.details.code, ...(activeViewerAttemptId ? { attemptId: activeViewerAttemptId } : {}), ...viewerFailureMetadata(cause), billingStatus: ["response_body_read", "response_body_decode", "invalid_provider_json"].includes(cause.details.code) ? "unknown" : "not_reported" },
-    });
+        eventType: "PROVIDER_ATTEMPT_FAILED",
+        role: "controller",
+        content: cause.message,
+        metadata: {
+          operationId: context.operationId,
+          logicalRequestId: context.logicalRequestId,
+          physicalAttempt: context.physicalAttempt,
+          errorCode: cause.details.code,
+          ...(activeViewerAttemptId ? { attemptId: activeViewerAttemptId } : {}),
+          ...viewerFailureMetadata(cause),
+          billingStatus: ["response_body_read", "response_body_decode", "invalid_provider_json"].includes(cause.details.code)
+            ? "unknown"
+            : "not_reported",
+        },
+      });
     },
   });
   const rawChat = (request: Parameters<typeof chat>[0]) => providerChatOnce(request, input.chat);
@@ -272,7 +295,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
   const runViewerCall = async (requestMessages: ProviderMessage[], onStreamEvent: ((event: ProviderStreamEvent) => void) | undefined, metadata: Record<string, unknown>) => {
     assertTargetCodeAbsent(viewerCodeMode, sessionCode, requestMessages);
     let durationMs = 0;
-    metadata = {...metadata,...focusMetadata(sessionFocus,currentPassIndex)};
+    metadata = {...metadata,...focusMetadata(sessionFocus, currentPassIndex)};
     const fingerprint = focusFingerprint(viewerRequestFingerprintInput(requestMessages),sessionFocus,currentPassIndex,effectiveSettings,input.providerConfig,input.model,input.sessionLanguage,input.protocol.contentSha256);
     const requestSha256 = await sha256Text(profilePolicy ? JSON.stringify({ fingerprint, rcpProfileTargetCode: profilePolicy }) : fingerprint);
     const stepId = buildViewerStepId("rcp", metadata);
@@ -313,7 +336,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
           return response;
         } catch (cause) {
           input.onStreamPreview?.(null);
-          if (!input.signal?.aborted && (!sessionFocus || focusedPhysicalFailures===failuresBefore)) metrics = recordProviderRequest(metrics, undefined, Date.now() - started);
+          if (!input.signal?.aborted && (!sessionFocus || focusedPhysicalFailures === failuresBefore)) metrics = recordProviderRequest(metrics, undefined, Date.now() - started);
           if (!isStreamingRepetitionRunawayError(cause)) {
             const dispatchOutcome = viewerDispatchOutcome(cause);
             if (dispatchOutcome === "not_dispatched") await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_ATTEMPT_NOT_DISPATCHED", role: "controller", metadata: { ...durableMetadata, ...dispatchAttempt } });
@@ -328,7 +351,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
       onRecoveryBlocked: (reason) => input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_RECOVERY_BLOCKED", role: "controller", metadata: { ...durableMetadata, reason } }),
       onIncompleteAttempt: (attempt) => input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: attempt.content, metadata: { ...durableMetadata, ...viewerOutputAttemptMetadata(attempt) } }),
     });
-    return { response: result.response, durationMs, acceptedMetadata: { ...focusMetadata(sessionFocus,currentPassIndex), stepId, ...viewerOutputAcceptedMetadata(result) } };
+    return { response: result.response, durationMs, acceptedMetadata: { ...focusMetadata(sessionFocus, currentPassIndex), stepId, ...viewerOutputAcceptedMetadata(result) } };
   };
 
   if (!input.initializationExistingSession) {
@@ -475,9 +498,9 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
   notify(input, sessionId, sessionCode, currentState, transcript, undefined, undefined, metrics, startedAtMs);
 
   for (const passIndex of focusPasses(sessionFocus)) {
-    currentPassIndex=passIndex;
-    const passStart=transcript.length;
-    transcript=await startFocusPass(input.repository,sessionId,sessionFocus,passIndex,transcript,input.sessionLanguage);
+    currentPassIndex = passIndex;
+    const passStart = transcript.length;
+    transcript = await startFocusPass(input.repository, sessionId, sessionFocus, passIndex, transcript, input.sessionLanguage);
     for (let phase = 1; phase <= 6; phase += 1) {
       if (input.signal?.aborted) return stop("USER STOP");
       const originalPhasePrompt = rcpProfileTargetCode?.renderedPrompts[phase - 1].content ?? rcpPhasePrompt(input.sessionLanguage, phase, sessionCode);
@@ -489,7 +512,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
         eventType: "CONTROLLER_STEP",
         role: "controller",
         content: controllerPrompt,
-        metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase },
+        metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase },
       });
       notify(input, sessionId, sessionCode, currentState, transcript, phase, undefined, metrics, startedAtMs);
 
@@ -515,16 +538,16 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
           eventType: "OUTPUT_TRUNCATED_LOOP",
           role: "controller",
           content: sanitized.finding?.fragment,
-          metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256 },
+          metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, rule: sanitized.finding?.rule, originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256 },
         });
-        await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: sanitized.content, metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, ...responseAcceptedMetadata, accepted: false, reason: "repetition_runaway", originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256 } });
+        await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: sanitized.content, metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, ...responseAcceptedMetadata, accepted: false, reason: "repetition_runaway", originalLength: sanitized.originalLength, retainedLength: sanitized.retainedLength, rawOutputSha256 } });
         return stop("AUTO-STOP: Viewer output entered a clear repetition runaway; the partial result was not accepted.")
       }
       let continuationState;
       try {
         ({ state: continuationState } = await persistSessionAssistantResponse({
           repository: input.repository, sessionId, response, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTurn ? undefined : continuationRoute,
-          event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, ...responseAcceptedMetadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", actualProvider: response.actualProvider ?? "unknown", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
+          event: { eventType: "VIEWER_RESPONSE", role: "assistant", content: response.content, metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, ...responseAcceptedMetadata, finishReason: response.finishReason, actualModel: response.actualModel ?? "unavailable", actualProvider: response.actualProvider ?? "unknown", providerRequestId: response.providerRequestId ?? "unavailable", usage: response.usage, usageAccuracy: response.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: responseDurationMs, ...(stopAfterSanitizedAnthropicTurn ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
         }));
       } catch (cause) {
         if (cause instanceof SessionContinuationError) return stop(`AUTO-STOP: ${cause.message}`);
@@ -546,7 +569,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
             ? `SPECJALNE ZADANIE VIEWERA — wykonaj je teraz, używając wyłącznie neutralnych etykiet ślepej sesji:\n${specialTask}`
             : `SPECIAL VIEWER TASK — apply it now using neutral blind-session labels only:\n${specialTask}`;
           messages.push({ role: "user", content: taskPrompt });
-          await input.repository.appendSessionEvent(sessionId, { eventType: "SPECIAL_TASK_INJECTED", role: "controller", content: taskPrompt, metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, recipient: "viewer" } });
+          await input.repository.appendSessionEvent(sessionId, { eventType: "SPECIAL_TASK_INJECTED", role: "controller", content: taskPrompt, metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, recipient: "viewer" } });
 
           let taskResponse: ProviderChatResponse;
           let taskDurationMs = 0;
@@ -570,16 +593,16 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
               eventType: "OUTPUT_TRUNCATED_LOOP",
               role: "controller",
               content: sanitizedTask.finding?.fragment,
-              metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, source: "special_task", rule: sanitizedTask.finding?.rule, originalLength: sanitizedTask.originalLength, retainedLength: sanitizedTask.retainedLength, rawOutputSha256 },
+              metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, source: "special_task", rule: sanitizedTask.finding?.rule, originalLength: sanitizedTask.originalLength, retainedLength: sanitizedTask.retainedLength, rawOutputSha256 },
             });
-            await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: sanitizedTask.content, metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, source: "special_task", ...taskAcceptedMetadata, accepted: false, reason: "repetition_runaway", originalLength: sanitizedTask.originalLength, retainedLength: sanitizedTask.retainedLength, rawOutputSha256 } });
+            await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: sanitizedTask.content, metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, source: "special_task", ...taskAcceptedMetadata, accepted: false, reason: "repetition_runaway", originalLength: sanitizedTask.originalLength, retainedLength: sanitizedTask.retainedLength, rawOutputSha256 } });
             return stop("AUTO-STOP: Viewer output entered a clear repetition runaway during Special Task; the partial result was not accepted.")
           }
           let taskContinuationState;
           try {
             ({ state: taskContinuationState } = await persistSessionAssistantResponse({
               repository: input.repository, sessionId, response: taskResponse, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicTask ? undefined : continuationRoute,
-              event: { eventType: "VIEWER_SPECIAL_TASK_RESPONSE", role: "assistant", content: taskResponse.content, metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, ...taskAcceptedMetadata, finishReason: taskResponse.finishReason, actualModel: taskResponse.actualModel ?? "unavailable", actualProvider: taskResponse.actualProvider ?? "unknown", providerRequestId: taskResponse.providerRequestId ?? "unavailable", usage: taskResponse.usage, usageAccuracy: taskResponse.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: taskDurationMs, ...(stopAfterSanitizedAnthropicTask ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
+              event: { eventType: "VIEWER_SPECIAL_TASK_RESPONSE", role: "assistant", content: taskResponse.content, metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, ...taskAcceptedMetadata, finishReason: taskResponse.finishReason, actualModel: taskResponse.actualModel ?? "unavailable", actualProvider: taskResponse.actualProvider ?? "unknown", providerRequestId: taskResponse.providerRequestId ?? "unavailable", usage: taskResponse.usage, usageAccuracy: taskResponse.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: taskDurationMs, ...(stopAfterSanitizedAnthropicTask ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
             }));
           } catch (cause) {
             if (cause instanceof SessionContinuationError) return stop(`AUTO-STOP: ${cause.message}`);
@@ -621,7 +644,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
                   eventType: "MONITOR_PROVIDER_ERROR",
                   role: "controller",
                   content: cause.message,
-                  metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, exchangeNumber, attempt: 1, recovery: "output_budget" },
+                  metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, exchangeNumber, attempt: 1, recovery: "output_budget" },
                 });
               },
               onTransportAttemptFailure: async (cause, context) => {
@@ -629,7 +652,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
                   eventType: "MONITOR_PROVIDER_ERROR",
                   role: "controller",
                   content: cause.message,
-                  metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, exchangeNumber, attempt: context.physicalAttempt, logicalRequestId: context.logicalRequestId, recovery: "transport" },
+                  metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, exchangeNumber, attempt: context.physicalAttempt, logicalRequestId: context.logicalRequestId, recovery: "transport" },
                 });
               },
               chat: async (request) => {
@@ -640,13 +663,13 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
                   const monitorResponse = { ...rawMonitorResponse, usage: withEstimatedCost(rawMonitorResponse.usage, input.monitor!.model) };
                   const requestDurationMs = Date.now() - requestStartedAt;
                   metrics = recordProviderRequest(metrics, monitorResponse.usage, requestDurationMs);
-                  await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", content: rawMonitorResponse.content, metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, exchangeNumber, usage: monitorResponse.usage, requestDurationMs, reasoningSource: rawMonitorResponse.reasoningSource, reasoningCharacterCount: rawMonitorResponse.reasoningContent?.length ?? 0, failed: isIncompleteMonitorResponse(rawMonitorResponse) } });
+                  await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", content: rawMonitorResponse.content, metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, exchangeNumber, usage: monitorResponse.usage, requestDurationMs, reasoningSource: rawMonitorResponse.reasoningSource, reasoningCharacterCount: rawMonitorResponse.reasoningContent?.length ?? 0, failed: isIncompleteMonitorResponse(rawMonitorResponse) } });
                   return monitorResponse;
                 } catch (cause) {
 
                   const requestDurationMs = Date.now() - requestStartedAt;
                   metrics = recordProviderRequest(metrics, undefined, requestDurationMs);
-                  await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, exchangeNumber, requestDurationMs, failed: true } });
+                  await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_TELEMETRY", role: "controller", metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, exchangeNumber, requestDurationMs, failed: true } });
                   throw cause;
                 }
               },
@@ -660,13 +683,13 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
                 eventType: "MONITOR_PROVIDER_ERROR",
                 role: "controller",
                 content: monitorError,
-                metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, exchangeNumber, attempt: attempt + 1 },
+                metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, exchangeNumber, attempt: attempt + 1 },
               });
             }
           }
           if (!decision) return stop(`AUTO-STOP: Monitor provider failure — ${monitorError}`);
           if (input.signal?.aborted) return stop("USER STOP");
-          await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_DECISION", role: "monitor", content: decision.decision === "INTERVENE" ? decision.commandText : "CONTINUE_PROTOCOL", metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, exchangeNumber, decision: decision.decision } });
+          await input.repository.appendSessionEvent(sessionId, { eventType: "MONITOR_DECISION", role: "monitor", content: decision.decision === "INTERVENE" ? decision.commandText : "CONTINUE_PROTOCOL", metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, exchangeNumber, decision: decision.decision } });
           if (decision.decision === "CONTINUE_PROTOCOL") {
             await input.repository.appendMonitorIntervention(monitorRunId, { decision: "CONTINUE_PROTOCOL", rationale: JSON.stringify({ phase, exchangeNumber }) });
             break;
@@ -681,7 +704,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
             eventType: "MONITOR_INTERVENTION",
             role: "controller",
             content: decision.commandText,
-            metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, exchangeNumber, rawResponse: decision.rawResponse },
+            metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, exchangeNumber, rawResponse: decision.rawResponse },
           });
           messages.push({ role: "user", content: decision.commandText });
 
@@ -706,16 +729,16 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
               eventType: "OUTPUT_TRUNCATED_LOOP",
               role: "controller",
               content: sanitizedDeepening.finding?.fragment,
-              metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, source: "monitor_intervention", rule: sanitizedDeepening.finding?.rule, originalLength: sanitizedDeepening.originalLength, retainedLength: sanitizedDeepening.retainedLength, rawOutputSha256 },
+              metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, source: "monitor_intervention", rule: sanitizedDeepening.finding?.rule, originalLength: sanitizedDeepening.originalLength, retainedLength: sanitizedDeepening.retainedLength, rawOutputSha256 },
             });
-            await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: sanitizedDeepening.content, metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, source: "monitor_intervention", ...deepeningAcceptedMetadata, accepted: false, reason: "repetition_runaway", originalLength: sanitizedDeepening.originalLength, retainedLength: sanitizedDeepening.retainedLength, rawOutputSha256 } });
+            await input.repository.appendSessionEvent(sessionId, { eventType: "VIEWER_OUTPUT_INCOMPLETE", role: "assistant", content: sanitizedDeepening.content, metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, source: "monitor_intervention", ...deepeningAcceptedMetadata, accepted: false, reason: "repetition_runaway", originalLength: sanitizedDeepening.originalLength, retainedLength: sanitizedDeepening.retainedLength, rawOutputSha256 } });
             return stop("AUTO-STOP: Viewer output entered a clear repetition runaway after Monitor intervention; the partial result was not accepted.")
           }
           let deepeningContinuationState;
           try {
             ({ state: deepeningContinuationState } = await persistSessionAssistantResponse({
               repository: input.repository, sessionId, response: deepening, providerConfig: input.providerConfig, model: input.model, route: stopAfterSanitizedAnthropicDeepening ? undefined : continuationRoute,
-              event: { eventType: "VIEWER_MONITOR_RESPONSE", role: "assistant", content: deepening.content, metadata: { ...focusMetadata(sessionFocus,currentPassIndex), phase, exchangeNumber, ...deepeningAcceptedMetadata, finishReason: deepening.finishReason, actualModel: deepening.actualModel ?? "unavailable", providerRequestId: deepening.providerRequestId ?? "unavailable", usage: deepening.usage, usageAccuracy: deepening.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: deepeningDurationMs, ...(stopAfterSanitizedAnthropicDeepening ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
+              event: { eventType: "VIEWER_MONITOR_RESPONSE", role: "assistant", content: deepening.content, metadata: { ...focusMetadata(sessionFocus, currentPassIndex), phase, exchangeNumber, ...deepeningAcceptedMetadata, finishReason: deepening.finishReason, actualModel: deepening.actualModel ?? "unavailable", providerRequestId: deepening.providerRequestId ?? "unavailable", usage: deepening.usage, usageAccuracy: deepening.usage.totalTokens !== undefined ? "reported" : "unavailable", requestDurationMs: deepeningDurationMs, ...(stopAfterSanitizedAnthropicDeepening ? { continuationState: { status: "suppressed", code: "signed_turn_content_modified" } } : {}) } },
             }));
           } catch (cause) {
             if (cause instanceof SessionContinuationError) return stop(`AUTO-STOP: ${cause.message}`);
@@ -731,7 +754,7 @@ async function runAutomaticRcpSessionOwned(input: AutomaticRcpRunInput): Promise
     }
 
     if (input.signal?.aborted) return stop("USER STOP");
-    await completeFocusPass(input.repository,sessionId,sessionFocus,passIndex,transcript.slice(passStart));
+    await completeFocusPass(input.repository, sessionId, sessionFocus, passIndex, transcript.slice(passStart));
   }
 
   if (input.signal?.aborted) return stop("USER STOP");
