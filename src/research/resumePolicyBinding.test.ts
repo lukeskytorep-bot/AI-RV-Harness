@@ -1,3 +1,4 @@
+import { hashBlindingMapping } from "./planner";
 import { expect, it, vi } from "vitest";
 import { targetCodeConfig, model, provider } from "../testing/targetCodeFixture";
 import { workflowTestRepository } from "../testing/workflowRepository";
@@ -26,7 +27,7 @@ for (const protocolId of ["rv-lite", "full-rcp"] as const) it.each(["missing", "
   const updateResearchAssignment = vi.fn(), initializeResearchSession = vi.fn(), runner = vi.fn();
   const repository = workflowTestRepository({ getResearchProject: async () => project,
     listResearchAssignments: async () => [{ id: "a", researchProjectId: "r", anonymousSessionId: "blind", targetId: "t", sessionId: "s", status: "ResumeApproved" }],
-    listBlindingMappings: async () => [{ anonymousSessionId: "blind", conditionId: "c" }], listResearchConditions: async () => [{ id: "c", researchProjectId: "r", conditionKey: condition.key, config: condition }],
+    listBlindingMappings: async () => [{ id: "map", researchProjectId: "r", anonymousSessionId: "blind", conditionId: "c", pairKey: "pair", mappingHash: await hashBlindingMapping({ anonymousSessionId: "blind", conditionId: "c", pairKey: "pair" }), createdAt: "t" }], listResearchConditions: async () => [{ id: "c", researchProjectId: "r", conditionKey: condition.key, config: condition }],
     listTargets: async () => [{ id: "t" }], listProviderConfigs: async () => [provider], listProviderModels: async () => [model], listProfiles: async () => [],
     getRvSession: async () => session, getSessionSnapshot: async () => snapshot, setResearchProjectState: vi.fn(), updateResearchAssignment, initializeResearchSession,
     getReveal: async () => ({ text: "Reveal" }), listSessionEvents: async () => [{ eventType: "REVEAL_ACCEPTED", metadata: { targetId: "t" } }], listTargetUsage: async () => [{ sessionId: "s", targetId: "t" }],

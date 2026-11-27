@@ -32,6 +32,23 @@ it.each(["custom_openai","ollama_cloud"] as const)("%s: independent sessions per
  // Deterministic execution order for this integration scenario only: stop B while A is untouched.
  for(const a of plan.assignments){a.executionOrder=plan.mappings.find(m=>m.anonymousSessionId===a.anonymousSessionId)?.conditionId===plan.conditions.find(c=>c.conditionKey==="without_code")!.id?1:2;}
  await repository.lockResearchProject(project.id,plan);
+ const mappingKey = "rvh.dev.blinding_mappings";
+ const originalMappings = localStorage.getItem(mappingKey)!;
+ const corruptMappings = () => {
+   const rows = JSON.parse(originalMappings) as typeof plan.mappings;
+   rows[0].conditionId = rows[1].conditionId;
+   localStorage.setItem(mappingKey, JSON.stringify(rows));
+ };
+ corruptMappings();
+ const refusedRunner = vi.fn();
+ const initialize = vi.spyOn(repository, "initializeResearchSession");
+ await expect(executeResearchSessions({ repository, projectId: project.id, rvLiteSessionRunner: refusedRunner })).rejects.toThrow(/mapping hash/);
+ expect(refusedRunner).not.toHaveBeenCalled();
+ expect(initialize).not.toHaveBeenCalled();
+ expect(await repository.listRvSessions(workspace.id)).toHaveLength(0);
+ initialize.mockRestore();
+ localStorage.setItem(mappingKey, originalMappings);
+
  const stop=new AbortController();const before:ProviderMessage[][]=[];
  await executeResearchSessions({repository,projectId:project.id,signal:stop.signal,rvLiteSessionRunner:input=>runAutomaticRvLiteSession({...input,chat:request=>executeProviderChat({...request,operationKind:"research_viewer",configuredRetries:0,attempt:async({messages})=>{before.push(structuredClone(messages));stop.abort();return {content:"Accepted B first answer",finishReason:"stop",usage:{}};}})})});
  const stopped=(await repository.listResearchAssignments(project.id)).find(a=>a.sessionId)!;
@@ -56,6 +73,11 @@ it.each(["custom_openai","ollama_cloud"] as const)("%s: independent sessions per
  expect(judgePayloads).toHaveLength(2);
  for(const payload of judgePayloads)expect(payload).not.toMatch(/with_code|without_code|target-code-presence|pair_tc|Target code/);
  expect((await repository.getResearchProject(project.id))?.state).toBe("ScoresFrozen");
+ corruptMappings();
+ await expect(unblindAndComputeResearch(repository, project.id)).rejects.toThrow(/mapping hash/);
+ expect(await repository.getResearchResults(project.id)).toBeNull();
+ expect((await repository.getResearchProject(project.id))?.state).toBe("Unblinded");
+ localStorage.setItem(mappingKey, originalMappings);
  const results=await unblindAndComputeResearch(repository,project.id);
  expect(results.targetCodeComparison?.summary).toMatchObject({completePairs:1,missingPairs:0,meanA:6,meanB:6,ties:1,meanPairedDifference:0});
  expect(results.targetCodeComparison?.pairs[0].a?.sessionCode).toBeTruthy();

@@ -1,6 +1,6 @@
 import { assertResearchTargetCodeContract } from "./targetCodeContract";
 import { assertTargetCodeDesign } from "./targetCodeDesign";
-import type { ResearchConfig, ResearchLockPlan } from "./types";
+import type { BlindingMappingRecord, ResearchConfig, ResearchLockPlan } from "./types";
 import { assertSamplingResearchContract, researchSamplingSessionCount } from "./samplingDesign";
 
 export async function buildResearchLockPlan(projectId: string, config: ResearchConfig): Promise<ResearchLockPlan> {
@@ -30,7 +30,7 @@ export async function buildResearchLockPlan(projectId: string, config: ResearchC
           judgeOrder: 0,
           status: "Pending",
         };
-        const mappingHash = await sha256Text(stableStringify({ anonymousSessionId, conditionId: conditionRecord.id, pairKey, pairOrder: condition.practiceOrder ?? null }));
+        const mappingHash = await hashBlindingMapping({ anonymousSessionId, conditionId: conditionRecord.id, pairKey, pairOrder: condition.practiceOrder });
         rows.push({
           assignment,
           mapping: {
@@ -124,6 +124,11 @@ export function validateConfig(config: ResearchConfig): void {
     const orders = config.conditions.map((condition) => condition.practiceOrder).sort();
     if (orders.length !== 2 || orders[0] !== "FIRST" || orders[1] !== "SECOND") throw new Error("Practice Effect requires exactly FIRST and SECOND conditions.");
   }
+}
+
+export function hashBlindingMapping(mapping: Pick<BlindingMappingRecord, "anonymousSessionId" | "conditionId" | "pairKey" | "pairOrder">): Promise<string> {
+  const { anonymousSessionId, conditionId, pairKey, pairOrder } = mapping;
+  return sha256Text(stableStringify({ anonymousSessionId, conditionId, pairKey, pairOrder: pairOrder ?? null }));
 }
 
 export function stableStringify(value: unknown): string {

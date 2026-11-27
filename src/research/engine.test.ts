@@ -1,3 +1,4 @@
+import { hashBlindingMapping } from "./planner";
 import {workflowTestRepository} from "../testing/workflowRepository";
 import fs from "node:fs";
 import path from "node:path";
@@ -65,7 +66,7 @@ describe("Research evidence boundaries", () => {
     const repo = workflowTestRepository({
       getResearchProject: vi.fn().mockResolvedValue(project),
       listResearchAssignments: vi.fn().mockResolvedValue([{ id: "assignment", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "Pending" }]),
-      listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: "hash", createdAt: "now" }]),
+      listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: await hashBlindingMapping({ anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair" }), createdAt: "now" }]),
       listResearchConditions: vi.fn().mockResolvedValue([{ id: "condition", researchProjectId: "r", conditionKey: "a", config: condition }]),
       listTargets: vi.fn().mockResolvedValue([{ id: "t", collection: "user", title: "T", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }]),
       listProviderConfigs: vi.fn().mockResolvedValue([provider]),
@@ -110,7 +111,7 @@ describe("Research evidence boundaries", () => {
     const repo = workflowTestRepository({
       getResearchProject: vi.fn().mockResolvedValue(project),
       listResearchAssignments: vi.fn().mockResolvedValue([{ id: "assignment", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "Pending" }]),
-      listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: "hash", createdAt: "now" }]),
+      listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: await hashBlindingMapping({ anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair" }), createdAt: "now" }]),
       listResearchConditions: vi.fn().mockResolvedValue([{ id: "condition", researchProjectId: "r", conditionKey: "a", config: condition }]),
       listTargets: vi.fn().mockResolvedValue([{ id: "t", collection: "user", title: "T", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }]),
       listProviderConfigs: vi.fn().mockResolvedValue([provider]),
@@ -148,7 +149,7 @@ describe("Research evidence boundaries", () => {
     const baseRepo = workflowTestRepository({
       getResearchProject: vi.fn().mockResolvedValue(project),
       listResearchAssignments: vi.fn().mockResolvedValue([{ id: "assignment", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "RetryApproved" }]),
-      listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: "hash", createdAt: "now" }]),
+      listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: await hashBlindingMapping({ anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair" }), createdAt: "now" }]),
       listTargets: vi.fn().mockResolvedValue([{ id: "t", collection: "user", title: "T", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }]),
       listProviderConfigs: vi.fn().mockResolvedValue([provider]),
       listProviderModels: vi.fn().mockResolvedValue([model]),
@@ -192,7 +193,7 @@ describe("Research evidence boundaries", () => {
     const baseRepo = workflowTestRepository({
       getResearchProject: vi.fn().mockResolvedValue(project),
       listResearchAssignments: vi.fn().mockResolvedValue([{ id: "assignment", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", targetId: "t", executionOrder: 1, judgeOrder: 1, status: "RetryApproved" }]),
-      listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: "hash", createdAt: "now" }]),
+      listBlindingMappings: vi.fn().mockResolvedValue([{ id: "mapping", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair", mappingHash: await hashBlindingMapping({ anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "condition", pairKey: "pair" }), createdAt: "now" }]),
       listTargets: vi.fn().mockResolvedValue([{ id: "t", collection: "user", title: "T", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }]),
       listProviderConfigs: vi.fn().mockResolvedValue([provider]), listProviderModels: vi.fn().mockResolvedValue([model]), listProfiles: vi.fn().mockResolvedValue([{ id: "p", name: "P", credentialId: "c", createdAt: "now", updatedAt: "now" }]),
       setResearchProjectState: vi.fn(), updateResearchAssignment: vi.fn(), getFieldGuideBundle,
@@ -263,7 +264,7 @@ describe("Research evidence boundaries", () => {
   });
 
   it("does not read condition mappings until after ScoresFrozen transitions to Unblinded", async () => {
-    const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "ScoresFrozen", config: { ...config, judges: [{ providerConfigId: "pc", modelId: "m" }] }, scoresFrozenAt: "now", createdAt: "now", updatedAt: "now" };
+    const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "ScoresFrozen", config: { ...config, conditions: [config.conditions[0]], judges: [{ providerConfigId: "pc", modelId: "m" }] }, scoresFrozenAt: "now", createdAt: "now", updatedAt: "now" };
     let state: ResearchState = "ScoresFrozen";
     let saved: ResearchResults | null = null;
     const repo = workflowTestRepository({
@@ -274,7 +275,7 @@ describe("Research evidence boundaries", () => {
       listJudgeScores: vi.fn().mockResolvedValue([score]),
       listBlindingMappings: vi.fn(async () => {
         expect(state).toBe("Unblinded");
-        return [{ id: "map", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "cond", pairKey: "pair", mappingHash: "h", createdAt: "now" }];
+        return [{ id: "map", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "cond", pairKey: "pair", mappingHash: await hashBlindingMapping({ anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "cond", pairKey: "pair" }), createdAt: "now" }];
       }),
       listResearchConditions: vi.fn().mockResolvedValue([{ id: "cond", researchProjectId: "r", conditionKey: "a", config: { ...config.conditions[0], requestedSettings: { topP: 0.04, topK: 0, seed: 42, temperature: 0.7 }, effectiveSettings: { requested: { topP: 0.04, topK: 0, seed: 42, temperature: 0.7 }, effective: { topP: 0.04, topK: 0, seed: 42, temperature: 0.7 }, omitted: [] }, samplingValues: { topP: 0.04, topK: 0, seed: 42 } } }]),
       listSessionEvents: vi.fn().mockResolvedValue([{ id: "e1", sessionId: "s", sequenceNumber: 1, createdAt: "now", eventType: "VIEWER_RESPONSE", role: "assistant", metadata: { actualProvider: "DeepInfra", actualModel: "m-runtime", providerRequestId: "req-1", requestDurationMs: 125, usage: { inputTokens: 100, outputTokens: 20, reasoningTokens: 5, totalTokens: 120, costUsd: 0.002 }, responseEvidence: { generationId: "gen-1" } } }]),
@@ -287,12 +288,12 @@ describe("Research evidence boundaries", () => {
   });
 
   it("resumes result computation after a temporary failure in Unblinded state", async () => {
-    const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "ScoresFrozen", config, scoresFrozenAt: "now", createdAt: "now", updatedAt: "now" };
+    const project: ResearchProjectRecord = { id: "r", workspaceId: "w", name: "R", templateType: "model", state: "ScoresFrozen", config: { ...config, conditions: [config.conditions[0]] }, scoresFrozenAt: "now", createdAt: "now", updatedAt: "now" };
     let state: ResearchState = "ScoresFrozen";
     let saved: ResearchResults | null = null;
     const listBlindingMappings = vi.fn()
       .mockRejectedValueOnce(new Error("temporary mapping read failure"))
-      .mockResolvedValue([{ id: "map", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "cond", pairKey: "pair", mappingHash: "h", createdAt: "now" }]);
+      .mockResolvedValue([{ id: "map", researchProjectId: "r", anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "cond", pairKey: "pair", mappingHash: await hashBlindingMapping({ anonymousSessionId: "BlindSession_ABCDEF12", conditionId: "cond", pairKey: "pair" }), createdAt: "now" }]);
     const repo = workflowTestRepository({
       getResearchProject: vi.fn(async () => ({ ...project, state })),
       getResearchResults: vi.fn(async () => saved),

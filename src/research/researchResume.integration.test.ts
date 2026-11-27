@@ -1,3 +1,4 @@
+import { hashBlindingMapping } from "./planner";
 import { ProviderCallError } from "../providers/providerError";
 import {
   clearOpenRouterEndpointCapabilityCache,
@@ -69,7 +70,7 @@ function researchDurableRepository(options?: { frozenOutputPolicy?: boolean; ini
       await append(session.id, { eventType: "SESSION_CREATED", role: "controller", metadata: { sessionCode: session.sessionCode, researchInitialization: true } });
       return structuredClone(session);
     }),
-    listBlindingMappings: vi.fn(async () => [{ id: "mapping", researchProjectId: project.id, anonymousSessionId: assignment.anonymousSessionId, conditionId: conditionRecord.id, pairKey: "pair", mappingHash: "hash", createdAt: "now" }]),
+    listBlindingMappings: vi.fn(async () => [{ id: "mapping", researchProjectId: project.id, anonymousSessionId: assignment.anonymousSessionId, conditionId: conditionRecord.id, pairKey: "pair", mappingHash: await hashBlindingMapping({ anonymousSessionId: assignment.anonymousSessionId, conditionId: conditionRecord.id, pairKey: "pair" }), createdAt: "now" }]),
     listResearchConditions: vi.fn(async () => [structuredClone(conditionRecord)]),
     listTargets: vi.fn(async () => [{ id: "target", collection: "user", title: "Target", revealText: "Reveal", tags: [], sourceMetadata: {}, createdAt: "now", updatedAt: "now" }]),
     listProviderConfigs: vi.fn(async () => [provider]),

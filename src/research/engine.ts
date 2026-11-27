@@ -1,3 +1,4 @@
+import { indexLockedResearchConditions, validateResearchBlindingMappings } from "./blindingIntegrity";
 import { assertResearchTargetCodeProject, assertResearchTargetCodeContract, captureResearchTargetCodeContract } from "./targetCodeContract";
 import { computeTargetCodeComparison } from "./targetCodeResults";
 import { assertPreparedContextResearchDraft } from "./contextLockPreparation";
@@ -182,19 +183,14 @@ async function executeResearchSessionsOwned(input: {
     input.repository.listProviderModels(),
     typeof input.repository.listProfiles === "function" ? input.repository.listProfiles() : Promise.resolve([]),
   ]);
-  const mappingByAnonymous = new Map(mappings.map((mapping) => [mapping.anonymousSessionId, mapping]));
-  const lockedConditionByKey = new Map(project.config.conditions.map((condition) => [condition.key, condition]));
-  const conditionById = new Map(conditions.map((condition) => [condition.id, condition]));
-  const storedConditionKeys = new Set(conditions.map((condition) => condition.conditionKey));
-  if (lockedConditionByKey.size !== project.config.conditions.length
-    || conditions.length !== lockedConditionByKey.size
-    || storedConditionKeys.size !== conditions.length
-    || conditionById.size !== conditions.length
-    || conditions.some(stored => !stored.id?.trim() || stored.researchProjectId !== project.id
-      || stored.config?.key !== stored.conditionKey || !lockedConditionByKey.has(stored.conditionKey))) {
+  let conditionIndex: ReturnType<typeof indexLockedResearchConditions>;
+  try {
+    conditionIndex = indexLockedResearchConditions(project, conditions);
+  } catch (cause) {
     await input.repository.setResearchProjectState(project.id, "Interrupted");
-    throw new Error("Locked Research condition set is incomplete or inconsistent.");
+    throw cause;
   }
+  const { lockedByKey: lockedConditionByKey, conditionById } = conditionIndex;
   for (const stored of conditions) {
     const locked = lockedConditionByKey.get(stored.conditionKey)!;
     if (viewerNotesSnapshotSignature(stored.config.viewerNotes) !== viewerNotesSnapshotSignature(locked.viewerNotes)) {
@@ -227,6 +223,14 @@ async function executeResearchSessionsOwned(input: {
       throw new Error("Frozen Research target-code policy drift detected after Experiment Lock.");
     }
   }
+  let mappingByAnonymous;
+  try {
+    mappingByAnonymous = await validateResearchBlindingMappings(project, assignments, mappings, conditionById);
+  } catch (cause) {
+    await input.repository.setResearchProjectState(project.id, "Interrupted");
+    throw cause;
+  }
+  if (input.signal?.aborted) return;
   const targetById = new Map(targets.map((target) => [target.id, target]));
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const modelByKey = new Map(models.map((model) => [modelRouteKey(model.providerConfigId, model.modelId), model]));
@@ -740,10 +744,6 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
   let project = await requireProject(repository, projectId);
   const existingResults = await repository.getResearchResults(projectId);
   if (project.state === "Complete" && existingResults) return existingResults;
-  if (project.state === "Unblinded" && existingResults) {
-    await repository.setResearchProjectState(projectId, "Complete");
-    return existingResults;
-  }
   if (project.state !== "ScoresFrozen" && project.state !== "Unblinded") {
     throw new Error("Blinding Key cannot be used until every Judge score is frozen.");
   }
@@ -762,8 +762,13 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
     repository.listBlindingMappings(projectId),
     repository.listResearchConditions(projectId),
   ]);
-  const mappingByAnonymous = new Map(mappings.map((mapping) => [mapping.anonymousSessionId, mapping]));
-  const conditionById = new Map(conditions.map((condition) => [condition.id, condition]));
+  const { conditionById } = indexLockedResearchConditions(project, conditions);
+  const mappingByAnonymous = await validateResearchBlindingMappings(project, assignments, mappings, conditionById);
+  await assertAbortOwnership(signal);
+  if (existingResults) {
+    await repository.setResearchProjectState(projectId, "Complete");
+    return existingResults;
+  }
   const sessions: UnblindedSessionResult[] = [];
   const targetCodeScores: Record<string, Awaited<ReturnType<ResearchRepository["listJudgeScores"]>>> = {};
   for (const assignment of assignments) {

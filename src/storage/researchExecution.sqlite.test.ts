@@ -235,3 +235,31 @@ it("Research evaluation SQLite: Stop/reconnect resumes only missing panel slots 
  for(const [id,scores] of Object.entries(before!.scores))expect(after?.scores[id]).toEqual(expect.arrayContaining(scores));
  expect(await reconnected.getResearchExecutionTermination(project.id)).toMatchObject({reason:"user_finished"});
 });
+
+it("checks real Target Code Presence lock mappings read from SQLite before any session starts", async () => {
+  const { buildResearchLockPlan } = await import("../research/planner");
+  const { targetCodeConfig } = await import("../testing/targetCodeFixture");
+  const { indexLockedResearchConditions, validateResearchBlindingMappings } = await import("../research/blindingIntegrity");
+  const { repository, project: setupProject } = await study();
+  const config = targetCodeConfig();
+  config.conditions = config.conditions.map(condition => ({ ...condition, profileId: setupProject.config.conditions[0].profileId }));
+  const project = await repository.createResearchProject(config);
+  const plan = await buildResearchLockPlan(project.id, project.config);
+  await repository.lockResearchProject(project.id, plan);
+  const conditions = await repository.listResearchConditions(project.id);
+  expect((await validateResearchBlindingMappings(project, await repository.listResearchAssignments(project.id),
+    await repository.listBlindingMappings(project.id), indexLockedResearchConditions(project, conditions).conditionById)).size).toBe(2);
+  expect(() => db.prepare("UPDATE blinding_mappings SET condition_id=? WHERE id=?").run(plan.mappings[1].conditionId, plan.mappings[0].id))
+    .toThrow(/immutable after Experiment Lock/);
+
+  // Seed an inconsistent persisted plan at Lock rather than disabling production triggers.
+  const damagedProject = await repository.createResearchProject(config);
+  const damagedPlan = await buildResearchLockPlan(damagedProject.id, damagedProject.config);
+  damagedPlan.mappings[0].conditionId = damagedPlan.mappings[1].conditionId;
+  await repository.lockResearchProject(damagedProject.id, damagedPlan);
+  const runner = vi.fn();
+  await expect(executeResearchSessions({ repository, projectId: damagedProject.id, rvLiteSessionRunner: runner })).rejects.toThrow(/mapping hash/);
+  expect(runner).not.toHaveBeenCalled();
+  expect((await repository.listResearchAssignments(damagedProject.id)).every(row => row.status === "Pending" && !row.sessionId)).toBe(true);
+  expect((await repository.getResearchProject(damagedProject.id))?.state).toBe("Interrupted");
+});
