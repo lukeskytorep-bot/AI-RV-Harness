@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { prepareContextResearchDraft } from "./contextLockPreparation";
+import { renderRvLiteSteps, getRvLite } from "../resources/protocolRegistry";
 import { afterEach,it,expect,vi } from "vitest";
 import { executeProviderChat } from "../providers/requestExecutor";
 import { normalizeModelDiscovery, resolveGenerationSettings } from "../providers/capabilities";
@@ -137,4 +139,80 @@ it.each(["custom_openai","ollama_cloud"] as const)("%s: independent sessions per
  expect(master.sessionSnapshots[stopped.anonymousSessionId].researchTargetCode).toEqual(snapshot?.researchTargetCode);
  // Research packages have no dedicated importer. Round-trip their existing JSON master/snapshot contract.
  const imported=JSON.parse(JSON.stringify(master));expect(imported.project.config.conditions.find((c:{key:string})=>c.key==="without_code").targetCode).toEqual(snapshot?.researchTargetCode?.policy);
+});
+
+it("reopens a stopped Selected Blocks Only experiment and sends only the frozen blocks on Resume", async () => {
+  vi.stubGlobal("navigator", { locks: locks() });
+  let repository = new BrowserRepository();
+  const profile = await repository.createProfile({ name: "Leo" });
+  const workspace = await repository.createWorkspace({ profileId: profile.id, name: "Research", kind: "rv" });
+  localStorage.setItem("rvh.dev.providers", JSON.stringify([fixtureProvider]));
+  await repository.replaceProviderModels(fixtureProvider.id, [fixtureModel]);
+  const target = await repository.createTarget({ id: "t", collection: "user", title: "T", revealText: "A tall bridge", tags: [], sourceMetadata: {} });
+  const contextPreparation = await prepareContextResearchDraft([
+    { id: "selected", label: "Field Guide + Viewer Notes", design: { version: 1, mode: "selected_only", blocks: ["system_prompt", "viewer_notes"] } },
+    { id: "blank", label: "Tabula rasa", design: { version: 1, mode: "selected_only", blocks: [] } },
+  ], {
+    system_prompt: { content: "  Locked Field Guide  ", availability: "available", source: "fixture:fg" },
+    viewer_notes: { content: "Locked Viewer Notes", availability: "available", source: "fixture:vn" },
+    viewer_identity: { content: "Omitted Viewer Identity", availability: "available", source: "fixture:vi" },
+    base_vocabulary: { content: "Omitted Base Vocabulary", availability: "available", source: "fixture:bv" },
+  });
+  const [registered] = await repository.listProviderModels();
+  const base = targetCodeConfig();
+  const { targetCode: _discard, ...route } = base.conditions[0];
+  const config = freezeResearchViewerOutputPolicy({
+    ...base, name: "Selected Blocks Only", templateType: "context_instructions", workspaceId: workspace.id,
+    targetIds: [target.id], contextPreparation,
+    conditions: contextPreparation.conditions.map(({ id, label, composition }) => ({
+      ...route, key: id, label, profileId: profile.id, capabilitySnapshot: registered.capabilities,
+      effectiveSettings: resolveGenerationSettings(registered.capabilities, route.requestedSettings, { provider: registered.provider }),
+      contextDesign: composition.design, contextComposition: composition,
+    })),
+  });
+  const project = await repository.createResearchProject(config);
+  const plan = await buildResearchLockPlan(project.id, config);
+  const selectedId = plan.conditions.find(({ conditionKey }) => conditionKey === "selected")!.id;
+  for (const assignment of plan.assignments) {
+    const mapping = plan.mappings.find(({ anonymousSessionId }) => anonymousSessionId === assignment.anonymousSessionId);
+    assignment.executionOrder = mapping?.conditionId === selectedId ? 1 : 2;
+  }
+  await repository.lockResearchProject(project.id, plan);
+
+  const stop = new AbortController();
+  const expectedBlocks = ["  Locked Field Guide  ", "Locked Viewer Notes"];
+  const systemBlocks = (messages: ProviderMessage[]) => messages.filter(({ role }) => role === "system").map(({ content }) => content);
+  const liveChat = (request: Parameters<typeof executeProviderChat>[0]) =>
+    executeProviderChat({ ...request, operationKind: "research_viewer", configuredRetries: 0 });
+  const runner: typeof runAutomaticRvLiteSession = (input) =>
+    runAutomaticRvLiteSession({ ...input, chat: input.chat ?? liveChat });
+  mockChatResponse(({ messages }) => {
+    expect(systemBlocks(messages)).toEqual(expectedBlocks);
+    stop.abort();
+    return { content: "Accepted first step", finish_reason: "stop" };
+  });
+  await executeResearchSessions({ repository, projectId: project.id, signal: stop.signal, rvLiteSessionRunner: runner });
+  const interrupted = (await repository.listResearchAssignments(project.id)).find(({ sessionId }) => sessionId)!;
+  expect(interrupted.status).toBe("Interrupted");
+
+  repository = new BrowserRepository();
+  const snapshot = await repository.getSessionSnapshot(interrupted.sessionId!);
+  expect(snapshot?.researchContext?.applicationMessages.map(({ content }) => content)).toEqual(expectedBlocks);
+  await prepareInterruptedResearchRetry(repository, project.id, async () => true);
+  const dispatched: ProviderMessage[][] = [];
+  mockChatResponse(({ messages }) => {
+    dispatched.push(messages);
+    return { content: `Evidence ${dispatched.length}`, finish_reason: "stop" };
+  });
+  await executeResearchSessions({
+    repository, projectId: project.id, rvLiteSessionRunner: runner,
+    sessionReplayFactory: (args) => createSessionReplay({ ...args, liveChat }),
+  });
+  expect(dispatched).toHaveLength(7);
+  const resumed = dispatched.slice(0, 3);
+  for (const messages of resumed) expect(systemBlocks(messages)).toEqual(expectedBlocks);
+  expect(resumed[0].some(({ role, content }) => role === "assistant" && content === "Accepted first step")).toBe(true);
+  expect(resumed[0].at(-1)?.content).toBe(renderRvLiteSteps(getRvLite("en", "extended"), "Leo", snapshot!.sessionCode)[1]);
+  for (const messages of dispatched.slice(3)) expect(systemBlocks(messages)).toEqual([]);
+  expect((await repository.listResearchAssignments(project.id)).map(({ status }) => status)).toEqual(["SessionComplete", "SessionComplete"]);
 });

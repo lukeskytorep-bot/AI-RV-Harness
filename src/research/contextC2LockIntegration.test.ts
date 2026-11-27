@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { prepareContextResearchDraft } from "./contextLockPreparation";
+import { assertPreparedContextResearchDraft, prepareContextResearchDraft } from "./contextLockPreparation";
 import { validateConfig } from "./planner";
 import { runResearchPreflight } from "./preflight";
 import type { ResearchConfig, ResearchContextBlockKey } from "./types";
@@ -16,6 +16,7 @@ async function config(): Promise<ResearchConfig> {
   const prepared = await prepareContextResearchDraft([
     { id: "standard", label: "Standard", design: { version: 1, mode: "standard" } },
     { id: "blank", label: "Tabula rasa", design: { version: 1, mode: "replace_all", content: "" } },
+    { id: "selected", label: "Field Guide + Notes", design: { version: 1, mode: "selected_only", blocks: ["system_prompt", "viewer_notes"] } },
   ], baseline);
   return {
     schemaVersion: 1,
@@ -39,9 +40,12 @@ async function config(): Promise<ResearchConfig> {
 }
 
 describe("Context & Instructions C2 lock contract", () => {
-  it("accepts a prepared Standard + Tabula rasa config in the lock validator", async () => {
+  it("accepts a prepared Standard, Tabula rasa and Selected Blocks Only config in the lock validator", async () => {
     const value = await config();
     expect(() => validateConfig(value)).not.toThrow();
+    await expect(assertPreparedContextResearchDraft(structuredClone(value.contextPreparation!))).resolves.toBeUndefined();
+    expect(value.conditions[2].contextComposition?.applicationMessages.map(({ origin, content }) => [origin, content]))
+      .toEqual([["system_prompt", "system_prompt"], ["viewer_notes", "notes"]]);
   });
 
   it("fails closed if a condition composition is changed after preparation", async () => {

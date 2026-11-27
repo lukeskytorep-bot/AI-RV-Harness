@@ -1,3 +1,5 @@
+import { ResearchContextConditionsEditor } from "./ResearchContextDesignBuilder";
+import { createContextEditorCondition } from "../../research/contextDesignDraft";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderModel } from "../../providers/types";
@@ -304,6 +306,16 @@ it("renders Context & Instructions result provenance and completeness", () => {
   expect(polish).toContain("Dodaj do wybranych");
   expect(polish).toContain("Add notes");
   expect(polish).not.toContain("Add to Selected");
+  const selection = structuredClone(results);
+  selection.conditions.push(
+    { ...selection.conditions[0], conditionKey: "selected", contextMode: "selected_only", contextAdditionTargets: [], contextSelectedBlocks: ["system_prompt", "viewer_notes"] },
+    { ...selection.conditions[0], conditionKey: "empty", contextMode: "selected_only", contextAdditionTargets: [], contextSelectedBlocks: [] },
+    { ...selection.conditions[0], conditionKey: "mismatch", contextMode: "selected_only", contextSelectedBlocksMismatch: true },
+  );
+  const selectedHtml = renderToStaticMarkup(<ResearchResultsView copy={getCopy("en")} results={selection} repository={repository} />);
+  expect(selectedHtml).toContain(`<td>Selected Blocks Only</td><td>${getCopy("en").contextSystem}, Viewer Notes</td>`);
+  expect(selectedHtml).toContain(`<td>Selected Blocks Only</td><td>${getCopy("en").contextEmpty}</td>`);
+  expect(selectedHtml).toContain("<td>Inconsistent with Experiment Lock</td>");
   const legacy = structuredClone(results);
   delete legacy.conditions[0].logicalContextMessages;
   delete legacy.conditions[0].logicalContextCharacters;
@@ -336,4 +348,15 @@ it.each(["pl", "en"] as const)("localizes stored practice and notes labels in re
     expect(html).toContain(`${expected[0]} ↔ ${expected[1]}`);
     expect(JSON.stringify(results)).toBe(before);
   }
+});
+
+it.each(["pl", "en"] as const)("shows four checks and no text editor for Selected Blocks Only (%s)", (language) => {
+  const condition = createContextEditorCondition({
+    id: "selected", label: "Guide", design: { version: 1, mode: "selected_only", blocks: ["system_prompt"] },
+  });
+  const html = renderToStaticMarkup(<ResearchContextConditionsEditor conditions={[condition]} onChange={() => {}} copy={getCopy(language)} />);
+  expect(html).toContain(language === "pl" ? "Tylko wybrane bloki" : "Selected Blocks Only");
+  expect(html.match(/type="checkbox"/g)).toHaveLength(4);
+  expect(html.match(/checked=""/g)).toHaveLength(1);
+  expect(html).not.toContain("<textarea");
 });

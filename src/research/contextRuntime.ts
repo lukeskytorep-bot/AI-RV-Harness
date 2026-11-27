@@ -1,5 +1,5 @@
 import type { ProviderMessage } from "../providers/types";
-import type { ResearchFrozenContextComposition } from "./types";
+import type { ResearchConfig, ResearchContextBlockKey, ResearchContextConditionDesign, ResearchFrozenContextComposition, ResearchResults } from "./types";
 
 export interface ResearchContextSessionEvidence {
   version: 1;
@@ -40,4 +40,36 @@ export function assertResearchContextSessionEvidence(
       throw new Error(`Research Resume refused context-message drift at position ${index + 1}.`);
     }
   }
+}
+
+// Validate results against Experiment Lock without rewriting stored results.
+export function withResearchSelectedBlocks(results: ResearchResults, config: ResearchConfig): ResearchResults {
+  if (results.templateType !== "context_instructions") return results;
+  const compositions = new Map(config.conditions.map(({ key, contextComposition }) => [key, contextComposition]));
+  const validateSelection = (key: string, mode: ResearchContextConditionDesign["mode"] | undefined,
+    hash: string | undefined, saved: ResearchContextBlockKey[] | undefined) => {
+    const composition = compositions.get(key);
+    const design = composition?.design;
+    if (mode !== "selected_only" && design?.mode !== "selected_only" && saved === undefined) return undefined;
+    if (mode === "selected_only" && design?.mode === "selected_only" && hash && composition?.compositionSha256 === hash) {
+      const expected = design.blocks;
+      if (saved === undefined || (Array.isArray(saved) && saved.length === expected.length && expected.every((block) => saved.includes(block)))) {
+        return { blocks: [...expected] };
+      }
+    }
+    return { mismatch: true as const };
+  };
+  return {
+    ...results,
+    conditions: results.conditions.map((condition) => {
+      const selection = validateSelection(condition.conditionKey, condition.contextMode, condition.compositionSha256, condition.contextSelectedBlocks);
+      return selection ? { ...condition, contextSelectedBlocks: selection.blocks, contextSelectedBlocksMismatch: selection.mismatch } : condition;
+    }),
+    sessions: results.sessions.map((session) => {
+      const audit = session.contextAudit;
+      if (!audit) return session;
+      const selection = validateSelection(session.conditionKey, audit.mode, audit.compositionSha256, audit.selectedBlocks);
+      return selection ? { ...session, contextAudit: { ...audit, selectedBlocks: selection.blocks, selectedBlocksMismatch: selection.mismatch } } : session;
+    }),
+  };
 }

@@ -1,3 +1,4 @@
+import { withResearchSelectedBlocks } from "../research/contextRuntime";
 import { computeTargetCodeComparison, targetCodeComparisonCsv } from "../research/targetCodeResults";
 import { buildJudgePacket } from "../domain/judgePacket";
 import { JUDGE_RUBRIC_VERSION } from "../judge/types";
@@ -14,8 +15,9 @@ import { renderCompleteSessionMarkdown } from "./sessionDocument";
 
 export async function exportResearchPackage(repository: AppRepository, projectId: string, baseDirectory?: string): Promise<{ directory: string; manifestHash: string }> {
   const project = await repository.getResearchProject(projectId);
-  const results = await repository.getResearchResults(projectId);
   if (!project) throw new Error("Research project not found.");
+  const savedResults = await repository.getResearchResults(projectId);
+  const results = savedResults ? withResearchSelectedBlocks(savedResults, project.config) : savedResults;
   const termination=await repository.getResearchExecutionTermination(projectId);
   const partial = !termination && project.config.judges.length > 0 && ["SessionsComplete", "Judging", "ScoresFrozen"].includes(project.state);
   const saveOnly = partial || project.config.judges.length === 0 && project.state === "SessionsComplete" || Boolean(termination && !results);
@@ -196,7 +198,7 @@ export async function exportResearchPackage(repository: AppRepository, projectId
 }
 
 function resultsCsv(results: ResearchResults): string {
-  const header = ["condition_key", "condition_label", "context_mode", "context_addition_targets", "composition_sha256", "logical_context_messages", "logical_context_characters", "planned_n", "completion_rate_pct", "requested_top_p", "effective_top_p", "requested_top_k", "effective_top_k", "requested_seed", "effective_seed", "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort", "provider_config_id", "model_id", "n", "mean_total", "median_total", "stddev_total", "min_total", "max_total", "gestalt_mean", "features_mean", "activity_mean", "confabulation_mean"];
+  const header = ["condition_key", "condition_label", "context_mode", "context_addition_targets", "composition_sha256", "logical_context_messages", "logical_context_characters", "planned_n", "completion_rate_pct", "requested_top_p", "effective_top_p", "requested_top_k", "effective_top_k", "requested_seed", "effective_seed", "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort", "provider_config_id", "model_id", "n", "mean_total", "median_total", "stddev_total", "min_total", "max_total", "gestalt_mean", "features_mean", "activity_mean", "confabulation_mean", "context_selected_blocks", "context_selected_blocks_status"];
   const rows = results.conditions.map((condition) => [condition.conditionKey, condition.label, condition.contextMode ?? "", condition.contextAdditionTargets?.join("|") ?? "", condition.compositionSha256 ?? "", condition.logicalContextMessages ?? "", condition.logicalContextCharacters ?? "", condition.plannedN ?? "", condition.completionRate ?? "",
     valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topP")), valueOrAuto(condition.effectiveSettings?.topP),
     valueOrAuto(researchRequestedSamplingValue(condition.requestedSettings, condition.samplingValues, "topK")), valueOrAuto(condition.effectiveSettings?.topK),
@@ -204,7 +206,7 @@ function resultsCsv(results: ResearchResults): string {
     valueOrAuto(condition.requestedSettings?.temperature), valueOrAuto(condition.effectiveSettings?.temperature),
     condition.requestedSettings?.reasoningEffort ?? "Auto", condition.effectiveSettings?.reasoningEffort ?? "Auto",
     condition.providerConfigId ?? "", condition.modelId ?? "", condition.n, condition.meanTotal, condition.medianTotal, condition.stdDevTotal, condition.minTotal, condition.maxTotal,
-    condition.meanComponents.gestalt, condition.meanComponents.verifiableFeatures, condition.meanComponents.activityFunctionEvent, condition.meanComponents.confabulationControl]);
+    condition.meanComponents.gestalt, condition.meanComponents.verifiableFeatures, condition.meanComponents.activityFunctionEvent, condition.meanComponents.confabulationControl, condition.contextSelectedBlocks?.join("|") ?? "", condition.contextSelectedBlocksMismatch ? "mismatch" : ""]);
   return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
 
@@ -212,7 +214,7 @@ function sessionResultsCsv(results: ResearchResults): string {
   const header = ["anonymous_session_id", "session_id", "target_id", "pair_key", "condition_key", "condition_label", "context_mode", "context_addition_targets", "composition_sha256", "logical_context_messages", "logical_context_characters", "evidence_physical_attempts", "evidence_logical_requests", "evidence_transport_retries", "evidence_recovery_attempts", "request_hashes",
     "requested_top_p", "effective_top_p", "requested_top_k", "effective_top_k", "requested_seed", "effective_seed", "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort",
     "provider_config_id", "model_id", "actual_provider", "actual_model", "generation_ids", "provider_request_ids", "viewer_call_count", "input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "cost_usd", "request_duration_ms", "first_viewer_response_at", "last_viewer_response_at",
-    "field_guide_version_id", "field_guide_version_number", "field_guide_content_sha256", "mean_total", "judge_count", "judge_total_range", "judge_total_stddev", "gestalt", "verifiable_features", "activity_function_event", "confabulation_control"];
+    "field_guide_version_id", "field_guide_version_number", "field_guide_content_sha256", "mean_total", "judge_count", "judge_total_range", "judge_total_stddev", "gestalt", "verifiable_features", "activity_function_event", "confabulation_control", "context_selected_blocks", "context_selected_blocks_status"];
   const rows = results.sessions.map((session) => [session.anonymousSessionId, session.sessionId, session.targetId, session.pairKey, session.conditionKey, session.conditionLabel, session.contextAudit?.mode ?? "", session.contextAudit?.additionTargets.join("|") ?? "", session.contextAudit?.compositionSha256 ?? "", session.contextAudit?.logicalContextMessages ?? "", session.contextAudit?.logicalContextCharacters ?? "", session.contextAudit?.requestEvidence.physicalAttempts ?? "", session.contextAudit?.requestEvidence.logicalRequests ?? "", session.contextAudit?.requestEvidence.transportRetries ?? "", session.contextAudit?.requestEvidence.recoveryAttempts ?? "", session.contextAudit?.requestEvidence.requestHashes.join("|") ?? "",
     valueOrAuto(researchRequestedSamplingValue(session.requestedSettings, session.samplingValues, "topP")), valueOrAuto(session.effectiveSettings?.topP),
     valueOrAuto(researchRequestedSamplingValue(session.requestedSettings, session.samplingValues, "topK")), valueOrAuto(session.effectiveSettings?.topK),
@@ -221,7 +223,7 @@ function sessionResultsCsv(results: ResearchResults): string {
     session.requestedSettings?.reasoningEffort ?? "Auto", session.effectiveSettings?.reasoningEffort ?? "Auto",
     session.providerConfigId ?? "", session.modelId ?? "", session.execution?.actualProviders?.join("|") || "unknown", session.execution?.actualModels?.join("|") || "unknown", session.execution?.generationIds?.join("|") ?? "", session.execution?.providerRequestIds?.join("|") ?? "", session.execution?.viewerCallCount ?? 0,
     session.execution?.inputTokens ?? "", session.execution?.outputTokens ?? "", session.execution?.reasoningTokens ?? "", session.execution?.totalTokens ?? "", session.execution?.costUsd ?? "", session.execution?.requestDurationMs ?? "", session.execution?.firstViewerResponseAt ?? "", session.execution?.lastViewerResponseAt ?? "",
-    session.fieldGuideVersionId ?? "", session.fieldGuideVersionNumber ?? "", session.fieldGuideContentSha256 ?? "", session.total, session.judgeCount, session.judgeTotalRange, session.judgeTotalStdDev, session.gestalt, session.verifiableFeatures, session.activityFunctionEvent, session.confabulationControl]);
+    session.fieldGuideVersionId ?? "", session.fieldGuideVersionNumber ?? "", session.fieldGuideContentSha256 ?? "", session.total, session.judgeCount, session.judgeTotalRange, session.judgeTotalStdDev, session.gestalt, session.verifiableFeatures, session.activityFunctionEvent, session.confabulationControl, session.contextAudit?.selectedBlocks?.join("|") ?? "", session.contextAudit?.selectedBlocksMismatch ? "mismatch" : ""]);
   return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
 
@@ -251,6 +253,7 @@ function researchConditionParameters(config: ResearchConfig): Array<Record<strin
     context: condition.contextComposition ? {
       mode: condition.contextComposition.design.mode,
       additionTargets: condition.contextComposition.design.mode === "add_to_selected" ? Object.keys(condition.contextComposition.design.additions) : [],
+      ...(condition.contextComposition.design.mode === "selected_only" ? { selectedBlocks: condition.contextComposition.design.blocks } : {}),
       compositionSha256: condition.contextComposition.compositionSha256,
     } : null,
   }));
@@ -259,14 +262,15 @@ function researchConditionParameters(config: ResearchConfig): Array<Record<strin
 function conditionParametersCsv(config: ResearchConfig): string {
   const header = ["condition_key", "condition_label", "context_mode", "context_addition_targets", "composition_sha256", "profile_id", "provider_config_id", "model_id", "target_code_mode", "target_code_policy_version", "target_code_templates_sha256",
     "requested_top_p", "top_p_source", "effective_top_p", "requested_top_k", "top_k_source", "effective_top_k", "requested_seed", "seed_source", "effective_seed",
-    "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort"];
+    "requested_temperature", "effective_temperature", "requested_reasoning_effort", "effective_reasoning_effort", "context_selected_blocks"];
   const rows = config.conditions.map((condition) => [condition.key, condition.label, condition.contextComposition?.design.mode ?? "", condition.contextComposition?.design.mode === "add_to_selected" ? Object.keys(condition.contextComposition.design.additions).join("|") : "", condition.contextComposition?.compositionSha256 ?? "", condition.profileId, condition.providerConfigId, condition.modelId,
     condition.targetCode?.mode ?? condition.researchProfileTargetCode?.policy.mode ?? "", condition.targetCode?.version ?? condition.researchProfileTargetCode?.policy.version ?? "", condition.targetCode?.templatesSha256 ?? condition.researchProfileTargetCode?.policy.templatesSha256 ?? "",
     valueOrAuto(condition.requestedSettings.topP), condition.requestedSettings.topP === undefined ? "auto" : "manual", valueOrAuto(condition.effectiveSettings?.effective.topP),
     valueOrAuto(condition.requestedSettings.topK), condition.requestedSettings.topK === undefined ? "auto" : "manual", valueOrAuto(condition.effectiveSettings?.effective.topK),
     valueOrAuto(condition.requestedSettings.seed), condition.requestedSettings.seed === undefined ? "auto" : "manual", valueOrAuto(condition.effectiveSettings?.effective.seed),
     valueOrAuto(condition.requestedSettings.temperature), valueOrAuto(condition.effectiveSettings?.effective.temperature),
-    condition.requestedSettings.reasoningEffort ?? "Auto", condition.effectiveSettings?.effective.reasoningEffort ?? "Auto"]);
+    condition.requestedSettings.reasoningEffort ?? "Auto", condition.effectiveSettings?.effective.reasoningEffort ?? "Auto",
+    condition.contextComposition?.design.mode === "selected_only" ? condition.contextComposition.design.blocks.join("|") : ""]);
   return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
 

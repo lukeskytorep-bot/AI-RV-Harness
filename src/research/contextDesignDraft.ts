@@ -41,6 +41,9 @@ export function exportResearchContextDraft(conditions: readonly ResearchContextD
 function serializeContextDesign(design: ResearchContextConditionDesign): ResearchContextConditionDesign {
   if (design.mode === "standard") return { version: 1, mode: "standard" };
   if (design.mode === "replace_all") return { version: 1, mode: "replace_all", content: design.content };
+  if (design.mode === "selected_only") {
+    return { version: 1, mode: "selected_only", blocks: RESEARCH_CONTEXT_BLOCK_KEYS.filter((key) => design.blocks.includes(key)) };
+  }
   const additions = design.additions;
   return { version: 1, mode: "add_to_selected", additions: Object.fromEntries(
     RESEARCH_CONTEXT_BLOCK_KEYS
@@ -54,12 +57,14 @@ export interface ResearchContextEditorCondition extends ResearchContextDraftCond
   savedReplacement: string;
   savedAdditions: Partial<Record<ResearchContextBlockKey, string>>;
   selectedBlocks: ResearchContextBlockKey[];
+  retainedBlocks: ResearchContextBlockKey[];
 }
 
 export function createContextEditorCondition(condition: ResearchContextDraftCondition): ResearchContextEditorCondition {
   const design = condition.design;
   return {
     ...condition,
+    retainedBlocks: design.mode === "selected_only" ? [...design.blocks] : [],
     savedReplacement: design.mode === "replace_all" ? design.content : "",
     savedAdditions: design.mode === "add_to_selected" ? { ...design.additions } : {},
     selectedBlocks: design.mode === "add_to_selected" ? RESEARCH_CONTEXT_BLOCK_KEYS.filter((key) => Object.prototype.hasOwnProperty.call(design.additions, key)) : ["system_prompt"],
@@ -75,7 +80,8 @@ export function changeContextEditorMode(condition: ResearchContextEditorConditio
     ...condition,
     design: mode === "standard" ? { version: 1, mode: "standard" }
       : mode === "replace_all" ? { version: 1, mode: "replace_all", content: condition.savedReplacement }
-        : { version: 1, mode: "add_to_selected", additions: activeAdditions(condition) },
+        : mode === "selected_only" ? { version: 1, mode, blocks: [...condition.retainedBlocks] }
+          : { version: 1, mode: "add_to_selected", additions: activeAdditions(condition) },
   };
 }
 
@@ -94,4 +100,10 @@ export function toggleContextAddition(condition: ResearchContextEditorCondition,
     : condition.selectedBlocks.filter((candidate) => candidate !== key);
   const next = { ...condition, selectedBlocks };
   return { ...next, design: { version: 1, mode: "add_to_selected", additions: activeAdditions(next) } };
+}
+
+export function toggleRetainedContextBlock(condition: ResearchContextEditorCondition, key: ResearchContextBlockKey, checked: boolean): ResearchContextEditorCondition {
+  const retainedBlocks = RESEARCH_CONTEXT_BLOCK_KEYS.filter((candidate) =>
+    candidate === key ? checked : condition.retainedBlocks.includes(candidate));
+  return { ...condition, retainedBlocks, design: { version: 1, mode: "selected_only", blocks: retainedBlocks } };
 }

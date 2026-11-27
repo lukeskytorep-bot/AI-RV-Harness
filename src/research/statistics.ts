@@ -11,6 +11,7 @@ export function computeConditionStatistics(sessions: UnblindedSessionResult[]): 
       ...(rows[0].contextAudit ? {
         contextMode: rows[0].contextAudit.mode,
         contextAdditionTargets: [...rows[0].contextAudit.additionTargets],
+        ...(rows[0].contextAudit.selectedBlocks ? { contextSelectedBlocks: [...rows[0].contextAudit.selectedBlocks] } : {}),
         compositionSha256: rows[0].contextAudit.compositionSha256,
         logicalContextCharacters: rows[0].contextAudit.logicalContextCharacters,
         logicalContextMessages: rows[0].contextAudit.logicalContextMessages,

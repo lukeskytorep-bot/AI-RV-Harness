@@ -33,6 +33,7 @@ export type ResearchContextBlockKey = (typeof RESEARCH_CONTEXT_BLOCK_KEYS)[numbe
 export type ResearchContextConditionDesign =
   | { version: 1; mode: "standard" }
   | { version: 1; mode: "replace_all"; content: string }
+  | { version: 1; mode: "selected_only"; blocks: ResearchContextBlockKey[] }
   | { version: 1; mode: "add_to_selected"; additions: Partial<Record<ResearchContextBlockKey, string>> };
 
 export interface ResearchContextBaseBlock {
@@ -337,6 +338,8 @@ export interface ResearchSessionExecutionMetadata {
 export interface ResearchContextSessionAudit {
   mode: ResearchContextConditionDesign["mode"];
   additionTargets: ResearchContextBlockKey[];
+  selectedBlocks?: ResearchContextBlockKey[];
+  selectedBlocksMismatch?: true;
   compositionSha256: string;
   logicalContextCharacters: number;
   logicalContextMessages: number;
@@ -379,6 +382,8 @@ export interface ConditionStatistics {
   label: string;
   contextMode?: ResearchContextConditionDesign["mode"];
   contextAdditionTargets?: ResearchContextBlockKey[];
+  contextSelectedBlocks?: ResearchContextBlockKey[];
+  contextSelectedBlocksMismatch?: true;
   compositionSha256?: string;
   logicalContextCharacters?: number;
   logicalContextMessages?: number;

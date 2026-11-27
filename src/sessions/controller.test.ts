@@ -124,13 +124,16 @@ describe("automatic RCP controller", () => {
     expect(snapshots[0].researchConditionInstruction).toEqual(expect.objectContaining({ contentSha256: "d".repeat(64), fullContent: "CUSTOM VARIABLE A" }));
   });
 
-  it("uses only the frozen Context & Instructions messages, snapshots them, and records request evidence before dispatch", async () => {
+  it.each([false, true])("sends and records only frozen RCP Research context (selected only: %s)", async (selected) => {
     const snapshots: SessionSnapshot[] = [];
     const events: Array<{ eventType: string; content?: string; metadata?: Record<string, unknown> }> = [];
     const repo = fakeRepository([], snapshots);
     repo.appendSessionEvent = async (_id: string, event: { eventType: string; content?: string; metadata?: Record<string, unknown> }) => { events.push(structuredClone(event)); return undefined as never; };
     const content = "  REPLACE ALL\nexact whitespace  ";
-    const researchContext = await composeResearchContext({ version: 1, mode: "replace_all", content }, {
+    const expectedContext = selected ? ["NOTES", "IDENTITY"] : [content];
+    const researchContext = await composeResearchContext(selected
+      ? { version: 1, mode: "selected_only", blocks: ["viewer_notes", "viewer_identity"] }
+      : { version: 1, mode: "replace_all", content }, {
       system_prompt: { content: "FIELD", source: "field", availability: "available" },
       viewer_notes: { content: "NOTES", source: "notes", availability: "available" },
       viewer_identity: { content: "IDENTITY", source: "identity", availability: "available" },
@@ -152,9 +155,9 @@ describe("automatic RCP controller", () => {
           expect(evidence.messagesSha256).toMatch(/^[a-f0-9]{64}$/);
           expect(evidenceEvent?.metadata?.compositionSha256).toBe(researchContext.compositionSha256);
           const system = messages.filter((message) => message.role === "system").map((message) => message.content);
-          expect(system).toEqual([getFullRcp("en").content, content]);
+          expect(system).toEqual([getFullRcp("en").content, ...expectedContext]);
           expect(JSON.stringify(messages)).not.toContain("SHOULD NOT LEAK");
-          expect(snapshots[0].researchContext?.applicationMessages[0].content).toBe(content);
+          expect(snapshots[0].researchContext?.applicationMessages.map((message) => message.content)).toEqual(expectedContext);
           expect(snapshots[0].rvSystemPrompt).toBeUndefined();
         }
         return { content: `context phase ${calls}`, finishReason: "stop", usage: {} };

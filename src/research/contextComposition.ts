@@ -36,6 +36,13 @@ export function assertResearchContextDesign(design: ResearchContextConditionDesi
     }
     return;
   }
+  if (design.mode === "selected_only") {
+    if (!Array.isArray(design.blocks) || design.blocks.some((key) => !KEY_ORDER.includes(key)) ||
+        new Set(design.blocks).size !== design.blocks.length) {
+      throw new Error("Select distinct, known context blocks.");
+    }
+    return;
+  }
   if (design.mode !== "add_to_selected" || !design.additions || typeof design.additions !== "object" || Array.isArray(design.additions)) {
     throw new Error("Unsupported context design mode or additions.");
   }
@@ -96,7 +103,12 @@ export async function composeResearchContext(
     const base = blocks[key];
     baseBlocks[key] = await freezeBlock(base, base.content, base.availability === "available" && base.content.length > 0);
     const addition = design.mode === "add_to_selected" ? design.additions[key] : undefined;
-    const content = design.mode === "replace_all" ? "" : addition === undefined ? base.content : appendExact(base.content, addition);
+    const selected = design.mode !== "selected_only" || design.blocks.includes(key);
+    if (design.mode === "selected_only" && selected && (base.availability !== "available" || !base.content.trim())) {
+      throw new Error(`Selected context block ${key} is unavailable or empty.`);
+    }
+    const omitted = design.mode === "replace_all" || !selected;
+    const content = omitted ? "" : addition === undefined ? base.content : appendExact(base.content, addition);
     const enabled = content.length > 0;
     effectiveBlocks[key] = await freezeBlock(base, content, enabled);
     if (enabled) messages.push({ role: "system", origin: key, content, sha256: effectiveBlocks[key].sha256 });
@@ -114,7 +126,9 @@ export async function composeResearchContext(
       ? { version: 1, mode: "standard" }
       : design.mode === "replace_all"
         ? { version: 1, mode: "replace_all", content: design.content }
-        : { version: 1, mode: "add_to_selected", additions: KEY_ORDER.filter((key) => hasOwn(design.additions, key)).map((key) => [key, design.additions[key]]) },
+        : design.mode === "selected_only"
+          ? { version: 1, mode: "selected_only", blocks: KEY_ORDER.filter((key) => design.blocks.includes(key)) }
+          : { version: 1, mode: "add_to_selected", additions: KEY_ORDER.filter((key) => hasOwn(design.additions, key)).map((key) => [key, design.additions[key]]) },
     baseBlocks: KEY_ORDER.map((key) => [key, baseBlocks[key]]),
     effectiveBlocks: KEY_ORDER.map((key) => [key, effectiveBlocks[key]]),
     applicationMessages: messages,

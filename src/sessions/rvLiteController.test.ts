@@ -74,12 +74,15 @@ describe("automatic RV Lite controller", () => {
     expect(events.filter((event) => event.eventType === "VIEWER_RESPONSE").every((event) => event.metadata?.actualProvider === "DeepInfra" && event.metadata?.actualModel === "m-runtime")).toBe(true);
   });
 
-  it("keeps RV Lite protocol steps while Tabula rasa removes all additional Viewer context and records each request", async () => {
+  it.each([false, true])("keeps RV Lite protocol steps and records the exact Research context (selected only: %s)", async (selected) => {
     const snapshots: SessionSnapshot[] = [];
     const events: SessionEventInput[] = [];
     const repo = repository([], snapshots);
     repo.appendSessionEvent = vi.fn(async (_sessionId: string, event: SessionEventInput) => { events.push(structuredClone(event)); return { ...event, id: `event-${events.length}`, sessionId: "session-tabula", sequenceNumber: events.length, createdAt: "now" } as never; });
-    const researchContext = await composeResearchContext({ version: 1, mode: "replace_all", content: "" }, {
+    const expectedContext = selected ? ["FIELD", "NOTES"] : [];
+    const researchContext = await composeResearchContext(selected
+      ? { version: 1, mode: "selected_only", blocks: ["system_prompt", "viewer_notes"] }
+      : { version: 1, mode: "replace_all", content: "" }, {
       system_prompt: { content: "FIELD", source: "field", availability: "available" },
       viewer_notes: { content: "NOTES", source: "notes", availability: "available" },
       viewer_identity: { content: "IDENTITY", source: "identity", availability: "available" },
@@ -96,7 +99,7 @@ describe("automatic RV Lite controller", () => {
       rvSystemPrompt: { id: "legacy", version: "1", content: "SHOULD NOT LEAK", contentSha256: "e".repeat(64) },
       chat: async ({ messages }) => {
         calls += 1;
-        expect(messages.filter((message) => message.role === "system")).toEqual([]);
+        expect(messages.filter((message) => message.role === "system").map((message) => message.content)).toEqual(expectedContext);
         expect(JSON.stringify(messages)).not.toContain("SHOULD NOT LEAK");
         expect(messages.at(-1)?.content).toBe(expectedSteps[calls - 1]);
         return { content: `blind ${calls}`, finishReason: "stop", usage: {} };
@@ -106,9 +109,9 @@ describe("automatic RV Lite controller", () => {
     const requestEvidence = events.filter((event) => event.eventType === "RESEARCH_CONTEXT_REQUEST_EVIDENCE_V1");
     expect(requestEvidence).toHaveLength(4);
     const firstEvidence = JSON.parse(requestEvidence[0].content ?? "{}") as { messages: Array<{ role: string; content: string }> };
-    expect(firstEvidence.messages.some((message) => message.role === "system")).toBe(false);
+    expect(firstEvidence.messages.filter((message) => message.role === "system").map((message) => message.content)).toEqual(expectedContext);
     expect(firstEvidence.messages.at(-1)?.content).toBe(expectedSteps[0]);
-    expect(snapshots[0].researchContext?.applicationMessages).toEqual([]);
+    expect(snapshots[0].researchContext?.applicationMessages.map((message) => message.content)).toEqual(expectedContext);
     expect(snapshots[0].rvSystemPrompt).toBeUndefined();
   });
 

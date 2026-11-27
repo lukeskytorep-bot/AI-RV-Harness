@@ -1,7 +1,8 @@
+import { composeResearchContext } from "../research/contextComposition";
 import {workflowTestRepository} from "../testing/workflowRepository";
 import { describe, expect, it, vi } from "vitest";
 import type { AppRepository } from "../storage/repository";
-import type { ResearchConfig, ResearchFrozenContextComposition, ResearchProjectRecord, ResearchResults } from "../research/types";
+import type { ResearchConfig, ResearchProjectRecord, ResearchResults } from "../research/types";
 import { createResearchProtocolSelection } from "../research/protocolPolicy";
 
 const { writeExportPackage } = vi.hoisted(() => ({ writeExportPackage: vi.fn() }));
@@ -218,17 +219,24 @@ it("exports Context & Instructions request evidence privately for save-only Rese
   expect(files.some((file) => file.relativePath.startsWith("external_evaluation/") && file.content.includes("exact request"))).toBe(false);
 });
 
-it("exports Context & Instructions condition metadata, completeness and request evidence summaries", async () => {
-  const compositionSha256 = "c".repeat(64);
-  const frozenBlock = { content: "", sha256: "b".repeat(64), enabled: false, source: "test", availability: "disabled" as const };
-  const contextComposition: ResearchFrozenContextComposition = {
-    version: 1,
-    design: { version: 1, mode: "add_to_selected", additions: { viewer_notes: "extra" } },
-    baseBlocks: { system_prompt: frozenBlock, viewer_notes: frozenBlock, viewer_identity: frozenBlock, base_vocabulary: frozenBlock },
-    effectiveBlocks: { system_prompt: frozenBlock, viewer_notes: { ...frozenBlock, content: "extra", enabled: true }, viewer_identity: frozenBlock, base_vocabulary: frozenBlock },
-    applicationMessages: [{ role: "system", origin: "viewer_notes", content: "extra", sha256: "d".repeat(64) }],
-    compositionSha256,
-  };
+it.each(["add_to_selected", "selected_only", "empty", "valid_saved", "mismatch", "wrong_hash"] as const)("exports Context & Instructions condition metadata and evidence (%s)", async (kind) => {
+  const blocks = kind === "empty" ? [] : ["system_prompt", "viewer_notes"] as const;
+  const mode = kind === "add_to_selected" ? kind : "selected_only";
+  const contextComposition = await composeResearchContext(
+    mode === "selected_only" ? { version: 1, mode, blocks: [...blocks] } : { version: 1, mode, additions: { viewer_notes: "extra" } },
+    {
+      system_prompt: { content: "Guide", source: "test", availability: "available" },
+      viewer_notes: { content: "Notes", source: "test", availability: "available" },
+      viewer_identity: { content: "Identity", source: "test", availability: "available" },
+      base_vocabulary: { content: "Vocabulary", source: "test", availability: "available" },
+    },
+  );
+  const mismatch = kind === "mismatch" || kind === "wrong_hash";
+  const compositionSha256 = kind === "wrong_hash" ? "f".repeat(64) : contextComposition.compositionSha256;
+  const savedBlocks = kind === "mismatch" ? ["viewer_identity"] as const : kind === "valid_saved" || kind === "wrong_hash" ? blocks : undefined;
+  const additionTargets = mode === "add_to_selected" ? ["viewer_notes" as const] : [];
+  const logicalContextMessages = contextComposition.applicationMessages.length;
+  const logicalContextCharacters = contextComposition.applicationMessages.reduce((sum, { content }) => sum + content.length, 0);
   const condition = {
     key: "ctx_add", label: "Add to notes", profileId: "profile", providerConfigId: "provider", modelId: "viewer", requestedSettings: {}, contextComposition,
   };
@@ -240,9 +248,9 @@ it("exports Context & Instructions condition metadata, completeness and request 
   const project = { id: "research-context-complete", workspaceId: "workspace", name: "Context results", templateType: "context_instructions", state: "Complete", config, configHash: "hash", lockedAt: "lock", scoresFrozenAt: "scores", unblindedAt: "unblind", createdAt: "now", updatedAt: "now" } as ResearchProjectRecord;
   const results: ResearchResults = {
     schemaVersion: 1, projectId: project.id, templateType: "context_instructions", computedAt: "now", pairwise: [],
-    conditions: [{ conditionKey: "ctx_add", label: "Add to notes", contextMode: "add_to_selected", contextAdditionTargets: ["viewer_notes"], compositionSha256, logicalContextMessages: 1, logicalContextCharacters: 5, plannedN: 2, completionRate: 50, n: 1, meanTotal: 7, medianTotal: 7, stdDevTotal: 0, minTotal: 7, maxTotal: 7, meanComponents: { gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 2, confabulationControl: 1 } }],
+    conditions: [{ conditionKey: "ctx_add", label: "Add to notes", contextMode: mode, contextAdditionTargets: additionTargets, contextSelectedBlocks: savedBlocks && [...savedBlocks], compositionSha256, logicalContextMessages, logicalContextCharacters, plannedN: 2, completionRate: 50, n: 1, meanTotal: 7, medianTotal: 7, stdDevTotal: 0, minTotal: 7, maxTotal: 7, meanComponents: { gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 2, confabulationControl: 1 } }],
     sessions: [{ anonymousSessionId: "BlindSession_CTX", sessionId: "session", targetId: "target", pairKey: "pair", conditionKey: "ctx_add", conditionLabel: "Add to notes", total: 7, judgeCount: 1, judgeTotalRange: 0, judgeTotalStdDev: 0, gestalt: 2, verifiableFeatures: 2, activityFunctionEvent: 2, confabulationControl: 1,
-      contextAudit: { mode: "add_to_selected", additionTargets: ["viewer_notes"], compositionSha256, logicalContextMessages: 1, logicalContextCharacters: 5, requestEvidence: { physicalAttempts: 5, logicalRequests: 4, transportRetries: 1, recoveryAttempts: 0, requestHashes: ["e".repeat(64), "f".repeat(64)] } } }],
+      contextAudit: { mode, additionTargets, selectedBlocks: savedBlocks && [...savedBlocks], compositionSha256, logicalContextMessages, logicalContextCharacters, requestEvidence: { physicalAttempts: 5, logicalRequests: 4, transportRetries: 1, recoveryAttempts: 0, requestHashes: ["e".repeat(64), "f".repeat(64)] } } }],
   };
   const repo = workflowTestRepository({
     getResearchProject: async () => project, getResearchResults: async () => results, getResearchExecutionTermination: async () => undefined,
@@ -260,10 +268,27 @@ it("exports Context & Instructions condition metadata, completeness and request 
   const sessionCsv = files.find((file) => file.relativePath === "results/session_results.csv")?.content ?? "";
   const parameters = files.find((file) => file.relativePath === "configuration/condition_parameters.json")?.content ?? "";
   expect(resultsCsv).toContain("context_mode,context_addition_targets,composition_sha256,logical_context_messages,logical_context_characters,planned_n,completion_rate_pct");
-  expect(resultsCsv).toContain(`add_to_selected,viewer_notes,${compositionSha256},1,5,2,50`);
+  expect(resultsCsv).toContain(`${mode},${additionTargets.join("|")},${compositionSha256},${logicalContextMessages},${logicalContextCharacters},2,50`);
   expect(sessionCsv).toContain("evidence_physical_attempts,evidence_logical_requests,evidence_transport_retries,evidence_recovery_attempts,request_hashes");
   expect(sessionCsv).toContain(`5,4,1,0,${"e".repeat(64)}|${"f".repeat(64)}`);
-  expect(parameters).toContain('"mode": "add_to_selected"');
+  expect(JSON.parse(parameters)[0].context.mode).toBe(mode);
   expect(parameters).toContain('"additionTargets": [');
-  expect(parameters).toContain('"viewer_notes"');
+  if (mode === "add_to_selected") expect(JSON.parse(parameters)[0].context.additionTargets).toEqual(["viewer_notes"]);
+  if (mode === "selected_only") {
+    expect(JSON.parse(parameters)[0].context.selectedBlocks).toEqual(blocks);
+    const parametersCsv = files.find(({ relativePath }) => relativePath === "configuration/condition_parameters.csv")!.content;
+    expect(parametersCsv.split("\r\n")[1].split(",").at(-1)).toBe(blocks.join("|"));
+    const exported = JSON.parse(files.find(({ relativePath }) => relativePath === "results/results.json")!.content) as ResearchResults;
+    const expected = mismatch ? undefined : blocks;
+    expect(exported.conditions[0].contextSelectedBlocks).toEqual(expected);
+    expect(exported.sessions[0].contextAudit?.selectedBlocks).toEqual(expected);
+    expect(exported.conditions[0].contextSelectedBlocksMismatch).toBe(mismatch || undefined);
+    expect(exported.sessions[0].contextAudit?.selectedBlocksMismatch).toBe(mismatch || undefined);
+    for (const csv of [resultsCsv, sessionCsv]) {
+      const [header, row] = csv.split("\r\n");
+      expect(header.split(",").slice(-2)).toEqual(["context_selected_blocks", "context_selected_blocks_status"]);
+      expect(row.split(",").slice(-2)).toEqual([expected?.join("|") ?? "", mismatch ? "mismatch" : ""]);
+    }
+    expect(results.conditions[0].contextSelectedBlocks).toEqual(savedBlocks);
+  }
 });

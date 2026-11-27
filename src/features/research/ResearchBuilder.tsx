@@ -1,5 +1,6 @@
 import { researchConditionDisplayLabel, researchAssignmentDisplayStatus } from "../../i18n/researchDisplay";
 import { formatResearchPreflightMessage } from "../../i18n/researchPreflight";
+import { withResearchSelectedBlocks } from "../../research/contextRuntime";
 import { ResearchContextConditionsEditor, createDefaultResearchContextConditions, contextBlockLabel, contextModeLabel } from "./ResearchContextDesignBuilder";
 import { targetCodePolicy } from "../../resources/rvLiteTargetCode";
 import { TargetCodePreview, TargetCodeResultsView } from "./TargetCodeResearch";
@@ -800,7 +801,7 @@ export function ResearchProjectView({ copy, repository, project, onRefresh, onBa
     {selectedSessionId && <SessionInspection repository={repository} workspaceId={project.workspaceId} sessionId={selectedSessionId} language={project.config.sessionLanguage} />}
     {selectedSessionId && project.templateType === "context_instructions" && <ResearchContextEvidencePanel repository={repository} sessionId={selectedSessionId} pl={pl} />}
     {completedAssignments.length > 0 && <ResearchEvaluationPanels repository={repository} project={project} pl={pl} sourceBusy={Boolean(busy)} onBusyChange={setEvaluationBusy} />}
-    {results && <ResearchResultsView copy={copy} results={results} repository={repository} />}
+    {results && <ResearchResultsView copy={copy} results={withResearchSelectedBlocks(results, project.config)} repository={repository} />}
   </div>;
 }
 
@@ -827,8 +828,9 @@ export function ResearchResultsView({ copy, results, repository }: { copy: Copy;
     <div className="research-section-head"><strong>{copy.researchResults}</strong><small>{results.sessions.length} {pl ? "sesji" : "sessions"}</small></div>
     {results.templateType === "context_instructions" && <div className="research-context-results-summary">
       <strong>{copy.contextComparison}</strong>
-      <div className="research-results-table-wrap"><table><thead><tr><th>{copy.condition}</th><th>{pl ? "Tryb" : "Mode"}</th><th>{pl ? "Miejsca dodatku" : "Addition targets"}</th><th>{pl ? "SHA-256 kompozycji" : "composition SHA-256"}</th><th>{pl ? "Kontekst" : "Context"}</th><th>{pl ? "Ukończone" : "Completed"}</th><th>{copy.mean}</th><th>{copy.median}</th><th>{copy.stdDev}</th></tr></thead><tbody>{results.conditions.map((condition) => <tr key={`context-${condition.conditionKey}`}>
-        <td><strong>{researchConditionDisplayLabel(pl ? "pl" : "en", results.templateType, condition.conditionKey, condition.label)}</strong></td><td>{condition.contextMode ? contextModeLabel(copy, condition.contextMode) : "—"}</td><td>{condition.contextAdditionTargets?.length ? condition.contextAdditionTargets.map((key) => contextBlockLabel(copy, key)).join(", ") : "—"}</td><td><code>{condition.compositionSha256 ?? "—"}</code></td><td>{condition.logicalContextMessages ?? "—"} {pl ? "wiad." : "msg"} · {condition.logicalContextCharacters ?? "—"} {pl ? "znaków" : "chars"}</td><td>{condition.n}/{condition.plannedN ?? "—"}{condition.completionRate !== undefined ? ` · ${condition.completionRate.toFixed(2)}%` : ""}</td><td>{condition.meanTotal.toFixed(2)}</td><td>{condition.medianTotal.toFixed(2)}</td><td>{condition.stdDevTotal.toFixed(2)}</td>
+      {results.sessions.some((session) => session.contextAudit?.selectedBlocksMismatch) && <p role="alert">{pl ? "Wybór bloków w co najmniej jednej sesji jest niespójny z Experiment Lock." : "The block selection in at least one session is inconsistent with Experiment Lock."}</p>}
+      <div className="research-results-table-wrap"><table><thead><tr><th>{copy.condition}</th><th>{pl ? "Tryb" : "Mode"}</th><th>{pl ? "Bloki kontekstu" : "Context blocks"}</th><th>{pl ? "SHA-256 kompozycji" : "composition SHA-256"}</th><th>{pl ? "Kontekst" : "Context"}</th><th>{pl ? "Ukończone" : "Completed"}</th><th>{copy.mean}</th><th>{copy.median}</th><th>{copy.stdDev}</th></tr></thead><tbody>{results.conditions.map((condition) => <tr key={`context-${condition.conditionKey}`}>
+        <td><strong>{researchConditionDisplayLabel(pl ? "pl" : "en", results.templateType, condition.conditionKey, condition.label)}</strong></td><td>{condition.contextMode ? contextModeLabel(copy, condition.contextMode) : "—"}</td><td>{condition.contextSelectedBlocksMismatch ? (pl ? "Niespójność z Experiment Lock" : "Inconsistent with Experiment Lock") : condition.contextSelectedBlocks ? (condition.contextSelectedBlocks.map((key) => contextBlockLabel(copy, key)).join(", ") || copy.contextEmpty) : condition.contextAdditionTargets?.map((key) => contextBlockLabel(copy, key)).join(", ") || "—"}</td><td><code>{condition.compositionSha256 ?? "—"}</code></td><td>{condition.logicalContextMessages ?? "—"} {pl ? "wiad." : "msg"} · {condition.logicalContextCharacters ?? "—"} {pl ? "znaków" : "chars"}</td><td>{condition.n}/{condition.plannedN ?? "—"}{condition.completionRate !== undefined ? ` · ${condition.completionRate.toFixed(2)}%` : ""}</td><td>{condition.meanTotal.toFixed(2)}</td><td>{condition.medianTotal.toFixed(2)}</td><td>{condition.stdDevTotal.toFixed(2)}</td>
       </tr>)}</tbody></table></div>
       <small>{pl ? "Kreska (—) oznacza brak zapisanej wartości, a nie zero." : "A dash (—) means a value was not recorded, not zero."}</small>
       <small>{pl ? "Porównania sparowane poniżej używają tego samego pairKey (cel/powtórzenie), więc nie są wyłącznie porównaniem globalnych średnich." : "Paired comparisons below use the same pairKey (target/repetition), rather than only comparing global means."}</small>

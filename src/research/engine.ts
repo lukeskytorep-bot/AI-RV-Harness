@@ -794,6 +794,7 @@ async function unblindAndComputeResearchOwned(repository: ResearchRepository, pr
       return {
         mode: composition.design.mode,
         additionTargets,
+        ...(composition.design.mode === "selected_only" ? { selectedBlocks: [...composition.design.blocks] } : {}),
         compositionSha256: composition.compositionSha256,
         logicalContextCharacters: composition.applicationMessages.reduce((sum, message) => sum + message.content.length, 0),
         logicalContextMessages: composition.applicationMessages.length,

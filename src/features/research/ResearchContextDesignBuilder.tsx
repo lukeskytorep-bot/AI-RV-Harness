@@ -1,13 +1,13 @@
 import { getCopy } from "../../i18n";
 import { RESEARCH_CONTEXT_BLOCK_KEYS, type ResearchContextBlockKey, type ResearchContextConditionDesign } from "../../research/types";
-import { changeContextAddition, changeContextEditorMode, changeContextReplacement, createContextEditorCondition, MAX_CONTEXT_DRAFT_CONDITIONS, toggleContextAddition, validateResearchContextDraft, type ResearchContextEditorCondition } from "../../research/contextDesignDraft";
+import { changeContextAddition, changeContextEditorMode, changeContextReplacement, createContextEditorCondition, MAX_CONTEXT_DRAFT_CONDITIONS, toggleContextAddition, toggleRetainedContextBlock, validateResearchContextDraft, type ResearchContextEditorCondition } from "../../research/contextDesignDraft";
 
 type Copy = ReturnType<typeof getCopy>;
 export function contextBlockLabel(copy: Copy, key: ResearchContextBlockKey | "replace_all"): string {
   return { system_prompt: copy.contextSystem, viewer_notes: copy.contextNotes, viewer_identity: copy.contextIdentity, base_vocabulary: copy.contextVocabulary, replace_all: copy.contextReplace }[key];
 }
 export function contextModeLabel(copy: Copy, mode: ResearchContextConditionDesign["mode"]): string {
-  return { standard: copy.contextStandard, replace_all: copy.contextReplace, add_to_selected: copy.contextAdd }[mode];
+  return { standard: copy.contextStandard, replace_all: copy.contextReplace, add_to_selected: copy.contextAdd, selected_only: copy.contextSelectedOnly }[mode];
 }
 export function localizeContextDraftError(copy: Copy, error: string): string {
   if (copy.home === "Home") return error;
@@ -22,6 +22,7 @@ export function localizeContextDraftError(copy: Copy, error: string): string {
     "Unsupported context design version.": "Nieobsługiwana wersja projektu kontekstu.",
     "Replace-all context must be text within the size limit.": "Tekst zastępujący musi mieścić się w limicie długości.",
     "Unsupported context design mode or additions.": "Nieobsługiwany tryb kontekstu lub dodatki.",
+    "Select distinct, known context blocks.": "Wybierz znane bloki kontekstu bez powtórzeń.",
     "Add-to-selected requires at least one target block.": "Wybierz co najmniej jeden blok do uzupełnienia.",
   };
   for (const [suffix, translation] of Object.entries(suffixes)) {
@@ -49,9 +50,16 @@ export function ResearchContextConditionsEditor({ conditions, onChange, copy = g
     <div className="research-variants">{conditions.map((condition, index) => <div key={condition.id} className="research-form-section">
       <label>{copy.condition} {index + 1} · {copy.contextLabel} <input disabled={disabled} maxLength={120} value={condition.label} onChange={(event) => update(condition.id, (item) => ({ ...item, label: event.target.value }))} /></label>
       <label>{copy.contextMode} <select disabled={disabled} value={condition.design.mode} onChange={(event) => update(condition.id, (item) => changeContextEditorMode(item, event.target.value as ResearchContextConditionDesign["mode"]))}>
-        <option value="standard">{copy.contextStandard}</option><option value="replace_all">{copy.contextReplace} / {copy.contextEmpty}</option><option value="add_to_selected">{copy.contextAdd}</option>
+        <option value="standard">{copy.contextStandard}</option><option value="replace_all">{copy.contextReplace} / {copy.contextEmpty}</option><option value="selected_only">{copy.contextSelectedOnly}</option><option value="add_to_selected">{copy.contextAdd}</option>
       </select></label>
       {condition.design.mode === "replace_all" && <label>{copy.contextReplacement}<textarea disabled={disabled} rows={5} maxLength={120000} value={condition.design.content} onChange={(event) => update(condition.id, (item) => changeContextReplacement(item, event.target.value))} /></label>}
+      {condition.design.mode === "selected_only" && <div>
+        <small>{copy.contextSelectedOnlyHelp}</small>
+        {RESEARCH_CONTEXT_BLOCK_KEYS.map((key) => <label key={key}>
+          <input disabled={disabled} type="checkbox" checked={condition.retainedBlocks.includes(key)} onChange={(event) => update(condition.id, (item) => toggleRetainedContextBlock(item, key, event.target.checked))} />
+          {contextBlockLabel(copy, key)}
+        </label>)}
+      </div>}
       {condition.design.mode === "add_to_selected" && RESEARCH_CONTEXT_BLOCK_KEYS.map((key) => {
         const additions = condition.design.mode === "add_to_selected" ? condition.design.additions : {};
         const checked = Object.prototype.hasOwnProperty.call(additions, key);
